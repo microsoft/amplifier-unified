@@ -263,6 +263,42 @@ async def _windows_status(home, expected, state):
     return result
 
 
+async def windows_working(home):
+    """How many chats this installation's own running app is working on.
+
+    The same private boundary as browser entry: HTTPS to loopback, pinned to
+    this installation's own leaf, with the owner credential. None when no host
+    answers as this installation or when it does not report a count. It reads
+    Task Scheduler never, so it does not delay the person's next question.
+    """
+    import aiohttp
+    import yaml
+    from . import browser_entry
+    from .auth import data_identity
+    from .deployment import load_server_config
+    try:
+        urls, pin = browser_entry._owner_probe_targets(home, load_server_config(home))
+        if not isinstance(pin, aiohttp.Fingerprint):
+            return None
+        token = browser_entry._control_token(home, browser_entry.current_owner_sid())
+        identity = data_identity(home)
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=3), trust_env=False) as client:
+            for url in urls:
+                try:
+                    async with client.get(url, ssl=pin, allow_redirects=False, params={"activity": "1"},
+                                          headers={"Authorization": "Bearer " + token}) as response:
+                        value = await response.json() if response.status == 200 else None
+                except (aiohttp.ClientError, OSError, TimeoutError, ValueError):
+                    continue
+                if (isinstance(value, dict) and value.get("app") == "amplifier-unified"
+                        and value.get("dataIdentity") == identity and isinstance(value.get("activity"), dict)):
+                    working = value["activity"].get("working")
+                    return working if type(working) is int and working >= 0 else None
+    except (OSError, ValueError, RuntimeError, yaml.YAMLError):
+        pass
+    return None
+
+
 def display(result, *, as_json=False, verbose=False):
     if as_json:
         print(json.dumps(result))

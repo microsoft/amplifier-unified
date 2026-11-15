@@ -429,6 +429,30 @@ def test_command_restart_stop_remove_only_exact_owned_definition(backend):
     assert backend["xml"] is None
 
 
+def test_uninstall_names_each_step_before_it_runs_so_a_failure_can_be_reported(backend, monkeypatch):
+    steps = []
+    def progress(name):
+        steps.append((name, list(backend["calls"])))
+    # No task: one read, nothing to stop or remove.
+    service.uninstall(spec().data_dir, progress=progress)
+    assert steps == [("task-read", [])]
+    service.install(spec().data_dir)
+    backend["calls"].clear()
+    steps.clear()
+    service.uninstall(spec().data_dir, progress=progress)
+    assert steps == [("task-read", []), ("stop", ["query"]),
+                     ("task-remove", ["query", "request_stop", "query"])]
+    # A stop that fails is named "stop", and the task is still registered.
+    service.install(spec().data_dir)
+    steps.clear()
+    def refuse(*args, **kwargs):
+        raise service.WindowsServiceError("Task still has a running instance; no force-stop attempted.")
+    monkeypatch.setattr(service, "_stop", refuse)
+    with pytest.raises(service.WindowsServiceError):
+        service.uninstall(spec().data_dir, progress=progress)
+    assert [name for name, _ in steps] == ["task-read", "stop"] and backend["xml"] is not None
+
+
 def test_wrong_root_and_unknown_command_do_not_mutate(backend):
     service.install(spec().data_dir)
     backend["calls"].clear()

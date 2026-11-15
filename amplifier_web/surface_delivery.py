@@ -230,6 +230,8 @@ class SurfaceProvider:
                 self._graph_lifetimes.clear()
                 self._private_lifetimes.clear()
             coordinator.register_cleanup(close_media)
+        from .overflow_feedback import OverflowFeedback
+        self._overflow_feedback = OverflowFeedback()
         from .performance_diagnostics import TIMING_ENABLED, time_preparation
         self.timing_coordinator = coordinator if TIMING_ENABLED else None
         if self.timing_coordinator is not None:
@@ -529,8 +531,16 @@ class SurfaceProvider:
                     from . import provider_capture as capture
                     capture.observe(capture.invalidate, self, request)
             return compact
+        if name == 'recover_context_overflow' and callable(method):
+            def recover(request, error, *, context_estimate, request_options=None):
+                return self._overflow_feedback.recover(request, error,
+                    context_estimate=context_estimate, request_options=request_options,
+                    owner=self.original)
+            return recover
         if name == 'stream' and callable(method):
             async def stream(request, **kwargs):
+                original_request = request
+                self._overflow_feedback.forget(request)
                 from . import provider_capture as capture
                 ticket = capture.observe(capture.take, self, request)
                 trace = capture.observe(capture.describe_take, self, request, ticket)
@@ -568,7 +578,9 @@ class SurfaceProvider:
                             return await operation()
                     finally:
                         WORK_ATTEMPT.reset(token)
-                iterator = None
+                iterator, emitted = None, False
+                feedback = self._overflow_feedback.capture(original_request, request,
+                                                           kwargs, kwargs, self.original)
                 try:
                     token = WORK_ATTEMPT.set((self.delivery, attempt) if attempt else None)
                     try:
@@ -580,10 +592,13 @@ class SurfaceProvider:
                             event = await within_attempt(iterator.__anext__)
                         except StopAsyncIteration:
                             break
+                        emitted = True
                         yield event
                     if attempt:
                         self.delivery.finish_work(attempt, streaming=True)
-                except BaseException:
+                except BaseException as error:
+                    if not emitted:
+                        self._overflow_feedback.remember(feedback, error)
                     if attempt:
                         self.delivery.finish_work(attempt, failed=True)
                     raise
@@ -601,6 +616,7 @@ class SurfaceProvider:
             return stream
         if name == 'request_budget' and callable(method):
             async def budget(request, *, request_options=None, **kwargs):
+                self._overflow_feedback.forget(request)
                 from . import provider_capture as capture
                 capture.observe(capture.invalidate, self, request)
                 original_request = request
@@ -675,6 +691,8 @@ class SurfaceProvider:
                    for row in self.prepared)
 
     async def complete(self, request, **kwargs):
+        original_request = request
+        self._overflow_feedback.forget(request)
         from . import provider_capture as capture
         ticket = capture.observe(capture.take, self, request)
         trace = capture.observe(capture.describe_take, self, request, ticket)
@@ -694,6 +712,8 @@ class SurfaceProvider:
             self._release_media(request)
             raise
         token = WORK_ATTEMPT.set((self.delivery, attempt) if attempt else None)
+        feedback = self._overflow_feedback.capture(original_request, request,
+                                                   kwargs, kwargs, self.original)
         try:
             from .request_projection import dispatch as projection_dispatch
             media = self._active_media.get(id(request))
@@ -707,7 +727,8 @@ class SurfaceProvider:
             if hasattr(self.delivery, 'finish_work'):
                 self.delivery.finish_work(attempt, response)
             return response
-        except BaseException:
+        except BaseException as error:
+            self._overflow_feedback.remember(feedback, error)
             if attempt:
                 self.delivery.finish_work(attempt, failed=True)
             raise

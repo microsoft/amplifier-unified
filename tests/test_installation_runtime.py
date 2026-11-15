@@ -2,11 +2,144 @@
 import asyncio
 from contextlib import contextmanager
 import json
+import os
+import threading
 
 import pytest
 
 from amplifier_web import installation_runtime as setup
 from amplifier_web import runtime_environment, runtime_qualification, updates
+
+
+def configured_inputs(tmp_path, monkeypatch):
+    shared = tmp_path / "shared"
+    shared.mkdir(mode=0o700)
+    settings = {"config": {"providers": [{"id": "fixture-account", "module": "provider-fixture",
+        "source": "git+https://example.invalid/provider@" + "a" * 40,
+        "config": {"api_key": "${FIXTURE_KEY}", "default_model": "offline"}}]},
+        "sources": {"modules": {"tool-fixture": "git+https://example.invalid/tool@" + "b" * 40}}}
+    (shared / "settings.yaml").write_text(json.dumps(settings))
+    (shared / "keys.env").write_text("FIXTURE_KEY=synthetic-private-value\n")
+    (shared / "keys.env").chmod(0o600)
+    (shared / "routing").mkdir()
+    (shared / "routing/custom.yaml").write_text("name: configured-fixture\n")
+    for excluded in ("projects", "cache", "registry", "oauth"):
+        (shared / excluded).mkdir()
+        (shared / excluded / "retained").write_text("must stay at its existing owner")
+    monkeypatch.setenv("AMPLIFIER_HOME", str(shared))
+    return shared, settings
+
+
+async def test_configured_prepare_snapshots_actual_shared_inputs_before_qualification(tmp_path, monkeypatch):
+    from amplifier_web.host.config import read_config
+    shared, settings = configured_inputs(tmp_path, monkeypatch)
+    home = tmp_path / "app"
+    home.mkdir()
+    before = {p.relative_to(shared): p.read_bytes() for p in shared.rglob("*") if p.is_file()}
+    phases = []
+
+    async def validate(owner, stage, generation):
+        # Exercise the real global settings reader at the same staging boundary
+        # as UpdateManager.validate; dependency installation is outside this test.
+        config = read_config(stage, home=stage, shared_home=stage / "shared-config", global_only=True)
+        assert len(config.providers) == 1
+        assert config.providers[0]["id"] == "fixture-account"
+        assert config.settings == settings
+        snapshot = stage / "shared-config"
+        assert {p.name for p in snapshot.iterdir()} == {"settings.yaml", "keys.env", "routing"}
+        for name in ("settings.yaml", "keys.env", "routing/custom.yaml"):
+            assert (snapshot / name).read_bytes() == (shared / name).read_bytes()
+            assert not (snapshot / name).samefile(shared / name)
+        if os.name != "nt":
+            assert snapshot.stat().st_mode & 0o777 == 0o700
+            assert (snapshot / "keys.env").stat().st_mode & 0o777 == 0o600
+        phases.append("validate")
+        (stage / "profiles-qualified.json").write_text(json.dumps({"profiles": ["work"]}))
+        (stage / "runtime-installed.json").write_text('[{"name":"synthetic","version":"1"}]')
+        (stage / "runtime.lock").write_text("exact-locked-graph")
+        project = owner.home / "runtime" / ("q-" + "a" * 32)
+        project.mkdir(parents=True)
+        (stage / "runtime-project.json").write_text(json.dumps({"project": project.name}))
+
+    monkeypatch.setattr(updates.UpdateManager, "validate", validate)
+    monkeypatch.setattr(runtime_qualification, "verify_recorded", lambda *a: phases.append("verify"))
+    result = await setup.prepare(home)
+    assert result["prepared"] and result["modelRequestSent"] is False
+    assert phases == ["validate", "verify"]
+    assert updates.active_release(home)["current"] == result["generation"]
+    assert before == {p.relative_to(shared): p.read_bytes() for p in shared.rglob("*") if p.is_file()}
+    # The existing-generation path inspects its receipt; it must not copy again.
+    from amplifier_web import update_storage
+    async def forbidden(*args):
+        pytest.fail("Recorded runtime cannot snapshot or refresh configuration")
+    monkeypatch.setattr(update_storage, "snapshot_shared_config", forbidden)
+    assert await setup.prepare(home) == result
+
+
+async def test_shared_snapshot_failure_retains_attempt_without_validation(tmp_path, monkeypatch):
+    from amplifier_web import update_storage
+    configured_inputs(tmp_path, monkeypatch)
+    home = tmp_path / "app"
+    home.mkdir()
+    original = update_storage.shutil.copy2
+    def failed(source, target):
+        if source.name == "keys.env":
+            raise OSError("synthetic-private-value")
+        return original(source, target)
+    monkeypatch.setattr(update_storage.shutil, "copy2", failed)
+    async def forbidden(*args):
+        pytest.fail("Incomplete private snapshot must not reach validation")
+    monkeypatch.setattr(updates.UpdateManager, "validate", forbidden)
+    with pytest.raises(OSError):
+        await setup.prepare(home)
+    stage, = (home / "updates/releases").iterdir()
+    assert (stage / "shared-config/settings.yaml").is_file()
+    assert not (stage / "validated.json").exists() and updates.active_release(home) == {}
+    failure = json.loads((stage / "install-failure.json").read_text())
+    assert failure["phase"] == "initial-shared-config"
+    assert "synthetic-private-value" not in json.dumps(failure)
+
+
+@pytest.mark.parametrize("unsettled", [False, True])
+async def test_cancelled_snapshot_never_validates_or_erases_inflight_copy(tmp_path, monkeypatch, unsettled):
+    from amplifier_web import update_storage
+    configured_inputs(tmp_path, monkeypatch)
+    home = tmp_path / "app"
+    home.mkdir()
+    started, release, finished = threading.Event(), threading.Event(), threading.Event()
+    original = update_storage.shutil.copy2
+    def held(source, target):
+        started.set()
+        assert release.wait(5), "owned test copy was not released"
+        try:
+            return original(source, target)
+        finally:
+            finished.set()
+    monkeypatch.setattr(update_storage.shutil, "copy2", held)
+    async def forbidden(*args):
+        pytest.fail("Cancelled snapshot cannot validate or activate")
+    monkeypatch.setattr(updates.UpdateManager, "validate", forbidden)
+    task = asyncio.create_task(setup.prepare(home))
+    try:
+        assert await asyncio.to_thread(started.wait, 3)
+        task.cancel()
+        await asyncio.sleep(0)  # candidate_copy waits for its shielded copy.
+        if unsettled:
+            task.cancel()  # Cancellation of the join does not stop its thread.
+        else:
+            release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert finished.is_set() is not unsettled
+        stage, = (home / "updates/releases").iterdir()
+        assert stage.is_dir() and (stage / "shared-config").is_dir()
+        assert not (stage / "validated.json").exists() and updates.active_release(home) == {}
+        progress = json.loads((stage / "install-progress.json").read_text())
+        assert progress["events"][-1]["status"] == "failed"
+    finally:
+        release.set()
+        assert await asyncio.to_thread(finished.wait, 3)
+        await asyncio.gather(task, return_exceptions=True)
 
 
 @pytest.fixture

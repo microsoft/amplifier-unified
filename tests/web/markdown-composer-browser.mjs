@@ -37,34 +37,40 @@ try{
    const rect=node=>{const {x,y,width,height}=node.getBoundingClientRect();return {x,y,width,height}};
    const current={select:rect(el),popup:rect(popup)};
    const paint={background:style.backgroundColor,ink:style.color,radius:style.borderRadius,boxSizing:style.boxSizing,appearance:style.appearance,padding:style.paddingTop,
+    paddingInlineEnd:style.paddingInlineEnd,indicator:style.backgroundImage,fontSize:parseFloat(style.fontSize),lineHeight:style.lineHeight,font:style.font,
     borders:['Top','Right','Bottom','Left'].map(side=>({width:style['border'+side+'Width'],style:style['border'+side+'Style'],color:style['border'+side+'Color']})),
     outline:{width:style.outlineWidth,style:style.outlineStyle,color:style.outlineColor,offset:style.outlineOffset},focusVisible:el.matches(':focus-visible')};
    // Resolve theme tokens in the same inheritance scope as the portal.
    const probe=document.createElement('span');probe.style.cssText='position:absolute;visibility:hidden;pointer-events:none;background:var(--a-soft);border:1px solid var(--a-line);color:var(--a-ink);outline:2px solid var(--a-accent)';
    popup.appendChild(probe);let palette;
    try{const tokens=getComputedStyle(probe);palette={soft:tokens.backgroundColor,line:tokens.borderTopColor,ink:tokens.color,accent:tokens.outlineColor,surface:getComputedStyle(popup).backgroundColor}}finally{probe.remove()}
-   // Compare border boxes with the exact old select rule (0 border + 7px
-   // padding), then restore immediately without editor/focus events.
-   const inline=el.getAttribute('style');let baseline;
-   try{el.style.border='0';el.style.padding='7px';baseline={select:rect(el),popup:rect(popup)}}finally{if(inline===null)el.removeAttribute('style');else el.setAttribute('style',inline)}
+   const textCanvas=document.createElement('canvas'),textContext=textCanvas.getContext('2d');
+   textContext.font=style.font;
+   const textWidth=textContext.measureText(el.selectedOptions[0].textContent).width;
+   const available=el.clientWidth-parseFloat(style.paddingInlineStart)-parseFloat(style.paddingInlineEnd);
    const canvas=document.createElement('canvas');canvas.width=canvas.height=1;const ctx=canvas.getContext('2d');
    const rgba=color=>{ctx.clearRect(0,0,1,1);ctx.fillStyle=color;ctx.fillRect(0,0,1,1);return [...ctx.getImageData(0,0,1,1).data]};
    const luminance=color=>rgba(color).slice(0,3).map(value=>{const c=value/255;return c<=.04045?c/12.92:((c+.055)/1.055)**2.4}).reduce((sum,c,i)=>sum+c*[.2126,.7152,.0722][i],0);
    const contrast=(a,b)=>{const x=luminance(a),y=luminance(b);return (Math.max(x,y)+.05)/(Math.min(x,y)+.05)};
-   return {current,baseline,paint,palette,lineAlpha:rgba(palette.line)[3],textContrast:contrast(palette.ink,palette.soft),borderContrast:contrast(palette.line,palette.soft),
+   return {current,textWidth,available,paint,palette,lineAlpha:rgba(palette.line)[3],textContrast:contrast(palette.ink,palette.soft),borderContrast:contrast(palette.line,palette.soft),
     row:rect(row),buttons:[...row.querySelectorAll('button')].map(rect),popupOverflow:popup.scrollWidth>popup.clientWidth,pageOverflow:document.documentElement.scrollWidth>innerWidth};
   });
   assert.equal(evidence.paint.boxSizing,'border-box');assert.equal(evidence.paint.padding,'6px');assert.equal(evidence.paint.radius,'8px');
-  assert.notEqual(evidence.paint.appearance,'none','The native select arrow remains available');
+  assert.equal(await select.evaluate(el=>el.tagName),'SELECT','Native select semantics and keyboard picker remain');
+  assert.equal(evidence.paint.appearance,'none');
+  assert.ok(parseFloat(evidence.paint.paddingInlineEnd)>=36,'Text reserves the inset indicator lane');
+  assert.match(evidence.paint.indicator,/linear-gradient/,'Decorative inset indicator is painted');
+  assert.ok(evidence.available>=evidence.textWidth,'Selected toolbar value fits before the indicator');
   for(const border of evidence.paint.borders){assert.equal(border.width,'1px');assert.equal(border.style,'solid');assert.equal(border.color,evidence.palette.line)}
   assert.ok(evidence.lineAlpha>0,'The selector border is not transparent');
   assert.equal(evidence.paint.background,evidence.palette.soft);assert.notEqual(evidence.paint.background,evidence.palette.surface,'Selector tint differs from the toolbar surface');
   assert.equal(evidence.paint.ink,evidence.palette.ink);assert.ok(evidence.textContrast>=4.5,'Selector text remains readable against the tint');
-  for(const part of ['select','popup'])for(const dimension of ['x','y','width','height']){
-   assert.ok(Math.abs(evidence.current[part][dimension]-evidence.baseline[part][dimension])<=.5,`${label}: ${part} ${dimension} retains the old outer geometry`);
-  }
   const box=evidence.current.select;assert.ok(box.width>0&&box.height>=36);
-  for(const button of evidence.buttons)assert.ok(Math.abs(box.height-button.height)<=.5,'Selector retains the neighboring control height');
+  if(label.startsWith('390px'))assert.ok(evidence.paint.fontSize>=16,'Narrow native select retains non-zooming readable text');
+  for(const button of evidence.buttons){
+   assert.ok(Math.abs(box.height-button.height)<=4,'Control heights stay visually coherent '+JSON.stringify({label,box,button,paint:evidence.paint}));
+   assert.ok(Math.abs(box.y+box.height/2-button.y-button.height/2)<=.5,'Select and formatting buttons share a centerline');
+  }
   for(const control of [box,...evidence.buttons])assert.ok(control.x>=evidence.row.x-.5&&control.x+control.width<=evidence.row.x+evidence.row.width+.5,'All controls fit the toolbar row');
   assert.equal(evidence.popupOverflow,false,'The selector does not overflow its toolbar');
   if(focused){await expect(select).toBeFocused();assert.equal(evidence.paint.focusVisible,true);assert.deepEqual(evidence.paint.outline,{width:'2px',style:'solid',color:evidence.palette.accent,offset:'1px'})}

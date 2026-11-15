@@ -102,14 +102,23 @@ class SelectedProvider:
         # Weak refs avoid retaining canonical content; saturation fails closed.
         self._media_fit_refusals = []
         self._media_fit_refusal_overflow = False
+        from ..overflow_feedback import OverflowFeedback
+        self._overflow_feedback = OverflowFeedback()
     def _execution_provider(self):
         return self.execution_adapter(self.original) if callable(self.execution_adapter) else self.original
     def __getattr__(self, name):
         if name == "default_model" and self.selection.get("model"):
             return self.selection["model"]
         execution = self._execution_provider() if name in {
-            'stream', 'request_budget', 'refit_request', 'compact_context'} else self.original
+            'stream', 'request_budget', 'refit_request', 'compact_context',
+            'recover_context_overflow'} else self.original
         method = getattr(execution, name)
+        if name == 'recover_context_overflow' and callable(method):
+            def recover(request, error, *, context_estimate, request_options=None):
+                return self._overflow_feedback.recover(request, error,
+                    context_estimate=context_estimate, request_options=request_options,
+                    owner=self._execution_provider(), binding=self.selection)
+            return recover
         if name == 'refit_request' and callable(method):
             async def refit(request, *, error, request_options=None, **kwargs):
                 # The execution adapter owns the refusal. Forward its exact
@@ -165,6 +174,7 @@ class SelectedProvider:
             return selected_stream
         if name == "request_budget" and callable(method):
             def selected_budget(request, *, request_options=None, **kwargs):
+                self._overflow_feedback.forget(request)
                 # Preserve named-option feature detection through this wrapper,
                 # translating to keywords only for a legacy provider budget.
                 kwargs['request_options'] = request_options
@@ -359,9 +369,13 @@ class SelectedProvider:
         return True
 
     async def _stream_selected(self, execution, method, request, kwargs):
+        options = dict(kwargs)
+        self._overflow_feedback.forget(request)
         self._check_fitted_execution(request, execution)
         selected, kwargs = self._selected_request(request, kwargs, dispatch=True)
         self._refused_requests = [row for row in self._refused_requests if row[0] is not request]
+        feedback = self._overflow_feedback.capture(request, selected, options, kwargs,
+                                                   execution, binding=self.selection)
         retained, emitted, iterator = False, False, None
         try:
             iterator = aiter(method(selected, **kwargs))
@@ -371,6 +385,7 @@ class SelectedProvider:
         except BaseException as error:
             if not emitted:
                 retained = self._retain_refusal(request, selected, execution, error)
+                self._overflow_feedback.remember(feedback, error)
             raise
         finally:
             if not retained:
@@ -379,15 +394,20 @@ class SelectedProvider:
                 await iterator.aclose()
 
     async def complete(self, request, **kwargs):
+        options = dict(kwargs)
+        self._overflow_feedback.forget(request)
         execution = self._execution_provider()
         self._check_fitted_execution(request, execution)
         selected, kwargs = self._selected_request(request, kwargs, dispatch=True)
         self._refused_requests = [row for row in self._refused_requests if row[0] is not request]
+        feedback = self._overflow_feedback.capture(request, selected, options, kwargs,
+                                                   execution, binding=self.selection)
         retained = False
         try:
             return await execution.complete(selected, **kwargs)
         except BaseException as error:
             retained = self._retain_refusal(request, selected, execution, error)
+            self._overflow_feedback.remember(feedback, error)
             raise
         finally:
             if not retained:

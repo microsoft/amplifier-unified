@@ -69,10 +69,28 @@ path assumptions do not establish Windows or macOS acceptance.
 
 The package version alone does not identify published or qualified bytes; use the
 actual release source receipts and artifact hashes.
-Unified already bundles these runtime sources and the worktree package from their
-single authoring owners. Do not coinstall either standalone distribution into
-Unified. Separate repositories and Unified dependency adoption remain separate
-reviewed delivery decisions.
+Unified consumes explicitly selected public artifacts through
+`components/portability-delivery/` and `components/worktrees-delivery/`, with
+Unified as the sole installed distribution owner. `components/portability.source.json`
+retains the exact dependency receipt from the published portability source archive;
+normal builds require it to match `components/worktrees.source.json`, including
+source, artifact and runtime identities, not just the version.
+
+To deliberately select verified release assets after selecting matching worktrees:
+
+```sh
+python scripts/scheduling_delivery.py select --component portability \
+  --dist /path/to/downloaded-assets --revision FULL_SOURCE_SHA \
+  --receipt-sha256 EXACT_PORTABILITY_SOURCE_SHA256
+python scripts/scheduling_delivery.py verify --component portability
+```
+
+Normal wheel, sdist and editable builds verify the committed selection offline.
+Author edits and component publication do not silently refresh either app default
+or require the author tree to match the selected copy. Do not coinstall either
+standalone distribution into Unified or edit its generated copies by hand. This
+is independent artifact consumption, not independent pip replacement; return to a
+prior selection through ordinary app rollback, preserving newer user state.
 
 
 ## Component artifact delivery

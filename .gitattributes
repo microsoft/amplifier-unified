@@ -31,11 +31,15 @@
 /components/worktrees/MANIFEST.in source-context=configuration
 /components/worktrees/.gitignore source-context=configuration
 /components/worktrees/LICENSE source-context=documentation
+/components/worktrees.source.json source-context=configuration
+/components/worktrees-delivery/** source-context=generated linguist-vendored=true linguist-generated=true -text
 /components/portability/amplifier_portability/** source-context=source
 /components/portability/tests/** source-context=tests
 /components/portability/MANIFEST.in source-context=configuration
 /components/portability/.gitignore source-context=configuration
 /components/portability/LICENSE source-context=documentation
+/components/portability.source.json source-context=configuration
+/components/portability-delivery/** source-context=generated linguist-vendored=true linguist-generated=true -text
 /components/outputs/amplifier_outputs/** source-context=source
 /components/outputs/tests/** source-context=tests
 /components/outputs/MANIFEST.in source-context=configuration
@@ -45,6 +49,8 @@
 /components/workspaces/tests/** source-context=tests
 /components/workspaces/.gitignore source-context=configuration
 /components/workspaces/LICENSE source-context=documentation
+/components/workspace-metadata.source.json source-context=configuration
+/components/workspace-metadata-delivery/** source-context=generated linguist-vendored=true linguist-generated=true -text
 /docs/** source-context=documentation
 /contracts/** source-context=contracts
 /context/** source-context=guidance
@@ -125,7 +131,21 @@ package-lock.json source-context=locks
 /scripts/files1318_integrated_checks.py source-context=evidence linguist-generated=true
 /scripts/scale_runtime_browser.mjs source-context=evidence linguist-generated=true
 /scripts/scale_runtime_workspace_browser.mjs source-context=evidence linguist-generated=true
-/amplifier_operations/tests/** source-context=tests
-/amplifier_operations/MANIFEST.in source-context=configuration
-/amplifier_operations/.gitignore source-context=configuration
-/amplifier_operations/LICENSE source-context=documentation
+/components/operations/*.py source-context=source
+/components/operations/tests/** source-context=tests
+/components/operations/MANIFEST.in source-context=configuration
+/components/operations/.gitignore source-context=configuration
+/components/operations/LICENSE source-context=documentation
+
+# Preserve the installed/isolated worker path; authoring lives under components.
+/components/operations.source.json source-context=configuration
+/amplifier_operations/** source-context=generated linguist-vendored=true linguist-generated=true -text
+/components/kernels/*.py source-context=source
+/components/kernels/*.cjs source-context=source
+/components/kernels/tests/** source-context=tests
+/components/kernels/pyproject.toml source-context=configuration
+/components/kernels/MANIFEST.in source-context=configuration
+/components/kernels/.gitignore source-context=configuration
+/components/kernels/LICENSE source-context=documentation
+/components/kernels.source.json source-context=configuration
+/amplifier_kernels/** source-context=generated linguist-vendored=true linguist-generated=true -text

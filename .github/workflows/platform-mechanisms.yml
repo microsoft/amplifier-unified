@@ -57,6 +57,7 @@ on:
       - amplifier_web/windows_installation.py
       - amplifier_web/windows_ports.py
       - amplifier_web/windows_consumer.py
+      - amplifier_web/windows_consumer_shell.py
       - amplifier_web/installation_runtime.py
       - amplifier_web/cli.py
       - amplifier_web/deployment_service.py
@@ -95,6 +96,7 @@ on:
       - tests/test_windows_installation.py
       - tests/test_windows_ports.py
       - tests/test_windows_consumer.py
+      - tests/test_windows_consumer_shell.py
       - tests/test_installation_runtime.py
       - tests/test_installation_health.py
       - tests/test_cli_deployment.py
@@ -256,6 +258,14 @@ jobs:
         run: |
           .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -p no:cacheprovider tests/test_session_sign_out.py
           if ($LASTEXITCODE -ne 0) { throw 'Sign-out of all browsers checks failed.' }
+      # Uninstall: real Start-menu shortcuts (ShellLink COM), the real HKCU
+      # registry transaction, private files and NTFS sharing, in a throwaway
+      # installation folder that the test removes. Task Scheduler is a stand-in.
+      - name: Check uninstall order, a failed stop and a second uninstall with the real Windows entries
+        shell: pwsh
+        run: |
+          .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -p no:cacheprovider tests/test_windows_consumer_shell.py
+          if ($LASTEXITCODE -ne 0) { throw 'Windows uninstall entry checks failed.' }
   windows-user-trial:
     if: ${{ inputs.storage_only || (!inputs.bootstrap_only && !inputs.foreground_only) }}
     # Candidate-only combined boundary, not a universal suite/release gate.

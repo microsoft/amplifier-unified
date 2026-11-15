@@ -650,11 +650,16 @@ def test_real_sdist_build_excludes_untracked_ci_checkouts(repository):
     for name in ('pyproject.toml', '.gitignore'):
         shutil.copyfile(project / name, repository / name)
     for name in ('scripts/scheduling_build_hook.py', 'scripts/scheduling_delivery.py',
-                 'components/scheduling.source.json'):
+                 'components/scheduling.source.json', 'components/worktrees.source.json',
+                 'components/portability.source.json', 'components/operations.source.json',
+                 'components/workspace-metadata.source.json', 'components/kernels.source.json'):
         target = repository / name; target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(project / name, target)
-    shutil.copytree(project / 'components/scheduling-delivery',
-                    repository / 'components/scheduling-delivery')
+    for component in ('scheduling', 'worktrees', 'portability', 'workspace-metadata'):
+        shutil.copytree(project / f'components/{component}-delivery',
+                        repository / f'components/{component}-delivery')
+    shutil.copytree(project / 'amplifier_operations', repository / 'amplifier_operations')
+    shutil.copytree(project / 'amplifier_kernels', repository / 'amplifier_kernels')
     (repository / 'README.md').write_text('Package build fixture')
     for dependency in ('loop-live', 'recipes'):
         checkout = repository / '.ci' / dependency

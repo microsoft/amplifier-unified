@@ -3,9 +3,11 @@
 `components/workspaces/` is the temporary authoring home for the independently
 buildable `amplifier_workspace_metadata` package. Its registration and query
 mechanism tests belong here; Unified retains initialization, filesystem effects,
-history, authority and persistence. Unified includes the same runtime sources as
-the sole installed owner; do not coinstall the standalone distribution. This
-metadata boundary is not the whole workspace domain or a generated copy.
+history, authority and persistence. Unified consumes only the published artifact
+selected into `workspace-metadata-delivery/` by `workspace-metadata.source.json`,
+as the sole installed owner; do not coinstall the standalone distribution. Never
+edit that generated copy by hand. Author edits and publication do not refresh the
+app selection. This metadata boundary is not the whole workspace domain.
 
 `components/outputs/` is temporarily authored here as an independently buildable
 Python project. Preserve `amplifier_outputs` imports and its saved-body formats.
@@ -18,15 +20,20 @@ standalone distribution. This is not a generated copy or the whole resources dom
 buildable Python project. Preserve `amplifier_portability` imports and its existing
 worktree dependency. Its signed-journal and Git-capsule tests stay with the package;
 Unified retains task admission, data projection, native fencing and account probes.
-Normal Unified builds both runtime packages directly. Standalone delivery selects
+Unified consumes only `portability-delivery/` selected by `portability.source.json`,
+which binds the exact published dependency to `worktrees.source.json`. Authoring
+and publication do not change those selected defaults. Standalone delivery selects
 an exact public worktrees artifact through `portability/worktrees-source.json`;
 install both selected wheels explicitly, never alongside their Unified-owned copies.
+Never edit either generated delivery copy by hand.
 
 `components/worktrees/` is temporarily authored here as an independently buildable
 Python project. Preserve `amplifier_worktrees` and `amplifier_worktrees.git` imports;
-Unified builds directly from its nested runtime sources. Its real-Git mechanism
+Unified selects published bytes into `worktrees-delivery/`, recorded by
+`worktrees.source.json`, as the sole installed owner. Its real-Git mechanism
 tests belong here; host permission, active-task, handoff and cleanup policy remain
-in Unified. It is not a generated delivery copy.
+in Unified. The author project is independent of the generated delivery copy;
+never edit that copy by hand or coinstall the standalone distribution.
 
 `components/publishing/` is temporarily authored here as its independently
 buildable Python project. Preserve its `amplifier_publishing` imports and existing
@@ -40,6 +47,22 @@ Unified consumes only the generated `scheduling-delivery/` snapshot selected by
 `scheduling.source.json`; author edits and publication do not change this default.
 Never edit the delivery copy by hand or coinstall the standalone distribution with
 Unified, which remains the sole installed owner. Follow the author project's README.
+
+`operations/` is the temporary authoring project for `amplifier_operations`.
+Its SQLite operation observations and bounded delivery/cursor tests belong here;
+Unified retains admission, authority, Stop and execution. The top-level
+`amplifier_operations/` is the generated runtime snapshot selected by
+`operations.source.json`, preserving the installed and isolated-worker import path.
+Never edit that snapshot by hand or coinstall the standalone distribution with
+Unified. Independent author edits/publication do not refresh the app selection.
+
+`kernels/` is the temporary authoring project for `amplifier_kernels`, including
+its Python and Node runners and real-process mechanism tests. Unified consumes
+the generated top-level `amplifier_kernels/` snapshot selected by
+`kernels.source.json`, preserving editable and isolated-worker import origins.
+Never edit that snapshot by hand or coinstall the standalone distribution with
+Unified. Author edits and publication do not refresh the app selection; the host
+retains process approval, execution, observation and recovery authority.
 
 ## Web client delivery
 

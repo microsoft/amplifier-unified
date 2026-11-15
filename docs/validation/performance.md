@@ -85,6 +85,15 @@ An object identity, list length or file size alone does not prove unchanged nest
 content. Count cache-validation work too. Moving a full scan to another process
 changes responsiveness, but does not by itself reduce total work or memory.
 
+Execution reuse still requires a fresh witness of the relevant borrowed builtin
+content. Within that synchronous invocation, placement encoding can reuse fresh raw-node digests
+while witnessing receipt and turn dependencies after projection. Bound this
+temporary metadata and conservatively fall back to the complete fragment witness
+near serialization limits; retain no borrowed graph between saves. Canonical JSON,
+commit authority and existing memory budgets remain unchanged. Measure changed
+and unchanged saves separately: this removes repeated work, not the full history
+scan or the broader causes of multi-second UI latency.
+
 Exercise interleaved owners whose combined history exceeds a cache's capacity,
 not only warm inputs that fit. A scan must not evict every reusable fragment
 before its next use. Count re-encoding as well as retained bytes, and pair reuse
@@ -574,6 +583,15 @@ without assigning a window rank to every owner. The existing directory-state
 checks retain global positions, negative indices, private-state filtering and
 stale-revision refusal. Their SQL budgets measure query work, not constant-time
 global ordering or a guaranteed live-host latency.
+
+`tests/test_coordination_current_cost.py` grows unrelated, incoming and outgoing
+command history while holding the current 32-request page fixed. Select bounded
+candidate IDs through the existing sender/target indexes before fetching bodies;
+the final page keeps insertion order and deduplicates requests involving both
+sides. Reads stay on the caller's transaction and observe uncommitted receipt
+changes and rollback. Cancellation remains a projection of the saved receipt,
+not a rewritten outcome. The measured query bound does not cover initial index
+creation, grants, pending proposals or other coordination operations.
 
 The additive Extended browser registration belongs to the nightly/manual lane. The separate
 `Client performance smoke` workflow selects affected PR paths and supports manual

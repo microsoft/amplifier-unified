@@ -586,13 +586,83 @@ observed depths below the folder: app generation 169 characters, worker
 environment 162, private Python 142, tools 124, private Git 68. Those fit at
 59 today.
 
-The short folder is necessary and not sufficient. Until the path-length work
-ships, the session folder and the source store still exceed the Windows limit
-for every folder path, so 59 is the number that stays true afterwards, not a
-claim that a first chat works on this release. A change to the folder name
-must respect this number, and `tests/test_windows_setup_folder.py` fails when
-code and document disagree. Setup stops before it asks anything when the path
-would be longer.
+The short folder is necessary and not sufficient. The app must also keep what
+it adds below the folder inside the budget of the next section. One row of that
+budget does not fit at 59: module source in the source store fits only up to a
+folder path of 54 (see the source-store item below). A change to the
+folder name must respect this number, and `tests/test_windows_setup_folder.py`
+fails when code and document disagree. Setup stops before it asks anything when
+the path would be longer.
+
+### Path budget below the installation folder
+
+With long paths off Windows accepts a file path of at most 259 characters and
+creates a folder of at most 247. `tests/test_windows_path_budget.py` is the one
+table of what each store adds below the installation folder. It computes every
+path shape for the longest supported folder path and reads that number from
+setup. For the session, capture and ownership stores it reads the temporary and
+sibling names from their owners, and it fails when a sum no longer fits. For the
+source store it uses measured repository depths, which are constants in the
+test: it does not notice a deeper file in a later bundle revision. Print the
+table with `python tests/test_windows_path_budget.py`.
+
+- **The app's own chat folders use a short project name on Windows.** The shared
+  CLI name of `<folder>\app\chats\<chat id>\files` is the folder path plus 53
+  characters, so the folder path appears twice in every session path. Release
+  0.94.1 failed its first chat on this: a temporary file beside the saved view
+  was 277 characters with an 18-character account name. The name is now
+  `chat-<16 hex digits>` (21 characters). The rule and its limits are in the
+  [history contract](../workspaces/contracts/history.v1.md#what-it-is).
+- **Root sessions fit in the session, capture and ownership stores** at 59: the
+  longest path is 245.
+- **Worker (sub-agent) sessions have longer IDs** (34 characters plus the agent
+  name). At 59 every path shape holds an ID of 50 characters. Longer IDs lose
+  files in this order: the request observation (50, root sessions only), the
+  oversized-request diagnostic copy (51; the app records "unavailable" and the
+  turn continues), background-job records (68), the saved view (93). A shorter
+  folder path adds the same number of characters to each limit.
+- **Not covered:** a chat that a person starts in the default workspace folder
+  (`<folder>\workspace`) keeps the CLI name, like every folder a person chooses.
+  Its background-job records fit only up to a folder path of 51, and its request
+  diagnostics up to 42. An installation made by an earlier setup file (folder
+  path of 74 characters plus the account name) has no budget; new chats there
+  get the short name, which is necessary and not always sufficient. A chat
+  there with saved history under the CLI name stays under it, including history
+  longer than the limit that was written while long paths were on. The app
+  finds such history through the extended-length path form and does not start
+  a second history for that chat.
+- **Source store:** Amplifier Foundation owns its layout; the app supplies the
+  folder, `<folder>\source-store`. A Foundation revision before `7526bb55`
+  cannot stage the default bundles at any supported folder path (measured at
+  51; arithmetic for the others), so the conversation worker cannot start on a
+  default PC. From `7526bb55` the store
+  reaches every staged file itself through extended-length paths, and new
+  entries on Windows have 16-digit folder names. Repository depth then no
+  longer limits staging, sealing, cleanup or the copy into a build view.
+- **Source store, the row that does not fit at 59:** other programs still open
+  store files by ordinary paths. Python imports module source from the store
+  object: folder path + 80 (`\source-store\objects\<16>\<40>\`) + the path
+  inside the repository. The deepest module file of the default bundles is 125
+  characters (measured), so the path is folder path + 205. It fits up to a
+  folder path of **54** and is 264 at 59. Setup accepts an account whose
+  profile-folder name has 22 to 26 characters, and that account then cannot
+  load the default bundles. This is arithmetic from measured depths; it has
+  not been run on such an account. Setup owns the fix, which is not decided:
+  the store folder name `s` (11 characters shorter, 253 at 59) or a limit of
+  54. An entry that already exists under a 64-digit name stays in use and is
+  48 characters longer.
+
+`.github/workflows/windows-path-length.yml` is the native check. It turns
+`LongPathsEnabled` off on its own runner, proves in a new process that a
+260-character path is refused, runs the real session and capture stores under a
+folder path of exactly 59 characters, and restores the runner's value. It
+installs the locked dependencies, and the lock selects Foundation `7526bb55`.
+Its source-store case stages a repository as deep as the default bundles
+through Foundation's real store, at folder paths of 59 and 54. It requires
+that the store seals, builds and cleans up files beyond the limit, and that
+Windows accepts or refuses each ordinary path exactly as the budget table
+says: the deepest module file is refused at 59 (264 characters) and opens at
+54 (259). It is not setup-file or clean-account acceptance.
 
 Setup checks the PC and the folder before its first question. Each stop names
 one cause and one next step in plain language, and never shows exception text,
@@ -663,6 +733,84 @@ Windows runner, folder states, a planted marker in a folder that other accounts
 can change, a link in place of the folder, removal, the held installation, the
 named folder above, elevation detection and the stop text. It shows no setup
 window and installs nothing.
+
+### Uninstall stops the app before it removes an entry
+
+Uninstall runs from the Apps list or from "Uninstall Amplifier" in the Start
+menu. Both start the stable launcher (`windows_consumer --uninstall`). A person
+must never be left with a running app and no entry to open, stop or remove it.
+So the order is:
+
+1. One question. No changes nothing.
+2. If the running app reports that a chat is working, a second question names
+   that. Yes stops the work through the app's normal stop. No keeps Amplifier
+   installed. The launcher asks the app over the same pinned private HTTPS
+   connection that browser entry uses. The app counts conversations with the
+   update gate's own two predicates (conversation work, background-worker
+   work). An app that does not answer, or an older app that reports no count,
+   gets no second question.
+3. Check and pin every Start-menu shortcut and the Apps-list entry. A changed
+   entry stops here, before the app is touched.
+4. Stop the app normally and remove its sign-in task. There is no forced stop.
+5. Remove the Apps-list entry, then the shortcuts ("Uninstall Amplifier" last),
+   then the emptied Start-menu folder.
+6. If Windows trusts this installation's own key-less certificate for this
+   person, ask Windows once to delete it (`windows_trust.remove_root`). Windows
+   itself asks the person; its default answer is No. The first question
+   announces this. Every outcome finishes the uninstall: a certificate that
+   stays has no signing key anywhere and names only this PC. There is no
+   second attempt, no elevation and no Local Machine store. An identity from
+   an earlier setup added nothing and is not touched.
+7. One message says that uninstall is complete. It says so when Windows kept
+   the certificate.
+
+A step that fails leaves the entries of every later step in place and shows
+one message with the cause, the next action and a short reference (step name,
+error type and Windows error code, never the error text). The same step and
+error are saved in the private file `consumer-maintenance.json` in
+`app\config\services`, beside the app's other service records, or in the
+installation folder when that folder cannot be written.
+
+Why the app stops first. The earlier order removed the entries, rewrote
+setup's entry record `consumer-shell.json` in the installation folder, and
+only then stopped the app. While a conversation worker is alive, Windows
+refuses a new or replaced file directly in the installation folder (sharing
+violation, error 32); a worker stays alive after its chat turn ends. So after
+any chat the rewrite failed, the app was never asked to stop, and it kept
+running and starting at sign-in with no entry left. Two clean-room runs showed
+this, and a probe in the second one measured the refusal: it is present with
+live workers and gone after the app's normal stop. Which handle in the worker
+tree causes it is not yet known. `app\config\services` accepts writes in the
+same state.
+
+Uninstall can be repeated. An entry that an earlier, interrupted uninstall
+already removed is skipped; a task that is already gone is not an error.
+
+The last step rewrites the entry record with the status `removed`; a later
+setup run reads that status to choose its wording. Worker programs end a
+moment after the task reports that it stopped, so this write waits up to 15
+seconds for them. A write that is still refused does not fail a finished
+uninstall, because every entry is already gone; it is saved as a failed
+`receipt` step.
+
+The Start-menu commands Stop and Status use the same form of message: what
+did not happen, the next action and the reference. They no longer show the
+general text "could not complete this operation".
+
+The launcher is the code that setup installed; an in-app update does not
+replace it. A new installation gets this behavior from its setup file. An
+earlier installation gets it only when its launcher is refreshed. The count
+in step 2 comes from the running app, which in-app updates do replace.
+
+Not in this change: uninstall still keeps the program files and the person's
+data. A changed shortcut or Apps-list entry still makes
+uninstall refuse. The Apps list still shows the version that setup installed.
+The native check in the `windows-local-connection` job uses the real
+shortcuts, the real registry transaction, private files and NTFS sharing on a
+Windows runner. It holds the throwaway installation folder open without write
+sharing to get the same refusal, and it uses a stand-in for Task Scheduler,
+because a runner cannot register the sign-in task. A real stop with a live
+conversation worker remains clean-room acceptance.
 
 ## Process-local Proactor cleanup backport
 

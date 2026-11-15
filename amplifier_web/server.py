@@ -487,6 +487,11 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
             response["dataIdentity"] = data_identity(service.data_dir)
             response.update({key: service.update_manager.running_identity[key] for key in ('revision', 'instanceId')})
             response["runtime"] = dict(service.state["runtime"])
+            if request.query.get("activity") == "1":
+                # Only on request: the owner's uninstall asks before a normal
+                # stop interrupts work. Ordinary health probes do not scan chats.
+                from .update_blockers import working_sessions
+                response["activity"] = {"working": working_sessions(service)}
         return web.json_response(response)
 
     async def performance_diagnostics(request):

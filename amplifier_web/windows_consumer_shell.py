@@ -3,6 +3,7 @@
 Native ShellLink COM and HKCU only: no PowerShell, administrator, machine PATH,
 trust import or external runtime. Unknown/colliding effects are retained, not
 silently overwritten. Removal unregisters this app and preserves user files.
+It can be repeated: entries that are already gone are skipped.
 """
 from __future__ import annotations
 
@@ -11,13 +12,16 @@ import ctypes as C
 from ctypes import wintypes as W
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
 import sys
+import time
 import uuid
 
 FILE = "consumer-shell.json"
+SETTLE_SECONDS = 15  # Longest wait for a closing app to release the installation folder.
 LINKS = {"Amplifier Unified.lnk": "", "Amplifier status.lnk": " --status",
          "Stop Amplifier.lnk": " --stop", "Uninstall Amplifier.lnk": " --uninstall"}
 REGISTRY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\AmplifierUnified-"
@@ -246,9 +250,21 @@ def install(root, version):
 
 
 @contextmanager
-def removal(root):
+def removal(root, *, progress=None):
+    """Prepare removal of this installation's own entries; `finish` removes them.
+
+    Entering changes nothing. It checks and pins every entry that still exists,
+    so the caller can stop the app first and remove the entries last. An entry
+    that an earlier, interrupted removal already took away is skipped: a second
+    uninstall completes. An entry that differs from setup's record refuses.
+
+    `progress(name)` names the step that is about to run: `apps-entry`,
+    `shortcuts`, `receipt`. `finish` releases the pins itself, so the entries
+    are gone before it records the removal.
+    """
     from .windows_files import address, directory
     from .deployment import write_private
+    step = progress or (lambda name: None)
     root = address(root)
     with directory(root, owned_root=root) as owned:
         row = json.loads(owned.read_private(FILE, limit=65536))
@@ -257,31 +273,69 @@ def removal(root):
     if (not isinstance(row, dict) or set(row) != {"schema", "root", "folder", "status", "links", "registry"}
             or type(row["schema"]) is not int or row["schema"] != 1
             or row["root"] != str(root) or row["folder"] != str(folder)
-            or row["status"] != "installed" or not isinstance(row["links"], dict)
+            or row["status"] not in {"installed", "removed"} or not isinstance(row["links"], dict)
             or set(row["links"]) != set(links) or not isinstance(row["registry"], dict)
             or row["registry"] != registration_values(root, row["registry"].get("DisplayVersion"))):
         raise ValueError("The Windows app entry receipt is incomplete; inspect before removal.")
+    result = {"shortcutsRemoved": True, "installedAppEntryRemoved": True, "userDataRetained": True}
+    if row["status"] == "removed":
+        # A completed earlier removal. Setup never recreates entries under this receipt.
+        yield lambda: dict(result)
+        return
     with ExitStack() as stack:
-        owned = stack.enter_context(directory(folder, owned_root=folder))
-        removers = []
+        removers, commit = [], None
+        try:
+            owned = stack.enter_context(directory(folder, owned_root=folder))
+        except FileNotFoundError:
+            owned = None  # The whole Start-menu folder is already gone.
         # Keep ALL verified handles (deny WRITE/DELETE sharing) through effects.
-        for name, args in links.items():
+        for name, args in links.items() if owned else ():
+            if not (folder / name).exists():
+                continue
             with shell_link() as link:
                 if link.read(folder / name) != (str(python), args):
                     raise ValueError("A Windows shortcut target changed; no entries were removed.")
             # COM can open without DELETE sharing. Close it first, then pin the
             # exact audited bytes: a change between those reads is refused.
             removers.append(stack.enter_context(owned.removal_private(name, row["links"][name])))
-        commit = stack.enter_context(registry_change(root, row["registry"], remove=True))
+        try:
+            commit = stack.enter_context(registry_change(root, row["registry"], remove=True))
+        except FileNotFoundError:
+            pass  # The installed-app entry is already gone.
         def finish():
-            # Commit conflicts refuse before link/task removal. Later genuine I/O
-            # failures can leave partial effects; they do not imply rollback.
-            commit()
+            # The commit can refuse because another program edited the key; it
+            # runs before any shortcut is removed. Later genuine I/O failures
+            # can leave partial effects, which the next removal completes.
+            step("apps-entry")
+            if commit is not None:
+                commit()
+            step("shortcuts")
             for remove_link in removers:
                 remove_link()
+            stack.close()  # Release the pins: Windows removes the shortcuts now.
+            try:
+                os.rmdir(folder)  # Only when empty; a file the person added stays.
+            except OSError:
+                pass
+            step("receipt")
             row["status"] = "removed"
-            write_private(root / FILE, json.dumps(row), owned_root=root)
-            return {"shortcutsRemoved": True, "installedAppEntryRemoved": True, "userDataRetained": True}
+            # Setup reads this status on a later run. Every entry is gone, so a
+            # refused write does not fail the removal; it is reported instead.
+            for attempt in range(max(1, SETTLE_SECONDS * 2)):
+                try:
+                    write_private(root / FILE, json.dumps(row), owned_root=root)
+                    return dict(result)
+                except PermissionError as refused:
+                    # The app's worker programs end a moment after its task
+                    # reports that it stopped. Until then Windows refuses a
+                    # replaced file in the installation folder.
+                    error = refused
+                    if attempt < SETTLE_SECONDS * 2 - 1:
+                        time.sleep(0.5)
+                except (OSError, ValueError, RuntimeError) as failed:
+                    error = failed
+                    break
+            return {**result, "receiptError": error}
         yield finish
 
 

@@ -20,11 +20,16 @@ COMPONENTS = {
     "scheduling": ("components/scheduling", "amplifier_scheduling/"),
     "worktrees": ("components/worktrees", "amplifier_worktrees/"),
     "portability": ("components/portability", "amplifier_portability/"),
-    "operations": ("amplifier_operations", ""),
+    "operations": ("components/operations", ""),
+    "workspace-metadata": ("components/workspaces", "amplifier_workspace_metadata/"),
+    "kernels": ("components/kernels", ""),
 }
 
 
 def component_name(selected):
+    # Original published flat projects retain their historical authored paths.
+    if selected["subdirectory"] in {"amplifier_operations", "amplifier_kernels"}:
+        return selected["subdirectory"].removeprefix("amplifier_")
     for name in COMPONENTS:
         if selected["subdirectory"] == COMPONENTS[name][0]:
             return name
@@ -51,6 +56,12 @@ def selection(root, revision, *, qualification=False, component="scheduling"):
         raise ValueError("Select a full merged commit SHA.")
     if not qualification:
         run("git", "merge-base", "--is-ancestor", revision, "origin/main", cwd=root)
+    if component in {"operations", "kernels"}:
+        projects = run("git", "ls-tree", "--name-only", revision, "--",
+                       project_path + "/pyproject.toml", f"amplifier_{component}/pyproject.toml", cwd=root).decode().splitlines()
+        if len(projects) != 1:
+            raise ValueError(f"Expected one {component} author project at the selected revision.")
+        project_path = projects[0].removesuffix("/pyproject.toml")
     project = tomllib.loads(run("git", "show", f"{revision}:{project_path}/pyproject.toml", cwd=root).decode())
     version = project["project"]["version"]
     if project["project"]["name"] != "amplifier-" + component or not re.fullmatch(r"\d+\.\d+\.\d+", version):
@@ -64,7 +75,7 @@ def selection(root, revision, *, qualification=False, component="scheduling"):
 
 
 def artifact_names(selected):
-    stem = "amplifier_" + component_name(selected) + "-" + selected["version"]
+    stem = "amplifier_" + component_name(selected).replace("-", "_") + "-" + selected["version"]
     return stem + "-py3-none-any.whl", stem + ".tar.gz"
 
 
@@ -77,13 +88,14 @@ def safe(name):
 def package_identity(dist, selected):
     """Bind built payload and sdist inputs to Git, not merely their version labels."""
     component = component_name(selected)
-    package = "amplifier_" + component
+    package = "amplifier_" + component.replace("-", "_")
     wheel, source = artifact_names(selected)
     expected = selected["sourceFiles"]
     prefix = COMPONENTS[component][1]
     runtime = {package + "/" + name.removeprefix(prefix): digest
                for name, digest in expected.items()
-               if name.startswith(prefix) and (prefix or "/" not in name and name.endswith(".py"))}
+               if name.startswith(prefix) and (prefix or "/" not in name and
+                   (name.endswith(".py") or component == "kernels" and name == "node_runner.cjs"))}
     info = f"{package}-{selected['version']}.dist-info/"
     with zipfile.ZipFile(dist / wheel) as archive:
         names = archive.namelist()
@@ -113,8 +125,8 @@ def package_identity(dist, selected):
                 name = member.name.removeprefix(prefix)
                 if name in expected:
                     observed[name] = sha(archive.extractfile(member).read())
-                elif name.endswith(".py"):
-                    raise ValueError("Source archive contains unselected Python code.")
+                elif name.endswith(".py") or component == "kernels" and name.endswith(".cjs"):
+                    raise ValueError("Source archive contains unselected runtime code.")
         required = {name: digest for name, digest in expected.items() if name != ".gitignore"}
         if observed != required:
             raise ValueError("Source archive differs from selected project/tests.")
@@ -231,7 +243,9 @@ def publish(root, revision, dist, *, component="scheduling"):
                       "-f", "body=" + {"scheduling": "Standalone scheduling policy/store package.",
                                   "worktrees": "Standalone managed Git worktree mechanism.",
                                   "portability": "Standalone signed task transfer mechanism.",
-                                  "operations": "Standalone durable operation observations and coordination delivery."}[component] + " Source: " + revision +
+                                  "operations": "Standalone durable operation observations and coordination delivery.",
+                                  "workspace-metadata": "Standalone workspace registration metadata over caller-owned records.",
+                                  "kernels": "Standalone persistent computation through caller-owned processes and observations."}[component] + " Source: " + revision +
                       ". Unified dependency selection is unchanged. Do not co-install with a Unified version that still bundles this package.")
         release = read_release(release, tag)
     if not release["draft"]:
@@ -269,7 +283,7 @@ def main():
         result = selection(args.root, args.revision, qualification=args.qualification, component=args.component)
         if args.output:
             with args.output.open("a") as output:
-                for key in ("revision", "version", "tag"):
+                for key in ("revision", "version", "tag", "subdirectory"):
                     output.write(f"{key}={result[key]}\n")
     else:
         if args.dist is None:

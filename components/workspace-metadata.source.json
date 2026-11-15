@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "source": {
+    "schema": 1,
+    "repository": "microsoft/amplifier-unified",
+    "revision": "8b82dc82119ca5fc19f4be976d48f50c73754945",
+    "subdirectory": "components/workspaces",
+    "tree": "7c639ce1e746e55494eb9310512a29eeb82dc4b6",
+    "version": "0.1.0",
+    "tag": "workspace-metadata-v0.1.0",
+    "sourceFiles": {
+      ".gitignore": "91ff24eaa65a89ef74d692e164233422924a556a07666dd471ceefc6a31f331f",
+      "LICENSE": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
+      "README.md": "6eb4a83eb55170bd5c03731a95f8fa8ce72ed583f978be0baad8c0d795d24f9b",
+      "amplifier_workspace_metadata/__init__.py": "e06ec4da44e8692fdf7d0158cfb929a3b763ee590a1a76f799fcc8d569b57373",
+      "amplifier_workspace_metadata/registrations.py": "06624bd964a087d9f84c2b926173f6a04566801069ed44f8b4133137abe24ac4",
+      "pyproject.toml": "662c6fca3c9ff56f7e51790c774dd4fff76462d97fd3c49a249fa6a475f5135d",
+      "tests/test_registration_metadata.py": "124fbc91ef55063a3c142961883c4fbeaa9c1b6cf997a6c332bd9e24321bc019"
+    },
+    "artifacts": {
+      "amplifier_workspace_metadata-0.1.0-py3-none-any.whl": {
+        "sha256": "3ec3ae6bda9c21e24861a6de67adbbc248b0fccd229458a49cb409e5ab87fb08",
+        "bytes": 6668
+      },
+      "amplifier_workspace_metadata-0.1.0.tar.gz": {
+        "sha256": "787c010466cff21e9bba8b29a41b37e2da12619109f161ce7d73877a68af77a5",
+        "bytes": 7531
+      }
+    }
+  },
+  "artifact": {
+    "url": "https://github.com/microsoft/amplifier-unified/releases/download/workspace-metadata-v0.1.0/amplifier_workspace_metadata-0.1.0-py3-none-any.whl",
+    "sha256": "3ec3ae6bda9c21e24861a6de67adbbc248b0fccd229458a49cb409e5ab87fb08",
+    "bytes": 6668
+  },
+  "sourceReceiptSha256": "e19a04e01908992dfe970bd48d14dc58e4b502b7629d9d8e145e26fcd316a911",
+  "runtimeRequirements": [],
+  "files": {
+    "amplifier_workspace_metadata/__init__.py": "e06ec4da44e8692fdf7d0158cfb929a3b763ee590a1a76f799fcc8d569b57373",
+    "amplifier_workspace_metadata/registrations.py": "06624bd964a087d9f84c2b926173f6a04566801069ed44f8b4133137abe24ac4",
+    "LICENSE": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  }
+}

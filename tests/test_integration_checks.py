@@ -638,8 +638,28 @@ def test_native_owner_retains_request_artifacts_in_its_existing_output(tmp_path,
         'environment': str(environment), 'preparation': str(preparation), 'python': 'prepared-python'})
     observed = []
     monkeypatch.setattr(runner, 'run_lane', lambda *args: observed.append(args) or 0)
+    controls = []
+    monkeypatch.setattr(runner.integration_native, 'overflow_negative_controls',
+                        lambda *args: controls.append(args))
     output = tmp_path / 'output'
-    assert runner.execute('native', work, output) == 0
+    assert runner.execute('native', work, output, overflow_negative_controls=True) == 0
     assert observed[0][3] == {'UNIFIED_RUNTIME_PYTHON': 'prepared-python',
                              'AMPLIFIER_TEST_ARTIFACTS': str(output / 'artifacts')}
     assert (output / 'artifacts').is_dir()
+    assert controls[0][0] == runner.ROOT and controls[0][1] == work
+
+
+def test_overflow_regressions_use_existing_native_owner_without_other_lane_expansion():
+    from scripts.integration_native import REQUIRED_MODULES
+    native = checks.manifest()['lanes']['native']
+    for selector in (
+        'tests/test_provider_overflow_recovery.py', 'tests/test_provider_context_continuation.py',
+        'tests/test_fable_context_loop.py', 'tests/test_selected_provider.py',
+        'tests/test_selected_provider_refit.py', 'tests/test_request_recovery.py',
+        'tests/test_request_projection.py', 'tests/test_surface_context.py',
+    ):
+        assert native['selectors'].count(selector) == 1
+        assert checks.select_lanes([selector]) == [{'lane': 'native', 'os': 'ubuntu-latest'}]
+    for path in ('amplifier_web/overflow_feedback.py', 'amplifier_web/surface_delivery.py'):
+        assert checks.select_lanes([path]) == [{'lane': 'native', 'os': 'ubuntu-latest'}]
+    assert 'amplifier_module_provider_anthropic' in REQUIRED_MODULES

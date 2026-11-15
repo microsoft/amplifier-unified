@@ -58,11 +58,20 @@ selected copy; a client-only merge is not delivery here. Follow the mandatory
 Its selection and maintenance guide stay visible; use `--all --under components/web-client`
 to inspect the copy. Generated-context classification does not make synchronization
 optional. The copy is the selected production build source, not another authored owner.
-The scheduling artifact snapshot follows the same author/delivery distinction:
-`components/scheduling` is authored, while `components/scheduling-delivery` is
-generated and opt-in. Its visible `components/scheduling.source.json` records the
-selected public wheel. Use `--all --under components/scheduling-delivery` to inspect
+Scheduling, worktrees, portability and workspace metadata artifact snapshots follow the same author/delivery
+distinction: `components/<name>` is authored, while `components/<name>-delivery`
+is generated and opt-in. Visible `components/<name>.source.json` records the
+selected public wheel. Use `--all --under components/<name>-delivery` to inspect
 it; a new component source edit or publication does not silently refresh the copy.
+Workspace metadata's author project is `components/workspaces`; its selection
+uses `workspace-metadata-delivery` and `workspace-metadata.source.json`.
+Operations is authored in `components/operations`; its generated selection stays
+at top-level `amplifier_operations` to preserve editable and isolated-worker import
+paths. `components/operations.source.json` records its published artifact.
+Use `--all --under amplifier_operations` to inspect that selected runtime.
+Kernels follows the same root-layout rule: author in `components/kernels`,
+select through `components/kernels.source.json`, and use
+`--all --under amplifier_kernels` to inspect the generated Python/Node runtime.
 Source bootstrap files in the canonical client's `public/` remain authored inputs;
 their delivery copy has the same generated-context classification as other copied
 client source. Shipped documentation in `docs/shell` is authored here. Frozen UX inventory/control

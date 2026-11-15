@@ -27,6 +27,11 @@ Unified and app-cli use the same native project session layout:
 `AMPLIFIER_HOME` relocates the community root. The CI-supported
 `AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH` can separately relocate capture files.
 Project slugs follow the CLI exactly, including spaces, underscores and periods.
+One exception, on Windows only: a chat folder that the app allocated
+(`chats\<chat id>\files`) uses the short name `chat-<16 hex digits>`, because
+its CLI slug makes session paths longer than Windows accepts by default. See the
+[history contract](workspaces/contracts/history.v1.md#what-it-is) and the
+[path budget](design/native-windows-installation.md#path-budget-below-the-installation-folder).
 
 The community CI hook owns session event capture; Unified reads it rather than
 serializing UI progress into another session event log. The host emits the same

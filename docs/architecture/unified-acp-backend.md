@@ -6,6 +6,13 @@ host. Closing one does not shut down the host or stop accepted work. This text
 backend uses the public ACP SDK shipped with Unified, without the private ACP
 application or a second writer for Unified's data directory.
 
+This is an execution attachment in the
+[five-boundary composition](VISION.md#constellation-boundaries).
+When it serves another Agent Instance, that agent supplies its continuing identity
+and accepted-work interface; connected experiences retain their source conversations.
+The adapter's advertised capabilities below describe its scope, not complete
+ecosystem conformance.
+
 ## Setup
 
 Install and start Unified normally, connect its model account, and choose its
@@ -55,8 +62,8 @@ model execution.
 
 For a new conversation that needs connected tools such as Instance's context
 retrieval, save this explicit profile as `/path/to/profiles/work-mcp.md` on the
-Unified host. This composition was tested with published Unified 0.94.1, the
-pinned Work source below, and canonical MCP v0.3.0:
+Unified host. The recipe pins Work 0.4.0 and canonical MCP v0.3.1, which preserves
+server-declared tool failures along with their returned content:
 
 ```markdown
 ---
@@ -68,7 +75,7 @@ includes:
   - bundle: git+https://github.com/microsoft/amplifier-bundle-work@b5154aabf0aaed0ad9465f711abb3bfb18dee6f8#subdirectory=bundle.md
 tools:
   - module: tool-mcp
-    source: git+https://github.com/microsoft/amplifier-module-tool-mcp@77b74bee1a7947a0cf4b3bac4d0dd74490c1ea21
+    source: git+https://github.com/microsoft/amplifier-module-tool-mcp@77bba04693963b0fb24ce6fe1313c39c35e2d3be
 ---
 
 @work:context/system.md
@@ -180,3 +187,11 @@ Maintained qualification uses the real SDK, connection and service persistence
 with a controlled runtime, plus a real worker retirement handshake. Live-provider,
 Companion voice and user-desktop acceptance are separate evidence; candidate tests
 do not imply adoption by a live host.
+
+The earlier connected-context retrieval qualification used Unified 0.94.1 and
+MCP v0.3.0. The [runnable Constellation reference](https://github.com/microsoft/amplifier-acp-lab/tree/b2a35e2ed600d6093832d3215514fb73c34a1bd3/examples/five_primitives)
+exercises Unified 0.95.0 with the MCP error fix now released in v0.3.1. It checks
+source-linked work, result inspection and recovery through authenticated APIs,
+using a deterministic provider and a prepared worker with automatic runtime
+preparation and qualification bypassed. Its recorded inputs and limits remain
+separate from the current recipe pin and from default-profile or browser acceptance.

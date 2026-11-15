@@ -76,9 +76,11 @@ def test_current_attention_does_not_repeat_receipt_aggregation(tmp_path):
     # 600 current notices, six admitted/selected owners, 20k historical receipts.
     # These ceilings permit the necessary exact receipt joins/global counts,
     # without repeating a whole owner-status aggregation in each SELECT.
+    # Separate snapshot SELECTs used 1.18M instructions on SQLite 3.53;
+    # one materialization uses 0.47M, including 20k historical receipts.
     # Repeated aggregation used 2.02M / 0.51M instructions on SQLite 3.53;
     # flattening the exact joins used 49.4M / 0.75M on SQLite 3.45.
-    assert max(row['vm'] for row in measurements if row['operation'] == 'snapshot') < 1_400_000
+    assert max(row['vm'] for row in measurements if row['operation'] == 'snapshot') < 650_000
     assert max(row['vm'] for row in measurements if row['operation'] == 'receipts') < 400_000
     assert len(state['sessions']) == 6
 
@@ -220,15 +222,15 @@ def test_multi_select_read_is_pinned_and_does_not_commit_outer_transaction(tmp_p
            'approvals': [{'id': 'a', 'title': 'Allow', 'status': 'pending'}]}
     directory.sync([row], state); directory.db.commit()
     expected = legacy(directory, state)
-    original = DirectoryAttention.items
+    original = DirectoryAttention.project
     def concurrent_rename(self, *args):
         with catalog.connect() as other:
             other.execute('UPDATE native_rows SET title=?,name_revision=100 WHERE identity=?',
                           ('Concurrent title', 'saved-00000'))
         return original(self, *args)
-    monkeypatch.setattr(DirectoryAttention, 'items', concurrent_rename)
+    monkeypatch.setattr(DirectoryAttention, 'project', concurrent_rename)
     assert snapshot(directory, state) == expected
-    monkeypatch.setattr(DirectoryAttention, 'items', original)
+    monkeypatch.setattr(DirectoryAttention, 'project', original)
     assert snapshot(directory, state) == legacy(directory, state)
     assert next(iter(snapshot(directory, state)['items']))['title'] == 'Approval requested · Concurrent title'
     assert not directory.db.in_transaction
@@ -239,7 +241,7 @@ def test_multi_select_read_is_pinned_and_does_not_commit_outer_transaction(tmp_p
         assert other.execute('SELECT count(*) FROM pending_test').fetchone()[0] == 0
     def fail(*args):
         raise RuntimeError('injected projection failure')
-    monkeypatch.setattr(DirectoryAttention, 'items', fail)
+    monkeypatch.setattr(DirectoryAttention, 'project', fail)
     with pytest.raises(RuntimeError, match='injected'):
         snapshot(directory, state)
     assert directory.db.in_transaction

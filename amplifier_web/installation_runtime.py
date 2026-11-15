@@ -203,6 +203,12 @@ async def prepare(home):
             stage.mkdir(parents=True, mode=0o700)
         owner = _Preparation(home, stage)
         try:
+            from .session_files import amplifier_home
+            from .update_storage import snapshot_shared_config
+            # The configured qualifier reads this private candidate, not the
+            # live shared home. Keep its settings and credentials together.
+            await owner.run("initial-shared-config", snapshot_shared_config,
+                            {"copySettled": True}, amplifier_home(), stage / "shared-config")
             await UpdateManager.validate(owner, stage, generation)
             result = await asyncio.to_thread(_inspect, home, generation)
             if not result["ok"]:

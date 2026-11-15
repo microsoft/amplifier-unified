@@ -172,6 +172,49 @@ async def test_actual_asset_checkpoint_count_send_and_release(session, support):
             assert base64.b64encode(session.raw) not in path.read_bytes()
 
 
+@pytest.mark.parametrize("selected", [False, True], ids=["surface", "selected-surface"])
+@pytest.mark.parametrize("stream", [False, True])
+async def test_overflow_feedback_never_keeps_released_private_media_alive(session, selected, stream):
+    """Main's feedback translation cannot extend a media request's lifetime."""
+    from amplifier_core.llm_errors import ContextLengthError
+    from amplifier_web.host.session import SelectedProvider
+    value = await accepted(session)
+    canonical = value.model_dump_json()
+    surface, seen = provider(session)
+    raw = surface.original
+    error = ContextLengthError("Synthetic private-media overflow", provider="fixture")
+    recoveries = []
+
+    async def fail(request, **options):
+        session.caps[NAMESPACE].validate(request, purpose="transport", request_options=options)
+        seen.sent.append(request)
+        raise error
+
+    def recover(request, failure, **options):
+        recoveries.append(request)
+        return {"context_token_budget": 100}
+
+    raw.complete = fail
+    raw.recover_context_overflow = recover
+    wrapped = (SelectedProvider(raw, {}, execution_adapter=lambda _: surface) if selected else surface)
+    await wrapped.request_budget(value)
+    private = seen.count[0]
+    with pytest.raises(ContextLengthError) as caught:
+        if stream:
+            async for _ in wrapped.stream(value):
+                pass
+        else:
+            await wrapped.complete(value)
+    assert seen.sent == [private] and private.messages == []
+    assert surface.prepared == [] and surface._active_media == {}
+    assert value.model_dump_json() == canonical
+    # Released prepared bytes cannot match the original dispatch fingerprint.
+    assert wrapped.recover_context_overflow(value, caught.value,
+        context_estimate=1000, request_options={}) is None
+    assert not recoveries and len(seen.count) == len(seen.sent) == 1
+    assert not wrapped._overflow_feedback.entries
+
+
 @pytest.mark.parametrize("selected", [False, True], ids=["surface-root", "selected-root"])
 async def test_repeated_private_fit_and_reuse_keep_canonical_refs_only(session, selected):
     """Actual Surface/selection seams: two counts, send, and a new fit of SAME input."""

@@ -2,6 +2,26 @@
   "schemaVersion": 1,
   "scenarios": [
     {
+      "id": "shared-controls",
+      "command": ["node", "tests/shared-controls-browser.mjs"],
+      "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/shared-controls"}
+    },
+    {
+      "id": "composer-return-mounted",
+      "command": ["node", "tests/composer-return-mounted-browser.mjs"],
+      "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/composer-return-mounted"}
+    },
+    {
+      "id": "composer-return",
+      "command": ["node", "tests/composer-return-browser.mjs"],
+      "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/composer-return"}
+    },
+    {
+      "id": "conversation-error",
+      "command": ["node", "tests/conversation-error-browser.mjs"],
+      "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/conversation-error"}
+    },
+    {
       "id": "installation-repair",
       "command": ["node", "tests/installation-repair-browser.mjs"],
       "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/installation-repair"}

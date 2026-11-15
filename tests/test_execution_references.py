@@ -700,19 +700,91 @@ def test_projection_summary_keeps_all_pending_work_and_voice_facts(db):
 
 def test_projection_hook_cannot_seed_digest_of_a_different_source(db):
     cache, row = ExecutionPreparation(), observed_owner()
+    save_projected(cache, db, row)
     class ChangesSource(dict):
         def __deepcopy__(self, memo):
             row['execution']['retiredUsageNodes'][0]['assignmentReservation'] = {'tokens': [99]}
+            row['execution']['nodes'][128]['label'] = 'Changed during projection'
             return {'tokens': [44]}
     row['execution']['retiredUsageNodes'][0]['assignmentReservation'] = ChangesSource()
     first = save_projected(cache, db, row)
     assert cache.references[row['id']].input_digest is None
     assert resource_files.read_detached(resource_files.detach(db, first['$resource']))[
         'retiredUsageNodes'][0]['assignmentReservation'] == {'tokens': [44]}
+    assert resource_files.read_detached(resource_files.detach(db, first['$resource']))[
+        'nodes'][128]['label'] == 'Changed during projection'
     second = save_projected(cache, db, row)
     assert first != second
     assert resource_files.read_detached(resource_files.detach(db, second['$resource']))[
         'retiredUsageNodes'][0]['assignmentReservation'] == {'tokens': [99]}
+
+
+def test_changed_save_witnesses_raw_nodes_once_and_preserves_borrowed_aliases(db, monkeypatch):
+    from amplifier_web.session_projection import stored_execution
+    cache, row = ExecutionPreparation(), observed_owner()
+    tree = row['execution']
+    # A nested alias crosses the raw-node/accounting boundary. Every save must
+    # still witness its new content, including edits after a successful commit.
+    shared = tree['retiredUsageNodes'][128]['assignmentReservation']
+    tree['nodes'][128]['assignmentReservation'] = shared
+    prior = save_projected(cache, db, row)
+    witnessed, original = [], execution_preparation._witness
+    def observe(value, **kwargs):
+        raw = value[0] if type(value) is tuple and len(value) == 2 else value
+        if (type(raw) is list and raw and type(raw[0]) is dict
+                and raw[0].get('liveObservation') is True):
+            witnessed.append(len(raw))
+        return original(value, **kwargs)
+    monkeypatch.setattr(execution_preparation, '_witness', observe)
+    for changed in (99, 100):
+        shared['tokens'].append(changed)
+        expected = stored_execution(tree)
+        witnessed.clear()
+        actual = save_projected(cache, db, row)
+        assert actual != prior
+        assert resource_files.read_detached(resource_files.detach(db, actual['$resource'])) == expected
+        assert witnessed == [128, 128, 44], 'Raw nodes were serialized again within the same save'
+        assert cache.bytes + cache.accounting_bytes + cache._reserved({}) <= 2 * cache.MAX_BYTES
+        prior = actual
+
+
+@pytest.mark.parametrize('boundary', ['metadata-cap', 'combined-bound'])
+def test_node_witness_limits_keep_complete_fallback_and_nested_edits(db, monkeypatch, boundary):
+    from amplifier_web.session_projection import stored_execution
+    cache, row = ExecutionPreparation(), observed_owner()
+    tree = row['execution']
+    shared = tree['retiredUsageNodes'][128]['assignmentReservation']
+    tree['nodes'][128]['assignmentReservation'] = shared
+    prior = save_projected(cache, db, row)
+    monkeypatch.setattr(execution_preparation._BoundedBytes, 'LIMIT', 32768)
+    if boundary == 'metadata-cap':
+        # Many small real fragments exhaust temporary metadata without making
+        # any individual content witness too large.
+        monkeypatch.setattr(ExecutionPreparation, 'CHUNK', 1)
+    else:
+        # The raw fragment fits, but leaves insufficient headroom for safely
+        # replacing the old combined fragment/dependency witness.
+        tree['nodes'][0]['label'] = 'x' * 16384
+    witnessed = execution_preparation._input_digest(tree)
+    assert witnessed is not None
+    assert (witnessed[2] is None) == (boundary == 'metadata-cap')
+    combined, original = [], execution_preparation._witness
+    def observe(value, **kwargs):
+        if (type(value) is tuple and len(value) == 2 and type(value[0]) is list
+                and value[0] and type(value[0][0]) is dict
+                and value[0][0].get('liveObservation') is True):
+            combined.append(len(value[0]))
+        return original(value, **kwargs)
+    monkeypatch.setattr(execution_preparation, '_witness', observe)
+    for changed in (99, 100):
+        shared['tokens'].append(changed)
+        combined.clear()
+        actual = save_projected(cache, db, row)
+        assert actual != prior
+        assert combined, 'The original combined-witness fallback was bypassed'
+        assert resource_files.read_detached(resource_files.detach(db, actual['$resource'])) == stored_execution(tree)
+        assert cache.bytes + cache.accounting_bytes + cache._reserved({}) <= 2 * cache.MAX_BYTES
+        prior = actual
 
 
 def test_failed_fragment_encoding_keeps_committed_reference_and_repairs_exactly(db):
