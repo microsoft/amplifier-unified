@@ -47,6 +47,7 @@ _FOLDER_FORMS = (rf"launcher-{_VERSION}-[0-9a-f]{{8}}(-\d+)?", r"launcher-not-us
 _FILE_FORMS = (rf"amplifier_unified-{_VERSION}-py3-none-any\.whl(\.part)?", r"\.private-[0-9a-f]{32}\.tmp",
                r"child-\d+\.(stderr\.txt|failure\.json)")
 _FOLDERS = frozenset(DATA + RUNNING + CACHES + LAST[:2])
+_EXACT = frozenset(DATA + RUNNING + CACHES + FILES + LAST + (STARTED, COMPLETE, JOURNAL))
 SECONDS_AFTER_EXIT = 120  # About seven times the measured need for python and tools together.
 # The steps of `remove` that come after the journal. A failure there leaves a
 # folder that Amplifier does not start from; a second uninstall finishes it.
@@ -79,6 +80,18 @@ def sort(names):
     for group, order in (("data", DATA), ("last", LAST)):
         groups[group].sort(key=order.index)
     return groups
+
+
+def altered(names):
+    """Names that differ from one of this installation's exact names only by case.
+
+    Windows opens such an entry under this installation's name, but it is not
+    the entry that this installation made, and nothing shows what it holds.
+    It is never deleted. Uninstall then deletes nothing at all: it could not
+    truthfully say that the person's data is gone.
+    """
+    known = {name.casefold(): name for name in _EXACT}
+    return [name for name in names if known.get(name.casefold(), name) != name]
 
 
 def unfinished(root):
@@ -313,7 +326,8 @@ def remove(root, *, stop, certificate, progress, choice="delete", data=remove_da
 
     1. One start or removal at a time. Leave the folder. Prove it and pin it:
        setup's completion record, or this removal's own journal, read through
-       the private-file boundary; then the folder's own handle.
+       the private-file boundary; then the folder's own handle. An entry
+       whose name differs from this installation's own only by case refuses.
     2. Check and pin the Windows entries. `stop()` stops the app and removes
        its sign-in task. `certificate()` lets Windows ask once.
        Up to here nothing in the folder has changed.
@@ -337,6 +351,8 @@ def remove(root, *, stop, certificate, progress, choice="delete", data=remove_da
             record = pending(root)
             if not completed(root) and (record is None or record["choice"] != choice):
                 raise ValueError("Neither setup's completion record nor this removal's journal proves the folder.")
+            if altered(owned.names()):
+                raise ValueError("An entry differs from this installation's own name only by case.")
             progress("entries-check")
             with ExitStack() as entries:
                 finish = (entries.enter_context(shell.removal(root, progress=progress))

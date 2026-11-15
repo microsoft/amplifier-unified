@@ -247,7 +247,8 @@ _UNFINISHED.update({
                 "To finish, select Uninstall Amplifier in the Start menu.",
     # The steps that only the delete choice has, in their order.
     "folder": _UNCHANGED + "Amplifier could not check its own folder, so it deleted nothing. "
-              "Restart this PC, then uninstall again.",
+              "Restart this PC, then uninstall again. If this message returns, select No in the first "
+              "question: Amplifier is then uninstalled, and its folder stays.",
     "journal": "Amplifier has stopped and no longer starts when you sign in, but it could not begin to delete "
                "its folder. Nothing in the folder was deleted.\n\n"
                "Wait a minute or restart this PC, then uninstall again. " + _STOPPED,
@@ -449,6 +450,10 @@ async def _uninstall(root):
             at[0] = name
         try:
             with _one_at_a_time(root):
+                if not unfinished and windows_uninstall.unfinished(root):
+                    # Another window began to delete this folder after the
+                    # question. Its entries must stay for the second uninstall.
+                    raise Refused("removing")
                 if (root / shell.FILE).exists():
                     # Check and pin every entry first: a changed entry refuses before
                     # the app stops. Remove the entries only when the task is gone.

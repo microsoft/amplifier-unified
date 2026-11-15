@@ -102,7 +102,9 @@ class Disk:
         self.root, self.state = root, state
 
     def names(self):
-        return sorted(path.name for path in self.root.iterdir())
+        if self.state.get("listing_fails") and self.state["registry"] is None:
+            raise OSError(5, "The folder could not be listed")
+        return sorted([path.name for path in self.root.iterdir()] + self.state.get("also_listed", []))
 
     def _delete(self, path):
         relative = path.relative_to(self.root).as_posix()
@@ -147,6 +149,8 @@ def deleter(uninstaller, monkeypatch):
             raise plan.Busy()
         state["locked"] = True
         state["calls"].append(("lock",))
+        if state.get("on_lock"):
+            state.pop("on_lock")()
         try:
             yield
         finally:
@@ -444,8 +448,9 @@ def test_a_journal_that_does_not_prove_a_delete_choice_never_deletes(deleter):
 
 def test_foreign_top_level_entries_stay_and_then_the_folder_stays(deleter, monkeypatch):
     state, root = deleter.state, deleter.root
-    foreign = {"mine.txt": "not Amplifier's", "App/notes.txt": "another spelling", "launcher-x/a": "no known form",
-               "Unified-Uninstall.json": "not the journal", "amplifier_unified-1.0.0-py3-none-any.whl.bak": "w"}
+    foreign = {"mine.txt": "not Amplifier's", "my folder/notes.txt": "a folder", "launcher-x/a": "no known form",
+               "launcher-1.0.0-0A1B2C3D/a": "not the form of a kept launcher",
+               "amplifier_unified-1.0.0-py3-none-any.whl.bak": "w"}
     for name, text in foreign.items():
         (root / name).parent.mkdir(parents=True, exist_ok=True)
         (root / name).write_text(text)
@@ -462,6 +467,24 @@ def test_foreign_top_level_entries_stay_and_then_the_folder_stays(deleter, monke
     confirmation = state["notices"][-1][0]
     assert "The folder itself stays" in confirmation and "They were not changed" in confirmation
     assert all(name in confirmation for name in names) and "you can delete it" not in confirmation
+
+
+@pytest.mark.parametrize("name", ["App", "SHARED", "Workspace", "Tools", "Consumer-Install.json", "Unified-Uninstall.json"])
+def test_entry_that_differs_from_an_own_name_only_by_case_deletes_nothing(deleter, name):
+    # Windows opens `App` under the name `app`, but it is not the entry that this installation made.
+    state, root, consumer = deleter.state, deleter.root, deleter.consumer
+    state.update(choices=["yes", "yes"], also_listed=[name])
+    before, registration = snapshot(root), state["registry"].copy()
+    with pytest.raises(consumer.Unfinished) as stopped:
+        deleter.run()
+    assert stopped.value.step == "folder" and "it deleted nothing" in stopped.value.notice
+    # The person is not left without a way: an uninstall that keeps the folder still works.
+    assert "select No in the first question" in stopped.value.notice
+    after = snapshot(root)
+    after.pop("app/config/services/" + consumer.RECORD)
+    assert after == before and not deletes(state) and state["task"] == "running" and state["registry"] == registration
+    assert plan.altered(["app", "mine.txt", name, "python", "launcher-x", "launcher-1.0.0-0A1B2C3D"]) == [name]
+    assert plan.altered(list(plan._EXACT)) == []
 
 
 def test_the_journal_and_the_running_program_are_in_no_delete_list(deleter):
@@ -517,6 +540,82 @@ def test_failed_entry_removal_after_the_data_is_gone_is_finished_by_a_second_uni
     state.update(commit_conflict=False, link_failure=None, choices=["yes"])
     assert deleter.run()["afterExit"] and state["registry"] is None and not deleter.folder.exists()
     assert {path.name for path in root.iterdir()} == {"python", "tools", plan.JOURNAL}
+
+
+def test_folder_that_cannot_be_listed_at_the_end_hands_every_exact_name_to_the_step_after_exit(deleter, monkeypatch):
+    # The Windows entries are gone by then, so an error would leave the person no way to uninstall again.
+    state, root = deleter.state, deleter.root
+    state.update(choices=["yes", "yes"], listing_fails=True)
+    monkeypatch.setattr(deleter.consumer.sys, "stdout", None)
+    result = deleter.run()
+    assert result["afterExit"] and result["kept"] == [] and state["registry"] is None
+    assert not any((root / name).exists() for name in top(DATA))
+    after = state["after"]
+    # Deletion inside the running program's folders only; every other folder only while it is empty.
+    assert after["contents"] == ["python", "tools"] and plan.JOURNAL not in after["folders"] + after["files"]
+    assert set(after["folders"]) == set(plan.DATA + plan.CACHES + plan.LAST[:2])
+    assert set(after["files"]) == set(plan.FILES + plan.LAST[2:])
+    assert plan.sort(after["contents"] + after["folders"] + after["files"])["foreign"] == []
+    confirmation = state["notices"][-1][0]
+    assert "are deleted" in confirmation and "This folder can still exist afterwards" in confirmation
+    assert "you can delete it" not in confirmation
+
+
+def test_keeping_uninstall_refuses_when_another_window_began_to_delete_after_the_question(deleter):
+    state, root, consumer = deleter.state, deleter.root, deleter.consumer
+    state["choices"], registration = ["no"], state["registry"].copy()
+    state["on_lock"] = lambda: (root / plan.JOURNAL).write_text(
+        json.dumps({"schema": 1, "choice": "delete", "token": "c" * 32}))
+    with pytest.raises(consumer.Refused) as refused:
+        deleter.run()
+    assert refused.value.step == "removing" and state["calls"] == [("lock",), ("unlock",)]
+    # The entries stay for the second uninstall, which finishes that removal.
+    assert state["task"] == "running" and state["registry"] == registration
+    assert {path.name for path in deleter.folder.iterdir()} == set(shell.LINKS)
+    state["choices"] = ["yes"]
+    assert deleter.run()["afterExit"] and state["registry"] is None
+
+
+def test_journal_write_waits_for_a_closing_app_and_then_refuses(model, monkeypatch):
+    root, _, state = model
+    monkeypatch.setattr(shell, "SETTLE_SECONDS", 15)
+    attempts, waits = [], []
+    state["refuse_write"] = lambda path: attempts.append(path.name) or len(attempts) <= 2
+    token = plan.begin(root, wait=waits.append)
+    assert waits == [0.5, 0.5] and attempts == [plan.JOURNAL] * 3 and re.fullmatch("[0-9a-f]{32}", token)
+    assert json.loads((root / plan.JOURNAL).read_text()) == {"schema": 1, "choice": "delete", "token": token}
+    # Another choice saves what it needs to continue in the same record; a new write has a new token.
+    kept = plan.begin(root, "keep", wait=waits.append, transfer="d" * 32)
+    assert kept != token and json.loads((root / plan.JOURNAL).read_text()) == {
+        "schema": 1, "choice": "keep", "token": kept, "transfer": "d" * 32}
+    # A refusal that does not end is the failed step `journal`; nothing was deleted before it.
+    monkeypatch.setattr(shell, "SETTLE_SECONDS", 0)
+    state["refuse_write"] = lambda path: True
+    with pytest.raises(PermissionError):
+        plan.begin(root, wait=waits.append)
+    assert len(waits) == 2
+
+
+def test_both_questions_have_no_as_their_default_and_only_the_first_can_be_cancelled(monkeypatch):
+    from types import SimpleNamespace
+    shown, answers = [], [6, 7, 2, 6, 7, 2, 0]
+    def dialog(window, text, title, flags):
+        shown.append((window, text, title, flags))
+        return answers.pop(0)
+    monkeypatch.setattr(plan, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(plan.C, "WinDLL", lambda name, **options: SimpleNamespace(MessageBoxW=dialog), raising=False)
+    assert [plan.question("one", cancel=True) for _ in range(3)] == ["yes", "no", "cancel"]
+    # Without Cancel, anything but Yes is No.
+    assert [plan.question("two") for _ in range(3)] == ["yes", "no", "no"]
+    with pytest.raises(OSError):
+        plan.question("not shown")
+    first, second = shown[0][3], shown[3][3]
+    # Buttons: Yes/No/Cancel and Yes/No. Icons: information and warning.
+    assert (first & 0xF, first & 0xF0) == (0x3, 0x40) and (second & 0xF, second & 0xF0) == (0x4, 0x30)
+    for flags in (first, second):
+        assert flags & 0xF00 == 0x100, "the second button, No, is the default"
+        assert flags & 0x51000 == 0x51000, "in front of other windows, as every launcher message"
+    assert shown[0][:3] == (None, "one", "Amplifier Unified")
 
 
 def test_step_after_exit_that_cannot_start_is_said_plainly(deleter, monkeypatch):
@@ -891,4 +990,26 @@ def test_native_interrupted_removal_refuses_to_start_and_a_second_uninstall_fini
     assert (root / "mine.txt").read_text() == "not Amplifier's"
     resumed = plan.pending(root)
     assert resumed["choice"] == "delete" and resumed["token"] != journal["token"]
+    _outside_unchanged(native["outside"])
+
+
+@pytest.mark.skipif(os.name != "nt", reason="A real case-only rename on NTFS and the real folder listing")
+def test_native_data_folder_renamed_only_by_case_deletes_nothing(native_installation):
+    """`app` renamed to `App`: Windows still opens it as `app`, but it is not the entry that setup made."""
+    native, root = native_installation, native_installation["root"]
+    os.rename(root / "app", root / "App")
+    assert "App" in os.listdir(root) and "app" not in os.listdir(root) and (root / "app" / "app.sqlite3").exists()
+    before = _tree(root)
+    refused = native["run"]("uninstall", ["yes", "yes"])
+    assert (refused["step"], refused["error"], refused["refused"]) == ("folder", "ValueError", False), refused
+    assert "it deleted nothing" in refused["notice"] and "select No in the first question" in refused["notice"]
+    assert refused["events"] == ["question", "question"]  # The app was not stopped.
+    # Nothing was deleted and no journal was written; only the private note of the failure is new.
+    after = _tree(root)
+    note = str(Path("App", "config", "services", "consumer-maintenance.json"))
+    assert [name for name in after if name != note] == before and note in after
+    assert not plan.unfinished(root) and plan.completed(root)
+    assert shell.registry(root) == native["registration"]
+    assert {path.name for path in native["entries"].iterdir()} == set(shell.LINKS)
+    assert not native["report"].exists()
     _outside_unchanged(native["outside"])

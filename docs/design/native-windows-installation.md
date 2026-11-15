@@ -840,7 +840,10 @@ completion record `unified-setup-complete.json` is in the folder.
 1. One start or removal at a time for one installation: a named semaphore
    whose name comes from the folder path. Opening Amplifier takes it around
    its start step, and an uninstall that keeps the folder takes it too. When
-   it is taken, the second window says so and changes nothing.
+   it is taken, the second window says so and changes nothing. An uninstall
+   that keeps the folder looks for the journal again under the lock: if
+   another window began to delete the folder after the question, it refuses
+   and leaves the Windows entries for the second uninstall.
 2. The process leaves the folder (its current folder was the installation's
    workspace) and stops saving compiled modules.
 3. Prove and pin the folder. Proof: the command runs from this folder's own
@@ -848,7 +851,12 @@ completion record `unified-setup-complete.json` is in the folder.
    private-file boundary, and the folder is opened once and checked on that
    handle (a real folder, exact spelling, this person's own, no access for
    another account). The handle stays open and shares read and write but not
-   delete, so no program can rename or replace the folder meanwhile.
+   delete, so no program can rename or replace the folder meanwhile. A
+   top-level entry whose name differs from one of this installation's names
+   only by case (`App` for `app`) refuses here. Windows opens it under the
+   installation's name, but it is not the entry that the installation made.
+   Uninstall then deletes nothing, because it could not truthfully say that
+   the person's data is gone.
 4. Check and pin the Windows entries; stop the app; remove its sign-in task;
    ask Windows once about the certificate. A failure up to here leaves the
    installation whole, with the messages of an uninstall that keeps the folder.
