@@ -151,7 +151,7 @@ def test_usage_refresh_preserves_shared_current_aliases_and_late_edits(saved):
     assert first['usage'] is second['usage'] is receipt['usage'] is shared
 
 
-def test_changed_compact_historical_parent_retains_its_complete_body(saved):
+def test_changed_historical_parent_retains_its_complete_body(saved):
     db, session, original = saved
     from amplifier_web.execution_working_set import refresh_usage
     parent = original['nodes'][7]

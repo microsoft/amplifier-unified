@@ -346,9 +346,9 @@ def refresh_usage(session):
             return
         except Rebuild:
             owner.usage_prefix = None
-    value, compact = owner.usage_input()
+    value, indexed = owner.usage_input()
     def identity(kind, row):
-        return row['id'] if compact else records.key(kind, row)
+        return row['id'] if indexed else records.key(kind, row)
     before = {kind: {identity(kind, row): (row.get('turnId'), row.get('aggregateUsage'))
                      for row in value.get(kind, [])} for kind in ('nodes', 'turns')}
     groups = _reduce_usage(value)
@@ -366,7 +366,7 @@ def refresh_usage(session):
             changed = prior_turn != row.get('turnId') or usage_owned and prior_usage != row.get('aggregateUsage')
             if row_id not in resident and changed:
                 record_key = records.key(kind, row)
-                if compact:
+                if indexed:
                     full = owner.record(kind, record_key)
                     if full is None:
                         raise ValueError('A changed historical execution record is unavailable.')
@@ -377,7 +377,7 @@ def refresh_usage(session):
                 else:
                     owner.current[kind].append(row)
                     owner.admitted[kind].add(record_key)
-    if compact:
+    if indexed:
         try:
             owner.usage_prefix = UsagePrefix.build(owner, value, groups)
         except Rebuild:

@@ -15,10 +15,6 @@ from . import resource_files
 COLLECTIONS = ('nodes', 'turns', 'retiredUsageNodes')
 PAGE_ROWS = 128
 FORMAT = resource_files.EXECUTION_ROOT_FORMAT
-# Exact complete-reducer inputs and the fields needed to apply its derived
-# changes. All other node fields have one owner in the matching detail page.
-USAGE_FIELDS = frozenset({'id', 'kind', 'parentId', 'turnId', 'phase', 'status',
-    'endedAt', 'usage', 'aggregateUsage', 'liveObservation', 'canonicalHistory', 'nativeHistory'})
 
 
 def key(kind, row):
@@ -101,23 +97,6 @@ def _ordered_branch(db, children):
             'count': count, 'executionFacts': facts}
 
 
-def _leaf_rows(db, page, read, *, compact=False):
-    entries = page.get('order', [])
-    if compact or 'details' not in page:
-        return entries
-    detail_rows = read(db, page['details'])['details']
-    details = {ordinal: (identity, value) for ordinal, identity, value in detail_rows}
-    if len(details) != len(detail_rows) or set(details) != {ordinal for ordinal, _ in entries}:
-        raise ValueError('Saved execution details no longer match their ordered page.')
-    result = []
-    for ordinal, entry in entries:
-        identity, value = details[ordinal]
-        if identity != entry['identity'] or entry['value'].keys() & value.keys():
-            raise ValueError('Saved execution detail fields conflict with their owner.')
-        result.append((ordinal, {**entry, 'value': {**entry['value'], **value}}))
-    return result
-
-
 def _ordered(db, kind, entries, height):
     """Canonical bodies in ordinal-contiguous pages, with direct radix seek."""
     if not entries:
@@ -125,13 +104,6 @@ def _ordered(db, kind, entries, height):
     if height == 0:
         facts = _facts(kind, [entry['value'] for _, entry in entries])
         page = {'order': sorted(entries), 'count': len(entries), 'facts': facts}
-        if kind == 'nodes':
-            details = [(ordinal, entry['identity'], {key: value for key, value in entry['value'].items()
-                        if key not in USAGE_FIELDS}) for ordinal, entry in page['order']]
-            if any(value for _, _, value in details):
-                page['details'] = resource_files.put(db, {'details': details})
-                page['order'] = [(ordinal, {**entry, 'value': {key: value for key, value in entry['value'].items()
-                                 if key in USAGE_FIELDS}}) for ordinal, entry in page['order']]
         return {**resource_files.put(db, page),
                 'count': len(entries), 'executionFacts': facts}
     else:
@@ -146,7 +118,7 @@ def _ordered(db, kind, entries, height):
 def _order_replace(db, kind, reference, height, ordinal, value):
     page = _read(db, reference) if reference else {}
     if height == 0:
-        entries = dict(_leaf_rows(db, page, _read))
+        entries = dict(page.get('order', []))
         if value is None:
             entries.pop(ordinal, None)
         else:
@@ -183,7 +155,7 @@ def _ordered_entry(db, collection, identity, metadata, read=None):
     while reference:
         page = (read or _read)(db, reference)
         if height == 0:
-            entry = next((value for number, value in _leaf_rows(db, page, read or _read)
+            entry = next((value for number, value in page['order']
                           if number == ordinal), None)
             if entry is None or entry['identity'] != identity:
                 break
@@ -194,18 +166,18 @@ def _ordered_entry(db, collection, identity, metadata, read=None):
     raise ValueError('Saved execution lookup no longer matches its record.')
 
 
-def _order_window(db, reference, start, stop, read, *, compact=False):
+def _order_window(db, reference, start, stop, read):
     if reference is None or start >= stop:
         return []
     page = read(db, reference)
     if 'order' in page:
-        return _leaf_rows(db, page, read, compact=compact)[start:stop]
+        return page['order'][start:stop]
     result, offset = [], 0
     for digit in sorted(page['children'], key=int):
         child = page['children'][digit]
         end = offset + child['count']
         if start < end and stop > offset:
-            result.extend(_order_window(db, child, max(0, start - offset), stop - offset, read, compact=compact))
+            result.extend(_order_window(db, child, max(0, start - offset), stop - offset, read))
         offset = end
         if offset >= stop:
             break
@@ -383,9 +355,9 @@ def materialize(db, reference, *, owner=None):
     return result
 
 
-def _collection(db, collection, *, compact=False):
+def _collection(db, collection):
     count = collection['order']['count'] if collection['order'] else 0
-    return [entry['value'] for _, entry in _order_window(db, collection['order'], 0, count, _read, compact=compact)]
+    return [entry['value'] for _, entry in _order_window(db, collection['order'], 0, count, _read)]
 
 
 def read_collection(db, reference, kind, *, owner=None):
@@ -394,13 +366,9 @@ def read_collection(db, reference, kind, *, owner=None):
 
 
 def read_usage(db, reference, *, owner=None):
-    """Private complete reducer input, without tool bodies or admission rows.
-
-    Old unsplit leaves remain readable. This projection must never replace a
-    complete mutable row; a derived historical change requires an exact join.
-    """
+    """Complete reducer/recovery input, without the separate admission ledger."""
     root = _root(db, reference, owner)
-    return {kind: _collection(db, root['collections'][kind], compact=True)
+    return {kind: _collection(db, root['collections'][kind])
             for kind in ('nodes', 'turns')}
 
 
