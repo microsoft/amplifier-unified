@@ -1018,12 +1018,17 @@ class Worktrees:
                     # provisional drain marker before host preflight. A current
                     # rejection must retire that hook too, not just RPC polls.
                     cleanup_required = True
+                    if callable(getattr(self.app.runtime, 'handoff_boundary', None)):
+                        # Publish the fence BEFORE exposing the rejection. The
+                        # provisional native hook survives until cancel returns.
+                        record['boundaryAttempted'] = True
+                        record['boundaryCleanup'] = {'status': 'required'}
                     record.update(phase='rejected', revision=record['revision']+1,
                         detail=('Handoff was superseded; the source execution folder is unchanged. '
                                 if isinstance(exc, HandoffSuperseded) else
                                 'Handoff was rejected before runtime release. The source execution folder is unchanged. ') + str(exc)[:1000])
                     current = self.app._session(record['sessionId'])
-                    current['configurationBusy'] = False
+                    current['configurationBusy'] = self.unresolved(record)
                     if record.get('release', {}).get('quiesced'):
                         current['ownership'] = {'status': 'available'}
                         current.pop('lockOwner', None)

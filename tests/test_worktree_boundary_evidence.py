@@ -389,3 +389,36 @@ async def test_preflight_refusal_retires_provisional_native_hook(tmp_path, monke
         assert not app.worktrees.execution_state(sid)['fenced']
     finally:
         await app.close()
+
+
+@pytest.mark.parametrize('cancel_fails', [False, True])
+async def test_preflight_cleanup_is_fenced_through_awaited_cancel(tmp_path, monkeypatch, cancel_fails):
+    app, runtime, _, sid = await fixture(tmp_path, monkeypatch)
+    entered, finish = asyncio.Event(), asyncio.Event()
+    async def cancel(*args, **kwargs):
+        assert kwargs == {'cancel': True}
+        entered.set()
+        await finish.wait()
+        if cancel_fails:
+            raise OSError('lost cleanup')
+        return {'cancelled': True}
+    runtime.handoff_boundary = AsyncMock(side_effect=cancel)
+    try:
+        target = await checkout(app, sid)
+        def refuse(*args): raise ValueError('preflight refused')
+        monkeypatch.setattr(app.worktrees, 'preflight', refuse)
+        result = (await app.dispatch('worktree.handoff', {'sessionId': sid,
+            'id': target['id'], 'expectedExecutionRevision': 0}))['result']
+        await asyncio.wait_for(entered.wait(), 2)
+        assert app.worktrees.execution_state(sid)['fenced']
+        assert app._session(sid)['configurationBusy']
+        runtime.quiesce_for_handoff.assert_not_awaited()
+        finish.set()
+        await settle(app)
+        saved = app.worktrees.read(sid, result['id'])
+        assert (saved['phase'] == 'unknown') is cancel_fails
+        assert app.worktrees.execution_state(sid)['fenced'] is cancel_fails
+        assert app._session(sid)['configurationBusy'] is cancel_fails
+    finally:
+        finish.set()
+        await app.close()
