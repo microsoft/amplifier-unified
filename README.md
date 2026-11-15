@@ -25,40 +25,40 @@ curl -fsSL https://raw.githubusercontent.com/microsoft/amplifier-unified/main/sc
 ```
 
 It finds or installs uv and Python, installs the latest stable release, starts
-Unified as a per-user service, and opens your browser. Existing Amplifier
+Amplifier Unified as a per-user service, and opens your browser. Existing Amplifier
 configuration, accounts, and history are preserved. For manual installation, see
 the [platform and recovery instructions](docs/DEPLOYMENT.md#manual-installation).
 
 ## Start a conversation
 
-1. Sign in to Unified in the browser and connect a model account if needed.
+1. Sign in to Amplifier Unified in the browser and connect a model account if needed.
 2. Choose a workspace and start a chat. You can finish setup with an assistant
    or use **Settings**.
 3. Describe the outcome you want. Review progress and results in the conversation.
 
-The first message can take a few minutes while Unified prepares its runtime.
+The first message can take a few minutes while Amplifier Unified prepares its runtime.
 You can reopen the workspace at [http://127.0.0.1:8941](http://127.0.0.1:8941).
 
 Use **Enter** to send and **Shift+Enter** for a new line. You can format messages
 with Markdown and attach files or images. In a code block, Enter inserts a line;
 use the Send button to submit the message.
 
-## Use Unified your way
+## Use Amplifier Unified your way
 
 - **Settings:** choose models, bundles, and capabilities. [Settings guide](docs/SETTINGS.md).
 - **Updates:** open **Settings → Updates** to check for a release or configure automatic checks. [Update guide](docs/UPDATES.md).
 - **Another device:** configure a trusted HTTPS address for LAN or Tailscale access. [Deployment guide](docs/DEPLOYMENT.md).
-- **An app window:** use your browser's install option, Safari's **Add to Dock**, or **Add to Home Screen**. Unified must remain running at the same address.
+- **An app window:** use your browser's install option, Safari's **Add to Dock**, or **Add to Home Screen**. Amplifier Unified must remain running at the same address.
 - **Recovery:** use the [reset guide](docs/RESET.md) to repair an installation while preserving your data.
 
-## Develop Unified
+## Develop Amplifier Unified
 
 See [development setup and contribution guidance](CONTRIBUTING.md) to work from
 source. Published packages include the web client; only frontend development
 requires Node.js and npm. Browser client source is maintained in
 [amplifier-client-web](https://github.com/microsoft/amplifier-client-web).
 
-For integrations, see [Unified as an ACP backend](docs/architecture/unified-acp-backend.md)
+For integrations, see [Amplifier Unified as an ACP backend](docs/architecture/unified-acp-backend.md)
 and the [architecture guide](docs/architecture/README.md).
 
 ## Contributing
