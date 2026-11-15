@@ -677,3 +677,10 @@ messages. Qualify selected-field aliases, pending choices, authority, Stop and
 owned preparation failures without changing direct `prepare()` return semantics.
 Measure the first capture and second preparation copy separately: reducing the
 second copy does not establish a native startup or history-lock latency improvement.
+
+Automatic host-history diagnostics separate `history.merge`,
+`history.activity.apply` and `history.publish`. The enclosing
+`history.native.refresh` includes execution-owner acquisition, activity and
+publication, so these durations overlap. Counts are phase calls, not message
+counts; these clocks do not measure the worker's native history load. Loading,
+busy and error paths retain the existing inclusive `history.load` timing.
