@@ -112,6 +112,10 @@ class ExecutionWindow:
         values = {row['value']['id']: row['value'] for row in selected}
         working = getattr(self.session, '_working_execution', None)
         if working is not None:
+            present = {row['id'] for row in working.current['turns']}
+            for identity in working.admitted['turns'] - {records.key('turns', {'id': value}) for value in present}:
+                import json
+                values.pop(json.loads(identity)[0], None)
             for row in working.current['turns']:
                 values[row['id']] = row
         return {**{key: value for key, value in self.fields.items() if key not in records.COLLECTIONS},

@@ -27,6 +27,21 @@ def save(db, session):
     pending.committed(session)
 
 
+async def test_deleted_current_turn_is_not_reintroduced_by_window_metadata(tmp_path, monkeypatch):
+    from amplifier_web.execution_windows import selection
+    windows, source, _ = live_fixture(tmp_path, monkeypatch, count=5)
+    db, session = indexed(tmp_path, windows, source)
+    try:
+        turn = exact(session, 'turns', {'id': 't'})
+        current(session)['turns'].remove(turn)
+        assert selection(session).tree()['turns'] == []
+        assert windows.live_pages._source(session, 0, 5)['execution']['turns'] == []
+        assert not dict.__contains__(session, 'execution')
+    finally:
+        await windows.close()
+        db.close()
+
+
 async def test_ordered_work_pages_and_open_fields_survive_completion_and_append(tmp_path, monkeypatch):
     windows, source, _ = live_fixture(tmp_path, monkeypatch)
     db, session = indexed(tmp_path, windows, source)

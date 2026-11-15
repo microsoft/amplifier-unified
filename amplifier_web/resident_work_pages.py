@@ -60,6 +60,9 @@ class ResidentWorkPages:
         current_turns = {row['id']: row for row in owner.current['turns']} if owner is not None else {}
         turns = {row['id']: row for row in source['execution']['turns']}
         for identity in {row.get('turnId') for row in source['execution']['nodes']} - {None} - turns.keys():
+            if (owner is not None and identity not in current_turns
+                    and key('turns', {'id': identity}) in owner.admitted['turns']):
+                continue
             row = current_turns.get(identity)
             if row is None:
                 selected = read_entry(indexed.db, indexed.reference, 'turns', key('turns', {'id': identity}),
@@ -75,7 +78,7 @@ class ResidentWorkPages:
         indexed = selection(session)
         if indexed is None or 'ordinals' not in entry:
             return self._source(session, *entry['ids'][identity])
-        node = self.windows.admitted_node(session, entry, identity)
+        node = self.windows.admitted_node(session, entry, identity, indexed=indexed)
         if node is None:
             raise ValueError('This Work changed. Close and reopen its steps.')
         nodes, seen = [node], {node['id']}
@@ -85,9 +88,9 @@ class ResidentWorkPages:
                 break
             nodes.append(parent['value'])
             seen.add(nodes[-1]['id'])
-        source = self.windows.live_view(session, include_nodes=False)
+        source = self.windows.live_view(session, include_nodes=False, tree=indexed.tree())
         source['execution']['nodes'] = [self.windows.live_node(session, row) for row in reversed(nodes)]
-        self._selected_turns(session, source)
+        self._selected_turns(session, source, indexed=indexed)
         return source
 
     def _stamp(self, session):
