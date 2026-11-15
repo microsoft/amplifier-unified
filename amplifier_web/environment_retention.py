@@ -284,8 +284,10 @@ def filter_incus_stream(stream, destination, identity, *, selections=SELECTION, 
             for selection in selections]
 
 
-def verify_artifacts(archives, *, publish=True):
-    """Verify selected evidence; the owner separately authorizes disposal."""
+def verify_artifacts(archives, *, publish=True, archive_only=False):
+    """Verify selected evidence; archive-only custody never authorizes disposal."""
+    if not publish:
+        archives = copy.deepcopy(archives)
     if len(archives) != 1 or archives[0].get('source') != '/artifacts':
         raise ValueError('Exactly the artifacts filesystem must be retained.')
     archive = archives[0]
@@ -293,10 +295,14 @@ def verify_artifacts(archives, *, publish=True):
     checksum, size = digest(path)
     if archive.get('sha256') not in {None, checksum} or archive.get('bytes') not in {None, size}:
         raise ValidationFailure('receipt_mismatch', 'The exported archive does not match its receipt.')
-    logical = inspect_archive(path, 'artifacts')
+    logical = inspect_archive(path, 'artifacts', archive_only=archive_only)
     archive.update(bytes=size, sha256=checksum, logicalBytes=logical, verified=True)
     result = {'archiveBytes': size, 'logicalBytes': logical, 'format': 'tar',
               'selection': ['/artifacts'], 'verified': True}
+    # Keep ordinary/historical receipts unchanged. Recovery custody is explicit:
+    # links and FIFOs are inert metadata, not a promise of safe host extraction.
+    if archive_only:
+        result['archiveOnly'] = True
     if publish:
         publish_record(path.parent / 'artifacts-retention.json', result)
     return result
