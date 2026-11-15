@@ -28,7 +28,7 @@ async def test_foreign_writer_refusal_preserves_source_without_persistent_busy(t
     manager = RuntimeManager()
     manager.stop = AsyncMock()
     if known_pid is not None:
-        manager.workers[sid] = {'process': SimpleNamespace(pid=known_pid)}
+        manager.workers[sid] = {'process': SimpleNamespace(pid=known_pid, returncode=None)}
     runtime.quiesce_for_handoff = manager.quiesce_for_handoff
     release = AsyncMock(side_effect=AssertionError('must not release a foreign writer'))
     monkeypatch.setattr('amplifier_foundation.session.request_release', release)
@@ -76,9 +76,10 @@ async def test_release_uncertainty_keeps_original_fence(tmp_path, monkeypatch, f
     app, runtime, root, sid = await fixture(tmp_path, monkeypatch)
     manager = RuntimeManager()
     manager.stop = AsyncMock()
-    manager.workers[sid] = {'process': SimpleNamespace(pid=os.getpid())}
     store = SharedSessionStore(root, sid)
     held = store.acquire(app='amplifier-unified', pid=os.getpid())
+    manager.workers[sid] = {'process': SimpleNamespace(pid=os.getpid(), returncode=None),
+                            'native_worker_pid': os.getpid(), 'native_writer': dict(held.owner)}
     owners = [held]
 
     async def release(*args, **kwargs):

@@ -461,7 +461,7 @@ for _access, _actions in {
         "capacity.read", "modelCapacity.read", "question.list", "question.read",
         "context.inspect",
         "schedule.list", "schedule.read", "schedule.overview", "session.plans", "storage.inspect", "workspace.deleteFilesPreview", "feedback.destination",
-        "worktree.inspect", "worktree.list", "worktree.status",
+        "worktree.inspect", "worktree.list", "worktree.status", "worktree.check",
         "coordination.awareness", "coordination.intent.read",
     },
     "domain_authoritative": {

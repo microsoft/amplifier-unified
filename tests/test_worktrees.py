@@ -142,7 +142,9 @@ async def test_runtime_cooperative_release_is_confirmed_without_replay(tmp_path,
         return ReadyToRelease()
     registration = await register_release_handler(held, prepare_release=release)
     manager = RuntimeManager()
-    manager.workers['s'] = {'process': SimpleNamespace(pid=os.getpid())}
+    manager.workers['s'] = {
+        'process': SimpleNamespace(pid=os.getpid() + 1000000, returncode=None),
+        'native_worker_pid': os.getpid(), 'native_writer': dict(held.owner)}
     manager.stop = AsyncMock()
     try:
         result = await manager.quiesce_for_handoff({'id':'s','workspace':str(tmp_path)}, 'move')
