@@ -890,14 +890,25 @@ take-back. It is written before the kept record becomes `adopting`.
 
 - Without `done`, the installation can hold a part of the kept data. The app
   starts only after the take-back finished, and an uninstall does not begin
-  (`unfinished_take_back`). If the kept record is lost or cannot be read, the
-  app does not start. If the kept folder itself is gone, nothing more can
-  come back: the person is told to put the folder back, and only the
-  person's Yes starts the app with the part that is back.
+  (`unfinished_take_back`). A take-back goes on only when this note and the
+  kept record name the same transfer.
+- If the kept record is lost or cannot be read, or the kept folder itself is
+  gone, nothing says how to go on. Then the launcher asks one question. It
+  says what to try first (restart the PC, or put the folder back). Only the
+  person's Yes starts the app: with the part that is back, or fresh when
+  nothing is back. The kept folder stays as it is. There is no state that
+  no step can end.
 - With `done`, the take-back finished and only tidying is left: the record,
   the empty kept folder, then the note. Such a note never blocks a start or
-  an uninstall, also while Windows refuses to remove it. The app can be
-  running then, so its database is not opened.
+  an uninstall, also while Windows refuses to remove it. It stays while its
+  record cannot be read. The app can be running then, so its database is
+  not opened.
+
+A kept set whose record says `adopting` and that has no note in this
+installation began its way back in another installation (the person moved
+that installation folder away, or chose to start without the rest). It is
+never continued and never offered; it is named once. A later uninstall with
+"keep" does not add to it.
 
 "No kept folder is left" alone never means "finished"; only `done` does.
 
@@ -927,7 +938,8 @@ and takes no lock. Else, under the lock:
 5. Every set that is not offered is named once in one message: a set of
    another folder, a newer set (with its version), an unfinished move, a set
    that holds a link, a set that was changed, a set with too many entries, a
-   declined set, and earlier sets. No chooser exists; that is a stated limit.
+   set whose way back began in another installation, a declined set, and
+   earlier sets. No chooser exists; that is a stated limit.
 6. A caller without a person (`--no-open`) gets a result and no question, and
    the app does not start while a usable or unreadable set waits.
 
@@ -938,12 +950,15 @@ each kept folder it removes the installation's empty folder and renames the
 kept folder into its place. Windows refuses to remove `workspace` at a first
 start, because it is the current folder of the launcher and of the program
 that started it. Then the kept entries move into that empty folder one by
-one. Before the first entry moves, the record names that folder and its
-entries. The folder may hold nothing but those entries: this is checked
-before the first move, again when a fill continues, and once more after the
-last entry. An entry that another program put there stops the take-back and
-is named in the message. So is an entry that came into the kept folder
-later. An entry that was removed since then is not in the way.
+one. Before the first entry moves, the record names that folder and, for
+each entry, its name and its identity (the file number on the disk; a rename
+on one disk keeps it, and no other file or folder has it). The folder may
+hold nothing but those entries: this is checked before the first move, again
+when a fill continues, and once more after the last entry. An entry that
+another program or the person put there stops the take-back and is named in
+the message, also when it has the name of an entry that moved. So is an
+entry that came into the kept folder later. An entry that was removed since
+then is not in the way.
 
 Folders are held in place while they are used. The installation folder, the
 kept folder and both folders of an entry-by-entry move are opened for the
@@ -961,13 +976,15 @@ finish leaves a status in `app.sqlite3` that refuses every new message until
 that exact app proves itself, and that app is gone. The step saves the
 database first, each time into a new folder
 `app\reset-backups\kept-<transfer>-<time>-<random>`, and removes only that
-status. Chats, settings and accounts in the database stay. A database file
-that has a second name somewhere (a hard link) is never changed. If the step
+status. Chats, settings and accounts in the database stay. If the step
 fails, the take-back is not finished: the record and the note stay, the app
 does not start, and the next start tries again. Windows has no in-app repair
-for this status. The person's exit in that case is an uninstall with "keep":
-its move-out finishes the take-back without this step and moves the data out
-again, unchanged.
+for this status. A database file that has a second name somewhere (a hard
+link) is never changed, because the change would also reach the other file;
+the take-back does not finish then either, and the message names the file.
+The person's exit in both cases is an uninstall with "keep": its move-out
+finishes the take-back without this step and moves the data out again,
+unchanged.
 
 What the module deletes: empty folders, its own two records and its lock
 file. Nothing else.
@@ -975,17 +992,27 @@ file. Nothing else.
 Messages. Every refusal and every stop is one message with what happened, that
 nothing was deleted, the next step and a short reference (the cause, the
 error type and the Windows error code, never the error text). A stop that a
-restart can cure says so. Every other stop names its cause: the entry that
-is in the way, the entry that stayed behind, a link, a newer version. While
-an installation holds a part of the kept data, the message says that an
-uninstall can delete that part.
+restart can cure says so. Every other stop names its cause and its own next
+step: the entry that is in the way (move it outside the two folders), a file
+that exists two times after a program closed late, a link, a newer version.
+A refusal before any change says that nothing was changed. While an
+installation holds a part of the kept data, the message says that an
+uninstall can delete that part. After a take-back that worked, a failure of
+a later message or check does not stop the start.
 
 Limits. A person who never installs again keeps the kept folder. A kept set
 is tied to its installation folder, because saved paths inside name it. A
 set with a data folder that holds more direct entries than the record can
-name (about 20,000) is not offered. A start does not look at an unfinished
-move of its own folder: while an uninstall is unfinished, the uninstall's
-own journal must refuse Open (the change that adds the uninstall choice).
+name (about 10,000) is not offered. A set is offered only while every data
+folder of the installation is empty; one stray file there makes the start
+"not the first", and the set is then not offered or named (the uninstall's
+confirmation names the kept folder). Each take-back saves the database once
+before it retires the update status, and a failed attempt can leave one more
+saved database under `app\reset-backups`. A start does not look at an
+unfinished move of its own folder: while an uninstall is unfinished, the
+uninstall's own journal must refuse Open (the change that adds the uninstall
+choice). `used_version` reads the active app version only when `app` and
+`app\updates` are real folders.
 The native check in the `windows-local-connection` job uses real NTFS
 renames, another program's current folder, a held file, a junction, a held
 folder and the private records on a Windows runner; the dialogs and the
