@@ -57,7 +57,7 @@ artifacts = ["/amplifier_web/release-source.json"]
 path = "scripts/scheduling_build_hook.py"
 
 [tool.hatch.build.targets.wheel]
-packages = ["amplifier_web", "amplifier_operations", "amplifier_kernels", "components/scheduling-delivery/amplifier_scheduling", "amplifier_recall", "components/outputs-delivery/amplifier_outputs", "components/workspace-metadata-delivery/amplifier_workspace_metadata", "components/worktrees-delivery/amplifier_worktrees", "components/publishing/amplifier_publishing", "components/portability-delivery/amplifier_portability"]
+packages = ["amplifier_web", "amplifier_operations", "amplifier_kernels", "components/scheduling-delivery/amplifier_scheduling", "amplifier_recall", "components/outputs-delivery/amplifier_outputs", "components/workspace-metadata-delivery/amplifier_workspace_metadata", "components/worktrees-delivery/amplifier_worktrees", "components/publishing-delivery/amplifier_publishing", "components/portability-delivery/amplifier_portability"]
 # Test/build inputs do not ship; selected component provenance is included below.
 exclude = [
     "/amplifier_kernels/LICENSE",
@@ -160,4 +160,4 @@ artifacts = ["python-docx>=1.1,<2", "python-pptx>=1,<2", "openpyxl>=3.1,<4", "re
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["tests", "components/publishing/tests"]
+testpaths = ["tests"]

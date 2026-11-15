@@ -316,6 +316,7 @@ def test_flat_selection_preserves_modified_root_snapshot(flat_selection, recorde
 @pytest.fixture(params=[
     ("workspace-metadata", "workspaces", "amplifier_workspace_metadata"),
     ("outputs", "outputs", "amplifier_outputs"),
+    ("publishing", "publishing", "amplifier_publishing"),
 ])
 def nested_selection(tmp_path, request):
     component, author_directory, package = request.param

@@ -39,9 +39,11 @@ never edit that copy by hand or coinstall the standalone distribution.
 
 `components/publishing/` is temporarily authored here as its independently
 buildable Python project. Preserve its `amplifier_publishing` imports and existing
-module entrypoint; Unified builds directly from the nested runtime sources.
-Its portable tests stay with the package, while host policy and integration tests
-stay in Unified. It is not a generated delivery copy.
+module entrypoint. Unified consumes only the published artifact selected into
+`publishing-delivery/` by `publishing.source.json`, as the sole installed owner.
+Never edit that generated copy by hand or coinstall the standalone distribution.
+Author edits and publication do not refresh the app selection. Its POSIX mechanism
+tests stay with the package; host authorization, policy and integration stay in Unified.
 
 `components/scheduling/` is temporarily authored here as its independently
 buildable Python project. Preserve its normal `amplifier_scheduling` import.
