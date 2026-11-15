@@ -368,12 +368,12 @@ def test_yes_twice_deletes_in_the_one_order_that_keeps_every_interruption_safe(d
     assert {path.name for path in root.iterdir()} == kept_names(deleter)
     assert plan.COMPLETE not in deletes(state) and plan.completed(root)
     journal = deleter.journal()
-    assert journal == {"schema": 1, "choice": "delete", "token": journal["token"]}
+    assert journal == {"schema": 1, "choice": "delete", "token": journal["token"], "store": "source-store"}
     assert re.fullmatch("[0-9a-f]{32}", journal["token"])
     assert state["after"] == {
         "token": journal["token"], "park": plan.PARK,
         "keep": (101, 202),
-        "folders": plan.last_names(),
+        "folders": plan.last_names(store="source-store"),
         "wait_for": (os.getpid(), os.getppid()), "seconds": 120, "choice": "delete", "notices": 1}
     # The result claims the start of the step after exit, never its end.
     assert result == {"ok": True, "operation": "uninstall", "userDataRetained": False, "certificate": "removed",
@@ -699,7 +699,7 @@ def test_emptied_folder_that_windows_keeps_is_not_data_and_a_program_file_in_use
     assert result["afterExit"] and result["userDataRetained"] is False
     assert list((root / "workspace").iterdir()) == [] and (root / "cache/wheels/x.whl").exists()
     # The step after exit can remove the cache only when it is empty.
-    assert state["after"]["folders"] == plan.last_names()
+    assert state["after"]["folders"] == plan.last_names(store="source-store")
     assert "files" not in state["after"]
     assert state["registry"] is None
 
@@ -838,8 +838,65 @@ def test_delete_everything_removes_the_source_store_of_a_new_and_of_an_earlier_i
     assert {path.name for path in root.iterdir()} == kept_names(deleter)
     confirmation = state["notices"][-1][0]
     assert "The folder itself stays" not in confirmation and "you can delete it" in confirmation
-    # The step after exit is asked about both names. It removes a named folder only while it is empty.
-    assert set(STORES) <= set(state["after"]["folders"])
+    # The removal decided once which name is the store, and wrote it down before it deleted anything.
+    assert deleter.journal()["store"] == store
+    # The step after exit is asked about that one name. It removes a named folder only while it is empty.
+    assert store in state["after"]["folders"] and other not in state["after"]["folders"]
+
+
+def _both_stores(root):
+    """Both names in one folder, each with a file. Returns the file under `s`.
+
+    Two ways lead here. An earlier installation (its store is `source-store`)
+    to which something else added a folder `s`. Or a new installation to
+    which something added `source-store`: the launcher then uses that folder
+    as the store, and nothing shows any more who made `s`.
+    """
+    mine = root / "s" / "deep" / "mine.txt"
+    mine.parent.mkdir(parents=True)
+    mine.write_text("not Amplifier's")
+    assert (root / "source-store" / "objects" / "s").read_text() == "s"
+    return mine
+
+
+def test_delete_everything_removes_only_the_store_that_the_launcher_uses(deleter, monkeypatch):
+    state, root = deleter.state, deleter.root
+    mine = _both_stores(root)
+    state["choices"] = ["yes", "yes"]
+    monkeypatch.setattr(deleter.consumer.sys, "stdout", None)
+    result = deleter.run()
+    # The launcher's store goes with the program files. The folder with the other name is not deleted,
+    # not handed to the step after exit, and named to the person as something that stays.
+    assert "source-store" in deletes(state) and not os.path.lexists(root / "source-store")
+    assert "s" not in deletes(state) and "s" not in state["after"]["folders"]
+    assert mine.read_text() == "not Amplifier's"
+    assert result["kept"] == ["s"] and result["afterExit"] and result["programLeft"] == []
+    assert {path.name for path in root.iterdir()} == {"s"} | kept_names(deleter)
+    assert deleter.journal()["store"] == "source-store"
+    confirmation = state["notices"][-1][0]
+    assert "The folder itself stays" in confirmation and "\ns\n" in confirmation and "you can delete it" not in confirmation
+
+
+def test_second_uninstall_keeps_the_other_folder_when_the_store_is_already_deleted(deleter):
+    """The first removal deleted the store and then stopped. The listing alone would now take `s` for the store."""
+    state, root, consumer = deleter.state, deleter.root, deleter.consumer
+    mine = _both_stores(root)
+    state.update(choices=["yes", "yes"], commit_conflict=True)
+    with pytest.raises(consumer.Unfinished) as stopped:
+        deleter.run()
+    assert stopped.value.step == "apps-entry"
+    # The program step ran: the store is gone, the other folder is whole, and the journal names the store.
+    assert not os.path.lexists(root / "source-store") and mine.read_text() == "not Amplifier's"
+    first = deleter.journal()
+    assert first["store"] == "source-store" and plan.store_name([path.name for path in root.iterdir()]) == "s"
+    state.update(commit_conflict=False, choices=["yes", "yes"])
+    result = deleter.run()
+    assert result["kept"] == ["s"] and result["afterExit"] and "s" not in deletes(state)
+    assert mine.read_text() == "not Amplifier's" and "s" not in state["after"]["folders"]
+    # The second removal has a new token and the same store.
+    second = deleter.journal()
+    assert second["token"] != first["token"] and second["store"] == "source-store"
+    assert {path.name for path in root.iterdir()} == {"s"} | kept_names(deleter)
 
 
 @pytest.mark.parametrize("store", STORES)
@@ -857,15 +914,31 @@ def test_keep_leaves_the_source_store_of_a_new_and_of_an_earlier_installation(de
     assert after == before and after[store + "/objects/s"] == b"s"
 
 
-def test_both_names_of_the_source_store_are_program_files_only_in_their_exact_spelling():
+def test_the_source_store_is_the_one_that_the_launcher_uses_in_its_exact_spelling():
     from amplifier_web import windows_consumer as consumer
-    # The launcher's two names, and no third one.
-    assert set(STORES) == {consumer.SOURCE_STORE, consumer.EARLIER_SOURCE_STORE}
-    assert set(STORES) <= set(plan.CACHES) and set(STORES) <= plan._FOLDERS and set(STORES) <= plan._EXACT
+    # The launcher's two names in the launcher's order (the earlier name wins), and no third one.
+    assert plan.STORES == (consumer.EARLIER_SOURCE_STORE, consumer.SOURCE_STORE) and set(STORES) == set(plan.STORES)
+    assert not set(STORES) & set(plan.CACHES) and set(STORES) <= plan._FOLDERS and set(STORES) <= plan._EXACT
+    # The launcher's rule: the earlier name when that folder is there, else the new name.
+    assert plan.store_name(["app", "s"]) == plan.store_name(["app"]) == plan.store_name([]) == "s"
+    assert plan.store_name(["source-store"]) == plan.store_name(["s", "source-store"]) == "source-store"
+    # The journal of a removal that did not finish only ever keeps the folder `s`.
+    assert plan.store_name(["s"], {"store": "source-store"}) == plan.store_name([], {"store": "source-store"}) == "source-store"
+    assert plan.store_name(["s"], {"store": "s"}) == plan.store_name(["s"], {}) == "s"
+    assert plan.store_name(["s"], {"store": ["source-store"]}) == plan.store_name(["s"], {"store": "Source-Store"}) == "s"
+    assert plan.store_name(["s", "source-store"], {"store": "s"}) == "source-store"
     others = ["S", "Source-Store", "ss", "s.txt", "s ", "source-store-2", "source_store", "sourcestore"]
-    groups = plan.sort(list(STORES) + others)
-    assert groups["program"] == list(STORES) and groups["foreign"] == others
-    assert sum(map(len, groups.values())) == len(STORES) + len(others)
+    for store in STORES:
+        groups = plan.sort([store] + others)
+        assert groups["program"] == [store] and groups["foreign"] == others
+        assert sum(map(len, groups.values())) == 1 + len(others)
+    # With both names in one folder, only the launcher's store is program files.
+    both = plan.sort(list(STORES))
+    assert both["program"] == ["source-store"] and both["foreign"] == ["s"]
+    # A removal's one decision holds for every later listing, also when its store is gone or the other name appears.
+    assert plan.sort(["s", "cache"], "source-store") == {**plan.sort(["cache"]), "foreign": ["s"]}
+    late = plan.sort(["s", "source-store"], "s")
+    assert late["program"] == ["s"] and late["foreign"] == ["source-store"]
     # Another spelling of either name is not this installation's entry: uninstall then deletes nothing.
     assert plan.altered(list(STORES) + others) == ["S", "Source-Store"]
 
@@ -876,6 +949,8 @@ def test_last_names_has_every_own_folder_but_never_a_file_or_the_flat_folder(del
     for owned in (None, Disk(root, deleter.state)):
         folders = plan.last_names(owned)
         assert set(plan.DATA + plan.RUNNING + plan.CACHES + plan.LAST[:2]) <= set(folders)
+        # One store name: the fixture's earlier store, or the new name when nothing is listed.
+        assert set(STORES) & set(folders) == {"source-store" if owned else "s"}
         assert not set(plan.FILES + plan.LAST[2:] + (plan.STARTED, plan.COMPLETE)) & set(folders)
         assert not {plan.JOURNAL, plan.PARK, "mine.txt"} & set(folders)
         assert len(folders) == len(set(folders))
@@ -883,6 +958,7 @@ def test_last_names_has_every_own_folder_but_never_a_file_or_the_flat_folder(del
             assert "launcher-1.0.0-0a1b2c3d" in folders
             assert "child-2.stderr.txt" not in folders
     assert plan.sort([plan.PARK])["running"] == [plan.PARK] and plan._folder(plan.PARK)
+    assert set(STORES) & set(plan.last_names(None, "source-store")) == {"source-store"}
 
 
 @pytest.mark.parametrize("failure", ["commit", "shortcut"])
@@ -1166,7 +1242,10 @@ def test_setup_creates_no_top_level_name_that_uninstall_does_not_know():
     # installation, and the earlier name that its check of a folder still knows.
     stores = re.search(r'SourceStore="([^"]+)", EarlierSourceStore="([^"]+)"', text).groups()
     assert stores == STORES
-    names.update(stores)
+    # Setup creates only the first. The earlier name is in its check of a folder alone.
+    assert text.count("EarlierSourceStore") == 2 and "SourceStore,EarlierSourceStore}.Any(" in text
+    names.add(stores[0])
+    assert plan.sort([stores[1]])["program"] == [stores[1]]
     lists = re.findall(r"foreach\((?:string|var) relative in new\[\]\{([^}]*)\}\)", text)
     pairs = re.search(r"foreach\(var pair in new\[\]\{([^}]*)\}\)", text).group(1)
     assert len(lists) == 2
@@ -1204,11 +1283,14 @@ def test_launcher_and_launcher_refresh_names_are_known_and_exact():
     # The launcher names the source store beside that mapping, by two constants.
     assert "source_store(root)" in environment and "source-store" not in roots
     known = [consumer.RECEIPT, consumer.QUALIFICATION, consumer.RECORD, windows_consumer_shell.FILE, "export",
-             "workspace", consumer.SOURCE_STORE, consumer.EARLIER_SOURCE_STORE, *re.findall(r': "([a-z-]+)"', roots),
+             "workspace", consumer.SOURCE_STORE, *re.findall(r': "([a-z-]+)"', roots),
              "launcher-0.95.0-0a1b2c3d", "launcher-0.95.0-0a1b2c3d-2", "launcher-not-used", "launcher-not-used-3",
              "amplifier_unified-0.96.0-py3-none-any.whl", "amplifier_unified-0.96.0-py3-none-any.whl.part",
              ".private-" + "0f" * 16 + ".tmp"]
     assert len(known) > 20 and plan.sort(known)["foreign"] == []
+    # An earlier installation: the same names with the earlier store.
+    earlier = [consumer.EARLIER_SOURCE_STORE if name == consumer.SOURCE_STORE else name for name in known]
+    assert earlier != known and plan.sort(earlier)["foreign"] == []
     # Exact spelling and exact forms. Anything else is not this installation's own and stays.
     foreign = ["App", "SHARED", "Workspace", "launcher-0.95.0-0A1B2C3D", "launcher-0.95.0-0a1b2c3", "launcher-x",
                "launcher-not-used-", "amplifier_unified-0.96.0-py3-none-any.whl.bak", "amplifier_unified-0.96-py3-none-any.whl",
@@ -1429,6 +1511,34 @@ def test_native_delete_choice_removes_the_folder_and_nothing_outside_it(native_i
     assert not os.path.lexists(root)
     _outside_unchanged(native["outside"])
     print("UNINSTALL_CHAIN " + json.dumps({"process": done, "afterExit": report}, separators=(",", ":")))
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Real folder, Windows entries, start chain and step after exit")
+def test_native_delete_choice_keeps_a_folder_with_the_other_store_name(native_installation):
+    """Yes, Yes on an earlier installation that also holds a folder `s`: only `source-store` goes.
+
+    The folder `s` is not this installation's store. It stays with its file,
+    and so the installation folder stays with both records.
+    """
+    native, root = native_installation, native_installation["root"]
+    assert native["store"] == "source-store"
+    mine = root / "s" / "deep" / "mine.txt"
+    mine.parent.mkdir(parents=True)
+    mine.write_text("not Amplifier's")
+    done = native["run"]("uninstall", ["yes", "yes"])
+    assert done["result"]["afterExit"] and done["result"]["kept"] == ["s"], done
+    assert done["result"]["programLeft"] == [] and done["result"]["userDataRetained"] is False
+    assert {plan.PARK, plan.JOURNAL, plan.COMPLETE, "s"} <= _without_kept_file(done["left"]) <= {
+        plan.PARK, plan.JOURNAL, plan.COMPLETE, "s", "workspace"}
+    assert shell.registry(root) is None and not native["entries"].exists()
+    report = _finish_report(native["report"], timeout=200)
+    assert report["reason"] == "" and not report["folderRemoved"], report
+    # The other folder keeps both records, as every entry does that is not Amplifier's.
+    assert sorted(os.listdir(root)) == sorted(["s", plan.COMPLETE, plan.JOURNAL])
+    assert mine.read_text() == "not Amplifier's" and sorted(os.listdir(root / "s")) == ["deep"]
+    assert plan.completed(root) and plan.pending(root)["store"] == "source-store"
+    _outside_unchanged(native["outside"])
+    print("UNINSTALL_OTHER_STORE " + json.dumps({"process": done, "afterExit": report}, separators=(",", ":")))
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Real folder, Windows entries and start chain")

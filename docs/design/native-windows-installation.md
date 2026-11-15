@@ -892,7 +892,8 @@ does.
    ask Windows once about the certificate. A failure up to here leaves the
    installation whole, with the messages of an uninstall that keeps the folder.
 5. Write the journal `unified-uninstall.json` (`schema` 1, `choice`, a random
-   `token`) with the private atomic writer. Nothing is deleted before it
+   `token`, and `store`: the name of the source store, see "Only exact
+   names") with the private atomic writer. Nothing is deleted before it
    exists.
 6. Delete setup's mark of unfinished work. Setup can leave that mark in a
    finished installation; with the mark and without the completion record, a
@@ -932,19 +933,31 @@ and then the folder stays. A test reads setup's source and fails when setup
 creates a top-level name that this list does not know. The journal is in no
 delete list.
 
-The source store has two names in that list: `s`, which setup creates in a
-new installation, and `source-store`, which an earlier installation keeps
-(see the path budget above). "Delete everything" removes the store of either
-installation with the caches, and "keep" leaves it. Neither is named as
-something that is not Amplifier's. The rule is by name, not by which
-installation made the entry: both names are program files in every
-installation, as they are in setup's own check of a folder. So a top-level
-folder `s` that something added to an earlier installation, or a
-`source-store` that something added to a new one, is deleted with the program
-files after the two Yes answers. The same holds for every other name of the
-list that one installation did not create itself (a launcher folder that the
-refresh kept, for example). Another spelling (`S`, `Source-Store`) is not the
-installation's entry: uninstall then deletes nothing, as for `App`.
+The source store has one of two names: `s`, which setup creates in a new
+installation, and `source-store`, which an earlier installation keeps (see
+the path budget above). Uninstall deletes only the store that the launcher
+uses, by the launcher's rule: `source-store` when that folder is in the
+installation, else `s` (`windows_uninstall.store_name`). "Delete everything"
+removes that store with the caches, and "keep" leaves it. It is not named as
+something that is not Amplifier's.
+
+A folder with the other name is not this installation's entry. It stays with
+everything in it, the message names it, and then the folder stays. That is a
+folder `s` that something added to an earlier installation. It is also the
+folder `s` of a new installation to which something added `source-store`:
+the launcher then uses `source-store`, and nothing shows any more who made
+`s`. That `s` holds module source and none of the person's data; the person
+can delete the folder by hand. Setup, the app, an update and the launcher
+refresh never create the second name in an installation.
+
+A removal decides the store once, from the listing that passed the check of
+the names, and writes its name into the journal before it deletes anything.
+Every later step of that removal uses that one decision. A second uninstall
+after an interruption takes it from the journal: by then the store can be
+deleted, and the listing alone would take a folder `s` for the store. The
+journal's entry can only keep a folder `s`: it never makes uninstall delete a
+folder that the listing alone would keep. Another spelling of either name
+(`S`, `Source-Store`) refuses: uninstall then deletes nothing, as for `App`.
 
 **While the journal exists** the folder can be partly deleted. Open, Stop and
 Status refuse with one message that tells the person to select Uninstall
@@ -1032,12 +1045,12 @@ dangling file link of that name and creates the file at the link's target.
 **Known limits.** Two reviewers examined this design in eight passes (pull
 request 2110). These limits stayed. They are stated, not solved. The numbers
 are the review's; a number that is not in the list was closed before the last
-pass. Except for L3 and L4, each needs a program that runs as the same person
-and acts in the moment of the uninstall.
+pass. Except for L3, L4, L14 and L15, each needs a program that runs as the
+same person and acts in the moment of the uninstall.
 
 One reviewer rated L12 and L13 as blocking, the other as not blocking. The
-owner accepted both on November 15, 2026, and the change was merged with
-them. Both reviewers rated every other limit as not blocking.
+owner accepted both on November 15, 2026. Both reviewers rated every other
+limit as not blocking.
 
 - **L12 (accepted).** A program can put files into the installation folder
   between the step's last listing and its deletion of setup's completion
@@ -1090,8 +1103,9 @@ them. Both reviewers rated every other limit as not blocking.
   another file. The step compares that text with its token and stops when it
   differs. Nothing is written or deleted through that path.
 - **L14.** A step after exit whose answer came too late keeps the two files
-  open and waits. It deletes nothing while `python` and `tools` are there,
-  and stops at its deadline.
+  open and waits. While `python` and `tools` are there it deletes no file;
+  it can remove a named folder of the installation that is already empty.
+  It stops at its deadline.
 - **L15.** The two kept files' handles can be inherited only in the moment in
   which the step after exit is created, and the step is created with an
   exact list of handles. A process that another thread of the uninstall
@@ -1139,7 +1153,11 @@ folder above it and of the flat folder is refused, and Windows refuses to
 turn the flat folder or the installation folder into a link in place (error
 145); the same call
 works on an empty folder that nobody holds. A folder with an open file in it,
-and the folder above it, can be neither turned into a link nor renamed. A
+and the folder above it, can be neither turned into a link nor renamed. The
+delete choice runs once on an installation with the store `s` and once on one
+with the store `source-store`, and the keep choice leaves either store with
+every other entry. An earlier installation that also holds a folder `s` keeps
+that folder with its file, and then the installation folder stays. A
 link under the kept file's name is refused and nothing is created at its
 target (the same create by a path does create the target). After the
 uninstall program let go, the two kept files stay with the process that
