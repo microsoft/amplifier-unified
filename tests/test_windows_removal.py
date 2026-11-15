@@ -20,6 +20,7 @@ from amplifier_web import windows_removal as removal
 
 TOKEN = "0123456789abcdef0123456789abcdef"
 PARK = "unified-uninstall-last"
+COMPLETE = "unified-setup-complete.json"
 
 
 class Tree:
@@ -694,6 +695,7 @@ def finish_tree(tmp_path):
         (root / "unified-uninstall.json").write_text(json.dumps({
             "schema": 1, "choice": "delete", "token": TOKEN,
         }))
+        (root / COMPLETE).write_text('{"schema": 1}')
         (outside / "deep").mkdir(parents=True)
         (outside / "keep.txt").write_text("keep outside")
         (outside / "deep" / "also.txt").write_text("keep deep outside")
@@ -736,7 +738,7 @@ def _finish_report(path, *, timeout=90):
 
 
 def _finish_options(tree):
-    return dict(park=PARK, folders=[], files=[], seconds=2, report=tree["report"])
+    return dict(park=PARK, folders=[], seconds=2, report=tree["report"])
 
 
 def _plain_tree(root):
@@ -756,8 +758,11 @@ def _assert_outside_unchanged(tree):
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Real Windows venv redirector and after-exit helper")
-def test_native_finish_survives_the_real_redirector_and_python_exit(finish_tree, tmp_path):
+@pytest.mark.parametrize("completion", [True, False], ids=["completion", "no-completion"])
+def test_native_finish_survives_the_real_redirector_and_python_exit(finish_tree, tmp_path, completion):
     tree, root = finish_tree, finish_tree["root"]
+    if not completion:
+        (root / COMPLETE).unlink()
     (root / "workspace").mkdir()
     (root / "python" / "probe").mkdir(parents=True)
     source = next(path for path in (Path(sys.base_prefix) / "vcruntime140.dll",
@@ -800,14 +805,14 @@ def record_start(*args, **kwargs):
     return process
 removal.subprocess.Popen = record_start
 with removal.folder(root) as owned:
-    with owned.aside('unified-uninstall-last') as park:
+    with owned.aside('unified-uninstall-last', '0123456789abcdef0123456789abcdef') as park:
         pid = removal.finish_after_exit(root, '0123456789abcdef0123456789abcdef',
             park='unified-uninstall-last', folders=['python', 'tools', 'workspace'],
-            files=[], wait_for=(os.getpid(), os.getppid()), seconds=30, report=report)
+            wait_for=(os.getpid(), os.getppid()), seconds=30, report=report)
         workspace = owned.remove(['workspace'])
         first = owned.remove(['python', 'tools'], park=park)
         parked = {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
-                  for path in (root / 'unified-uninstall-last').iterdir()}
+                  for path in (root / 'unified-uninstall-last').iterdir() if path.is_file()}
         left = owned.names()
 evidence.write_text(json.dumps(dict(
     inProcess=first, workspace=workspace, parked=parked, images=images, left=left, pid=pid,
@@ -832,7 +837,8 @@ evidence.write_text(json.dumps(dict(
     assert first["realPid"] != process.pid and first["redirectorPid"] == process.pid
     assert first["inProcess"]["parked"] >= 2
     assert set(first["images"].values()) <= set(first["parked"].values())
-    assert set(first["left"]) <= {PARK, "unified-uninstall.json", "workspace"}
+    assert set(first["left"]) <= {PARK, "unified-uninstall.json", COMPLETE, "workspace"}
+    assert (COMPLETE in first["left"]) is completion
     assert first["inProcess"]["left"] == [] and first["inProcess"]["leftCount"] == 0
     assert first["workspace"]["left"] in ([], ["workspace"])
     result = _finish_report(tree["report"])
@@ -847,7 +853,7 @@ evidence.write_text(json.dumps(dict(
 def test_native_finish_wrong_token_changes_nothing(finish_tree):
     tree, root = finish_tree, finish_tree["root"]
     with removal.folder(root) as owned:
-        with owned.aside(PARK):
+        with owned.aside(PARK, "f" * 32):
             (root / PARK / "old.txt").write_text("must stay")
             before = _plain_tree(root)
             with pytest.raises(OSError, match="did not start in the held folder"):
@@ -872,7 +878,7 @@ def test_native_finish_invalid_journal_changes_nothing(finish_tree, journal):
     tree, root = finish_tree, finish_tree["root"]
     (root / "unified-uninstall.json").write_text(journal)
     with removal.folder(root) as owned:
-        with owned.aside(PARK):
+        with owned.aside(PARK, TOKEN):
             (root / PARK / "old.txt").write_text("must stay")
             before = _plain_tree(root)
             with pytest.raises(OSError, match="did not start in the held folder"):
@@ -886,25 +892,26 @@ def test_native_finish_invalid_journal_changes_nothing(finish_tree, journal):
 
 
 @pytest.mark.skipif(os.name != "nt", reason="The helper's real current-folder hold after the caller lets go")
-def test_native_finish_holds_both_folders_while_it_waits(finish_tree):
+def test_native_finish_holds_the_root_flat_and_inner_folders_while_it_waits(finish_tree):
     tree, root = finish_tree, finish_tree["root"]
     sleeper = subprocess.Popen([sys.executable, "-I", "-S", "-c", "import sys; sys.stdin.buffer.read(1)"],
                                stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     errors = {}
     try:
         with removal.folder(root) as owned:
-            with owned.aside(PARK):
+            with owned.aside(PARK, TOKEN):
                 removal.finish_after_exit(root, TOKEN, **{
                     **_finish_options(tree), "wait_for": [sleeper.pid], "seconds": 20})
         # No caller handle remains. The helper alone must keep these folders in place.
         for name, source, destination in (
                 ("root", root, Path(str(root) + "-moved")),
-                ("flat", root / PARK, root / "moved-flat")):
+                ("flat", root / PARK, root / "moved-flat"),
+                ("hold", root / PARK / TOKEN, root / PARK / "moved-hold")):
             with pytest.raises(OSError) as refused:
                 os.rename(source, destination)
             errors[name] = refused.value.winerror
         with pytest.raises(OSError) as refused:
-            os.rmdir(root / PARK)
+            os.rmdir(root / PARK / TOKEN)
         errors["rmdir"] = refused.value.winerror
         assert sleeper.poll() is None and not tree["report"].exists()
     finally:
@@ -917,47 +924,115 @@ def test_native_finish_holds_both_folders_while_it_waits(finish_tree):
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Real PowerShell keeps folders and links in the flat folder")
-@pytest.mark.parametrize("kind", ["junction", "folder", "filelink", "held", "later"])
+@pytest.mark.parametrize("kind", ["junction", "folder", "filelink", "held", "later", "readonly"])
 def test_native_finish_keeps_entries_that_are_not_free_old_plain_files(finish_tree, kind):
     import _winapi
 
     tree, root = finish_tree, finish_tree["root"]
     held = None
-    with removal.folder(root) as owned:
-        with owned.aside(PARK):
-            entry = root / PARK / kind
-            if kind == "junction":
-                _winapi.CreateJunction(str(tree["outside"]), str(entry))
-                tree["links"].append(entry)
-            elif kind == "filelink":
-                os.symlink(tree["outside"] / "keep.txt", entry)
-                tree["links"].append(entry)
-            elif kind == "folder":
-                entry.mkdir()
-                (entry / "inside.txt").write_text("must not enter")
-            elif kind == "held":
-                held = open(entry, "w")
-                held.write("must stay")
-                held.flush()
-            try:
-                # A live PID holds phase 1 open while a later entry is made.
+    try:
+        with removal.folder(root) as owned:
+            with owned.aside(PARK, TOKEN):
+                entry = root / PARK / kind
+                if kind == "junction":
+                    _winapi.CreateJunction(str(tree["outside"]), str(entry))
+                    tree["links"].append(entry)
+                elif kind == "filelink":
+                    os.symlink(tree["outside"] / "keep.txt", entry)
+                    tree["links"].append(entry)
+                elif kind == "folder":
+                    entry.mkdir()
+                    (entry / "inside.txt").write_text("must not enter")
+                elif kind == "held":
+                    held = open(entry, "w")
+                    held.write("must stay")
+                    held.flush()
+                elif kind == "readonly":
+                    entry.write_text("read-only stays")
+                    os.chmod(entry, stat.S_IREAD)
                 options = {**_finish_options(tree), "wait_for": [os.getpid()]}
                 removal.finish_after_exit(root, TOKEN, **options)
                 if kind == "later":
                     entry.write_text("made after ready")
-                result = _finish_report(tree["report"])
-                assert result["reason"] == "" and not result["folderRemoved"], result
-                assert os.path.lexists(entry) and (root / "unified-uninstall.json").exists()
-                assert str(root / PARK) in result["left"] and result["leftCount"] >= 1
-                if kind == "folder":
-                    assert (entry / "inside.txt").read_text() == "must not enter"
-                elif kind in {"held", "later"}:
-                    assert entry.read_text() == ("must stay" if kind == "held" else "made after ready")
-            finally:
-                if held:
-                    held.close()
+        result = _finish_report(tree["report"])
+        assert result["reason"] == "" and not result["folderRemoved"], result
+        assert os.path.lexists(entry) and (root / "unified-uninstall.json").exists()
+        assert (root / COMPLETE).exists() and not (root / PARK / TOKEN).exists()
+        assert str(entry) in result["left"] and result["leftCount"] >= 1
+        if kind == "folder":
+            assert (entry / "inside.txt").read_text() == "must not enter"
+        elif kind in {"held", "later", "readonly"}:
+            assert entry.read_text() == {"held": "must stay", "later": "made after ready",
+                                         "readonly": "read-only stays"}[kind]
+    finally:
+        if held:
+            held.close()
     _assert_outside_unchanged(tree)
     print("AFTER_EXIT_FLAT_KEPT " + json.dumps({"kind": kind, "report": result}))
+
+
+def _junction_in_place(path, target):
+    """Set mount-point reparse data on an existing folder; never rename it."""
+    import ctypes as C
+    import struct
+
+    kernel = C.WinDLL("kernel32", use_last_error=True)
+    kernel.CreateFileW.argtypes = [C.c_wchar_p, C.c_uint32, C.c_uint32, C.c_void_p,
+                                  C.c_uint32, C.c_uint32, C.c_void_p]
+    kernel.CreateFileW.restype = C.c_void_p
+    kernel.DeviceIoControl.argtypes = [C.c_void_p, C.c_uint32, C.c_void_p, C.c_uint32,
+                                      C.c_void_p, C.c_uint32, C.POINTER(C.c_uint32), C.c_void_p]
+    kernel.DeviceIoControl.restype = C.c_int
+    kernel.CloseHandle.argtypes = [C.c_void_p]
+    substitute = ("\\??\\" + str(target)).encode("utf-16-le")
+    printed = str(target).encode("utf-16-le")
+    names = substitute + b"\0\0" + printed + b"\0\0"
+    data = struct.pack("<HHHH", 0, len(substitute), len(substitute) + 2, len(printed)) + names
+    buffer = C.create_string_buffer(struct.pack("<IHH", 0xA0000003, len(data), 0) + data)
+    handle = kernel.CreateFileW(str(path), 0x40000000, 7, None, 3, 0x02200000, None)
+    if handle == C.c_void_p(-1).value:
+        return {"ok": False, "error": C.get_last_error(), "stage": "open"}
+    try:
+        returned = C.c_uint32()
+        ok = bool(kernel.DeviceIoControl(handle, 0x000900A4, buffer, len(buffer.raw) - 1,
+                                         None, 0, C.byref(returned), None))
+        return {"ok": ok, "error": 0 if ok else C.get_last_error(), "stage": "set"}
+    finally:
+        kernel.CloseHandle(handle)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Measure in-place reparse data while the helper holds the inner folder")
+def test_native_nonempty_flat_folder_cannot_become_a_junction_in_place(finish_tree):
+    tree, root = finish_tree, finish_tree["root"]
+    control = root.parent / ("au-inplace-control-" + uuid.uuid4().hex[:10])
+    control.mkdir()
+    sleeper = subprocess.Popen([sys.executable, "-I", "-S", "-c", "import sys; sys.stdin.buffer.read(1)"],
+                               stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    measured = {}
+    try:
+        with removal.folder(root) as owned:
+            with owned.aside(PARK, TOKEN):
+                removal.finish_after_exit(root, TOKEN, **{
+                    **_finish_options(tree), "wait_for": [sleeper.pid], "seconds": 20})
+        # All caller handles are closed. The helper alone holds the inner folder.
+        measured["control"] = _junction_in_place(control, tree["outside"])
+        measured["flat"] = _junction_in_place(root / PARK, tree["outside"])
+        measured["hold"] = _junction_in_place(root / PARK / TOKEN, tree["outside"])
+        if (measured["flat"] != {"ok": False, "error": 145, "stage": "set"}
+                or measured["control"] != {"ok": True, "error": 0, "stage": "set"}):
+            print("AFTER_EXIT_INPLACE " + json.dumps(measured))
+            pytest.exit("The required in-place junction measurement differed. Stop; inspect the numbers.", 1)
+        assert sleeper.poll() is None and not tree["report"].exists()
+    finally:
+        sleeper.stdin.close()
+        sleeper.wait(timeout=10)
+        # This is either the separate empty control or its junction, never its target.
+        os.rmdir(control)
+    result = _finish_report(tree["report"])
+    measured["report"] = result
+    print("AFTER_EXIT_INPLACE " + json.dumps(measured, separators=(",", ":")))
+    assert result["reason"] == "" and result["folderRemoved"] and not root.exists(), result
+    _assert_outside_unchanged(tree)
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Real PowerShell hard-link attribute preservation")
@@ -965,70 +1040,47 @@ def test_native_finish_keeps_entries_that_are_not_free_old_plain_files(finish_tr
 def test_native_finish_never_clears_attributes_through_a_hard_link(finish_tree, location):
     import ctypes
     tree, root = finish_tree, finish_tree["root"]
-    # Create the flat folder through the same held-handle boundary as the caller.
-    with removal.folder(root) as owned:
-        with owned.aside(PARK):
-            _check_native_hardlink(tree, location, ctypes)
-
-
-def _check_native_hardlink(tree, location, ctypes):
-    from amplifier_web.windows_service import _powershell
-    root = tree["root"]
-    parent = root / PARK if location == "flat" else root
     outside = tree["outside"] / "keep.txt"
-    hardlink, readonly, hidden, system = (parent / name for name in (
-        "hardlink.txt", "readonly.txt", "hidden.txt", "system.txt"))
     os.chmod(outside, stat.S_IREAD)
-    os.link(outside, hardlink)
-    readonly.write_text("single read-only file")
-    os.chmod(readonly, stat.S_IREAD)
-    hidden.write_text("single hidden file")
-    system.write_text("single system file")
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
     kernel.SetFileAttributesW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32]
     kernel.SetFileAttributesW.restype = ctypes.c_int
-    assert kernel.SetFileAttributesW(str(hidden), stat.FILE_ATTRIBUTE_HIDDEN)
-    assert kernel.SetFileAttributesW(str(system), stat.FILE_ATTRIBUTE_SYSTEM)
-    assert readonly.stat().st_file_attributes & stat.FILE_ATTRIBUTE_READONLY
-    assert hidden.stat().st_file_attributes & stat.FILE_ATTRIBUTE_HIDDEN
-    assert system.stat().st_file_attributes & stat.FILE_ATTRIBUTE_SYSTEM
-    code = r"""
-$p = $input | Out-String | ConvertFrom-Json
-(Get-Item -LiteralPath $p.path -Force).LinkType
-"""
-    observed = subprocess.run(
-        [_powershell(), "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand",
-         base64.b64encode(code.encode("utf-16-le")).decode("ascii")],
-        input=json.dumps({"path": str(hardlink)}), capture_output=True, text=True, timeout=15,
-    )
-    assert observed.returncode == 0, observed.stderr[-1000:]
-    link_type = observed.stdout.strip()
-    assert link_type == "HardLink", link_type
+    with removal.folder(root) as owned:
+        with owned.aside(PARK, TOKEN):
+            parent = root / PARK if location == "flat" else root
+            hardlink, readonly, hidden, system = (parent / name for name in (
+                "hardlink.txt", "readonly.txt", "hidden.txt", "system.txt"))
+            os.link(outside, hardlink)
+            assert hardlink.stat().st_nlink == 2
+            readonly.write_text("single read-only file")
+            os.chmod(readonly, stat.S_IREAD)
+            hidden.write_text("single hidden file")
+            system.write_text("single system file")
+            assert kernel.SetFileAttributesW(str(hidden), stat.FILE_ATTRIBUTE_HIDDEN)
+            assert kernel.SetFileAttributesW(str(system), stat.FILE_ATTRIBUTE_SYSTEM)
+            before = {path: (path.read_bytes(), path.stat().st_file_attributes)
+                      for path in (hardlink, readonly, hidden, system)}
+            removal.finish_after_exit(root, TOKEN, **_finish_options(tree))
     tree["outside_before"] = _outside_state(tree["outside"])
-    options = _finish_options(tree)
-    if location == "root-files":
-        options["files"].extend(path.name for path in (hardlink, readonly, hidden, system))
-    removal.finish_after_exit(root, TOKEN, **options)
     result = _finish_report(tree["report"])
     assert result["reason"] == "" and not result["folderRemoved"], result
-    # Phase 2 reports the flat folder as a whole when something inside stayed.
-    assert hardlink.exists() and str(root / PARK if location == "flat" else hardlink) in result["left"]
-    assert not readonly.exists() and not hidden.exists() and not system.exists()
-    assert outside.exists() and outside.read_text() == "keep outside"
-    assert outside.stat().st_file_attributes & stat.FILE_ATTRIBUTE_READONLY
-    assert hardlink.stat().st_file_attributes & stat.FILE_ATTRIBUTE_READONLY
-    assert (root / "unified-uninstall.json").exists() and root.exists()
+    assert {path: (path.read_bytes(), path.stat().st_file_attributes) for path in before} == before
+    assert set(map(str, before)) <= set(result["left"])
+    assert outside.stat().st_file_attributes & stat.FILE_ATTRIBUTE_READONLY and outside.stat().st_nlink == 2
+    assert (root / "unified-uninstall.json").exists() and (root / COMPLETE).exists()
     if location == "flat":
-        assert sorted(path.name for path in root.iterdir()) == [PARK, "unified-uninstall.json"]
-        assert sorted(path.name for path in (root / PARK).iterdir()) == ["hardlink.txt"]
+        assert sorted(path.name for path in (root / PARK).iterdir()) == [
+            "hardlink.txt", "hidden.txt", "readonly.txt", "system.txt"]
+    else:
+        assert not (root / PARK).exists()
     _assert_outside_unchanged(tree)
-    print("AFTER_EXIT_HARDLINK " + json.dumps({"location": location, "linkType": link_type,
+    print("AFTER_EXIT_HARDLINK " + json.dumps({"location": location, "links": 2,
                                              "outsideAttributes": outside.stat().st_file_attributes,
                                              "report": result}))
 
 
-@pytest.mark.skipif(os.name != "nt", reason="Real PowerShell removes only links, empty folders and named plain files")
-def test_native_finish_uses_the_separate_folder_and_file_rules(finish_tree):
+@pytest.mark.skipif(os.name != "nt", reason="Real PowerShell removes only empty folders and folder links")
+def test_native_finish_removes_named_folders_but_never_a_file_or_nonempty_folder(finish_tree):
     import _winapi
 
     tree, root = finish_tree, finish_tree["root"]
@@ -1036,23 +1088,19 @@ def test_native_finish_uses_the_separate_folder_and_file_rules(finish_tree):
     (root / "nonempty" / "inside.txt").write_text("not entered")
     (root / "empty").mkdir()
     (root / "plain.txt").write_text("named file")
-    (root / "file-that-is-a-folder").mkdir()
     junction = root / "junction"
     _winapi.CreateJunction(str(tree["outside"]), str(junction))
     tree["links"].append(junction)
-    filelink = root / "filelink"
-    os.symlink(tree["outside"] / "keep.txt", filelink)
-    tree["links"].append(filelink)
     with removal.folder(root) as owned:
-        with owned.aside(PARK):
+        with owned.aside(PARK, TOKEN):
             removal.finish_after_exit(root, TOKEN, **{
-                **_finish_options(tree), "folders": ["junction", "empty", "nonempty"],
-                "files": ["plain.txt", "filelink", "file-that-is-a-folder"]})
+                **_finish_options(tree), "folders": ["junction", "empty", "nonempty", "plain.txt"]})
     result = _finish_report(tree["report"])
     assert result["reason"] == "" and not result["folderRemoved"], result
-    assert sorted(os.listdir(root)) == ["file-that-is-a-folder", "nonempty", "unified-uninstall.json"]
+    assert sorted(os.listdir(root)) == ["nonempty", "plain.txt", COMPLETE, "unified-uninstall.json"]
+    assert (root / "plain.txt").read_text() == "named file"
     assert (root / "nonempty" / "inside.txt").read_text() == "not entered"
-    assert set(result["left"]) == {str(root / "nonempty"), str(root / "file-that-is-a-folder")}
+    assert set(result["left"]) == {str(root / "nonempty"), str(root / "plain.txt")}
     _assert_outside_unchanged(tree)
     print("AFTER_EXIT_NAMED " + json.dumps(result))
 
@@ -1062,33 +1110,80 @@ def test_native_finish_leaves_a_foreign_top_level_entry(finish_tree):
     tree, root = finish_tree, finish_tree["root"]
     (root / "mine.txt").write_text("not Amplifier's")
     with removal.folder(root) as owned:
-        with owned.aside(PARK):
+        with owned.aside(PARK, TOKEN):
             removal.finish_after_exit(root, TOKEN, **_finish_options(tree))
     result = _finish_report(tree["report"])
     assert result["reason"] == "" and not result["folderRemoved"], result
-    assert sorted(os.listdir(root)) == ["mine.txt", "unified-uninstall.json"]
+    assert sorted(os.listdir(root)) == ["mine.txt", COMPLETE, "unified-uninstall.json"]
     assert (root / "mine.txt").read_text() == "not Amplifier's"
     assert result["left"] == [str(root / "mine.txt")] and result["leftCount"] == 1
     _assert_outside_unchanged(tree)
     print("AFTER_EXIT_FOREIGN " + json.dumps(result))
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Real PowerShell refuses a damaged completion record")
+@pytest.mark.parametrize("kind", ["folder", "filelink", "readonly"])
+def test_native_finish_refuses_a_completion_record_that_is_not_a_plain_writable_file(finish_tree, kind):
+    tree, root = finish_tree, finish_tree["root"]
+    record = root / COMPLETE
+    record.unlink()
+    if kind == "folder":
+        record.mkdir()
+    elif kind == "filelink":
+        os.symlink(tree["outside"] / "keep.txt", record)
+        tree["links"].append(record)
+    else:
+        record.write_text('{"schema": 1}')
+        os.chmod(record, stat.S_IREAD)
+    with removal.folder(root) as owned:
+        with owned.aside(PARK, TOKEN):
+            removal.finish_after_exit(root, TOKEN, **_finish_options(tree))
+    result = _finish_report(tree["report"])
+    assert result["reason"] == "Record refused" and not result["folderRemoved"], result
+    assert os.path.lexists(record) and (root / "unified-uninstall.json").exists()
+    if kind == "folder":
+        assert record.is_dir() and list(record.iterdir()) == []
+    elif kind == "filelink":
+        assert record.is_symlink()
+    else:
+        assert record.read_text() == '{"schema": 1}'
+        assert record.stat().st_file_attributes & stat.FILE_ATTRIBUTE_READONLY
+    _assert_outside_unchanged(tree)
+    print("AFTER_EXIT_RECORD " + json.dumps({"kind": kind, "report": result}))
+
+
+@pytest.mark.skipif(os.name != "nt", reason="The last step must never delete an own file at the top level")
+def test_native_finish_keeps_a_leftover_own_file_and_both_records(finish_tree):
+    tree, root = finish_tree, finish_tree["root"]
+    (root / "install.log").write_text("own file held earlier")
+    with removal.folder(root) as owned:
+        with owned.aside(PARK, TOKEN):
+            removal.finish_after_exit(root, TOKEN, **_finish_options(tree))
+    result = _finish_report(tree["report"])
+    assert not result["folderRemoved"] and result["reason"] == "", result
+    assert sorted(os.listdir(root)) == ["install.log", COMPLETE, "unified-uninstall.json"]
+    assert (root / "install.log").read_text() == "own file held earlier"
+    assert result["left"] == [str(root / "install.log")]
+    _assert_outside_unchanged(tree)
+    print("AFTER_EXIT_OWN_FILE " + json.dumps(result))
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Real PowerShell stops when another removal replaces the journal")
 def test_native_finish_stops_when_the_journal_token_changes_while_it_waits(finish_tree):
     tree, root = finish_tree, finish_tree["root"]
-    (root / "named.txt").write_text("must stay in phase 2")
+    (root / "named.txt").write_text("must stay")
     with removal.folder(root) as owned:
-        with owned.aside(PARK):
+        with owned.aside(PARK, TOKEN):
             (root / PARK / "phase-one.txt").write_text("witness the first pass")
             removal.finish_after_exit(root, TOKEN, **{
-                **_finish_options(tree), "files": ["named.txt"], "wait_for": [os.getpid()], "seconds": 20})
+                **_finish_options(tree), "wait_for": [os.getpid()], "seconds": 20})
     # Wait for a deletion, not just ready: the token must change during a real wait.
     witness = root / PARK / "phase-one.txt"
     deadline = time.monotonic() + 10
     while witness.exists() and time.monotonic() < deadline:
         time.sleep(0.05)
     assert not witness.exists(), "The first pass never reached the flat folder."
-    # A live caller keeps phase 1 open. No phase 2 deletion can have run yet.
+    # A live caller keeps the helper waiting. No record deletion can have run yet.
     assert not tree["report"].exists() and (root / "named.txt").exists()
     (root / "unified-uninstall.json").write_text(json.dumps({
         "schema": 1, "choice": "delete", "token": "f" * 32}))
@@ -1108,11 +1203,11 @@ def test_native_finish_with_no_retry_time_keeps_a_nonempty_folder(finish_tree):
     (root / "nonempty").mkdir()
     (root / "nonempty" / "keep.txt").write_text("no tree walk")
     with removal.folder(root) as owned:
-        with owned.aside(PARK):
+        with owned.aside(PARK, TOKEN):
             removal.finish_after_exit(root, TOKEN, **{
                 **_finish_options(tree), "folders": ["nonempty"], "seconds": 0})
     result = _finish_report(tree["report"])
-    assert result["passes"] == 2 and result["reason"] == "" and not result["folderRemoved"], result
+    assert result["passes"] == 1 and result["reason"] == "" and not result["folderRemoved"], result
     assert (root / "nonempty" / "keep.txt").read_text() == "no tree walk"
     assert (root / "unified-uninstall.json").exists()
     _assert_outside_unchanged(tree)

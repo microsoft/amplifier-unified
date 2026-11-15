@@ -1146,7 +1146,7 @@ except consumer.Unfinished as stopped:
     outcome.update(step=stopped.step, refused=isinstance(stopped, consumer.Refused),
                    error=type(stopped.error).__name__, notice=stopped.notice)
 parked = {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
-          for path in (root / plan.PARK).iterdir()} if (root / plan.PARK).exists() else {}
+          for path in (root / plan.PARK).iterdir() if path.is_file()} if (root / plan.PARK).exists() else {}
 outcome.update(events=events, folderAfter=os.getcwd(), left=sorted(os.listdir(root)),
                images=images, parked=parked)
 Path(evidence).write_text(json.dumps(outcome))
@@ -1270,7 +1270,8 @@ def test_native_delete_choice_removes_the_folder_and_nothing_outside_it(native_i
     assert Path(done["folder"]) == root / "workspace" and not Path(done["folderAfter"]).is_relative_to(root)
     assert done["process"] != done["parent"]
     # Before exit only the flat folder, journal and at most the emptied workspace stayed.
-    assert {plan.PARK, plan.JOURNAL} <= set(done["left"]) <= {plan.PARK, plan.JOURNAL, "workspace"}
+    assert {plan.PARK, plan.JOURNAL, plan.COMPLETE} <= set(done["left"]) <= {
+        plan.PARK, plan.JOURNAL, plan.COMPLETE, "workspace"}
     # The Windows entries are gone.
     assert shell.registry(root) is None and not native["entries"].exists()
     # The step after exit removes the running program's files, then the journal, then the empty folder.
@@ -1378,14 +1379,15 @@ with open(evidence, "w", encoding="utf-8") as stream:
         assert done["result"] == {"ok": True, "operation": "uninstall", "userDataRetained": False,
                                   "certificate": "none", "kept": [], "afterExit": True, "programLeft": []}
         assert done["parked"] >= 4, done
-        assert {plan.PARK, plan.JOURNAL} <= set(done["left"]) <= {plan.PARK, plan.JOURNAL, "workspace"}
+        assert {plan.PARK, plan.JOURNAL, plan.COMPLETE} <= set(done["left"]) <= {
+            plan.PARK, plan.JOURNAL, plan.COMPLETE, "workspace"}
         assert not (root / "python").exists() and not (root / "tools").exists()
         # The helper can already have finished. It may only remove these entries.
         try:
             after = set(os.listdir(root))
         except FileNotFoundError:
             after = set()
-        assert after <= {plan.PARK, plan.JOURNAL, "workspace"}
+        assert after <= {plan.PARK, plan.JOURNAL, plan.COMPLETE, "workspace"}
         finished = _finish_report(report, timeout=30)
         assert finished["folderRemoved"] and finished["reason"] == "", finished
         assert finished["left"] == [] and finished["leftCount"] == 0, finished
@@ -1423,9 +1425,9 @@ def test_native_interrupted_removal_refuses_to_start_and_a_second_uninstall_fini
         assert "could not be deleted" in first["notice"] and first["events"] == ["question", "question", "stop"]
         journal = plan.pending(root)
         assert journal is not None and journal["choice"] == "delete" and plan.unfinished(root)
-        # The stored keys went first; the file in use is there; setup's completion record is gone.
+        # The stored keys went first; the file in use and setup's completion record stay.
         assert not (root / "shared").exists() and (root / "app" / "busy.db").exists()
-        assert not (root / plan.COMPLETE).exists() and not plan.completed(root)
+        assert (root / plan.COMPLETE).exists() and plan.completed(root)
         # The Windows entries and the launcher are whole, so the person can uninstall again.
         assert shell.registry(root) == native["registration"]
         assert {path.name for path in native["entries"].iterdir()} == set(shell.LINKS)
@@ -1447,9 +1449,7 @@ def test_native_interrupted_removal_refuses_to_start_and_a_second_uninstall_fini
         assert _tree(root) == before and plan.pending(root) == journal
         # While another Amplifier window holds the installation's lock, Open and Uninstall refuse.
         with plan.single(root):
-            with pytest.raises(plan.Busy):
-                with plan.single(root, wait=0.2):
-                    pass
+            _busy_on_another_thread(root)
             for operation, answers in (("open", []), ("uninstall", ["yes", "yes"])):
                 waiting = native["run"](operation, answers)
                 assert (waiting["step"], waiting["refused"], waiting["error"]) == ("busy", True, "Busy"), waiting
@@ -1465,14 +1465,15 @@ def test_native_interrupted_removal_refuses_to_start_and_a_second_uninstall_fini
     assert done["result"]["afterExit"] and done["result"]["kept"] == ["mine.txt"], done
     assert done["result"]["programLeft"] == []
     assert set(done["images"].values()) <= set(done["parked"].values())
-    assert {plan.PARK, plan.JOURNAL, "mine.txt"} <= set(done["left"]) <= {
-        plan.PARK, plan.JOURNAL, "mine.txt", "workspace"}
+    assert {plan.PARK, plan.JOURNAL, plan.COMPLETE, "mine.txt"} <= set(done["left"]) <= {
+        plan.PARK, plan.JOURNAL, plan.COMPLETE, "mine.txt", "workspace"}
     assert done["events"] == ["question", "question", "stop", "after-exit"]
     assert shell.registry(root) is None and not native["entries"].exists()
     report = _finish_report(native["report"], timeout=200)
     assert report["reason"] == "" and not report["folderRemoved"], report
-    # Only the person's own file and the journal are left. Amplifier never starts from this folder again.
-    assert sorted(os.listdir(root)) == ["mine.txt", plan.JOURNAL]
+    # A foreign entry keeps both records. Setup must never empty this folder.
+    assert sorted(os.listdir(root)) == ["mine.txt", plan.COMPLETE, plan.JOURNAL]
+    assert plan.completed(root)
     assert (root / "mine.txt").read_text() == "not Amplifier's"
     resumed = plan.pending(root)
     assert resumed["choice"] == "delete" and resumed["token"] != journal["token"]
@@ -1517,8 +1518,12 @@ def test_native_lock_refuses_an_object_of_its_name_that_another_owner_made():
     root = windows_files.address(Path.home() / ("au-lock-test-" + uuid.uuid4().hex[:10]))
     api = windows_files._API()
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_wchar_p]
+    kernel.CreateMutexW.restype = ctypes.c_void_p
     kernel.CreateSemaphoreW.argtypes = [ctypes.c_void_p, ctypes.c_long, ctypes.c_long, ctypes.c_wchar_p]
     kernel.CreateSemaphoreW.restype = ctypes.c_void_p
+    kernel.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+    kernel.WaitForSingleObject.restype = ctypes.c_uint32
     kernel.CloseHandle.argtypes = [ctypes.c_void_p]
     name = "Global\\AmplifierUnified-installation-" + shell.identity(root)
 
@@ -1532,18 +1537,16 @@ def test_native_lock_refuses_an_object_of_its_name_that_another_owner_made():
 
     # 1. The lock that Amplifier makes is this person's own, also for an elevated account, and it excludes.
     with plan.single(root):
-        mine = kernel.CreateSemaphoreW(None, 1, 1, name)
+        mine = kernel.CreateMutexW(None, 0, name)
         existed = ctypes.get_last_error()
         assert mine and existed == 183 and owner_of(mine) == api.sid  # ERROR_ALREADY_EXISTS
         kernel.CloseHandle(mine)
-        with pytest.raises(plan.Busy):
-            with plan.single(root, wait=0.2):
-                pass
+        _busy_on_another_thread(root)
     with plan.single(root, wait=0.2):  # Released: it can be taken again.
         pass
     # 2. An object of the same name with another owner. This lane's account is elevated, so an object
     #    with default security belongs to the Administrators group, not to this person.
-    foreign = kernel.CreateSemaphoreW(None, 1, 1, name)
+    foreign = kernel.CreateMutexW(None, 0, name)
     existed = ctypes.get_last_error()
     assert foreign and existed != 183
     try:
@@ -1556,7 +1559,47 @@ def test_native_lock_refuses_an_object_of_its_name_that_another_owner_made():
         kernel.CloseHandle(foreign)
     with plan.single(root, wait=0.2):  # The foreign object is gone: the lock works again.
         pass
-    print("UNINSTALL_LOCK own lock: owner is the person; an object with another owner: refused")
+    # A semaphore of this name cannot pretend to be a mutex, whatever its count.
+    semaphore = kernel.CreateSemaphoreW(None, 2, 2, name)
+    assert semaphore
+    try:
+        with pytest.raises(OSError) as refused:
+            with plan.single(root, wait=0.2):
+                pytest.fail("A semaphore must never be used as the lock.")
+        assert not isinstance(refused.value, plan.Busy)
+        semaphore_error = refused.value.winerror
+    finally:
+        kernel.CloseHandle(semaphore)
+    # Keep the object alive while its owner thread ends without releasing it.
+    with api.private_security() as security:
+        abandoned = kernel.CreateMutexW(ctypes.byref(security), 0, name)
+    assert abandoned
+    waits = []
+    try:
+        owner = threading.Thread(target=lambda: waits.append(kernel.WaitForSingleObject(abandoned, 1000)))
+        owner.start()
+        owner.join(timeout=5)
+        assert not owner.is_alive() and waits == [0]
+        with plan.single(root, wait=0.2):
+            _busy_on_another_thread(root)
+    finally:
+        kernel.CloseHandle(abandoned)
+    print("UNINSTALL_LOCK " + json.dumps({"otherThreadBusy": True, "otherOwnerRefused": True,
+                                         "semaphoreError": semaphore_error, "abandonedTaken": True}))
+
+
+def _busy_on_another_thread(root):
+    result = []
+    def take():
+        try:
+            with plan.single(root, wait=0.2):
+                result.append("taken")
+        except BaseException as error:
+            result.append(type(error).__name__)
+    thread = threading.Thread(target=take)
+    thread.start()
+    thread.join(timeout=5)
+    assert not thread.is_alive() and result == ["Busy"], result
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Real NTFS sharing: an entry that the walk holds cannot be moved")
