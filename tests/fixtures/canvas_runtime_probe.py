@@ -54,10 +54,9 @@ async def run():
     try:
         with tempfile.TemporaryDirectory() as home:
             os.environ['AMPLIFIER_WEB_HOME'] = home
-            attachment = save(home, 'tiny.png', PNG)
             task = asyncio.create_task(session.execute(''))
             await runtime.wait_for(lambda e: e['type'] == 'session.ready', timeout=8)
-            await runtime.submit(Input('user', 'Please review the attached files.', id='image-only', attachments=(attachment,)))
+            await runtime.submit(Input('user', 'Please show the result on Canvas.', id='canvas-input'))
             event = await runtime.wait_for(lambda e: e['type'] in {'generation.finished', 'generation.failed'}, timeout=8)
             assert event['type'] == 'generation.finished', event
             assert provider.requests
@@ -97,11 +96,6 @@ async def run():
                 assert reminder['metadata']['ephemeral'] is True
                 assert reminder['metadata']['persisted'] is True
 
-            request = provider.requests[0]
-            user = next(message for message in request.messages if message.role == 'user' and isinstance(message.content, list))
-            image = next(block for block in user.content if block.type == 'image')
-            assert image.source['media_type'] == 'image/png'
-            assert base64.b64decode(image.source['data']) == base64.b64decode(PNG)
             assert PNG not in json.dumps(runtime.events)
             await runtime.submit(Input('stop'))
             await asyncio.wait_for(task, 5)

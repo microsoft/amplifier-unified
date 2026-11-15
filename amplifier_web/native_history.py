@@ -29,7 +29,9 @@ from .session_files import amplifier_home, project_slug
 _MAX_METADATA = 8 * 1024 * 1024
 _METADATA_FIELDS_VERSION = 2
 _STAMP_FILES = ('metadata.json', 'metadata.json.backup', 'transcript.jsonl',
-                'transcript.jsonl.backup', 'naming.json', os.path.join('context-intelligence', 'metadata.json'))
+                'transcript.jsonl.backup', 'naming.json', os.path.join('context-intelligence', 'metadata.json'),
+                'transcript.v2', 'transcript.v2/current.json', 'transcript.v2/ready.json',
+                'transcript.v2/migration.json')
 _FIELDS = (
     'name', 'title', 'description', 'name_source', 'name_revision', 'name_policy_revision',
     'name_auto', 'name_auto_revision', 'bundle', 'bundle_name',
@@ -38,6 +40,13 @@ _FIELDS = (
     'cwd', 'project_dir', 'workspace', 'model', 'status', 'forked_from_turn', 'forked_at',
     'session_visibility', 'session_purpose',
 )
+
+
+def _stamp_names(directory):
+    from .committed_source import versioned, source_files
+    if versioned(directory):
+        return tuple(dict.fromkeys((*_STAMP_FILES, *source_files(directory))))
+    return _STAMP_FILES
 
 
 def _text(value):
@@ -567,7 +576,7 @@ class NativeHistory:
             # Stamps need only a string prefix. Keep the normalized scandir
             # path instead of constructing and converting a temporary Path.
             prefix = directory.path + os.sep
-            paths.extend(prefix + name for name in _STAMP_FILES)
+            paths.extend(prefix + name for name in _stamp_names(Path(directory.path)))
         result = [tuple(sorted(known.get(project.name, ())))]
         result.append(tuple((path, str(Path(path).resolve()))
                             for path in sorted(self._project_paths.get(project.name, ()))))
@@ -613,7 +622,7 @@ class NativeHistory:
                 raise OSError('Native session changed during reconciliation')
             values = []
             prefix = str(directory) + os.sep
-            for name in _STAMP_FILES:
+            for name in _stamp_names(directory):
                 path = prefix + name
                 try:
                     info = os.stat(path, follow_symlinks=False)
@@ -728,8 +737,12 @@ class NativeHistory:
                 candidate = self._working_dir(source, slug)
                 if candidate:
                     candidates.add(candidate)
+            from . import committed_source
+            is_committed = committed_source.versioned(directory)
+            transcript = None
             try:
-                transcript = _signature(directory / 'transcript.jsonl')
+                if not is_committed:
+                    transcript = _signature(directory / 'transcript.jsonl')
             except FileNotFoundError:
                 try:
                     transcript = _signature(directory / 'transcript.jsonl.backup')
@@ -743,7 +756,7 @@ class NativeHistory:
             # CI diagnostics and runtime probes also make session directories.
             # A real saved transcript or a positive native turn count is needed.
             previous_row = previous_rows.get(directory.name)
-            if not (transcript and transcript[2]) and not (turns and turns > 0) and previous_row is None:
+            if not is_committed and not (transcript and transcript[2]) and not (turns and turns > 0) and previous_row is None:
                 continue
             updated = max([_timestamp(meta.get(key)) or 0 for key in
                            ('updated_at', 'last_updated', 'last_event_at', 'ended_at')]
@@ -773,8 +786,9 @@ class NativeHistory:
                    and isinstance(meta.get('session_purpose'), str)
                    and re.fullmatch(r'[a-z][a-z0-9_.-]{0,79}', meta['session_purpose']) else {}),
                 'createdAt': created, 'updatedAt': updated, 'recentActivityAt': recent, 'turnCount': turns,
-                'transcriptAvailable': bool(transcript and transcript[2]),
-                'transcriptRevision': list(transcript[1:]) if transcript else None,
+                'transcriptAvailable': is_committed or bool(transcript and transcript[2]),
+                'transcriptRevision': (committed_source.revision(directory) if is_committed
+                                       else list(transcript[1:]) if transcript else None),
                 'nameSource': _text(meta.get('name_source')), 'autoName': automatic_metadata(meta),
                 'nameRevision': meta['name_revision'] if type(meta.get('name_revision')) is int and meta['name_revision'] >= 0 else 0,
                 'namePolicyRevision': meta['name_policy_revision'] if type(meta.get('name_policy_revision')) is int and meta['name_policy_revision'] >= 0 else 0,
@@ -1036,6 +1050,8 @@ class NativeHistory:
     def _cached_source_matches(facts, signatures):
         if facts is None:
             return False
+        if signatures.get('transcript.v2') is not None:
+            return False
         files = facts['files']
         sources = {'metadata.json': (signatures['metadata.json'], signatures['metadata.json.backup']),
                    'naming.json': signatures['naming.json'],
@@ -1096,9 +1112,14 @@ class NativeHistory:
                 try:
                     self._directory_stamp(directory)
                     signatures = {}
-                    for name in _STAMP_FILES:
+                    from .committed_source import versioned
+                    is_committed = versioned(directory)
+                    for name in _stamp_names(directory):
                         try:
-                            signatures[name] = _signature(directory / name)
+                            signatures[name] = (self._directory_stamp(directory / name)
+                                                if name == 'transcript.v2' or
+                                                (is_committed and name in {'transcript.jsonl', 'transcript.jsonl.backup'})
+                                                else _signature(directory / name))
                         except FileNotFoundError:
                             signatures[name] = None
                 except (OSError, ValueError):
@@ -1273,7 +1294,15 @@ class NativeHistory:
                     if isinstance(path, str) and Path(path).is_absolute():
                         if Path(path).expanduser().resolve() != Path(workspace).resolve():
                             raise ValueError('Native workspace metadata changed; refresh before continuing.')
-            if not any((directory / name).is_file() and _signature(directory / name)[2]
+            from . import committed_source
+            if committed_source.versioned(directory):
+                pool = committed_source.SourcePool()
+                try:
+                    with pool.source(directory, {'project': project, 'nativeId': identity}):
+                        pass
+                finally:
+                    pool.close()
+            elif not any((directory / name).is_file() and _signature(directory / name)[2]
                        for name in ('transcript.jsonl', 'transcript.jsonl.backup')):
                 raise ValueError('The saved native transcript is unavailable.')
         except OSError as exc:

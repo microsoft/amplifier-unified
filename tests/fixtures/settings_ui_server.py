@@ -136,7 +136,7 @@ async def add_recovery_fixture(app):
  app.router.add_get('/fixture/recovery-observations',observe)
  app.router.add_post('/fixture/recovery-release',release)
 
-async def main(home):
+async def main(home, *, prepare_native_source=None):
  if os.environ.get('SETTINGS_DECISION_SETUP_FIXTURE'):
   from decision_setup import prepare
   prepare()
@@ -157,7 +157,21 @@ async def main(home):
  if 'control_token' in app:
   app['control_token']='fixture-browser-control-token'
   app['allowed_origins']=app['allowed_origins']|{'http://127.0.0.1:8957','http://127.0.0.1:8958'}
- service=app['service'];await service.dispatch('session.create',{'title':'Settings test','workspace':str(workspace),'bundle':'anchors'})
+ service=app['service']
+ original_new=service._new_session
+ if prepare_native_source is not None:
+  # Test-only initial source preparation: registration still uses the ordinary
+  # public create action and its exact generated identity. No outcome/owner
+  # adapter is replaced, and the constructor is restored before browser input.
+  def new_with_source(args,**kwargs):
+   session=original_new(args,**kwargs)
+   prepare_native_source(session)
+   return session
+  service._new_session=new_with_source
+ try:
+  await service.dispatch('session.create',{'title':'Settings test','workspace':str(workspace),'bundle':'anchors'})
+ finally:
+  if prepare_native_source is not None:service._new_session=original_new
  if recovery:await add_recovery_fixture(app)
  if os.environ.get('SETTINGS_DECISION_SETUP_FIXTURE'):
   from decision_setup import attach

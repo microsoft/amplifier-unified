@@ -50,7 +50,9 @@ async def test_worker_cancel_waits_for_real_acquire_and_release(tmp_path, monkey
     finally:
         held.release()
     checkpoint = store.checkpoint_path.read_bytes()
-    worker = runtime_worker.Worker()
+    # This case starts at an already constructed legacy shared-store boundary.
+    # Normal prospective root acquisition has its own real-FD bootstrap checks.
+    worker = runtime_worker.Worker(canonical_bootstrap=False)
     worker.workspace, worker.home = workspace, tmp_path / 'app'
     worker.runtime = SimpleNamespace(session_id='cancelled-worker')
     worker.shared_store = store

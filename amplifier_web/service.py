@@ -268,6 +268,8 @@ from .storage_usage import definitions as storage_definitions
 ACTION_DEFINITIONS.update(storage_definitions(schema, string))
 from .operations import definitions as operation_definitions
 ACTION_DEFINITIONS.update(operation_definitions())
+from .storage_optimize import definitions as storage_optimize_definitions
+ACTION_DEFINITIONS.update(storage_optimize_definitions())
 from .computation import definitions as computation_definitions
 ACTION_DEFINITIONS.update(computation_definitions())
 
@@ -2404,6 +2406,9 @@ class AppService:
             return await dispatch(self, action, args, origin)
         if action.startswith("operations."):
             return await self.operations.dispatch(action, args, origin, command_id)
+        if action.startswith('maintenance.optimize.'):
+            from .storage_optimize import owner
+            return await owner(self).dispatch(action, args, origin, command_id, caller_session_id)
         if action.startswith("computer.visual."):
             return await self.computer_visual.dispatch(action, args, command_id, origin)
         if action.startswith("voice.visual."):
@@ -2824,9 +2829,16 @@ class AppService:
                 except ValueError as exc:
                     raise AppError(str(exc), 409) from exc
             elif action == 'diagnostics.export':
+                from datetime import datetime as export_datetime, timezone as export_timezone
                 page=self.state.get('diagnostics',{}).get('lastResult',{})
                 if page.get('action')!='diagnostics.records':raise AppError('Inspect the records to export first.')
-                lines=[json.dumps({'event':r['event'],'workspace':r['workspace'],'timestamp':r['data']['timestamp'],'data':r['data']}) for r in reversed(page.get('items',[]))]
+                # Captured metadata deliberately omits payload timestamps. Its
+                # indexed envelope retains the original event time; do not
+                # restore private payload fields or invent the export time.
+                lines=[json.dumps({'event':r['event'],'workspace':r['workspace'],
+                                   'timestamp':r['data'].get('timestamp') or
+                                       export_datetime.fromtimestamp(r['at'], export_timezone.utc).isoformat(),
+                                   'data':r['data']}) for r in reversed(page.get('items',[]))]
                 effects.append({'type':'download','filename':'amplifier-diagnostics.jsonl','mime':'application/x-ndjson','content':'\n'.join(lines)+'\n'})
             elif action=='diagnostics.test':
                 if not any(row['id']==args['id'] for row in self.diagnostics.config['destinations']):
@@ -6097,6 +6109,8 @@ class AppService:
         self._close_started = True
         self.begin_shutdown()
         await self.external_conversations.close()
+        if getattr(self, '_saved_storage_optimize', None):
+            await self._saved_storage_optimize.close()
         lifecycle_tasks = [task for task in self._runtime_lifecycle_tasks
                            if task is not asyncio.current_task()]
         for task in lifecycle_tasks:

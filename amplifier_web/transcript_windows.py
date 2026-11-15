@@ -59,7 +59,7 @@ def _native_page(reader, source, before, limit):
     # including hidden/media-only inputs, without expanding the reader's budget.
     complete = (before is None and result['coverage']['rangeStart'] == 0
                 and not window['hasEarlier'] and not result['unavailableRanges']
-                and window['source'] == 'primary' and window['recoveredBackup'] is False)
+                and window['source'] in {'primary', 'committed'} and window['recoveredBackup'] is False)
     items = []
     for item in result['rows']:
         value = item['value']
@@ -120,6 +120,7 @@ class TranscriptWindows:
         # waiter never releases ownership while its physical read still runs.
         if self.jobs:
             await asyncio.gather(*tuple(self.jobs), return_exceptions=True)
+        self.reader.close()
         self.pages.clear()
         self.initial.clear()
         self.bytes = 0

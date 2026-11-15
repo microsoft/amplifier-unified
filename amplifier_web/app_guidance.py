@@ -105,6 +105,8 @@ async def install_app_access(coordinator, bridge, *, execution_role):
         full_access=coordinator.get_capability('web.work_full_access')),
         bridge), context.read), context.read))
     coordinator.register_capability('web.surface_delivery', delivery)
+    from .host.media import mint_graph_owner
+    mint_graph_owner(coordinator, delivery, kind="request-delivery")
     # Observation only. The service's effect policy must independently decide
     # applicability and permissions; absent producer wiring is not a grant.
     coordinator.register_capability('web.work_effect_coverage', delivery.recheck_effect_coverage)
@@ -231,12 +233,17 @@ async def install_app_access(coordinator, bridge, *, execution_role):
         for name, tool in list(tools.items()):
             # AppControl carries its witness into service-owned synchronous
             # action admission. Avoid consuming that execution twice.
-            tools[name] = wrapped(name, tool)
+            from .host.media import replace_media_adapter
+            replace_media_adapter(coordinator, 'tools', name, tool, wrapped(name, tool))
     coordinator.register_capability('web.work_guard_tools', guard_tools)
     original_mount = coordinator.mount
     async def guarded_mount(mount_point, module, name=None):
         if mount_point == 'tools':
             module = guard_tools((name or getattr(module, 'name', None), module))
+        if mount_point == 'providers' and coordinator.get_capability('live.child_mode') == 'finite':
+            transform = coordinator.get_capability('web.provider_transform')
+            if callable(transform):
+                module = transform(module)
         return await original_mount(mount_point, module, name=name)
     coordinator.mount = guarded_mount
     def programmatic_guarded():
@@ -367,12 +374,15 @@ async def install_app_access(coordinator, bridge, *, execution_role):
         delivery.observe_nested_pre(data)
         return HookResult()
 
-    await coordinator.mount('tools', AppControl(), name='app_control')
+    from .host.media import registration_coordinator
+    await registration_coordinator(coordinator).mount('tools', AppControl(), name='app_control')
     delivery.install_dispatch(coordinator)
     guard_tools()
-    coordinator.hooks.register('tool:pre', bind_nested_pre, priority=-200, name='web-work-nested-origin')
-    coordinator.hooks.register('provider:request', guidance, name='web-canvas-guidance')
-    coordinator.hooks.register('tool:post', bind_image_pair, name='web-image-pair-receipt')
+    from .host.media import registration_hooks
+    hooks = registration_hooks(coordinator)
+    hooks.register('tool:pre', bind_nested_pre, priority=-200, name='web-work-nested-origin')
+    hooks.register('provider:request', guidance, name='web-canvas-guidance')
+    hooks.register('tool:post', bind_image_pair, name='web-image-pair-receipt')
     async def ui_host(operation, args):
         return await bridge('ui.use', {'operation': operation, 'args': args})
     coordinator.register_capability('ui.use.host', ui_host)
@@ -384,5 +394,5 @@ async def install_app_access(coordinator, bridge, *, execution_role):
             if current.get('stopped'):
                 return HookResult(action='deny',reason='The user paused UI access. Resume from Browser & computer controls before further input.')
         return HookResult()
-    coordinator.hooks.register('tool:pre',ui_stop_guard,priority=-100,name='web-ui-stop')
+    hooks.register('tool:pre',ui_stop_guard,priority=-100,name='web-ui-stop')
     coordinator.register_capability('web.app_access', True)

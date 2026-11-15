@@ -1,0 +1,603 @@
+"""Real Optimize host/owners; synthetic private captures and text-only runtime.
+
+Never substitutes an eligibility adapter or writes operation/authority SQL.
+--offline-check uses in-process dispatch only (no listener, browser or model).
+The browser runner must use an independently selected, built client.
+"""
+from __future__ import annotations
+
+import asyncio
+import base64
+from datetime import datetime, timedelta, timezone
+import hashlib
+import json
+import os
+from pathlib import Path
+import signal
+import sys
+import tempfile
+import struct
+import zlib
+
+TOKEN = 'fixture-browser-control-token'
+PREFIX = 'maintenance.optimize.'
+# Older than the manual 12-hour cutoff, but inside the ordinary diagnostics
+# index's retention window: identity/export assertions must not be vacuous.
+OLD = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat().replace('+00:00', 'Z')
+REQUEST_SECRET = 'OPTIMIZE-SYNTHETIC-REQUEST-ONLY'
+RESPONSE_SECRET = 'OPTIMIZE-SYNTHETIC-RESPONSE-KEEP'
+OUTBOX_DESTINATION = 'optimize-offline-pending'
+
+
+def assert_pending_outbox(before, after=None):
+    """Nonempty, owner-staged pending rows; an empty equality is not acceptance."""
+    rows = before['deliveries']
+    assert len(rows) == 2, 'Nonempty outbox proof requires both owner-staged pending rows'
+    assert before['outboxTransport'] == {'schedulerStopped': True, 'clientCalls': 0}
+    assert len({row['record_id'] for row in rows}) == 2
+    events = set()
+    for row in rows:
+        assert row['destination'] == OUTBOX_DESTINATION
+        assert row['status'] == 'pending' and row['attempts'] == 0 and row['error'] is None
+        assert row['record_id'] in before['eventIds']
+        assert len(row['revision']) == 64
+        assert REQUEST_SECRET not in row['payload'] and RESPONSE_SECRET not in row['payload']
+        payload = json.loads(row['payload'])
+        assert payload['workspace'] == OUTBOX_DESTINATION
+        assert payload['data']['provider'] == 'fixture'
+        assert payload['data']['model'] == 'outbox-fixture'
+        assert payload['data']['event_id'] == row['record_id']
+        assert 'raw' not in payload['data'] and 'provider_payloads' not in payload['data']
+        assert payload['idempotency_key'].startswith('aci-event-v1:')
+        events.add(payload['event'])
+    assert events == {'llm:request', 'llm:response'}
+    if after is not None:
+        assert after['deliveries'] == rows, 'Outbox identities/status/payloads changed or extra work was enqueued'
+        assert after['outboxTransport'] == before['outboxTransport'], 'Offline transport was contacted'
+    return hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest()
+
+
+def digest(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def historical_pixel():
+    """Valid synthetic 1x1 PNG, deliberately without owner/TTL admission."""
+    def chunk(kind, payload):
+        return (struct.pack('>I', len(payload)) + kind + payload
+            + struct.pack('>I', zlib.crc32(kind + payload)))
+    png = (b'\x89PNG\r\n\x1a\n'
+        + chunk(b'IHDR', struct.pack('>IIBBBBB', 1, 1, 8, 2, 0, 0, 0))
+        + chunk(b'IDAT', zlib.compress(b'\x00\x12\x34\x56'))
+        + chunk(b'IEND', b''))
+    return base64.b64encode(png).decode('ascii')
+
+
+def seed_canonical(directory, native, workspace, *, format='legacy'):
+    """Explicit synthetic history; enrollment is not image-origin admission."""
+    message = {'role': 'tool', 'name': 'historical-observation',
+        'content': [{'type': 'image', 'source': {'type': 'base64',
+            'media_type': 'image/png', 'data': historical_pixel()}}]}
+    if format == 'committed':
+        from amplifier_foundation.session.transcript_lifetime import VersionedSessionBinding
+        directory.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        # Create only a new synthetic root. Never migrate/adopt an existing one.
+        binding = VersionedSessionBinding.create_new(directory, session_id=native,
+            operation_id='fixture-initial', admit=lambda: None)
+        try:
+            binding.append([message], expected=binding.expected,
+                operation_id='fixture-unknown-inline', admit=lambda: None)
+            transcript = directory / 'transcript.v2' / binding.expected.body
+        finally:
+            binding.close()
+    elif format == 'legacy':
+        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        transcript = directory / 'transcript.jsonl'
+        transcript.write_text(json.dumps(message) + '\n')
+        transcript.chmod(0o600)
+    else:
+        raise ValueError('Unknown synthetic canonical format')
+    (directory / 'metadata.json').write_text(json.dumps({
+        'session_id': native, 'host': 'amplifier-unified', 'cwd': workspace}))
+    return transcript
+
+
+def canonical_files(directory):
+    # CI is a separate owner under this same synthetic session root. Its
+    # explicitly selected diagnostics expire; native source/recovery may not.
+    return {str(p.relative_to(directory)): digest(p) for p in directory.rglob('*')
+        if p.is_file() and p.relative_to(directory).parts[0] != 'context-intelligence'}
+
+
+def seed_capture(directory, native):
+    """Small, explicit synthetic source; missing image provenance stays missing."""
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    (directory / 'metadata.json').write_text(json.dumps({
+        'format': 'context-intelligence', 'version': '1.0.0', 'session_id': native}))
+    records = []
+    for direction, secret in [('request', REQUEST_SECRET), ('response', RESPONSE_SECRET)]:
+        body = json.dumps({'synthetic': secret}, sort_keys=True).encode()
+        sha = hashlib.sha256(body).hexdigest()
+        assets = directory / 'provider-payloads'
+        assets.mkdir(exist_ok=True)
+        (assets / (sha + '.json')).write_bytes(body)
+        records.append({'event': 'llm:' + direction, 'timestamp': OLD, 'session_id': native,
+            'data': {'event_id': 'optimize-' + direction, 'provider': 'fixture',
+                'request_id': 'optimize-call',
+                'model': 'optimize-fixture', 'raw': {'synthetic': secret},
+                'provider_payloads': {'raw': {'sha256': sha, 'bytes': len(body),
+                    'redacted': True, 'truncated': False}},
+                'usage': {'input_tokens': 7, 'output_tokens': 3, 'cost': 0.01}}})
+    path = directory / 'events.jsonl'
+    path.write_text(''.join(json.dumps(row) + '\n' for row in records))
+    path.chmod(0o600)
+    os.utime(path, (1, 1))  # Genuine idle eligibility, not a mocked retention clock.
+    return path
+
+
+def dependency_check():
+    """Fail closed, before starting a host, when the selected CI owner is old."""
+    from context_intelligence.prune.policy import Policy
+    from context_intelligence.prune.operations import PruneRequest
+    Policy(diagnostic_sidecars=True)
+    if 'before_commit' not in PruneRequest.__dataclass_fields__:
+        raise RuntimeError('Selected CI lacks guarded before_commit retention admission')
+
+
+async def main(home):
+    # Inherited capture configuration must never redirect this fixture to real data.
+    canonical_format = os.environ.get('AMPLIFIER_OPTIMIZE_FIXTURE_CANONICAL_FORMAT', 'legacy')
+    if canonical_format not in {'legacy', 'committed'}:
+        raise ValueError('Unknown synthetic canonical format')
+    # T2 is create-only; keep this fixture's already-running diagnostic writer
+    # in the supported separate capture root, not inside the new native source.
+    capture_root = 'captures' if canonical_format == 'committed' else 'native'
+    os.environ['AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH'] = str(home / capture_root / 'projects')
+    os.environ['AMPLIFIER_SESSION_STATE_HOME'] = str(home / 'session-state')
+    os.environ['HOME'] = str(home)
+    import settings_ui_server as fixture
+    from aiohttp import web
+    from amplifier_web.capture_index import index_shared
+    from amplifier_web.runtime import RuntimeManager
+    from amplifier_web.session_files import capture_dir, sessions_dir
+
+    class Runtime(fixture.Runtime):
+        def __init__(self):
+            super().__init__()
+            self.calls = []
+            self.boundaries = RuntimeManager()
+
+        def stopped_boundary(self, session):
+            # Real Foundation ownership acquisition; never an AlwaysEligible lease.
+            return self.boundaries.stopped_boundary(session)
+
+        async def start(self, session, emit, **kwargs):
+            self.calls.append({'operation': 'start', 'sessionId': session['id']})
+            await super().start(session, emit, **kwargs)
+
+        async def stop(self, sid, **kwargs):
+            self.calls.append({'operation': 'stop', 'sessionId': sid})
+
+        async def close(self):
+            await self.boundaries.close()
+
+    fixture.Runtime = Runtime
+    prepared_sources = {}
+
+    def prepare_native_source(session):
+        native = session.get('runtimeSessionId') or session['id']
+        directory = sessions_dir(session['workspace']) / native
+        assert directory.is_relative_to(home)
+        prepared_sources[native] = seed_canonical(directory, native,
+            session['workspace'], format='committed')
+
+    app = await fixture.main(home, prepare_native_source=(
+        prepare_native_source if canonical_format == 'committed' else None))
+    service = app['service']
+    diagnostics = service.diagnostics
+    # Pause only this private fixture's outbound scheduler before any destination
+    # exists. Configuration, ingestion, persistence and Optimize remain production
+    # implementations. No transport is opened and no remote ACK is manufactured.
+    if diagnostics.task is not None:
+        diagnostics.task.cancel()
+        await asyncio.gather(diagnostics.task, return_exceptions=True)
+    assert not diagnostics.delivery_tasks
+    transport = {'clientCalls': 0}
+
+    def forbid_transport(_):
+        transport['clientCalls'] += 1
+        raise AssertionError('The offline outbox fixture must never open a CI transport')
+
+    diagnostics._client = forbid_transport
+    source = service._session()
+    native = source.get('runtimeSessionId') or source['id']
+    canonical = sessions_dir(source['workspace']) / native
+    # Deliberately unknown historic image origin/TTL; no fabricated owner grant.
+    # Seed the new canonical root before CI creates its context-intelligence
+    # subdirectory in the same synthetic session namespace.
+    transcript = (prepared_sources[native] if canonical_format == 'committed'
+        else seed_canonical(canonical, native, source['workspace']))
+    path = seed_capture(capture_dir(source['workspace'], native), native)
+    original_transcript = digest(transcript)
+    original_canonical = canonical_files(canonical)
+    # The ordinary committed session/create path owns native registration.
+    await service.diagnostics.flush()
+    with service.diagnostics._db() as db:
+        index_shared(db, [(source['workspace'], native)], {'streams': ['usage']})
+    configured = await service.dispatch('diagnostics.configure', {'config': {
+        **diagnostics.config,
+        'enabled': True,
+        'destinations': [{'id': OUTBOX_DESTINATION, 'name': 'Offline pending fixture',
+            'url': 'http://127.0.0.1:9', 'enabled': True, 'streams': ['usage'],
+            'workspace': OUTBOX_DESTINATION, 'workspacePattern': source['workspace'],
+            'includePaths': False, 'authMode': 'static',
+            'apiKeyEnv': 'OPTIMIZE_FIXTURE_UNUSED_CI_KEY', 'authResource': ''}]}},
+        include_state=False)
+    assert configured['accepted'] is True
+    for direction in ('request', 'response'):
+        # Normal Diagnostics ingestion adds identities and idempotency envelopes;
+        # its flush stages the durable outbox. No delivery SQL or timestamp rewrite.
+        diagnostics.record('usage', {'event': 'llm:' + direction,
+            'data': {'provider': 'fixture', 'model': 'outbox-fixture',
+                'usage': {'input_tokens': 5, 'output_tokens': 2},
+                'raw': REQUEST_SECRET if direction == 'request' else RESPONSE_SECRET}},
+            session_id=native, workspace=source['workspace'])
+    await diagnostics.flush()
+    assert not diagnostics.storage_error
+    # Initial session/create diagnostics may have appended during flush above.
+    # Only this private synthetic fixture is declared genuinely idle.
+    os.utime(path, (1, 1))
+    initial_runtime_calls = list(service.runtime.calls)
+    audit = []
+    gates = {}
+    # Timing-only test checkpoint AFTER the real apply receipt is committed and
+    # BEFORE the unchanged production worker begins its first file. No status,
+    # eligibility, file outcome, authority, adapter or prune result is replaced.
+    from amplifier_web.storage_optimize import owner
+    optimize = owner(service)
+    production_work = optimize._work
+    work_gate = {'held': False, 'entered': asyncio.Event(), 'release': asyncio.Event()}
+
+    async def checkpointed_work(identity, caller, phase):
+        if phase == 'apply' and work_gate['held']:
+            work_gate['entered'].set()
+            await asyncio.wait_for(work_gate['release'].wait(), 20)
+        return await production_work(identity, caller, phase)
+
+    optimize._work = checkpointed_work
+    app['optimize_fixture_checkpoint'] = work_gate
+
+    def authorize(request):
+        if request.headers.get('Authorization') != 'Bearer ' + TOKEN:
+            raise web.HTTPForbidden()
+
+    def observations():
+        from amplifier_web.storage_cleanup import policy as cleanup_policy
+        with service.diagnostics._db() as db:
+            ids = [row[0] for row in db.execute(
+                'SELECT id FROM records WHERE session=? ORDER BY id', (native,))]
+            deliveries = [dict(row) for row in db.execute(
+                'SELECT * FROM deliveries ORDER BY record_id,destination')]
+        # Bounded known synthetic records only. Never return their diagnostic bodies.
+        facts = {}
+        with path.open() as stream:
+            for line in stream:
+                if len(line) > 8192:
+                    raise AssertionError('Synthetic fixture record exceeded its bound')
+                record = json.loads(line)
+                event_id = record.get('data', {}).get('event_id')
+                if event_id in {'optimize-request', 'optimize-response'}:
+                    data = record['data']
+                    facts[event_id] = {'rawPresent': 'raw' in data,
+                        'expired': data.get('provider_payloads_expired', {}).get('raw'),
+                        'usage': data.get('usage')}
+        return {'nativeId': native, 'sessionId': source['id'], 'eventIds': ids,
+            'deliveries': deliveries,
+            'canonicalFormat': canonical_format,
+            'canonicalUnchanged': digest(transcript) == original_transcript
+                and original_canonical == canonical_files(canonical),
+            'outboxTransport': {'schedulerStopped': diagnostics.task is None or diagnostics.task.done(),
+                'clientCalls': transport['clientCalls']},
+            'sourceSha256': digest(path), 'runtimeCalls': list(service.runtime.calls),
+            'diagnosticFacts': facts,
+            'automaticCleanupPolicy': cleanup_policy(service),
+            'diagnosticsConfigSha256': hashlib.sha256(json.dumps(
+                service.diagnostics.config, sort_keys=True).encode()).hexdigest(),
+            'initialRuntimeCalls': initial_runtime_calls, 'requests': list(audit),
+            'workCheckpoint': {'entered': work_gate['entered'].is_set(),
+                'released': work_gate['release'].is_set()},
+            'responseGates': {key: {'entered': value['entered'].is_set(),
+                'released': value['release'].is_set()} for key, value in gates.items()}}
+
+    @web.middleware
+    async def transport_gate(request, handler):
+        if request.path != '/api/actions' or request.method != 'POST':
+            return await handler(request)
+        body = await request.json()
+        if not str(body.get('action', '')).startswith(PREFIX):
+            return await handler(request)
+        # Observe the exact public envelope. Do not call the action a second time.
+        row = {key: body.get(key) for key in ('action', 'args', 'id')}
+        audit.append(row)
+        response = await handler(request)
+        action = body['action'].removeprefix(PREFIX)
+        gate = gates.get(action)
+        if gate and not gate['entered'].is_set():
+            gate['entered'].set()  # handler has returned its actual durable receipt.
+            await asyncio.wait_for(gate['release'].wait(), 20)
+        return response
+
+    app.middlewares.append(transport_gate)
+
+    async def observe(request):
+        authorize(request)
+        return web.json_response(observations())
+
+    async def control(request):
+        authorize(request)
+        body = await request.json()
+        if body.get('op') == 'hold-before-first-file' and not work_gate['held']:
+            work_gate['held'] = True
+            return web.json_response({'ok': True})
+        if body.get('op') == 'release-first-file' and work_gate['held']:
+            work_gate['release'].set()
+            return web.json_response({'ok': True})
+        action = body.get('action')
+        if action not in {'preview', 'apply', 'cancel', 'resume', 'policy.save'}:
+            raise web.HTTPBadRequest(text='Unknown fixed transport gate')
+        if body.get('op') == 'hold-response' and action not in gates:
+            gates[action] = {'entered': asyncio.Event(), 'release': asyncio.Event()}
+        elif body.get('op') == 'release-response' and action in gates:
+            gates[action]['release'].set()
+        else:
+            raise web.HTTPBadRequest(text='Invalid gate transition')
+        return web.json_response({'ok': True})
+
+    async def browser_session(request):
+        authorize(request)
+        from amplifier_web.auth import SESSION_COOKIE, new_session
+        response = web.json_response({'issued': True})
+        response.set_cookie(SESSION_COOKIE, new_session(app['session_secret']),
+            httponly=True, samesite='Strict', path='/')
+        return response
+
+    async def cleanup(_):
+        work_gate['release'].set()
+        for gate in gates.values():
+            gate['release'].set()
+
+    app.router.add_get('/fixture/optimize', observe)
+    app.router.add_post('/fixture/optimize', control)
+    app.router.add_post('/fixture/browser-session', browser_session)
+    app.on_cleanup.append(cleanup)
+    # In-process qualification uses these read-only closures, never a listener.
+    assert_pending_outbox(observations())
+    return app, observations
+
+
+async def check_public_usage_export(service, native):
+    """Exercise the same inspected-page export actions as the browser, unmodified."""
+    inspected = await service.dispatch('diagnostics.records',
+        {'stream': 'usage', 'sessionId': native}, include_state=False)
+    assert inspected['accepted'] is True, inspected
+    page = service.state['diagnostics']['lastResult']
+    calls = [row for row in page['items'] if row['event'] in {'llm:request', 'llm:response'}
+        and row['data'].get('model') == 'optimize-fixture']
+    assert {row['event'] for row in calls} == {'llm:request', 'llm:response'}, calls
+    safe = {'provider': 'fixture', 'model': 'optimize-fixture',
+        'usage': {'input_tokens': 7, 'output_tokens': 3, 'cost': 0.01}}
+    assert all(row['data'] == safe for row in calls), calls
+    print(json.dumps({'phase': 'public-usage-export',
+        'inspectedEvents': [row['event'] for row in calls],
+        'safeData': safe, 'privateEventIdsExcluded': True,
+        'metadataTimestampExcluded': True, 'exportOutcome': 'not_yet_observed'}), flush=True)
+    # Do not restore timestamp/event_id/raw into sanitized data to make this pass.
+    exported = await service.dispatch('diagnostics.export', {}, include_state=False)
+    assert exported['accepted'] is True, exported
+    downloads = [effect for effect in exported.get('effects', []) if effect['type'] == 'download']
+    assert len(downloads) == 1 and downloads[0]['mime'] == 'application/x-ndjson', exported
+    content = downloads[0]['content']
+    assert REQUEST_SECRET not in content and RESPONSE_SECRET not in content
+    rows = [json.loads(line) for line in content.splitlines()]
+    assert len(rows) == len(page['items']) and len(rows) <= 30
+    actual = [row for row in rows if row['event'] in {'llm:request', 'llm:response'}
+        and row['data'].get('model') == 'optimize-fixture']
+    assert len(actual) == 2
+    for row in actual:
+        assert set(row) == {'event', 'workspace', 'timestamp', 'data'}, row
+        datetime.fromisoformat(row['timestamp'].replace('Z', '+00:00'))
+        assert row['data'] == safe
+    return {'publicUsageExport': True, 'exportedEvents': [row['event'] for row in actual],
+        'exportedData': [row['data'] for row in actual],
+        'exportSha256': hashlib.sha256(content.encode()).hexdigest()}
+
+
+async def offline_check(*, export=False):
+    """Focused real-service proof; explicitly not browser or installed evidence."""
+    dependency_check()
+    from amplifier_web.storage_optimize import owner
+    from aiohttp import web
+    with tempfile.TemporaryDirectory(prefix='optimize-offline-') as temporary:
+        app, observe = await main(Path(temporary))
+        runner = web.AppRunner(app)
+        await runner.setup()
+        service = app['service']
+        async def dispatch(name, args, identity=None):
+            result = await service.dispatch(PREFIX + name, args,
+                command_id=identity, include_state=False)
+            assert result['accepted'] is True, result
+            return result['result']
+        async def settle(identity):
+            async with asyncio.timeout(15):
+                while True:
+                    value = await dispatch('read', {'operationId': identity})
+                    if value['status'] not in {'previewing', 'applying', 'cancelling'}:
+                        return value
+                    await asyncio.sleep(.01)
+        try:
+            before = observe()
+            assert len(before['eventIds']) >= 2, 'Identity preservation needs nonempty real indexed records'
+            outbox_hash = assert_pending_outbox(before)
+            default = await dispatch('policy.read', {})
+            assert default['requestKeepHours'] is None and default['responseKeepHours'] is None
+            saved = await dispatch('policy.save', {'expectedRevision': default['revision'],
+                'requestKeepHours': 12, 'responseKeepHours': None}, 'offline-save')
+            images = await dispatch('preview', {'scope': 'all', 'extractImages': True,
+                'policyRevision': saved['revision']}, 'offline-images-preview')
+            images = await settle(images['operationId'])
+            assert images['summary']['coverage'].get('eligible', 0) > 0, images
+            canonical_rows = [row for row in images['rows']
+                if row['owner'] == 'foundation' and row['sessionId'] == before['nativeId']]
+            assert len(canonical_rows) == 1, images
+            canonical_row = canonical_rows[0]
+            assert canonical_row['status'] == 'held' and 'provenance' in canonical_row['reason'].lower(), canonical_row
+            assert canonical_row['canonicalRecords'] == canonical_row['canonicalInlineImages'] == 1
+            canonical_prefix = None
+            if before['canonicalFormat'] == 'committed':
+                from dataclasses import asdict
+                from amplifier_foundation.session.transcript_source import open_committed_source
+                from amplifier_web.session_files import sessions_dir
+                with open_committed_source(sessions_dir(service._session()['workspace']) / before['nativeId']) as source:
+                    canonical_prefix = asdict(source.commit)
+                    assert canonical_row['bytes'] == source.commit.committed_bytes
+                    assert canonical_row['canonicalRecords'] == source.commit.message_count
+            preview = await dispatch('preview', {'scope': 'all', 'extractImages': False,
+                'policyRevision': saved['revision']}, 'offline-preview')
+            preview = await settle(preview['operationId'])
+            assert preview['summary']['coverage'].get('eligible', 0) > 0, preview
+            frozen = preview['cutoffs'].copy()
+            assert frozen['requestBefore'].endswith('Z') and frozen['responseBefore'] is None
+            assert preview['canApply'] is True
+            assert_pending_outbox(before, observe())
+            gate = app['optimize_fixture_checkpoint']
+            gate['held'] = True
+            await dispatch('apply', {'operationId': preview['operationId'],
+                'expectedRevision': preview['revision'], 'confirmExpiry': True}, 'offline-apply')
+            await asyncio.wait_for(gate['entered'].wait(), 5)
+            cancelled = await dispatch('cancel', {'operationId': preview['operationId'],
+                'expectedRevision': preview['revision']}, 'offline-cancel')
+            assert cancelled['status'] == 'cancelling'
+            gate['release'].set()
+            cancelled = await settle(preview['operationId'])
+            assert cancelled['status'] == 'cancelled' and cancelled['canResume'], cancelled
+            assert observe()['sourceSha256'] == before['sourceSha256']
+            assert_pending_outbox(before, observe())
+            # Passive receipt reads do not resume or expire anything.
+            await dispatch('read', {'commandId': 'offline-apply'})
+            assert observe()['sourceSha256'] == before['sourceSha256']
+            assert_pending_outbox(before, observe())
+            await dispatch('resume', {'operationId': preview['operationId'],
+                'expectedRevision': cancelled['revision']}, 'offline-resume')
+            finished = await settle(preview['operationId'])
+            assert finished['summary']['coverage'].get('completed', 0) > 0, finished
+            command = await dispatch('read', {'commandId': 'offline-apply'})
+            assert command['status'] == 'recorded' and command['operationId'] == preview['operationId']
+            resumed = await dispatch('read', {'commandId': 'offline-resume'})
+            assert resumed['status'] == 'recorded' and resumed['operationId'] == preview['operationId']
+            assert finished['cutoffs'] == frozen
+            after = observe()
+            assert_pending_outbox(before, after)
+            assert before['eventIds'] == after['eventIds']
+            assert before['deliveries'] == after['deliveries']
+            assert after['canonicalUnchanged'] and after['runtimeCalls'] == before['runtimeCalls']
+            assert after['automaticCleanupPolicy'] == before['automaticCleanupPolicy']
+            assert after['diagnosticsConfigSha256'] == before['diagnosticsConfigSha256']
+            assert not after['diagnosticFacts']['optimize-request']['rawPresent']
+            assert after['diagnosticFacts']['optimize-request']['expired']
+            assert after['diagnosticFacts']['optimize-response']['rawPresent']
+            assert after['diagnosticFacts']['optimize-response']['usage'] == before['diagnosticFacts']['optimize-response']['usage']
+            source = service._session()
+            tree = service.event_log_view.read(source)
+            models = [node for node in tree['nodes'] if node.get('model') == 'optimize-fixture']
+            assert len(models) == 1, models
+            model = models[0]
+            assert model.get('requestRecordingExpired') and not model.get('requestDetail'), model
+            assert model.get('responseDetail') and model.get('responseRecording'), model
+            assert owner(service).adapter.__class__.__name__ == 'OwnerAdapters'
+            export_result = await check_public_usage_export(service, before['nativeId']) if export else {}
+            final = observe()
+            assert_pending_outbox(before, final)
+            print(json.dumps({'passed': True, 'browser': False, 'listener': False,
+                'realService': True, 'realRetentionOwner': True, 'syntheticSource': True,
+                'canonicalFormat': before['canonicalFormat'],
+                'canonicalPrefix': canonical_prefix,
+                'canonicalPreview': {key: canonical_row[key] for key in (
+                    'owner', 'sessionId', 'status', 'canonicalRecords', 'canonicalInlineImages', 'bytes', 'reason')},
+                'operationId': finished['operationId'], 'status': finished['status'],
+                'cutoffs': frozen, 'coverage': finished['summary']['coverage'],
+                'cancelledBeforeEffect': True, 'explicitResumeOnly': True,
+                'requestExpiredResponseKept': True, 'eventIdsAndDeliveriesPreserved': True,
+                'actualReaderMarksRequestExpiredAndResponseAvailable': True,
+                'realImagePreviewHoldsMissingHistoricalProvenance': True,
+                'indexedRecordCount': len(before['eventIds']),
+                'deliveryRows': len(before['deliveries']), 'outboxStatus': 'pending',
+                'outboxAttempts': [row['attempts'] for row in after['deliveries']],
+                'outboxClientCalls': after['outboxTransport']['clientCalls'],
+                'outboxRowsSha256': outbox_hash,
+                'outboxBefore': before['deliveries'], 'outboxAfter': final['deliveries'],
+                'nonemptyOutboxPreservedWithoutExtraEnqueue': True, **export_result}))
+        finally:
+            await runner.cleanup()
+
+
+async def serve():
+    dependency_check()
+    from aiohttp import web
+    with tempfile.TemporaryDirectory(prefix='optimize-storage-ui-') as temporary:
+        app, _ = await main(Path(temporary))
+        runner = web.AppRunner(app, shutdown_timeout=5)
+        await runner.setup()
+        stopped = asyncio.Event()
+        loop = asyncio.get_running_loop()
+        signals = (signal.SIGTERM, signal.SIGINT) if os.name == 'posix' else ()
+        for value in signals:
+            loop.add_signal_handler(value, stopped.set)
+        try:
+            site = web.TCPSite(runner, '127.0.0.1', 0)
+            await site.start()
+            base = 'http://127.0.0.1:' + str(site._server.sockets[0].getsockname()[1])
+            app['allowed_origins'] = app['allowed_origins'] | {base}
+            print(json.dumps({'fixture': 'optimize-storage-ui', 'base': base,
+                'pid': os.getpid()}), flush=True)
+            await stopped.wait()
+        finally:
+            await runner.cleanup()
+            for value in signals:
+                loop.remove_signal_handler(value)
+
+
+def source_check():
+    """Pure source-fixture invariants, not evidence of owner/browser execution."""
+    with tempfile.TemporaryDirectory(prefix='optimize-source-check-') as temporary:
+        path = seed_capture(Path(temporary) / 'synthetic', 'fixture-root')
+        records = [json.loads(line) for line in path.read_text().splitlines()]
+        assert len(records) == 2 and len({row['data']['event_id'] for row in records}) == 2
+        assert [row['event'] for row in records] == ['llm:request', 'llm:response']
+        for row in records:
+            ref = row['data']['provider_payloads']['raw']
+            asset = path.parent / 'provider-payloads' / (ref['sha256'] + '.json')
+            assert digest(asset) == ref['sha256'] and asset.stat().st_size == ref['bytes']
+            assert row['timestamp'] == OLD and row['session_id'] == 'fixture-root'
+        assert path.stat().st_mtime < 3600
+        try:
+            assert_pending_outbox({'deliveries': []})
+        except AssertionError as error:
+            assert 'Nonempty outbox' in str(error)
+        else:
+            raise AssertionError('An empty outbox must not qualify as positive preservation proof')
+        print(json.dumps({'passed': True, 'checks': [
+            'two independent synthetic diagnostic directions',
+            'stable unique event identities', 'exact real sidecar hashes and sizes',
+            'genuinely old timestamp and filesystem idle time',
+            'empty outbox rejected as positive preservation evidence'],
+            'productionOwnerExecuted': False, 'browserExecuted': False}))
+
+
+if __name__ == '__main__':
+    if not os.environ.get('AMPLIFIER_TEST_INSTALLED_PACKAGE'):
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    if '--source-check' in sys.argv:
+        source_check()
+    else:
+        asyncio.run(offline_check(export='--export-check' in sys.argv)
+            if '--offline-check' in sys.argv or '--export-check' in sys.argv else serve())

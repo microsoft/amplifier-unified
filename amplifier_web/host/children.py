@@ -335,10 +335,14 @@ class StandaloneHostAdapter(HostAdapter):
 
     async def prepare_execution(self, loop, coordinator, providers):
         if coordinator and coordinator.get_capability("live.child_mode") == "finite":
-            return None, providers, coordinator.session_id
+            from .media import execution_providers
+            return None, execution_providers(coordinator, providers), coordinator.session_id
         if coordinator:
             from ..native_provider import install_native
             providers = await install_native(loop, coordinator, providers)
+        if coordinator and not coordinator.get_capability("web.app_access.install"):
+            from .media import execution_providers
+            providers = execution_providers(coordinator, providers)
         return coordinator.get_capability("live.runtime") if coordinator else None, providers, None
 
     def finite_finished(self, scope, coordinator, status, result=""):
@@ -346,10 +350,57 @@ class StandaloneHostAdapter(HostAdapter):
             self.registry.finished(scope, status, result)
 
 
+class ChildCheckpoint:
+    """Actual child lifetime receiver, shared by canonical and compaction hooks.
+
+    Mutable progress belongs to this source owner. The construction fixes the
+    child/store/binding association before registering any execution callback.
+    """
+    def __init__(self, registry, identity, store, binding, metadata, row):
+        self.registry, self.identity, self.store = registry, identity, store
+        self.binding, self.metadata, self.row = binding, metadata, row
+        self.child = None
+        self.ready = False
+        self.continuity = None
+        self.completion = {}
+
+    async def __call__(self, status=None):
+        if not self.child or not self.ready:
+            return
+        coordinator = self.child.coordinator
+        context = coordinator.get("context")
+        messages = await context.get_messages() if context else []
+        intent = {}
+        if self.binding is not None:
+            intent = {"expected": self.binding.expected, "operation_id": uuid.uuid4().hex,
+                      "admit": self.binding.check,
+                      "media_store": coordinator.get_capability("web.media.store")}
+        canonical = self.store.save(self.identity, messages,
+            {**self.metadata, "status": status or self.row["status"]}, **intent)
+        from .media import acknowledge_media, settle_media_policy
+        if self.binding is None:
+            acknowledge_media(coordinator, self.store, self.identity, canonical)
+        else:
+            settle_media_policy(coordinator, canonical)
+        if self.continuity:
+            self.continuity.save()
+
+    async def completed(self, event, data):
+        from amplifier_core import HookResult
+        self.completion.update(data)
+        return HookResult()
+
+    async def compacted(self, event, data):
+        from amplifier_core import HookResult
+        await self()
+        return HookResult()
+
+
 class Children:
-    def __init__(self, root, store, approvals, host_adapter=None):
+    def __init__(self, root, store, approvals, host_adapter=None, *, canonical_binding_factory=None):
         self.root = root
         self.store = store
+        self.canonical_binding_factory = canonical_binding_factory
         self.approvals = approvals
         self.rows = {}
         self.admissions = {}
@@ -427,8 +478,14 @@ class Children:
         coordinator.register_capability("live.host", self.host_adapter)
         delegate = (coordinator.get("tools") or {}).get("delegate")
         if delegate and not isinstance(delegate, PersistentDelegate):
-            await coordinator.mount("tools", PersistentDelegate(delegate, self, coordinator), name="delegate")
-            await coordinator.mount("tools", WorkerControl(self), name="live_worker")
+            from .media import registration_coordinator
+            view = registration_coordinator(coordinator)
+            wrapped = PersistentDelegate(delegate, self, coordinator)
+            if coordinator.get_capability("web.media.hook_bridge") is not None:
+                await view.mount_adapter("tools", wrapped, previous=delegate, name="delegate")
+            else:
+                await view.mount("tools", wrapped, name="delegate")
+            await view.mount("tools", WorkerControl(self), name="live_worker")
 
     async def spawn(self, agent_name, instruction, parent_session, agent_configs=None, sub_session_id=None,
                     tool_inheritance=None, hook_inheritance=None, orchestrator_config=None,
@@ -460,9 +517,45 @@ class Children:
             session_metadata=session_metadata)
 
     async def resume(self, sub_session_id, instruction, parent_session, provider_preferences=None, model_role=None):
+        binding = self._canonical_binding(sub_session_id, resumed=True)
+        try:
+            return await self._resume_owned(sub_session_id, instruction, parent_session,
+                provider_preferences, model_role, canonical_binding=binding)
+        finally:
+            cleanup = (self.rows.get(sub_session_id) or {}).get("_computerCleanup")
+            if binding is not None and cleanup is None:
+                await binding.aclose()
+
+    def _canonical_binding(self, identity, *, resumed):
+        if self.canonical_binding_factory is None:
+            if getattr(self.store, "canonical_binding", None) is not None:
+                raise ValueError("A prospective root needs an explicit child lifetime factory before child admission")
+            return None
+        binding = self.canonical_binding_factory(self.store.directory(identity),
+                                                 session_id=identity, resumed=resumed)
+        from amplifier_foundation.session.transcript_lifetime import VersionedSessionBinding
+        if (type(binding) is not VersionedSessionBinding or binding.session_id != identity
+                or binding.directory != self.store.directory(identity).absolute()):
+            raise ValueError("The prospective child owner does not match this source")
+        binding.check()
+        return binding
+
+    def _selected_store(self, binding):
+        if binding is None:
+            return self.store
+        from .storage import SessionStore
+        return SessionStore(self.store.base_dir, legacy_home=self.store.legacy_home,
+                            shared=self.store.shared, previous=self.store.previous,
+                            canonical_binding=binding)
+
+    async def _resume_owned(self, sub_session_id, instruction, parent_session,
+                           provider_preferences=None, model_role=None, *, canonical_binding=None):
         if sub_session_id in self.rows and self.rows[sub_session_id].get("status") in {"starting", "running", "idle", "stopping"}:
             raise ValueError("This child is already active; use live_worker to message or steer it")
-        saved = self.store.load(sub_session_id) or self.store.import_cli(sub_session_id)
+        store = self._selected_store(canonical_binding)
+        saved = store.load(sub_session_id)
+        if saved is None and canonical_binding is None:
+            saved = store.import_cli(sub_session_id)
         if not saved:
             raise FileNotFoundError("No saved child session exists with this ID")
         messages, metadata = saved
@@ -500,9 +593,24 @@ class Children:
             metadata = {**metadata, "preferences_source": source}
         return await self._execute(sub_session_id, instruction, parent_session,
             metadata.get("agent_name", "resumed"), overlay, provider_preferences=provider_preferences or retained_preferences,
-            parent_messages=messages, resumed=True, session_metadata=metadata)
+            parent_messages=messages, resumed=True, session_metadata=metadata,
+            tool_inheritance=copy.deepcopy(metadata.get("tool_inheritance")),
+            hook_inheritance=copy.deepcopy(metadata.get("hook_inheritance")),
+            canonical_binding=canonical_binding)
 
     async def _execute(self, identity, instruction, parent, agent, overlay, **kwargs):
+        binding = kwargs.pop("canonical_binding", None)
+        if binding is None:
+            binding = self._canonical_binding(identity, resumed=kwargs.get("resumed", False))
+        try:
+            return await self._execute_owned(identity, instruction, parent, agent, overlay,
+                                             canonical_binding=binding, **kwargs)
+        finally:
+            cleanup = (self.rows.get(identity) or {}).get("_computerCleanup")
+            if binding is not None and cleanup is None:
+                await binding.aclose()
+
+    async def _execute_owned(self, identity, instruction, parent, agent, overlay, **kwargs):
         # Capture before preparation's first await. A checkout move must retain
         # existing preparation too, not just children that already have UI rows.
         dispatch = (getattr(parent.coordinator, "_tool_dispatch_contexts", {}).get(asyncio.current_task())
@@ -524,7 +632,9 @@ class Children:
 
     async def _execute_admitted(self, identity, instruction, parent, agent, overlay, *, admission, tool_inheritance=None,
                        hook_inheritance=None, orchestrator_config=None, parent_messages=None,
-                       provider_preferences=None, self_delegation_depth=0, session_metadata=None, resumed=False):
+                       provider_preferences=None, self_delegation_depth=0, session_metadata=None, resumed=False,
+                       canonical_binding=None):
+        store = self._selected_store(canonical_binding)
         # Capture the invoking assignment before any provider/session setup can
         # await newer parent work. The bound installer never recaptures it.
         capture_access = parent.coordinator.get_capability("web.app_access.install")
@@ -584,7 +694,7 @@ class Children:
         # Never silently run an agent requesting process isolation in-process.
         if plan.get("spawn_mode") == "subprocess":
             raise ValueError(_SUBPROCESS_UNSUPPORTED)
-        self.store.directory(identity)
+        store.directory(identity)
         while len(self.rows) >= 256 and identity not in self.rows:
             oldest = next((key for key, value in self.rows.items()
                            if value["status"] in {"completed", "cancelled", "error", "interrupted"}
@@ -683,6 +793,8 @@ class Children:
         metadata = {**(session_metadata or {}), "parent_id": parent.session_id, "agent_name": agent,
                     "tool_call_id": call_id,
                     "agent_overlay": copy.deepcopy(overlay), "workspace": str(cwd), "persistent": persistent,
+                    "tool_inheritance": copy.deepcopy(tool_inheritance),
+                    "hook_inheritance": copy.deepcopy(hook_inheritance),
                     "provider_preferences": [p.to_dict() for p in preferences],
                     "preferences_source": preferences_source, "mount_plan": credential_bindings(plan),
                     "automatic_default_routing": bool(
@@ -693,22 +805,8 @@ class Children:
             # SessionStore merges metadata: omission would resurrect a prior
             # fallback snapshot after an explicit/role selection replaced it.
             metadata["effective_selection"] = None
-        continuity = None
-        checkpoint_ready = False
-        async def checkpoint(status=None):
-            # Setup callbacks and failure handling can run before saved history
-            # is fully restored. Never publish that empty or partial context.
-            if not child or not checkpoint_ready:
-                return
-            context = child.coordinator.get("context")
-            messages = await context.get_messages() if context else []
-            self.store.save(identity, messages, {**metadata, "status": status or row["status"]})
-            if continuity:
-                continuity.save()
-        completion = {}
-        async def completed(event, data):
-            completion.update(data)
-            return HookResult()
+        checkpoint = ChildCheckpoint(self, identity, store, canonical_binding, metadata, row)
+        completion = checkpoint.completion
         try:
             from .initialization import initialization_hooks
             routing = (partial(prepare_default_routing, automatic=metadata["automatic_default_routing"])
@@ -716,8 +814,13 @@ class Children:
             def retain_child(constructing):
                 nonlocal child
                 child = constructing
+                checkpoint.child = constructing
+            from .media import bind_media
             initialization = initialization_hooks(isolation=isolation, decision_accounts=decision_accounts,
-                                                  routing=routing, retain=retain_child)
+                                                  routing=routing, retain=retain_child,
+                                                  media=partial(bind_media, store=store,
+                                                      selection=parent.coordinator.get_capability(
+                                                          "web.media.graph_selection")))
             from .approvals import Approvals
             approvals = (self.approvals.for_context(lambda: child.coordinator.get('context') if child else None)
                          if isinstance(self.approvals, Approvals) else self.approvals)
@@ -726,6 +829,10 @@ class Children:
                 session_cwd=cwd, is_resumed=resumed, **initialization)
             decision_accounts.require_complete()
             coordinator = child.coordinator
+            from .media import mint_graph_owner
+            mint_graph_owner(coordinator, checkpoint, kind="child-checkpoint",
+                associations=((child, "coordinator", coordinator),
+                              (store, "canonical_binding", canonical_binding)))
             from ..read_policy import validate_mounted_read_policy
             validate_mounted_read_policy(coordinator)
             from ..session_files import capture_dir
@@ -751,13 +858,13 @@ class Children:
             coordinator.register_capability("web.worker_run", row["runId"])
             coordinator.register_capability("self_delegation_depth", self_delegation_depth)
             coordinator.register_capability("live.checkpoint", checkpoint)
+            coordinator.register_capability("session.durable_checkpoint", checkpoint)
             from ..context_continuity import install as install_continuity
             from ..runtime_controls import override_path
-            continuity = install_continuity(coordinator, identity, override_path(identity).parent, checkpoint)
-            async def compacted(event, data):
-                await checkpoint()
-                return HookResult()
-            coordinator.hooks.register("context:compaction_finished", compacted, name="unified-child-context-checkpoint")
+            checkpoint.continuity = install_continuity(coordinator, identity, override_path(identity).parent, checkpoint)
+            from .media import registration_hooks
+            registration_hooks(coordinator).register("context:compaction_finished", checkpoint.compacted,
+                                                       name="unified-child-context-checkpoint")
             for capability in ("model_role_resolver", "web.activity.install"):
                 value = parent.coordinator.get_capability(capability)
                 if routing_policy and capability == "model_role_resolver" and coordinator.get_capability(capability) is not None:
@@ -771,14 +878,16 @@ class Children:
                     await installed
             if persistent:
                 from amplifier_module_loop_live.job_store import JobStore
-                ledger = JobStore(self.store.directory(identity) / "live-jobs")
+                ledger = JobStore(store.directory(identity) / "live-jobs")
                 coordinator.register_capability("live.jobs", ledger)
                 row["runtime"] = self._runtime(row)
                 coordinator.register_capability("live.runtime", row["runtime"])
             else:
                 coordinator.register_capability("live.runtime", None)
             if parent_messages is not None:
-                await coordinator.get("context").set_messages(copy.deepcopy(parent_messages))
+                from .media import adopt_messages
+                parent_messages = await adopt_messages(coordinator, parent.coordinator, parent_messages)
+                await coordinator.get("context").set_messages(parent_messages)
             await self.install(child, child_prepared)
             # Authority-bearing closures belong to the invoking coordinator.
             # Install before execution, including finite/custom orchestrators
@@ -786,7 +895,16 @@ class Children:
             # also propagates itself for nested and resumed children.
             if install_access:
                 await install_access(coordinator)
-            unregister = coordinator.hooks.register("orchestrator:complete", completed, name="unified-child-completion", priority=999)
+            if not persistent or not callable(getattr(coordinator.get("orchestrator"), "_select_provider", None)):
+                # Finite/custom loops do not necessarily call prepare_execution.
+                # Native installation is deliberately not attempted on this path.
+                from .media import execution_providers
+                providers = coordinator.get("providers") or {}
+                from .media import replace_media_adapter
+                for name, wrapped in execution_providers(coordinator, providers).items():
+                    replace_media_adapter(coordinator, "providers", name, providers[name], wrapped)
+            unregister = registration_hooks(coordinator).register(
+                "orchestrator:complete", checkpoint.completed, name="unified-child-completion", priority=999)
             if ledger and parent_messages is not None:
                 # Recover evidence only after original history and admission
                 # setup succeed. A pending dispatch becomes interrupted, never
@@ -796,7 +914,18 @@ class Children:
                 coordinator.register_capability("live.recovered_jobs", [item["job_id"] for item in recovered])
                 if recovered_messages != parent_messages:
                     await coordinator.get("context").set_messages(recovered_messages)
-            checkpoint_ready = True
+            checkpoint.ready = True
+            from .media import enable_media
+            enable_media(coordinator)
+            if not persistent or not callable(getattr(coordinator.get("orchestrator"), "_select_provider", None)):
+                from .media import seal_hook_graph
+                from .media import flush_media_adapters, mount_media_adapter
+                await flush_media_adapters(coordinator)
+                for name, value in providers.items():
+                    mounted = (coordinator.get("providers") or {}).get(name)
+                    await mount_media_adapter(coordinator, "providers", value,
+                                              previous=mounted, name=name)
+                seal_hook_graph(coordinator)
             row["status"] = "running"
             self._emit(row)
             await checkpoint()
@@ -823,24 +952,31 @@ class Children:
         except BaseException as exc:
             status = "cancelled" if isinstance(exc, asyncio.CancelledError) else "error"
             self.finished(identity, status)
-            await checkpoint(status)
+            try:
+                await checkpoint(status)
+            except BaseException as checkpoint_error:
+                exc.add_note(f"Child terminal checkpoint also failed: {type(checkpoint_error).__name__}")
             raise
         finally:
             if unregister:
                 unregister()
             async def release_child():
-                if child:
-                    await child.cleanup()
-                if ledger:
-                    ledger.close()
-                if self.sessions.get(identity) is child:
-                    self.sessions.pop(identity, None)
-                    self.prepared.pop(identity, None)
-                row.pop("task", None)
-                row.pop("_owner", None)
-                row.pop("runtime", None)
-                row.pop('_input_sources', None)
-                row.pop("_computerCleanup", None)
+                try:
+                    if child:
+                        await child.cleanup()
+                    if ledger:
+                        ledger.close()
+                    if self.sessions.get(identity) is child:
+                        self.sessions.pop(identity, None)
+                        self.prepared.pop(identity, None)
+                    row.pop("task", None)
+                    row.pop("_owner", None)
+                    row.pop("runtime", None)
+                    row.pop('_input_sources', None)
+                    row.pop("_computerCleanup", None)
+                finally:
+                    if canonical_binding is not None:
+                        await canonical_binding.aclose()
             if child:
                 sponsor = child.coordinator.get_capability("web.computer_episodes")
                 if sponsor:
@@ -998,7 +1134,9 @@ class WorkerControl:
             return ToolResult(success=False, error={"message": str(exc)})
 
 
-async def install_children(session, prepared, runtime, store, approvals, host_adapter=None):
-    registry = getattr(host_adapter, "registry", None) or Children(runtime, store, approvals, host_adapter)
+async def install_children(session, prepared, runtime, store, approvals, host_adapter=None, *,
+                           canonical_binding_factory=None):
+    registry = getattr(host_adapter, "registry", None) or Children(runtime, store, approvals, host_adapter,
+        canonical_binding_factory=canonical_binding_factory)
     await registry.install(session, prepared)
     return registry

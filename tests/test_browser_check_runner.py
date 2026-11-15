@@ -47,10 +47,11 @@ def coverage_plan():
     multiparty_ids = external_multiparty_browser_addition(plan['scenarios'])
     shared_room_ids = shared_room_browser_addition(plan['scenarios'])
     repair_ids = installation_repair_browser_addition(plan['scenarios'])
+    optimize_ids = optimize_storage_browser_addition(plan['scenarios'])
     layout_ids = layout_return_browser_additions(plan['scenarios'])
     rows = []
     for row in plan['scenarios']:
-        if row['id'] in retained_ids | appearance_ids | responsive_ids | notices_ids | multiparty_ids | shared_room_ids | repair_ids | layout_ids:
+        if row['id'] in retained_ids | appearance_ids | responsive_ids | notices_ids | multiparty_ids | shared_room_ids | repair_ids | optimize_ids | layout_ids:
             continue
         row = {**row, 'command': [coverage_paths(part) for part in row['command']]}
         row.pop('cwd', None)
@@ -3878,6 +3879,7 @@ def test_current_composed_registry_owns_every_executable_and_both_mixed_suites()
     multiparty_ids = external_multiparty_browser_addition(plan['scenarios'])
     shared_room_ids = shared_room_browser_addition(plan['scenarios'])
     repair_ids = installation_repair_browser_addition(plan['scenarios'])
+    optimize_ids = optimize_storage_browser_addition(plan['scenarios'])
     layout_ids = layout_return_browser_additions(plan['scenarios'])
     lifecycle_additions = [
         {'id': 'session-health-request-failure',
@@ -3887,10 +3889,10 @@ def test_current_composed_registry_owns_every_executable_and_both_mixed_suites()
     ]
     lifecycle_ids = {row['id'] for row in lifecycle_additions}
     assert [row for row in plan['scenarios'] if row['id'] in lifecycle_ids] == lifecycle_additions
-    preceding = [row for row in plan['scenarios'] if row['id'] not in navigation_ids | client_addition_ids | retained_ids | appearance_ids | responsive_ids | notices_ids | lifecycle_ids | multiparty_ids | shared_room_ids | repair_ids | layout_ids]
+    preceding = [row for row in plan['scenarios'] if row['id'] not in navigation_ids | client_addition_ids | retained_ids | appearance_ids | responsive_ids | notices_ids | lifecycle_ids | multiparty_ids | shared_room_ids | repair_ids | optimize_ids | layout_ids]
     assert len(preceding) == len({row['id'] for row in preceding}) == 147
-    assert len(plan['scenarios']) == len({row['id'] for row in plan['scenarios']}) == 152 + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(multiparty_ids) + len(shared_room_ids) + len(lifecycle_ids) + len(repair_ids) + len(layout_ids)
-    assert len(plan['scenarios']) == 147 + len(navigation_ids) + len(client_addition_ids) + len(retained_ids) + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(multiparty_ids) + len(shared_room_ids) + len(lifecycle_ids) + len(repair_ids) + len(layout_ids)
+    assert len(plan['scenarios']) == len({row['id'] for row in plan['scenarios']}) == 152 + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(multiparty_ids) + len(shared_room_ids) + len(lifecycle_ids) + len(repair_ids) + len(optimize_ids) + len(layout_ids)
+    assert len(plan['scenarios']) == 147 + len(navigation_ids) + len(client_addition_ids) + len(retained_ids) + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(multiparty_ids) + len(shared_room_ids) + len(lifecycle_ids) + len(repair_ids) + len(optimize_ids) + len(layout_ids)
     assert sum(row.get('cwd') == '.build/web-client' for row in preceding) == 14
     assert sum(row.get('cwd') == '.build/web-client' for row in plan['scenarios']) == 17 + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(shared_room_ids) + len(repair_ids) + len(layout_ids)
     client_path = source_test('tests/input-status-browser.mjs').with_name('browser-checks.json')
@@ -3905,6 +3907,44 @@ def test_current_composed_registry_owns_every_executable_and_both_mixed_suites()
     assert mixed['cwd'] == '.build/web-client'
     assert mixed['command'] == ['node', '--test', 'tests/configuration-recovery.test.mjs',
                                 '../../tests/web/configuration-recovery-observer.test.mjs']
+
+
+def optimize_storage_browser_addition(rows):
+    """Validate the added host journey without weakening frozen inventories."""
+    script = 'tests/web/optimize-storage-browser.mjs'
+    expected = {
+        'id': 'optimize-storage',
+        'command': ['node', script],
+        'env': {
+            'AMPLIFIER_TEST_PYTHON': '{root}/.venv/bin/python',
+            'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/optimize-storage',
+        },
+    }
+    owners = [row for row in rows if row['id'] == expected['id']
+              or script in row['command']]
+    assert owners == [expected], 'optimize-storage: expected one exact host owner'
+    return {expected['id']}
+
+
+@pytest.mark.parametrize('fault', ['missing', 'duplicate', 'command', 'python', 'artifacts', 'cwd'])
+def test_optimize_storage_rejects_changed_or_duplicate_owner(fault):
+    rows = current_plan()['scenarios']
+    owner = next(row for row in rows if row['id'] == 'optimize-storage')
+    if fault == 'missing':
+        rows.remove(owner)
+    elif fault == 'duplicate':
+        rows.append({**owner, 'id': 'other-optimize'})
+    elif fault == 'command':
+        owner['command'] = [*owner['command'], '--source-check']
+    elif fault == 'cwd':
+        owner['cwd'] = '.build/web-client'
+    else:
+        owner['env'] = {**owner['env'], {
+            'python': 'AMPLIFIER_TEST_PYTHON',
+            'artifacts': 'AMPLIFIER_TEST_ARTIFACTS',
+        }[fault]: 'wrong-input'}
+    with pytest.raises(AssertionError, match='optimize-storage'):
+        optimize_storage_browser_addition(rows)
 
 
 LAYOUT_RETURN_IDS = ('composer-return', 'composer-return-mounted', 'shared-controls', 'conversation-error')

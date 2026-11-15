@@ -20,6 +20,29 @@ def test_model_selection_inheritance_is_opt_in_and_specialists_win():
     assert inherited_selection(parent, {}, [], {"effective_selection": choice}) == choice
 
 
+@pytest.mark.asyncio
+async def test_resume_preserves_original_tool_and_hook_inheritance_without_aliasing(tmp_path):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from amplifier_web.host.children import Children
+    from amplifier_web.host.storage import SessionStore
+    store = SessionStore(tmp_path / "sessions")
+    policy = {"exclude_tools": ["tool-delegate"]}
+    hooks = {"exclude_hooks": ["fixture-observer"]}
+    rows = [{"role": "user", "content": "original"}]
+    store.save("child", rows, {"parent_id": "parent", "agent_name": "self",
+                              "tool_inheritance": policy, "hook_inheritance": hooks})
+    registry = Children(SimpleNamespace(), store, None)
+    registry._execute = AsyncMock(return_value={"output": "done"})
+    parent = SimpleNamespace(session_id="parent", coordinator=SimpleNamespace(config={}))
+    await registry._resume_owned("child", "Continue", parent)
+    kwargs = registry._execute.await_args.kwargs
+    assert kwargs["tool_inheritance"] == policy and kwargs["hook_inheritance"] == hooks
+    assert kwargs["parent_messages"] == rows and kwargs["resumed"] is True
+    kwargs["tool_inheritance"]["exclude_tools"].append("other")
+    assert store.load("child")[1]["tool_inheritance"] == policy
+
+
 def test_real_foundation_child_lifecycle_and_delegate_contract():
     python=os.environ.get('UNIFIED_RUNTIME_PYTHON')
     if not python:
@@ -195,8 +218,10 @@ async def mount(coordinator, config=None):
     class ObserveOnly(BundleLiveOrchestrator):
         async def execute(self, prompt, context, providers, tools, hooks, coordinator):
             selected = self._select_provider(providers)
+            from amplifier_web.host.media import _provider_owner
             underlying = getattr(selected, 'original', selected)
-            instance, = [key for key, provider in providers.items() if provider is underlying]
+            instance, = [key for key, provider in providers.items()
+                         if _provider_owner(provider) is _provider_owner(underlying)]
             executions.append({'instance': instance, 'model': selected.default_model})
             assert all(not provider.calls for provider in providers.values())
             return 'selector observed; no inference'

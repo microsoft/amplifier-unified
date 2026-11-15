@@ -30,6 +30,26 @@ class StreamingProvider(Provider):
         yield 'first'
         yield 'last'
 
+async def test_abandon_uses_cached_selected_object_and_frozen_options_after_mutation():
+    class BudgetProvider(Provider):
+        async def request_budget(self, request, *, request_options=None):
+            self.counted = request
+            return {"input_tokens": 1}
+        def release_media_request(self, request, *, request_options=None):
+            assert request is self.counted
+            assert request_options == {"model": "selected", "native": {"temperature": 0.2}}
+            return True
+    provider = BudgetProvider()
+    choice = {"model": "selected"}
+    selected = SelectedProvider(provider, choice)
+    request = Request()
+    options = {"native": {"temperature": 0.2}}
+    await selected.request_budget(request, request_options=options)
+    assert not selected.release_media_request(Request(), request_options=options)
+    request.model = "mutated"
+    choice["model"] = "other"
+    assert selected.release_media_request(request, request_options=options)
+    assert not selected.release_media_request(request, request_options=options)
 
 async def test_native_compaction_and_validation_use_selected_model_without_mutating_defaults():
     class NativeProvider(Provider):
@@ -188,6 +208,11 @@ async def test_selected_preparation_invalidates_changed_inputs_or_selection(chan
         request.tools.append(ToolSpec(name='new_tool', parameters={'type': 'object'}))
     else:
         request = request.model_copy()
+    if changed != 'new_request':
+        with pytest.raises(ValueError, match='changed after fitting'):
+            await selected.complete(request)
+        assert dispatched == [] and commits == []
+        await selected.request_budget(request, context_estimate=20)
     await selected.complete(request)
     assert len(lookups) == 2 and len(commits) == 1
     assert dispatched[0][0] is not budgets[0][0]

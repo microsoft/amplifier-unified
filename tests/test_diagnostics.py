@@ -40,6 +40,48 @@ async def test_default_local_capture_never_infers_remote_destination(service,mon
     with collector._db() as db:assert db.execute('SELECT count(*) FROM deliveries').fetchone()[0]==0
 
 
+@pytest.mark.parametrize('held', ['maintenance', 'inode'])
+async def test_held_capture_does_not_drop_unrelated_app_diagnostics(service, held):
+    from test_capture_index import write_capture
+    await service.dispatch('session.create', {})
+    session = service._session()
+    workspace, sid = session['workspace'], session['id']
+    path = write_capture(workspace, sid, 'existing') / 'events.jsonl'
+    collector = service.diagnostics
+    await collector.flush()
+    with collector._db() as db:
+        if held == 'maintenance':
+            db.execute('INSERT INTO capture_maintenance VALUES(?,?,?)', (str(path), 'unresolved', '{}'))
+        else:
+            replacement = path.with_name('unqualified-replacement')
+            replacement.write_bytes(path.read_bytes())
+            replacement.replace(path)
+        db.execute("UPDATE records SET at=0 WHERE json_extract(data,'$.\"$event\"')=?", (str(path),))
+        existing = db.execute('SELECT id,data FROM records').fetchall()
+        identity = existing[0][0]
+        db.execute('INSERT INTO deliveries(record_id,destination,revision,payload,status,updated) VALUES(?,?,?,?,?,?)',
+                   (identity, 'original-destination', 'original-revision', '{"exact":"payload"}', 'accepted', 0))
+        deliveries = [tuple(row) for row in db.execute('SELECT * FROM deliveries')]
+    collector.record('updates', {'event': 'update:survives-quarantine', 'data': {'phase': 'probe'}})
+    await collector.flush()
+    assert not collector.storage_error and not collector.dropped
+    with collector._db() as db:
+        assert db.execute('SELECT count(*) FROM records WHERE event=?',
+                          ('update:survives-quarantine',)).fetchone()[0] == 1
+        for identity, data in existing:
+            assert db.execute('SELECT data FROM records WHERE id=?', (identity,)).fetchone()[0] == data
+        assert [tuple(row) for row in db.execute('SELECT * FROM deliveries')] == deliveries
+    # Exercise the separate count boundary on the same unresolved source.
+    collector.config['maxRecords'] = 100
+    for number in range(105):
+        collector.record('updates', {'event': 'update:count-pressure', 'data': {'number': number}})
+    await collector.flush()
+    with collector._db() as db:
+        for identity, data in existing:
+            assert db.execute('SELECT data FROM records WHERE id=?', (identity,)).fetchone()[0] == data
+        assert [tuple(row) for row in db.execute('SELECT * FROM deliveries')] == deliveries
+
+
 async def test_provider_request_setting_is_optional_private_and_saved_without_enabling_forwarding(service):
     assert service.diagnostics.config['providerRequests'] is False
     await configure(service, providerRequests=True)
@@ -215,6 +257,51 @@ async def test_content_opt_in_redaction_and_bounded_agent_read(service,monkeypat
     (capture/'metadata.json').write_text(json.dumps({'format':'context-intelligence','version':'1.0.0','session_id':session['id'],'workspace':session['workspace']}))
     transcript=read_native_transcript(CaptureLocator.from_session_dir(capture))
     assert transcript.messages[0].content=='Hello [REDACTED]'
+
+
+async def test_export_indexed_usage_keeps_envelope_time_without_restoring_private_fields(service):
+    from datetime import datetime, timedelta, timezone
+    from amplifier_web.capture_index import index_shared
+    from amplifier_web.session_files import capture_dir
+
+    await service.dispatch('session.create', {})
+    session = service._session()
+    directory = capture_dir(session['workspace'], session['id'])
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / 'metadata.json').write_text(json.dumps({
+        'format': 'context-intelligence', 'version': '1.0.0'}))
+    when = datetime.now(timezone.utc) - timedelta(days=2)
+    timestamp = when.isoformat()
+    usage = {'input_tokens': 7, 'output_tokens': 3, 'cost': 0.01}
+    rows = [{'event': event, 'timestamp': timestamp, 'data': {
+        'event_id': 'private-event-' + event, 'provider': 'fixture',
+        'model': 'export-fixture', 'usage': usage, 'raw': 'private-raw-payload'}}
+        for event in ('llm:request', 'llm:response')]
+    path = directory / 'events.jsonl'
+    path.write_text(''.join(json.dumps(row) + '\n' for row in rows))
+    original = path.read_bytes()
+    await service.diagnostics.flush()
+    with service.diagnostics._db() as db:
+        index_shared(db, [(session['workspace'], session['id'])], {'streams': ['usage']})
+    page = await service.dispatch('diagnostics.records',
+                                 {'sessionId': session['id'], 'stream': 'usage'})
+    captured = [row for row in page['result']['items'] if row['id'].startswith('capture-')]
+    assert len(captured) == 2
+    assert all('timestamp' not in row['data'] and 'event_id' not in row['data']
+               and 'raw' not in row['data'] for row in captured)
+    exported = await service.dispatch('diagnostics.export')
+    content = exported['effects'][0]['content']
+    values = [json.loads(line) for line in content.splitlines()]
+    assert {row['event'] for row in values} == {'llm:request', 'llm:response'}
+    assert all(row['workspace'] == session['workspace'] for row in values)
+    assert all(datetime.fromisoformat(row['timestamp']).timestamp() == when.timestamp()
+               for row in values)
+    assert all(row['data'] == {'provider': 'fixture', 'model': 'export-fixture',
+                               'usage': usage} for row in values)
+    assert 'private-event-' not in content and 'private-raw-payload' not in content
+    # Public actions may append their own diagnostic events, but cannot rewrite
+    # the two original capture records while exporting their safe projection.
+    assert path.read_bytes().startswith(original)
 
 
 async def test_child_session_correlates_with_app_session_and_parent(service):

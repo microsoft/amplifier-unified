@@ -15,6 +15,40 @@ class PolicyBoundaryReached(Exception):
     """Stop after preparation and its postcheck, before unrelated worker setup."""
 
 
+@pytest.mark.parametrize("preinstalled", [False, True])
+async def test_worker_post_prepare_retains_coordinator_bound_attachment_encoder(
+        policy_worker, monkeypatch, preinstalled):
+    state = policy_worker
+    incoming_policy(state, monkeypatch, "absent")
+    capabilities = {}
+    original = object()
+    if preinstalled:
+        async def bound(command):
+            return original
+        capabilities["live.attachments.encode"] = bound
+    coordinator = SimpleNamespace(
+        get_capability=capabilities.get,
+        register_capability=lambda key, value: capabilities.update({key: value}))
+    session = SimpleNamespace(coordinator=coordinator)
+    async def prepare(*args, **kwargs):
+        return session, state.runtime, {}
+    state.prepare.side_effect = prepare
+    class ControlsBoundary:
+        def __init__(self, *args, **kwargs):
+            raise PolicyBoundaryReached
+    monkeypatch.setattr("amplifier_web.runtime_controls.RuntimeControls", ControlsBoundary)
+    calls = []
+    async def encode(command, owner=None):
+        calls.append(owner)
+        return "encoded"
+    monkeypatch.setattr("amplifier_web.attachments.encode", encode)
+    with pytest.raises(PolicyBoundaryReached):
+        await state.worker.start(state.config, raise_errors=True, recover_bundle=False)
+    actual = capabilities["live.attachments.encode"]
+    result = await actual(SimpleNamespace())
+    assert (result is original) if preinstalled else result == "encoded"
+    assert calls == ([] if preinstalled else [coordinator])
+
 class PolicyBoundaryReport(dict):
     def get(self, key, default=None):
         if key == "config_inputs":
@@ -63,7 +97,9 @@ def policy_worker(tmp_path, monkeypatch):
                         SimpleNamespace(Runtime=lambda **kwargs: runtime))
     state.events = []
     monkeypatch.setattr(runtime_worker, "publish", state.events.append)
-    state.worker = runtime_worker.Worker()
+    # This fixture deliberately replaces preparation/recovery/native ownership;
+    # prospective source custody is exercised by its real-boundary suite.
+    state.worker = runtime_worker.Worker(canonical_bootstrap=False)
     state.worker.shared_store = SimpleNamespace()
     state.worker.shared_handle = SimpleNamespace()
     state.worker.activation_gate = ActivationGate()

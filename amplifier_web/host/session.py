@@ -9,6 +9,7 @@ import inspect
 import json
 import os
 from pathlib import Path
+import weakref
 
 from .config import HostConfig, expand_environment, load_config, merge, write_private, provider_mount_sources
 from .components import HostComponents, ComponentResolver, compose_bundles, imagegen_defaults, capability_defaults, explicit_context_forwarding, installed_package_source
@@ -96,6 +97,11 @@ class SelectedProvider:
         self.execution_adapter = execution_adapter
         self._selected_requests = []
         self._refused_requests = []
+        self._release_bindings = []
+        # Payload-free local identity refusals outlive discarded private fits.
+        # Weak refs avoid retaining canonical content; saturation fails closed.
+        self._media_fit_refusals = []
+        self._media_fit_refusal_overflow = False
         from ..overflow_feedback import OverflowFeedback
         self._overflow_feedback = OverflowFeedback()
     def _execution_provider(self):
@@ -104,7 +110,8 @@ class SelectedProvider:
         if name == "default_model" and self.selection.get("model"):
             return self.selection["model"]
         execution = self._execution_provider() if name in {
-            'stream', 'request_budget', 'refit_request', 'recover_context_overflow'} else self.original
+            'stream', 'request_budget', 'refit_request', 'compact_context',
+            'recover_context_overflow'} else self.original
         method = getattr(execution, name)
         if name == 'recover_context_overflow' and callable(method):
             def recover(request, error, *, context_estimate, request_options=None):
@@ -139,14 +146,17 @@ class SelectedProvider:
                     self._forget_request(request)
                 else:
                     entry.refitted = True
+                    self._clear_media_fit_refusal(request)
                 return result
             return refit
         if name == "compact_context" and callable(method):
             async def compact(request, **kwargs):
-                selected, _ = self._selected_request(request, {}, consume=True)
+                self._check_fitted_execution(request, execution)
+                selected, _ = self._selected_request(request, {}, consume=True, dispatch=True)
                 # Native compaction owns its own output reservation. Only the
                 # selected model/effort follows the conversation preference.
-                selected = selected.model_copy(update={"max_output_tokens": request.max_output_tokens})
+                if selected.max_output_tokens != request.max_output_tokens:
+                    selected = selected.model_copy(update={"max_output_tokens": request.max_output_tokens})
                 return await method(selected, **kwargs)
             return compact
         if name == "validate_compacted_context" and callable(method):
@@ -168,9 +178,23 @@ class SelectedProvider:
                 # Preserve named-option feature detection through this wrapper,
                 # translating to keywords only for a legacy provider budget.
                 kwargs['request_options'] = request_options
+                # Reject malformed options before touching an earlier fitted
+                # candidate or its captured release association.
+                from ..surface_delivery import SurfaceProvider
+                options = SurfaceProvider._media_options(kwargs.get("request_options"),
+                    {key: value for key, value in kwargs.items() if key != "request_options"})
+                self._retire_replaced_fit(request, execution)
                 selected, kwargs = self._selected_request(request, kwargs)
                 try:
+                    # Selection supplies model/effort overrides; normalize them
+                    # with the provider budget protocol after preflight.
                     self._budget_options(kwargs)
+                    options = SurfaceProvider._media_options(kwargs.get("request_options"),
+                        {key: value for key, value in kwargs.items() if key != "request_options"})
+                    self._release_bindings = [row for row in self._release_bindings if row[0] is not request]
+                    self._release_bindings.append((request, selected, execution,
+                                                   copy.deepcopy(request_options or {}), copy.deepcopy(options), False))
+                    self._release_bindings = self._release_bindings[-4:]
                     result = method(selected, **kwargs)
                 except BaseException:
                     self._forget_request(request)
@@ -178,14 +202,30 @@ class SelectedProvider:
                 if inspect.isawaitable(result):
                     async def budget():
                         try:
-                            return await result
+                            decision = await result
                         except BaseException:
                             self._forget_request(request)
                             raise
+                        self._finish_selected_budget(request, selected, execution)
+                        return decision
                     return budget()
+                self._finish_selected_budget(request, selected, execution)
                 return result
             return selected_budget
         return method
+
+    def release_media_request(self, canonical, *, request_options=None):
+        """Only preparation-time associations participate in cleanup."""
+        row = next((row for row in self._release_bindings if row[0] is canonical), None)
+        if row is None or row[3] != (request_options or {}):
+            return False
+        release = getattr(row[2], "release_media_request", None)
+        if not callable(release):
+            return False
+        result = release(row[1], request_options=copy.deepcopy(row[4]))
+        if result is True:
+            self._forget_request(canonical)
+        return result
     def get_info(self):
         info = self.original.get_info()
         overrides = {key:self.selection[key] for key in ("model", "max_output_tokens") if key in self.selection}
@@ -193,8 +233,71 @@ class SelectedProvider:
             overrides["reasoning_effort"] = self.selection["effort"]
         return info.model_copy(update={"defaults": {**info.defaults, **overrides}})
     def _forget_request(self, request):
+        self._release_bindings = [row for row in self._release_bindings if row[0] is not request]
         self._selected_requests = [row for row in self._selected_requests if row.original is not request]
         self._refused_requests = [row for row in self._refused_requests if row[0] is not request]
+
+    def _check_fitted_execution(self, request, execution):
+        """A fitted private candidate belongs to its exact execution adapter."""
+        row = next((row for row in self._release_bindings if row[0] is request), None)
+        self._media_fit_refusals = [ref for ref in self._media_fit_refusals if ref() is not None]
+        if (any(ref() is request for ref in self._media_fit_refusals)
+                or self._media_fit_refusal_overflow and (row is None or not row[5])):
+            raise ValueError("A refused media request requires a new successful explicit budget/refit.")
+        if row is None:
+            return
+        owns_media = getattr(row[2], "has_prepared_media_request", None)
+        if not callable(owns_media) or not owns_media(row[1]):
+            return  # Preserve text-only adapters that are constructed per call.
+        if row[2] is execution and self._execution_provider() is execution:
+            return
+        # Use the preparation-time owner/options to retire its private request.
+        # Never ask the replacement provider to adopt, refit or send it.
+        release = getattr(row[2], "release_media_request", None)
+        if not callable(release) or release(row[1], request_options=copy.deepcopy(row[4])) is not True:
+            raise ValueError("Previous selected media fit could not be released")
+        self._mark_media_fit_refusal(request)
+        self._forget_request(request)
+        raise ValueError("The selected execution provider changed after fitting; request a new explicit budget.")
+
+    def _mark_media_fit_refusal(self, request):
+        self._media_fit_refusals = [ref for ref in self._media_fit_refusals
+                                    if ref() is not None and ref() is not request]
+        if len(self._media_fit_refusals) >= 16:
+            self._media_fit_refusal_overflow = True
+            return
+        try:
+            self._media_fit_refusals.append(weakref.ref(request))
+        except TypeError:
+            self._media_fit_refusal_overflow = True
+
+    def _clear_media_fit_refusal(self, request):
+        # Only the successful explicit budget/refit callers invoke this.
+        self._media_fit_refusals = [ref for ref in self._media_fit_refusals
+                                    if ref() is not None and ref() is not request]
+
+    def _finish_selected_budget(self, request, selected, execution):
+        for index, row in enumerate(self._release_bindings):
+            if row[0] is request and row[1] is selected and row[2] is execution:
+                self._release_bindings[index] = (*row[:5], True)
+                self._clear_media_fit_refusal(request)
+                break
+
+    def _retire_replaced_fit(self, request, execution):
+        """An explicit new fit must release a previous private owner's candidate."""
+        row = next((row for row in self._release_bindings if row[0] is request), None)
+        if row is None:
+            return
+        owns_media = getattr(row[2], "has_prepared_media_request", None)
+        if not callable(owns_media) or not owns_media(row[1]):
+            return
+        updates, _ = self._selection_overrides(request, {})
+        if row[2] is execution and self._cached_request(request, updates) is not None:
+            return  # Repeated count retains the exact private request.
+        release = getattr(row[2], "release_media_request", None)
+        if not callable(release) or release(row[1], request_options=copy.deepcopy(row[4])) is not True:
+            raise ValueError("Previous selected media fit could not be released")
+        self._forget_request(request)
 
     def _budget_options(self, kwargs):
         budget = getattr(self.original, 'request_budget', None)
@@ -230,7 +333,7 @@ class SelectedProvider:
         return next((row for row in self._selected_requests
                      if row.original is request and row.choices == updates and row.snapshot == request), None)
 
-    def _selected_request(self, request, kwargs, *, consume=False):
+    def _selected_request(self, request, kwargs, *, consume=False, dispatch=False):
         updates, kwargs = self._selection_overrides(request, kwargs)
         # Budget and dispatch must share one selected request so the host's
         # surface adapter can reuse its prepared observation. Retain a bounded
@@ -238,6 +341,9 @@ class SelectedProvider:
         # it unless the adapter can refit an exact local refusal.
         entry = self._cached_request(request, updates)
         selected = entry.selected if entry is not None else None
+        if entry is None and dispatch and any(
+                row.original is request for row in self._selected_requests):
+            raise ValueError("The selected request changed after fitting; request a new explicit budget.")
         if entry is None:
             selected = request.model_copy(update=updates)
             self._forget_request(request)
@@ -265,7 +371,8 @@ class SelectedProvider:
     async def _stream_selected(self, execution, method, request, kwargs):
         options = dict(kwargs)
         self._overflow_feedback.forget(request)
-        selected, kwargs = self._selected_request(request, kwargs)
+        self._check_fitted_execution(request, execution)
+        selected, kwargs = self._selected_request(request, kwargs, dispatch=True)
         self._refused_requests = [row for row in self._refused_requests if row[0] is not request]
         feedback = self._overflow_feedback.capture(request, selected, options, kwargs,
                                                    execution, binding=self.selection)
@@ -289,8 +396,9 @@ class SelectedProvider:
     async def complete(self, request, **kwargs):
         options = dict(kwargs)
         self._overflow_feedback.forget(request)
-        selected, kwargs = self._selected_request(request, kwargs)
         execution = self._execution_provider()
+        self._check_fitted_execution(request, execution)
+        selected, kwargs = self._selected_request(request, kwargs, dispatch=True)
         self._refused_requests = [row for row in self._refused_requests if row[0] is not request]
         feedback = self._overflow_feedback.capture(request, selected, options, kwargs,
                                                    execution, binding=self.selection)
@@ -1039,6 +1147,9 @@ def install_checkpoint_hooks(coordinator, runtime, checkpoint):
     """Keep automatic nested completion cheap; enclosing saves are unchanged."""
     import asyncio
     from amplifier_core import HookResult
+    from .media import mint_graph_owner
+    mint_graph_owner(coordinator, checkpoint, kind="checkpoint")
+    mint_graph_owner(coordinator, runtime, kind="runtime")
     async def checkpoint_hook(event, data):
         if data.get("session_id", runtime.session_id) == runtime.session_id:
             from ..performance_diagnostics import PhaseTiming, TIMING_ENABLED
@@ -1067,7 +1178,9 @@ def install_checkpoint_hooks(coordinator, runtime, checkpoint):
                         pass
         return HookResult()
     for event in ("tool:post", "tool:error", "orchestrator:complete", "context:compaction_finished"):
-        coordinator.hooks.register(event, checkpoint_hook, name="unified-checkpoint-" + event)
+        from .media import registration_hooks
+        registration_hooks(coordinator).register(event, checkpoint_hook,
+                                                  name="unified-checkpoint-" + event)
 
 
 async def prepare_manager(workspace, *, runtime=None, bundle=None, background_delegate=True,
@@ -1075,7 +1188,9 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                           application_host="Amplifier Unified", shared_handle=None,
                           shared_handle_getter=None, shared_snapshot=None,
                           write_guard=None, resolved_root=None, execution_workspace=None, owner_session_id=None,
-                          refresh_dependencies=False, install_overrides=None, qualification_readonly=False, global_only=False, runtime_plan=None, startup_timing=None, ephemeral_mcp_servers=None, **kwargs):
+                          refresh_dependencies=False, install_overrides=None, qualification_readonly=False, global_only=False, runtime_plan=None, startup_timing=None, ephemeral_mcp_servers=None, media_graph_selection=None,
+                          canonical_binding=None, canonical_binding_factory=None, canonical_resume=None,
+                          media_assembly_root=None, **kwargs):
     from ..worker_diagnostics import StartupTimings
     startup_timing = startup_timing or StartupTimings()
     if refresh_dependencies and resume:
@@ -1090,6 +1205,10 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
     from .storage import SessionStore
 
     runtime = runtime or Runtime()
+    if canonical_binding is not None:
+        if type(canonical_resume) is not bool:
+            raise ValueError("A canonical root needs explicit new-versus-resume construction intent")
+        resume = canonical_resume
     with startup_timing.phase('manager.config'):
         config = load_config(workspace, session_id=runtime.session_id, global_only=global_only,
             **({'owner_session_id': owner_session_id} if owner_session_id is not None else {}))
@@ -1102,15 +1221,22 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
     from ..session_files import capture_dir
     if not os.environ.get('AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH'):
         os.environ['AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH'] = str(capture_dir(config.workspace, 'root').parents[3])
-    store = SessionStore.for_app(config.home, config.workspace)
+    store = SessionStore.for_app(config.home, config.workspace,
+        **({"canonical_binding": canonical_binding} if canonical_binding is not None else {}))
     # Native history is authoritative, including an intentionally empty file.
     # A common checkpoint is read only for an explicitly legacy-only session;
     # a stale or corrupt checkpoint cannot prevent opening valid native history.
-    native_guard = NativeTranscriptGuard(store.directory(runtime.session_id) / "transcript.jsonl")
+    if canonical_binding is not None:
+        if (canonical_binding.session_id != runtime.session_id or
+                canonical_binding.directory != store.directory(runtime.session_id)):
+            raise ValueError("The canonical lifetime binding does not match this root")
+        canonical_binding.check()
+    native_guard = (canonical_binding if canonical_binding is not None else
+                    NativeTranscriptGuard(store.directory(runtime.session_id) / "transcript.jsonl"))
     with startup_timing.phase('manager.history.load'):
         saved = store.load(runtime.session_id) if resume else None
         history_source = "native" if saved is not None else "new"
-        if resume and saved is None:
+        if resume and saved is None and canonical_binding is None:
             if shared_snapshot is None and shared_handle is not None:
                 shared_snapshot = shared_handle.read()
             if shared_snapshot is not None:
@@ -1142,6 +1268,17 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
     bundle_identity = chosen
     directory = Path(report_dir or config.home / "runtime-reports" / runtime.session_id)
     with startup_timing.phase('manager.bundle.load'):
+        if media_assembly_root is not None:
+            # A preflight composition is reusable only for the actual selected
+            # root. Saved history may select a different bundle; it never turns
+            # that other bundle into the approved preflight recipe.
+            if (resolved_root is None and media_assembly_root.root is not None
+                    and media_assembly_root.config == config
+                    and media_assembly_root.bundle == chosen
+                    and media_assembly_root.execution_workspace == execution_workspace):
+                resolved_root = media_assembly_root
+            else:
+                media_graph_selection = None
         registry, loaded, chosen = (resolved_root.take(config, chosen, execution_workspace=execution_workspace) if resolved_root is not None
                                    else await load_root_bundle(config, chosen, execution_workspace=execution_workspace))
     with startup_timing.phase('manager.plan'):
@@ -1151,6 +1288,10 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         if runtime_plan is not None or edited_path.exists():
             edited = runtime_plan if runtime_plan is not None else json.loads(edited_path.read_text())
             loaded = apply_runtime_plan(loaded, edited, config, execution_workspace)
+            if media_assembly_root is not None:
+                # A runtime edit is a new authored graph, not authority inherited
+                # from the preflight root. Unknown edits stay neutral.
+                media_graph_selection = None
         if not snapshot:
             from .mentions import include_instruction_files
             loaded = include_instruction_files(loaded, config_home=config.settings_file.parent,
@@ -1255,9 +1396,11 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         def retain_session(constructing):
             nonlocal session
             session = constructing
+        from .media import bind_media
         initialization = initialization_hooks(isolation=isolation, decision_accounts=decision_accounts,
                                               routing=routing, retain=retain_session,
-                                              ephemeral_servers=ephemeral_mcp_servers)
+                                              ephemeral_servers=ephemeral_mcp_servers,
+                                              media=partial(bind_media, store=store, selection=media_graph_selection))
         with startup_timing.phase('manager.session.create'):
             session = await prepared.create_session(session_id=runtime.session_id,
                 session_cwd=execution_workspace, approval_system=approvals, is_resumed=messages is not None,
@@ -1297,7 +1440,9 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
             if messages is not None:
                 await coordinator.get("context").set_messages(messages)
         with startup_timing.phase('manager.children'):
-            await install_children(session, prepared, runtime, store, approvals, host_adapter=adapter)
+            await install_children(session, prepared, runtime, store, approvals, host_adapter=adapter,
+                **({"canonical_binding_factory": canonical_binding_factory}
+                   if canonical_binding_factory is not None else {}))
         configurator = SessionConfigurator(session, prepared)
         coordinator.register_capability("web.configurator", configurator)
         coordinator.register_capability("web.prepared", prepared)
@@ -1308,7 +1453,9 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                                         copy.deepcopy(coordinator.config.get("agents", {})))
         with startup_timing.phase('manager.settings'):
             if not snapshot:
-                await configurator.apply_saved_settings(config.settings.get("configurator") or {})
+                from .media import hook_configuration
+                with hook_configuration(coordinator):
+                    await configurator.apply_saved_settings(config.settings.get("configurator") or {})
             configurator.take_snapshot()
         providers = coordinator.get("providers") or {}
         if not providers:
@@ -1387,11 +1534,27 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                     # native transcript/metadata are the only newly written history.
                     held.check()
                 if timing:timing.mark('store.start')
+                canonical_intent = {}
+                if canonical_binding is not None:
+                    import uuid
+                    canonical_intent = {
+                        "expected": canonical_binding.expected,
+                        "operation_id": uuid.uuid4().hex,
+                        "admit": recovery_write_guard,
+                        "media_store": coordinator.get_capability("web.media.store"),
+                    }
                 saved_rows = store.save(runtime.session_id, transcript, {**metadata, "status": status,
                     "last_updated": datetime.now(UTC).isoformat(),
-                    "turn_count": sum(row.get("role") == "user" for row in transcript)})
+                    "turn_count": sum(row.get("role") == "user" for row in transcript)}, **canonical_intent)
+                from .media import acknowledge_media
+                if canonical_binding is None:
+                    acknowledge_media(coordinator, store, runtime.session_id, saved_rows)
+                else:
+                    from .media import settle_media_policy
+                    settle_media_policy(coordinator, saved_rows)
                 if timing:timing.mark('store.end')
-                native_guard.saved()
+                if canonical_binding is None:
+                    native_guard.saved()
                 if continuity:
                     if timing:timing.mark('continuity.start')
                     continuity.save()
@@ -1425,6 +1588,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                 published_anchors = anchors  # A failed emit remains retryable.
             return canonical
         coordinator.register_capability("live.checkpoint", checkpoint)
+        coordinator.register_capability("session.durable_checkpoint",
+                                        partial(checkpoint, capture_messages=False))
         from ..context_continuity import install as install_continuity
         continuity = install_continuity(coordinator, runtime.session_id, edited_path.parent,
                                        checkpoint, writer_guard=recovery_write_guard)
@@ -1434,6 +1599,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         coordinator.register_cleanup(cleanup_jobs)
         with startup_timing.phase('manager.checkpoint'):
             await checkpoint(capture_messages=False)
+        from .media import enable_media
+        enable_media(coordinator)
         failures = getattr(loop, "load_failures", [])
         fatal_failures = [row for row in failures if not isolation or row.get("type") != "provider"]
         if fatal_failures:

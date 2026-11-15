@@ -36,7 +36,8 @@ async def admit(controls, runtime, args, activation=None, authorize=None):
     try: controls.require_idle()
     except ValueError as exc: return {'accepted': False, 'reason': str(exc)}
     coordinator = controls.coordinator
-    loop, hooks = coordinator.get('orchestrator'), getattr(coordinator, 'hooks', None)
+    from .host.media import registration_hooks
+    loop, hooks = coordinator.get('orchestrator'), registration_hooks(coordinator)
     tools = getattr(loop, 'tools', None)
     if not coordinator.get_capability('live.continuation_guard_supported') or not isinstance(tools, dict) or not hooks:
         return {'accepted': False, 'reason': 'This runtime cannot enforce a finite tool-denied background explanation'}

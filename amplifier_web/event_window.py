@@ -215,6 +215,17 @@ def _observation(event, raw, offset, path, identity):
     }.items():
         key = next((key for key in keys if key in data), None)
         if key is None:
+            if field in {'request', 'response'}:
+                from .provider_payloads import expired_metadata
+                expired = data.get('provider_payloads_expired')
+                if isinstance(expired, dict):
+                    marker = next((value for name in keys
+                                   if (value := expired_metadata(expired.get(name)))), None)
+                    if marker is not None:
+                        row[field] = '[Provider recording expired under the saved retention policy]'
+                        row[field + 'RecordingExpired'] = marker
+                        # An intentional-expiry notice is not a body/detail
+                        # capability. Keep missing raw fields undisclosable.
             continue
         row['_eventFields'][field] = {**reference, 'key': key}
         row[field + 'Detail'] = {'part': 'nodes', 'id': row['id'], 'field': field,

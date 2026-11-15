@@ -5,15 +5,15 @@ turn event is the completion boundary. The orchestrator already emits submit.
 """
 
 
-def install(coordinator):
-    from amplifier_core import HookResult
+class PromptEvents:
+    """One constructor-owned observer; mutable turn data is not a graph grant."""
+    def __init__(self, coordinator):
+        self.coordinator = coordinator
+        self.current = {}
 
-    if coordinator.get_capability('web.prompt_completion'):
-        return
-    coordinator.register_capability('web.prompt_completion', True)
-    current = {}
-
-    async def observe(event, data):
+    async def observe(self, event, data):
+        from amplifier_core import HookResult
+        coordinator, current = self.coordinator, self.current
         if data.get('session_id', coordinator.session_id) != coordinator.session_id:
             return HookResult()
         if event == 'prompt:submit':
@@ -43,5 +43,14 @@ def install(coordinator):
                 CALL_PURPOSE.reset(token)
         return HookResult()
 
+
+def install(coordinator):
+    from .media import registration_hooks, mint_graph_owner
+    if coordinator.get_capability('web.prompt_completion'):
+        return
+    observer = PromptEvents(coordinator)
+    coordinator.register_capability('web.prompt_completion', observer)
+    mint_graph_owner(coordinator, observer, kind="prompt-events")
     for event in ('prompt:submit', 'prompt:complete', 'orchestrator:complete'):
-        coordinator.hooks.register(event, observe, name='unified-prompt-' + event, priority=900)
+        registration_hooks(coordinator).register(event, observer.observe,
+                                                   name='unified-prompt-' + event, priority=900)

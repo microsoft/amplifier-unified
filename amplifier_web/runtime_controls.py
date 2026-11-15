@@ -124,11 +124,14 @@ def validate_plan(plan):
 
 
 class RuntimeControls:
-    def __init__(self, session, runtime, telemetry=None, *, preserve_configuration=False, tool_invocation=None):
+    def __init__(self, session, runtime, telemetry=None, *, preserve_configuration=False, tool_invocation=None,
+                 canonical_binding=None, canonical_media_store=None):
         self.session, self.runtime, self.telemetry = session, runtime, telemetry
         self.preserve_configuration = preserve_configuration
         self._restoring = False
         self._tool_invocation = tool_invocation
+        self.canonical_binding = canonical_binding
+        self.canonical_media_store = canonical_media_store
         self.coordinator = session.coordinator
         self.configurator = self.coordinator.get_capability("web.configurator")
         self.prepared = self.coordinator.get_capability("web.prepared")
@@ -188,7 +191,9 @@ class RuntimeControls:
 
     async def _restore_saved(self, saved, *, selection_override=None):
         if self.configurator:
-            await self.configurator.apply_saved_settings(saved.get("configurator", {}))
+            from .host.media import hook_configuration
+            with hook_configuration(self.coordinator):
+                await self.configurator.apply_saved_settings(saved.get("configurator", {}))
         self.coordinator.session_state["goal"] = saved.get("goal")
         self.coordinator.session_state["task"] = saved.get("task")
         self.coordinator.session_state["configurationCheckpoint"] = saved.get("configurationCheckpoint")
@@ -472,9 +477,11 @@ class RuntimeControls:
             if section == "agents" and not enabled and name in self.coordinator.config.get("agents", {}):
                 # Retain runtime edits/additions, not only the initial bundle.
                 self.agent_definitions[name] = copy.deepcopy(self.coordinator.config["agents"][name])
-            result = function(name)
-            if inspect.isawaitable(result):
-                await result
+            from .host.media import hook_configuration
+            with hook_configuration(self.coordinator):
+                result = function(name)
+                if inspect.isawaitable(result):
+                    await result
             await self.checkpoint()
             return self.configuration()
         if operation == "catalog.inspect":
@@ -783,6 +790,68 @@ class RuntimeControls:
         return result
 
     async def mode(self, operation, args):
+        if operation not in {"mode.set", "mode.clear"}:
+            return await self._mode(operation, args)
+        self.require_idle()
+        transition = self.coordinator.get_capability("session.media.graph_transition")
+        if transition is not None and not callable(transition):
+            raise ValueError("Mode graph transition capability is malformed")
+        state = self.coordinator.session_state
+        if state.get("mode_transition_failure") and transition is None:
+            raise ValueError("A participating mode transition is incomplete; its owner must recover it")
+        previous = state.get("active_mode")
+        hooks = state.get("mode_hooks")
+        if operation == "mode.set":
+            discovery = state.get("mode_discovery")
+            if not discovery or not discovery.find(args.get("name")):
+                raise ValueError("Mode is not available in this bundle")
+        warnings = copy.deepcopy(getattr(hooks, "warned_tools", None))
+        entered, primary = False, None
+        try:
+            with (transition() if transition is not None else nullcontext()):
+                entered = True
+                try:
+                    result = await self._mode(operation, args)
+                except BaseException as error:
+                    primary = error
+                    raise
+            if primary is not None:
+                raise primary  # A foreign suppressing context is not success.
+        except BaseException as error:
+            if entered and transition is not None:
+                state["active_mode"] = previous
+                if warnings is not None:
+                    hooks.warned_tools = warnings
+                state["mode_transition_failure"] = {
+                    "previous_mode": previous,
+                    "target_mode": args.get("name") if operation == "mode.set" else None,
+                    "message": f"Mode transition incomplete: {type(primary or error).__name__}",
+                }
+            if primary is not None and error is not primary:
+                primary.add_note(f"Mode transition cleanup also failed: {type(error).__name__}")
+                raise primary
+            raise
+        await self.checkpoint()
+        return result
+
+    async def _emit_mode_transition(self, event, payload):
+        factory = self.coordinator.get_capability("session.media.graph_transition")
+        if factory is None:
+            return await self.coordinator.hooks.emit(event, payload)
+        if not callable(factory):
+            raise ValueError("Mode graph transition capability is malformed")
+        hooks = self.coordinator.session_state.get("mode_hooks")
+        tracker = getattr(hooks, "track_transition", None)
+        if not callable(tracker):
+            raise ValueError("Participating mode completion tracking is unavailable")
+        with tracker(event, payload=payload) as operation:
+            from .host.media import registration_hooks
+            result = await registration_hooks(self.coordinator).emit(
+                event, {**payload, "transition_id": operation.id})
+            operation.verify()
+            return result
+
+    async def _mode(self, operation, args):
         state = self.coordinator.session_state
         discovery = state.get("mode_discovery")
         if operation == "mode.list":
@@ -795,7 +864,7 @@ class RuntimeControls:
         previous = state.get("active_mode")
         if operation == "mode.clear":
             if previous:
-                await self.coordinator.hooks.emit("mode:cleared", {"name":previous,"previous_mode":previous})
+                await self._emit_mode_transition("mode:cleared", {"name":previous,"previous_mode":previous})
             state["active_mode"] = None
         else:
             definition = discovery.find(args.get("name")) if discovery else None
@@ -805,12 +874,11 @@ class RuntimeControls:
             if name != previous:
                 payload = {key:getattr(definition,key) for key in ("description","default_action","safe_tools","warn_tools","confirm_tools","block_tools") if hasattr(definition,key)}
                 payload.update({"old":previous,"new":name,"from_mode":previous,"to_mode":name} if previous else {"name":name,"mode":name})
-                await self.coordinator.hooks.emit("mode:changed" if previous else "mode:activated",payload)
+                await self._emit_mode_transition("mode:changed" if previous else "mode:activated",payload)
                 state["active_mode"] = name
         hooks = state.get("mode_hooks")
         if hooks and hasattr(hooks, "reset_warnings"):
             hooks.reset_warnings()
-        await self.checkpoint()
         return await self.mode("mode.list", {})
 
     async def invoke(self, args, *, coordinator=None, bound_arguments=None, provenance=None, checkpoint=True, expected_process_owner=None, generic=False, integration_id=None):
@@ -854,6 +922,12 @@ class RuntimeControls:
             raise ValueError("A policy modification cannot redirect an identity-bound operation")
         from amplifier_module_loop_live.scope import JOB_CALL
         ownership = JOB_CALL.set(call)
+        from .host.media import NAMESPACE
+        media_capability = coordinator.get_capability(NAMESPACE)
+        media_session_id = coordinator.session_id
+        from .host.media import neutral_control_media
+        neutral_media = neutral_control_media(coordinator)
+        primary_error = None
         try:
             if integration_id is not None:
                 admit = coordinator.get_capability('integration.admit')
@@ -878,12 +952,26 @@ class RuntimeControls:
                     checker(*expected_process_owner)
             with invocation(arguments):
                 result = await tool.execute(arguments)
-            await hooks.emit("tool:post",{**data,"tool_result":result.model_dump() if hasattr(result,"model_dump") else result})
+            from .host.media import control_tool_post, prepare_control_result
+            result = await prepare_control_result(coordinator, result, call)
+            result = await control_tool_post(coordinator, {
+                **{key: value for key, value in data.items() if key != "tool_obj"}, "result": result})
             if checkpoint:
                 await self.checkpoint()
             return {"callId":call,"result":public_config(result)}
-        except Exception as exc:
+        except BaseException as exc:
+            primary_error = exc
+            if not isinstance(exc, Exception):
+                raise
             await hooks.emit("tool:error",{**data,"error":{"type":type(exc).__name__}})
             raise
         finally:
             JOB_CALL.reset(ownership)
+            from .host.media import drop_control_media
+            try:
+                await drop_control_media(media_capability, media_session_id, call, neutral=neutral_media)
+            except BaseException as cleanup_error:
+                if primary_error is None:
+                    raise
+                primary_error.add_note("Control media origin settlement failed: " +
+                                       type(cleanup_error).__name__)

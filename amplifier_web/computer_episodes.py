@@ -95,7 +95,8 @@ class ComputerEpisodes:
             return await original(mount_point, module, name=name)
 
         coordinator.mount = mount
-        hooks = getattr(coordinator, "hooks", None)
+        from .host.media import registration_hooks
+        hooks = registration_hooks(coordinator)
         if hooks is not None:
             from amplifier_core import HookResult
             async def entering(event, data):
@@ -311,7 +312,8 @@ class Sponsor:
     def wrap_tools(self):
         tools = self.coordinator.get("tools") or {}
         for name, tool in tuple(tools.items()):
-            tools[name] = self.wrap(name, tool)
+            from .host.media import replace_media_adapter
+            replace_media_adapter(self.coordinator, "tools", name, tool, self.wrap(name, tool))
 
     def capture_invocation(self, captured):
         if captured is None:

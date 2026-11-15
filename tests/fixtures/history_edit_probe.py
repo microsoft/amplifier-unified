@@ -97,14 +97,15 @@ Reply with the fixture response.
             owner = next(worker for worker in workers if event['id'] in worker.bridges)
             operation = event['operation']
             if operation == 'context.prepare':
-                from amplifier_web.preparation_context import OPERATIONS
-                values = {
-                    'context.manifest': {'surfaces': [], 'inputIds': event['args'].get('_contextInputs', [])},
-                    'message.reactions.context': {'items': []},
-                    'coordination.current': {'sessionId': owner.session.session_id, 'grants': [], 'requests': [], 'bounded': True},
-                    'memory.context': {'items': []},
+                result = {
+                    'context.manifest': {'available': True, 'value': {
+                        'surfaces': [], 'inputIds': event['args'].get('_contextInputs', [])}},
+                    'message.reactions.context': {'available': False},
+                    'coordination.current': {'available': True, 'value': {
+                        'sessionId': owner.session.session_id, 'grants': [],
+                        'requests': [], 'bounded': True}},
+                    'memory.context': {'available': True, 'value': {'items': []}},
                 }
-                result = {name: {'available': True, 'value': values[name]} for name in OPERATIONS}
             elif operation == 'coordination.current':
                 result = {'sessionId': owner.session.session_id, 'grants': [], 'requests': [], 'bounded': True}
             elif operation == 'context.manifest':

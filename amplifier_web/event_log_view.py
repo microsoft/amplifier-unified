@@ -201,7 +201,7 @@ def merge_model_observations(rows, *, aliases=()):
         if row['id'] in omitted or closest['id'] in matched:
             continue
         matched.add(closest['id']);omitted.add(row['id'])
-        for field in ('requestInfo', 'requestDetail', 'requestCapture', 'requestRecording', 'responseDetail', 'responseCapture', 'responseRecording', '_eventFields', 'error', 'errorDetail'):
+        for field in ('requestInfo', 'requestDetail', 'requestCapture', 'requestRecording', 'requestRecordingExpired', 'responseDetail', 'responseCapture', 'responseRecording', 'responseRecordingExpired', '_eventFields', 'error', 'errorDetail'):
             if field in row:closest[field] = row[field]
         for field in ('request', 'response'):
             if closest.get(field + 'Detail'):closest[field + 'Detail']['id'] = closest['id']
@@ -346,6 +346,17 @@ class EventIndex:
 
     def field(self, node, field, data, keys, reference, *, preview=True):
         key = next((key for key in keys if key in data), None)
+        if field in ('request', 'response'):
+            from .provider_payloads import expired_metadata
+            expired = data.get('provider_payloads_expired')
+            if isinstance(expired, dict):
+                expired_key = next((name for name in keys if expired_metadata(expired.get(name))), None)
+                if key is None and expired_key is not None:
+                    marker = expired_metadata(expired[expired_key])
+                    node[field] = '[Provider recording expired under the saved retention policy]'
+                    node[field + 'RecordingExpired'] = marker
+                    node.setdefault('_eventFields', {})[field] = {**reference, 'key': expired_key}
+                    return
         if key is None:
             return
         node.setdefault('_eventFields', {})[field] = {**reference, 'key': key}
@@ -509,7 +520,7 @@ class EventIndex:
             if isinstance(options.get('tools'), list):node['requestInfo']['tool_count'] = len(options['tools'])
             if isinstance(options.get('reasoning'), dict) and isinstance(options['reasoning'].get('effort'), str):
                 node['requestInfo']['reasoning_effort'] = options['reasoning']['effort'][:100]
-            if raw is not None:
+            if raw is not None or 'provider_payloads_expired' in data:
                 self.field(node, 'request', data, ('raw', 'raw_request'), reference, preview=False)
                 capture = data.get('request_capture', {})
                 if isinstance(capture, dict):
@@ -544,7 +555,8 @@ class EventIndex:
         node.update(provider=data.get('provider'), model=data.get('model'), endedAt=at,
                     phase='error' if name == 'llm:error' or data.get('status') == 'error' else 'completed',
                     usage=public_usage(data.get('usage')))
-        if name == 'llm:response' and data.get('raw', data.get('raw_response')) is not None:
+        if name == 'llm:response' and (data.get('raw', data.get('raw_response')) is not None
+                                     or 'provider_payloads_expired' in data):
             # Keep the provider's recorded response out of summaries and state.
             # The authenticated detail endpoint reads it only when requested.
             self.field(node, 'response', data, ('raw', 'raw_response'), reference, preview=False)
@@ -560,17 +572,23 @@ class EventIndex:
     def associations(self, directory):
         """Use Foundation's exact transcript associations for undated history."""
         from amplifier_foundation.session.history import SessionHistoryStore, associate_events
+        from . import committed_source
+        names = (committed_source.source_files(directory) if committed_source.versioned(directory)
+                 else ('transcript.jsonl', 'transcript.jsonl.backup', 'transcript.jsonl.append-pending'))
+        self.association_paths = tuple(directory / name for name in names)
         stamps = []
-        for name in ('transcript.jsonl', 'transcript.jsonl.backup', 'transcript.jsonl.append-pending'):
+        for path in self.association_paths:
             try:
-                stat = (directory / name).stat()
+                stat = path.stat()
                 stamps.append(((stat.st_dev, stat.st_ino), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns))
             except FileNotFoundError:
                 stamps.append(None)
         revision = (self.revision, tuple(stamps))
         if revision == self.association_revision:
             return self.association_cache
-        messages = SessionHistoryStore(directory, session_id=self.identity).indexed_messages() if any(stamps) else []
+        messages = (committed_source.load(directory, session_id=self.identity).messages
+                    if committed_source.versioned(directory) else
+                    SessionHistoryStore(directory, session_id=self.identity).indexed_messages() if any(stamps) else [])
         associations = associate_events(messages, self.association_events)
         current, result = None, {}
         for association in associations:
@@ -1061,7 +1079,8 @@ class EventLogView:
                 self._forget_index(str(root_index.path))
             raise
         if root_index:
-            transcript_paths = tuple(directory(source) / name for name in ('transcript.jsonl', 'transcript.jsonl.backup', 'transcript.jsonl.append-pending'))
+            transcript_paths = getattr(root_index, 'association_paths', tuple(directory(source) / name
+                for name in ('transcript.jsonl', 'transcript.jsonl.backup', 'transcript.jsonl.append-pending')))
             self.read_paths[session['id']] += transcript_paths
             self.read_revisions[session['id']] += tuple(
                 (str(path), stamp) for path, stamp in zip(transcript_paths, root_index.association_revision[1]))

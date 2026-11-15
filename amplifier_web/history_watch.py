@@ -24,8 +24,9 @@ class HistoryWatch:
         # catalog. Runtime events and browser view checkpoints are irrelevant.
         if len(parts) <= 3 or (len(parts) == 4 and parts[3] in {
             'metadata.json', 'metadata.json.backup', 'transcript.jsonl',
-            'transcript.jsonl.backup', 'naming.json', 'context-intelligence',
-        }) or (len(parts) == 5 and parts[3:] == ('context-intelligence', 'metadata.json')):
+            'transcript.jsonl.backup', 'naming.json', 'context-intelligence', 'transcript.v2',
+        }) or (len(parts) == 5 and (parts[3:] == ('context-intelligence', 'metadata.json')
+                 or parts[3] == 'transcript.v2')):
             return parts[0]
         return None
 
@@ -46,7 +47,8 @@ class HistoryWatch:
                         if project is None:
                             continue
                         parts = Path(path).relative_to(self.root).parts
-                        if len(parts) == 4 and parts[3] in {'transcript.jsonl', 'transcript.jsonl.backup'}:
+                        if ((len(parts) == 4 and parts[3] in {'transcript.jsonl', 'transcript.jsonl.backup', 'transcript.v2'})
+                                or len(parts) == 5 and parts[3] == 'transcript.v2'):
                             self.dirty.add((project, parts[2], 'transcript'))
                         elif len(parts) >= 4 and parts[1] == 'sessions':
                             self.dirty.add((project, parts[2], 'metadata'))

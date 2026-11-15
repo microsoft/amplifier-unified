@@ -6,6 +6,8 @@ import hashlib
 import json
 from pathlib import Path
 import uuid
+from contextlib import nullcontext
+from dataclasses import asdict
 
 from .host.config import write_private
 
@@ -21,6 +23,7 @@ BUNDLE_LABELS = {
     'work-amp-dev': ('Work · Amplifier development', 'Work with Amplifier ecosystem knowledge and tooling.'),
     'anchors-work': ('Anchors + Work', 'Anchors capabilities with Work execution and context handling.'),
 }
+_BUNDLE_FIELDS = ('bundle_name', 'bundle', 'preserve_system')
 
 
 def catalog_entry(name, metadata=None):
@@ -90,7 +93,7 @@ async def inspect_replacement(home, workspace, identity, bundle, *, selection=No
     return checked, ResolvedRoot(config, bundle, root, execution_workspace=execution_workspace)
 
 
-async def begin_replacement(home, workspace, config, *, admit=None):
+async def begin_replacement(home, workspace, config, *, admit=None, canonical_binding=None, media_store=None):
     """Called only after acquiring Foundation's writer lock for this session."""
     request = config['bundleReplacement']
     checked, resolved = await inspect_replacement(home, workspace, config['id'], request['bundle'],
@@ -105,7 +108,8 @@ async def begin_replacement(home, workspace, config, *, admit=None):
         if admit is None:
             raise ValueError('The deferred bundle application has no host authority.')
         await admit()
-    journal = BundleTransaction(home, workspace, config['id'])
+    journal = BundleTransaction(home, workspace, config['id'], canonical_binding=canonical_binding,
+                                media_store=media_store)
     journal.begin()
     try:
         journal.select(request['bundle'], reset_model=request.get('resetModel', False))
@@ -153,23 +157,94 @@ async def inspect_bundle(controls, workspace, bundle):
 
 class BundleTransaction:
     """Journal only files owned by this session; crash recovery restores the source."""
-    def __init__(self, home, workspace, identity):
+    def __init__(self, home, workspace, identity, *, canonical_binding=None, media_store=None):
         from .host.storage import SessionStore
         self.local = Path(home) / 'sessions' / identity
-        self.native = SessionStore.for_app(home, workspace).directory(identity)
+        self.store = SessionStore.for_app(home, workspace, canonical_binding=canonical_binding)
+        self.native = self.store.directory(identity)
+        self.binding = self.store._binding(identity)
+        self.media_store = media_store
         self.path = self.local / 'bundle-transition.json'
         self.paths = {f'{kind}/{name}': directory/name for kind, directory, names in (
             ('local', self.local, ('configuration.json', 'control-state.json', 'effective-configuration.json')),
             ('native', self.native, ('transcript.jsonl', 'transcript.jsonl.backup', 'metadata.json', 'metadata.json.backup')))
             for name in names}
+        if self.binding is not None:
+            self.paths = {key: path for key, path in self.paths.items()
+                          if not key.startswith('native/')}
+
+    def _custody(self):
+        return self.binding.publication() if self.binding is not None else nullcontext()
+
+    def _v2_journal(self):
+        value = json.loads(self.path.read_text())
+        if (value.get('version') != 2 or value.get('sessionId') != self.binding.session_id
+                or set(value.get('files', {})) != set(self.paths)):
+            raise ValueError('The owned bundle transition requires explicit recovery.')
+        return value
+
+    def _write_rows(self, value, rows, kind):
+        if value.get('phase') not in {'prepared', 'selected'}:
+            raise ValueError('An uncertain bundle write requires exact operation reconciliation, not replay.')
+        expected = self.binding.expected
+        if asdict(expected) != value['expected']:
+            raise ValueError('The owned bundle source changed; retained transition was not replayed.')
+        value.update(phase='writing', intent=kind)
+        write_private(self.path, json.dumps(value))
+        # Canonical asset admission is checked by the actual binding against
+        # this exact selected root and rows before Foundation publishes them.
+        ack = self.binding.rewrite(rows, expected=expected, operation_id=value['operationId'] + '-' + kind,
+                                   admit=self.binding.check, media_store=self.media_store)
+        value.update(phase='selected' if kind == 'select' else 'restored', expected=asdict(ack.commit))
+        write_private(self.path, json.dumps(value))
+        return value
 
     def begin(self):
+        if self.binding is not None:
+            with self._custody():
+                if self.path.exists():
+                    raise ValueError('An earlier bundle change needs recovery before another change.')
+                rows = self.binding.load_messages()
+                from amplifier_foundation.session.metadata import SessionMetadataStore, metadata_lock
+                with metadata_lock(self.native):
+                    metadata = SessionMetadataStore(self.native).read()
+                write_private(self.path, json.dumps({'version': 2, 'sessionId': self.binding.session_id,
+                    'phase': 'prepared', 'operationId': 'bundle-' + uuid.uuid4().hex,
+                    'expected': asdict(self.binding.expected), 'messages': rows,
+                    'bundleBefore': {key: {'present': key in metadata, 'value': metadata.get(key)}
+                                     for key in _BUNDLE_FIELDS},
+                    'files': {key: path.read_text() if path.exists() else None
+                              for key, path in self.paths.items()}}))
+            return
+        from .committed_source import refuse_legacy_write
+        refuse_legacy_write(self.native)
         if self.path.exists(): raise ValueError('An earlier bundle change needs recovery before another change.')
         write_private(self.path, json.dumps({'version': 1, 'files': {
             key: path.read_text() if path.exists() else None for key, path in self.paths.items()}}))
 
     def restore(self):
         if not self.path.exists(): return False
+        if self.binding is not None:
+            with self._custody():
+                saved = self._v2_journal()
+                if saved['phase'] == 'selected':
+                    saved = self._write_rows(saved, saved['messages'], 'restore')
+                elif saved['phase'] not in {'prepared', 'restored'}:
+                    raise ValueError('The bundle write outcome is uncertain; retain its journal and reconcile before restoring.')
+                if asdict(self.binding.expected) != saved['expected']:
+                    raise ValueError('The owned bundle source changed before recovery.')
+                self._restore_bundle_metadata(saved)
+                for key, path in self.paths.items():
+                    value = saved['files'][key]
+                    if value is None:
+                        path.unlink(missing_ok=True)
+                    else:
+                        write_private(path, value)
+                self.binding.check()
+                self.path.unlink()
+            return True
+        from .committed_source import refuse_legacy_write
+        refuse_legacy_write(self.native)
         saved = json.loads(self.path.read_text())
         if saved.get('version') != 1 or set(saved.get('files', {})) != set(self.paths):
             raise ValueError('The saved bundle transition cannot be recovered automatically.')
@@ -181,13 +256,27 @@ class BundleTransaction:
         return True
 
     def commit(self):
-        self.path.unlink()
+        with self._custody():
+            if self.binding is not None:
+                saved = self._v2_journal()
+                if saved['phase'] != 'selected' or asdict(self.binding.expected) != saved['expected']:
+                    raise ValueError('The owned bundle result is not settled for publication.')
+            self.path.unlink()
 
     def select(self, bundle, *, reset_model=False):
-        metadata = self.native/'metadata.json'
-        value = json.loads(metadata.read_text()) if metadata.exists() else {}
-        value.update(bundle_name=bundle, bundle=bundle, preserve_system=False)
-        write_private(metadata, json.dumps(value))
+        if self.binding is not None:
+            with self._custody():
+                saved = self._v2_journal()
+                if saved['phase'] != 'prepared':
+                    raise ValueError('This bundle selection was already attempted; inspect the retained result.')
+                self._write_rows(saved, [row for row in saved['messages']
+                                       if row.get('role') not in {'system', 'developer'}], 'select')
+                self._select_owned_metadata(saved, bundle)
+                self._reset_local(reset_model=reset_model)
+            return
+        from .committed_source import refuse_legacy_write
+        refuse_legacy_write(self.native)
+        self._select_metadata(bundle, reset_model=reset_model)
         transcript = self.native/'transcript.jsonl'
         if transcript.exists():
             rows = [json.loads(line) for line in transcript.read_text().splitlines() if line.strip()]
@@ -195,6 +284,48 @@ class BundleTransaction:
             # authoritative system rows; the journal retains originals until commit.
             write_private(transcript, ''.join(json.dumps(row, ensure_ascii=False)+'\n' for row in rows
                           if row.get('role') not in {'system', 'developer'}))
+        self._reset_local(reset_model=reset_model)
+
+    def _select_metadata(self, bundle, *, reset_model=False):
+        metadata = self.native/'metadata.json'
+        value = json.loads(metadata.read_text()) if metadata.exists() else {}
+        value.update(bundle_name=bundle, bundle=bundle, preserve_system=False)
+        write_private(metadata, json.dumps(value))
+
+    def _select_owned_metadata(self, saved, bundle):
+        from amplifier_foundation.session.metadata import SessionMetadataStore, metadata_lock
+        patch = {'bundle_name': bundle, 'bundle': bundle, 'preserve_system': False}
+        with metadata_lock(self.native):
+            history = self.store.history(self.binding.session_id)
+            current = SessionMetadataStore(self.native).read()
+            for key, previous in saved['bundleBefore'].items():
+                if (key in current) != previous['present'] or current.get(key) != previous['value']:
+                    raise ValueError('Bundle metadata changed during this transition; retain its journal for recovery.')
+            # Record the intended field patch before its metadata effects, so
+            # recovery can distinguish untouched originals from selected values.
+            saved['bundleSelected'] = patch
+            write_private(self.path, json.dumps(saved))
+            history._save_metadata_unlocked({**current, **patch})
+
+    def _restore_bundle_metadata(self, saved):
+        from amplifier_foundation.session.metadata import SessionMetadataStore, metadata_lock
+        selected = saved.get('bundleSelected')
+        if selected is None:
+            return
+        with metadata_lock(self.native):
+            current = SessionMetadataStore(self.native).read()
+            replacement = dict(current)
+            for key, previous in saved['bundleBefore'].items():
+                untouched = (key in current) == previous['present'] and current.get(key) == previous['value']
+                if not untouched and current.get(key) != selected[key]:
+                    raise ValueError('Newer bundle metadata prevents automatic restoration; journal retained.')
+                if previous['present']:
+                    replacement[key] = previous['value']
+                else:
+                    replacement.pop(key, None)
+            self.store.history(self.binding.session_id)._save_metadata_unlocked(replacement)
+
+    def _reset_local(self, *, reset_model=False):
         for name in ('configuration.json', 'effective-configuration.json'):
             (self.local/name).unlink(missing_ok=True)
         state = self.local/'control-state.json'
