@@ -1189,9 +1189,10 @@ limit as not blocking.
   another file. The step compares that text with its token and stops when it
   differs. Nothing is written or deleted through that path.
 - **L14.** A step after exit whose answer came too late keeps the two files
-  open and waits. While `python` and `tools` are there it deletes no file;
-  it can remove a named folder of the installation that is already empty.
-  It stops at its deadline.
+  open and waits. The uninstall program has then moved nothing into the flat
+  folder and has not deleted `python` and `tools`. So the step deletes no
+  file; it can remove a named folder of the installation that is already
+  empty. It stops at its deadline.
 - **L15.** The two kept files' handles can be inherited only in the moment in
   which the step after exit is created, and the step is created with an
   exact list of handles. A process that another thread of the uninstall
@@ -1225,12 +1226,22 @@ says that a program file is missing. When it is still there (a removal that
 stopped before its last step), setup asks, and on Yes it lets the
 installation's own program add the Start-menu and Apps-list entries again,
 and then it starts the launcher. That program adds the entries only when the
-installation's own records are whole, and it does not look for the journal.
-The launcher does: it refuses to open Amplifier, and its message tells the
-person to select Uninstall Amplifier. With the entries back, the person can
-do that, and the second uninstall finishes the removal. This is read from the
-source of both programs; the combination was not run. In none of these states
-can Amplifier start, and in none of them does setup delete anything.
+installation's own records are whole and no entry exists, and it does not
+look for the journal. The launcher then does not open Amplifier:
+
+- While the installation's own records are whole, the launcher finds the
+  journal, and its message tells the person to select Uninstall Amplifier.
+  With the entries back, the person can do that, and the second uninstall
+  finishes the removal.
+- When those records are already deleted (a removal that stopped in its last
+  seconds), no entry is added, and the launcher's own check of the
+  installation fails before it looks for the journal. Its message says that
+  Amplifier could not start and names the setup file again. Like setup's
+  message, that is not true for this leftover (L3).
+
+This is read from the source of both programs; the combination was not run.
+In none of these states can Amplifier start, and in none of them does setup
+delete anything.
 
 **Which installations get it.** This is launcher code: a new installation from
 a setup file of a release that has it, and an earlier installation after a
