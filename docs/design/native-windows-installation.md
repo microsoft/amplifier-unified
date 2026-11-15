@@ -2006,17 +2006,23 @@ record before and after the attempt and found the same record.
 A look at the record can fail for another reason than a missing record. Such
 a look is never taken for "no record" and never for "unchanged". The host
 then opens no session for a ticket or code. The watcher applies nothing, keeps
-nothing, and says so once in the host log. The command does not report a
-finished sign-out.
+nothing, and says so once in the host log. The command never takes such a
+look as proof of a finished sign-out or of an unchanged record. Without that
+proof it says that it could not confirm the sign-out, unless a later save of
+the same run gives the proof.
 
 This holds while the PC clock does not go backward. One case is left open: the
 host looks every two seconds, and it misses a change when two or more saves
 between two looks end in a file with the same time, size and identity as the
 file that the host saw last. That needs a file time that does not change
 between saves and a reused identity. It is not measured on any file system.
-Two facts make it narrower. The Windows private store accepts only a local
-fixed NTFS volume. Tickets and codes exist on a Windows host only, so on the
-other systems a missed change can only delay the end of open streams.
+
+When the host misses a change, that sign-out is not applied. Sessions from
+before it stay valid for every request, and their streams stay open, until the
+record changes again or the host starts again. This is so on every system.
+Two facts make the case narrower. The Windows private store accepts only a
+local fixed NTFS volume. Tickets and codes exist on a Windows host only, so on
+the other systems no ticket or code is part of the case.
 
 A ticket or code that is made after a sign-out and before the host has applied
 it is dropped as well. The owner waits a few seconds after the command.
