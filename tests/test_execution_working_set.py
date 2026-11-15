@@ -344,6 +344,10 @@ async def test_ordinary_web_send_claims_legacy_cold_execution_without_full_hydra
                                             command_id='ordinary-input')
                 assert result['accepted']
         assert len(runtime.sent) == 1
+        sent_session, sent_text, input_id = runtime.sent[0]
+        assert (sent_session, sent_text) == (sid, 'Continue')
+        assert any(message.get('inputId') == input_id and message.get('role') == 'user'
+                   and message.get('text') == 'Continue' for message in session['messages'])
         assert not dict.__contains__(session, 'execution')
         assert getattr(session, '_working_execution', None) is not None
         reference = dict.get(session, MARKER)['execution']
@@ -352,6 +356,6 @@ async def test_ordinary_web_send_claims_legacy_cold_execution_without_full_hydra
         assert saved['nodes'] == expected['nodes']
         assert saved['retiredUsageNodes'] == expected['retiredUsageNodes']
         assert saved['turns'][0] == expected['turns'][0]
-        assert any(turn['id'] == 'ordinary-input' for turn in saved['turns'])
+        assert any(turn['id'] == input_id for turn in saved['turns'])
     finally:
         await app.close()
