@@ -477,6 +477,13 @@ def has_media(request):
                for message in getattr(request, "messages", ()))
 
 
+def _private_media(request):
+    return has_media(request) or any(
+        getattr(block, "type", None) == "image"
+        for message in getattr(request, "messages", ())
+        for block in (message.content if isinstance(message.content, list) else ()))
+
+
 def effective_options(request, options):
     result = copy.deepcopy(options or {})
     for key in ("model", "reasoning_effort"):
@@ -710,6 +717,7 @@ class HostMediaProjection:
         self.prepared = prepared
         self.request = prepared.request
         self.capability = coordinator.get_capability(NAMESPACE)
+        self.private_admission = type(prepared) is not NeutralPrepared and _private_media(source)
         registry = coordinator.get_capability("web.media.request_only")
         self.request_only = registry is not None and registry.contains(source)
         self.transport_armed = False
@@ -728,6 +736,8 @@ class HostMediaProjection:
     def validate_binding(self):
         if self.graph_lifetime is not None:
             self.graph_lifetime.validate()
+        if self.private_admission and getattr(self.capability, "enabled", False) is not True:
+            raise ValueError("Private media admission was revoked; prepare a new request")
         if (self.prepared is None or self.source != self.snapshot
                 or self.canonical is not None and self.canonical != self.canonical_snapshot
                 or self.coordinator.get_capability(NAMESPACE) is not self.capability
@@ -737,6 +747,17 @@ class HostMediaProjection:
                 or _live_binding(self.coordinator, self.provider, self.model, self.options, self.snapshot) != self.live_binding
                 or _scope(self.coordinator) != self.scope):
             raise ValueError("Prepared media request identity changed")
+        # Support/scope callbacks above may revoke admission without changing
+        # their returned values. Recheck authority after those callbacks, not
+        # just at entry to this validator.
+        if self.private_admission and getattr(self.capability, "enabled", False) is not True:
+            raise ValueError("Private media admission was revoked during validation")
+        if (self.prepared is None or self.coordinator.get_capability(NAMESPACE) is not self.capability
+                or self.source != self.snapshot
+                or self.canonical is not None and self.canonical != self.canonical_snapshot):
+            raise ValueError("Prepared media request identity changed during validation")
+        if self.graph_lifetime is not None:
+            self.graph_lifetime.validate()
         return True
 
     def bind_canonical(self, request):
@@ -771,14 +792,35 @@ class HostMediaProjection:
 
 async def prepare_media(coordinator, provider, request, *, request_options=None,
                         purpose="model"):
+    registry = coordinator.get_capability("web.media.request_only") if coordinator is not None else None
+    try:
+        return await _prepare_media(coordinator, provider, request,
+                                    request_options=request_options, purpose=purpose)
+    except BaseException:
+        # Overlay issuance precedes preparation. Even an early refusal before a
+        # projection exists must release its exact request-only association.
+        if registry is not None:
+            registry.release(request)
+        raise
+
+
+async def _prepare_media(coordinator, provider, request, *, request_options=None,
+                         purpose="model"):
     capability = coordinator.get_capability(NAMESPACE) if coordinator is not None else None
-    if not has_media(request) and not (
+    if not _private_media(request) and not (
             getattr(capability, "version", None) == 1
             and (callable(getattr(provider, "get_media_request_support", None))
                  or hasattr(provider, "get_media_request_support_for_request"))):
         return None
     if capability is None or getattr(capability, "version", None) != 1:
         capability = NeutralMedia(coordinator)
+    elif getattr(capability, "enabled", False) is not True:
+        if _private_media(request):
+            # Validate authority before any provider support callback or asset
+            # projection. A committed ref is data, never a hydration grant.
+            raise ValueError("Private media admission is disabled; no pixels supplied")
+        # A refs/image-free request may still need the provider's text-only
+        # projection identity. It cannot acquire pixel authority.
     from ..provider_capture import normalized_options
     options = effective_options(request, request_options)
     if normalized_options(options) is None:
@@ -803,6 +845,10 @@ async def prepare_media(coordinator, provider, request, *, request_options=None,
     if registry is not None:
         registry.transfer(request, projection_source)
     try:
+        if (_private_media(request) and type(capability) is not NeutralMedia
+                and (getattr(capability, "enabled", False) is not True
+                     or coordinator.get_capability(NAMESPACE) is not capability)):
+            raise ValueError("Private media admission was revoked before preparation")
         prepared = await capability.prepare_request(
             projection_source, provider_identity=identity, model=model, request_options=options,
             purpose=purpose, execution_scope=scope,
@@ -812,10 +858,19 @@ async def prepare_media(coordinator, provider, request, *, request_options=None,
             registry.release(request)
             registry.release(projection_source)
         raise
+    projection = None
     try:
+        if (_private_media(request) and type(capability) is not NeutralMedia
+                and (getattr(capability, "enabled", False) is not True
+                     or coordinator.get_capability(NAMESPACE) is not capability)):
+            raise ValueError("Private media admission changed during preparation")
         projection = HostMediaProjection(coordinator, provider, request, options, prepared, _scope(coordinator), model)
+        projection.validate_binding()
     except BaseException:
-        prepared.release()
+        if projection is not None:
+            projection.release()
+        else:
+            prepared.release()
         if registry is not None:
             registry.release(projection_source)
         raise

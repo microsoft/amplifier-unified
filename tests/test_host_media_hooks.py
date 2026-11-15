@@ -301,8 +301,9 @@ class NamedFixtureLoader:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("redact", [None, "null", "string", "inplace", "deny", "unknown", "control",
-                                   "transition", "replacement", "eviction"])
-async def test_named_actual_core_construction_final_result_ack_private_pixels(tmp_path, redact):
+                                   "transition", "replacement", "eviction",
+                                   "disabled-initial", "disabled-count", "disabled-send"])
+async def test_named_actual_core_construction_final_result_ack_private_pixels(tmp_path, redact, monkeypatch):
     """No graph Boolean: actual source/callback join, mount/ready/late and ACK."""
     import base64
     import io
@@ -452,7 +453,7 @@ async def test_named_actual_core_construction_final_result_ack_private_pixels(tm
     refs = (settled["result"].get("output", {}).get(NAMESPACE, {}).get("refs", [])
             if isinstance(settled["result"], dict) else [])
     await cap.publish(refs, origin=origin, disposition="retain" if refs else "drop")
-    if redact is None:
+    if redact is None or redact.startswith("disabled-"):
         assert refs == [ref]
         coordinator.get_capability("web.media.store").classify_origin(ref, classification="tool")
         rows = [{"role": "tool", "name": "fixture", "tool_call_id": "call-1",
@@ -462,6 +463,33 @@ async def test_named_actual_core_construction_final_result_ack_private_pixels(tm
         request = ChatRequest(messages=[Message.model_validate(row) for row in rows])
         adapter = SurfaceProvider(coordinator.get("providers")["fixture"],
                                   host_media.MediaOnlyDelivery(), coordinator=coordinator)
+        if isinstance(redact, str) and redact.startswith("disabled-"):
+            receipt = coordinator.get_capability("web.media.hook_bridge").graph_receipt
+            if redact == "disabled-initial":
+                cap.enabled = False
+                def no_asset(*args, **kwargs):
+                    raise AssertionError("Disabled graph must not read any image asset")
+                monkeypatch.setattr(coordinator.get_capability("web.media.store"), "resolve_ref", no_asset)
+                with pytest.raises(ValueError, match="admission"):
+                    await adapter.request_budget(request)
+                assert not seen and not adapter._graph_lifetimes
+            else:
+                await adapter.request_budget(request)
+                private = seen[0]
+                assert adapter._graph_lifetimes
+                cap.enabled = False
+                with pytest.raises(ValueError, match="admission"):
+                    if redact == "disabled-count":
+                        await adapter.request_budget(request)
+                    else:
+                        await adapter.complete(request)
+                assert len(seen) == 1 and private.messages == []
+                assert not adapter.prepared and not adapter._active_media and not adapter._graph_lifetimes
+            assert coordinator.get_capability("web.media.hook_bridge").validate_receipt(receipt)
+            assert request.messages[0].metadata[NAMESPACE]["refs"] == refs
+            assert base64.b64encode(pixels).decode() not in request.model_dump_json()
+            await session.cleanup()
+            return
         await adapter.request_budget(request)
         result = await adapter.complete(request)
         assert result.messages == []  # Terminal release clears the private copy.

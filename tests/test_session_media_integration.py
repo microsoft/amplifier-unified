@@ -215,6 +215,124 @@ async def test_overflow_feedback_never_keeps_released_private_media_alive(sessio
     assert not wrapped._overflow_feedback.entries
 
 
+async def test_disabled_owned_reference_refuses_before_asset_read_or_provider_count(session, monkeypatch):
+    value = await accepted(session)
+    canonical = value.model_dump_json()
+    cap = session.caps[NAMESPACE]
+    cap.enabled = False
+    store = session.caps["web.media.store"]
+    reads = []
+    def forbidden(*args, **kwargs):
+        reads.append(True)
+        raise AssertionError("Disabled admission must not resolve media assets")
+    monkeypatch.setattr(store, "resolve_ref", forbidden)
+    wrapped, seen = provider(session)
+    with pytest.raises(ValueError, match="admission"):
+        await wrapped.request_budget(value)
+    assert reads == [] and seen.count == seen.sent == []
+    assert value.model_dump_json() == canonical and wrapped.prepared == []
+
+
+async def test_disabled_inline_only_request_cannot_borrow_request_only_admission(session):
+    value = ChatRequest(messages=[Message(role="user", content=[{
+        "type": "image", "source": {"type": "base64", "media_type": "image/png",
+                                   "data": base64.b64encode(session.raw).decode()}}])])
+    canonical = value.model_dump_json()
+    wrapped, seen = provider(session)
+    assert session.caps[NAMESPACE].enabled is False
+    with pytest.raises(ValueError, match="admission"):
+        await wrapped.request_budget(value)
+    assert not seen.count and not seen.sent
+    assert value.model_dump_json() == canonical
+
+
+@pytest.mark.parametrize("phase", ["support", "preparation"])
+async def test_admission_revoked_during_fit_drops_candidate_before_measurement(session, monkeypatch, phase):
+    value = await accepted(session)
+    canonical = value.model_dump_json()
+    cap = session.caps[NAMESPACE]
+    wrapped, seen = provider(session)
+    projections = []
+    if phase == "support":
+        original = wrapped.original.get_media_request_support
+        def revoke(**kwargs):
+            cap.enabled = False
+            return original(**kwargs)
+        monkeypatch.setattr(wrapped.original, "get_media_request_support", revoke)
+    else:
+        original = cap.prepare_request
+        async def revoke(*args, **kwargs):
+            prepared = await original(*args, **kwargs)
+            projections.append(prepared.request)
+            cap.enabled = False
+            return prepared
+        monkeypatch.setattr(cap, "prepare_request", revoke)
+    with pytest.raises(ValueError, match="admission"):
+        await wrapped.request_budget(value)
+    assert not seen.count and not seen.sent and not wrapped.prepared
+    assert all(private.messages == [] for private in projections)
+    assert not session.caps["web.media.projections"]
+    assert value.model_dump_json() == canonical
+
+
+async def test_binding_callback_revocation_cannot_return_a_successful_validator(session, monkeypatch):
+    value = await accepted(session)
+    wrapped, seen = provider(session)
+    await wrapped.request_budget(value)
+    projection = wrapped.prepared[0][5]
+    original = wrapped.original.get_media_request_support
+    def revoke(**kwargs):
+        session.caps[NAMESPACE].enabled = False
+        return original(**kwargs)
+    monkeypatch.setattr(wrapped.original, "get_media_request_support", revoke)
+    with pytest.raises(ValueError, match="admission"):
+        projection.validate_binding()
+    wrapped._discard_prepared(value)
+    assert seen.count[0].messages == []
+
+
+async def test_disabled_fit_refusal_releases_issued_overlay_registry(session):
+    from amplifier_web.host.media import record_request_only
+    value = await accepted(session)
+    canonical = value.model_dump_json()
+    overlay = Message(role="user", content=[{"type": "image", "source": {
+        "type": "base64", "media_type": "image/png", "data": base64.b64encode(session.raw).decode()}}])
+    wrapped, seen = provider(session)
+    class Delivery(NoWorkDelivery):
+        async def prepare(self, request, provider):
+            record_request_only(overlay)
+            session.caps[NAMESPACE].enabled = False
+            return request.model_copy(update={"messages": [*request.messages, overlay]})
+    wrapped.delivery = Delivery()
+    with pytest.raises(ValueError, match="admission"):
+        await wrapped.request_budget(value)
+    assert not session.caps["web.media.request_only"].requests
+    assert not seen.count and not seen.sent and not wrapped.prepared
+    assert value.model_dump_json() == canonical
+
+
+@pytest.mark.parametrize("phase", ["count", "complete", "stream"])
+async def test_disable_after_fit_rejects_and_releases_exact_private_candidate(session, phase):
+    value = await accepted(session)
+    canonical = value.model_dump_json()
+    wrapped, seen = provider(session)
+    await wrapped.request_budget(value)
+    private = seen.count[0]
+    session.caps[NAMESPACE].enabled = False
+    with pytest.raises(ValueError, match="admission"):
+        if phase == "count":
+            await wrapped.request_budget(value)
+        elif phase == "complete":
+            await wrapped.complete(value)
+        else:
+            async for _ in wrapped.stream(value):
+                pass
+    assert len(seen.count) == 1 and seen.sent == []
+    assert private.messages == []
+    assert not wrapped.prepared and not wrapped._active_media
+    assert value.model_dump_json() == canonical
+
+
 @pytest.mark.parametrize("selected", [False, True], ids=["surface-root", "selected-root"])
 async def test_repeated_private_fit_and_reuse_keep_canonical_refs_only(session, selected):
     """Actual Surface/selection seams: two counts, send, and a new fit of SAME input."""
@@ -923,7 +1041,7 @@ async def test_bound_attachment_encoder_accepts_actual_loop_argument_without_reb
 
 
 @pytest.mark.parametrize("mode", ["finite", "selected", "nested", "resumed", "persistent"])
-async def test_actual_child_provider_receives_own_adopted_pixels_without_parent_capability(
+async def test_unqualified_child_keeps_own_adopted_refs_but_refuses_private_pixels(
         session, tmp_path, monkeypatch, mode):
     import importlib.util
     import sys
@@ -996,13 +1114,14 @@ async def test_actual_child_provider_receives_own_adopted_pixels_without_parent_
         selected = self.root_provider or next(iter(providers.values()))
         if isinstance(selected, SelectedProvider):
             assert _provider_owner(selected.original) is _provider_owner(providers["fixture"])
-        await selected.request_budget(request)
-        assert await selected.complete(request) == "done"
+        assert cap.enabled is False  # This fixture has no named source graph.
+        with pytest.raises(ValueError, match="admission"):
+            await selected.request_budget(request)
         assert request.messages and all(
             getattr(block, "type", None) != "image"
             for message in request.messages
             for block in message.content if isinstance(message.content, list))
-        assert private_requests[-1].messages == []
+        assert not private_requests and not counted
         assert "base64" not in str(await context.get_messages())
         if mode == "nested" and coordinator.session_id == "child":
             registry = coordinator.get_capability("live.children")
@@ -1033,14 +1152,9 @@ async def test_actual_child_provider_receives_own_adopted_pixels_without_parent_
         if mode == "resumed":
             await registry.resume("child", "Continue", parent)
         expected = 2 if mode in {"nested", "resumed"} else 1
-        assert len(seen) == expected
-        assert len(counted) == len(private_requests) == expected
-        assert len({id(request) for request in private_requests}) == expected
+        assert seen == counted == private_requests == []
+        assert len(child_ids) == expected
         assert len({id(cap) for cap in capabilities}) == expected
-        for request, _ in seen:
-            block = next(block for message in request.messages for block in message.content
-                         if getattr(block, "type", None) == "image")
-            assert hashlib.sha256(base64.b64decode(block.source["data"])).hexdigest() == hashlib.sha256(session.raw).hexdigest()
         for child_id in child_ids:
             child_rows, _ = session.store.load(child_id)
             assert child_rows and base64.b64encode(session.raw).decode() not in str(child_rows)

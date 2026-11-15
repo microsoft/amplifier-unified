@@ -56,7 +56,7 @@ def case(*, work=False):
         item = Prepared(value, kwargs["request_options"])
         prepared.append(item)
         return item
-    caps[NAMESPACE] = SimpleNamespace(version=1, prepare_request=prepare)
+    caps[NAMESPACE] = SimpleNamespace(version=1, enabled=True, prepare_request=prepare)
     coordinator = SimpleNamespace(get_capability=caps.get, get=lambda _: None,
                                   register_capability=lambda k, v: caps.update({k: v}))
 
