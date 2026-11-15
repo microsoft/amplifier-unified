@@ -1,12 +1,14 @@
 # Workspace registration metadata
 
 `amplifier_workspace_metadata` owns registration edits, native observation
-reconciliation, and list/search/paging over caller-owned records. It uses only
+reconciliation, local-location interpretation, and list/search/paging over
+caller-owned records. It uses only
 Python's standard library. It does not import Unified, Core or Foundation, read
 folders, allocate identities, persist state, or authorize access.
 
-The public exports are `register`, `edit`, `reconcile`, `listing`, and
-`RegistrationReconciliation`. Callers supply the current mutable registration
+The public exports are `register`, `edit`, `reconcile`, `listing`,
+`RegistrationReconciliation`, `local_location`, and `LocalLocation`.
+Callers supply the current mutable registration
 list. Edits preserve existing row objects and custom fields. Reconciliation
 returns ordered reference remaps for the caller to apply under its existing
 lock. `listing(registrations, args)` returns shallow row copies with the current
@@ -15,9 +17,31 @@ The caller validates action inputs and resolved folders, and owns transactions,
 selection, pins, Canvas effects, history and publication.
 
 Current path-derived IDs, unresolved native-project placeholders and display
-aliases retain their meanings. This package does not implement portable logical
-identity, location bindings, shared context, filesystem grants or a second chat
+aliases retain their meanings. This package does not implement multi-location
+bindings, portable identity, shared context, filesystem grants or a second chat
 catalog. Those remain separate workspace and conversation-owner contracts.
+
+## Interpret a legacy local location
+
+`local_location(registration)` returns an immutable
+`LocalLocation(workspace_id, path, available)` snapshot, or `None` when the
+legacy path is missing, `None` or empty. It preserves the existing ID and exact
+path spelling without resolving folders, normalizing paths or probing availability.
+A nonempty path with `available=False` remains a known location; missing or
+`None` availability remains unknown. The recorded availability is not coerced.
+
+The observation is local to the caller's existing installation/account scope.
+It is not a location identity, native history locator or permission grant.
+The existing registration's top-level `path` remains the sole writable location;
+the snapshot is derived, never a second persisted record. Call again after a
+registration changes. Custom fields, including any existing `locations` field,
+remain opaque and untouched. Archive and display-name edits do not erase the
+location. Unresolved native-project placeholders still follow the existing
+ordered reconciliation/remap rules.
+
+This API adds interpretation only. It does not change host ID derivation,
+discovery, selection, pins, settings, sessions, Canvas, execution directories or
+history. Interpreting a changed path does not move files or running work.
 
 ## Develop and qualify
 
@@ -36,7 +60,7 @@ separate temporary directory and environment:
 check_dir=$(mktemp -d)
 uv venv --python 3.13 "$check_dir/venv"
 uv pip install --python "$check_dir/venv/bin/python" \
-  ./dist/amplifier_workspace_metadata-0.1.0-py3-none-any.whl 'pytest>=8'
+  ./dist/amplifier_workspace_metadata-0.2.0-py3-none-any.whl 'pytest>=8'
 cp -R tests "$check_dir/tests"
 (cd "$check_dir" && ./venv/bin/python -I -m pytest tests)
 "$check_dir/venv/bin/python" -I -c \
