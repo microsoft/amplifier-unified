@@ -9,7 +9,7 @@
     "openai": "ac9268e12a462d974fa7106178174e05cc3313ed",
     "openai_archive_sha256": "815c6db2b44e5bfe6a221318e438a4c55e59628f4971936cfa14bc7e2a03fe82",
     "context-intelligence": "1eaac57492937dbae8671ae155201eae4a6ba653",
-    "host": "006313d7b396fe3fef0ff8de5fb0b28c2cccade6"
+    "host": "154173e8f3c4097e2c20d53d8dc772f11bc2c19a"
   },
   "sources": {
     "amplifier_foundation/session/media_hook_bridge.py": "12da0011ee2d908a97e7b2fd8a58b3358b53d3e65b4894b77a170cebd30c3186",
