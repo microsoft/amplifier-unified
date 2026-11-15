@@ -189,6 +189,29 @@ async def test_a_failed_core_lookup_blocks_an_available_sibling_update(current_i
     assert statuses()['runtime:amplifier-core'] == 'check_failed'
 
 
+class ForeignError(ValueError):
+    """Not a registry lookup failure, although it carries a `reason` of the closed set."""
+    reason = 'certificate'
+
+
+async def test_a_foreign_error_with_a_reason_attribute_gets_no_lookup_guidance(current_install, monkeypatch):
+    c = current_install
+    monkeypatch.setattr(registry, 'check', AsyncMock(side_effect=ForeignError(SECRET)))             # The row.
+    monkeypatch.setattr(app_component_graph, 'updates', AsyncMock(side_effect=ForeignError(SECRET)))  # The app release.
+    await c.manager.check()
+    application = c.state['application']
+    assert application['status'] == 'check_failed'
+    assert (application['checkStage'], application['checkReason']) == ('components', 'invalid_response')
+    assert application['detail'] == ('The published application release was verified, but its component check failed. '
+                                     'Review source details, then check for updates again. '
+                                     'No update was installed by this check.')
+    checked = c.manager.inventory[0]
+    assert checked['status'] == 'check_failed' and 'checkReason' not in checked and 'detail' not in checked
+    assert page_status(c.state)['detail'] == (
+        'The installed source is preserved. Review its source details before updating.')
+    assert SECRET not in json.dumps(c.state)
+
+
 async def test_a_core_release_that_cannot_be_verified_keeps_the_generic_report(current_install):
     """Not a lookup failure: the registry answers, but with a release below the app's minimum."""
     c = current_install

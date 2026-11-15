@@ -19,6 +19,7 @@ import ssl
 import subprocess
 import threading
 
+import aiohttp
 import certifi
 import pytest
 from cryptography import x509
@@ -96,7 +97,7 @@ class Authority:
 class Registry:
     """A local HTTPS registry. It counts connection attempts and answered requests."""
 
-    def __init__(self, authority, names=('127.0.0.1', 'localhost')):
+    def __init__(self, authority, names=('127.0.0.1', 'localhost'), *, status=200, content_type='application/json'):
         key_file, certificate_file = authority.leaf(list(names))
         self.context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         self.context.load_cert_chain(certificate_file, key_file)
@@ -109,8 +110,8 @@ class Registry:
             def do_GET(self):
                 registry.answers += 1
                 body = json.dumps({'info': {'version': PUBLISHED}}).encode()
-                self.send_response(200)
-                self.send_header('Content-Type', 'application/json')
+                self.send_response(status)
+                self.send_header('Content-Type', content_type)
                 self.send_header('Content-Length', str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
@@ -237,6 +238,21 @@ def test_no_request_is_sent_when_the_roots_cannot_be_loaded(registry, tmp_path, 
     assert registry.connections == 0  # No weaker request instead.
 
 
+@pytest.mark.parametrize('status,content_type', [(503, 'application/json'), (200, 'text/plain')])
+def test_an_answer_that_cannot_be_used_is_not_reported_as_a_connection_fault(
+        authority, tmp_path, monkeypatch, status, content_type):
+    # Through the real request path: the site answered over a verified connection.
+    monkeypatch.setattr(certifi, 'where', authority.bundle)
+    with Registry(authority, status=status, content_type=content_type) as answered:
+        monkeypatch.setattr(update_checks, 'REGISTRY_JSON', answered.url)
+        results = lookups(tmp_path / 'cache')
+        assert isinstance(results['cache'], aiohttp.ClientResponseError), results['cache']
+        for path in ('unscoped', 'scoped'):
+            assert isinstance(results[path], RegistryLookupFailure), (path, results[path])
+            assert results[path].reason == 'invalid_response'
+        assert answered.answers == 3
+
+
 def test_each_failure_class_gets_the_reason_that_fits():
     import aiohttp
     from types import SimpleNamespace
@@ -261,7 +277,13 @@ def test_each_failure_class_gets_the_reason_that_fits():
 
 def test_trust_lost_after_a_success_is_refused_and_the_saved_success_is_not_reused(
         registry, authority, tmp_path, monkeypatch):
-    """One live client: neither its open connection nor the saved result outlives the trust."""
+    """One live client: neither its open connection nor the saved result outlives the trust.
+
+    The order matters: the person's check comes first and removes the saved
+    result. An automatic check that runs first, inside the saved result's
+    lifetime, may reuse the earlier value, which a verified connection gave.
+    That is the cache's design and is not a case of this test.
+    """
     bundled = certifi.where()
     directory = tmp_path / 'cache'
 
@@ -303,7 +325,7 @@ def test_trust_lost_after_a_success_is_refused_and_the_saved_success_is_not_reus
 @pytest.mark.parametrize('reason', sorted(update_checks.LOOKUP_REASONS))
 def test_each_reason_has_plain_words_and_a_next_step(reason):
     for text in (update_checks.lookup_guidance(reason), update_checks.lookup_guidance(reason, application=True)):
-        assert 'pypi.org' in text and text.count('. ') >= 2 and text.endswith('.')
+        assert 'pypi.org' in text and text.endswith(update_checks._LOOKUP_NEXT[reason])  # The next step itself.
         assert not any(word in text for word in ('Error', 'Exception', 'errno', 'ssl', 'SSL', 'aiohttp'))
     assert 'The installed version is kept.' in update_checks.lookup_guidance(reason)
     assert update_checks.lookup_guidance(reason, application=True).startswith('The newest app release is installed.')
