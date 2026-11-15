@@ -981,7 +981,7 @@ async def test_provider_count_diagnostics_reach_real_context_intelligence_captur
             await ci_cleanup()
     assert http_client.is_closed
     assert provider._client is None
-    assert event not in coordinator.hooks.list_handlers()
+    assert not coordinator.hooks.list_handlers().get(event)
     assert coordinator.get_capability('context_intelligence._hook_state') is None
 
     # Read only this small synthetic capture, from the resolver-owned path.
