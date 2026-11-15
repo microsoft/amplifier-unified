@@ -232,7 +232,8 @@ SOURCE_STORE_LONGEST_ROOT = {}
 # Stated limit, not fixed: an installation that an earlier setup file made keeps
 # the longer folder name, and module source is the folder path plus 205. Above
 # the number here Python cannot import the deepest default module. Nothing moves
-# that store; a person with such an account installs again to get the short name.
+# that store. Only a new installation gets the short name: a second setup run
+# on a finished installation opens it and keeps its store folder.
 EARLIER_SOURCE_STORE_LONGEST_ROOT = {SOURCE_OBJECT: 54}
 # The fixed folder with the longest account name that Windows allows locally.
 ROOT_FOR_20_CHARACTER_ACCOUNT = len('C:\\Users\\' + 'u' * 20 + '\\AppData\\Local\\Amplifier')

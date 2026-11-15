@@ -587,8 +587,9 @@ environment 162, private Python 142, tools 124, private Git 68. Those fit at
 59 today.
 
 The short folder is necessary and not sufficient. The app must also keep what
-it adds below the folder inside the budget of the next section. Every row of
-that budget fits at 59 in a new installation. The tightest row is module
+it adds below the folder inside the budget of the next section. In a new
+installation every row of that budget fits at 59; the next section also names
+the cases that the budget does not cover. The tightest row is module
 source in the source store (253 characters at 59; see the source-store items
 below), and it fits only because the store folder is named `s`. A change to
 the folder name must respect this number, and
@@ -661,7 +662,15 @@ table with `python tests/test_windows_path_budget.py`.
   otherwise (`source_store` in `amplifier_web/windows_consumer.py`). Nothing
   is moved, renamed or downloaded again, by a second setup run, by an update
   or by the launcher refresh. So an existing installation also keeps its limit
-  of 54. Nothing renames its store folder.
+  of 54. Nothing renames its store folder, and a second setup run on a
+  finished installation does not give it the short name.
+  The earlier name wins when both folders exist, because an earlier launcher
+  and the recorded sign-in task use it, and one installation must not have two
+  stores. The cost: a `source-store` folder that something adds to a new
+  installation sends its store to the long name. Setup, the app, an update and
+  the launcher refresh do not create that folder. A `source-store` entry that
+  exists and fails the private-folder check (a link, another owner) stops the
+  start; the other name never replaces it.
 
 `.github/workflows/windows-path-length.yml` is the native check. It turns
 `LongPathsEnabled` off on its own runner, proves in a new process that a
