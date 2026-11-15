@@ -17,7 +17,7 @@ from urllib.parse import quote, urlsplit
 from aiohttp import web
 from filelock import FileLock
 
-from .deployment import validate_origin, write_private
+from .deployment import canonical_host, is_loopback, validate_origin, write_private
 from . import browser_entry
 
 SESSION_COOKIE = "amplifier_unified_session"
@@ -192,7 +192,23 @@ def valid_session(app, value: str | None) -> bool:
     that sign-out is refused as well.
     """
     issued = _issued(app["session_secret"], value, app["server_config"]["session_ttl_seconds"], "session")
-    return issued is not None and issued > app.get("session_epoch", 0)
+    return issued is not None and issued > getattr(app.get("sessions"), "epoch", 0)
+
+
+class Sessions:
+    """The running host's sign-out time and the change hint of its saved record.
+
+    A holder object: the keys of an application are fixed once it has started,
+    and this value changes while the host runs.
+    """
+
+    def __init__(self, epoch=0, hint=None):
+        self.epoch, self.hint = epoch, hint
+
+    @classmethod
+    def load(cls, data_dir):
+        hint = _epoch_hint(data_dir)  # Read first: a change during the read is seen next time.
+        return cls(session_epoch(data_dir), hint)
 
 
 _EPOCH = "session-epoch"
@@ -249,6 +265,15 @@ def session_epoch(data_dir: Path) -> int:
         return now
 
 
+class SignOutUncertain(OSError):
+    """The sign-out could not be confirmed.
+
+    A save was too slow, failed after the record had changed, or could not be
+    looked at. The record may have changed. A sign-in at the same moment may
+    have a session that this sign-out does not end.
+    """
+
+
 def sign_out_all(data_dir: Path) -> int:
     """Sign out every browser of this installation; return the saved second.
 
@@ -256,46 +281,107 @@ def sign_out_all(data_dir: Path) -> int:
     credential are involved. A running host applies the change within a few
     seconds. The time never moves backward, and a write failure is an error,
     never a silent success.
+
+    The saved second is never earlier than the second in which the record
+    was saved. A session that the host made before the record was there
+    carries that second or an earlier one, so the host refuses it (see
+    `sign_in`). A write that ends in a later second than its value is
+    therefore made again with the later second, after a short pause.
+
+    The host tells a new record from the file's time, size and identity,
+    not from its content. So each save is checked: a save that the host
+    could not tell from the record before it is made again as well.
     """
     try:
         saved = _read_epoch(data_dir)
     except (OSError, ValueError):
         saved = 0
-    value = max(int(time.time()), saved)
-    _write_epoch(data_dir, value)
-    if _read_epoch(data_dir) != value:
-        raise OSError("The sign-out time was not saved.")
-    return value
+    published = False
+    for _ in range(3):
+        before = _epoch_hint(data_dir)
+        value = max(int(time.time()), saved)
+        try:
+            _write_epoch(data_dir, value)
+            if _read_epoch(data_dir) != value:
+                raise OSError("The sign-out time was not saved.")
+        except (OSError, ValueError):
+            if published or not _same_record(before, _epoch_hint(data_dir)):
+                # A save of this run is on disk, or the record is not known to
+                # be the one from before: this is not "nothing was changed".
+                raise SignOutUncertain("The sign-out time was not confirmed, and the record may have changed.") from None
+            raise
+        published = True
+        # Done when the host can see this save (both looks worked and differ),
+        # and no later second began before the save was there.
+        if _new_record(before, _epoch_hint(data_dir)) and int(time.time()) <= value:
+            return value
+        saved = value
+        time.sleep(0.05)
+    raise SignOutUncertain("A sign-out time was saved, but not within one second or not visibly to the host.")
 
 
 def _epoch_hint(data_dir: Path):
-    """A cheap change hint for the saved record; never its value."""
+    """A cheap change hint for the saved record; never its value.
+
+    Every save puts a new file in place, so the file identity changes with
+    each save, also when two saves have the same file time and size.
+
+    None means that there is no record: no sign-out yet. A look that fails
+    for any other reason gives `_UNSEEN`. That is never "no record" and never
+    "the same record"; compare two looks only with `_same_record` and
+    `_new_record`.
+    """
     try:
         info = os.stat(_epoch_path(data_dir))
-        return info.st_mtime_ns, info.st_size
-    except OSError:
+    except FileNotFoundError:
         return None
+    except OSError:
+        return _UNSEEN
+    return info.st_mtime_ns, info.st_size, info.st_ino
+
+
+_UNSEEN = object()  # The saved record could not be looked at.
+
+
+def _same_record(first, second) -> bool:
+    """Both looks worked, and they found the same record or both found none."""
+    return first is not _UNSEEN and second is not _UNSEEN and first == second
+
+
+def _new_record(first, second) -> bool:
+    """Both looks worked, and the second found another record than the first."""
+    return first is not _UNSEEN and second is not _UNSEEN and first != second
 
 
 def refresh_sessions(app, streams=()) -> bool:
-    """Apply a newer saved sign-out to the running host; True when applied.
+    """Apply a changed saved sign-out to the running host; True for a newer time.
 
-    Pending sign-in tickets are dropped, and open state streams are ended so
-    that a signed-out browser cannot keep watching. A stream that reconnects
-    must pass the session check again.
+    Pending sign-in tickets and codes are dropped for every changed record,
+    also when its second is the one already applied: a second sign-out in the
+    same second must still drop a ticket or code that was made in between.
+    For a newer time, open state streams are ended as well, so that a
+    signed-out browser cannot keep watching. A stream that reconnects must
+    pass the session check again.
     """
-    data_dir = app["service"].data_dir
+    data_dir, state = app["service"].data_dir, app["sessions"]
     hint = _epoch_hint(data_dir)
-    if hint == app.get("session_epoch_hint", ...):
+    if hint is _UNSEEN:
+        # Nothing is applied and nothing is kept from a look that failed.
+        raise OSError("The saved sign-out record could not be looked at.")
+    if _same_record(hint, state.hint):
         return False
-    app["session_epoch_hint"] = hint
     value = session_epoch(data_dir)
-    if value <= app.get("session_epoch", 0):
+    # Kept only now: a record that could not be read is read again next time,
+    # and until then no ticket or code opens a session (see sign_in).
+    state.hint = hint
+    for store in (app.get("browser_entry"), app.get("browser_codes")):
+        if store is not None:
+            store.clear()
+    if value <= state.epoch:
+        # No session is older than before: one that is valid now was made
+        # after the second of this record, so no stream needs to end.
         return False
-    app["session_epoch"] = value
-    store = app.get("browser_entry")
-    if store is not None:
-        store.clear()
+    state.epoch = value
     for task in list(streams):
         task.cancel()
     return True
@@ -304,16 +390,50 @@ def refresh_sessions(app, streams=()) -> bool:
 async def watch_sessions(app, streams, *, interval=2.0):
     """Notice the owner's sign-out while the host runs."""
     import asyncio
+    reported = False
     while True:
         await asyncio.sleep(interval)
         try:
             refresh_sessions(app, streams)
-        except Exception:  # A watcher fault must never stop the host.
-            continue
+        except Exception as error:  # A watcher fault must never stop the host.
+            if not reported:
+                # Say it once in the host log: a sign-out that the running
+                # host cannot apply must not fail in silence.
+                reported = True
+                try:
+                    print("Sign-out of all browsers could not be checked: " + type(error).__name__
+                          + ". Until it can be checked, no browser can sign in with a ticket or a code.", flush=True)
+                except (OSError, ValueError):
+                    pass
 
 
-def new_session(secret: str) -> str:
-    return _signed(secret, {"kind": "session", "issued": int(time.time()), "nonce": secrets.token_urlsafe(16)})
+def new_session(secret: str, *, remote: bool = False) -> str:
+    """Mark a session from a typed remote code; a local session is unchanged."""
+    payload = {"kind": "session", "issued": int(time.time()), "nonce": secrets.token_urlsafe(16)}
+    return _signed(secret, {**payload, "via": "remote"} if remote else payload)
+
+
+def sign_in(app, *, remote: bool = False) -> str | None:
+    """A session for a redeemed ticket or code, or None.
+
+    None while a saved sign-out waits for this host to apply it. The ticket or
+    code is then from before that sign-out, and it must not open a session
+    after it.
+
+    The order matters. The session's second is read first; the saved record
+    is looked at after that. So a session that is returned was made before
+    any record that is saved later, and `sign_out_all` saves no second that
+    is earlier than its own record. The host therefore refuses this session
+    when it applies that later sign-out.
+
+    The record is only looked at here. The watcher applies it, and it alone
+    ends the open streams. A look that fails opens no session: it is not
+    known then that no sign-out waits.
+    """
+    value = new_session(app["session_secret"], remote=remote)
+    if not _same_record(_epoch_hint(app["service"].data_dir), app["sessions"].hint):
+        return None
+    return value
 
 
 def new_csrf(secret: str) -> str:
@@ -394,15 +514,16 @@ async def auth_required(request: web.Request, handler):
         # This exact handler checks a room/source-bound transport capability.
         # Neither that capability nor an owner cookie grants other API access.
         return await handler(request)
-    if request.path == browser_entry.ISSUE_PATH:
+    if request.path in {browser_entry.ISSUE_PATH, browser_entry.CODE_PATH}:
         authorization = request.headers.get("Authorization", "")
         if (request.method != "POST" or not authorization.startswith("Bearer ")
                 or not hmac.compare_digest(authorization[7:].encode(), request.app["control_token"].encode())):
             return web.json_response({"error": "The owner control credential is required."}, status=403)
         return await handler(request)
-    if request.path == browser_entry.REDEEM_PATH and request.method == "POST":
-        # Only this exact public mutation. The handler requires HTTPS, Origin
-        # and signed form CSRF before atomically consuming the one-use ticket.
+    if request.path in {browser_entry.REDEEM_PATH, browser_entry.CODE_REDEEM_PATH} and request.method == "POST":
+        # Only these exact public mutations. Each handler requires HTTPS, Origin
+        # and signed form CSRF before atomically consuming the one-use ticket
+        # or typed code.
         return await handler(request)
     if extension and request.method == 'OPTIONS':
         return await handler(request)
@@ -470,7 +591,22 @@ async def auth_required(request: web.Request, handler):
     raise web.HTTPTemporaryRedirect(login_url(requested))
 
 
+def _other_device_address(request: web.Request) -> bool:
+    """The address in use is not this computer's own.
+
+    The name is read exactly as the host boundary reads it, so that
+    `localhost.` and `localhost` get the same page.
+    """
+    try:
+        return not is_loopback(canonical_host(urlsplit("//" + request.host).hostname or ""))
+    except ValueError:
+        return False  # The host boundary refuses such a name before any page.
+
+
 async def login_page(request: web.Request) -> web.Response:
+    if browser_entry.is_windows() and _other_device_address(request):
+        # Another device cannot use the local launcher; it types an owner-made code.
+        return browser_entry.remote_login_page(request)
     secret = request.app["session_secret"]
     csrf = request.cookies.get(CSRF_COOKIE)
     # Preserve valid issuance for favicon redirects and concurrent login forms.

@@ -95,6 +95,7 @@ on:
       - tests/test_windows_tls.py
       - tests/test_windows_trust.py
       - tests/test_session_sign_out.py
+      - tests/test_browser_code.py
       - tests/test_windows_service.py
       - tests/test_windows_task_runtime.py
       - tests/test_windows_installation.py
@@ -275,11 +276,11 @@ jobs:
         run: |
           .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -p no:cacheprovider tests/test_update_health_setup_record.py
           if ($LASTEXITCODE -ne 0) { throw 'Setup-record update health checks failed.' }
-      - name: Check sign-out of all browsers on the real private store
+      - name: Check sign-out of all browsers and remote sign-in by code (real private store, real HTTPS)
         shell: pwsh
         run: |
-          .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -p no:cacheprovider tests/test_session_sign_out.py
-          if ($LASTEXITCODE -ne 0) { throw 'Sign-out of all browsers checks failed.' }
+          .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -p no:cacheprovider tests/test_session_sign_out.py tests/test_browser_code.py
+          if ($LASTEXITCODE -ne 0) { throw 'Sign-out of all browsers or remote sign-in by code checks failed.' }
       # Uninstall: real Start-menu shortcuts (ShellLink COM), the real HKCU
       # registry transaction, private files and NTFS sharing, in a throwaway
       # installation folder that the test removes. Task Scheduler is a stand-in.

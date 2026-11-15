@@ -251,6 +251,51 @@ _UNFINISHED = {
 _UNFINISHED["apps-entry"] = _UNFINISHED["shortcuts"] = _UNFINISHED["entries"]
 
 
+def entry_notice(purpose, entry, retry, *, listed=True):
+    """The person's text when Amplifier did not confirm its start-at-sign-in entry.
+
+    `purpose` is `start`, `status`, `stop` or `uninstall`; `entry` is the task's
+    name in Task Scheduler. The check cannot say why the entry differs (a
+    changed setting, another installation, a renamed Windows account), so the
+    text does not say that someone changed it. With `retry`, Windows gave no
+    answer about the entry's account: that can pass, and nothing is deleted.
+    `listed` is False when Amplifier is not in the Start menu: the setup file
+    then opens it.
+    """
+    opening = {"start": "Amplifier could not start.",
+               "status": "Amplifier could not read its status.",
+               "stop": "Amplifier did not stop its background app.",
+               "uninstall": "Amplifier was not uninstalled, and nothing was changed."}[purpose]
+    opens = ("Open Amplifier from the Start menu: Amplifier Unified." if listed else
+             "Run the Amplifier setup file again.")
+    again = {"start": opens, "status": opens, "stop": "Select Stop Amplifier again.",
+             "uninstall": "Uninstall Amplifier again."}[purpose]
+    cause = ("Windows could not check the account of Amplifier's start-at-sign-in entry, so "
+             "Amplifier could not confirm that the entry belongs to this installation." if retry else
+             "Amplifier could not confirm that its start-at-sign-in entry in Windows belongs to "
+             "this installation. It uses and changes only an entry that it can confirm.")
+    if purpose == "stop":
+        # The person wants the app to stop. That needs no confirmed entry.
+        return opening + "\n\n" + cause + "\n\nTo stop the app now, sign out of Windows or restart this PC."
+    if retry:
+        return (opening + "\n\n" + cause + "\n\n"
+                "1. If your work or school manages this PC, connect it to that network.\n"
+                "2. Restart this PC.\n"
+                "3. " + again)
+    return (opening + "\n\n" + cause + "\n\n"
+            f"The entry is the task named {entry} in Windows Task Scheduler. If you have another "
+            "Amplifier installation for this Windows account, the entry can belong to it. Then do "
+            "not delete the entry: use that installation, or uninstall it first.\n\n"
+            "Otherwise delete the entry. Amplifier then no longer starts when you sign in"
+            + (".\n" if purpose == "uninstall" else ", until it makes a new entry in step 5.\n") +
+            "1. Open the Start menu, type Task Scheduler and open it.\n"
+            "2. Select Task Scheduler Library.\n"
+            f"3. Select the task named {entry}, press the Delete key and confirm.\n"
+            "4. Restart this PC.\n"
+            "5. " + again
+            + ("" if purpose == "uninstall" else " It makes a new entry. Your chats and settings stay."))
+
+
 class Unfinished(RuntimeError):
     """A Status, Stop or Uninstall step that did not finish; `notice` is the person's text.
 
@@ -265,8 +310,14 @@ class Unfinished(RuntimeError):
 
     @property
     def notice(self):
+        from .windows_service import TaskNotConfirmed
         code = getattr(self.error, "winerror", None)
-        text = _UNFINISHED.get(self.step, "Amplifier could not finish this.\n\nRestart this PC, then try again.")
+        if isinstance(self.error, TaskNotConfirmed):
+            # The step's own text would name a wrong cause and a wrong next step.
+            text = entry_notice({"status": "status", "stop-app": "stop"}.get(self.step, "uninstall"),
+                                self.error.entry, self.error.retry)
+        else:
+            text = _UNFINISHED.get(self.step, "Amplifier could not finish this.\n\nRestart this PC, then try again.")
         return text + f"\n\nReference: {self.step}, {type(self.error).__name__}" + (f" {code}" if code else "")
 
 
@@ -275,7 +326,8 @@ def _record(root, operation, step, error):
 
     Nothing else records why a windowless maintenance step failed. The note
     goes beside the app's other service records. The installation folder is
-    the second choice: while a conversation worker is alive, Windows refuses a
+    the second choice: while a conversation worker is alive, and its Foundation
+    is older than e37a946b, Windows refuses a
     new or replaced file directly in that folder (sharing violation).
     """
     import time
@@ -427,7 +479,9 @@ async def maintenance(root, operation):
         if operation == "status":
             result = await status(checked / "app")
             if sys.stdout is None:
-                owner_notice(result["message"])
+                entry = result.get("entry")
+                owner_notice(entry_notice("status", entry["name"], entry["retry"]) if entry
+                             else result["message"])
             return result
         if operation == "uninstall":
             return await _uninstall(checked)
@@ -453,10 +507,18 @@ def integrate(root):
     return install(root, value["version"])
 
 
-def start_failure(root, step=None):
-    """One plain cause and next step when the shortcut could not start the app."""
+def start_failure(root, step=None, error=None):
+    """One plain cause and next step when the shortcut could not start the app.
+
+    `step` is the last step that the start named; `error` is what ended it.
+    """
     from .windows_consumer_shell import listed
+    from .windows_service import TaskNotConfirmed
     has_entries = listed(root)
+    if isinstance(error, TaskNotConfirmed):
+        # The start-at-sign-in entry exists and Amplifier does not use it. This
+        # is not a failed download, and a restart alone does not change it.
+        return entry_notice("start", error.entry, error.retry, listed=has_entries)
     next_step = ("open Amplifier from the Start menu: Amplifier Unified" if has_entries else
                  "run the Amplifier setup file again. It keeps your chats and settings")
     if step == "prepare":
@@ -499,7 +561,7 @@ def main(argv=None):
         message = None
         if starting:
             try:
-                message = start_failure(args.root, steps[-1] if steps else None)
+                message = start_failure(args.root, steps[-1] if steps else None, error)
             except (OSError, ValueError, RuntimeError):
                 pass
         if sys.stdout is None:

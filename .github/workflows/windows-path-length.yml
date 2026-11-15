@@ -8,6 +8,10 @@ name: Windows path length
 # path that setup allows. It restores the runner's value in every case.
 #
 # It is not setup-file or clean-account acceptance, and it runs no model turn.
+#
+# This is the only native job that installs the locked Amplifier Foundation.
+# So it also holds a real Foundation session ownership, as a live conversation
+# worker does, and requires that the installation folder stays usable.
 on:
   workflow_dispatch:
   pull_request:
@@ -27,6 +31,7 @@ on:
       - tests/test_chat_project_names_service.py
       - tests/test_windows_path_budget.py
       - tests/test_windows_long_paths_off.py
+      - tests/test_windows_live_worker_folders.py
       # A dependency change can lengthen a store path (Foundation, loop-live).
       - pyproject.toml
       - uv.lock
@@ -65,6 +70,19 @@ jobs:
         run: |
           .\.venv\Scripts\python.exe -B -m pytest -q -ra -p no:cacheprovider tests/test_chat_project_names.py
           if ($LASTEXITCODE -ne 0) { throw 'The chat-folder naming rule failed on native Windows.' }
+      # A live conversation worker holds Foundation's session ownership below
+      # <installation folder>\ownership. No app or worker starts: the test holds
+      # the ownership with the worker's own call, in setup's folder layout.
+      - name: Hold a real Foundation session ownership and change the folders around it
+        shell: pwsh
+        env:
+          # A skipped case would hide the answer; with this it runs and fails instead.
+          AMPLIFIER_REQUIRE_LIVE_WORKER_FOLDERS: '1'
+        run: |
+          .\.venv\Scripts\python.exe -I -c "import importlib.metadata as m, json; print('Installed Foundation revision:', json.loads(m.distribution('amplifier-foundation').read_text('direct_url.json'))['vcs_info']['commit_id'])"
+          if ($LASTEXITCODE -ne 0) { throw 'The installed Foundation revision could not be read.' }
+          .\.venv\Scripts\python.exe -B -m pytest -q -ra -p no:cacheprovider tests/test_windows_live_worker_folders.py
+          if ($LASTEXITCODE -ne 0) { throw 'A held session ownership blocks the installation folder, or its own folders accept an arrival.' }
       - name: Turn Windows long paths off for new processes
         id: long_paths
         shell: pwsh

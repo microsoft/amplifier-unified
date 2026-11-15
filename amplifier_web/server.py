@@ -108,9 +108,8 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         for host in ("localhost", "127.0.0.1", "[::1]")
     )
     app["session_secret"] = session_secret(data_dir)
-    from .auth import _epoch_hint, session_epoch
-    app["session_epoch_hint"] = _epoch_hint(data_dir)
-    app["session_epoch"] = session_epoch(data_dir)
+    from .auth import Sessions
+    app["sessions"] = Sessions.load(data_dir)
     app["control_token"] = control_token(data_dir)
     service = AppService(data_dir, runtime=runtime, workspace=workspace)
     service.port = config["port"]
@@ -712,6 +711,8 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     app.router.add_post("/login", post_login)
     app.router.add_post(browser_entry.ISSUE_PATH, browser_entry.issue)
     app.router.add_post(browser_entry.REDEEM_PATH, browser_entry.redeem)
+    app.router.add_post(browser_entry.CODE_PATH, browser_entry.code_issue)
+    app.router.add_post(browser_entry.CODE_REDEEM_PATH, browser_entry.code_redeem)
     app.router.add_get("/setup", setup)
     app.router.add_get("/api/ca", certificate)
     app.router.add_get("/ca.crt", certificate)

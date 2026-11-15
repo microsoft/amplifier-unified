@@ -6,6 +6,7 @@ remain available for reading/migrating pre-0.8 Unified checkpoints.
 from __future__ import annotations
 
 import copy
+import inspect
 import json
 import os
 from pathlib import Path
@@ -198,19 +199,25 @@ class SessionStore:
                 current.update(name_auto=enabled, name_auto_revision=current.get('name_revision', 0), name_policy_revision=1)
                 store.history._save_metadata_unlocked(current)
 
-    def load(self, session_id):
+    def load(self, session_id, *, prepare_index=False):
         """Read native history first, without migrating or writing while browsing."""
         directory = self.directory(session_id)
         from ..naming import read
         if self.has_transcript(session_id):
-            value = self.history(session_id).load(include_events=False)
+            history = self.history(session_id)
+            options = {'include_events': False}
+            # Only explicit resume prepares the next checkpoint's derived index.
+            # A retained worker generation may still use an older Foundation.
+            if prepare_index and 'prepare_index' in inspect.signature(history.load).parameters:
+                options['prepare_index'] = True
+            value = history.load(**options)
             changed = {item.source for item in value.diagnostics if item.code == 'changed_during_read'}
             # A title/status writer can replace metadata during a long history
             # read. Re-read once, but never retry a changing transcript or use
             # the inconsistent first snapshot. Edit callers still validate
             # their expected transcript revision before and after this load.
             if changed and changed <= {'metadata', 'metadata_backup'}:
-                value = self.history(session_id).load(include_events=False)
+                value = self.history(session_id).load(**options)
             if any(item.code == 'changed_during_read' for item in value.diagnostics):
                 raise ValueError('The saved session changed while it was being read.')
             return value.messages, {**value.metadata, **read(directory)}

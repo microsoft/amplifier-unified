@@ -191,13 +191,34 @@ restore. The stable launcher keeps the code that setup installed; an in-app
 update cannot change it. `amplifier_web.windows_launcher_refresh` is the only
 supported replacement: it runs with the active generation's Python from outside
 the host's Job, and it rolls back fully on failure.
-While a conversation worker is alive, Windows refuses a new or replaced file
-directly in a consumer installation folder (error 32); `app\config\services`
+A live conversation worker holds Foundation's session ownership below
+`<installation folder>\ownership`. A worker whose Foundation is older than
+`e37a946b` makes Windows refuse a rename, a move or a replacement of an entry
+directly in the installation folder (error 32); the private writer publishes
+by a rename, so it fails there too. From `e37a946b` those changes work. Windows
+still refuses a rename of a pinned folder itself (the installation folder,
+each folder above it, and Foundation's own), and a rename or a move into
+`ownership` or a pinned folder below it
+(`tests/test_windows_live_worker_folders.py`). A running worker keeps the
+Foundation that it started with. Maintenance code must still expect the
+refusal from a worker that started before an update; `app\config\services`
 still accepts writes. Launcher maintenance stops the app before such a write
 and removes the person's Start-menu and Apps-list entries last.
 Task Scheduler expands percent-bearing executable/working-directory paths.
 Reject those paths rather than recording a literal identity that launches a
 different program. Task registration/state is not authenticated host health.
+Task Scheduler stores the sign-in trigger's user as a name (`COMPUTER\user`),
+even when registration gave the SID, and never rewrites it; the principal stays
+a SID. After a computer rename Windows still starts the task, and that name
+maps to nothing. `_same_account` in `windows_service.py` is the one identity
+equivalence in the ownership check: keep "Windows says no such name" apart from a lookup
+that failed, and keep every other field an exact comparison. The launcher runs
+that check before any app version does, so a fix to it reaches an installed PC
+only with a new launcher. `windows-task-after-rename.yml` registers the real
+task on a hosted runner and renames that runner's account domain. Its fixture
+changes the machine's security policy: it runs only with the workflow's opt-in
+in a hosted runner's environment. That guard stops accidental use and does not
+prove the machine; never run the fixture on a machine that is kept.
 Python on Windows accepts only root certificates that the Windows store holds
 at that moment, and aiohttp builds its default list once at import. A new PC's
 store lacks many public roots (seen in Windows Sandbox: the package registry's
