@@ -420,7 +420,8 @@ async def test_agent_root_and_associated_checkout_selection(multi):
 
 @pytest.mark.parametrize('side', ['source', 'target'])
 @pytest.mark.parametrize('stage', ['waiting', 'releasing'])
-async def test_repository_replaced_during_handoff_await_never_applies(multi, side, stage):
+@pytest.mark.parametrize('cancel_fails', [False, True])
+async def test_repository_replaced_during_handoff_await_never_applies(multi, side, stage, cancel_fails):
     app, sid, workspace, repos = multi
     source = await create(app, sid, repos[0], 'source-await-copy')
     target = await create(app, sid, repos[0], 'target-await-copy')
@@ -433,6 +434,9 @@ async def test_repository_replaced_during_handoff_await_never_applies(multi, sid
 
     async def boundary(*args, **kwargs):
         if kwargs.get('cancel'):
+            if cancel_fails:
+                from amplifier_web.runtime import RuntimeOperationPending
+                raise RuntimeOperationPending('handoff.boundary', 'original-cancel')
             return {'cancelled': True}
         if stage == 'waiting':
             entered.set()
@@ -458,8 +462,13 @@ async def test_repository_replaced_during_handoff_await_never_applies(multi, sid
         resume.set()
         await settle(app)
         saved = app.worktrees.read(sid, pending['id'])
-        assert saved['phase'] == ('rejected' if stage == 'waiting' else 'unknown')
-        assert side in saved['detail'] and 'recorded repository' in saved['detail']
+        rejected = stage == 'waiting' and not cancel_fails
+        assert saved['phase'] == ('rejected' if rejected else 'unknown')
+        if stage != 'waiting' or not cancel_fails:
+            assert side in saved['detail'] and 'recorded repository' in saved['detail']
+        else:
+            assert saved['boundaryCleanup']['status'] == 'issued'
+            assert side in saved['rejectionDetail'] and 'recorded repository' in saved['rejectionDetail']
         current = app._session(sid)
         for key in ('workspace', 'workingDirectory', 'executionRevision', 'messages'):
             assert current[key] == before[key]
@@ -467,8 +476,14 @@ async def test_repository_replaced_during_handoff_await_never_applies(multi, sid
         runtime.collaboration_input.assert_not_awaited()
         if stage == 'waiting':
             runtime.quiesce_for_handoff.assert_not_awaited()
-            assert not current['configurationBusy']
+            assert current['configurationBusy'] is cancel_fails
+            assert app.worktrees.execution_state(sid)['fenced'] is cancel_fails
+            assert runtime.handoff_boundary.await_count == 2
+            assert runtime.handoff_boundary.call_args.kwargs == {'cancel': True}
+            if not cancel_fails:
+                assert saved['boundaryCleanup']['cancelled'] is True
         else:
+            runtime.handoff_boundary.assert_awaited_once()
             runtime.quiesce_for_handoff.assert_awaited_once()
             assert saved['release']['quiesced']
             assert current['configurationBusy']

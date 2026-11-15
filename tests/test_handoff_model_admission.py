@@ -21,7 +21,8 @@ async def app(tmp_path, monkeypatch):
     await agent_action(service, session, 'assignment.start', {'sessionId': sid}, 'assignment')
     runtime.workers = {sid: {'process': SimpleNamespace(pid=100, returncode=None), 'started_at': 12.5}}
     runtime.collaboration_input = AsyncMock(return_value={'accepted': True})
-    runtime.handoff_boundary = AsyncMock(return_value={'ready': False})
+    runtime.handoff_boundary = AsyncMock(side_effect=lambda *args, **kwargs:
+        {'cancelled': True} if kwargs.get('cancel') else {'ready': False})
     yield service
     await service.close()
 
@@ -50,6 +51,7 @@ async def test_originating_turn_finishes_before_checkout_release(app, providers,
     assert app.worktrees.read(session['id'], receipt['id'])['step'] == 'waiting'
     app.runtime.quiesce_for_handoff.assert_not_awaited()
     assert session.get('workingDirectory', source) == source
+    app.runtime.handoff_boundary.side_effect = None
     app.runtime.handoff_boundary.return_value = {'ready': True}
     await settle(app)
     await asyncio.gather(*list(app.tasks))
@@ -124,7 +126,8 @@ async def test_own_handoff_does_not_bypass_model_budget(app, providers):
     app.runtime.quiesce_for_handoff.assert_not_awaited()
 
 
-async def test_graceful_stop_rejects_only_the_unperformed_move(app, providers):
+@pytest.mark.parametrize('cancel_fails', [False, True])
+async def test_graceful_stop_rejects_only_the_unperformed_move(app, providers, cancel_fails):
     session, target, receipt = await move(app)
     source = session['workspace']
     session['artifactRefs'] = ['completed-evidence']
@@ -133,12 +136,27 @@ async def test_graceful_stop_rejects_only_the_unperformed_move(app, providers):
         artifactRefs=['manager-evidence'])
     app.state['sessions'].append(manager)
     retained_manager = copy.deepcopy(manager)
+    if cancel_fails:
+        from amplifier_web.runtime import RuntimeOperationPending
+        async def uncertain_cleanup(*args, **kwargs):
+            if kwargs.get('cancel'):
+                raise RuntimeOperationPending('handoff.boundary', 'original-cancel')
+            return {'ready': False}
+        app.runtime.handoff_boundary.side_effect = uncertain_cleanup
     app.runtime.stop = AsyncMock()
     await app.dispatch('conversation.stop', {'sessionId': session['id']}, command_id='human-stop')
     await settle(app)
     saved = app.worktrees.read(session['id'], receipt['id'])
-    assert saved['phase'] == 'rejected' and 'user stopped' in saved['detail']
-    assert not session['configurationBusy']
+    assert saved['phase'] == ('unknown' if cancel_fails else 'rejected')
+    assert session['configurationBusy'] is cancel_fails
+    assert app.worktrees.execution_state(session['id'])['fenced'] is cancel_fails
+    if cancel_fails:
+        assert saved['boundaryCleanup']['status'] == 'issued'
+        assert 'user stopped' in saved['rejectionDetail']
+    else:
+        assert 'user stopped' in saved['detail']
+        assert saved['boundaryCleanup']['cancelled'] is True
+    assert app.runtime.handoff_boundary.call_args.kwargs == {'cancel': True}
     assert session.get('workingDirectory', source) == source
     assert session.get('executionRevision', 0) == 0
     assert session['artifactRefs'] == ['completed-evidence']

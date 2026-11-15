@@ -9,6 +9,7 @@ import asyncio
 from contextlib import asynccontextmanager, contextmanager, nullcontext
 from dataclasses import dataclass
 import copy
+import hashlib
 import json
 import logging
 import os
@@ -125,8 +126,9 @@ Emitter = Callable[[str, dict], Awaitable[None]]
 class RuntimeOperationPending(RuntimeError):
     """A written operation has no reply yet; its outcome remains uncertain."""
 
-    def __init__(self, operation):
+    def __init__(self, operation, operation_id=None):
         self.operation = operation
+        self.operation_id = operation_id
         super().__init__('The runtime operation has not returned yet. It may still be running; do not automatically repeat it.')
 
 
@@ -1208,12 +1210,15 @@ class RuntimeManager:
                         row['bridge_tasks'].add(task)
                         task.add_done_callback(row['bridge_tasks'].discard)
                 elif data.get("op") == "reply":
+                    evidence_saved = self._observe_handoff_reply(sid, row, data)
                     row["inflight"].discard(data.get("id"))
                     tracked_input = row.get('sendInputs', {}).pop(data.get('id'), None)
                     peer_input = tracked_input if isinstance(tracked_input, dict) else None
                     input_id = None if peer_input else tracked_input
                     future = row["pending"].get(data.get("id"))
                     error = _worker_error(data) if data.get('error') else None
+                    if evidence_saved is False:
+                        error = RuntimeOperationPending('handoff.boundary', data.get('id'))
                     if error is not None:
                         from .worker_diagnostics import validate_command_failure_facts
                         facts = validate_command_failure_facts(data.get('failureFacts'))
@@ -1632,6 +1637,21 @@ class RuntimeManager:
         if row.get('preparation_error') and op in {'send', 'retry', 'resume', 'control'}:
             raise row['preparation_error']
         identity = str(uuid.uuid4())
+        if op == 'handoff.boundary' and getattr(self, '_handoff_observer', None):
+            from .host_identity import local_host_identity
+            observation = {'id': identity, 'requestId': args['request_id'],
+                'sessionId': sid, 'runtimeOwnerId': row['runtimeOwnerId'],
+                'executionHost': local_host_identity(),
+                'nativeSessionId': row.get('runtime_id'),
+                'executionRevision': (execution or {}).get('revision'),
+                'interruptionRevision': (execution or {}).get('interruptionRevision'),
+                'signature': hashlib.sha256(encode_message({'op': op, **args})).hexdigest(),
+                'issuedAt': time.time(),
+                'kind': 'cancel' if args.get('cancel') else 'boundary', 'state': 'issued'}
+            # Persist issuance BEFORE the transport write. A missing terminal
+            # reply stays uncertain, including after host shutdown.
+            if self._handoff_observer(sid, args['request_id'], observation):
+                row.setdefault('handoffOperations', {})[identity] = observation
         future = asyncio.get_running_loop().create_future()
         row["pending"][identity] = future
         if op == 'send':
@@ -1677,7 +1697,7 @@ class RuntimeManager:
             try:
                 return await asyncio.wait_for(future, timeout)
             except TimeoutError as exc:
-                raise RuntimeOperationPending(op) from exc
+                raise RuntimeOperationPending(op, identity) from exc
         finally:
             row["pending"].pop(identity, None)
 
@@ -1966,6 +1986,30 @@ class RuntimeManager:
                 current.args = (f'Takeover did not complete ({result.status}). {result.message} {current}',)
                 raise current from None
 
+    def bind_handoff_observer(self, observer):
+        """Host-owned worktree receipts retain their own exact RPC evidence."""
+        self._handoff_observer = observer
+
+    def _observe_handoff_reply(self, sid, row, data):
+        # Retry only persistence of replies already consumed from this pipe.
+        # Never resend a command and never lose the shared reader on disk error.
+        retained = row.setdefault('handoffReplies', {})
+        operation = row.get('handoffOperations', {}).get(data.get('id'))
+        if operation is not None:
+            retained[data['id']] = {**operation, 'state': 'returned', 'returnedAt': time.time(),
+                'result': ({key: value for key, value in data.get('result', {}).items()
+                            if key in {'ready', 'cancelled', 'continuationAllowed'} and type(value) is bool}
+                           if isinstance(data.get('result'), dict) and not data.get('error') else None),
+                'error': bool(data.get('error'))}
+        for identity, observation in list(retained.items()):
+            try:
+                self._handoff_observer(sid, observation['requestId'], observation)
+            except (OSError, ValueError):
+                continue  # Issued evidence stays fenced; no terminal guess.
+            row['handoffOperations'].pop(identity, None)
+            retained.pop(identity)
+        return data.get('id') not in retained
+
     async def handoff_boundary(self, session_id, request_id, *, cancel=False, receipt=None, update=False, configuration=False):
         """Inspect only this existing worker; never warm or acquire a writer."""
         row = self.workers.get(session_id)
@@ -2016,7 +2060,7 @@ class RuntimeManager:
         finally:
             held.release()
 
-    async def quiesce_for_handoff(self, session, request_id, *, transfer_destination=None):
+    async def quiesce_for_handoff(self, session, request_id, *, transfer_destination=None, expected_runtime_owner=None):
         """Save and release a known local writer before moving execution cwd."""
         if _WINDOWS:
             raise RuntimeError('Session handoff and transfer fencing are unavailable on Windows; no ownership was changed.')
@@ -2025,6 +2069,8 @@ class RuntimeManager:
         store = SharedSessionStore(session['workspace'], session.get('runtimeSessionId') or session.get('nativeIdentity') or sid)
         async with self._admission(sid):
             row = self.workers.get(sid)
+            if expected_runtime_owner and row and row.get('runtimeOwnerId') != expected_runtime_owner:
+                raise ValueError('The original handoff runtime owner changed; no release was requested')
             released_owner = None
             try:
                 held = await asyncio.to_thread(store.acquire, app='amplifier-unified-handoff')
