@@ -906,6 +906,9 @@ def test_entry_that_comes_in_while_a_folder_is_filled_stops_the_take_back(tmp_pa
     assert kept.read(folder)[0] == "adopting" and (root / kept.MARKER).exists()  # Not finished: nothing is tidied.
     assert late.read_text() == "written during the fill"
     monkeypatch.setattr(os, "rename", real)
+    again = kept.first_start(root, VERSION, ask=False)  # A continuation names it too, and never moves it.
+    assert again["reason"] == "take-back-not-empty" and str(late) in again["message"]
+    assert late.read_text() == "written during the fill" and kept.read(folder)[0] == "adopting"
     os.remove(late)
     assert kept.first_start(root, VERSION, ask=False) is None and person(data(root)) == expected
 
@@ -1229,6 +1232,30 @@ def test_file_that_a_closing_program_writes_after_the_last_entry_moved_is_never_
     assert second["state"] == "complete" and second["stayed"] == []
     assert (folder / "workspace" / "late.txt").read_text() == "written late\n"
     assert person(data(folder)) == {**person(before), "workspace/late.txt": tree(folder)["workspace/late.txt"]}
+
+
+@pytest.mark.parametrize("released", [True, False])
+def test_move_out_waits_for_a_closing_program_and_else_stops_for_a_second_uninstall(tmp_path, monkeypatch, released):
+    root = used(tmp_path / "Amplifier")
+    before, folder = data(root), kept.kept_folder(root)
+    real, refusals, pauses = os.rename, [], []
+
+    def rename(source, target):
+        if Path(source) in (root / "app", root / "app" / "config") and len(refusals) < (3 if released else 999):
+            refusals.append(source)  # A closing program holds a file in `app\config` for a moment.
+            raise PermissionError(13, "The process cannot access the file", str(source))
+        return real(source, target)
+    monkeypatch.setattr(os, "rename", rename)
+    clock = [0.0]
+    monkeypatch.setattr(kept.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(kept.time, "sleep", lambda seconds: (pauses.append(seconds), clock.__setitem__(
+        0, clock[0] + seconds)))
+    result = kept.move_out(root, version=VERSION, transfer=T1, remove=shutil.rmtree, wait=2.0)
+    if released:
+        assert result["state"] == "complete" and pauses == [0.5, 0.5] and person(data(folder)) == person(before)
+    else:
+        assert result["state"] == "moving" and pauses == [0.5] * 4  # Two seconds, then it stops.
+        assert result["stayed"] == [str(root / "app" / "config" / "server.yaml")]
 
 
 def test_data_folder_that_comes_back_after_it_moved_keeps_the_set_unfinished(tmp_path, monkeypatch):
