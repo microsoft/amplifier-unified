@@ -54,6 +54,7 @@ namespace UnifiedBootstrap {
             try {
                 // The fixed folder: short, and the same on every run.
                 Need(NativeInstaller.RootName=="Amplifier" && NativeInstaller.MaxRootLength==59,"folder constants");
+                Need(NativeInstaller.SourceStore=="s" && NativeInstaller.EarlierSourceStore=="source-store","source store folder names");
                 InstallStorage.Check(work);
 
                 // Folder states, in a folder that this person owns privately.
@@ -71,6 +72,15 @@ namespace UnifiedBootstrap {
                 Need(NativeInstaller.RootState(root)=="unfinished","started marker");
                 Directory.CreateDirectory(Path.Combine(root,"app"));
                 Need(NativeInstaller.RootState(root)=="unfinished","empty data folders are not use");
+                // Component sources are app data under both store folder names.
+                foreach(string store in new[]{NativeInstaller.SourceStore,NativeInstaller.EarlierSourceStore}) {
+                    Directory.CreateDirectory(Path.Combine(root,store));
+                    Need(NativeInstaller.RootState(root)=="unfinished","an empty source store is not use: "+store);
+                    File.WriteAllText(Path.Combine(root,store,"object"),"component source");
+                    Need(NativeInstaller.RootState(root)=="damaged","component sources without a completion record: "+store);
+                    File.Delete(Path.Combine(root,store,"object")); Directory.Delete(Path.Combine(root,store));
+                }
+                Need(NativeInstaller.RootState(root)=="unfinished","the store folders are gone again");
                 File.WriteAllText(Path.Combine(root,"app","settings.yaml"),"a person's settings");
                 Need(NativeInstaller.RootState(root)=="damaged","app data without a completion record");
                 Need(Refused(()=>NativeInstaller.RemoveUnfinished(root)) && File.Exists(Path.Combine(root,"app","settings.yaml")),

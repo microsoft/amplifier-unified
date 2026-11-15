@@ -44,6 +44,12 @@ namespace UnifiedBootstrap {
         // name short. docs/design/native-windows-installation.md owns the limit.
         internal const string RootName="Amplifier";
         internal const int MaxRootLength=59;
+        // The source store of a new installation. Python imports module source
+        // from it by ordinary paths. The name is one character: with the earlier
+        // name the deepest default module does not fit at MaxRootLength. An
+        // installation that has the earlier folder keeps its store there
+        // (source_store in amplifier_web/windows_consumer.py).
+        internal const string SourceStore="s", EarlierSourceStore="source-store";
         internal const string Started="unified-setup-started.json", Complete="unified-setup-complete.json";
         internal static string Diagnostics;
         static string FailedStage, Aftermath="Setup changed nothing on this PC.";
@@ -335,7 +341,7 @@ namespace UnifiedBootstrap {
             // from it, so it holds no chats or settings. "damaged" has setup's first
             // marker and app data, but no completion record: it is never removed.
             if(File.Exists(Path.Combine(root,Complete))) return "installed";
-            bool used=new[]{"app","shared","ownership","capture","import","workspace","source-store"}.Any(name=>{
+            bool used=new[]{"app","shared","ownership","capture","import","workspace",SourceStore,EarlierSourceStore}.Any(name=>{
                 string folder=Path.Combine(root,name);
                 return Directory.Exists(folder) && Directory.EnumerateFileSystemEntries(folder).Any();});
             if(File.Exists(Path.Combine(root,Started))) return used?"damaged":"unfinished";
@@ -605,7 +611,7 @@ namespace UnifiedBootstrap {
                 // The first file marks this folder as setup's own unfinished work.
                 PrivateText(Path.Combine(root,Started),"{\"schema\":1}");
                 LogPath=Path.Combine(root,"install.log");PrivateText(LogPath,"");
-                foreach(string relative in new[]{"app","shared","ownership","capture","import","source-store","workspace","cache","python","python-bin","tools","tool-bin","temp"})
+                foreach(string relative in new[]{"app","shared","ownership","capture","import",SourceStore,"workspace","cache","python","python-bin","tools","tool-bin","temp"})
                     Storage.EnsureDirectory(Path.Combine(root,relative));
                 foreach(string relative in new[]{"","cache","python","python-bin","tools","tool-bin","temp"})
                     Storage.EnableToolWrites(Path.Combine(root,relative));
@@ -622,7 +628,7 @@ namespace UnifiedBootstrap {
                 var env=EnvironmentFor(uv,git);
                 env["AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH"]=Path.Combine(root,"capture");
                 env["AMPLIFIER_UNIFIED_IMPORT_HOME"]=Path.Combine(root,"import");
-                env["AMPLIFIER_SOURCE_STORE"]=Path.Combine(root,"source-store");
+                env["AMPLIFIER_SOURCE_STORE"]=Path.Combine(root,SourceStore);
                 Stage="Installing Python";
                 string patch=Text(plan,"python");
                 Child(uv,new[]{"python","install",patch,"--no-bin","--no-registry"},env);

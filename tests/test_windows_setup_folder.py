@@ -90,8 +90,21 @@ def test_markers_count_only_inside_a_checked_private_folder():
     marked = between("static string Marked(", "internal static void RemoveUnfinished(")
     assert marked.index("Complete") < marked.index("Started")  # a finished installation wins
     assert 'return used?"damaged":"unfinished"' in marked  # app data is never "unfinished"
-    for folder in ("app", "shared", "ownership", "capture", "import", "workspace", "source-store"):
+    for folder in ("app", "shared", "ownership", "capture", "import", "workspace"):
         assert '"' + folder + '"' in marked
+    # Component sources in either store folder are app data too.
+    assert '"workspace",SourceStore,EarlierSourceStore}' in marked
+
+
+def test_new_installations_get_the_short_source_store_folder():
+    assert 'internal const string SourceStore="s", EarlierSourceStore="source-store";' in SOURCE
+    consumer = between("static string InstallConsumer(", "static DialogResult Say(")
+    # Created with the other private folders, and the first installation step uses the same one.
+    assert consumer.index('"import",SourceStore,"workspace"') < consumer.index(
+        'env["AMPLIFIER_SOURCE_STORE"]=Path.Combine(root,SourceStore);')
+    # Setup never creates, moves or removes the earlier folder: it only recognises it as app data.
+    assert SOURCE.count("EarlierSourceStore") == 2 and SOURCE.count('"source-store"') == 1
+    assert "store folder is named `s`" in " ".join(DESIGN.split())
 
 
 def test_unfinished_attempts_are_removed_and_installations_never_are():
