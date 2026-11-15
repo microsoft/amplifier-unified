@@ -177,6 +177,7 @@ def remove_internal_copies(session, hidden):
     """
     session['messages'] = [message for message in session['messages']
         if type(message.get('nativeIndex')) is not int
+        or message['nativeIndex'] not in hidden
         or hidden.get(message['nativeIndex']) != display_identity(
             session, message['nativeIndex'], message.get('role'), message.get('text', ''))]
     boundary = session.get('nativeBoundary')
@@ -989,38 +990,42 @@ class AutomaticHistory:
                     if session is None:
                         return
                     if (paging or session.get('status') not in BUSY) and not session.get('configurationBusy'):
-                        if paging:
-                            # Only prepend. Current live messages, streaming
-                            # text, execution ownership and draft stay intact.
-                            known = {m['id'] for m in session['messages']}
-                            known_indexes = {m['nativeIndex'] for m in session['messages'] if 'nativeIndex' in m}
-                            session['messages'] = [m for m in result['messages']
-                                                   if m['id'] not in known and m['nativeIndex'] not in known_indexes] + session['messages']
-                        else:
-                            remove_internal_copies(session, result['hiddenMessages'])
-                            if session.get('historyManaged'):
-                                # Keep the loaded window when another host appends.
-                                session['messages'] = result['messages']
+                        with measure(self.service, 'history.merge', synchronous=True, session_id=session_id):
+                            if paging:
+                                # Only prepend. Current live messages, streaming
+                                # text, execution ownership and draft stay intact.
+                                known = {m['id'] for m in session['messages']}
+                                known_indexes = {m['nativeIndex'] for m in session['messages'] if 'nativeIndex' in m}
+                                session['messages'] = [m for m in result['messages']
+                                                       if m['id'] not in known and m['nativeIndex'] not in known_indexes] + session['messages']
                             else:
-                                # Preserve web-owned message IDs, execution anchors,
-                                # voice-only bubbles, attachments and draft state.
-                                merge_web_history(session, result['messages'])
-                            session['nativeRevision'] = result['revision']
+                                remove_internal_copies(session, result['hiddenMessages'])
+                                if session.get('historyManaged'):
+                                    # Keep the loaded window when another host appends.
+                                    session['messages'] = result['messages']
+                                else:
+                                    # Preserve web-owned message IDs, execution anchors,
+                                    # voice-only bubbles, attachments and draft state.
+                                    merge_web_history(session, result['messages'])
+                                session['nativeRevision'] = result['revision']
                         from .native_activity import apply_activity
                         from .execution_working_set import native_refresh
-                        with native_refresh(session):
-                            apply_activity(session, result['activity'], append=before is not None)
-                            offset = source.get('sharedHistoryOffset', 0)
-                            user_offset = source.get('sharedHistoryUserTurnOffset', 0)
-                            if (not paging and session.get('historyManaged')) or (paging and result['offset'] <= offset):
-                                offset, user_offset = result['offset'], result['userOffset']
-                            # A page does not refresh the tail. Keep its old stamp
-                            # so a later refresh still discovers any new appends.
-                            session.update(historyLoaded=True,
-                                sharedHistoryOffset=offset, sharedHistoryUserTurnOffset=user_offset,
-                                sharedHistoryTotal=result['total'])
-                            session['historyLoading'] = False
-                            self.service._publish_changes(sessions={session_id}, detail_only=True)
+                        with measure(self.service, 'history.native.refresh', synchronous=True, session_id=session_id):
+                            with native_refresh(session):
+                                with measure(self.service, 'history.activity.apply', synchronous=True, session_id=session_id):
+                                    apply_activity(session, result['activity'], append=before is not None)
+                                offset = source.get('sharedHistoryOffset', 0)
+                                user_offset = source.get('sharedHistoryUserTurnOffset', 0)
+                                if (not paging and session.get('historyManaged')) or (paging and result['offset'] <= offset):
+                                    offset, user_offset = result['offset'], result['userOffset']
+                                # A page does not refresh the tail. Keep its old stamp
+                                # so a later refresh still discovers any new appends.
+                                session.update(historyLoaded=True,
+                                    sharedHistoryOffset=offset, sharedHistoryUserTurnOffset=user_offset,
+                                    sharedHistoryTotal=result['total'])
+                                session['historyLoading'] = False
+                                with measure(self.service, 'history.publish', synchronous=True, session_id=session_id):
+                                    self.service._publish_changes(sessions={session_id}, detail_only=True)
                     else:
                         session['historyLoading'] = False
                         self.service._publish_changes(sessions={session_id}, detail_only=True)

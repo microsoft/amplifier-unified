@@ -19,6 +19,7 @@ on:
       - tests/fixtures/windows_setup_native.py
       - tests/windows/native_setup.Tests.cs
       - tests/test_windows_setup_folder.py
+      - docs/design/native-windows-installation.md
 permissions:
   contents: read
 jobs:
