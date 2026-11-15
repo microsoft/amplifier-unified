@@ -901,9 +901,12 @@ delete list.
 
 **While the journal exists** the folder can be partly deleted. Open, Stop and
 Status refuse with one message that tells the person to select Uninstall
-Amplifier. A second uninstall reads the journal through the private-file
-boundary in place of setup's record, asks once, and runs the whole order
-again, including the stop, with a new token. A journal that is damaged, or
+Amplifier. Only these launcher commands look at the journal; a program file
+that a person starts by hand from the folder does not. A second uninstall
+reads the journal through the private-file boundary in place of setup's
+record. The journal is not proof of the person's choice (a program of this
+account can write it), so the person chooses again, twice. Then the whole
+order runs again, including the stop, with a new token. A journal that is damaged, or
 that records another choice, proves nothing: uninstall then offers only to
 keep the folder.
 
@@ -912,9 +915,11 @@ its parent's handle as the entry itself, judged on its own handle and deleted
 through it. A link of any kind is removed as a link. No attribute is changed.
 While the walk holds an entry, the entry does not share delete, so no program
 can move it out of the folder before it is deleted. An entry that a program
-renames only by case after the check counts as still there: uninstall stops,
-never deletes setup's completion record past it, and never says that the data
-is deleted.
+renames only by case after the check counts as still there, from the same
+listing that looks for its exact name: uninstall stops, never deletes setup's
+completion record past it, and never says that the data is deleted. Until the
+entry has its own name again, a second uninstall refuses at its first check;
+data that was deleted before the renamed entry stays deleted.
 
 **The step after exit.** A running program cannot delete its own files. The
 process hands the two folders of the running program (`python`, `tools`) to

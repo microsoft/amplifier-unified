@@ -390,16 +390,21 @@ async def _uninstall(root):
     unchanged = {"ok": True, "cancelled": True}
     unfinished = windows_uninstall.unfinished(root)
     record = windows_uninstall.pending(root) if unfinished else None
-    delete = resumed = record is not None and record["choice"] == "delete"
+    resumed = record is not None and record["choice"] == "delete"
+    delete = chosen = False
     if resumed:
-        # The person chose to delete, twice, and that removal did not finish.
+        # A removal began and did not finish. The journal is not proof that
+        # the person chose it: a program of this account can write that file.
+        # So the person chooses again, twice, as for a first removal.
         if windows_uninstall.question(
                 "The removal of Amplifier from this PC did not finish.\n\n"
                 "Select Yes to finish it now. This deletes everything that Amplifier still keeps in this "
                 "folder, including chats, settings, saved accounts and stored keys. This cannot be undone.\n"
                 + str(root) + "\n\n"
+                "Amplifier asks you once more before it deletes anything.\n\n"
                 "Select No to change nothing now. Amplifier does not open until the removal has finished.") != "yes":
             return unchanged
+        chosen = True
     elif not unfinished and windows_uninstall.completed(root):
         # Only a folder that setup completed as an installation can be deleted.
         answer = windows_uninstall.question(
@@ -417,16 +422,7 @@ async def _uninstall(root):
             cancel=True)
         if answer == "cancel":
             return unchanged
-        if answer == "yes":
-            if windows_uninstall.question(
-                    "Delete everything that Amplifier keeps in this folder?\n\n" + str(root) + "\n\n"
-                    "This deletes all your Amplifier chats, your settings, your saved accounts and your "
-                    "stored keys. It also deletes the files that Amplifier or you saved in its workspace "
-                    "folder there. This cannot be undone.\n\n"
-                    "Select Yes to delete all of that and uninstall Amplifier.\n"
-                    "Select No to change nothing. Amplifier stays installed.") != "yes":
-                return unchanged
-            delete = True
+        chosen = answer == "yes"
     elif not owner_notice(
             "Uninstall Amplifier?\n\n"
             "Amplifier will stop and will no longer start when you sign in. Its entries in the "
@@ -436,6 +432,18 @@ async def _uninstall(root):
                "Select Yes there to remove it." if certificate else ""),
             confirm=True):
         return unchanged
+    if chosen:
+        # The second choice, immediately before the deletion, in every case.
+        if windows_uninstall.question(
+                "Delete everything that Amplifier keeps in this folder?\n\n" + str(root) + "\n\n"
+                "This deletes all your Amplifier chats, your settings, your saved accounts and your "
+                "stored keys. It also deletes the files that Amplifier or you saved in its workspace "
+                "folder there. This cannot be undone.\n\n"
+                "Select Yes to delete all of that and uninstall Amplifier.\n"
+                + ("Select No to change nothing now." if resumed else
+                   "Select No to change nothing. Amplifier stays installed.")) != "yes":
+            return unchanged
+        delete = True
     # A removal that did not finish stopped the app before it deleted anything.
     working = None if resumed else await windows_working(root / "app")
     if working and not owner_notice(

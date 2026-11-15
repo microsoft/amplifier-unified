@@ -90,8 +90,9 @@ def altered(names):
     It is never deleted. Uninstall then deletes nothing at all: it could not
     truthfully say that the person's data is gone.
     """
-    known = {name.casefold(): name for name in _EXACT}
-    return [name for name in names if known.get(name.casefold(), name) != name]
+    from .windows_removal import same_name
+    known = {same_name(name): name for name in _EXACT}
+    return [name for name in names if known.get(same_name(name), name) != name]
 
 
 def unfinished(root):
@@ -271,9 +272,10 @@ def _clear(owned, names, deadline, wait):
 
     An entry whose name now differs from a wanted name only by case is the
     same entry to Windows and to setup. A program renamed it after the check.
-    It is not deleted and it counts as still there, so the caller stops:
-    setup's completion record is never deleted past such an entry, and the
-    data is never reported as deleted.
+    It is not deleted, and `holding` counts it as still there from the same
+    listing that looks for the exact name. So the caller stops: setup's
+    completion record is never deleted past such an entry, and the data is
+    never reported as deleted.
     """
     names, groups = list(names), sort(names)
     # Never the journal, never a foreign name, never the running program.
@@ -284,8 +286,7 @@ def _clear(owned, names, deadline, wait):
         for name in left:
             owned.remove([name])
         held = set(owned.holding(names))
-        renamed = {name.casefold() for name in altered(owned.names())}
-        left = [name for name in names if name in held or name.casefold() in renamed]
+        left = [name for name in names if name in held]
         if not left or time.monotonic() >= deadline:
             return left
         wait(0.5)

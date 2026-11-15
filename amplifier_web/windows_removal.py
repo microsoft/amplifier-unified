@@ -42,6 +42,16 @@ from .windows_read_files import _Attributes, _ReadAPI, _Status, _Unicode
 _DIRECTORY, _LINK = 0x10, 0x400  # FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT
 
 
+def same_name(name):
+    """A key that is equal for every spelling that Windows can take for one name.
+
+    Windows compares names with its own upper-case table. This key is at least
+    as wide for the plain names that an installation uses: it also joins
+    spellings that Windows keeps apart, which only makes a caller more careful.
+    """
+    return name.upper().casefold()
+
+
 # All variable data travels on stdin, never in this program. Unlike the pinned
 # in-process walk below, this path-based last step deletes links only as links.
 # It looks at every folder again immediately before it lists it. It cannot
@@ -459,10 +469,19 @@ class Folder:
         nothing in it: Windows keeps such a folder while a program uses it as
         its current folder. A file, a link, a folder with an entry, and an
         entry that cannot be examined all count. A link is never entered.
+
+        An entry under another spelling of a name (`App` for `app`) is the
+        same entry to Windows. It is never examined or deleted, and the name
+        counts as holding something. One listing decides for every spelling,
+        so a program cannot hide an entry by renaming it between two looks.
         """
-        wanted, held = set(names), []
+        wanted, held = {same_name(name): name for name in names}, set()
         for name, attributes in self._api.children(self._handle):
-            if name not in wanted:  # Exact spelling.
+            own = wanted.get(same_name(name))
+            if own is None:
+                continue
+            if name != own:
+                held.add(own)
                 continue
             handle, empty = None, False
             try:
@@ -475,7 +494,7 @@ class Folder:
                 if handle is not None:
                     self._api.close(handle)
             if not empty:
-                held.append(name)
+                held.add(name)
         return sorted(held)
 
     def _each(self, names):

@@ -41,6 +41,23 @@ def test_holding_tells_an_empty_folder_in_use_from_an_entry_that_still_holds_som
     assert outside not in tree.listed and not tree.handles
 
 
+def test_holding_counts_another_spelling_of_a_name_from_the_same_listing_and_never_opens_it(opened):
+    # `App` is the entry `app` to Windows. So are spellings with the dotless i and the long s.
+    root = folder(App=folder(chat=file()), shared=folder(), **{"\u0131mport": folder(), "unified-\u017fetup-started.json": file()})
+    tree = opened["use"](root)
+    with removal.folder(opened["path"]) as owned:
+        assert owned.remove(["app", "import", "unified-setup-started.json"]) == {"removed": 0, "left": [], "leftCount": 0}
+        tree.opened.clear()
+        listings = len(tree.listed)
+        held = owned.holding(["app", "shared", "import", "unified-setup-started.json", "capture"])
+        # One listing of the folder decided for every name; only the exact, real folder was opened.
+        assert len(tree.listed) == listings + 2 and tree.opened == [("shared", True, False)]
+    assert held == ["app", "import", "unified-setup-started.json"]
+    assert sorted(root["children"]) == ["App", "shared", "unified-\u017fetup-started.json", "\u0131mport"]
+    assert plan.altered(["App", "\u0131mport", "unified-\u017fetup-started.json", "shared", "mine.txt"]) == [
+        "App", "\u0131mport", "unified-\u017fetup-started.json"]
+
+
 @pytest.mark.parametrize("change", ["link", "refused"])
 def test_holding_counts_what_it_cannot_examine_and_never_enters_a_link(opened, change):
     outside = folder(precious=file())
@@ -127,9 +144,13 @@ class Disk:
         return {"removed": 0, "left": [], "leftCount": 0}
 
     def holding(self, names):
-        listed = set(os.listdir(self.root))
-        return sorted(name for name in names if name in listed and not (
-            (self.root / name).is_dir() and not any((self.root / name).iterdir())))
+        wanted, held = {removal.same_name(name): name for name in names}, set()
+        for name in os.listdir(self.root):  # One listing decides for every spelling, as the real folder.
+            own = wanted.get(removal.same_name(name))
+            if own is not None and (name != own or not (
+                    (self.root / name).is_dir() and not any((self.root / name).iterdir()))):
+                held.add(own)
+        return sorted(held)
 
 
 @pytest.fixture
@@ -425,9 +446,17 @@ def test_data_that_stays_keeps_the_entries_and_the_journal_and_a_second_uninstal
     (text, cancel) = state["questions"][-1]
     assert not cancel and "did not finish" in text and str(root) in text and "This cannot be undone" in text
 
-    # Yes runs the whole path again, including the stop, with a new token.
+    # Yes and then No changes nothing either: the person chooses twice again, with No as each default.
+    state["choices"] = ["yes", "no"]
+    assert deleter.run() == {"ok": True, "cancelled": True} and not state["calls"] and snapshot(root) == before
+    (asked, _), (warned, cancel) = state["questions"][-2:]
+    assert "asks you once more before it deletes anything" in asked and not cancel
+    assert "Delete everything that Amplifier keeps in this folder?" in warned and str(root) in warned
+    assert "Select No to change nothing now." in warned and "stays installed" not in warned
+
+    # Yes twice runs the whole path again, including the stop, with a new token.
     state["held"].clear()
-    state.update(choices=["yes"], task="running")
+    state.update(choices=["yes", "yes"], task="running")
     result = deleter.run()
     assert state["calls"][:6] == [("lock",), ("outside",), ("pin",), ("stop",), ("task-remove",),
                                   ("write", plan.JOURNAL)]
@@ -529,7 +558,7 @@ def test_entry_renamed_only_by_case_after_the_check_counts_as_still_there(delete
     assert state["registry"] == registration and state["after"] is None
     # A second uninstall refuses at its first check and deletes nothing more.
     before = snapshot(root)
-    state["choices"] = ["yes"]
+    state["choices"] = ["yes", "yes"]
     with pytest.raises(consumer.Unfinished) as again:
         deleter.run()
     assert again.value.step == "folder" and "could not finish its removal" in again.value.notice
@@ -599,7 +628,7 @@ def test_failed_entry_removal_after_the_data_is_gone_is_finished_by_a_second_uni
     assert (deleter.folder / "Uninstall Amplifier.lnk").exists()
     assert all((root / name).exists() for name in (*LAST, *RUNNING, shell.FILE, plan.JOURNAL))
     assert json.loads((root / consumer.RECORD).read_text())["step"] == stopped.value.step
-    state.update(commit_conflict=False, link_failure=None, choices=["yes"])
+    state.update(commit_conflict=False, link_failure=None, choices=["yes", "yes"])
     assert deleter.run()["afterExit"] and state["registry"] is None and not deleter.folder.exists()
     assert {path.name for path in root.iterdir()} == {"python", "tools", plan.JOURNAL}
 
@@ -634,8 +663,24 @@ def test_keeping_uninstall_refuses_when_another_window_began_to_delete_after_the
     # The entries stay for the second uninstall, which finishes that removal.
     assert state["task"] == "running" and state["registry"] == registration
     assert {path.name for path in deleter.folder.iterdir()} == set(shell.LINKS)
-    state["choices"] = ["yes"]
+    state["choices"] = ["yes", "yes"]
     assert deleter.run()["afterExit"] and state["registry"] is None
+
+
+def test_journal_that_a_program_wrote_never_replaces_one_of_the_two_choices(deleter):
+    # The journal is a private file, but a program of this account can write it. It is not the person's choice.
+    state, root = deleter.state, deleter.root
+    (root / plan.JOURNAL).write_text(json.dumps({"schema": 1, "choice": "delete", "token": "e" * 32}))
+    before, registration = snapshot(root), state["registry"].copy()
+    for choices in (["no"], ["yes", "no"]):
+        state["choices"] = list(choices)
+        assert deleter.run() == {"ok": True, "cancelled": True}
+        assert not state["calls"] and snapshot(root) == before and state["registry"] == registration
+    assert [cancel for _, cancel in state["questions"]] == [False, False, False]
+    # Only two answers of Yes, given now, delete.
+    state["choices"] = ["yes", "yes"]
+    assert deleter.run()["afterExit"] and len(state["questions"]) == 5
+    assert {path.name for path in root.iterdir()} == {"python", "tools", plan.JOURNAL}
 
 
 def test_journal_write_waits_for_a_closing_app_and_then_refuses(model, monkeypatch):
@@ -691,7 +736,7 @@ def test_step_after_exit_that_cannot_start_is_said_plainly(deleter, monkeypatch)
     assert "none of your chats, settings or accounts" in leftover and str(deleter.root) in leftover
     assert leftover.endswith("You can delete that folder.")
     # With something in the folder that is not Amplifier's, there is no advice to delete the folder.
-    state.update(choices=["yes"], notices=[])
+    state.update(choices=["yes", "yes"], notices=[])
     (deleter.root / "mine.txt").write_text("not Amplifier's")
     assert deleter.run()["kept"] == ["mine.txt"]
     assert "You can delete" not in state["notices"][-1][0] and "You can delete" not in state["notices"][0][0]
@@ -1109,18 +1154,22 @@ def test_native_interrupted_removal_refuses_to_start_and_a_second_uninstall_fini
             with pytest.raises(plan.Busy):
                 with plan.single(root, wait=0.2):
                     pass
-            for operation, answers in (("open", []), ("uninstall", ["yes"])):
+            for operation, answers in (("open", []), ("uninstall", ["yes", "yes"])):
                 waiting = native["run"](operation, answers)
                 assert (waiting["step"], waiting["refused"], waiting["error"]) == ("busy", True, "Busy"), waiting
         assert _tree(root) == before and plan.pending(root) == journal
+        # Yes and then No changes nothing either.
+        declined = native["run"]("uninstall", ["yes", "no"])
+        assert declined["result"] == {"ok": True, "cancelled": True} and declined["events"] == ["question", "question"]
+        assert _tree(root) == before and plan.pending(root) == journal
     finally:
         busy.close()
-    # The file is free: Yes finishes the removal, with the stop again and a new token.
-    done = native["run"]("uninstall", ["yes"])
+    # The file is free: Yes twice finishes the removal, with the stop again and a new token.
+    done = native["run"]("uninstall", ["yes", "yes"])
     print("UNINSTALL_RESUME " + json.dumps({key: done[key] for key in ("result", "events", "left")},
                                            separators=(",", ":")))
     assert done["result"]["afterExit"] and done["result"]["kept"] == ["mine.txt"], done
-    assert done["events"] == ["question", "stop", "after-exit"]
+    assert done["events"] == ["question", "question", "stop", "after-exit"]
     assert shell.registry(root) is None and not native["entries"].exists()
     report = _finish_report(native["report"], timeout=200)
     print("UNINSTALL_AFTER_EXIT " + json.dumps(report, separators=(",", ":")))
@@ -1152,6 +1201,11 @@ def test_native_data_folder_renamed_only_by_case_deletes_nothing(native_installa
     assert shell.registry(root) == native["registration"]
     assert {path.name for path in native["entries"].iterdir()} == set(shell.LINKS)
     assert not native["report"].exists()
+    # The real folder: the walk matches the exact name only, and one listing reports the other spelling as held.
+    with removal.folder(root) as owned:
+        assert owned.remove(["app"]) == {"removed": 0, "left": [], "leftCount": 0}
+        assert owned.holding(["app", "shared", "absent"]) == ["app", "shared"]
+    assert (root / "App" / "app.sqlite3").read_text() == "data"
     _outside_unchanged(native["outside"])
 
 
