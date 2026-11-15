@@ -65,15 +65,15 @@ def _branch(db, children):
     return {**resource_files.put(db, {'children': children, 'facts': facts}), 'executionFacts': facts}
 
 
-def _find(db, reference, identity, depth=0):
+def _find(db, reference, identity, depth=0, *, read=None):
     if reference is None:
         return None
-    page = _read(db, reference)
+    page = (read or _read)(db, reference)
     if 'records' in page:
         return page['records'].get(identity)
     if depth >= 64:
         raise ValueError('Invalid execution index depth.')
-    return _find(db, page['children'].get(_hash(identity)[depth]), identity, depth + 1)
+    return _find(db, page['children'].get(_hash(identity)[depth]), identity, depth + 1, read=read)
 
 
 def _replace(db, kind, reference, identity, entry, depth=0):
@@ -102,8 +102,96 @@ def _entries(db, reference):
             yield from _entries(db, child)
 
 
-def _root(db, reference, owner=None):
-    root = _read(db, reference)
+def _ordered(db, entries, height):
+    """Direct ordinal radix index; leaves hold identities, never record bodies."""
+    if not entries:
+        return None
+    if height == 0:
+        value = {'order': sorted(entries), 'count': len(entries)}
+    else:
+        groups = {}
+        for ordinal, identity in entries:
+            digit = (ordinal // (PAGE_ROWS * 16 ** (height - 1))) % 16
+            groups.setdefault(str(digit), []).append((ordinal, identity))
+        children = {digit: _ordered(db, rows, height - 1) for digit, rows in groups.items()}
+        value = {'children': children, 'count': sum(row['count'] for row in children.values())}
+    return {**resource_files.put(db, value), 'count': value['count']}
+
+
+def _order_replace(db, reference, height, ordinal, identity):
+    page = _read(db, reference) if reference else {}
+    if height == 0:
+        entries = dict(page.get('order', []))
+        if identity is None:
+            entries.pop(ordinal, None)
+        else:
+            entries[ordinal] = identity
+        return _ordered(db, list(entries.items()), 0)
+    children = page.get('children', {})
+    digit = str((ordinal // (PAGE_ROWS * 16 ** (height - 1))) % 16)
+    changed = _order_replace(db, children.get(digit), height - 1, ordinal, identity)
+    if changed is None:
+        children.pop(digit, None)
+    else:
+        children[digit] = changed
+    if not children:
+        return None
+    count = sum(row['count'] for row in children.values())
+    return {**resource_files.put(db, {'children': children, 'count': count}), 'count': count}
+
+
+def _order_update(db, collection, ordinal, identity):
+    height = collection['orderHeight']
+    reference = collection['order']
+    while ordinal >= PAGE_ROWS * 16 ** height:
+        if reference:
+            reference = {**resource_files.put(db, {'children': {'0': reference}, 'count': reference['count']}),
+                         'count': reference['count']}
+        height += 1
+    collection['orderHeight'] = height
+    collection['order'] = _order_replace(db, reference, height, ordinal, identity)
+
+
+def _order_window(db, reference, start, stop, read):
+    if reference is None or start >= stop:
+        return []
+    page = read(db, reference)
+    if 'order' in page:
+        return page['order'][start:stop]
+    result, offset = [], 0
+    for digit in sorted(page['children'], key=int):
+        child = page['children'][digit]
+        end = offset + child['count']
+        if start < end and stop > offset:
+            result.extend(_order_window(db, child, max(0, start - offset), stop - offset, read))
+        offset = end
+        if offset >= stop:
+            break
+    return result
+
+
+def _bounded_reader(db, max_bytes):
+    """Request-local immutable page reuse, bounded by actual backing bytes."""
+    remaining, pages = max_bytes, {}
+    def read(_db, reference):
+        nonlocal remaining
+        identity = reference['$resource']
+        if identity in pages:
+            return pages[identity]
+        source = resource_files.detach(db, identity)
+        signature = resource_files.detached_signature(source)
+        size = signature[2] if len(signature) == 5 else len(source.indexed.encode())
+        if size > remaining:
+            raise ValueError('Saved execution selection exceeds its byte budget.')
+        page = resource_files.read_detached(source, max_bytes=remaining)
+        remaining -= size
+        pages[identity] = page
+        return page
+    return read
+
+
+def _root(db, reference, owner=None, *, read=None):
+    root = (read or _read)(db, reference)
     if (root.get('format') != FORMAT or set(root.get('collections', {})) != set(COLLECTIONS)
             or owner is not None and root.get('owner') != list(owner)):
         raise ValueError('Execution records belong to a different owner or unsupported format.')
@@ -133,7 +221,12 @@ def import_tree(db, owner, tree):
             if identity in records:
                 raise ValueError('Duplicate execution identities require the legacy projection.')
             records[identity] = {'ordinal': ordinal, 'value': row}
-        collections[kind] = {'root': _page(db, kind, records), 'next': len(records)}
+        height = 0
+        while len(records) > PAGE_ROWS * 16 ** height:
+            height += 1
+        collections[kind] = {'root': _page(db, kind, records), 'next': len(records),
+                             'order': _ordered(db, [(row['ordinal'], identity) for identity, row in records.items()], height),
+                             'orderHeight': height}
         active[kind] = [identity for identity, row in records.items() if is_active(row['value'])]
     fields = {name: value for name, value in tree.items() if name not in COLLECTIONS}
     return _store(db, {'format': FORMAT, 'owner': list(owner),
@@ -142,9 +235,34 @@ def import_tree(db, owner, tree):
 
 def read_record(db, reference, kind, identity, *, owner=None):
     """Detached exact-record read. It does not admit historical mutable state."""
-    root = _root(db, reference, owner)
-    row = _find(db, root['collections'][kind]['root'], identity)
+    row = read_entry(db, reference, kind, identity, owner=owner)
     return row['value'] if row is not None else None
+
+
+def read_entry(db, reference, kind, identity, *, owner=None):
+    """Exact identity plus its stable ordinal for an admitted historical read."""
+    root = _root(db, reference, owner)
+    return _find(db, root['collections'][kind]['root'], identity)
+
+
+def read_window(db, reference, kind, *, start=0, limit=100, owner=None, max_bytes=4 * 1024 * 1024):
+    """Seek an ordered live range directly, skipping arbitrarily large gaps.
+
+    A same-ID correction retains its ordinal. Deletion removes membership;
+    reinsertion gets a new ordinal. Consumers bind exact ordinal/ID pairs.
+    """
+    if type(start) is not int or type(limit) is not int or start < 0 or not 0 <= limit <= PAGE_ROWS:
+        raise ValueError('Choose a bounded execution window.')
+    read = _bounded_reader(db, max_bytes)
+    collection = _root(db, reference, owner, read=read)['collections'][kind]
+    selected = _order_window(db, collection['order'], start, start + limit, read)
+    rows = []
+    for ordinal, identity in selected:
+        row = _find(db, collection['root'], identity, read=read)
+        if row is None or row['ordinal'] != ordinal or key(kind, row['value']) != identity:
+            raise ValueError('Saved execution order no longer matches its record.')
+        rows.append(row)
+    return {'rows': rows, 'total': collection['order']['count'] if collection['order'] else 0}
 
 
 def read_fields(db, reference, *, owner=None):
@@ -174,6 +292,8 @@ def replace_records(db, reference, changes, *, fields=None, owner=None):
             ordinal = previous['ordinal'] if previous is not None else collection['next']
             if previous is None:
                 collection['next'] += 1
+            if previous is None or value is None:
+                _order_update(db, collection, ordinal, identity if value is not None else None)
             entry = {'ordinal': ordinal, 'value': value} if value is not None else None
             collection['root'] = _replace(db, kind, collection['root'], identity, entry)
             active = root.setdefault('active', {}).setdefault(kind, [])

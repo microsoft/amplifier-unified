@@ -113,3 +113,46 @@ def test_duplicate_legacy_records_are_not_silently_collapsed(db):
     value['nodes'].append(copy.deepcopy(value['nodes'][0]))
     with pytest.raises(ValueError, match='Duplicate execution'):
         records.import_tree(db, OWNER, value)
+
+
+def test_ordered_windows_seek_without_scanning_deleted_history(db, monkeypatch):
+    value = tree(3000)
+    first = records.import_tree(db, OWNER, value)
+    # A wide deleted prefix and gaps are not historical rows to walk on reads.
+    kept = [3, 1001, 2003, 2999]
+    second = records.replace_records(db, first, {'nodes': {
+        records.key('nodes', row): None for i, row in enumerate(value['nodes']) if i not in kept}})
+    db.commit()
+    bodies, read = [], resource_files.read_detached
+    def counted(source, **kwargs):
+        result = read(source, **kwargs)
+        bodies.append(result)
+        return result
+    monkeypatch.setattr(resource_files, 'read_detached', counted)
+    result = records.read_window(db, second, 'nodes', start=1, limit=2, owner=OWNER)
+    assert result == {'rows': [{'ordinal': i, 'value': value['nodes'][i]} for i in kept[1:3]], 'total': 4}
+    assert len(bodies) < 20
+    assert sum(len(body.get('order', [])) for body in bodies) <= 4
+
+
+def test_order_root_stays_exact_on_correction_and_reinsertion_gets_new_ordinal(db):
+    value = tree(500)
+    first = records.import_tree(db, OWNER, value)
+    identity = records.key('nodes', value['nodes'][7])
+    changed = {**value['nodes'][7], 'revision': 2}
+    corrected = records.replace_records(db, first, {'nodes': {identity: changed}})
+    assert records._root(db, first)['collections']['nodes']['order'] == records._root(db, corrected)['collections']['nodes']['order']
+    assert records.read_window(db, corrected, 'nodes', start=7, limit=1)['rows'] == [{'ordinal': 7, 'value': changed}]
+    deleted = records.replace_records(db, corrected, {'nodes': {identity: None}})
+    reinserted = records.replace_records(db, deleted, {'nodes': {identity: changed}})
+    assert records.read_entry(db, reinserted, 'nodes', identity)['ordinal'] == 500
+    assert records.read_window(db, reinserted, 'nodes', start=499, limit=1)['rows'] == [{'ordinal': 500, 'value': changed}]
+    assert records.read_record(db, first, 'nodes', identity) == value['nodes'][7]
+
+
+def test_ordered_window_has_byte_and_row_bounds(db):
+    first = records.import_tree(db, OWNER, tree(10))
+    with pytest.raises(ValueError, match='byte budget'):
+        records.read_window(db, first, 'nodes', max_bytes=1)
+    with pytest.raises(ValueError, match='bounded execution'):
+        records.read_window(db, first, 'nodes', limit=records.PAGE_ROWS + 1)
