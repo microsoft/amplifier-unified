@@ -9,6 +9,7 @@ import inspect
 import json
 import os
 from pathlib import Path
+import weakref
 
 from .config import HostConfig, expand_environment, load_config, merge, write_private, provider_mount_sources
 from .components import HostComponents, ComponentResolver, compose_bundles, imagegen_defaults, capability_defaults, explicit_context_forwarding, installed_package_source
@@ -97,6 +98,10 @@ class SelectedProvider:
         self._selected_requests = []
         self._refused_requests = []
         self._release_bindings = []
+        # Payload-free local identity refusals outlive discarded private fits.
+        # Weak refs avoid retaining canonical content; saturation fails closed.
+        self._media_fit_refusals = []
+        self._media_fit_refusal_overflow = False
     def _execution_provider(self):
         return self.execution_adapter(self.original) if callable(self.execution_adapter) else self.original
     def __getattr__(self, name):
@@ -132,6 +137,7 @@ class SelectedProvider:
                     self._forget_request(request)
                 else:
                     entry.refitted = True
+                    self._clear_media_fit_refusal(request)
                 return result
             return refit
         if name == "compact_context" and callable(method):
@@ -177,7 +183,7 @@ class SelectedProvider:
                         {key: value for key, value in kwargs.items() if key != "request_options"})
                     self._release_bindings = [row for row in self._release_bindings if row[0] is not request]
                     self._release_bindings.append((request, selected, execution,
-                                                   copy.deepcopy(request_options or {}), copy.deepcopy(options)))
+                                                   copy.deepcopy(request_options or {}), copy.deepcopy(options), False))
                     self._release_bindings = self._release_bindings[-4:]
                     result = method(selected, **kwargs)
                 except BaseException:
@@ -186,11 +192,14 @@ class SelectedProvider:
                 if inspect.isawaitable(result):
                     async def budget():
                         try:
-                            return await result
+                            decision = await result
                         except BaseException:
                             self._forget_request(request)
                             raise
+                        self._finish_selected_budget(request, selected, execution)
+                        return decision
                     return budget()
+                self._finish_selected_budget(request, selected, execution)
                 return result
             return selected_budget
         return method
@@ -221,6 +230,10 @@ class SelectedProvider:
     def _check_fitted_execution(self, request, execution):
         """A fitted private candidate belongs to its exact execution adapter."""
         row = next((row for row in self._release_bindings if row[0] is request), None)
+        self._media_fit_refusals = [ref for ref in self._media_fit_refusals if ref() is not None]
+        if (any(ref() is request for ref in self._media_fit_refusals)
+                or self._media_fit_refusal_overflow and (row is None or not row[5])):
+            raise ValueError("A refused media request requires a new successful explicit budget/refit.")
         if row is None:
             return
         owns_media = getattr(row[2], "has_prepared_media_request", None)
@@ -233,8 +246,32 @@ class SelectedProvider:
         release = getattr(row[2], "release_media_request", None)
         if not callable(release) or release(row[1], request_options=copy.deepcopy(row[4])) is not True:
             raise ValueError("Previous selected media fit could not be released")
+        self._mark_media_fit_refusal(request)
         self._forget_request(request)
         raise ValueError("The selected execution provider changed after fitting; request a new explicit budget.")
+
+    def _mark_media_fit_refusal(self, request):
+        self._media_fit_refusals = [ref for ref in self._media_fit_refusals
+                                    if ref() is not None and ref() is not request]
+        if len(self._media_fit_refusals) >= 16:
+            self._media_fit_refusal_overflow = True
+            return
+        try:
+            self._media_fit_refusals.append(weakref.ref(request))
+        except TypeError:
+            self._media_fit_refusal_overflow = True
+
+    def _clear_media_fit_refusal(self, request):
+        # Only the successful explicit budget/refit callers invoke this.
+        self._media_fit_refusals = [ref for ref in self._media_fit_refusals
+                                    if ref() is not None and ref() is not request]
+
+    def _finish_selected_budget(self, request, selected, execution):
+        for index, row in enumerate(self._release_bindings):
+            if row[0] is request and row[1] is selected and row[2] is execution:
+                self._release_bindings[index] = (*row[:5], True)
+                self._clear_media_fit_refusal(request)
+                break
 
     def _retire_replaced_fit(self, request, execution):
         """An explicit new fit must release a previous private owner's candidate."""
