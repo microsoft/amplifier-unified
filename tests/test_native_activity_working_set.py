@@ -61,8 +61,9 @@ async def test_changed_native_revision_keeps_only_noop_activity_cold(tmp_path, m
         assert not dict.__contains__(session, 'execution')
         assert dict.get(session, MARKER)['execution']['executionProjection'] == 1
         assert session['nativeRevision'] != revision(session)
-        original = snapshot(session)
-        owner = working(session)
+        from amplifier_web.cold_display import load as load_execution
+        original = load_execution(app.db, dict.get(session, MARKER)['execution'])
+        assert not hasattr(session, '_working_execution')
         await app.history.ensure_loaded(sid, hydrate=False)
         assert not session.get('historyError')
         assert session['nativeRevision'] == revision(session)
@@ -75,7 +76,7 @@ async def test_changed_native_revision_keeps_only_noop_activity_cold(tmp_path, m
         fast = activity_kind != 'unshadowed'
         assert dict.__contains__(session, 'execution') is not fast
         if fast:
-            assert session._working_execution is owner
+            owner = session._working_execution
             assert not owner.current['nodes']
         else:
             assert not hasattr(session, '_working_execution')
