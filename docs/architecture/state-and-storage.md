@@ -309,6 +309,15 @@ Detached metadata reads freeze the root and current overlay without loading hist
 The last committed root and retained client/operation roots remain GC authorities
 until their owning transactions release them; failed saves never adopt a staged root.
 
+A canonical native refresh may share one verified legacy execution read through
+its synchronous merge and publication while holding the session writer lock.
+This operation-local binding is cleared on every exit; detached owners do not
+inherit it. The current overlay and public snapshots remain independently
+mutable, while the canonical projector only reads the verified original. The
+normal logical-content check, stored projection, index import and successful
+commit still own validation and durable selection. No decoded history is cached
+between refreshes, and the first index-publication cost remains visible.
+
 Usage totals continue the canonical per-call fold in original order from a closed
 prefix and a current suffix. The prefix is disposable private state, not a receipt
 or a second accounting authority. Current nested aliases remain live; earlier

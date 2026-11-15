@@ -1,12 +1,13 @@
 """Canonical native refresh qualifies no-op activity without taking history ownership."""
 import copy
 import json
+import asyncio
 
 import pytest
 
 from amplifier_web import execution, execution_records as records
 from amplifier_web.automatic_history import read_transcript, revision
-from amplifier_web.cold_display import MARKER
+from amplifier_web.cold_display import MARKER, ColdRecord, detached, execution_reference
 from amplifier_web.execution_working_set import current, exact, snapshot, working
 from amplifier_web.host.storage import SessionStore
 from amplifier_web.native_activity import apply_activity
@@ -76,7 +77,17 @@ async def test_changed_native_revision_keeps_only_noop_activity_cold(tmp_path, m
         from amplifier_web.cold_display import load as load_execution
         original = load_execution(app.db, dict.get(session, MARKER)['execution'])
         assert not hasattr(session, '_working_execution')
-        await app.history.ensure_loaded(sid, hydrate=False)
+        from amplifier_web import cold_display
+        reads = []
+        reference = dict.get(session, MARKER)['execution']['$resource']
+        def counted(db, selected):
+            if selected['$resource'] == reference:
+                reads.append(selected['$resource'])
+            return load_execution(db, selected)
+        with monkeypatch.context() as observer:
+            observer.setattr(cold_display, 'load', counted)
+            await app.history.ensure_loaded(sid, hydrate=False)
+        assert reads == [reference]
         assert not session.get('historyError')
         assert session['nativeRevision'] == revision(session)
         result = read_transcript(session, limit=None)
@@ -89,6 +100,7 @@ async def test_changed_native_revision_keeps_only_noop_activity_cold(tmp_path, m
         assert dict.__contains__(session, 'execution') is not fast
         if fast:
             owner = session._working_execution
+            assert owner._legacy_read is None
             assert not owner.current['nodes']
         else:
             assert not hasattr(session, '_working_execution')
@@ -130,6 +142,74 @@ async def test_changed_native_revision_keeps_only_noop_activity_cold(tmp_path, m
         assert not any(row.get('nativeHistory') for row in materialize(retained, app.db)['execution']['nodes'])
     finally:
         await app.close()
+
+
+@pytest.fixture
+def legacy_saved(saved):
+    db, _, tree = saved
+    tree = copy.deepcopy(tree)
+    tree['nodes'][0]['phase'] = 'running'
+    tree['extension'] = {'nested': ['original']}
+    reference = execution_reference(db, tree)
+    db.commit()
+    session = ColdRecord({'id': 'chat', 'messages': [], MARKER: {'execution': reference}}, db)
+    return db, session, tree
+
+
+def test_native_scope_detaches_snapshots_and_preserves_live_aliases(legacy_saved):
+    from amplifier_web.execution_working_set import native_refresh
+    db, session, original = legacy_saved
+    with native_refresh(session):
+        owner = working(session)
+        selected = snapshot(session)
+        selected['nodes'][0]['detail']['values'].append('snapshot only')
+        selected['nodes'][1]['detail']['values'].append('snapshot only')
+        selected['extension']['nested'].append('snapshot only')
+        frozen = detached(session)
+        assert frozen._working_execution._legacy_read is None
+        borrowed = current(session)['nodes'][0]['detail']['values']
+        borrowed.append('live edit')
+        current(session)['extension']['nested'].append('live edit')
+        historical = exact(session, 'nodes', {'id': '1'})['detail']['values']
+        historical.append('historical correction')
+        assert owner._legacy_read[1] == original
+        reference = save(db, session)
+    assert owner._legacy_read is None
+    actual = records.materialize(db, reference)
+    assert actual['nodes'][0]['detail']['values'] == [0, 'live edit']
+    assert actual['nodes'][1]['detail']['values'] == [1, 'historical correction']
+    assert actual['extension']['nested'] == ['original', 'live edit']
+    assert frozen['execution'] == original
+    borrowed.append('after commit')
+    historical.append('after commit')
+    actual = records.materialize(db, save(db, session))
+    assert actual['nodes'][0]['detail']['values'][-1] == 'after commit'
+    assert actual['nodes'][1]['detail']['values'][-1] == 'after commit'
+
+
+@pytest.mark.parametrize('failure', [RuntimeError, asyncio.CancelledError])
+def test_native_scope_failure_keeps_selected_root_and_releases_read(legacy_saved, failure):
+    from amplifier_web.execution_working_set import native_refresh
+    db, session, original = legacy_saved
+    reference = copy.deepcopy(dict.get(session, MARKER)['execution'])
+    with pytest.raises(failure):
+        try:
+            with native_refresh(session):
+                owner = working(session)
+                current(session)['extension']['nested'].append('pending')
+                owner.stage()
+                raise failure('publication not accepted')
+        finally:
+            db.rollback()
+    assert owner._legacy_read is None
+    assert owner.reference == dict.get(session, MARKER)['execution'] == reference
+    from amplifier_web.cold_display import load
+    assert load(db, reference) == original
+    with native_refresh(session):
+        accepted = save(db, session)
+    assert owner._legacy_read is None
+    actual = records.materialize(db, accepted)
+    assert actual['extension']['nested'] == ['original', 'pending']
 
 
 @pytest.mark.parametrize('append', [False, True])
