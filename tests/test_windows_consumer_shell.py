@@ -35,6 +35,9 @@ def model(tmp_path, monkeypatch):
             raw = (path / name).read_bytes()
             assert len(raw) <= limit
             return raw
+        def publish(name, content):
+            with (path / name).open("xb") as stream:
+                stream.write(content)
         @contextmanager
         def removal(name, digest):
             if state.get("before_pin"):
@@ -52,7 +55,7 @@ def model(tmp_path, monkeypatch):
                 yield remove
             finally:
                 state["pins"].remove(name)
-        yield SimpleNamespace(read_private=read, removal_private=removal)
+        yield SimpleNamespace(read_private=read, removal_private=removal, publish_private=publish)
     monkeypatch.setattr(windows_files, "directory", directory)
     def write_private(path, raw, **kw):
         if state.get("refuse_write") and state["refuse_write"](path):
@@ -169,6 +172,108 @@ def test_user_shell_entries_have_windowless_exact_root_and_normal_remove(model):
     assert shell.remove(root)["shortcutsRemoved"] and state["calls"] == before
 
 
+def test_entries_can_be_installed_again_after_uninstall(uninstaller):
+    root, state = uninstaller.root, uninstaller.state
+    assert uninstaller.run()["ok"] and not shell.listed(root)
+    assert json.loads((root / shell.FILE).read_text())["status"] == "removed"
+    result = shell.install(root, "1.0.0")
+    assert result["shortcuts"] == 4 and result["installedAppEntry"] and shell.listed(root)
+    assert {path.name for path in uninstaller.folder.iterdir()} == set(shell.LINKS)
+    assert state["registry"] is not None
+    assert json.loads((root / shell.FILE).read_text())["status"] == "installed"
+
+
+def test_a_record_that_still_says_installed_with_every_entry_gone_does_not_block(uninstaller):
+    """The last write of an uninstall can be refused after every entry is removed."""
+    root, state = uninstaller.root, uninstaller.state
+    installed = (root / shell.FILE).read_text()
+    assert json.loads(installed)["status"] == "installed" and shell.listed(root)
+    assert uninstaller.run()["ok"]
+    (root / shell.FILE).write_text(installed)  # As if that last write had been refused.
+    assert not uninstaller.folder.exists() and state["registry"] is None
+    # The record alone never sends a person to a Start-menu entry that is gone.
+    assert shell.listed(root) is False
+    assert shell.install(root, "1.0.0")["shortcuts"] == 4 and shell.listed(root)
+    # With the entries present the same record refuses, and nothing is overwritten.
+    before = dict(state["links"])
+    with pytest.raises(ValueError, match="already has a receipt"):
+        shell.install(root, "1.0.0")
+    assert state["links"] == before and shell.listed(root)
+    # A person deleted only the entry that opens Amplifier: not listed.
+    (uninstaller.folder / next(iter(shell.LINKS))).unlink()
+    assert shell.listed(root) is False
+
+
+def test_a_record_of_entries_in_another_place_is_never_replaced(model, tmp_path):
+    """The Start-menu location changed after setup: the recorded entries are still there."""
+    root, _, state = model
+    elsewhere = tmp_path / "Earlier Programs" / "Amplifier Unified - earlier"
+    elsewhere.mkdir(parents=True)
+    (elsewhere / "Amplifier Unified.lnk").write_bytes(b"shortcut")
+    record = json.dumps({"status": "installed", "folder": str(elsewhere)})
+    (root / shell.FILE).write_text(record)
+    # Setup and the launcher read the same folder: the one that the record names.
+    assert shell.listed(root) is True
+    with pytest.raises(ValueError, match="already has a receipt"):
+        shell.install(root, "1.0.0")
+    assert (root / shell.FILE).read_text() == record and state["registry"] is None and not state["links"]
+
+
+@pytest.mark.parametrize("raw", [
+    '{"status":"installed"}', '{"status":"installed","folder":7}',
+    '{"status":"preparing"}', '{"status":"other"}', '{}', '[]', 'null', 'not json'])
+def test_only_a_removed_receipt_allows_installing_entries_again(model, raw):
+    root, _, state = model
+    (root / shell.FILE).write_text(raw)
+    with pytest.raises(ValueError) as refused:
+        shell.install(root, "1.0.0")
+    assert str(refused.value) == "Windows shell integration already has a receipt; inspect it before retrying."
+    assert state["registry"] is None and not state["links"]
+
+
+def test_unreadable_receipt_refuses_install_and_is_not_listed(model, monkeypatch):
+    root, _, _ = model
+    (root / shell.FILE).write_text('{"status":"removed"}')
+    def unreadable(root):
+        raise PermissionError("read refused")
+    monkeypatch.setattr(shell, "_receipt", unreadable)
+    with pytest.raises(ValueError, match="^Windows shell integration already has a receipt; inspect it before retrying\\.$"):
+        shell.install(root, "1.0.0")
+    assert shell.listed(root) is False
+
+
+@pytest.mark.parametrize("status,named,shortcut,expected", [
+    (None, True, True, False), ("removed", True, True, False), ("installed", True, True, True),
+    ("installed", True, False, False), ("installed", False, True, False), ("preparing", True, True, False),
+    ("[]", True, True, False), ("not json", True, True, False)])
+def test_listed_needs_the_installed_record_and_the_entry_that_opens_amplifier(
+        model, status, named, shortcut, expected):
+    root, programs, _ = model
+    folder = programs / ("Amplifier Unified - " + shell.identity(root))
+    if status in ("[]", "not json"):
+        (root / shell.FILE).write_text(status)
+    elif status is not None:
+        (root / shell.FILE).write_text(json.dumps(
+            {"status": status, **({"folder": str(folder)} if named else {})}))
+    if shortcut:
+        folder.mkdir()
+        (folder / "Amplifier Unified.lnk").write_bytes(b"shortcut")
+    assert shell.listed(root) is expected
+
+
+@pytest.mark.parametrize("collision", ["folder", "registry"])
+def test_removed_receipt_does_not_allow_overwriting_entries(model, collision):
+    root, programs, state = model
+    (root / shell.FILE).write_text('{"status":"removed"}')
+    if collision == "folder":
+        (programs / ("Amplifier Unified - " + shell.identity(root))).mkdir()
+    else:
+        state["registry"] = {"foreign": "entry"}
+    with pytest.raises(ValueError, match="entries already exist; nothing was overwritten"):
+        shell.install(root, "1.0.0")
+    assert not state["links"] and json.loads((root / shell.FILE).read_text())["status"] == "removed"
+
+
 def test_removed_folder_keeps_a_file_the_person_added(model):
     root, programs, state = model
     shell.install(root, "1.0.0")
@@ -208,8 +313,12 @@ def test_modified_shell_entries_never_remove_anything(model, change):
 def test_existing_or_partial_registration_does_not_replay(model):
     root, programs, state = model
     shell.install(root, "1.0.0")
-    with pytest.raises(ValueError, match="receipt"): shell.install(root, "1.0.0")
+    before = dict(state["links"]), state["registry"], (root / shell.FILE).read_text()
+    # A second install over existing entries refuses, and nothing is replayed or overwritten.
+    with pytest.raises(ValueError, match="already has a receipt"):
+        shell.install(root, "1.0.0")
     assert not state["calls"]
+    assert (dict(state["links"]), state["registry"], (root / shell.FILE).read_text()) == before
 
 
 @pytest.mark.parametrize("gone", [
@@ -567,43 +676,19 @@ def test_failure_record_tries_the_service_folder_first_and_never_raises(tmp_path
     assert written == [tmp_path / "app/config/services" / consumer.RECORD, tmp_path / consumer.RECORD]
 
 
-def _seed_native_entries(root, folder):
-    """The state that setup's install() leaves, also valid for an elevated runner.
-
-    install() creates each shortcut file with an ordinary open. An elevated
-    token gives such a file to the Administrators group, and the private-file
-    boundary then refuses it; setup itself refuses an elevated account. So each
-    real shortcut is saved by ShellLink COM in the throwaway folder and then
-    published privately, byte for byte, into the real Start-menu folder.
-    """
+def _install_native_entries(root):
+    """Install the real entries in a throwaway folder. No app is started."""
     from amplifier_web import windows_files
-    from amplifier_web.deployment import write_private
-    python, links = shell.entries(root)
+    python, _ = shell.entries(root)
     python.parent.mkdir(parents=True)
     python.write_bytes(b"MZ")  # A shortcut target must exist. Nothing starts it.
-    values = shell.registration_values(root, "1.0.0")
-    row = {"schema": 1, "root": str(root), "folder": str(folder), "status": "installed",
-           "links": {}, "registry": values}
-    with windows_files.directory(folder, owned_root=folder, create=True) as owned:
-        for name, args in links.items():
-            scratch = root / ("scratch-" + name)
-            with shell.shell_link() as link:
-                link.create(scratch, python, args, root / "workspace")
-            content = scratch.read_bytes()
-            scratch.unlink()
-            owned.publish_private(name, content)
-            with shell.shell_link() as link:
-                assert link.read(folder / name) == (str(python), args)
-            row["links"][name] = hashlib.sha256(content).hexdigest()
-    shell.registry(root, values)
-    write_private(root / shell.FILE, json.dumps(row), owned_root=root)
+    shell.install(root, "1.0.0")
     # A real installation has this folder before its app first runs.
     with windows_files.directory(root / "app" / "config" / "services", owned_root=root, create=True):
         pass
     return shell.registry(root)
 
 
-@pytest.mark.skipif(os.name != "nt", reason="Real Start-menu shortcuts, HKCU transaction and private NTFS files")
 def test_native_uninstall_order_failure_and_second_uninstall(monkeypatch):
     """The real Windows entries of a throwaway installation folder.
 
@@ -620,6 +705,10 @@ def test_native_uninstall_order_failure_and_second_uninstall(monkeypatch):
     the folder about one second after its stop reports, because real worker
     programs end a moment after the task reports that it stopped.
     """
+    if os.name != "nt":
+        if os.environ.get("AMPLIFIER_REQUIRE_WINDOWS_SHELL_CHECKS") == "1":
+            pytest.fail("This lane requires the real Windows shell checks.")
+        pytest.skip("Real Start-menu shortcuts, HKCU transaction and private NTFS files")
     import ctypes
     import shutil
     import threading
@@ -674,7 +763,7 @@ def test_native_uninstall_order_failure_and_second_uninstall(monkeypatch):
         events.append("task")
     monkeypatch.setattr(windows_service, "uninstall", uninstall)
     try:
-        registration = _seed_native_entries(root, folder)
+        registration = _install_native_entries(root)
         assert registration and {path.name for path in folder.iterdir()} == set(shell.LINKS)
         with windows_files.directory(root, owned_root=root) as owned:
             receipt = owned.read_private(shell.FILE, limit=65536)
@@ -723,6 +812,22 @@ def test_native_uninstall_order_failure_and_second_uninstall(monkeypatch):
         # 5. Asking again changes nothing and is not an error.
         present.clear()
         assert asyncio.run(consumer.maintenance(root, "uninstall"))["ok"] and events == ["task", "task"]
+        # 6. Setup restores the real entries over the completed removal receipt.
+        assert not shell.listed(root)
+        restored = shell.install(root, "1.0.0")
+        assert restored["shortcuts"] == 4 and restored["installedAppEntry"] and shell.listed(root)
+        assert {path.name for path in folder.iterdir()} == set(shell.LINKS)
+        python, links = shell.entries(root)
+        for name, args in links.items():
+            with shell.shell_link() as link:
+                assert link.read(folder / name) == (str(python), args)
+        assert shell.registry(root) == registration
+        with windows_files.directory(root, owned_root=root) as owned:
+            assert json.loads(owned.read_private(shell.FILE, limit=65536))["status"] == "installed"
+        # 7. The public uninstall removes the restored entries for cleanup.
+        present.update(shell.LINKS)
+        assert asyncio.run(consumer.maintenance(root, "uninstall"))["ok"]
+        assert not shell.listed(root) and shell.registry(root) is None and not folder.exists()
     finally:
         # Only this test's own throwaway objects, by their exact names.
         for timer in timers:

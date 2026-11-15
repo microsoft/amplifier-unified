@@ -134,7 +134,27 @@ def save(service, args, authority=None):
 def bind(service, runtime):
     """Only host code supplies this callback. It never crosses the worker wire."""
     if callable(getattr(runtime, 'bind_input_configuration', None)):
-        runtime.bind_input_configuration(lambda session: prepare(service, session, frozen=True))
+        async def prepare_input(session):
+            # Stay inside RuntimeManager's owned preparation task, including
+            # projection/copy failures. The original Send snapshot stays full.
+            return await prepare(service, _startup_inputs(session), frozen=True)
+        runtime.bind_input_configuration(prepare_input)
+
+
+def _startup_inputs(session):
+    """Private startup inputs; prepare() detaches their shared graph once."""
+    value = {key: session[key] for key in (
+        'id', 'workspace', 'workingDirectory', 'executionRevision',
+        'interruptionRevision', 'nextMessageRevision', 'configurationPendingRevision',
+        'runtimeSessionId', 'nativeIdentity', 'location', 'bundle', 'selection',
+        'pendingModelSelection', 'modelConnectionKey', 'pendingBundleSelection',
+        'pendingChoiceAuthority', 'replaceSavedSelection', 'bundleReplacement', 'forkContext',
+    ) if key in session}
+    # Ordinary startup restores native history. A fork explicitly supplies its
+    # captured messages through the existing startup path.
+    if session.get('forkContext'):
+        value['messages'] = session.get('messages', [])
+    return value
 
 
 def guard_for(service, captured, *, frozen=False):

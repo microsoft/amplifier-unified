@@ -217,13 +217,54 @@ def registry(root, values=None, *, remove=False):
         return None
 
 
+def _receipt(root):
+    from .windows_files import directory
+    with directory(root, owned_root=root) as owned:
+        return json.loads(owned.read_private(FILE, limit=65536))
+
+
+def listed(root) -> bool:
+    """The Start-menu entry that opens Amplifier exists, and the entry record says so.
+
+    The record alone is not enough. The last write of an uninstall can be
+    refused after every entry is gone, and a person can delete the folder.
+    """
+    from .windows_files import address
+    try:
+        row = _receipt(address(root))
+        # The folder that the record names: setup's second run reads the same one.
+        if (not isinstance(row, dict) or row.get("status") != "installed"
+                or not isinstance(row.get("folder"), str)):
+            return False
+        return (Path(row["folder"]) / next(iter(LINKS))).is_file()
+    except (OSError, ValueError):
+        return False
+
+
 def install(root, version):
     from .windows_files import address, directory
     from .deployment import write_private
     root = address(root)
     manifest = root / FILE
     if manifest.exists():
-        raise ValueError("Windows shell integration already has a receipt; inspect it before retrying.")
+        # The entries can be added again over the record of a finished
+        # removal. A record that still says `installed` counts the same when
+        # the entries are gone: the last write of an uninstall can be refused
+        # after every entry is removed. "Gone" means the folder that this
+        # record names, so that a record of entries in another place is never
+        # replaced. The check below also refuses when today's Start-menu
+        # folder or the Apps-list entry exists, so nothing is ever overwritten.
+        # Every other record is refused.
+        try:
+            row = _receipt(root)
+            status = row.get("status") if isinstance(row, dict) else None
+            again = status == "removed" or (
+                status == "installed" and isinstance(row.get("folder"), str)
+                and not Path(row["folder"]).exists())
+        except (OSError, ValueError):
+            again = False
+        if not again:
+            raise ValueError("Windows shell integration already has a receipt; inspect it before retrying.")
     folder = programs() / ("Amplifier Unified - " + identity(root))
     if folder.exists() or registry(root) is not None:
         raise ValueError("The Windows app entries already exist; nothing was overwritten.")
@@ -236,7 +277,7 @@ def install(root, version):
         for name, args in links.items():
             path = folder / name
             # The private directory is pinned, no pre-existing file is adopted.
-            with path.open("xb"): pass
+            owned.publish_private(name, b"")
             with shell_link() as link:
                 link.create(path, python, args, root / "workspace")
                 if link.read(path) != (str(python), args):
@@ -279,7 +320,7 @@ def removal(root, *, progress=None):
         raise ValueError("The Windows app entry receipt is incomplete; inspect before removal.")
     result = {"shortcutsRemoved": True, "installedAppEntryRemoved": True, "userDataRetained": True}
     if row["status"] == "removed":
-        # A completed earlier removal. Setup never recreates entries under this receipt.
+        # A completed earlier removal. A second removal changes nothing.
         yield lambda: dict(result)
         return
     with ExitStack() as stack:
