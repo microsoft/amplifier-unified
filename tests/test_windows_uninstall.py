@@ -1357,13 +1357,21 @@ os.chdir(system)
 out = {}
 library = C.WinDLL(str(root / "python" / "probe" / "probe.dll"))  # A mapped image inside the folder.
 
+native = C.WinDLL("ntdll")
+native.NtSetInformationFile.argtypes = [C.c_void_p, C.c_void_p, C.c_void_p, C.c_ulong, C.c_int]
+native.NtSetInformationFile.restype = C.c_long
+
 def rename(api, handle, directory, name):
+    # FileRenameInformation with a folder handle and a single name: no path at all.
     encoded = name.encode("utf-16-le")
     buffer = C.create_string_buffer(C.sizeof(FILE_RENAME_INFO) + len(encoded))
     info = FILE_RENAME_INFO.from_buffer(buffer)
     info.Flags, info.RootDirectory, info.FileNameLength = 0, directory, len(encoded)
     C.memmove(C.addressof(buffer) + FILE_RENAME_INFO.FileName.offset, encoded, len(encoded))
-    api.ok(api.SetFileInformationByHandle(handle, 22, buffer, len(buffer)))
+    block = (C.c_void_p * 2)()
+    status = native.NtSetInformationFile(handle, C.byref(block), buffer, len(buffer), 10)
+    if status < 0:
+        raise C.WinError(api.dos_error(status))
 
 try:
     with removal.folder(root) as owned:
@@ -1387,9 +1395,14 @@ try:
                         row["deleteError"] = error.winerror
                         try:
                             rename(api, handle, last, str(len(moved) + 1))
-                            row["moved"] = True
+                            row["moved"] = "by folder handle"
                         except OSError as error:
                             row["moveError"] = error.winerror
+                            try:  # The second form: an absolute target whose folders are all held.
+                                api.move(handle, root / "unified-uninstall-last" / str(len(moved) + 1), replace=False)
+                                row["moved"] = "by held path"
+                            except OSError as error:
+                                row["pathMoveError"] = error.winerror
                 finally:
                     api.close(handle)
             except OSError as error:
