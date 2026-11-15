@@ -785,10 +785,18 @@ def _finish_options(tree):
     return dict(park=PARK, folders=[], seconds=2, report=tree["report"])
 
 
-def _plain_tree(root):
+def _plain_tree(root, *, exclude=()):
     """Only for trees without links."""
     return {str(path.relative_to(root)): path.read_bytes() if path.is_file() else None
-            for path in root.rglob("*")}
+            for path in root.rglob("*") if path not in exclude}
+
+
+def _wait_until_gone(path, *, timeout=5):
+    """A report can arrive just before the helper exits and closes its file."""
+    deadline = time.monotonic() + timeout
+    while os.path.lexists(path) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert not os.path.lexists(path), f"The helper still holds {path.name}."
 
 
 def _outside_state(outside):
@@ -856,7 +864,8 @@ with removal.folder(root) as owned:
         workspace = owned.remove(['workspace'])
         first = owned.remove(['python', 'tools'], park=park)
         parked = {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
-                  for path in (root / 'unified-uninstall-last').iterdir() if path.is_file()}
+                  for path in (root / 'unified-uninstall-last').iterdir()
+                  if path.is_file() and not path.name.endswith('.hold')}
         left = owned.names()
 evidence.write_text(json.dumps(dict(
     inProcess=first, workspace=workspace, parked=parked, images=images, left=left, pid=pid,
@@ -935,6 +944,22 @@ def test_native_finish_invalid_journal_changes_nothing(finish_tree, journal):
     print("AFTER_EXIT_BAD_JOURNAL " + json.dumps({"journal": journal, "report": result}))
 
 
+@pytest.mark.skipif(os.name != "nt", reason="CreateNew must refuse an existing anchor before ready")
+def test_native_finish_refuses_a_second_anchor_and_changes_nothing(finish_tree):
+    tree, root = finish_tree, finish_tree["root"]
+    with removal.folder(root) as owned:
+        with owned.aside(PARK, TOKEN):
+            (root / PARK / (TOKEN + ".hold")).write_bytes(b"an earlier anchor")
+            before = _plain_tree(root)
+            with pytest.raises(OSError, match="did not start in the held folder"):
+                removal.finish_after_exit(root, TOKEN, **_finish_options(tree))
+            result = _finish_report(tree["report"])
+            assert _plain_tree(root) == before
+    assert result["passes"] == 0 and not result["folderRemoved"] and result["reason"], result
+    _assert_outside_unchanged(tree)
+    print("AFTER_EXIT_SECOND " + json.dumps(result, separators=(",", ":")))
+
+
 @pytest.mark.skipif(os.name != "nt", reason="The helper's real current-folder hold after the caller lets go")
 def test_native_finish_holds_the_root_flat_and_inner_folders_while_it_waits(finish_tree):
     tree, root = finish_tree, finish_tree["root"]
@@ -965,6 +990,42 @@ def test_native_finish_holds_the_root_flat_and_inner_folders_while_it_waits(fini
     assert result["reason"] == "" and result["folderRemoved"] and not root.exists(), result
     _assert_outside_unchanged(tree)
     print("AFTER_EXIT_HOLD " + json.dumps({"refused": errors, "report": result}))
+
+
+@pytest.mark.skipif(os.name != "nt", reason="The step keeps its own anchor open without sharing")
+def test_native_finish_keeps_its_anchor_open_until_the_wait_ends(finish_tree):
+    tree, root = finish_tree, finish_tree["root"]
+    flat, anchor = root / PARK, root / PARK / (TOKEN + ".hold")
+    sleeper = subprocess.Popen([sys.executable, "-I", "-S", "-c", "import sys; sys.stdin.buffer.read(1)"],
+                               stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    errors = {}
+    try:
+        with removal.folder(root) as owned:
+            with owned.aside(PARK, TOKEN):
+                removal.finish_after_exit(root, TOKEN, **{
+                    **_finish_options(tree), "wait_for": [sleeper.pid], "seconds": 20})
+        assert sorted(os.listdir(flat)) == [TOKEN, TOKEN + ".hold"]
+        for name, action in (("remove", lambda: os.remove(anchor)),
+                             ("rename", lambda: os.rename(anchor, flat / "moved")),
+                             ("read", lambda: anchor.read_bytes())):
+            with pytest.raises(OSError) as refused:
+                action()
+            errors[name] = refused.value.winerror
+            assert errors[name] == 32, errors
+        inplace = _junction_in_place(flat, tree["outside"])
+        if inplace != {"ok": False, "error": 145, "stage": "set"}:
+            print("AFTER_EXIT_ANCHOR " + json.dumps({"refused": errors, "flat": inplace}))
+            pytest.exit("The open anchor did not keep the flat folder nonempty. Stop.", 1)
+        assert sleeper.poll() is None and not tree["report"].exists()
+    finally:
+        sleeper.stdin.close()
+        sleeper.wait(timeout=10)
+    result = _finish_report(tree["report"])
+    _wait_until_gone(root)
+    assert result["reason"] == "" and result["folderRemoved"], result
+    _assert_outside_unchanged(tree)
+    print("AFTER_EXIT_ANCHOR " + json.dumps({"refused": errors, "flat": inplace, "report": result},
+                                           separators=(",", ":")))
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Real Windows sharing rules for the folders above the held folder")
@@ -1085,6 +1146,63 @@ def _junction_in_place(path, target):
         return {"ok": ok, "error": 0 if ok else C.get_last_error(), "stage": "set"}
     finally:
         kernel.CloseHandle(handle)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Measure Windows folder protection from an open delete-on-close file")
+def test_native_an_open_file_keeps_its_folder_and_the_folder_above_in_place(finish_tree):
+    import ctypes as C
+
+    tree, root, outside = finish_tree, finish_tree["root"], finish_tree["outside"]
+    parent, control = root / "F", root / "control"
+    flat = parent / "flat"
+    flat.mkdir(parents=True)
+    control.mkdir()
+    anchor = flat / "anchor"
+    # Prove that a rename works before the open file is there.
+    os.rename(flat, parent / "free-flat")
+    os.rename(parent / "free-flat", flat)
+    os.rename(parent, root / "free-F")
+    os.rename(root / "free-F", parent)
+    kernel = C.WinDLL("kernel32", use_last_error=True)
+    kernel.CreateFileW.argtypes = [C.c_wchar_p, C.c_uint32, C.c_uint32, C.c_void_p,
+                                  C.c_uint32, C.c_uint32, C.c_void_p]
+    kernel.CreateFileW.restype = C.c_void_p
+    kernel.CloseHandle.argtypes = [C.c_void_p]
+    handle = kernel.CreateFileW(str(anchor), 0x40000000, 0, None, 1, 0x04000000, None)
+    assert handle != C.c_void_p(-1).value, C.get_last_error()
+    measured = {}
+    try:
+        measured["flat"] = _junction_in_place(flat, outside)
+        measured["parent"] = _junction_in_place(parent, outside)
+        measured["control"] = _junction_in_place(control, outside)
+        if measured["control"]["ok"]:
+            tree["links"].append(control)
+        for label, action in (
+                ("renameFlat", lambda: os.rename(flat, parent / "moved-flat")),
+                ("renameParent", lambda: os.rename(parent, root / "moved-F")),
+                ("removeAnchor", lambda: os.remove(anchor)),
+                ("renameAnchor", lambda: os.rename(anchor, flat / "moved-anchor"))):
+            try:
+                action()
+                measured[label] = 0
+            except OSError as error:
+                measured[label] = error.winerror
+        required = {"ok": False, "error": 145, "stage": "set"}
+        if (measured["flat"] != required or measured["parent"] != required
+                or measured["control"] != {"ok": True, "error": 0, "stage": "set"}
+                or not measured["renameFlat"] or not measured["renameParent"]
+                or measured["removeAnchor"] != 32 or measured["renameAnchor"] != 32):
+            print("OPEN_FILE_KEEPS_FOLDER " + json.dumps(measured, separators=(",", ":")))
+            pytest.exit("The required open-file protection differed. Stop; inspect the numbers.", 1)
+    finally:
+        kernel.CloseHandle(handle)
+    assert not anchor.exists()
+    measured["afterClose"] = _junction_in_place(flat, outside)
+    if measured["afterClose"]["ok"]:
+        tree["links"].append(flat)
+    print("OPEN_FILE_KEEPS_FOLDER " + json.dumps(measured, separators=(",", ":")))
+    assert measured["afterClose"] == {"ok": True, "error": 0, "stage": "set"}, measured
+    _assert_outside_unchanged(tree)
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Measure in-place reparse data while the helper holds the inner folder")
@@ -1244,6 +1362,7 @@ def test_native_finish_removes_named_folders_but_never_a_file_or_nonempty_folder
 def test_native_finish_leaves_a_foreign_top_level_entry(finish_tree):
     tree, root = finish_tree, finish_tree["root"]
     (root / "mine.txt").write_text("not Amplifier's")
+    records = {name: (root / name).read_bytes() for name in ("unified-uninstall.json", COMPLETE)}
     with removal.folder(root) as owned:
         with owned.aside(PARK, TOKEN):
             removal.finish_after_exit(root, TOKEN, **_finish_options(tree))
@@ -1252,8 +1371,13 @@ def test_native_finish_leaves_a_foreign_top_level_entry(finish_tree):
     assert sorted(os.listdir(root)) == ["mine.txt", COMPLETE, "unified-uninstall.json"]
     assert (root / "mine.txt").read_text() == "not Amplifier's"
     assert result["left"] == [str(root / "mine.txt")] and result["leftCount"] == 1
+    _wait_until_gone(root / PARK / (TOKEN + ".hold"))
+    assert {name: (root / name).read_bytes() for name in records} == records
+    assert not (root / PARK).exists() and not (root / PARK / TOKEN).exists()
     _assert_outside_unchanged(tree)
-    print("AFTER_EXIT_FOREIGN " + json.dumps(result))
+    print("AFTER_EXIT_JOURNAL_KEPT " + json.dumps({
+        "journalUnchanged": True, "completeUnchanged": True, "holdGone": True,
+        "flatGone": True, "anchorGone": True, "report": result}, separators=(",", ":")))
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Real PowerShell refuses a damaged completion record")
@@ -1276,6 +1400,9 @@ def test_native_finish_refuses_a_completion_record_that_is_not_a_plain_writable_
     result = _finish_report(tree["report"])
     assert result["reason"] == "Record refused" and not result["folderRemoved"], result
     assert os.path.lexists(record) and (root / "unified-uninstall.json").exists()
+    _wait_until_gone(root / PARK / (TOKEN + ".hold"))
+    assert sorted(os.listdir(root)) == sorted([PARK, COMPLETE, "unified-uninstall.json"])
+    assert os.listdir(root / PARK) == [TOKEN] and list((root / PARK / TOKEN).iterdir()) == []
     if kind == "folder":
         assert record.is_dir() and list(record.iterdir()) == []
     elif kind == "filelink":
@@ -1323,10 +1450,13 @@ def test_native_finish_stops_when_the_journal_token_changes_while_it_waits(finis
     (root / "unified-uninstall.json").write_text(json.dumps({
         "schema": 1, "choice": "delete", "token": "f" * 32}))
     (root / PARK / "later.txt").write_text("after the token changed")
-    before = _plain_tree(root)
+    # Its own open anchor is not readable and is deleted by Windows at helper exit.
+    anchor = root / PARK / (TOKEN + ".hold")
+    before = _plain_tree(root, exclude=(anchor,))
     result = _finish_report(tree["report"])
     assert result["reason"] == "Root or token refused" and not result["folderRemoved"], result
     assert result["passes"] >= 1
+    _wait_until_gone(anchor)
     assert _plain_tree(root) == before
     _assert_outside_unchanged(tree)
     print("AFTER_EXIT_NEW_TOKEN " + json.dumps(result))

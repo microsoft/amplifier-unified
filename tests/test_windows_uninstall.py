@@ -1148,7 +1148,8 @@ except consumer.Unfinished as stopped:
     outcome.update(step=stopped.step, refused=isinstance(stopped, consumer.Refused),
                    error=type(stopped.error).__name__, notice=stopped.notice)
 parked = {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
-          for path in (root / plan.PARK).iterdir() if path.is_file()} if (root / plan.PARK).exists() else {}
+          for path in (root / plan.PARK).iterdir()
+          if path.is_file() and not path.name.endswith(".hold")} if (root / plan.PARK).exists() else {}
 outcome.update(events=events, folderAfter=os.getcwd(), left=sorted(os.listdir(root)),
                images=images, parked=parked)
 Path(evidence).write_text(json.dumps(outcome))
