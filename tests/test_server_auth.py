@@ -442,6 +442,8 @@ async def test_real_host_applies_sign_out_all_browsers_to_requests_and_open_stre
     real = time.time
     monkeypatch.setattr(auth.time, "time", lambda: real() + 5)
     saved = auth.sign_out_all(tmp_path)
+    # Until the host has applied it, a sign-in ticket or code opens no session.
+    assert app["sessions"].epoch == 0 and auth.sign_in(app) is None and auth.sign_in(app, remote=True) is None
     # The running host notices by itself (its watcher looks every two seconds).
     for _ in range(100):
         if app["sessions"].epoch == saved:
@@ -461,3 +463,23 @@ async def test_real_host_applies_sign_out_all_browsers_to_requests_and_open_stre
     monkeypatch.setattr(auth.time, "time", lambda: real() + 10)
     fresh = {"Cookie": f"amplifier_unified_session={new_session(app['session_secret'])}"}
     assert (await client.get("/api/state", headers=fresh)).status == 200
+    opened = {"Cookie": f"amplifier_unified_session={auth.sign_in(app)}"}
+    assert (await client.get("/api/state", headers=opened)).status == 200
+
+
+@pytest.mark.parametrize("method,path", [
+    ("GET", "/login"), ("POST", "/api/browser-entry/code"), ("POST", "/api/browser-entry/code/redeem")])
+async def test_default_host_serves_no_sign_in_by_code_at_an_address_for_other_devices(aiohttp_client, tmp_path, method, path):
+    """Remote access is off by default: the host answers only at this computer's own names."""
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(),
+                           voice=False, background_updates=False)
+    assert app["server_config"]["public_origins"] == [] and app["server_config"]["bind"] == ["127.0.0.1"]
+    assert app["permitted_hosts"] == frozenset({"127.0.0.1", "localhost", "::1"})
+    client = await aiohttp_client(app)
+    other = "pc.tail1234.ts.net:8941"
+    response = await client.request(method, path, allow_redirects=False, data="csrf=x&code=ABCDEFGHJK", headers={
+        "Host": other, "Origin": "https://" + other, "Content-Type": "application/x-www-form-urlencoded",
+        "Authorization": "Bearer " + app["control_token"]})
+    # Refused at the host boundary, before the sign-in page or either code endpoint runs.
+    assert response.status == 403 and (await response.json())["error"] == "This Host is not configured."
+    assert "Set-Cookie" not in response.headers
