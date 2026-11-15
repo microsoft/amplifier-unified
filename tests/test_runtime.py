@@ -1206,7 +1206,8 @@ async def test_ready_worker_identity_is_private_and_bound_to_native_session(repo
     script = (
         "import json,os,sys;sys.stdin.readline();"
         "print(json.dumps({'type':'runtime.ready','report':{'public':True},"
-        f"'workerIdentity':{{'sessionId':{reported_session!r},'pid':os.getpid()}}}}),flush=True);"
+        f"'workerIdentity':{{'sessionId':{reported_session!r},'pid':os.getpid(),"
+        "'owner':{'pid':os.getpid(),'app':'amplifier-unified','hostname':'fixture-host','acquisition_id':'fixture-acquisition'}}}),flush=True);"
         "sys.stdin.readline()"
     )
     manager = RuntimeManager(command=[sys.executable, '-c', script])
@@ -1217,6 +1218,9 @@ async def test_ready_worker_identity_is_private_and_bound_to_native_session(repo
         row = manager.workers['app-owner']
         assert row.get('native_worker_pid') == (
             row['process'].pid if reported_session == 'identity-owner' else None)
+        assert bool(row.get('native_writer')) is (reported_session == 'identity-owner')
+        if reported_session == 'identity-owner':
+            assert row['native_writer']['acquisition_id'] == 'fixture-acquisition'
         assert all('workerIdentity' not in value and 'native_worker_pid' not in value for _, value in events)
         assert next(value['report'] for kind, value in events if value.get('status') == 'ready') == {'public': True}
     finally:

@@ -1,5 +1,7 @@
 # Contributor operating guidance
 
+This codebase is yours: what it's for and how it's built are your call, and you'll keep building on it.
+
 Before broad source reads or searches, use the [source and ownership map](docs/source-context.md).
 `python scripts/source_context.py` summarizes tracked inputs without reading
 their bodies; use `--format paths` with `--under` to select relevant owners,

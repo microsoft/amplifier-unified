@@ -284,6 +284,40 @@ async def test_restart_never_replays_an_unknown_manager_move(app, tmp_path, monk
         await other.close()
 
 
+async def test_startup_no_move_proof_precedes_manager_notification_snapshot(app, tmp_path, monkeypatch):
+    from amplifier_web.runtime import RuntimeManager
+    source, target, _, root = await prepared(app, tmp_path)
+    record = await checkout(app, source, target, root)
+    monkeypatch.setattr(app.worktrees, 'launch', Mock())
+    pending = await move(app, source, target, record)
+    pending.update(step='waiting')
+    app.worktrees.save(pending)
+    # Force the existing reserved return through its suppression save after
+    # restart; that bookkeeping must retain the newer recovery proof.
+    source['interruptionRevision'] = source.get('interruptionRevision', 0) + 1
+    app._publish_changes(sessions={source['id']})
+    await app.close()
+    runtime = RuntimeManager()
+    runtime.start = AsyncMock(side_effect=AssertionError('No model work in startup recovery'))
+    other = AppService(app.data_dir, runtime, workspace=tmp_path)
+    try:
+        assert other.worktrees.read(target['id'], pending['id'])['phase'] == 'unknown'
+        other.worktrees.start()
+        immediate = other.worktrees.read(target['id'], pending['id'])
+        assert immediate['phase'] == 'rejected' and immediate['boundaryCleanup']['workerAbsent']
+        await settle(other)
+        saved = other.worktrees.read(target['id'], pending['id'])
+        assert saved['revision'] == immediate['revision']
+        assert saved['boundaryCleanup'] == immediate['boundaryCleanup']
+        assert saved['phase'] == 'rejected' and not other.worktrees.execution_state(target['id'])['fenced']
+        assert not other._session(target['id'])['configurationBusy']
+        notice = other.collaboration.receipt('worktree-wait:' + pending['id'])
+        assert notice['subscription']['status'] == 'suppressed'
+        runtime.start.assert_not_awaited()
+    finally:
+        await other.close()
+
+
 @pytest.mark.parametrize('user_stop', [False, True])
 async def test_native_release_stop_is_distinct_from_a_new_user_stop(app, tmp_path, user_stop):
     source, target, _, root = await prepared(app, tmp_path)

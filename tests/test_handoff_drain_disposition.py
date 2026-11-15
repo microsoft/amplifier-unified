@@ -216,17 +216,19 @@ async def test_partial_hook_installation_releases_its_own_gate(worker, monkeypat
 @pytest.mark.parametrize('cancel_at', ['reconciling', 'consumed'])
 async def test_consumed_no_effect_ack_finishes_after_bridge_cancellation(worker, monkeypatch, response, cancel_at):
     value, children = worker
-    sent, reconciling = asyncio.Event(), asyncio.Event()
+    sent, reconciling, release_cleanup = asyncio.Event(), asyncio.Event(), asyncio.Event()
     messages = []
     def publish(message):
         if message.get('op') == 'bridge':
             messages.append(message)
             sent.set()
     original = inspect
-    async def blocked_inspect(worker, request_id, cancel=False):
+    async def blocked_inspect(worker, request_id, cancel=False, **kwargs):
         if cancel:
             reconciling.set()
-        return await original(worker, request_id, cancel=cancel)
+            # Explicit consumed-ACK race, not the old command-lock dependency.
+            await release_cleanup.wait()
+        return await original(worker, request_id, cancel=cancel, **kwargs)
     monkeypatch.setattr('amplifier_web.runtime_worker.publish', publish)
     monkeypatch.setattr('amplifier_web.handoff_boundary.inspect', blocked_inspect)
     bridge = asyncio.create_task(value.bridge('dispatch', {'action': 'worktree.handoff', 'id': 'move',
@@ -250,6 +252,7 @@ async def test_consumed_no_effect_ack_finishes_after_bridge_cancellation(worker,
         assert children.admission_gate and value._handoff_boundary
     finally:
         value.command_lock.release()
+        release_cleanup.set()
     # An exact reply was already consumed; no new host notification is coming.
     # Any worker-owned reconciliation must finish without replaying the move.
     await asyncio.sleep(0)

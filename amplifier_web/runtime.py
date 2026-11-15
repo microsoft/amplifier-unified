@@ -372,6 +372,7 @@ class RuntimeManager:
         self._execution_state = None
         self._configuration_revision = lambda: 0
         self._input_configuration = None
+        self.boundary_reply_timeout = 1
         self.home = None
         from .runtime_retention import WorkerRetention
         self.retention = WorkerRetention(self, retention)
@@ -507,7 +508,7 @@ class RuntimeManager:
         if current.get('hostMatches') is False and not allow_fenced:
             raise ValueError('The saved execution host differs from this local host. Cross-host execution is unavailable.')
         if current['fenced'] and not allow_fenced:
-            raise ValueError('The task execution handoff is pending or unknown. Inspect and reconcile it before starting more work.')
+            raise ValueError('The task execution handoff is pending or unconfirmed. Choose Check move in Task execution folder to read its saved facts without repeating work. An unconfirmed writer release still needs recovery by its original owner.')
         if session is not None and (
             session.get('executionRevision', 0) != current['revision']
             or (session.get('workingDirectory') or session.get('workspace')) != current['directory']
@@ -1303,6 +1304,12 @@ class RuntimeManager:
                                 and identity.get("sessionId") == row.get("runtime_id")
                                 and type(identity.get("pid")) is int and identity["pid"] > 0):
                             row["native_worker_pid"] = identity["pid"]
+                            native_owner = identity.get('owner')
+                            if (isinstance(native_owner, dict) and native_owner.get('pid') == identity['pid']
+                                    and native_owner.get('app') == 'amplifier-unified'
+                                    and native_owner.get('acquisition_id')):
+                                row['native_writer'] = {key: native_owner.get(key) for key in
+                                    ('hostname', 'app', 'pid', 'acquisition_id')}
                         row["ready"].set_result(data.get("report", {}))
                     # Private mount inputs never enter public readiness/state.
                     if isinstance(data.get("configurationInputs"), list) and isinstance(data.get("configurationStamp"), list):
@@ -1660,9 +1667,9 @@ class RuntimeManager:
         except BaseException as exc:
             # A partial transport write has an unknown outcome. Keep the
             # in-flight fence until its reply or process exit, just like timeout.
-            if op == 'retire' and isinstance(exc, Exception):
-                # A partial retirement write can still get a late reply. Its
-                # reconciler keeps the original future until reply or exit.
+            if op in {'retire', 'handoff.boundary'} and isinstance(exc, Exception):
+                # A partial lifecycle write can still get a late reply. Its
+                # original owner keeps the future until that reply or exit.
                 return row, identity, future
             row["pending"].pop(identity, None)
             raise
@@ -1670,7 +1677,7 @@ class RuntimeManager:
 
     async def _reply(self, row, identity, future, *, op, args):
         try:
-            timeout = 75 if op == "control" and args.get("operation") == "memory.consolidate" else None if op == "retire" or op == "control" and args.get("operation") == "history.edit" else 180 if op == "control" and args.get("operation") in {"bundle.preview", "bundle.prepare"} else 600 if op == "control" and args.get("operation") == "tool.invoke" else 150 if op == "control" and args.get("operation") in {"configuration.providerModels","configuration.providerTest"} else 30
+            timeout = 75 if op == "control" and args.get("operation") == "memory.consolidate" else None if op in {"retire", "handoff.boundary"} or op == "control" and args.get("operation") == "history.edit" else 180 if op == "control" and args.get("operation") in {"bundle.preview", "bundle.prepare"} else 600 if op == "control" and args.get("operation") == "tool.invoke" else 150 if op == "control" and args.get("operation") in {"configuration.providerModels","configuration.providerTest"} else 30
             if op == "coordination.approval":
                 # The worker expires the human decision after 50 seconds.
                 timeout = 55
@@ -1967,24 +1974,86 @@ class RuntimeManager:
                 raise current from None
 
     async def handoff_boundary(self, session_id, request_id, *, cancel=False, receipt=None, update=False, configuration=False):
-        """Inspect only this existing worker; never warm or acquire a writer."""
+        """One original boundary reply owner, even after a caller stops waiting."""
         row = self.workers.get(session_id)
         expected = (receipt or {}).get('configurationWait') if configuration else (receipt or {}).get('updateWait')
         def guard():
             current = self.workers.get(session_id)
+            if current is not row:
+                raise ValueError('The original boundary worker changed; its request was not recreated.')
             if expected and (not current or current.get('runtimeOwnerId') != expected['owner']):
                 raise ValueError('The requesting runtime owner changed before its update boundary.')
+            if ((receipt or {}).get('boundaryOwner') and current is not None
+                    and current.get('runtimeOwnerId') != receipt['boundaryOwner']):
+                raise ValueError('The original checkout worker changed; its boundary was not recreated.')
         guard()
         if row is None:
-            return {'ready': True, 'waitingFor': [], 'continuationAllowed': False}
+            return {'ready': True, 'waitingFor': [], 'continuationAllowed': False,
+                    **({'cancelled': True} if cancel else {})}
         if row['process'].returncode is not None:
+            if cancel:
+                return {'cancelled': True}
             raise RuntimeError('The old worker exited before confirming its saved boundary.')
-        return await self._request(session_id, 'handoff.boundary', request_id=request_id, cancel=cancel,
-            receipt=receipt, **({'guard': guard} if expected else {}), **({'update': True} if update else {}),
-            **({'configuration': True} if configuration else {}))
+        waits = row.setdefault('boundary_waits', {})
+        key = request_id
+        waiting = waits.get(key)
+        if waiting is None:
+            waiting = {'cancel': cancel}
+            waits[key] = waiting
+            async def observe():
+                result = await self._request(session_id, 'handoff.boundary', request_id=request_id,
+                    cancel=cancel, receipt=receipt, guard=guard,
+                    **({'update': True} if update else {}), **({'configuration': True} if configuration else {}))
+                # Cancellation is ordered after the original marker/checkpoint.
+                # A late arm can never arrive after its acknowledged removal.
+                if not cancel and waiting['cancel']:
+                    result = await self._request(session_id, 'handoff.boundary', request_id=request_id,
+                        cancel=True, guard=guard)
+                return result
+            waiting['task'] = asyncio.create_task(observe())
+            # Retrieve failures after a disconnected waiter without losing them:
+            # the exact next observation still consumes this task's result.
+            waiting['task'].add_done_callback(lambda done: None if done.cancelled() else done.exception())
+        elif cancel:
+            waiting['cancel'] = True
+            if waiting['task'].done() and not waiting['task'].cancelled():
+                try:
+                    cancelled = waiting['task'].result().get('cancelled')
+                except Exception:
+                    cancelled = False
+                if not cancelled:
+                    # Consume the original reply before ordering its removal.
+                    waits.pop(key)
+                    return await self.handoff_boundary(session_id, request_id, cancel=True, receipt=receipt,
+                                                       update=update, configuration=configuration)
+        try:
+            result = await asyncio.wait_for(asyncio.shield(waiting['task']), self.boundary_reply_timeout)
+        except TimeoutError:
+            return {'ready': False, 'waitingFor': ['boundary-reply'], 'requestPending': True}
+        if waits.get(key) is waiting:
+            waits.pop(key)
+        if waiting['cancel'] and not cancel:
+            return {'ready': False, 'waitingFor': ['cancelled'], 'cancelled': True}
+        return result
+
+    def boundary_cleanup(self, session_id, request_id, owner):
+        """Observe an exact retained removal reply; never send another request."""
+        row = self.workers.get(session_id)
+        if not owner or not row or row.get('runtimeOwnerId') != owner:
+            return None
+        waiting = row.get('boundary_waits', {}).get(request_id)
+        if not waiting or not waiting['cancel'] or not waiting['task'].done() or waiting['task'].cancelled():
+            return None
+        try:
+            if waiting['task'].result().get('cancelled') is True:
+                return {'boundaryId': request_id, 'runtimeOwnerId': owner, 'markerRemoved': True,
+                        'inputsReplayed': False}
+        except Exception:
+            pass
+        return None
 
     @contextmanager
-    def stopped_boundary(self, session):
+    def stopped_boundary(self, session, *, allow_fenced=False):
         """Hold existing native ownership while proving a stopped root is absent.
 
         Called under the service mutation lock. This non-awaiting inspection
@@ -1993,7 +2062,7 @@ class RuntimeManager:
         """
         from amplifier_foundation.session import SharedSessionStore
         sid = session['id']
-        self._check_execution(sid, session)
+        self._check_execution(sid, session, allow_fenced=allow_fenced)
         row = self.workers.get(sid)
         lock = self._locks.get(sid)
         if (self._closed or sid in self._preparations or lock and lock.locked()
@@ -2016,7 +2085,7 @@ class RuntimeManager:
         finally:
             held.release()
 
-    async def quiesce_for_handoff(self, session, request_id, *, transfer_destination=None):
+    async def quiesce_for_handoff(self, session, request_id, *, transfer_destination=None, guard=None):
         """Save and release a known local writer before moving execution cwd."""
         if _WINDOWS:
             raise RuntimeError('Session handoff and transfer fencing are unavailable on Windows; no ownership was changed.')
@@ -2024,12 +2093,18 @@ class RuntimeManager:
         sid = session['id']
         store = SharedSessionStore(session['workspace'], session.get('runtimeSessionId') or session.get('nativeIdentity') or sid)
         async with self._admission(sid):
+            if guard is not None: guard()
             row = self.workers.get(sid)
             released_owner = None
             try:
                 held = await asyncio.to_thread(store.acquire, app='amplifier-unified-handoff')
             except SessionBusyError as busy:
-                if not row or busy.owner.get('app') != 'amplifier-unified' or busy.owner.get('pid') != row['process'].pid:
+                if guard is not None: guard()
+                writer = row.get('native_writer') if row else None
+                if (self.workers.get(sid) is not row or not writer or row['process'].returncode is not None
+                        or writer.get('pid') != row.get('native_worker_pid')
+                        or any(busy.owner.get(key) != writer.get(key) for key in
+                               ('hostname', 'app', 'pid', 'acquisition_id'))):
                     # No release request, Stop or placement mutation occurred.
                     # Later failures must remain uncertain, even if they also
                     # report a busy writer after the release boundary.
@@ -2041,6 +2116,9 @@ class RuntimeManager:
                 held = await asyncio.to_thread(store.acquire, app='amplifier-unified-handoff')
             try:
                 # A released worker cannot write while this proof handle is held.
+                # Return the positive release proof even if task/Stop authority
+                # changed during release. The placement owner retains it before
+                # suppressing the unperformed move; it is not a no-effect error.
                 await self.stop(sid)
                 from .host_identity import local_host_identity, require_local_host
                 owner = held.owner

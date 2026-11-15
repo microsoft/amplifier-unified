@@ -1352,6 +1352,7 @@
     "connectors",
     "test-environments",
     "assignment-adoption",
+    "worktree-move",
     "access-mode",
     "storage-cleanup-settings",
     "model-capacity-settings",
@@ -1368,7 +1369,6 @@
     "voice-work-message",
     "external-multiparty",
     "shared-room",
-    "work-hierarchy",
-    "worktree-move"
+    "work-hierarchy"
   ]
 }
