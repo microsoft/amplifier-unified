@@ -1,4 +1,4 @@
-"""Immutable, content-addressed artifact files; SQLite contains only an index."""
+"""Immutable, content-addressed artifact files and selected inline index pages."""
 import asyncio
 from collections import OrderedDict
 from collections.abc import Mapping
@@ -91,10 +91,22 @@ def put(db, value):
     return put_prepared(db, prepared)
 
 
-def put_prepared(db, prepared):
+def put_prepared(db, prepared, *, _execution_index=False):
     """Adopt prepared bytes through the same transaction and file checks."""
     directory, indexed, owns_transaction = _stage(db, prepared)
     try:
+        if _execution_index and directory is not None and not prepared.execution_root:
+            # An outer deferred transaction may not hold the writer yet. Take
+            # the same exclusion before inspecting representation or paths.
+            db.execute('UPDATE state_resources SET value=value WHERE 0')
+            existing = db.execute('SELECT value FROM state_resources WHERE id=?',
+                                  (prepared.identity,)).fetchone()
+            eligible = (prepared.size <= 8192 if existing is None
+                        else existing[0] == prepared.text)
+            path = directory / (prepared.identity + '.json')
+            if eligible and not path.exists() and not path.is_symlink():
+                # Do not convert file pointers or hide conflicting orphan files.
+                directory, indexed = None, prepared.text
         _index_prepared(db, prepared, indexed)
         write_prepared(directory, prepared)
         db.execute('RELEASE resource_put')
@@ -102,6 +114,15 @@ def put_prepared(db, prepared):
         _rollback_put(db, owns_transaction)
         raise
     return {'$resource': prepared.identity, 'bytes': prepared.size}
+
+
+def put_execution_index(db, value):
+    """Inline new execution-index payloads up to 8 KiB; retain exact inline rows.
+
+    Existing backing paths and non-inline index rows keep normal file adoption.
+    Tagged execution roots always retain their existing file-backed protocol.
+    """
+    return put_prepared(db, prepare(value), _execution_index=True)
 
 
 def put_execution_root(db, value):
