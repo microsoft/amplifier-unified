@@ -187,8 +187,6 @@ class WorkingExecution:
         return selected
 
     def committed(self, reference):
-        if self._usage_stage is None or self._usage_stage[0] != reference:
-            self.usage_prefix = None
         self.reference = copy.deepcopy(reference)
         # Named canonical writers borrow this whole working set synchronously.
         # If a caller retains any nested alias, keep that exact graph resident.
