@@ -619,6 +619,10 @@ def test_finish_requires_two_different_positive_integer_handles(finish_start, ke
 
 def test_step_after_exit_keeps_both_inherited_files_open_until_path_deletion_is_over():
     script = removal.FINISH_SCRIPT
+    # A parked file has a number as its name. The step deletes nothing else in the flat folder.
+    assert ("                if ($entry.PSIsContainer -or $entry.Name -cnotmatch '^[0-9]+$' -or\n"
+            "                    \"$($entry.Attributes)\" -match 'ReparsePoint|ReadOnly|Hidden|System') {\n"
+            "                    Keep $entry.FullName\n") in script
     start = script.split("Write-Host 'ready'")[0]
     assert "$handle = New-Object Microsoft.Win32.SafeHandles.SafeFileHandle -ArgumentList ([IntPtr][long]$_), $true" in start
     assert "New-Object System.IO.FileStream -ArgumentList $handle, ([System.IO.FileAccess]'Write')" in start

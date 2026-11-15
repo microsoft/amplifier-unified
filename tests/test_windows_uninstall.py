@@ -640,6 +640,38 @@ def test_no_entry_shares_delete_while_the_walk_holds_it():
     assert [bool(call[1] & 0x10000) for call in calls] == [True, True, False]
 
 
+def test_kept_file_is_new_unshared_deleted_on_close_and_never_made_behind_a_link():
+    native, calls = object.__new__(removal._Native), []
+    native.create = lambda *arguments: calls.append(arguments) or 0
+    removal._Native.keep(native, 1, "0f" * 16 + ".hold")
+    (_, access, _, _, _, attributes, share, disposition, options, _, _), = calls
+    # Nobody else can open it at all. Otherwise a program could delete or move it and empty the folder.
+    assert share == 0
+    # FILE_CREATE: an existing entry of that name refuses; nothing is replaced or reused.
+    assert disposition == 2
+    # FILE_OPEN_REPARSE_POINT: a link of that name is an existing entry. Without it Windows follows a
+    # dangling file link and creates the file at the link's target (measured on the Windows runner).
+    assert options & 0x200000
+    # FILE_DELETE_ON_CLOSE: Windows deletes it when the last handle closes. A file, never a folder.
+    assert options & 0x1000 and options & 0x40 and not options & 0x1
+    # DELETE is needed for delete-on-close; FILE_WRITE_DATA lets the step take the handle over as a file.
+    assert access == 0x110082 and attributes == 0x80
+    for name in ("", ".", "..", "a\\b", "a/b", "file:stream"):
+        with pytest.raises(OSError):
+            removal._Native.keep(native, 1, name)
+    assert len(calls) == 1
+
+
+def test_new_flat_folder_can_be_taken_back_by_its_creator_only():
+    native, calls = object.__new__(removal._Native), []
+    native.create = lambda *arguments: calls.append(arguments) or 0
+    removal._Native.make(native, 1, "unified-uninstall-last")
+    (_, access, _, _, _, _, share, disposition, options, _, _), = calls
+    # A new folder (FILE_CREATE), never through a link, shared for read and write but not for delete.
+    assert (share, disposition) == (3, 2) and options & 0x200000 and options & 0x1
+    assert access & 0x10000 and access & 0x1
+
+
 def test_the_journal_and_the_running_program_are_not_deleted_by_the_data_step(deleter):
     state, root = deleter.state, deleter.root
     owned = Disk(root, state)

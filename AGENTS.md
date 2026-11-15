@@ -199,9 +199,12 @@ twice, and only exact top-level names (`windows_uninstall`). It writes
 launcher does not start the app, and setup must never install into a folder
 that holds it. Add a new top-level name to `windows_uninstall` together with
 the code that creates it. A running program cannot delete the files that it
-runs from: uninstall moves them through their handles into the held folder
-`unified-uninstall-last`, and the step after exit deletes only there. Do not
-give that step a tree walk; it works with paths and cannot hold a handle.
+runs from: uninstall moves them through their handles into the folder
+`unified-uninstall-last`, and the step after exit deletes only there. That
+step works with paths. Its paths are safe only because it inherits two open
+files that the uninstall program created through handles; do not give it a
+tree walk, a file that it creates or opens by a path, or a rule that rests on
+its current folder.
 Task Scheduler expands percent-bearing executable/working-directory paths.
 Reject those paths rather than recording a literal identity that launches a
 different program. Task registration/state is not authenticated host health.

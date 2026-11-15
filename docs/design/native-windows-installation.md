@@ -893,10 +893,11 @@ does.
    Amplifier's is named and stays.
 10. The last step (`windows_uninstall.finish`), under the lock and with the
     folder proven and pinned again: create the flat folder
-    `unified-uninstall-last` and one folder inside it, and hold both; start
-    the step after exit in that inner folder; delete `python` and `tools`
-    through handles, and move the few files that this running program has
-    mapped into the flat folder. Then the process ends.
+    `unified-uninstall-last` and two kept files, one in the installation
+    folder and one in the flat folder, through handles; start the step after
+    exit, which inherits both files open; delete `python` and `tools` through
+    handles, and move the few files that this running program has mapped
+    into the flat folder. Then the process ends.
 
 **Only exact names.** Uninstall deletes a top-level entry only when its name
 is, with its exact case, one that setup, the launcher or the launcher refresh
@@ -941,68 +942,77 @@ with a temporary folder outside the installation.
 
 The step works with paths, so it deletes a file only while its path cannot
 lead anywhere else. It walks no tree. One fact carries this: a folder cannot
-be replaced while it holds a file that a program keeps open without delete
+be replaced while it holds a file that a program keeps open without any
 sharing. Nobody can delete or move that file, so the folder is never empty;
 Windows turns only an empty folder into a link; and Windows refuses to rename
 a folder with an open file below it. The same holds for every folder above.
 
-- Hand-over. The uninstall program creates one folder inside the flat folder
-  (its name is the token) and holds both. The step starts with that inner
-  folder as its current folder. It refuses when that folder or the flat
-  folder is a link.
-- The step's own file. Before it answers, the step creates one new file in
-  the flat folder (`<token>.hold`) and keeps it open with no sharing. Windows
-  deletes that file itself when the step closes it or ends. The uninstall
-  program goes on only when the step has answered.
-- While that file is open, the step deletes the plain files directly in the
-  flat folder. It never uses `-Force`: a read-only, hidden or system file
-  stays, and no attribute of any file is changed. A folder or a link there
-  stays. It removes the named folders of the installation that are empty by
-  then, and at the end the inner folder.
-- Still while that file is open, and only when a fresh listing shows nothing
-  but the flat folder and the two records: the step deletes the journal, and
-  then, if nothing appeared meanwhile, setup's completion record. Both
-  records are checked before anything of the end happens; a record that is a
-  link, a folder or a read-only file is refused. The step opens no existing
-  file for deletion: a plain delete of a path removes a link as a link.
-- Then the step closes its file and removes two empty folders: the flat
-  folder and the installation folder. Every folder goes by RemoveDirectory
-  only: an empty folder goes, a link goes as a link, a folder with entries
-  refuses.
-- It reads the whole journal record before every pass and every named folder,
-  and stops when the record is missing or different. An entry that was
-  created after the step started stays. A file that a program moves into the
-  flat folder while the step runs is deleted with it; that folder is the
-  installation's own.
+- The kept files. The uninstall program creates two files named
+  `<token>.hold` through handles, relative to the folders that it holds: one
+  in the installation folder, one in the flat folder. The create refuses an
+  existing entry of that name, also a link, so nothing is created elsewhere.
+  Nobody else can open these files, and Windows deletes each when its last
+  handle closes.
+- Hand-over. The step inherits both open handles when it is created, so
+  there is no moment in which nobody holds them. It takes them over, checks
+  that both files are in their folders, and only then answers. The uninstall
+  program goes on, and lets its own handles go, only after that answer.
+- While both files are open, the step deletes the parked files directly in
+  the flat folder: plain files whose name is a number. It never uses
+  `-Force`: a read-only, hidden or system file stays, and no attribute of
+  any file is changed. Anything else there stays. It removes the named
+  folders of the installation that are empty by then.
+- Still while both are open, and only when a fresh listing shows nothing but
+  the flat folder, the kept files and the two records: the step deletes the
+  journal, and then, if nothing appeared meanwhile, setup's completion
+  record. Both records are checked before anything of the end happens; a
+  record that is a link, a folder or a read-only file is refused. A plain
+  delete of a path removes a link as a link.
+- The step closes the flat folder's file and removes the flat folder while
+  the installation folder's file is still open. Then, if everything was
+  deleted and the folder above holds something else, it closes that last
+  file and removes the installation folder. Every folder goes by
+  RemoveDirectory only: an empty folder goes, a link goes as a link, a
+  folder with entries refuses.
+- The step creates no file and opens no existing file. It reads the whole
+  journal record before every pass and every named folder, and stops when
+  the record is missing or different. An entry that was created after the
+  step started stays.
 
 The step does not delete other files in the installation folder. A file of
 the installation that is still there at the end (a program uses it) stays,
 and then the folder stays with both records.
 
-Three earlier forms of this step were given up after review. The first walked
+Four earlier forms of this step were given up after review. The first walked
 `python` and `tools` by path: a program of the same account could swap a
 folder for a link between the look and the delete. The second deleted in a
 flat folder that could be empty, and the third relied on the step's current
 folder: Windows lets a program turn an empty folder into a link in place,
-without a rename, also when it is another program's current folder.
+without a rename, also when it is another program's current folder. The
+fourth let the step create its kept file by a path: Windows follows a
+dangling file link of that name and creates the file at the link's target.
 
 Limits that stay, all for a program that runs as the same person and acts in
 the moment of the uninstall:
 
-- After the step closed its file, its last two commands remove the flat
-  folder and the installation folder by path with nothing held. They can
-  remove only an empty folder. A program that empties and replaces a folder
-  in that instant could make one of them remove an empty folder of the same
-  name elsewhere. No file can be lost.
 - A program can put files into the installation folder between the step's
   last listing and its deletion of setup's completion record (one command),
   and a file with the name of setup's mark of unfinished work among them. The
   folder then stays without setup's record, and a later setup run empties it.
-  Such a program can delete those files, and setup's record, without us.
+  No order of commands closes this while the folder is removed: Windows
+  cannot remove a folder together with its last file in one step. Such a
+  program can delete those files, and setup's record, without us.
+- The last command removes the installation folder by its path after the
+  last kept file is closed. It can remove only an empty folder. It runs only
+  when the folder above holds something else, so that folder cannot be
+  emptied and turned into a link unless a program removes those other
+  entries in that instant. The product installs only into
+  `%LOCALAPPDATA%\Amplifier`, and that folder always holds files that are in
+  use.
 - A program that can control another program of the same person (close its
   handles, change its memory) can end every hold.
 
-Under PowerShell constrained language mode the step stops at its first check
+Under PowerShell constrained language mode the step stops before it answers
 and changes nothing; the parked files and both records stay.
 
 **Rule for setup.** An installation must never be made in a folder that holds
@@ -1038,14 +1048,18 @@ removes them and the folder is gone; an outside folder behind junctions is
 unchanged. One case deletes the Python that it runs from (interpreter,
 standard library and the installed package inside the folder) and still ends
 cleanly. While the step waits, a rename of the installation folder, of the
-folder above it, of the flat folder and of the inner folder is refused.
-Windows refuses to turn the flat folder into a link in place (error 145),
-before and after it allowed that for the empty inner folder; the same call
+folder above it and of the flat folder is refused, and Windows refuses to
+turn the flat folder or the installation folder into a link in place (error
+145); the same call
 works on an empty folder that nobody holds. A folder with an open file in it,
-and the folder above it, can be neither turned into a link nor renamed; the
-step's own file can be neither deleted, renamed nor read by another program,
-and it is gone when the step has ended. A plain delete of a path that has
-become a link removes the link or nothing, never anything behind it. In the flat folder a junction, a
+and the folder above it, can be neither turned into a link nor renamed. A
+link under the kept file's name is refused and nothing is created at its
+target (the same create by a path does create the target). After the
+uninstall program let go, the two kept files stay with the process that
+inherited them: no other program can delete, move or read them, and both are
+gone when that process has ended. With nothing else in the folder above, the
+emptied installation folder stays. A plain delete of a path that has become a
+link removes the link or nothing, never anything behind it. In the flat folder a junction, a
 folder, a file link, a file in use, a read-only file, a hard link to an
 outside read-only file and a later entry all stay. A data file in use stops the removal with the entries and the
 journal in place; Open, Status and Stop refuse; a second window refuses while
