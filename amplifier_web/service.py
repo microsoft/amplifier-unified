@@ -3457,7 +3457,7 @@ class AppService:
                 from .next_message_configuration import save
                 diagnostic_result = save(self, args, configuration_authority)
             elif action == "conversation.send":
-                session = self._session(args.get("sessionId"))
+                session = self._session(args.get("sessionId"), hydrate=False)
                 if ('expectedInterruptionRevision' in args
                         and args['expectedInterruptionRevision'] != session.get('interruptionRevision', 0)):
                     raise AppError('This message was prepared before Stop. Nothing was sent. Send a new message to continue.',
@@ -3556,7 +3556,7 @@ class AppService:
                     pending.append((self._send, (dispatch_session, text, input_id, previous_activity, args.get('preserveDraft', False))))
             elif action == "conversation.retry":
                 from .message_delivery import find_message
-                session = self._session(args['sessionId'])
+                session = self._session(args['sessionId'], hydrate=False)
                 message = find_message(session, args['inputId'])
                 if message is None:
                     raise AppError('This message is not saved in this conversation.', 404)
@@ -3577,7 +3577,7 @@ class AppService:
                         raise AppError('This runtime does not support message recovery.', 409)
                     original_status = session['status']
                     known_undelivered = message.get('delivery', {}).get('status') == 'failed'
-                    original_turn = copy.deepcopy(next((t for t in session.get('execution', {}).get('turns', []) if t['id'] == args['inputId']), {}))
+                    original_turn = copy.deepcopy(execution_record(session, 'turns', {'id': args['inputId']}) or {})
                     self._delivery(session, args['inputId'], 'sending')
                     self._activity(session, 'queued', 'Sending your saved message again.', reset=True)
                     session['status'] = 'working'
@@ -3591,7 +3591,7 @@ class AppService:
                     turn.pop('generationId', None)
                     pending.append((self._retry_message, (copy.deepcopy(session), message['text'], args['inputId'], original_status, original_turn, known_undelivered)))
             elif action == "conversation.stop":
-                session = self._session(args.get("sessionId"))
+                session = self._session(args.get("sessionId"), hydrate=False)
                 session["interruptionRevision"] = session.get("interruptionRevision", 0) + 1
                 session["lastInterruption"] = {"commandId": command_id, "at": time.time(), "origin": origin}
                 if session.get('externalAgent', {}).get('status') not in {'unknown', 'error'}:
@@ -3600,7 +3600,7 @@ class AppService:
                 interrupt_input_status(session)
                 pending.append((self._stop, (session["id"],)))
             elif action == "worker.spawn":
-                session = self._session(args.get("sessionId"))
+                session = self._session(args.get("sessionId"), hydrate=False)
                 text = args["instruction"].strip()
                 if not text:
                     raise AppError("Describe the worker's task.")
@@ -3616,7 +3616,7 @@ class AppService:
                 ensure_turn(session,input_id,text)
                 pending.append((self._send, (copy.deepcopy(session), instruction, input_id)))
             elif action in {"worker.stop", "worker.steer", "worker.message"}:
-                session = self._session(args.get("sessionId"))
+                session = self._session(args.get("sessionId"), hydrate=False)
                 if not self.runtime:
                     raise AppError("The execution runtime is unavailable.")
                 worker = next((row for row in session["workers"] if row["id"] == args["id"]), None)
@@ -4488,11 +4488,11 @@ class AppService:
         result = await self._send(session, text, input_id, preserve_draft=True, retry=True, known_undelivered=known_undelivered)
         if isinstance(result, dict) and result.get('duplicate'):
             async with self.lock:
-                current = self._session(session['id'])
-                if current['status'] == 'working' and current.get('execution', {}).get('currentTurnId') == input_id:
+                current = self._session(session['id'], hydrate=False)
+                if current['status'] == 'working' and current_execution(current).get('currentTurnId') == input_id:
                     current['status'] = original_status
                     self._activity(current, original_status, 'Delivery confirmed. Amplifier already received this message.')
-                    turn = next(t for t in current['execution']['turns'] if t['id'] == input_id)
+                    turn = execution_record(current, 'turns', {'id': input_id})
                     for key in ('phase', 'endedAt', 'retriedAt', 'runtimeOwnerId', 'generationId'):
                         if key in original_turn:
                             turn[key] = original_turn[key]
@@ -4593,7 +4593,7 @@ class AppService:
             return await defer_send(self, session['id'], input_id, preserve_draft)
         except RuntimeHostClosingError:
             async with self.lock:
-                current = self._session(session['id'])
+                current = self._session(session['id'], hydrate=False)
                 self._delivery(current, input_id, 'unknown')
                 interrupt_unfinished(current)
                 if current['status'] in {'working', 'starting', 'ready', 'stopping'}:
@@ -4602,7 +4602,7 @@ class AppService:
             raise
         except RuntimeOperationPending:
             async with self.lock:
-                self._delivery(self._session(session['id']), input_id, 'unknown')
+                self._delivery(self._session(session['id'], hydrate=False), input_id, 'unknown')
                 self._publish_changes(sessions={session['id']}, globals={'view'})
             # A missing acknowledgement is not a failed turn. Keep the saved
             # input and live work; the exact late receipt can reconcile delivery.
@@ -4615,7 +4615,7 @@ class AppService:
             message = startup_message + (' Earlier delivery is still uncertain; checking does not resend it.' if delivery == 'unknown' else ' Your message has been saved.')
             receipt = {'delivery': delivery, 'inputId': input_id, 'sessionId': session['id']}
             async with self.lock:
-                current = self._session(session['id'])
+                current = self._session(session['id'], hydrate=False)
                 # The worker may already have published a specific startup
                 # error or the location of its private stderr log. Preserve
                 # that public detail, but never reuse an earlier attempt's
@@ -4646,7 +4646,7 @@ class AppService:
         except SessionInUseError as exc:
             if retry:
                 async with self.lock:
-                    current = self._session(session['id'])
+                    current = self._session(session['id'], hydrate=False)
                     self._delivery(current, input_id, 'unknown')
                     from .session_ownership import blocked
                     from .execution import finish
@@ -4656,7 +4656,7 @@ class AppService:
                     self._publish_changes(sessions={session['id']}, globals={'view'})
                 raise AppError('This conversation is owned elsewhere. Continue here before resending.', 409, code='session_busy') from exc
             async with self.lock:
-                current = self._session(session["id"])
+                current = self._session(session["id"], hydrate=False)
                 rejected = find_message(current, input_id)
                 if (rejected and rejected.get('navigationPost') and
                         rejected.get('delivery', {}).get('status') == 'accepted'):
@@ -4691,7 +4691,7 @@ class AppService:
             raise AppError(str(exc), 409, code="session_busy") from exc
         except Exception:
             async with self.lock:
-                current = self._session(session['id'])
+                current = self._session(session['id'], hydrate=False)
                 self._delivery(current, input_id, 'unknown')
                 needs_error = current['status'] != 'error'
                 self._publish_changes(sessions={session['id']}, globals={'view'})
@@ -4703,7 +4703,7 @@ class AppService:
             raise
         with measure(self, 'input.delivery.publish', session_id=session['id']):
             async with self.lock:
-                current = self._session(session["id"])
+                current = self._session(session["id"], hydrate=False)
                 observed = find_message(current, input_id) or {}
                 if observed.get('steering'):
                     # Inbox admission cannot erase an earlier native
@@ -4755,7 +4755,7 @@ class AppService:
                 await self.set_voice_status({"status": "error", "id": call.id, "error": str(exc)})
 
     async def _stop(self, sid):
-        if self._session(sid).get('externalAgent'):
+        if self._session(sid, hydrate=False).get('externalAgent'):
             return await self.external_conversations.stop(sid)
         # The Stop revision is already durable. Release invalidated inbox slots
         # even while the actual worker interruption is slow or unavailable.
@@ -4767,12 +4767,12 @@ class AppService:
     async def record_voice_usage(self,session_id,call_id,response_id,model,usage,phase='completed', *, transfer_id=None):
         from .voice_usage import normalize_voice_usage
         async with self.lock:
-            try:session=self._session(session_id)
+            try:session=self._session(session_id, hydrate=False)
             except AppError:return
             self._check_voice_owner(session['id'], transfer_id)
             identity='voice:'+call_id+':'+response_id
-            tree=session.get('execution',{})
-            existing=next((n for n in tree.get('nodes',[]) if n['id']==identity),None)
+            tree=current_execution(session)
+            existing=execution_record(session, 'nodes', {'id': identity})
             # Live duration updates replace one session receipt. Completion is
             # authoritative; a delayed running update cannot reopen it.
             if existing and existing.get('phase') == 'completed' and phase != 'completed':
@@ -4800,12 +4800,12 @@ class AppService:
                 touch_independent_activity(session)
             turn_id=('voice:'+call_id) if response_id=='session' else existing.get('turnId') if existing else tree.get('currentTurnId')
             if not turn_id:turn_id='voice:'+call_id
-            if not any(t['id']==turn_id for t in tree.get('turns',[])):
+            if execution_record(session, 'turns', {'id': turn_id}) is None:
                 previous=tree.get('currentTurnId')
                 ensure_turn(session,turn_id,'Voice call · session usage' if response_id=='session' else 'Voice call')
-                session['execution']['currentTurnId']=previous
+                current_execution(session)['currentTurnId']=previous
             if turn_id == 'voice:'+call_id:
-                for turn in session['execution']['turns']:
+                for turn in current_execution(session)['turns']:
                     if turn['id'] == turn_id:
                         turn['lifecycle'] = 'voice'
             ingest_execution(session,{'id':identity,'turnId':turn_id,'sessionId':session_id,'rootSessionId':session_id,
@@ -4817,7 +4817,7 @@ class AppService:
                 from .chat_navigation import settle_activity
                 settle_activity(session)
             if phase in {'completed','incomplete'} and turn_id == 'voice:'+call_id:
-                for turn in session['execution']['turns']:
+                for turn in current_execution(session)['turns']:
                     if turn['id']==turn_id:turn.update(phase=phase,endedAt=time.time())
             self._publish_changes(sessions={session['id']})
 

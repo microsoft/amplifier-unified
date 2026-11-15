@@ -299,7 +299,8 @@ def terminal_exception_failure(session, value):
 def request_call_failure(session, inputs, generation=None, error_type=None):
     """An earlier call can explain a terminal, but is not itself a turn failure."""
     from .support_diagnostics import public_exception_chain
-    tree = session.get('execution') or {}
+    from .execution_working_set import readonly
+    tree = readonly(session)
     for row in reversed([*tree.get('retiredUsageNodes', [])[-40:], *tree.get('nodes', [])[-40:]]):
         if (row.get('sessionId') not in {session['id'], session.get('runtimeSessionId')}
                 or row.get('lifecycle') in {'background', 'voice'} or row.get('purpose')
@@ -333,7 +334,8 @@ def runtime_fault_is_current(session, payload):
         return True
     # Ordinary new send creates its own display turn before native admission.
     # Do not mistake that pending/unknown delivery for the previous saved result.
-    tree = session.get('execution') or {}
+    from .execution_working_set import readonly
+    tree = readonly(session)
     current = tree.get('currentTurnId')
     turn = next((row for row in reversed(tree.get('turns', [])) if row['id'] == current), {})
     if turn.get('phase') in {'running', 'working', 'starting', 'pending'} and (
