@@ -1975,6 +1975,24 @@ def test_folder_that_is_back_is_this_take_backs_own_until_the_end_of_the_run(tmp
     assert len(prepared) == (0 if when == "during-the-moves" else 1)  # No database step on a folder set like that.
 
 
+def test_empty_folder_that_takes_a_kept_folders_place_at_the_last_moment_is_never_taken_for_it(
+        tmp_path, monkeypatch, notices):
+    root, folder, _ = kept_then_installed(tmp_path)
+    real = os.rename
+
+    def rename(old, new):
+        if Path(old) == folder / "ownership" and not (tmp_path / "taken-away").exists():  # After every check.
+            real(folder / "ownership", tmp_path / "taken-away")
+            (folder / "ownership").mkdir()
+        return real(old, new)
+    monkeypatch.setattr(os, "rename", rename)
+    notices.answers.append(True)
+    result = kept.first_start(root, VERSION, ask=True)
+    assert result["taken"] is False and result["reason"] == "take-back-link"
+    assert str(root / "ownership") + "\n" in result["message"] and kept.read(folder)[0] == "adopting"
+    assert (tmp_path / "taken-away" / "owner.json").exists() and kept.unfinished_take_back(root)
+
+
 def test_record_of_another_finished_take_back_never_overrides_an_unfinished_one(tmp_path, monkeypatch, notices):
     root, folder, expected = interrupted(tmp_path, monkeypatch, notices)
     good = (folder / kept.RECORD).read_text()
