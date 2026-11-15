@@ -234,7 +234,8 @@ async def launch(root, *, open_browser=True, progress=None):
         if not await browser_opened((launcher, "--data-dir", root / "app",
                                      "--workspace", root / "workspace"), env):
             owner_notice("Amplifier is running, but it did not open in your browser.\n\n"
-                         "Open it from the Start menu: Amplifier Unified.")
+                         "Open it from the Start menu: Amplifier Unified. "
+                         "If this message appears again, restart this PC.")
             return {**result, "browser": {"opened": False, "reason": "not-confirmed"}}
         return {**result, "browser": {"opened": True}}
     return result

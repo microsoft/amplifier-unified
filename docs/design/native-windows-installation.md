@@ -413,6 +413,39 @@ of 0.94.1 that updated itself to 0.95.0 at first start, the earlier two-answer
 check showed the "this PC still does not trust the connection" message two
 seconds after Yes, although the root was in the store.)
 
+The browser step waits for the same restart. After trust is established, the
+launcher runs `amplifier-unified open` once. Windows hands that command to the
+active app generation, which after an update at first start is the new version,
+while the earlier host can still serve for some seconds and is then away. `open`
+accepts only a host of its own package version. So `open` waits up to 60
+seconds for that host (`browser_entry.HOST_WAIT`): it repeats only the health
+request, sends one grant request to the first host that matches, and starts the
+browser once. A refused or unconfirmed grant request ends the command; it is
+never sent again.
+
+The launcher learns the result from one line of the command's output
+(`browser_entry.OPENED`), not from its exit status. On Windows a command that
+a generation takes over ends with exit status 0 for its caller, whatever it
+did: `os.execv` starts a new process there and ends the calling one. The
+launcher allows the command 90 seconds. Without the confirmation line it shows
+one message: Amplifier is running, but it did not open in your browser; open it
+from the Start menu: Amplifier Unified. The launcher is the code that setup
+installed and an in-app update does not change it, so the line's text is fixed.
+For the same reason the wait is in `open`: a launcher from an earlier setup file
+gets it from the new generation. Such a launcher allows the command 30 seconds
+and reads the exit status; if the restart takes longer, it shows its earlier
+message, and the browser still opens when the host is there.
+
+The hand-over also keeps each argument whole. The Windows C runtime joins an
+`os.execv` list with spaces and quotes nothing, so the installation folder of a
+person whose user name has a space would reach the app as two arguments.
+`application_generations.exec_arguments` quotes each argument on Windows.
+
+(In a clean-room run of 0.98.1 that updated itself to 0.98.4 at first start,
+`open` ran in 0.98.4 three seconds before the host restarted, found the 0.98.1
+host, and ended after 0.7 seconds with no browser. The launcher received exit
+status 0 and showed nothing.)
+
 Outcomes: **No** keeps the app running, says so in one plain message, and the
 next open (always started by the person) explains and asks again. A refusal by
 Windows, device policy that disables user roots (read first, so no pointless

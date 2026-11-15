@@ -348,6 +348,68 @@ def test_pending_certificate_review_does_not_issue_browser_grant(tmp_path, monke
     assert result["health"]["ok"] and reviews == [(tmp_path, ["private-target"], "private-pin")]
 
 
+def opening_launch(tmp_path, monkeypatch, outcome):
+    """Launch with trust established, up to the one `open` command; record every effect."""
+    from amplifier_web import windows_installation, deployment, browser_entry, updates
+    monkeypatch.setattr(consumer, "installation", lambda root: (root, {}))
+    monkeypatch.setattr(consumer, "environment", lambda *a: {"private": "environment"})
+    async def prepared(*args, identity):
+        return {"background": True, "created": False, "health": {"ok": True}}
+    monkeypatch.setattr(windows_installation, "prepare_background", prepared)
+    monkeypatch.setattr(deployment, "load_server_config", lambda home: {})
+    monkeypatch.setattr(browser_entry, "_owner_probe_targets", lambda *a: (["private-target"], "private-pin"))
+    events = []
+    monkeypatch.setattr(windows_installation, "review_browser_trust",
+                        lambda *a, fresh: events.append(("trust",)) or True)
+    async def process(*args, env, timeout):
+        events.append(("command", args, env, timeout))
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+    monkeypatch.setattr(updates, "process", process)
+    monkeypatch.setattr(windows_installation, "owner_notice",
+                        lambda message, **kw: events.append(("notice", message, kw)) or True)
+    return asyncio.run(consumer.launch(tmp_path)), events
+
+
+def test_first_start_reports_the_browser_on_the_open_commands_own_confirmation(tmp_path, monkeypatch):
+    from amplifier_web import browser_entry
+    from amplifier_web.update_diagnostics import CommandOutput
+    result, events = opening_launch(tmp_path, monkeypatch, CommandOutput(
+        "Amplifier is not ready yet.\n" + browser_entry.OPENED))
+    assert result["browser"] == {"opened": True} and result["health"]["ok"]
+    launcher = tmp_path / "tools/amplifier-unified/Scripts/amplifier-unified.exe"
+    # Trust first, then the one command; no message.
+    assert events == [("trust",), ("command", (launcher, "--data-dir", tmp_path / "app", "--workspace",
+                                               tmp_path / "workspace", "open"),
+                                   {"private": "environment"}, 90)]
+    # `open` waits for a restarting host. The launcher's limit must be longer.
+    assert events[1][3] > browser_entry.HOST_WAIT + 15
+
+
+def unconfirmed():
+    from amplifier_web.update_diagnostics import CommandFailure, CommandOutput, CommandTimeout
+    return [
+        # Windows, after a generation took the command over: exit status 0 and
+        # no confirmation. This was the silent first start of November 15.
+        CommandOutput(""),
+        CommandOutput("Browser opening disabled; no browser grant was issued."),
+        CommandFailure({"returncode": 1}), CommandTimeout(90.0), OSError("launcher missing"),
+    ]
+
+
+@pytest.mark.parametrize("outcome", unconfirmed(), ids=lambda value: type(value).__name__)
+def test_browser_that_did_not_open_gives_one_plain_message_and_no_second_attempt(tmp_path, monkeypatch, outcome):
+    result, events = opening_launch(tmp_path, monkeypatch, outcome)
+    assert result["browser"] == {"opened": False, "reason": "not-confirmed"} and result["health"]["ok"]
+    assert [event[0] for event in events] == ["trust", "command", "notice"]  # One command, one message.
+    message, options = events[2][1:]
+    assert options == {}  # A statement, not a question.
+    assert message == ("Amplifier is running, but it did not open in your browser.\n\n"
+                       "Open it from the Start menu: Amplifier Unified. "
+                       "If this message appears again, restart this PC.")
+
+
 @pytest.mark.parametrize("first_setup", [True, False])
 def test_first_setup_creates_the_identity_in_this_process_and_hands_windows_that_root(
         tmp_path, monkeypatch, first_setup):
