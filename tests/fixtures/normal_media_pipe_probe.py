@@ -55,14 +55,13 @@ def save_json(path, value):
     path.chmod(0o600)
 
 
-def typed_checkpoint_facts(owner):
+def typed_checkpoint_facts(binding):
     """Observe actual live receipt/result and cold bytes; JSON facts grant nothing."""
     from dataclasses import asdict
     from amplifier_foundation.session.transcript_lifetime import VersionedSessionBinding
     from amplifier_foundation.session.transcript_writer import CommitAck
     from amplifier_foundation.session.versioned_checkpoint import VersionedCheckpointReceipt
     from amplifier_foundation.session.transcript_source import open_committed_source
-    binding = owner.canonical_binding
     assert type(binding) is VersionedSessionBinding
     binding.check()
     result, receipt = binding.last_result, binding.last_receipt
@@ -153,6 +152,7 @@ def child_environment(bootstrap_dir, modules, root, target=None):
     env = dict(os.environ)
     # Only this invocation's explicit CLI selector may choose the negative.
     env.pop("NORMAL_MEDIA_CONTRACT_NEGATIVE", None)
+    env.pop("NORMAL_MEDIA_DELEGATE_JOURNEY", None)
     env["NORMAL_MEDIA_PIPE_ROOT"] = str(root)
     fixture_paths = [str(bootstrap_dir), str(Path(__file__).parent)]
     if target is None:
@@ -184,6 +184,7 @@ def bootstrap():
     root = Path(os.environ["NORMAL_MEDIA_PIPE_ROOT"]).resolve(strict=True)
     label = os.environ["NORMAL_MEDIA_PIPE_CHILD"]
     contract_negative = os.environ.get("NORMAL_MEDIA_CONTRACT_NEGATIVE") == "1"
+    delegate_journey = os.environ.get("NORMAL_MEDIA_DELEGATE_JOURNEY") == "1"
     report = root / (label + "-observer.json")
     stack = ExitStack()
     denied = deny_socket_connections(stack, root / (label + "-socket-denials.json"))
@@ -191,6 +192,8 @@ def bootstrap():
     fixture = helpers()
     target = installed_target(os.environ.get("NORMAL_MEDIA_INSTALLED_PROFILE"),
                               os.environ.get("NORMAL_MEDIA_INSTALLED_WORKER"))
+    if target and delegate_journey:
+        assert "amplifier_module_tool_delegate" in target.packages, "Delegate journey needs its artifact/package profile"
     import importlib
     import importlib.util
     import gc
@@ -227,22 +230,60 @@ def bootstrap():
                 self.check_installed_boundary(owner)
                 # The real issuer object is verified before each SDK count/send
                 # response, not inferred from hydration or lease contention.
-                self.typed_receipts.append(typed_checkpoint_facts(owner))
+                coordinator, binding = owner.session.coordinator, owner.canonical_binding
+                if delegate_journey:
+                    from amplifier_module_provider_openai import _media
+                    coordinator = _media.CURRENT.get().provider.coordinator
+                    if coordinator is not owner.session.coordinator:
+                        from amplifier_web.host.children import ChildCheckpoint
+                        from amplifier_web.host.canonical_bootstrap import _ChildFactory
+                        checkpoint = coordinator.get_capability("session.durable_checkpoint")
+                        assert type(checkpoint) is ChildCheckpoint
+                        assert checkpoint.child.coordinator is coordinator
+                        assert checkpoint.ready is True
+                        binding = checkpoint.binding
+                        assert checkpoint.store.canonical_binding is binding
+                        registry = owner.session.coordinator.get_capability("live.children")
+                        assert registry.sessions[coordinator.session_id].coordinator is coordinator
+                        assert registry.canonical_binding_factory is owner.canonical_binding_factory
+                        assert type(owner.canonical_binding_factory) is _ChildFactory
+                        assert owner.canonical_binding_factory.root is owner.canonical_binding
+                        assert binding is not owner.canonical_binding
+                        assert binding.directory == owner.canonical_binding_factory.parent / coordinator.session_id
+                        root_rows = await owner.session.coordinator.get("context").get_messages()
+                        root_refs = [ref for row in root_rows for ref in
+                                     (row.get("metadata") or {}).get(fixture.MEDIA, {}).get("refs", [])]
+                        assert len(root_refs) == 1 and root_refs[0]["session_id"] == SESSION
+                        root_facts = typed_checkpoint_facts(owner.canonical_binding)
+                        assert root_facts["refs"] == root_refs
+                        native_facts = typed_checkpoint_facts(binding)
+                        assert native_facts["refs"] and all(
+                            ref["session_id"] == coordinator.session_id for ref in native_facts["refs"])
+                        assert all(ref != root_refs[0] for ref in native_facts["refs"])
+                        if not any(row[0] is binding for row in self.native_children):
+                            self.native_children.append((binding, coordinator.get_capability("web.media.store"), coordinator))
+                self.typed_receipts.append(typed_checkpoint_facts(binding))
                 if not self.owners:
                     self.owners.append(owner)
                 else:
                     assert self.owners == [owner]
                 result = await super().receive(request)
-                media = owner.session.coordinator.get_capability("web.media.store")
+                if delegate_journey:
+                    result = self.delegate_response(owner, coordinator, request, result)
+                media = coordinator.get_capability("web.media.store")
                 self.snapshots.append({
                     "worker_class": type(owner).__module__ + "." + type(owner).__qualname__,
                     "wire_http_package": type(request).__module__.split(".")[0],
                     "worker_id": id(owner), "session_id": id(owner.session),
                     "execution_id": id(owner.execution), "shared_id": id(owner.shared_handle),
-                    "binding_id": id(owner.canonical_binding), "media_id": id(media),
-                    "canonical_directory": str(owner.canonical_binding.directory),
+                    "binding_id": id(binding), "media_id": id(media),
+                    "canonical_directory": str(binding.directory),
                     "media_root": str(media.root), "media_session_id": media.session_id,
                     "resumed": owner.canonical_resume,
+                    **({"native_session_id": coordinator.session_id,
+                        "native_resumed": coordinator.get_capability("web.child.resumed") is True,
+                        "native_child": coordinator is not owner.session.coordinator}
+                       if delegate_journey else {}),
                 })
                 self.dump(False)
                 return result
@@ -251,6 +292,31 @@ def bootstrap():
                     self.failures.append(error)
                 self.dump(False)
                 raise
+
+        def delegate_response(self, owner, coordinator, request, result):
+            if request.url.path.endswith("/input_tokens") or coordinator is not owner.session.coordinator:
+                return result
+            body = json.loads(request.content)
+            users = [row for row in body["input"] if isinstance(row, dict) and row.get("role") == "user"]
+            turn = next((name for name in ("three", "two", "one") if name in json.dumps(users[-1:])), None)
+            assert turn
+            if getattr(self, "delegated_turn", None) == turn:
+                return result
+            self.delegated_turn = turn
+            arguments = {"agent": "self", "instruction": "Inspect the inherited image.",
+                         "context_depth": "all", "context_scope": "conversation"}
+            if turn != "one":
+                previous = (json.loads((root / "first-observer.json").read_text())["snapshots"]
+                            if label == "second" else self.snapshots)
+                identities = {row["native_session_id"] for row in previous if row.get("native_child")}
+                assert len(identities) == 1
+                arguments["session_id"] = identities.pop()
+            value = fixture.response(len(self.records))
+            value["output"] = [{"type": "function_call", "id": "fc_delegate_" + turn,
+                                "call_id": "call_delegate_" + turn, "name": "delegate",
+                                "arguments": json.dumps(arguments), "status": "completed"}]
+            package = importlib.import_module(type(request).__module__.split(".")[0])
+            return package.Response(200, json=value)
 
         async def receive_contract_negative(self, owner, request):
             """Observe the real refusal; never enable or substitute a graph."""
@@ -311,11 +377,11 @@ def bootstrap():
                 assert child_row["parentSessionId"] == SESSION
                 assert child_row["callId"] == "call_media_child_spawn"
                 checkpoint = coordinator.get_capability("session.durable_checkpoint")
-                captures = dict(zip(checkpoint.__code__.co_freevars,
-                                    (cell.cell_contents for cell in checkpoint.__closure__)))
-                binding = captures["canonical_binding"]
-                assert captures["child"].coordinator is coordinator
-                assert captures["store"].canonical_binding is binding
+                from amplifier_web.host.children import ChildCheckpoint
+                assert type(checkpoint) is ChildCheckpoint
+                binding = checkpoint.binding
+                assert checkpoint.child.coordinator is coordinator
+                assert checkpoint.store.canonical_binding is binding
                 assert type(binding) is VersionedSessionBinding
                 assert binding.session_id == coordinator.session_id
                 assert binding.directory == factory.parent / coordinator.session_id
@@ -396,7 +462,7 @@ def bootstrap():
         transport.expected_handles[package.AsyncHTTPTransport] = handle
         stack.enter_context(patch.object(package.AsyncHTTPTransport, "handle_async_request", handle))
 
-    declaration = fixture.authored_bundle(root, child_tool=contract_negative)
+    declaration = fixture.authored_bundle(root, child_tool=contract_negative, delegate=delegate_journey)
     modules = json.loads((root / "source-modules.json").read_text())
     paths = [root / "fixture.md", *modules.values(),
              declaration["session"]["context"]["source"],
@@ -427,7 +493,18 @@ def bootstrap():
                         raise AssertionError("Actual native child writer remained open")
                     assert coordinator.session_id not in transport.child_registry.sessions
             else:
-                transport.check_pairs(2 if label == "first" else 1)
+                transport.check_pairs((6 if label == "first" else 3) if delegate_journey
+                                      else (2 if label == "first" else 1))
+                if delegate_journey:
+                    assert len(transport.native_children) == (2 if label == "first" else 1)
+                    from amplifier_foundation.session.transcript_lifetime import VersionedSessionConflict
+                    for binding, _, _ in transport.native_children:
+                        try:
+                            binding.check()
+                        except VersionedSessionConflict:
+                            pass
+                        else:
+                            raise AssertionError("Delegate native child binding remained open")
             assert len(transport.owners) == 1
             owner = transport.owners[0]
             assert owner._cleanup_settled and owner.shared_handle is None
@@ -451,7 +528,7 @@ def bootstrap():
     atexit.register(finish)
 
 
-def host_result(event):
+def host_result(event, *, child_ids=()):
     """Finite known-service fixture; unknown operations fail closed."""
     operation, args = event["operation"], event["args"]
     context = {"surfaces": [], "inputIds": args.get("_contextInputs", [])}
@@ -468,13 +545,22 @@ def host_result(event):
     if operation == "memory.context":
         return {"items": []}
     if operation == "capacity.admit":
-        assert args["call"]["sessionId"] in {SESSION, "normal-media-native-child"}
+        assert args["call"]["sessionId"] in {SESSION, "normal-media-native-child", *child_ids}
         # This fresh fixture has the ordinary disabled budget (also independently
         # checked on the actual child owner at count/send), not an account change.
         return {"allowed": True, "budgetRevision": 0}
     if operation == "work.effect.check":
-        assert args["toolName"] == "media_child" and args["toolInput"] == {"resume": False}
-        assert args["toolCallId"] == "call_media_child_spawn"
+        if args["toolName"] == "media_child":
+            assert args["toolInput"] == {"resume": False}
+            assert args["toolCallId"] == "call_media_child_spawn"
+        else:
+            assert args["toolName"] == "delegate"
+            assert args["toolInput"]["agent"] == "self"
+            assert args["toolInput"]["instruction"] == "Inspect the inherited image."
+            assert args["toolInput"]["context_depth"] == "all"
+            assert args["toolInput"]["context_scope"] == "conversation"
+            assert set(args["toolInput"]) <= {"agent", "instruction", "context_depth", "context_scope", "session_id"}
+            assert args["toolCallId"] in {"call_delegate_one", "call_delegate_two", "call_delegate_three"}
         assert args["_runtimeSessionId"] == SESSION
         # Finite synthetic host permits this sole local fixture call. No host
         # defaults/production guard are bypassed or replaced.
@@ -508,8 +594,12 @@ class Pipe:
                     "error", "runtime.error", "worker.error", "generation.failed"}, event
                 assert not (event.get("op") == "reply" and event.get("error")), event
                 if event.get("op") == "bridge":
+                    child_ids = {row["event"]["sessionId"] for row in self.events
+                                 if row.get("type") == "execution.event"
+                                 and row.get("event", {}).get("kind") == "worker"
+                                 and row["event"].get("parentSessionId") == SESSION}
                     await self.write({"op": "bridge.result", "id": event["id"],
-                                      "result": host_result(event)})
+                                      "result": host_result(event, child_ids=child_ids)})
                 self.changed.set()
             self.eof_index = len(self.events)
         finally:
@@ -639,10 +729,14 @@ async def main():
     parser.add_argument("--installed-profile")
     parser.add_argument("--contract-negative", action="store_true",
                         help="Reproduce the existing nonempty-tool recipe refusal; NOT child qualification")
+    parser.add_argument("--delegate-journey", action="store_true",
+                        help="Require reviewed canonical delegate source and actual child private hydration")
     args = parser.parse_args()
     fixture = helpers()
     # This happens before application imports, fixture settings, or worker spawn.
     target = installed_target(args.installed_profile, args.installed_worker, bootstrap_app=True)
+    if target and args.delegate_journey:
+        assert "amplifier_module_tool_delegate" in target.packages, "Delegate journey needs its artifact/package profile"
     if target:
         target.check_origins()
     root = qualification_root(args.root, target)
@@ -661,7 +755,9 @@ async def main():
     workspace = root / "workspace"
     workspace.mkdir(mode=0o700)
     bundle = root / "fixture.md"
-    bundle.write_text("---\n" + json.dumps(fixture.authored_bundle(root, child_tool=args.contract_negative))
+    assert not (args.contract_negative and args.delegate_journey)
+    bundle.write_text("---\n" + json.dumps(fixture.authored_bundle(
+                          root, child_tool=args.contract_negative, delegate=args.delegate_journey))
                       + "\n---\nInspect the image.\n")
     if args.contract_negative:
         tool = root / "child-tool"
@@ -692,7 +788,11 @@ async def main():
     env = child_environment(bootstrap_dir, modules, root, target)
     if args.contract_negative:
         env["NORMAL_MEDIA_CONTRACT_NEGATIVE"] = "1"
+    if args.delegate_journey:
+        env["NORMAL_MEDIA_DELEGATE_JOURNEY"] = "1"
     config = {"id": SESSION, "workspace": str(workspace), "bundle": str(bundle)}
+    if args.delegate_journey:
+        config["selection"] = {"instance": "openai", "model": fixture.MODEL}
     children, receipts, reports = [], [], []
     saved = ref = None
     try:
@@ -727,7 +827,8 @@ async def main():
                 assert not observed["failures"] and not observed["socket_denials"], observed
                 if args.contract_negative:
                     continue
-                snapshot = observed["snapshots"][-1]
+                snapshot = next(row for row in reversed(observed["snapshots"])
+                                if not row.get("native_child"))
                 commit, messages, current_ref = checkpoint(snapshot["canonical_directory"], pixels)
                 if ref is None:
                     ref = current_ref
@@ -771,7 +872,8 @@ async def main():
         assert fixture.catalog_status() == catalog
         for report in reports:
             snapshots = report["snapshots"]
-            assert all(row == snapshots[0] for row in snapshots)
+            root_snapshots = [row for row in snapshots if not row.get("native_child")]
+            assert all(row == root_snapshots[0] for row in root_snapshots)
         # Installed status is reported only after the real lifecycle and both
         # child loaded-origin/file-manifest checks succeeded, never from a flag.
         if target:
@@ -787,6 +889,12 @@ async def main():
                     "canonical_t2_ack": True, "canonical_and_protocol_no_pixels": True,
                     "cas_scope": "successful exact-prefix path; idle contention is lease refusal, not independent stale-CAS rejection",
                     "receipts": receipts, "children": reports}
+        if args.delegate_journey:
+            native = [row for report in reports for row in report["snapshots"] if row["native_child"]]
+            assert len({row["native_session_id"] for row in native}) == 1
+            assert any(row["native_resumed"] for row in native)
+            evidence.update(actual_delegate_native_child_hydration=True,
+                            fresh_process_native_child_resume_without_replay=True)
         fixture.no_pixels(evidence, pixels)
         print(json.dumps(evidence))
     finally:

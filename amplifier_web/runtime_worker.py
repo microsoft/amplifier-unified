@@ -51,6 +51,14 @@ def publish_process_identity():
              "created": creation_time(kernel, kernel.GetCurrentProcess())})
 
 
+class ActivityRun:
+    """Source-owned per-construction activity identity, never a UUID allowlist."""
+    def __init__(self, worker, coordinator):
+        self.worker = worker
+        self.coordinator = coordinator
+        self.identity = coordinator.get_capability("web.worker_run")
+
+
 class Worker:
     def __init__(self, *, media_graph_selection=None, canonical_binding=None,
                  canonical_binding_factory=None, canonical_resume=None,
@@ -805,7 +813,10 @@ class Worker:
                     name="amplifier-web-response-boundary-" + event)
         # A resumed child reuses its session ID but owns a new coordinator.
         # Bind hooks to their originating run, never the mutable registry row.
-        activity_run_id = coordinator.get_capability("web.worker_run")
+        activity_run = ActivityRun(self, coordinator)
+        from amplifier_web.host.media import mint_graph_owner
+        mint_graph_owner(coordinator, activity_run, kind="activity-run")
+        activity_run_id = activity_run.identity
         async def observe_operation(event):
             identity = (coordinator.session_id, event.get("operationId"))
             if event.get("phase") == "started":
@@ -900,7 +911,7 @@ class Worker:
                 row = registry.rows.get(identity, {}) if registry else {}
                 publish({"type": "worker.activity", "workerId": identity, "phase": phase,
                     "detail": detail, "name": row.get("agent", "Worker"), "callId": row.get("callId"),
-                    "runId": activity_run_id, "time": time.time(), **retry})
+                    "runId": activity_run.identity, "time": time.time(), **retry})
             return result
         for event in ("provider:request", "provider:retry", "tool:pre", "tool:post", "tool:error", "llm:request", "llm:response", "context:compaction_started", "context:compaction_progress", "context:compaction_finished"):
             # Exact tool observation identity must precede the canonical

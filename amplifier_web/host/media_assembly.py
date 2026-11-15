@@ -33,6 +33,7 @@ _MODULES = {
     "context-simple": "amplifier_module_context_simple",
     "provider-openai": "amplifier_module_provider_openai",
     "hook-context-intelligence": "amplifier_module_hook_context_intelligence",
+    "tool-delegate": "amplifier_module_tool_delegate",
 }
 # These are the only optional provider settings reviewed for this recipe. In
 # particular no dynamic credentials, native runtime, workload, extra_body,
@@ -111,7 +112,14 @@ def _declaration(plan, roots, background_delegate):
             or set(plan) - {"session", "providers", "hooks", "agents", "tools"}
             or not {"session", "providers", "hooks"} <= set(plan)
             or type(plan.get("agents", {})) is not dict or plan.get("agents", {}) != {}
-            or type(plan.get("tools", [])) is not list or plan.get("tools", []) != []):
+            or type(plan.get("tools", [])) is not list):
+        return False
+    tools = plan.get("tools", [])
+    # A single reviewed production delegate with ordinary defaults. Its source
+    # must already be in the shipped literal catalog, not declared authority.
+    if tools and (len(tools) != 1 or "amplifier_module_tool_delegate" not in roots
+                  or not _spec(tools[0], "tool-delegate", roots)
+                  or tools[0].get("config", {}) != {}):
         return False
     session = plan["session"]
     if type(session) is not dict or set(session) != {"orchestrator", "context"}:
@@ -122,11 +130,13 @@ def _declaration(plan, roots, background_delegate):
     loop_config = loop.get("config", {})
     # Both omitted defaults and an already-host-adapted declaration are useful.
     # No other loop or context option is silently normalized away.
-    if set(loop_config) - {"configured_bundle", "background_delegate"}:
+    if set(loop_config) - {"configured_bundle", "background_delegate", "inherit_effective_model"}:
         return False
     if "configured_bundle" in loop_config and loop_config["configured_bundle"] is not True:
         return False
     if "background_delegate" in loop_config and loop_config["background_delegate"] is not background_delegate:
+        return False
+    if "inherit_effective_model" in loop_config and type(loop_config["inherit_effective_model"]) is not bool:
         return False
     if context.get("config", {}) != {}:
         return False
@@ -160,7 +170,7 @@ def _declaration(plan, roots, background_delegate):
     return True
 
 
-def _assemble(plan, roots, sources):
+def _assemble(plan, roots, sources, *, child_plans=()):
     """Explicit reviewed semantic owners, not discovered callback dependencies."""
     from amplifier_core import HookResult, ModuleCoordinator, ProviderInfo
     from amplifier_core.message_models import ChatResponse, TextBlock
@@ -171,11 +181,14 @@ def _assemble(plan, roots, sources):
     from amplifier_module_hook_context_intelligence.handlers.logging_handler import LoggingHandler
     from amplifier_module_hook_context_intelligence.config_resolver import HookConfigResolver
     from amplifier_web.preparation_context import PreparedDelivery
-    from amplifier_web.runtime_worker import Worker
+    from amplifier_web.runtime_worker import Worker, ActivityRun
+    from .children import ChildCheckpoint
+    from .prompt_events import PromptEvents
     from .media import SourcePolicy
     from functools import partial
     import asyncio
     import time
+    import uuid
     import amplifier_web.runtime_worker as worker
     import amplifier_module_loop_live.orchestrator as live
     import amplifier_module_context_simple as context
@@ -192,7 +205,6 @@ def _assemble(plan, roots, sources):
         at("amplifier_module_loop_live/orchestrator.py", "mount"): {"config": None},
         at("amplifier_module_provider_openai/__init__.py", "mount"): {"config": None},
         at("amplifier_module_hook_context_intelligence/__init__.py", "mount"): {"config": None},
-        at("amplifier_web/runtime_worker.py", "Worker.install_activity.<locals>.activity"): {"activity_run_id": None},
         at("amplifier_core/loader.py", "ModuleLoader.load.<locals>.mount_with_config_fs"): [
             {"config": plan["session"]["orchestrator"]["config"]},
             {"config": plan["session"]["context"].get("config", {})},
@@ -203,13 +215,19 @@ def _assemble(plan, roots, sources):
             {"_totals": {"cost_usd": None, "has_data": False}}, {},
         ],
     }
+    dependencies = ()
+    if plan.get("tools"):
+        import amplifier_module_tool_delegate as delegate
+        dependencies = (delegate.mount, delegate.DelegateTool)
+        environments[at("amplifier_core/loader.py", "ModuleLoader.load.<locals>.mount_with_config_fs")].append(
+            {"config": plan["tools"][0].get("config", {})})
     return NamedMediaGraph(
-        RECIPE, plans=[plan], sources=sources,
+        RECIPE, plans=[plan, *child_plans], sources=sources,
         dependencies=(HookResult, ModuleCoordinator, ProviderInfo, ChatResponse, TextBlock,
                       BundleLiveOrchestrator, ConversationProviderPin, SimpleContextManager,
-                      OpenAIProvider, asyncio, time, worker.publish,
+                      OpenAIProvider, asyncio, time, uuid, worker.publish,
                       live.mount, context.mount, provider.mount, capture.mount,
-                      capture.on_session_ready, LoggingHandler.__call__),
+                      capture.on_session_ready, LoggingHandler.__call__, *dependencies),
         capability_owners=(
             ("capture-handler", "context_intelligence._hook_state", ("logging_handler",)),
             ("capture-resolver", "context_intelligence.hook_config_resolver", ())),
@@ -218,6 +236,10 @@ def _assemble(plan, roots, sources):
                      ("worker", Worker, ("media_graph_selection", "telemetry", "response_blocks")),
                      ("runtime", Runtime, ("session_id",)),
                      ("coordinator", ModuleCoordinator, ("session_id",)),
+                     ("activity-run", ActivityRun, ("worker", "coordinator", "identity")),
+                     ("prompt-events", PromptEvents, ("coordinator", "current")),
+                     ("child-checkpoint", ChildCheckpoint,
+                      ("registry", "identity", "store", "binding", "child", "row", "metadata", "completion")),
                      ("checkpoint", partial, ("func", "args", "keywords")),
                      ("capture-handler", LoggingHandler, ("_resolver",)),
                      ("capture-resolver", HookConfigResolver, ()),
@@ -253,8 +275,10 @@ def select_from_declaration(authored_plan, *, workspace, session_id, bundle_name
         # Build an independent expected plan from the restricted declaration,
         # not a copy of anything prepared/observed after construction.
         plan = copy.deepcopy(authored_plan)
-        plan["session"]["orchestrator"].update(
-            source=_LOOP_SOURCE, config={"configured_bundle": True, "background_delegate": background_delegate})
+        loop_config = {"configured_bundle": True, "background_delegate": background_delegate}
+        if "inherit_effective_model" in plan["session"]["orchestrator"].get("config", {}):
+            loop_config["inherit_effective_model"] = plan["session"]["orchestrator"]["config"]["inherit_effective_model"]
+        plan["session"]["orchestrator"].update(source=_LOOP_SOURCE, config=loop_config)
         from amplifier_web.session_files import project_slug
         workspace = Path(workspace)
         plan.update(agents={}, application_host=application_host, root_session_id=session_id,
@@ -262,6 +286,15 @@ def select_from_declaration(authored_plan, *, workspace, session_id, bundle_name
                     project_dir=str(workspace), project_name=workspace.name)
         # Fixed Foundation886 event contract; source join verifies the producer.
         plan["hooks"][0]["config"]["additional_events"] = ["session:config", "mentions:resolved"]
-        return _assemble(plan, roots, sources)
+        child_plans = []
+        if plan.get("tools"):
+            # Independently anticipate only ordinary self-delegation's default
+            # tool exclusion and host ceilings, before any prepare/create call.
+            # Retained credentials, model roles and unknown overlays cannot
+            # turn an observed child plan into another admitted declaration.
+            child = copy.deepcopy(plan)
+            child.update(tools=[], agents={}, _unified_image_policy={}, _unified_desktop_policy={})
+            child_plans.append(child)
+        return _assemble(plan, roots, sources, child_plans=child_plans)
     except (ImportError, OSError, ValueError, TypeError, AttributeError, KeyError):
         return None

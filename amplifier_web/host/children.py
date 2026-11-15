@@ -350,6 +350,52 @@ class StandaloneHostAdapter(HostAdapter):
             self.registry.finished(scope, status, result)
 
 
+class ChildCheckpoint:
+    """Actual child lifetime receiver, shared by canonical and compaction hooks.
+
+    Mutable progress belongs to this source owner. The construction fixes the
+    child/store/binding association before registering any execution callback.
+    """
+    def __init__(self, registry, identity, store, binding, metadata, row):
+        self.registry, self.identity, self.store = registry, identity, store
+        self.binding, self.metadata, self.row = binding, metadata, row
+        self.child = None
+        self.ready = False
+        self.continuity = None
+        self.completion = {}
+
+    async def __call__(self, status=None):
+        if not self.child or not self.ready:
+            return
+        coordinator = self.child.coordinator
+        context = coordinator.get("context")
+        messages = await context.get_messages() if context else []
+        intent = {}
+        if self.binding is not None:
+            intent = {"expected": self.binding.expected, "operation_id": uuid.uuid4().hex,
+                      "admit": self.binding.check,
+                      "media_store": coordinator.get_capability("web.media.store")}
+        canonical = self.store.save(self.identity, messages,
+            {**self.metadata, "status": status or self.row["status"]}, **intent)
+        from .media import acknowledge_media, settle_media_policy
+        if self.binding is None:
+            acknowledge_media(coordinator, self.store, self.identity, canonical)
+        else:
+            settle_media_policy(coordinator, canonical)
+        if self.continuity:
+            self.continuity.save()
+
+    async def completed(self, event, data):
+        from amplifier_core import HookResult
+        self.completion.update(data)
+        return HookResult()
+
+    async def compacted(self, event, data):
+        from amplifier_core import HookResult
+        await self()
+        return HookResult()
+
+
 class Children:
     def __init__(self, root, store, approvals, host_adapter=None, *, canonical_binding_factory=None):
         self.root = root
@@ -749,33 +795,8 @@ class Children:
             # SessionStore merges metadata: omission would resurrect a prior
             # fallback snapshot after an explicit/role selection replaced it.
             metadata["effective_selection"] = None
-        continuity = None
-        checkpoint_ready = False
-        async def checkpoint(status=None):
-            # Setup callbacks and failure handling can run before saved history
-            # is fully restored. Never publish that empty or partial context.
-            if not child or not checkpoint_ready:
-                return
-            context = child.coordinator.get("context")
-            messages = await context.get_messages() if context else []
-            intent = {}
-            if canonical_binding is not None:
-                intent = {"expected": canonical_binding.expected, "operation_id": uuid.uuid4().hex,
-                          "admit": canonical_binding.check,
-                          "media_store": child.coordinator.get_capability("web.media.store")}
-            canonical = store.save(identity, messages, {**metadata, "status": status or row["status"]}, **intent)
-            from .media import acknowledge_media
-            if canonical_binding is None:
-                acknowledge_media(child.coordinator, store, identity, canonical)
-            else:
-                from .media import settle_media_policy
-                settle_media_policy(child.coordinator, canonical)
-            if continuity:
-                continuity.save()
-        completion = {}
-        async def completed(event, data):
-            completion.update(data)
-            return HookResult()
+        checkpoint = ChildCheckpoint(self, identity, store, canonical_binding, metadata, row)
+        completion = checkpoint.completion
         try:
             from .initialization import initialization_hooks
             routing = (partial(prepare_default_routing, automatic=metadata["automatic_default_routing"])
@@ -783,6 +804,7 @@ class Children:
             def retain_child(constructing):
                 nonlocal child
                 child = constructing
+                checkpoint.child = constructing
             from .media import bind_media
             initialization = initialization_hooks(isolation=isolation, decision_accounts=decision_accounts,
                                                   routing=routing, retain=retain_child,
@@ -797,6 +819,10 @@ class Children:
                 session_cwd=cwd, is_resumed=resumed, **initialization)
             decision_accounts.require_complete()
             coordinator = child.coordinator
+            from .media import mint_graph_owner
+            mint_graph_owner(coordinator, checkpoint, kind="child-checkpoint",
+                associations=((child, "coordinator", coordinator),
+                              (store, "canonical_binding", canonical_binding)))
             from ..read_policy import validate_mounted_read_policy
             validate_mounted_read_policy(coordinator)
             from ..session_files import capture_dir
@@ -825,12 +851,9 @@ class Children:
             coordinator.register_capability("session.durable_checkpoint", checkpoint)
             from ..context_continuity import install as install_continuity
             from ..runtime_controls import override_path
-            continuity = install_continuity(coordinator, identity, override_path(identity).parent, checkpoint)
-            async def compacted(event, data):
-                await checkpoint()
-                return HookResult()
+            checkpoint.continuity = install_continuity(coordinator, identity, override_path(identity).parent, checkpoint)
             from .media import registration_hooks
-            registration_hooks(coordinator).register("context:compaction_finished", compacted,
+            registration_hooks(coordinator).register("context:compaction_finished", checkpoint.compacted,
                                                        name="unified-child-context-checkpoint")
             for capability in ("model_role_resolver", "web.activity.install"):
                 value = parent.coordinator.get_capability(capability)
@@ -871,7 +894,7 @@ class Children:
                 for name, wrapped in execution_providers(coordinator, providers).items():
                     replace_media_adapter(coordinator, "providers", name, providers[name], wrapped)
             unregister = registration_hooks(coordinator).register(
-                "orchestrator:complete", completed, name="unified-child-completion", priority=999)
+                "orchestrator:complete", checkpoint.completed, name="unified-child-completion", priority=999)
             if ledger and parent_messages is not None:
                 # Recover evidence only after original history and admission
                 # setup succeed. A pending dispatch becomes interrupted, never
@@ -881,7 +904,7 @@ class Children:
                 coordinator.register_capability("live.recovered_jobs", [item["job_id"] for item in recovered])
                 if recovered_messages != parent_messages:
                     await coordinator.get("context").set_messages(recovered_messages)
-            checkpoint_ready = True
+            checkpoint.ready = True
             from .media import enable_media
             enable_media(coordinator)
             if not persistent or not callable(getattr(coordinator.get("orchestrator"), "_select_provider", None)):

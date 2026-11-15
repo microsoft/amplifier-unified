@@ -144,6 +144,62 @@ def test_preserves_background_optout_and_selected_provider_options(recipe, tmp_p
     assert selected.plans == (expected_plan(plan, tmp_path, background_delegate=background),)
 
 
+@pytest.mark.parametrize("inherit", [True, False])
+def test_reviewed_inherit_effective_model_flag_is_preserved_not_dropped(recipe, tmp_path, inherit):
+    plan, args, _ = recipe
+    plan["session"]["orchestrator"]["config"] = {"inherit_effective_model": inherit}
+    selected = assembly.select_from_declaration(plan, **args)
+    assert type(selected) is NamedMediaGraph
+    assert selected.plans == (expected_plan(plan, tmp_path),)
+    assert selected.plans[0]["session"]["orchestrator"]["config"]["inherit_effective_model"] is inherit
+    plan["session"]["orchestrator"]["config"]["inherit_effective_model"] = int(inherit)
+    assert assembly.select_from_declaration(plan, **args) is None
+
+
+def test_authored_delegate_needs_a_shipped_source_join_not_just_package_name(recipe):
+    plan, args, _ = recipe
+    plan["tools"] = [{"module": "tool-delegate", "source": "/unselected/delegate"}]
+    assert assembly.select_from_declaration(plan, **args) is None
+
+
+def test_prompt_receiver_mutable_progress_does_not_admit_replaced_coordinator(recipe):
+    from amplifier_web.host.prompt_events import PromptEvents
+    _, _, selected = recipe
+    coordinator = types.SimpleNamespace()
+    observer = PromptEvents(coordinator)
+    assert selected.mint_owner(observer, kind="prompt-events")
+    assert selected.accepts_callable(observer.observe)
+    observer.current.update(prompt="one", completed=False)
+    assert selected.accepts_callable(observer.observe)
+    assert not selected._binding_valid(observer.current), "Mutable dictionaries are not global graph grants"
+    observer.coordinator = types.SimpleNamespace()
+    assert not selected.accepts_callable(observer.observe)
+
+
+def test_child_checkpoint_receiver_keeps_actual_store_binding_and_child_association(recipe):
+    from amplifier_web.host.children import ChildCheckpoint
+    _, _, selected = recipe
+    binding, other = object(), object()
+    coordinator = types.SimpleNamespace()
+    store = types.SimpleNamespace(canonical_binding=binding)
+    child = types.SimpleNamespace(coordinator=coordinator)
+    checkpoint = ChildCheckpoint(object(), "child", store, binding, {}, {"status": "starting"})
+    checkpoint.child = child
+    assert selected.mint_owner(checkpoint, kind="child-checkpoint",
+                               associations=((child, "coordinator", coordinator),
+                                             (store, "canonical_binding", binding)))
+    assert selected.accepts_callable(checkpoint.completed)
+    assert selected.accepts_callable(checkpoint.compacted)
+    checkpoint.ready = True
+    checkpoint.completion.update(status="success")
+    assert selected.accepts_callable(checkpoint.completed)
+    store.canonical_binding = other
+    assert not selected.accepts_callable(checkpoint.completed)
+    store.canonical_binding = binding
+    checkpoint.binding = other
+    assert not selected.accepts_callable(checkpoint.compacted)
+
+
 def test_platform_and_primitive_subclasses_do_not_auto_accept(recipe, monkeypatch):
     plan, args, _ = recipe
     monkeypatch.setattr(assembly.sys, "platform", "win32")

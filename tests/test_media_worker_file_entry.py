@@ -156,6 +156,44 @@ def test_actual_file_entry_authored_child_tool_remains_neutral_contract_blocker(
     assert all(row["pixels_supplied"] is False for row in observed["records"])
 
 
+def test_actual_file_entry_canonical_delegate_private_native_child_and_resume(tmp_path):
+    if os.environ.get("NORMAL_MEDIA_DELEGATE_ENTRY") != "1":
+        pytest.skip("requires explicitly selected reviewed whole Foundation/delegate source")
+    assert os.environ.get("NORMAL_MEDIA_FILE_ENTRY") == "1"
+    python = os.environ.get("UNIFIED_RUNTIME_PYTHON")
+    assert python
+    tmp_path.chmod(0o700)
+    profile, worker = (os.environ.get("NORMAL_MEDIA_INSTALLED_PROFILE"),
+                       os.environ.get("NORMAL_MEDIA_INSTALLED_WORKER"))
+    command = [python, str(PROBE), str(tmp_path), "--delegate-journey"]
+    env = {**os.environ, "AMPLIFIER_RUNTIME_IMMUTABLE": "1", "UV_OFFLINE": "1"}
+    if profile or worker:
+        assert profile and worker
+        command.extend(["--installed-profile", profile, "--installed-worker", worker])
+        for key in ("WARM_LOOP_SOURCE", "PYTHONHOME", "PYTHONUSERBASE"):
+            env.pop(key, None)
+        env.update(PYTHONPATH=str(PROBE.parent), PYTHONNOUSERSITE="1")
+    result = subprocess.run(command, cwd=tmp_path if profile else ROOT, text=True,
+                            capture_output=True, timeout=120, env=env)
+    (tmp_path / "delegate-journey-result.json").write_text(result.stdout)
+    assert result.returncode == 0, result.stdout + result.stderr
+    evidence = json.loads(result.stdout)
+    assert evidence["actual_delegate_native_child_hydration"] is True
+    assert evidence["fresh_process_native_child_resume_without_replay"] is True
+    assert evidence["canonical_t2_ack"] and evidence["canonical_and_protocol_no_pixels"]
+    assert len(evidence["children"]) == 2
+    for report, sends in zip(evidence["children"], (6, 3)):
+        assert report["final"] and not report["failures"] and not report["socket_denials"]
+        assert report["canonical_cleanup_joined"] and report["private_requests_cleared"]
+        assert sum(row["phase"] == "send" for row in report["records"]) == sends
+        assert len(report["typed_receipts"]) == len(report["records"])
+        assert any(row["native_child"] for row in report["snapshots"])
+        for receipt in report["typed_receipts"]:
+            assert receipt["receipt_type"] == "VersionedCheckpointReceipt"
+            assert receipt["result_type"] == "CommitAck" and receipt["refs"]
+            assert all(ref["session_id"] == receipt["prefix"]["session_id"] for ref in receipt["refs"])
+
+
 async def test_pipe_until_rejects_eof_instead_of_inventing_retirement_ack(probe):
     class Writer:
         def write(self, value):

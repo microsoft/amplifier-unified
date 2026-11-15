@@ -28,6 +28,7 @@ PACKAGES = ("amplifier_core", "amplifier_foundation", "amplifier_module_loop_liv
             "amplifier_module_provider_openai", "amplifier_module_hook_context_intelligence",
             "context_intelligence")
 INSTALLED_PACKAGES = (*PACKAGES, "amplifier_web", "openai", "httpx", "httpx2", "PIL")
+DELEGATE_INSTALLED_PACKAGES = (*INSTALLED_PACKAGES, "amplifier_module_tool_delegate")
 INSTALLED_TARGET = None
 
 
@@ -67,7 +68,8 @@ class InstalledTarget:
             raise ValueError("Installed app must be inside the qualification venv")
         self.packages = self.data["packages"]
         self.files = self.data["files"]
-        if (type(self.packages) is not dict or set(self.packages) != set(INSTALLED_PACKAGES)
+        if (type(self.packages) is not dict or set(self.packages) not in (
+                set(INSTALLED_PACKAGES), set(DELEGATE_INSTALLED_PACKAGES))
                 or type(self.files) is not dict or not self.files):
             raise ValueError("Explicit installed package and file identities required")
         for package, item in self.packages.items():
@@ -235,7 +237,7 @@ async def mount(coordinator, config=None):
 '''
 
 
-def authored_bundle(root, *, child_tool=False):
+def authored_bundle(root, *, child_tool=False, delegate=False):
     """Ordinary authored declaration, not a prepared/session-derived mount plan."""
     declaration = {
         "bundle": {"name": "normal-media-worker", "version": "0.0.1"},
@@ -255,6 +257,11 @@ def authored_bundle(root, *, child_tool=False):
     }
     if child_tool:
         declaration["tools"] = [{"module": "tool-media-child", "source": str(root / "child-tool")}]
+    if delegate:
+        assert not child_tool
+        declaration["tools"] = [{"module": "tool-delegate",
+                                  "source": str(origin("amplifier_module_tool_delegate").parent)}]
+        declaration["session"]["orchestrator"]["config"] = {"inherit_effective_model": True}
     return declaration
 
 
