@@ -448,8 +448,9 @@ def test_a_journal_that_does_not_prove_a_delete_choice_never_deletes(deleter):
 
 def test_foreign_top_level_entries_stay_and_then_the_folder_stays(deleter, monkeypatch):
     state, root = deleter.state, deleter.root
+    # Names that are distinct from this installation's own on a file system that ignores case, too.
     foreign = {"mine.txt": "not Amplifier's", "my folder/notes.txt": "a folder", "launcher-x/a": "no known form",
-               "launcher-1.0.0-0A1B2C3D/a": "not the form of a kept launcher",
+               "launcher-2.0.0-0A1B2C3E/a": "not the form of a kept launcher",
                "amplifier_unified-1.0.0-py3-none-any.whl.bak": "w"}
     for name, text in foreign.items():
         (root / name).parent.mkdir(parents=True, exist_ok=True)
@@ -1004,9 +1005,9 @@ def test_native_data_folder_renamed_only_by_case_deletes_nothing(native_installa
     assert (refused["step"], refused["error"], refused["refused"]) == ("folder", "ValueError", False), refused
     assert "it deleted nothing" in refused["notice"] and "select No in the first question" in refused["notice"]
     assert refused["events"] == ["question", "question"]  # The app was not stopped.
-    # Nothing was deleted and no journal was written; only the private note of the failure is new.
-    after = _tree(root)
-    note = str(Path("App", "config", "services", "consumer-maintenance.json"))
+    # Nothing was deleted and no journal was written; only the private note of the failure is new. It is
+    # in the folder itself: the private-file boundary refuses the altered spelling of the app's own folder.
+    after, note = _tree(root), "consumer-maintenance.json"
     assert [name for name in after if name != note] == before and note in after
     assert not plan.unfinished(root) and plan.completed(root)
     assert shell.registry(root) == native["registration"]
