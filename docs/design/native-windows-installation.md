@@ -1995,10 +1995,113 @@ The owner can end every browser session with `amplifier-unified browsers sign-ou
 (see the deployment guide). All browser session checks go through one function,
 `auth.valid_session`, so that no check can ignore that sign-out.
 
-Remote browsers need an explicit owner-approved browser-pairing design over
-trusted configured HTTPS. Do not silently reuse terminal/companion grants with
-broader authority. Until that path is qualified, report its limitation rather
-than offering the unusable Windows password form.
+The command and the running host are two processes, and the host looks at the
+saved record every two seconds. A ticket or code from before a sign-out must
+not open a session that outlasts it, also in that gap. Two rules give that,
+with no lock between the two processes:
+
+1. The command saves a second that is not earlier than the second in which its
+   record was saved. When a write ends in a later second, it pauses for a
+   moment and saves again with that later second (`auth.sign_out_all`).
+2. For a ticket or code, the host reads the new session's second first and
+   looks at the saved record after that. When the record has changed and the
+   host has not applied it yet, the ticket or code is used up and opens no
+   session (`auth.sign_in`). The host keeps the mark of a record only when it
+   has read that record.
+3. The host drops pending tickets and codes for every changed record, also
+   when its second is the one already applied. A second sign-out in the same
+   second therefore still drops a ticket or code that was made in between
+   (`auth.refresh_sessions`). Open streams end only for a later second: a
+   session that is valid at that point was made after the record's second.
+
+A session that the host returns was therefore made before any record that is
+saved later, so it carries no later second than that record, and the host
+refuses it when it applies that sign-out. A session in the same second as a
+sign-out is refused. The owner signs in again a few seconds later, with a new
+ticket or code.
+
+The host tells a new record from the file's time, size and identity, not from
+its content. Every save puts a new file in place while the record before it
+still exists, so two saves in a row never have the same identity. The command
+checks this for each save: a save that the host could not tell from the record
+before it is made again. After three saves that were too slow or not visible,
+and after a save that is not confirmed although the record may have changed,
+the command says that it could not confirm the sign-out and asks the owner to
+run it again. It says that nothing was changed only when it looked at the
+record before and after the attempt and found the same record.
+
+A look at the record can fail for another reason than a missing record. Such
+a look is never taken for "no record" and never for "unchanged". The host
+then opens no session for a ticket or code. The watcher applies nothing, keeps
+nothing, and says so once in the host log. The command does not report a
+finished sign-out.
+
+This holds while the PC clock does not go backward. One case is left open: the
+host looks every two seconds, and it misses a change when two or more saves
+between two looks end in a file with the same time, size and identity as the
+file that the host saw last. That needs a file time that does not change
+between saves and a reused identity. It is not measured on any file system.
+Two facts make it narrower. The Windows private store accepts only a local
+fixed NTFS volume. Tickets and codes exist on a Windows host only, so on the
+other systems a missed change can only delay the end of open streams.
+
+A ticket or code that is made after a sign-out and before the host has applied
+it is dropped as well. The owner waits a few seconds after the command.
+
+#### Remote browser sign-in on a Windows host
+
+A browser on another device cannot use the local launcher, and a Windows host
+has no password form. The owner starts that sign-in at the PC:
+`amplifier-unified browsers code` prints a code, and the owner types it on the
+sign-in page that the other device shows. Terminal and companion grants are not
+reused for this; they carry broader authority.
+
+- **The code.** Ten symbols from 32 (no `0`, `1`, `I` or `O`): 50 bits. It
+  lasts 120 seconds and works once. The host keeps only its SHA-256, and at
+  most eight codes at a time. Input is upper-cased, and spaces and hyphens are
+  removed. No other character is changed, so a look-alike is a wrong code.
+- **Who can make one.** The command uses the same request as `open`. It pins
+  the privately read leaf certificate before it reads or sends the control
+  credential, and the host accepts that request from this computer only. The
+  code is bound to the host instance, the data folder, the owner SID and one
+  address: an exact HTTPS entry of `public_origins` that is not this computer.
+- **Where it works.** The redeem endpoint has its own narrow check: HTTPS, an
+  explicit `Origin` equal to the address the browser used, and that address an
+  exact configured remote one. It does **not** look at the peer address. A
+  Tailscale TCP forward connects to the host from `127.0.0.1` (measured), so
+  the socket does not say where the browser is. The local ticket keeps its
+  check that both socket ends are local. With the forward on, that check no
+  longer tells a tailnet device from this computer: a client there can also
+  send the local address as `Host` and `Origin`. It gains nothing by that. The
+  owner endpoints still need the control credential from the owner-only folder,
+  and the local redeem still needs a ticket that only the launcher can get.
+  Loopback was never authority; another Windows account on the PC is in the
+  same position.
+- **Wrong codes.** No lockout and no delay. A lockout would let any device
+  that reaches the address keep the owner out. A delay taken in turn would
+  make the owner wait behind a flood of wrong codes. The numbers carry the
+  guess resistance: at 10,000 guesses each second against eight pending codes,
+  the chance of a hit in one code lifetime is about 1 in 100 million. A wrong
+  code never removes a real one and never reaches the owner's command, which
+  uses another endpoint. The host counts wrong codes and logs only the count.
+- **The page.** Server-rendered, with no script, and it shows nothing from the
+  request. It is sent with `Referrer-Policy: same-origin`, not `no-referrer`:
+  from a `no-referrer` page a browser posts the form with `Origin: null`, and
+  the redeem check refuses that. The redeem reply is `no-store`, `no-referrer`.
+- **The session.** The signed cookie from a code is marked remote
+  (`"via": "remote"`), so that a rule for remote sessions only is possible
+  later. Local cookies do not change. The lifetime is the configured one.
+- **The control.** `amplifier-unified browsers sign-out` signs out every
+  browser and drops every pending ticket and code.
+
+Limits: there is no sign-out for one device. A person on the same network who
+gets the owner to type the code into a look-alike page within 120 seconds can
+use it; the command prints the exact address to open. One host process holds
+the pending codes in memory, so a restart drops them and the owner makes a new
+code. Not measured yet: a phone browser, and the whole journey on a real second
+device. Linux, macOS and WSL hosts keep the password form and refuse both code
+endpoints. The steps for the owner are in the
+[deployment guide](../DEPLOYMENT.md#windows-host-reach-unified-from-another-device).
 
 ### Background lifetime
 
