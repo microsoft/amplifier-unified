@@ -573,7 +573,8 @@ class Worktrees:
                                 result = self.display(record)
                         except (RuntimeError, ValueError, OSError):
                             pass  # A live/foreign writer is not evidence of absence.
-                if record['phase'] == 'applied' and not self.placement_committed(record, saved):
+                if (record['phase'] == 'applied' and not self.placement_committed(record, saved)
+                        and (saved or {}).get('executionRevision', 0) <= record['executionRevision'] + 1):
                     result.update(displayState='needs_recovery',
                         detail='The saved move does not match current placement. No folder or input was changed.')
                 self.changed({sid})

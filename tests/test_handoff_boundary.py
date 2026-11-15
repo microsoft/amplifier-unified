@@ -152,6 +152,27 @@ async def test_check_move_is_machine_observation_not_a_second_move(tmp_path, mon
         await app.close()
 
 
+async def test_check_historical_success_does_not_confuse_a_later_move_with_failure(tmp_path, monkeypatch):
+    app, runtime, root, sid = await fixture(tmp_path, monkeypatch)
+    try:
+        target = await checkout(app, sid)
+        first = (await app.dispatch('worktree.handoff', {'sessionId': sid, 'id': target['id'],
+            'expectedExecutionRevision': 0}, command_id='outward'))['result']
+        await settle(app)
+        await app.dispatch('worktree.handoff', {'sessionId': sid, 'id': None,
+            'expectedExecutionRevision': 1}, command_id='homeward')
+        await settle(app)
+        calls = runtime.quiesce_for_handoff.await_count
+        observed = (await app.dispatch('worktree.check', {'sessionId': sid, 'id': first['id']}))['result']
+        assert observed['displayState'] == 'moved' and observed['phase'] == 'applied'
+        assert observed['target'] == target['path']
+        assert app._session(sid)['executionRevision'] == 2
+        assert app._session(sid)['workingDirectory'] == str(root)
+        assert runtime.quiesce_for_handoff.await_count == calls == 2
+    finally:
+        await app.close()
+
+
 async def test_restart_before_release_check_confirms_absence_without_releasing_or_replaying(tmp_path, monkeypatch):
     from amplifier_web.runtime import RuntimeManager
     app, runtime, root, sid = await fixture(tmp_path, monkeypatch)
