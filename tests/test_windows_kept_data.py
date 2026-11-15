@@ -851,6 +851,59 @@ def test_continued_fill_accepts_nothing_that_it_did_not_move(tmp_path, monkeypat
     assert kept.first_start(root, VERSION, ask=False) is None and person(data(root)) == expected
 
 
+def test_entry_that_appears_after_the_last_check_is_never_replaced(tmp_path, monkeypatch, notices):
+    root, folder, _ = kept_then_installed(tmp_path)
+    refuse(monkeypatch, "rmdir", root / "workspace")
+    real = kept._filling
+
+    def filling(record, name, source, target):
+        result = real(record, name, source, target)
+        if result and not os.listdir(target):  # The check passed. Then another program writes the same name.
+            (target / "notes.txt").write_text("appeared after the check")
+        return result
+    monkeypatch.setattr(kept, "_filling", filling)
+    notices.answers.append(True)
+    result = kept.first_start(root, VERSION, ask=True)
+    assert result["taken"] is False and result["reason"] == "take-back-not-empty"
+    assert (root / "workspace" / "notes.txt").read_text() == "appeared after the check"
+    assert (folder / "workspace" / "notes.txt").read_text() == "mine\n"
+
+
+@pytest.mark.parametrize("direction", ["take-back", "move-out"])
+def test_link_that_takes_a_folders_place_at_the_last_moment_is_never_used(tmp_path, monkeypatch, notices, direction):
+    """A whole-folder rename cannot hold its own source. A link that is swapped in moves as a link, unused."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "theirs.txt").write_text("not Amplifier's\n")
+    if direction == "take-back":
+        root, folder, _ = kept_then_installed(tmp_path)
+        source = folder / "ownership"
+    else:
+        root = used(tmp_path / "Amplifier")
+        folder, source = kept.kept_folder(root), root / "ownership"
+    real = os.rename
+
+    def rename(old, new):
+        if Path(old) == source and kept._kind(source) == "folder":  # After every check: the swap.
+            real(source, tmp_path / "taken-away")
+            link(outside, source)
+        return real(old, new)
+    monkeypatch.setattr(os, "rename", rename)
+    if direction == "take-back":
+        notices.answers.append(True)
+        result = kept.first_start(root, VERSION, ask=True)
+        assert result["taken"] is False and result["reason"] == "take-back-link"
+        assert "Do not uninstall Amplifier" in notices.shown[-1][1] and kept.read(folder)[0] == "adopting"
+        assert kept._kind(root / "ownership") == "link"
+    else:
+        result = kept.move_out(root, version=VERSION, transfer=T1, remove=shutil.rmtree, wait=0)
+        assert result["state"] == "moving" and kept.read(folder)[0] == "moving"
+        assert kept._kind(folder / "ownership") == "link"
+        again = kept.move_out(root, version=VERSION, transfer=T1, remove=shutil.rmtree, wait=0)
+        assert again["state"] == "moving" and again["remaining"] == ["ownership"]  # Never complete with a link.
+    assert os.listdir(outside) == ["theirs.txt"]  # Never entered.
+
+
 def test_installation_knows_that_a_take_back_began_also_when_the_record_is_lost(tmp_path, monkeypatch, notices):
     root, folder, expected = kept_then_installed(tmp_path)
     notices.answers.append(True)

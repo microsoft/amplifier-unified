@@ -583,9 +583,11 @@ def _move_out(root, kept, version, transfer, remove, wait):
         while True:
             present, left, remaining = set(_names(root)), [], []
             for name in FOLDERS:
-                if name not in present:
+                if _kind(kept / name) not in (None, "folder"):
+                    remaining.append(name)  # Not a real folder in the kept set: the set is never complete.
+                elif name not in present:
                     continue
-                if _kind(root / name) != "folder":
+                elif _kind(root / name) != "folder":
                     left.append(name)  # A link, or a file: it stays and is reported.
                 elif not _move(root / name, kept / name, kept):
                     remaining.append(name)
