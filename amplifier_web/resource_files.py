@@ -13,6 +13,9 @@ import stat
 import time
 from pathlib import Path
 
+EXECUTION_ROOT_FORMAT = 'unified-execution-records/1'
+_EXECUTION_ROOT_INDEX = 'execution-root/1:'
+
 
 def root(db):
     path = next(row[2] for row in db.execute('PRAGMA database_list') if row[1] == 'main')
@@ -24,6 +27,7 @@ class Prepared:
     encoded: bytes
     identity: str
     size: int
+    execution_root: bool = False
 
     @property
     def text(self):
@@ -36,7 +40,8 @@ def prepare(value):
     """Pure canonical preparation, safe to run without a database in a worker."""
     text = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
     encoded = text.encode()
-    return Prepared(encoded, hashlib.sha256(encoded).hexdigest(), len(encoded))
+    return Prepared(encoded, hashlib.sha256(encoded).hexdigest(), len(encoded),
+                    isinstance(value, dict) and value.get('format') == EXECUTION_ROOT_FORMAT)
 
 
 def write_prepared(directory, prepared):
@@ -56,7 +61,8 @@ def write_prepared(directory, prepared):
 
 def _stage(db, prepared):
     directory = root(db)
-    indexed = prepared.text if directory is None else json.dumps({'$blob': prepared.identity})
+    pointer = (_EXECUTION_ROOT_INDEX if prepared.execution_root else '') + prepared.identity
+    indexed = prepared.text if directory is None else json.dumps({'$blob': pointer})
     owns_transaction = not db.in_transaction
     if owns_transaction:
         db.execute('BEGIN IMMEDIATE')
@@ -71,6 +77,14 @@ def _rollback_put(db, owns_transaction):
         db.rollback()
 
 
+def _index_prepared(db, prepared, indexed):
+    db.execute('INSERT OR IGNORE INTO state_resources VALUES (?, ?)', (prepared.identity, indexed))
+    if prepared.execution_root:
+        existing = db.execute('SELECT value FROM state_resources WHERE id=?', (prepared.identity,)).fetchone()[0]
+        if existing != indexed:
+            raise ValueError('Execution root index conflicts with its required format; original preserved.')
+
+
 def put(db, value):
     prepared = prepare(value)
     return put_prepared(db, prepared)
@@ -80,13 +94,26 @@ def put_prepared(db, prepared):
     """Adopt prepared bytes through the same transaction and file checks."""
     directory, indexed, owns_transaction = _stage(db, prepared)
     try:
-        db.execute('INSERT OR IGNORE INTO state_resources VALUES (?, ?)', (prepared.identity, indexed))
+        _index_prepared(db, prepared, indexed)
         write_prepared(directory, prepared)
         db.execute('RELEASE resource_put')
     except BaseException:
         _rollback_put(db, owns_transaction)
         raise
     return {'$resource': prepared.identity, 'bytes': prepared.size}
+
+
+def put_execution_root(db, value):
+    """Keep canonical bytes; older file-backed readers must refuse this root.
+
+    Older resource decoders reject a $blob pointer unequal to its resource ID,
+    including during reachability collection. An unfamiliar ordinary wrapper
+    would instead look like an empty leaf and could lose retained descendants.
+    In-memory resources cannot outlive their process and remain inline.
+    """
+    if value.get('format') != EXECUTION_ROOT_FORMAT:
+        raise ValueError('Unsupported execution root format.')
+    return put(db, value)
 
 
 async def settle_worker(function, *args):
@@ -119,7 +146,7 @@ async def put_prepared_async(db, prepared):
     """
     directory, indexed, owns_transaction = _stage(db, prepared)
     try:
-        db.execute('INSERT OR IGNORE INTO state_resources VALUES (?, ?)', (prepared.identity, indexed))
+        _index_prepared(db, prepared, indexed)
         await settle_worker(write_prepared, directory, prepared)
         db.execute('RELEASE resource_put')
     except BaseException:
@@ -156,8 +183,10 @@ def read_detached(source, *, max_bytes=None):
     if max_bytes is not None and len(text.encode()) > max_bytes:
         raise ValueError('Oversized artifact index.')
     value = json.loads(text)
+    execution_root = False
     if isinstance(value, dict) and set(value) == {'$blob'}:
-        if value['$blob'] != source.identity or source.directory is None:
+        execution_root = value['$blob'] == _EXECUTION_ROOT_INDEX + source.identity
+        if (value['$blob'] != source.identity and not execution_root) or source.directory is None:
             raise ValueError('Invalid artifact index')
         path = source.directory / (source.identity + '.json')
         with _open_blob(path) as stream:
@@ -174,6 +203,8 @@ def read_detached(source, *, max_bytes=None):
         value = json.loads(encoded)
     elif hashlib.sha256(text.encode()).hexdigest() != source.identity:
         raise ValueError('Artifact content conflicts with its identity.')
+    if execution_root and (not isinstance(value, dict) or value.get('format') != EXECUTION_ROOT_FORMAT):
+        raise ValueError('Unsupported execution root format.')
     return value
 
 
@@ -213,7 +244,8 @@ def _blob_index(source):
             return value
         value = json.loads(source.indexed, object_pairs_hook=unique)
         if isinstance(value, dict) and '$blob' in value:
-            if value != {'$blob': source.identity} or source.directory is None:
+            if (value not in ({'$blob': source.identity}, {'$blob': _EXECUTION_ROOT_INDEX + source.identity})
+                    or source.directory is None):
                 raise ValueError('Invalid artifact index.')
             return True
     return False
@@ -374,6 +406,8 @@ def reuse_reference(db, evidence):
 
 def resolve(db, identity, value):
     if isinstance(value, dict) and set(value) == {'$blob'}:
+        if value['$blob'] == _EXECUTION_ROOT_INDEX + identity:
+            return read_detached(Detached(root(db), identity, json.dumps(value)))
         if value['$blob'] != identity:
             raise ValueError('Invalid artifact index')
         if os.name == 'nt':

@@ -14,7 +14,7 @@ from . import resource_files
 
 COLLECTIONS = ('nodes', 'turns', 'retiredUsageNodes')
 PAGE_ROWS = 128
-FORMAT = 'unified-execution-records/1'
+FORMAT = resource_files.EXECUTION_ROOT_FORMAT
 
 
 def key(kind, row):
@@ -215,7 +215,7 @@ def _store(db, root):
     for collection in root['collections'].values():
         if collection['order'] is not None:
             facts = [old or value for old, value in zip(facts, collection['order']['executionFacts'], strict=True)]
-    reference = resource_files.put(db, root)
+    reference = resource_files.put_execution_root(db, root)
     return {**reference, 'executionProjection': 2, 'pendingObservation': facts[0],
             'pendingWork': facts[1], 'pendingVoice': facts[2], 'unassignedNodes': facts[3]}
 

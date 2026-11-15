@@ -1,5 +1,6 @@
 """Execution pages use the existing durable roots and transaction recovery."""
 import json
+import hashlib
 import sqlite3
 
 import pytest
@@ -104,3 +105,65 @@ def test_failed_publication_restart_and_collection_keep_the_last_committed_graph
         save(restarted, retry)
         restarted.commit()
         assert records.read_record(restarted, retry, 'nodes', records.key('nodes', changed)) == changed
+
+
+def test_root_index_preserves_canonical_bytes_and_recovery_encoding(db):
+    original = value()
+    reference = records.import_tree(db, OWNER, original)
+    save(db, reference)
+    db.commit()
+    identity = reference['$resource']
+    source = resource_files.detach(db, identity)
+    assert json.loads(source.indexed) == {'$blob': 'execution-root/1:' + identity}
+    path = resource_files.root(db) / (identity + '.json')
+    encoded = path.read_bytes()
+    assert hashlib.sha256(encoded).hexdigest() == identity
+    root = resource_files.read_detached(source)
+    assert resource_files.prepare(root).encoded == encoded
+    assert resource_files.prepare(root).execution_root
+    assert resource_files.detached_signature(source)[2] == len(encoded)
+
+    # Missing-index recovery must not silently restore an old-reader-compatible
+    # pointer. The resource and every descendant keep their exact identities.
+    db.execute('DELETE FROM state_resources WHERE id=?', (identity,))
+    db.commit()
+    assert resource_files.restore(db, {}, identity, root) == {'id': identity, 'restored': True}
+    db.commit()
+    assert resource_files.detach(db, identity).indexed == source.indexed
+    assert path.read_bytes() == encoded
+    collect(db)
+    assert records.materialize(db, reference) == original
+
+
+async def test_prepared_and_async_root_readoption_keep_the_format_guard(db):
+    reference = records.import_tree(db, OWNER, value())
+    source = resource_files.detach(db, reference['$resource'])
+    root = resource_files.read_detached(source)
+    prepared = resource_files.prepare(root)
+    assert resource_files.put_prepared(db, prepared) == {'$resource': prepared.identity, 'bytes': prepared.size}
+    assert await resource_files.put_prepared_async(db, prepared) == resource_files.put(db, root)
+    assert await resource_files.put_async(db, root) == resource_files.put(db, root)
+    assert resource_files.detach(db, prepared.identity).indexed == source.indexed
+
+    # An existing unknown or untagged index is not overwritten by re-adoption.
+    conflicting = json.dumps({'$blob': prepared.identity})
+    db.execute('UPDATE state_resources SET value=? WHERE id=?', (conflicting, prepared.identity))
+    with pytest.raises(ValueError, match='required format'):
+        resource_files.put_prepared(db, prepared)
+    assert resource_files.detach(db, prepared.identity).indexed == conflicting
+
+
+def test_unsupported_root_index_refuses_reads_and_collection_without_rewriting(db):
+    reference = records.import_tree(db, OWNER, value())
+    save(db, reference)
+    db.commit()
+    identity = reference['$resource']
+    changed = json.dumps({'$blob': 'execution-root/2:' + identity})
+    db.execute('UPDATE state_resources SET value=? WHERE id=?', (changed, identity))
+    db.commit()
+    before = db.execute('SELECT id,value FROM state_resources ORDER BY id').fetchall()
+    with pytest.raises(ValueError, match='Invalid artifact index'):
+        records.materialize(db, reference)
+    assert resource_files.marked_references(db, {}) is None
+    assert collect(db) == []
+    assert db.execute('SELECT id,value FROM state_resources ORDER BY id').fetchall() == before
