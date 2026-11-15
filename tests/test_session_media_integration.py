@@ -257,6 +257,134 @@ async def test_cached_pretransport_refusal_drops_serialized_private_frame(sessio
     assert private.messages == [] and not seen.sent and wrapped.prepared == []
 
 
+@pytest.mark.parametrize("stream", [False, True])
+async def test_changed_dispatch_options_do_not_retain_private_tuple_in_any_surface_frame(session, stream):
+    value = await accepted(session)
+    canonical = value.model_dump_json()
+    wrapped, seen = provider(session)
+    await wrapped.request_budget(value, request_options={"temperature": 0.1})
+    private = seen.count[0]
+    with pytest.raises(ValueError, match="options changed") as failed:
+        if stream:
+            async for _ in wrapped.stream(value, temperature=0.9):
+                pass
+        else:
+            await wrapped.complete(value, temperature=0.9)
+    sentinel = base64.b64encode(session.raw).decode()
+    def private_text(item):
+        if isinstance(item, str):
+            return sentinel in item
+        if isinstance(item, (list, tuple)):
+            return any(private_text(part) for part in item)
+        if isinstance(item, dict):
+            return any(private_text(part) for pair in item.items() for part in pair)
+        return False
+    frame = failed.value.__traceback__
+    while frame:
+        if frame.tb_frame.f_code.co_filename.endswith("surface_delivery.py"):
+            assert not any(private_text(item) for item in frame.tb_frame.f_locals.values()), (
+                "Known serialized private bytes retained in a SurfaceProvider traceback")
+        frame = frame.tb_next
+    assert private.messages == [] and not seen.sent and wrapped.prepared == []
+    assert value.model_dump_json() == canonical
+
+
+@pytest.mark.parametrize("retry", ["complete", "stream", "compact"])
+async def test_selected_owner_refusal_requires_successful_explicit_fit_before_any_retry(session, retry):
+    from amplifier_web.host.session import SelectedProvider
+    value = await accepted(session)
+    canonical = value.model_dump_json()
+    original, old = provider(session)
+    replacement, new = provider(session)
+    async def compact(request, **kwargs):
+        new.sent.append(request)
+        return "uncounted compact"
+    replacement.original.compact_context = compact
+    active = [original]
+    selected = SelectedProvider(original.original, {}, execution_adapter=lambda _: active[0])
+    await selected.request_budget(value)
+    previous = old.count[0]
+    active[0] = replacement
+    with pytest.raises(ValueError, match="execution provider changed"):
+        await selected.complete(value)
+    assert previous.messages == [] and original.prepared == []
+    async def dispatch():
+        if retry == "complete":
+            return await selected.complete(value)
+        if retry == "compact":
+            return await selected.compact_context(value)
+        return [part async for part in selected.stream(value)]
+    for _ in range(2):
+        with pytest.raises(ValueError, match="explicit budget"):
+            await dispatch()
+    with pytest.raises((ValueError, TypeError)):
+        await selected.request_budget(value, request_options=object())
+    with pytest.raises(ValueError, match="explicit budget"):
+        await dispatch()
+    budget = replacement.original.request_budget
+    async def failed_budget(*args, **kwargs):
+        raise RuntimeError("Explicit fit failed")
+    replacement.original.request_budget = failed_budget
+    with pytest.raises(RuntimeError, match="Explicit fit failed"):
+        await selected.request_budget(value)
+    with pytest.raises(ValueError, match="explicit budget"):
+        await dispatch()
+    assert not new.sent and not old.sent
+    replacement.original.request_budget = budget
+    await selected.request_budget(value)
+    assert await selected.complete(value) == "done"
+    assert new.count[-1] is new.sent[-1] and new.sent[-1].messages == []
+    assert value.model_dump_json() == canonical
+
+
+async def test_selected_refusal_state_is_bounded_weak_and_saturation_requires_completed_fit():
+    import gc
+    import weakref
+    from amplifier_web.host.session import SelectedProvider
+    selected = SelectedProvider(object(), {})
+    requests = [ChatRequest(messages=[]) for _ in range(17)]
+    for request in requests:
+        selected._mark_media_fit_refusal(request)
+    assert len(selected._media_fit_refusals) == 16 and selected._media_fit_refusal_overflow
+    assert all(type(ref) is weakref.ReferenceType for ref in selected._media_fit_refusals)
+    value, execution = requests[-1], selected.original
+    with pytest.raises(ValueError, match="successful explicit budget"):
+        selected._check_fitted_execution(value, execution)
+    selected._release_bindings.append((value, value, execution, {}, {}, False))
+    with pytest.raises(ValueError, match="successful explicit budget"):
+        selected._check_fitted_execution(value, execution)  # Merely starting a budget cannot clear it.
+    selected._finish_selected_budget(value, value, execution)
+    selected._check_fitted_execution(value, execution)
+    selected._forget_request(value)
+    with pytest.raises(ValueError, match="successful explicit budget"):
+        selected._check_fitted_execution(value, execution)
+    watched = weakref.ref(requests[0])
+    requests.clear()
+    gc.collect()
+    assert watched() is None, "Refusal bookkeeping must not retain canonical/private payloads"
+
+
+async def test_early_refit_scope_failure_drops_new_private_serialized_tuple(session):
+    class Delivery(NoWorkDelivery):
+        async def prepare_refit(self, request, provider, *, binding):
+            return request
+        def check_execution_scope(self, scope):
+            raise ValueError("Refit scope expired")
+    value = await accepted(session)
+    wrapped, seen = provider(session)
+    wrapped.delivery = Delivery()
+    with pytest.raises(ValueError, match="Refit scope expired") as failed:
+        await wrapped._prepare_inner(value, refit_binding={"executionScope": {}}, projection_out=[])
+    sentinel = base64.b64encode(session.raw).decode()
+    frame = failed.value.__traceback__
+    while frame:
+        if frame.tb_frame.f_code.co_filename.endswith("surface_delivery.py"):
+            for name in ("entry", "cached", "fitted"):
+                assert sentinel not in str(frame.tb_frame.f_locals.get(name))
+        frame = frame.tb_next
+    assert not wrapped.prepared and not seen.count and not seen.sent
+
+
 async def test_selected_rebudget_retires_previous_private_execution_owner(session):
     from amplifier_web.host.session import SelectedProvider
     value = await accepted(session)

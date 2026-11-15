@@ -277,8 +277,11 @@ class SurfaceProvider:
         if entry is not None and len(entry) > 5 and entry[5] is not None:
             if not entry[5].matches_options(request_options):
                 if not explicit_budget:
-                    entry[5].release()
-                    self.prepared.remove(entry)
+                    try:
+                        entry[5].release()
+                        self.prepared.remove(entry)
+                    finally:
+                        entry = None
                     raise ValueError('Prepared media request options changed after fitting')
                 entry[5].release()
                 self.prepared.remove(entry)
@@ -361,6 +364,9 @@ class SurfaceProvider:
                 except BaseException:
                     if media is not None:
                         media.release()
+                        if projection_out is not None:
+                            projection_out.clear()
+                        entry = cached = None
                     raise
             self.prepared.append(entry)
             while len(self.prepared) > 4:
