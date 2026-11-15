@@ -216,7 +216,8 @@ and either the preservation or verification phase with a safe failure code
 (including `preserving` / `retention_storage` when retention space was unavailable), or
 the `preparing` phase and `cleanup_helper_not_started` code proving that no
 cleanup helper started. Once `Popen` returns, a lost response or helper process
-failure remains uncertain; it is not covered by this preflight exception.
+failure remains uncertain unless the new local Docker loaded-input gate
+positively records a reaped, pre-permit refusal (`cleanup_loaded_inputs_refused`).
 A local refusal before the new cleanup helper is invoked stays a failed request;
 retained dependency preparation from an earlier start does not make it an unknown
 removal. Known local refusal boundaries have bounded reason codes; arbitrary
@@ -227,6 +228,35 @@ Stopped inventory alone does not qualify. An unresolved removal or cleanup
 executor, including an unbound journal entry, blocks a new destructive identity.
 It uses the retained original backend configuration. The failed operation receipt,
 test outcome and partial exports remain unchanged.
+
+Prospective local Docker cleanup uses the retained Smart Tool interpreter, not
+necessarily the serving application's Python. Its fixed launcher compiles the
+exact captured worker and retention source buffers after comparing them with
+members of the serving generation's original qualified release wheel. The wheel
+digest comes from the existing authenticated download and private qualification
+receipt, never from action input, installed RECORD, a source stamp or prefix alone.
+The host caches only immutable verified member bytes; it revalidates serving
+eligibility for each invocation. The first capture streams the wheel once and
+retains bounded selected ZIP reads, not a second wheel or dependency-closure scan.
+
+The same live helper reports bounded payload-free readiness, then waits for a
+nonce/lifecycle-bound permit. Before delivery the host durably records that permit
+and rechecks authority, Stop, owner/revision, original receipt, source, backend and
+executor after its waits. No preservation, backend import or operation payload
+precedes the permit. A partial/lost permit delivery or subsequent helper failure
+remains UNKNOWN, never automatically replayed. Readiness from an exited probe
+cannot qualify another process.
+
+`removal.read` can return the exact saved `loadedInputs` evidence for an original
+remove or finishCleanup request without starting/importing a helper or consulting
+the backend. It describes a historical retained permit, **not** current process
+liveness, a dispatch acknowledgement or retroactive proof for older releases.
+No source contents, operation payload, settings, environment variables or chat
+content enter that evidence. The proof covers the two named app inputs only,
+not Python, stdlib, DTU or other helper/dependency bytes. Local Docker cleanup
+without the qualified serving-wheel context is refused; ordinary non-cleanup
+actions are unchanged. Incus/common-loader and registered-runner cleanup retain
+their existing routes and make no same-process loaded-input attestation claim.
 
 One older returned failure has a separate, narrow qualification: Docker's
 `export-too-large` receipt, containing the exact retained universe and source
