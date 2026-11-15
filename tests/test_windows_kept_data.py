@@ -1042,10 +1042,14 @@ def test_person_can_start_with_the_part_that_is_back_and_the_rest_is_never_merge
     rest = tree(folder)
     notices.answers.append(True)  # Yes: start with the part that is back.
     assert kept.first_start(root, VERSION, ask=True) is None
-    assert not (root / kept.MARKER).exists() and not kept.unfinished_take_back(root) and tree(folder) == rest
+    assert json.loads((root / kept.MARKER).read_text()) == {
+        "schema": 1, "transfer": T1, "kept": str(folder), "left": True}  # The choice is saved.
+    assert not kept.unfinished_take_back(root) and tree(folder) == rest
     assert "updates" not in saved_state(root / "app")[0]  # The part that is back is prepared for this version.
     back = data(root)
-    # The record comes back (a restore from a backup program). Its take-back is not this installation's any more.
+    # The record comes back (a restore from a backup program). It names this installation folder, and still
+    # this installation does not go on with it: the person chose to start without the rest.
+    assert json.loads(good)["into"] == os.lstat(root).st_ino
     (folder / kept.RECORD).write_text(good)
     shown = len(notices.shown)
     assert kept.first_start(root, VERSION, ask=True) is None  # It has its own data: no question, no move.
@@ -1077,7 +1081,7 @@ def test_note_without_a_usable_record_and_nothing_back_is_one_question_and_never
     assert confirm and "They are in this folder" in text and "Start Amplifier without them?" in text
     assert "Yes: start fresh." in text and str(folder) in text
     if answer:  # Start fresh: the note goes; the kept folder stays as it is.
-        assert result is None and not (root / kept.MARKER).exists()
+        assert result is None and json.loads((root / kept.MARKER).read_text())["left"] is True
         assert {key: value for key, value in tree(tmp_path).items() if not key.startswith(root.name + "/")} == {
             key: value for key, value in snapshot.items() if not key.startswith(root.name + "/")}
         assert data(root) == {name: "folder" for name in SETUP}
@@ -1085,6 +1089,26 @@ def test_note_without_a_usable_record_and_nothing_back_is_one_question_and_never
     assert result["taken"] is False and tree(tmp_path) == snapshot
     (folder / kept.RECORD).write_text(good)  # After a restart the record reads again: the take-back goes on.
     assert kept.first_start(root, VERSION, ask=False) is None and person(data(root)) == expected
+
+
+@pytest.mark.parametrize("note", ["deleted", "unreadable"])
+def test_take_back_goes_on_without_its_note_and_the_app_never_starts_on_half_of_the_data(
+        tmp_path, monkeypatch, notices, note):
+    """The person deletes the note file in the installation folder, or it cannot be read. The record is enough."""
+    root, folder, expected = kept_then_installed(tmp_path)
+    notices.answers.append(True)
+    restore = crash_after(monkeypatch, "rename", 2)  # `shared` and `app` are back.
+    with pytest.raises(Crash):
+        kept.first_start(root, VERSION, ask=True)
+    restore()
+    if note == "deleted":
+        os.remove(root / kept.MARKER)
+    else:
+        (root / kept.MARKER).write_text("{")
+    assert kept.read(folder)[1]["into"] == os.lstat(root).st_ino and kept.unfinished_take_back(root)
+    assert kept.first_start(root, VERSION, ask=False) is None
+    assert person(data(root)) == expected and not folder.exists() and not (root / kept.MARKER).exists()
+    assert len(notices.shown) == 1  # Only the first question.
 
 
 def test_take_back_that_began_in_another_installation_is_never_continued(tmp_path, monkeypatch, notices):
@@ -1099,6 +1123,7 @@ def test_take_back_that_began_in_another_installation_is_never_continued(tmp_pat
     fresh(root)
     rest = tree(folder)
     assert kept.read(folder)[0] == "adopting" and not kept.unfinished_take_back(root)
+    assert kept.read(folder)[1]["into"] == os.lstat(tmp_path / "Amplifier-moved-away").st_ino != os.lstat(root).st_ino
     notices.shown.clear()
     assert kept.first_start(root, VERSION, ask=True) is None  # The new installation starts fresh.
     (confirm, text), = notices.shown
@@ -1184,8 +1209,9 @@ def test_kept_folder_that_is_gone_during_a_take_back_never_counts_as_finished(tm
         os.rename(away, folder)
         assert kept.first_start(root, VERSION, ask=False) is None and person(data(root)) == expected
         return
-    # Yes: the app starts on the part that is back. Its saved update status is retired; the note goes.
-    assert result is None and not (root / kept.MARKER).exists() and not kept.unfinished_take_back(root)
+    # Yes: the app starts on the part that is back. Its saved update status is retired; the choice is saved.
+    assert result is None and json.loads((root / kept.MARKER).read_text())["left"] is True
+    assert not kept.unfinished_take_back(root)
     assert "updates" not in saved_state(root / "app")[0]
     assert tree(away) == {key.split("/", 1)[1]: value for key, value in snapshot.items()
                           if key.startswith(away.name + "/")}  # The rest is where the person put it, unchanged.

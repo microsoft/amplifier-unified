@@ -18,9 +18,12 @@ link itself, as in every rename; it is never followed.
 Two records. `<root>-kept\\amplifier-kept.json` names the installation folder,
 the newest app version that used the data, one transfer identity and a state:
 `moving` (move-out not finished), `complete`, `adopting` (take-back not
-finished). `<root>\\amplifier-kept-return.json` is the installation's own note
-of a take-back: without `done` the installation can hold a part of the kept
-data and the app must not start; with `done` only tidying is left.
+finished). An `adopting` record also names the identity of the installation
+folder that takes the set back: no other installation continues it.
+`<root>\\amplifier-kept-return.json` is the installation's own note of a
+take-back: it tells that a take-back began also when the record is lost;
+with `done` only tidying is left; with `left` the person chose to start
+without the rest, and this installation continues no take-back.
 An unfinished transfer is finished first, in its own direction. A move-out
 continues only the set that holds its own transfer identity (the uninstall
 journal saves it), so two installations' data never share a set.
@@ -324,7 +327,9 @@ def read(kept):
                 raise ValueError("Kept data without a record.")
             return "none", None
         record = json.loads(_raw(kept, RECORD))
-        if (not isinstance(record, dict) or not _FIELDS <= set(record) <= _FIELDS | {"entries", "declined"}
+        if (not isinstance(record, dict)
+                or not _FIELDS <= set(record) <= _FIELDS | {"entries", "declined", "into"}
+                or type(record.get("into", 0)) is not int
                 or type(record["schema"]) is not int or record["schema"] != 1
                 or not isinstance(record["root"], str) or not record["root"]
                 or not isinstance(record["version"], str) or _three(record["version"]) != record["version"]
@@ -454,7 +459,8 @@ def _marker(root):
     try:
         note = json.loads(_raw(root, MARKER))
         if (not isinstance(note, dict)
-                or not {"schema", "transfer", "kept"} <= set(note) <= {"schema", "transfer", "kept", "done"}
+                or not {"schema", "transfer", "kept"} <= set(note) <= {"schema", "transfer", "kept", "done", "left"}
+                or note.get("left", True) is not True
                 or type(note["schema"]) is not int or note["schema"] != 1
                 or not isinstance(note["transfer"], str) or not re.fullmatch(_HEX32, note["transfer"])
                 or note["kept"] != str(kept_folder(root)) or note.get("done", True) is not True):
@@ -477,23 +483,31 @@ def _returning(root, kept):
     """A take-back in this installation: None, `finish`, `done`, `missing` or `blocked`.
 
     `done`: the note says that the take-back finished; only tidying is left.
-    `finish`: this installation's note and the record name one transfer, and
-    the record says how to go on. A record without that note is never
-    continued: its take-back began in another installation.
+    `finish`: the record says how to go on, and it is this installation's:
+    an `adopting` record names the identity of this installation folder (so
+    the note is not needed, and another installation at the same path never
+    continues it); a `complete` record needs the note of the same transfer
+    (the take-back wrote its note and stopped before the record).
     `missing`: the note is there and the kept folder is not. `blocked`: the
     note is there and the record does not say how to go on. With these two
     the installation can hold a part of the kept data: the app starts only on
     the person's Yes, and an uninstall does not begin.
+    A note that says `left`: the person chose to start without the rest. This
+    installation then continues no take-back by itself.
     """
     marker = _marker(root)
     noted = isinstance(marker, dict)
     if noted and marker.get("done"):
         return "done"
+    left = noted and bool(marker.get("left"))
     state, record = read(kept)
-    if (noted and record is not None and record["root"] == str(root)
-            and marker["transfer"] == record["transfer"] and state in ("adopting", "complete")):
-        return "finish"
-    if marker is None:
+    if record is not None and record["root"] == str(root) and not left:
+        same = not noted or marker["transfer"] == record["transfer"]
+        if state == "adopting" and same and record.get("into") == _identity(root):
+            return "finish"
+        if state == "complete" and noted and same:
+            return "finish"
+    if marker is None or left:
         return None
     return "missing" if state == "absent" else "blocked"
 
@@ -886,7 +900,7 @@ def _take_back(root, kept, version, settle):
         cause = _CAUSE.get(reason, _CAUSE["changed"])
         raise Refused("take-back-" + reason, _BLOCKED.format(root=root, kept=kept, cause=cause))
     if began and _returning(root, kept) != "finish":
-        # Without this installation's own note of that transfer, the set began its way back somewhere else.
+        # The set began its way back into another installation folder, or the person chose to start without it.
         raise Refused("take-back-orphan", _UNUSABLE.format(kept=kept))
     part = [_PART if began else ""]
 
@@ -903,7 +917,7 @@ def _take_back(root, kept, version, settle):
         if not began:
             # The installation's own note first: from here it can hold a part of the kept data.
             _write(root, MARKER, note)
-            record = {**record, "state": "adopting"}
+            record = {**record, "state": "adopting", "into": _identity(root)}
             _write(kept, RECORD, record)
             part[0] = _PART
         present = set(_names(root))
@@ -1029,15 +1043,16 @@ def _first(root, kept, version, ask, owner_notice, waiting, taken):
         notice = (_GONE if returning == "missing" else _UNCLEAR).format(kept=kept, **_WORDS[returning, part])
         if not ask or not owner_notice(notice, confirm=True):
             return waiting("take-back-record", notice, show=False)
+        marker = _marker(root)
+        transfer = marker["transfer"] if isinstance(marker, dict) else "0" * 32
         if part:
-            marker = _marker(root)
-            settled = _settle(root, marker["transfer"] if isinstance(marker, dict) else "0" * 32)
+            settled = _settle(root, transfer)
             if settled == "unchanged":
                 raise Refused("take-back-prepare", _PREPARE)
             if settled == "linked":
                 raise Refused("take-back-prepare", _LINKED.format(path=root / "app" / "app.sqlite3"))
-        try:
-            _forget(root, MARKER)
+        try:  # The choice is saved: this installation never continues that take-back by itself.
+            _write(root, MARKER, {"schema": 1, "transfer": transfer, "kept": str(kept), "left": True})
         except (OSError, ValueError, RuntimeError) as error:
             raise Refused("take-back", _RETRY.format(root=root, kept=kept), error) from error
         return None
@@ -1045,7 +1060,7 @@ def _first(root, kept, version, ask, owner_notice, waiting, taken):
         return None  # This installation has its own data. Kept sets stay where they are.
     reason, record = _reason(root, kept, version)
     if reason == "use" and record["state"] != "complete":
-        reason = "orphan"  # Its way back began in another installation: never continued here, never offered.
+        reason = "orphan"  # Its way back began into another installation folder: never continued, never offered.
     if reason == "unreadable":
         notice = _UNREADABLE.format(kept=kept)
         if not ask or not owner_notice(notice, confirm=True):

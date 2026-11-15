@@ -890,25 +890,29 @@ take-back. It is written before the kept record becomes `adopting`.
 
 - Without `done`, the installation can hold a part of the kept data. The app
   starts only after the take-back finished, and an uninstall does not begin
-  (`unfinished_take_back`). A take-back goes on only when this note and the
-  kept record name the same transfer.
+  (`unfinished_take_back`).
 - If the kept record is lost or cannot be read, or the kept folder itself is
   gone, nothing says how to go on. Then the launcher asks one question. It
   says what to try first (restart the PC, or put the folder back). Only the
   person's Yes starts the app: with the part that is back, or fresh when
-  nothing is back. The kept folder stays as it is. There is no state that
-  no step can end.
+  nothing is back. The answer is saved in the note (`left`): this
+  installation then continues no take-back by itself, also when the record
+  comes back. The kept folder stays as it is. There is no state that no step
+  can end.
 - With `done`, the take-back finished and only tidying is left: the record,
   the empty kept folder, then the note. Such a note never blocks a start or
   an uninstall, also while Windows refuses to remove it. It stays while its
   record cannot be read. The app can be running then, so its database is
   not opened.
 
-A kept set whose record says `adopting` and that has no note in this
-installation began its way back in another installation (the person moved
-that installation folder away, or chose to start without the rest). It is
-never continued and never offered; it is named once. A later uninstall with
-"keep" does not add to it.
+Which installation continues a take-back. An `adopting` record names the
+identity of the installation folder that takes the set back (the folder's
+file number on the disk). The take-back goes on in exactly that folder, also
+when the note was deleted or cannot be read: the app never starts on a part
+of the data only because the note is gone. Another installation at the same
+path (the person moved the first folder away and installed again) has
+another identity: there the set is never continued and never offered; it is
+named once, and a later uninstall with "keep" does not add to it.
 
 "No kept folder is left" alone never means "finished"; only `done` does.
 
