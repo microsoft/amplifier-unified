@@ -7,7 +7,9 @@ shared visual surfaces. It uses your configured Amplifier bundles and model acco
 ## Install
 
 The installer supports **macOS and Linux**, including **Windows through WSL with
-systemd**. Native Windows installation is not yet supported.
+systemd**. **Native Windows is not yet supported.**
+See the [native Windows design and trial status](docs/design/native-windows-installation.md)
+for that separate work.
 
 You need Git, curl, and CA certificates. On Ubuntu or Debian, install them with:
 
@@ -24,7 +26,8 @@ curl -fsSL https://raw.githubusercontent.com/microsoft/amplifier-unified/main/sc
 
 It finds or installs uv and Python, installs the latest stable release, starts
 Unified as a per-user service, and opens your browser. Existing Amplifier
-configuration, accounts, and history are preserved.
+configuration, accounts, and history are preserved. For manual installation, see
+the [platform and recovery instructions](docs/DEPLOYMENT.md#manual-installation).
 
 ## Start a conversation
 

@@ -1,6 +1,71 @@
-# Deploying Unified beyond localhost
+# Installation and deployment
 
-This guide is the canonical reference for making Unified available on a LAN or Tailscale network. It covers the service host, TLS trust, and Linux service management. The short path is in the [README](../README.md).
+This guide covers manual installation and making Unified available on a LAN or Tailscale network, including service hosting, TLS trust, and Linux service management. The recommended installation path is in the [README](../README.md).
+
+## Manual installation
+
+The [README installer](../README.md#install) is the recommended path and selects
+the current stable release. Use the following instructions when you want to
+manage prerequisites and package installation yourself. These versioned examples
+pin `v0.20.101`; choose another published release tag deliberately when needed.
+
+Install [uv](https://docs.astral.sh/uv/) and Git, then select Python **3.13**
+explicitly, as the installer does. A newer system Python may lack prebuilt
+dependency wheels. uv can manage the selected Python without replacing your
+system Python. Run installation and launch as your normal user.
+
+### Linux
+
+```sh
+uv tool install --python 3.13 git+https://github.com/microsoft/amplifier-unified@v0.20.101
+amplifier-unified
+```
+
+### Windows through WSL
+
+Use a Linux distribution in WSL with systemd enabled. Add this to `/etc/wsl.conf`
+in that distribution:
+
+```ini
+[boot]
+systemd=true
+```
+
+Restart WSL with `wsl --shutdown` from Windows PowerShell, reopen the distribution,
+then run:
+
+```sh
+uv tool install --python 3.13 git+https://github.com/microsoft/amplifier-unified@v0.20.101
+amplifier-unified
+```
+
+This is WSL installation, not native Windows support. Open the app address from
+your Windows browser and sign in with the account running the app in WSL.
+
+### macOS
+
+```sh
+uv tool install --python 3.13 git+https://github.com/microsoft/amplifier-unified@v0.20.101
+amplifier-unified
+```
+
+The first launch sets up the per-user background service and opens the browser;
+later launches reuse it. Use `amplifier-unified serve` to run in the current
+terminal instead. Package installation alone does not register a service.
+
+### Advanced repair
+
+For a broken installation that needs the latest recovery command, the existing
+source recovery path is:
+
+```sh
+uv tool install --force --python 3.13 git+https://github.com/microsoft/amplifier-unified@main
+amplifier-unified reset --dry-run
+```
+
+Inspect the preview before running `amplifier-unified reset`. This source-branch
+repair path is separate from normal stable-release installation and updates.
+Read [the reset guide](RESET.md) for what is preserved and other recovery options.
 
 ## Before you start
 
