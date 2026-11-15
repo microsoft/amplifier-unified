@@ -342,7 +342,7 @@ def refresh_usage(session):
                         raise ValueError('A changed historical execution record is unavailable.')
                     if prior_turn != row.get('turnId'):
                         full['turnId'] = row['turnId']
-                    if usage_owned and prior_usage != row.get('aggregateUsage'):
+                    if prior_usage != row.get('aggregateUsage'):
                         full['aggregateUsage'] = row['aggregateUsage']
                 else:
                     owner.current[kind].append(row)

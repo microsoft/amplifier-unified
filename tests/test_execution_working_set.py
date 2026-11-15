@@ -176,6 +176,29 @@ def test_changed_compact_historical_parent_retains_its_complete_body(saved):
     assert records.materialize(db, save(db, session)) == expected
 
 
+@pytest.mark.parametrize('source_flag', ['liveObservation', 'canonicalHistory', 'nativeHistory'])
+def test_historical_turn_repair_carries_fresh_aggregate_with_source_flags(saved, source_flag):
+    db, session, original = saved
+    from amplifier_web.execution_working_set import refresh_usage
+    for row in [*original['nodes'], *original['turns']]:
+        row['aggregateUsage'] = execution.rollup([])
+    original['nodes'][7].update(kind='worker', turnId=None, **{source_flag: True})
+    original['nodes'][9].update(kind='llm', parentId='7', turnId=None, usage={'inputTokens': 2})
+    reference = records.import_tree(db, ('chat',), original)
+    db.commit()
+    session[MARKER]['execution'] = reference
+    expected = snapshot(session)
+    execution.refresh_usage(expected)
+    refresh_usage(session)
+    parent = exact(session, 'nodes', {'id': '7'})
+    assert parent['turnId'] == 'turn'
+    assert parent['aggregateUsage']['inputTokens'] == 2
+    assert parent['detail'] == original['nodes'][7]['detail']
+    # A stored placement may later omit display aggregates. The complete
+    # mutable view must still match the reducer before that projection.
+    assert snapshot(session) == expected
+
+
 def test_failed_save_keeps_original_root_and_current_changes_for_retry(saved):
     db, session, original = saved
     owner = working(session)
