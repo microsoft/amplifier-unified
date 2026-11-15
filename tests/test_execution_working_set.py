@@ -348,6 +348,8 @@ async def test_ordinary_web_send_claims_legacy_cold_execution_without_full_hydra
         assert (sent_session, sent_text) == (sid, 'Continue')
         assert any(message.get('inputId') == input_id and message.get('role') == 'user'
                    and message.get('text') == 'Continue' for message in session['messages'])
+        assert any(message.get('inputId') == input_id and message.get('role') == 'assistant'
+                   and message.get('text') == 'Test transport result' for message in session['messages'])
         assert not dict.__contains__(session, 'execution')
         assert getattr(session, '_working_execution', None) is not None
         reference = dict.get(session, MARKER)['execution']
@@ -355,7 +357,8 @@ async def test_ordinary_web_send_claims_legacy_cold_execution_without_full_hydra
         saved = records.materialize(app.db, reference)
         assert saved['nodes'] == expected['nodes']
         assert saved['retiredUsageNodes'] == expected['retiredUsageNodes']
-        assert saved['turns'][0] == expected['turns'][0]
-        assert any(turn['id'] == input_id for turn in saved['turns'])
+        # This existing transport fixture emits a reply and terminal receipt,
+        # but no generation.started/input.delivered execution boundary.
+        assert saved['turns'] == expected['turns']
     finally:
         await app.close()
