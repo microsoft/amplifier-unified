@@ -361,7 +361,6 @@ class OpaqueHistoryWire:
 async def test_opaque_history_overflow_requires_one_different_counted_retry(control, monkeypatch):
     module = pytest.importorskip('amplifier_module_provider_anthropic',
         reason='Native qualification installs exact accepted Anthropic source.')
-    from amplifier_core.llm_errors import ContextLengthError
     from anthropic import _base_client
     http = getattr(_base_client, 'httpx2', None) or _base_client.httpx
     wire = OpaqueHistoryWire(http, control)
@@ -466,7 +465,8 @@ async def test_opaque_history_overflow_requires_one_different_counted_retry(cont
             result = await session.execute(prompt)
             assert wire.final_marker in result and wire.summary_marker not in result
         elif control == 'second-overflow':
-            with pytest.raises(ContextLengthError, match='prompt is too long'):
+            # The native Core session boundary wraps the typed loop error.
+            with pytest.raises(RuntimeError, match='Execution failed: ContextLengthError:.*prompt is too long'):
                 await session.execute(prompt)
         else:
             with pytest.raises(Exception, match='(?i)(context|count|measur|budget|fit|prompt is too long)'):
