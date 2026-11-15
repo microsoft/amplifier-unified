@@ -218,8 +218,10 @@ def time_preparation(coordinator, operation, method):
 def install_preparation_timing(coordinator):
     """Observe the existing Python context and native hook boundaries once.
 
-    Arbitrary context implementations remain supported: only ordinary Python
-    objects exposing the current request-view/factory boundary are wrapped.
+    Prefer registered request-view capabilities, which the loop calls directly.
+    Keep the object-method fallback for contexts without an observable capability;
+    wrapping both would double-count capabilities that delegate to that method.
+    Only ordinary Python async boundaries are wrapped.
     Native hook callbacks may run in different Python task contexts. Emit
     separate boundary observations, not an incorrectly paired elapsed span.
     A short-circuit has no end observation. Correlation requires matching
@@ -228,10 +230,20 @@ def install_preparation_timing(coordinator):
     if not TIMING_ENABLED or coordinator.get_capability('web.performance.preparation'):
         return
     coordinator.register_capability('web.performance.preparation', True)
+    capability_view = False
+    for name in ('context.request_retention', 'context.measured_request_view'):
+        method = coordinator.get_capability(name)
+        if inspect.iscoroutinefunction(method):
+            try:
+                coordinator.register_capability(name, time_preparation(coordinator, 'context.view', method))
+            except (AttributeError, TypeError):
+                pass  # An immutable registry retains its original capability.
+            else:
+                capability_view = True
     context = coordinator.get('context')
     if isinstance(getattr(context, '__dict__', None), dict):
         method = getattr(context, 'get_messages_for_request', None)
-        if inspect.iscoroutinefunction(method):
+        if not capability_view and inspect.iscoroutinefunction(method):
             try:
                 context.get_messages_for_request = time_preparation(coordinator, 'context.view', method)
             except (AttributeError, TypeError):

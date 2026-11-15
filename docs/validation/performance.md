@@ -237,6 +237,12 @@ It records context view/factory, surface preparation, provider budget/refit and
 checkpoint read/save boundaries. Native provider-hook start/end observations are
 separate: correlate only a proven single request window with matching session,
 generation and iteration; a short-circuit need not reach the end observer.
+Context-view observations prefer the registered async retention/measured callbacks
+actually called by the loop. With no observable capability, the existing Python
+object-method fallback remains. When a capability is observed, the fallback is
+left unwrapped so delegation through it does not create a duplicate view span.
+Custom contexts that mix an observable capability with direct legacy calls can
+still have unobserved legacy requests; absent marks alone do not prove no work.
 Worker phase marks and host receipt marks separate execution from event delivery
 only when their `clockDomain` and `hostClockDomain` match. Never subtract wall
 clocks or add nested spans. This observes existing behavior, does not change
