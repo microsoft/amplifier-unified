@@ -590,14 +590,45 @@ def check(root, version, transfer=None):
         raise Refused("check", _STUCK.format(kept=kept_folder(root), stayed=""), error) from error
 
 
+def _move_entries(source, target):
+    """Move the entries of `source` into `target`; both are real folders and are held in place meanwhile.
+
+    An entry never replaces an entry. Where both sides have a real folder of
+    one name, its entries move in the same way and the emptied folder is
+    removed: a program that closes late can write into a folder again whose
+    first part already moved. A file or a link with a name that the target
+    has stays where it is. A link is never entered.
+    """
+    with _held(source), _held(target):
+        for name in _names(source):
+            kind = _kind(target / name)
+            if kind is None:
+                with suppress(OSError):
+                    os.rename(source / name, target / name)
+            elif kind == "folder" and _kind(source / name) == "folder":
+                with suppress(OSError):
+                    _move_entries(source / name, target / name)
+                    os.rmdir(source / name)
+
+
+def _stayed(folder):
+    """The first entry that is still below `folder`, as deep as it can be named; never through a link."""
+    while _kind(folder) == "folder":
+        names = _names(folder)
+        if not names:
+            break
+        folder = folder / names[0]
+    return folder
+
+
 def _move(source, target, owned):
     """Rename a whole folder; if Windows refuses, move its entries one by one into its moved place.
 
-    An entry never replaces an entry. Returns None when the source is gone or
-    empty, else what stayed: the folder, or the first entry that is still in it.
-    The source can still get a file from a closing program, so its entries are
-    not fixed in advance as in a take-back; nothing but this move writes into
-    the target. "Empty" is decided by a listing that is made last.
+    Returns None when the source is gone or empty, else what stayed: the
+    folder, or the first entry that is still in it. The source can still get
+    a file from a closing program, so its entries are not fixed in advance as
+    in a take-back; nothing but this move writes into the target, which is
+    this transfer's own set. "Empty" is decided by a listing that is made last.
     """
     kind = _kind(target)
     if kind is None:
@@ -610,19 +641,14 @@ def _move(source, target, owned):
         return target
     try:
         _private(target, owned, create=kind is None)  # Also an existing one: this person's own real folder.
-        with _held(source), _held(target):
-            for name in _names(source):
-                if _kind(target / name) is None:
-                    with suppress(OSError):
-                        os.rename(source / name, target / name)
+        _move_entries(source, target)
         with suppress(OSError):  # Another program's current folder: it stays, empty.
             os.rmdir(source)
         if _kind(source) is None:
             return None
-        left = _names(source)
+        return _stayed(source) if _names(source) else None
     except OSError:
         return source
-    return source / left[0] if left else None
 
 
 def move_out(root, *, version, transfer, remove=None, wait=WAIT):
@@ -701,10 +727,9 @@ def _move_out(root, kept, version, transfer, remove, wait):
         if not remaining:
             # A closing program can write once more after its folder moved: look again before `complete`.
             for name in FOLDERS:
-                late = _names(root / name) if _kind(root / name) == "folder" else []
-                if late:
+                if _kind(root / name) == "folder" and _names(root / name):
                     remaining.append(name)
-                    stayed.append(root / name / late[0])
+                    stayed.append(_stayed(root / name))
     app = _kind(kept / "app")
     if app not in (None, "folder"):
         state = list(PROGRAM_STATE)  # Not a real folder: never entered, never complete.
@@ -721,7 +746,8 @@ def _move_out(root, kept, version, transfer, remove, wait):
         _write(kept, RECORD, {**record, "state": "complete", "version": newest})
     elif not done and record["state"] != "moving":
         _write(kept, RECORD, {**record, "state": "moving"})  # A repeated run found something new to move.
-    stayed += [kept / "app" / name for name in state]
+    if not remaining:
+        stayed += [kept / "app" / name for name in state]  # Only the program state keeps the set unfinished.
     return {"kept": str(kept), "state": "complete" if done else "moving", "transfer": record["transfer"],
             "left": left, "remaining": remaining, "programState": state, "stayed": [str(path) for path in stayed],
             **({} if done else {"notice": _STUCK.format(kept=kept, stayed=_STAYED.format(path=stayed[0]))})}

@@ -1200,6 +1200,221 @@ def test_every_stop_is_one_plain_message_with_a_reference_and_never_an_exception
     assert notices.shown == [(False, result["message"])]
 
 
+# Round 2 of the review: a late write, the saved answer, a linked database, versions
+
+
+def test_file_that_a_closing_program_writes_after_the_last_entry_moved_is_never_left_out(tmp_path, monkeypatch):
+    """`workspace` is a program's current folder: its entries move one by one, and the empty folder stays.
+
+    A closing program writes one more file into it after the last entry moved.
+    The set must not become complete: the uninstall would delete that file.
+    """
+    root = used(tmp_path / "Amplifier")
+    before, folder = data(root), kept.kept_folder(root)
+    refuse(monkeypatch, "rename", root / "workspace")
+    real = os.rmdir
+
+    def rmdir(path, *args, **kwargs):
+        if Path(path) == root / "workspace":
+            if not (folder / "workspace" / "late.txt").exists():
+                (root / "workspace" / "late.txt").write_text("written late\n")
+            raise PermissionError(13, "The process cannot access the file", str(path))
+        return real(path, *args, **kwargs)
+    monkeypatch.setattr(os, "rmdir", rmdir)
+    first = kept.move_out(root, version=VERSION, transfer=T1, remove=shutil.rmtree, wait=0)
+    assert first["state"] == "moving" and first["remaining"] == ["workspace"]
+    assert first["stayed"] == [str(root / "workspace" / "late.txt")] and first["stayed"][0] in first["notice"]
+    assert kept.read(folder)[0] == "moving" and (folder / "app" / "updates").is_dir()  # Nothing was deleted yet.
+    second = kept.move_out(root, version=VERSION, transfer=T1, remove=shutil.rmtree, wait=0)
+    assert second["state"] == "complete" and second["stayed"] == []
+    assert (folder / "workspace" / "late.txt").read_text() == "written late\n"
+    assert person(data(folder)) == {**person(before), "workspace/late.txt": tree(folder)["workspace/late.txt"]}
+
+
+def test_data_folder_that_comes_back_after_it_moved_keeps_the_set_unfinished(tmp_path, monkeypatch):
+    root = used(tmp_path / "Amplifier")
+    folder = kept.kept_folder(root)
+    real, wrote = kept._move, []
+
+    def move(source, target, owned):
+        result = real(source, target, owned)
+        if source.name == "export" and not wrote:  # The last folder moved. A closing program makes one again.
+            wrote.append((root / "app" / "sessions" / "late").mkdir(parents=True))
+            (root / "app" / "sessions" / "late" / "transcript.jsonl").write_text("late chat\n")
+        return result
+    monkeypatch.setattr(kept, "_move", move)
+    first = kept.move_out(root, version=VERSION, transfer=T1, remove=shutil.rmtree, wait=0)
+    assert first["state"] == "moving" and first["remaining"] == ["app"]
+    assert first["stayed"] == [str(root / "app" / "sessions" / "late" / "transcript.jsonl")]
+    assert kept.read(folder)[0] == "moving"
+    # The set has `app\sessions` already. The late chat joins it; no entry replaces an entry.
+    second = kept.move_out(root, version=VERSION, transfer=T1, remove=shutil.rmtree, wait=0)
+    assert second["state"] == "complete" and data(root) == {}
+    assert (folder / "app" / "sessions" / "late" / "transcript.jsonl").read_text() == "late chat\n"
+    assert (folder / "app" / "sessions" / "first" / "transcript.jsonl").read_text() == "chat first\n"
+
+
+def test_late_file_with_a_name_that_the_set_holds_stays_and_is_named(tmp_path, monkeypatch):
+    root = used(tmp_path / "Amplifier")
+    folder = kept.kept_folder(root)
+    assert kept.move_out(root, version=VERSION, transfer=T1, remove=shutil.rmtree, wait=0)["state"] == "complete"
+    late = root / "app" / "sessions" / "first" / "transcript.jsonl"  # The same chat file again, with other text.
+    late.parent.mkdir(parents=True)
+    late.write_text("written late\n")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    link(outside, root / "app" / "config")  # A link with a name that the set holds as a folder: never entered.
+    for _ in range(2):
+        result = kept.move_out(root, version=VERSION, transfer=T1, remove=shutil.rmtree, wait=0)
+        assert result["state"] == "moving" and result["remaining"] == ["app"]
+        assert result["stayed"] == [str(root / "app" / "config")] and kept.read(folder)[0] == "moving"
+    assert late.read_text() == "written late\n" and os.listdir(outside) == []
+    assert (folder / "app" / "sessions" / "first" / "transcript.jsonl").read_text() == "chat first\n"
+    assert (folder / "app" / "config" / "server.yaml").read_text() == "port: 51234\n"
+
+
+def test_answer_no_that_cannot_be_saved_never_starts_the_app(tmp_path, monkeypatch, notices):
+    root, folder, expected = kept_then_installed(tmp_path)
+    before, real = tree(folder), kept._write
+
+    def write(owner, name, value):
+        if value.get("declined"):
+            raise PermissionError(13, "The private write was refused", str(owner / name))
+        return real(owner, name, value)
+    monkeypatch.setattr(kept, "_write", write)
+    notices.answers.append(False)
+    result = kept.first_start(root, VERSION, ask=True, hold=True)
+    assert result["taken"] is False and result["reason"] == "answer" and not kept._STAYING
+    assert [confirm for confirm, _ in notices.shown] == [True, False]
+    assert "could not save your answer" in notices.shown[1][1] and "Nothing was changed" in notices.shown[1][1]
+    assert tree(folder) == before and data(root) == {name: "folder" for name in SETUP}
+    # The next start asks again, and Yes still works.
+    monkeypatch.setattr(kept, "_write", real)
+    notices.answers.append(True)
+    assert kept.first_start(root, VERSION, ask=True, hold=True) is None and person(data(root)) == expected
+    assert not kept._STAYING  # The data is back: the lock is free.
+
+
+@pytest.mark.parametrize("answered", ["no", "unreadable-yes", "named-only"])
+def test_launcher_that_starts_fresh_keeps_the_lock_until_it_ends(tmp_path, monkeypatch, notices, answered):
+    """Until this start wrote its first file, a second launcher would see empty folders and a kept set."""
+    root, folder, _ = kept_then_installed(tmp_path)
+    monkeypatch.setattr(kept, "BUSY", 0.2)
+    if answered == "no":
+        notices.answers.append(False)
+    elif answered == "unreadable-yes":
+        (folder / kept.RECORD).write_text("{")
+        notices.answers.append(True)  # Yes: start without them. Nothing can be saved in a set that is unreadable.
+    else:
+        record(folder, version="9.0.0")  # A newer set: named, not offered.
+    assert kept.first_start(root, VERSION, ask=True, hold=True) is None
+    assert len(kept._STAYING) == 1 and len(notices.shown) == 1  # One question, or one message that names the set.
+    shown = len(notices.shown)
+    second = kept.first_start(root, VERSION, ask=True, hold=True)  # A second launcher, before the first file.
+    assert second["taken"] is False and second["reason"] == "busy" and len(notices.shown) == shown + 1
+    with pytest.raises(kept.Refused):
+        kept.move_out(root, version=VERSION, transfer=T2, remove=shutil.rmtree, wait=0)
+    # The first launcher wrote the app's settings and ended.
+    (root / "app" / "config").mkdir()
+    kept._STAYING.pop().release()
+    assert kept.first_start(root, VERSION, ask=True, hold=True) is None
+    assert len(notices.shown) == shown + 1 and not kept._STAYING  # No question, no lock: it has its own data.
+
+
+def test_caller_that_is_not_the_launcher_never_keeps_the_lock(tmp_path, notices):
+    root, folder, _ = kept_then_installed(tmp_path)
+    notices.answers.append(False)
+    assert kept.first_start(root, VERSION, ask=True) is None and not kept._STAYING
+
+
+def test_database_with_a_second_name_is_never_changed(tmp_path, notices):
+    """A hard link: the same file is also another installation's database. A link check does not see it."""
+    root, folder, expected = kept_then_installed(tmp_path)
+    other = tmp_path / "another-installation.sqlite3"
+    os.link(folder / "app" / "app.sqlite3", other)
+    before = other.read_bytes()
+    notices.answers.append(True)
+    assert kept.first_start(root, VERSION, ask=True) is None
+    assert other.read_bytes() == before and (root / "app" / "app.sqlite3").read_bytes() == before
+    with closing(sqlite3.connect(other)) as db:
+        assert json.loads(db.execute("SELECT value FROM state WHERE id=1").fetchone()[0])["updates"] == FENCE
+    assert not (root / "app" / "reset-backups").exists()
+    assert person(data(root)) == expected and not folder.exists() and not (root / kept.MARKER).exists()
+
+
+def test_failed_attempt_to_retire_the_update_status_leaves_no_empty_folder(tmp_path, monkeypatch, notices):
+    from amplifier_web import reset
+
+    def failing(home, backup):
+        raise sqlite3.OperationalError("database is locked")
+    root, folder, _ = kept_then_installed(tmp_path)
+    monkeypatch.setattr(reset, "reset_update_state", failing)
+    notices.answers.append(True)
+    for _ in range(3):
+        assert kept.first_start(root, VERSION, ask=True)["reason"] == "take-back-prepare"
+    assert list((root / "app" / "reset-backups").iterdir()) == []
+
+
+def test_set_with_a_folder_that_holds_too_many_entries_is_not_offered_and_is_named(tmp_path, monkeypatch, notices):
+    root, folder, _ = kept_then_installed(tmp_path)
+    monkeypatch.setattr(kept, "NAMES", 16)  # `workspace` holds two entries: more than these 16 characters.
+    before = tree(folder)
+    assert kept.first_start(root, VERSION, ask=True) is None
+    (confirm, text), = notices.shown
+    assert not confirm and str(folder) in text and "too many files and folders" in text
+    with pytest.raises(kept.Refused) as refused:
+        kept.take_back(root, VERSION)
+    assert refused.value.kind == "take-back-too-many"
+    assert tree(folder) == before and data(root) == {name: "folder" for name in SETUP}
+
+
+@pytest.mark.parametrize("launcher,offered", [("0.96.1rc1", True), ("v0.96.1", True), ("0.96.1+local.5", True),
+                                              ("0.96.0.dev3", False), ("next", False), ("", False)])
+def test_version_with_a_suffix_is_compared_by_its_three_numbers(tmp_path, notices, launcher, offered):
+    root, folder, expected = kept_then_installed(tmp_path)
+    notices.answers.append(True)
+    assert kept.first_start(root, launcher, ask=True) is None  # Never an error, with any version text.
+    if offered:
+        assert notices.shown[0][0] and person(data(root)) == expected
+    else:  # Not comparable, or older than the set: the set is named and stays.
+        assert [confirm for confirm, _ in notices.shown] == [False] and "newer version" in notices.shown[0][1]
+        assert data(root) == {name: "folder" for name in SETUP}
+
+
+def test_move_out_takes_a_version_with_a_suffix_and_refuses_one_without_numbers(tmp_path):
+    root = used(tmp_path / "Amplifier")
+    assert kept.used_version(root, "0.98.0rc2") == "0.98.0"
+    kept.check(root, "0.98.0rc2")
+    result = kept.move_out(root, version="0.98.0rc2", transfer=T1, remove=shutil.rmtree, wait=0)
+    assert result["state"] == "complete" and kept.read(kept.kept_folder(root))[1]["version"] == "0.98.0"
+    for call in (lambda: kept.check(root, "next"), lambda: kept.used_version(root, "next"),
+                 lambda: kept.move_out(root, version="next", transfer=T1, wait=0),
+                 lambda: kept.move_out(root, version=VERSION, transfer="not hex", wait=0)):
+        with pytest.raises(ValueError):
+            call()
+
+
+def test_error_inside_a_take_back_is_its_own_message_and_never_nothing_was_changed(tmp_path, monkeypatch, notices):
+    root, folder, expected = kept_then_installed(tmp_path)
+    real, calls = kept._write, []
+
+    def write(owner, name, value):
+        calls.append(name)
+        if name == kept.MARKER and value.get("done"):  # After every folder is back.
+            raise ValueError("The private write was refused")
+        return real(owner, name, value)
+    monkeypatch.setattr(kept, "_write", write)
+    notices.answers.append(True)
+    result = kept.first_start(root, VERSION, ask=True)
+    assert result["taken"] is False and result["reason"] == "take-back"
+    assert "Nothing was changed" not in result["message"] and "Nothing was deleted" in result["message"]
+    assert "Reference: kept-data, take-back, ValueError" in result["message"]
+    assert kept.read(folder)[0] == "adopting" and kept.unfinished_take_back(root)
+    monkeypatch.setattr(kept, "_write", real)
+    assert kept.first_start(root, VERSION, ask=False) is None and person(data(root)) == expected
+    assert len(list((root / "app" / "reset-backups").iterdir())) == 2  # Each attempt saved the database anew.
+
+
 # The reason for the rule, the launcher's step, and what the rule rests on
 
 
