@@ -22,7 +22,7 @@ export function ExecutionLimits({act,navigate}){
   finally{pending.current=false;setBusy(false)}
  }
  const change=(group,key,value)=>setDraft(d=>['queue','concurrency'].includes(group)?{...d,[group]:{...d[group],[key]:value}}:{...d,profiles:{...d.profiles,[group]:{...d.profiles[group],[key]:value}}});
- return <section aria-label="Test execution limits" className="a-settings-section">
+ return <section aria-label="Test execution limits" className="a-settings-section a-testing-section">
   <h3>Test execution limits</h3><p>Choose how long checks may wait and how much each test can use. Changes apply across all workspaces on this installation. Accepted checks keep their saved resource and time budgets. Lowering concurrency limits never stops active work.</p>
   {error&&<p role="alert">{error}</p>}{notice&&<p role="status">{notice}</p>}
   {!data?<button className="a-soft" type="button" disabled={busy} onClick={refresh}>Reload execution limits</button>:<>

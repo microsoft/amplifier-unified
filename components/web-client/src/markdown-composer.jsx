@@ -1,9 +1,11 @@
-import React,{useLayoutEffect,useRef,useState} from 'react';
+import React,{useId,useLayoutEffect,useRef,useState} from 'react';
 import {createPortal} from 'react-dom';
 import {Link,Bold,Italic,Code,Strikethrough} from 'lucide-react';
 import 'prosemirror-view/style/prosemirror.css';
 import {EditorView} from 'prosemirror-view';
-import {composerState,composerMarkdown,composerDocument,composerSendDocument,insertQuote,composerEnter,pasteMarkdown,composerClipboard,composerFormat,formatComposerBlock,setComposerLink,moveComposerBoundary,composerSelectionEditable,toggleComposerMark} from './markdown-composer.js';
+import {composerState,composerMarkdown,composerDocument,composerSendDocument,insertQuote,pasteMarkdown,composerClipboard,composerFormat,formatComposerBlock,setComposerLink,moveComposerBoundary,composerSelectionEditable,toggleComposerMark} from './markdown-composer.js';
+import {composerReturnEvents,composingReturn,returnKeyHelp} from './composer-return.js';
+import {useComposerReturn} from './composer-return-preference.jsx';
 import {quoteNodeView,refreshQuoteControls} from './composer-quote-view.js';
 import {clipboardPaste} from './clipboard-paste';
 import {resizeComposer,observeComposerLayout} from './composer';
@@ -15,19 +17,21 @@ export function MarkdownComposer({value,document:documentValue,onChange,onSend,o
  const host=useRef(null),editor=useRef(null),latest=useRef(null),published=useRef(value),publishedDocument=useRef(documentValue);
  const toolbar=useRef(null),refresh=useRef(()=>{}),dismissed=useRef(null);
  const insertionMode=useRef('caret');
+ const {mode:returnMode}=useComposerReturn(),returnHelpId=useId();
  const [selection,setSelection]=useState(null),[linkOpen,setLinkOpen]=useState(false),[link,setLink]=useState(''),[linkError,setLinkError]=useState('');
  const openLink=()=>{
   const view=editor.current;if(!view||view.state.selection.empty||!composerSelectionEditable(view.state)||view.state.selection.$from.parent.type.spec.code)return;
   let href='';view.state.doc.nodesBetween(view.state.selection.from,view.state.selection.to,node=>{const mark=node.marks.find(mark=>mark.type.name==='link');if(mark)href=mark.attrs.href;});
   setLink(href);setLinkError('');setLinkOpen(true);
  };
- latest.current={value,onChange,onSend,onFiles,onReveal,onQuoteRemoved,disabled,readOnly,pasteDisabled};
+ latest.current={value,onChange,onSend,onFiles,onReveal,onQuoteRemoved,disabled,readOnly,pasteDisabled,returnMode};
  useLayoutEffect(()=>{
   const editable=()=>!latest.current.disabled&&!latest.current.readOnly;
+  const returnEvents=composerReturnEvents({editable,mode:()=>latest.current.returnMode,onSend:()=>latest.current.onSend()});
   const view=new EditorView(host.current,{
    state:composerState(latest.current.value,documentValue),editable,clipboardTextSerializer:composerClipboard,
    nodeViews:{reference:(node,view,getPos)=>quoteNodeView(node,view,getPos,()=>latest.current)},
-   attributes:{role:'textbox','aria-label':'Message Amplifier','aria-multiline':'true','data-action':'view.update','data-private':'true','data-view-label':'Message Amplifier',class:'a-markdown-composer',spellcheck:'true'},
+   attributes:{role:'textbox','aria-label':'Message Amplifier','aria-multiline':'true','aria-describedby':returnHelpId,enterkeyhint:'enter','data-action':'view.update','data-private':'true','data-view-label':'Message Amplifier',class:'a-markdown-composer',spellcheck:'true'},
    dispatchTransaction(transaction){
     const before=view.state.doc;view.updateState(view.state.apply(transaction));
     if(transaction.docChanged){published.current=composerMarkdown(view.state.doc);publishedDocument.current=composerDocument(view.state.doc,!!publishedDocument.current);latest.current.onChange(published.current,publishedDocument.current);
@@ -39,31 +43,31 @@ export function MarkdownComposer({value,document:documentValue,onChange,onSend,o
     refresh.current();
    },
    handleKeyDown(view,event){
-    if(!editable()||view.composing||event.isComposing||event.keyCode===229)return false;
+    if(!editable()||composingReturn(view,event))return false;
     if(moveComposerBoundary(view,event)){event.preventDefault();return true;}
     if(event.key==='Escape'&&!view.state.selection.empty){dismissed.current=view.state.selection.from+':'+view.state.selection.to;setSelection(null);setLinkOpen(false);return true;}
     if(event.altKey&&event.key==='F10'&&!view.state.selection.empty){
      event.preventDefault();refresh.current();requestAnimationFrame(()=>toolbar.current?.querySelector('button:not(:disabled),select')?.focus());return true;
     }
     if((event.metaKey||event.ctrlKey)&&event.key.toLowerCase()==='k'&&!view.state.selection.empty){event.preventDefault();openLink();return true;}
-    if(event.key==='Enter'){
-     event.preventDefault();
-     if(!composerEnter(view,{continueWriting:event.shiftKey||event.ctrlKey,exit:event.altKey}))latest.current.onSend();
-     return true;
-    }
+    // ProseMirror also synthesizes Enter while reconciling native DOM paragraph
+    // edits (including non-cancelable beforeinput). Only the same observed DOM
+    // keydown may request Send; generated editing commands always keep writing.
+    if(returnEvents.keyDown(view,event))return true;
     return false;
    },
    handleDOMEvents:{
     // Let the browser/IME commit composition, but do not run later editor
     // keymaps (whose Enter binding would otherwise split a paragraph).
     // DOM handlers do not prevent the native default merely by returning true.
-    keydown(view,event){return view.composing||event.isComposing||event.keyCode===229;},
+    keydown(view,event){
+     // Do not consume Return here: ProseMirror must first synchronize pending
+     // native edits and apply its platform-specific post-composition protection.
+     return returnEvents.observeKeyDown(view,event);
+    },
     beforeinput(view,event){
-     // Virtual keyboards may emit beforeinput without a usable keydown.
-     if(editable()&&!view.composing&&!event.isComposing&&['insertParagraph','insertLineBreak'].includes(event.inputType)){
-      event.preventDefault();if(!composerEnter(view,{continueWriting:event.inputType==='insertLineBreak'}))latest.current.onSend();return true;
-     }
-     return false;
+     // Bare editing events are never consent to send, even on desktop.
+     return returnEvents.beforeInput(view,event);
     },
     contextmenu(){
      // Keep native copy/paste/spelling. Our same selection toolbar remains
@@ -131,7 +135,7 @@ export function MarkdownComposer({value,document:documentValue,onChange,onSend,o
  },[value,documentValue,disabled,readOnly]);
  const dismiss=()=>{const view=editor.current;dismissed.current=view.state.selection.from+':'+view.state.selection.to;setSelection(null);setLinkOpen(false);view.focus();};
  const mark=name=>toggleComposerMark(editor.current,name);
- return <><div className="a-markdown-composer-host" ref={host}/>{documentValue?.segments?.some(part=>part.type==='quote')&&<label className="a-caption">Add quotes <select aria-label="Quote insertion" defaultValue="caret" onChange={event=>{insertionMode.current=event.target.value;}}><option value="caret">At remembered caret</option><option value="append">At end</option></select></label>}{selection&&!disabled&&!readOnly&&createPortal(
+ return <><div className="a-markdown-composer-host" ref={host}/><small className="a-caption" id={returnHelpId}>{returnKeyHelp(returnMode)}</small>{documentValue?.segments?.some(part=>part.type==='quote')&&<label className="a-caption">Add quotes <select aria-label="Quote insertion" defaultValue="caret" onChange={event=>{insertionMode.current=event.target.value;}}><option value="caret">At remembered caret</option><option value="append">At end</option></select></label>}{selection&&!disabled&&!readOnly&&createPortal(
   <div className="a-composer-format" ref={toolbar} style={{left:selection.left,top:selection.top}} onKeyDown={event=>{if(event.key==='Escape'){event.preventDefault();event.stopPropagation();dismiss();}}}>
    <div role="toolbar" aria-label="Format selected text" className="a-composer-format-row">
     <button type="button" aria-label="Link" disabled={selection.literal} title="Link (Ctrl/⌘ K)" aria-pressed={selection.link} onMouseDown={e=>e.preventDefault()} onClick={openLink}><Link size={18}/></button>

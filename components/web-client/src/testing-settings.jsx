@@ -67,7 +67,7 @@ export function TestingSettings({act,navigate}){
    accept(response.result);setNotice('Current settings loaded.');
   }catch(e){setError(e.message)}finally{pending.current=false;setBusy(false)}
  }
- return <section aria-label="Testing and resources">
+ return <section className="a-testing-settings" aria-label="Testing and resources">
   <p>Choose how much isolated testing Amplifier can run across your workspaces. Higher limits allow more work at once when the machine has enough resources.</p>
   {error&&<p role="alert">{error}</p>}{notice&&<p role="status">{notice}</p>}
   {!data?<button className="a-soft" disabled={busy} onClick={refresh}>Reload testing settings</button>:<>
@@ -113,13 +113,16 @@ export function MachineResources({act,navigate,draftId='testing-machine',title='
   }catch(e){let confirmed=false;if(intended)try{const current=await load();if(current.supported&&same(current.limits,intended.limits)){accept(current);setMessage('Current machine limits match your changes. No settings were replayed.');confirmed=true}}catch{}if(!confirmed)setError(e.message+' Your edits are kept.');}
   finally{pending.current=false;setBusy(false)}
  }
- return <section aria-label="Shared machine resources"><h4>{title}</h4>
+ return <section className="a-testing-section" aria-label="Shared machine resources"><h4>{title}</h4>
   {error&&<p role="alert">{error}</p>}{message&&<p role="status">{message}</p>}
   {data?.supported?<><p>{data.scope}</p><p>Reserved: {data.reserved.cpus} CPU cores and {(data.reserved.memoryMiB/1024).toFixed(1)} GiB memory across {data.reserved.count} checks. {data.reserved.preparing} dependency builds are admitted.</p>
    <p>Currently available: {(data.observed.availableMemoryMiB/1024).toFixed(1)} GiB memory and {(data.observed.freeBytes/gib).toFixed(1)} GiB disk space. These observations can change as other apps work.</p>
    <details><summary>Advanced machine budgets</summary><p>These settings are shared by cooperating local installations using this account. Empty uses the automatic value; zero disables that limit. CPU reservations allow oversubscription, so a core limit is not a measurement of current CPU use. Home disk space protects this account’s local storage; the runner’s disk limit separately protects container storage. Lowering a budget never stops admitted work.</p>
     <fieldset disabled={busy}><legend>Machine-wide limits for this account</legend>{machineFields.map(([key,label,unit])=><label className="a-field" key={key}>{label}<input type="number" min="0" step={unit===1?'1':'any'} value={draft[key]} placeholder={String(data.effective[key]/unit)} onChange={event=>setDraft(old=>({...old,[key]:event.target.value}))}/><small>Effective: {data.effective[key]===0?'No limit':data.effective[key]/unit} · {data.limits[key]===undefined?'Automatic':'Saved setting'}</small></label>)}</fieldset>
-   </details><button className="a-primary" disabled={busy||!dirty} onClick={save}>Save machine budgets</button></>:<p>{data?.reason||'Loading machine resource information…'}</p>}
+   </details></>:<p>{data?.reason||'Loading machine resource information…'}</p>}
+  <div className="a-dialog-actions">
+  {data?.supported&&<button className="a-primary" disabled={busy||!dirty} onClick={save}>Save machine budgets</button>}
   <button className="a-soft" disabled={busy} onClick={refresh}>{dirty?'Discard machine edits and refresh':'Refresh machine resources'}</button>
+  </div>
  </section>;
 }

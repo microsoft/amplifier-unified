@@ -38,17 +38,22 @@ try{
   evidence.installedServedAssets=served;
  }
  const presentation=async patch=>{
-  const revision=await page.evaluate(async patch=>{
+  const receipt=await page.evaluate(async patch=>{
    const shell=window.amplifier.getShellState(),clientId=window.amplifier.shellClientId;
    const prepared=await window.amplifier.dispatch('shell.changes.prepare',{clientId,expectedRevision:shell.revision,composition:{...shell.effectiveComposition,presentation:{...shell.effectiveComposition.presentation,...patch}}});
    assertAccepted(prepared);
    const applied=await window.amplifier.dispatch('shell.changes.apply',{clientId,expectedRevision:shell.revision,changeId:prepared.result.id});
-   assertAccepted(applied);return applied.result.revision;
+   assertAccepted(applied);
+   if(applied.result?.status!=='awaiting-storage'||!applied.result.commandId)throw Error('Expected browser preference storage receipt');
+   return {commandId:applied.result.commandId,baseRevision:prepared.result.baseRevision};
    function assertAccepted(r){if(!r.accepted)throw Error(r.error||'Presentation refused');}
   },patch);
   // An accepted mutation precedes the SSE/rendered shell. The next change
   // must use the acknowledged revision, even when the scheme stayed equal.
-  await expect.poll(()=>page.evaluate(()=>window.amplifier.getShellState()?.revision)).toBe(revision);
+  await expect.poll(()=>page.evaluate(({commandId,baseRevision})=>{
+   const shell=window.amplifier.getShellState();
+   return shell?.preferenceCommand?.id===commandId&&shell.preferenceCommand.status==='stored'&&shell.revision===baseRevision+1;
+  },receipt)).toBe(true);
   await expect.poll(()=>page.evaluate(patch=>{
    const actual=window.amplifier.getShellState()?.effectiveComposition?.presentation;
    return Object.fromEntries(Object.keys(patch).map(key=>[key,actual?.[key]]));

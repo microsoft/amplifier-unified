@@ -16,6 +16,7 @@ import {workProjectionReceipt} from './work-projection-receipt.js';
 import {hasEarlierWindow,conversationHistoryPending} from './history-window.js';
 import {ChatPages,chatPageTitles} from './chat-pages';
 import {MarkdownComposer} from './markdown-composer.jsx';
+import {ComposerReturnSettings} from './composer-return-preference.jsx';
 import {ComposerAdd} from './composer-add.jsx';
 import {ButtonTooltips} from './tooltips';
 import {ConversationRail} from './conversation-rail.jsx';
@@ -1038,7 +1039,7 @@ function App(){
  }});
  const settingsState={...state,view:{...state?.view,settingsCanvas:canvasSettingsVisible}};
  const settingsAct=(name,args={},meta={})=>act(name,name==='view.update'&&canvasSettingsVisible&&args.patch?.panel==='settings'?{...args,patch:{...args.patch,panel:null,settingsCanvas:true}}:args,meta);
- const settingsSurface=<SettingsExperience state={settingsState} session={settingsSession} act={settingsAct} dispatch={dispatch} open={open} close={()=>canvasSettingsVisible?act('canvas.tabClose',{id:state.canvas.id}):dismissPanel()} navigationRef={settingsNavigation} appearance={<AppearanceSettings state={state} appearance={appearance} act={dispatch} editor={appearanceEditor} previewOwner={appearancePreviewOwner} preferenceStatus={appearancePreferenceStatus} onPreferenceChange={updateAppearancePreference} onPreferenceSelect={selectAppearanceProfile}/>}/>;
+ const settingsSurface=<SettingsExperience state={settingsState} session={settingsSession} act={settingsAct} dispatch={dispatch} open={open} close={()=>canvasSettingsVisible?act('canvas.tabClose',{id:state.canvas.id}):dismissPanel()} navigationRef={settingsNavigation} appearance={<><AppearanceSettings state={state} appearance={appearance} act={dispatch} editor={appearanceEditor} previewOwner={appearancePreviewOwner} preferenceStatus={appearancePreferenceStatus} onPreferenceChange={updateAppearancePreference} onPreferenceSelect={selectAppearanceProfile}/><ComposerReturnSettings/></>}/>;
  const browsing=workSurface(state)!=='chat';
  const browse=(surface,id=null)=>act('view.update',{patch:{...browsePatch(surface,id),navExpanded:false}});
  const visitHistory=async key=>{

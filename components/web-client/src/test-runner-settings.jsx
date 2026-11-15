@@ -43,7 +43,7 @@ export function TestRunnerSettings({act,navigate}){
    if(!confirmed)setError(e.message+' Your entries are kept.');
   }finally{pending.current=false;setBusy(false)}
  }
- return <section aria-label="Connected test machines"><h4>Connected test machines</h4><p>Run checks on a Linux test machine from Mac, Windows, WSL or Linux. This computer needs Git and a saved SSH connection; it does not need Docker or a local test environment.</p>
+ return <section className="a-testing-section" aria-label="Connected test machines"><h4>Connected test machines</h4><p>Run checks on a Linux test machine from Mac, Windows, WSL or Linux. This computer needs Git and a saved SSH connection; it does not need Docker or a local test environment.</p>
   {error&&<p role="alert">{error}</p>}{notice&&<p role="status">{notice}</p>}
   {data&&<><p className="a-caption">{data.scope}</p>
    {(data.enrollments||[]).map(operation=><div className="a-card" key={operation.id} aria-label={'Connection check: '+operation.name}><strong>{operation.name}</strong><p role="status">{operation.detail}</p>
@@ -53,8 +53,9 @@ export function TestRunnerSettings({act,navigate}){
    {data.runners.length===0?<p>No test machines connected. Connect and check one to start testing remotely.</p>:data.runners.map(runner=><details key={runner.id}><summary>{runner.name} · {runner.enabled?'Allowed for new checks':'Paused for new checks'}</summary><p>Connection: {runner.connection}</p>
     <p>{runner.lastCheck?.status==='passed'?<>Last connection check passed {new Date(runner.lastCheck.checkedAt*1000).toLocaleString()}. Execution, result download and cleanup were verified using a small Python check.</>:'This saved connection has not completed the new connection check yet.'} Availability is checked again before each new job.</p>
     <p className="a-caption">Supported check types: {runner.profiles.join(', ')}. Project dependencies are prepared separately for each requested check.</p>
-    <button className="a-soft" disabled={busy} onClick={()=>change('testing.runners.enable',{id:runner.id,enabled:!runner.enabled,expectedRevision:data.revision},'Test machine preference saved. Existing checks keep their original machine.')}>{runner.enabled?'Pause new checks':'Allow new checks'}</button>
+    <div className="a-dialog-actions"><button className="a-soft" disabled={busy} onClick={()=>change('testing.runners.enable',{id:runner.id,enabled:!runner.enabled,expectedRevision:data.revision},'Test machine preference saved. Existing checks keep their original machine.')}>{runner.enabled?'Pause new checks':'Allow new checks'}</button>
     <button className="a-soft" disabled={busy||data.enrollments?.some(item=>unfinished(item)&&item.connection===runner.connection)} onClick={()=>connect(runner)}>Check connection and controller</button>
+    </div>
     <MachineResources act={(operation,args)=>act(operation.replace('testing.machine.','testing.runners.machine.'),{...args,id:runner.id})} navigate={navigate} draftId={'testing-machine-'+runner.id} title={runner.name+' test resources'}/><TestRunnerBackendLimits act={act} navigate={navigate} id={runner.id} name={runner.name}/>
    </details>)}
    <details><summary>Connect a test machine</summary><p>Choose a machine with testing already set up in its Amplifier Settings. Its saved SSH connection must work without an interactive sign-in and its identity must already be trusted. A small, fixed test verifies the connection and removes its test environment before enabling new checks. Your files and credentials are not copied for this check.</p>

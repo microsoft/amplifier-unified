@@ -150,6 +150,10 @@ test('retained size is shown only from verified accounting and an uncertain oper
  try{
   await act(async()=>{root=create(React.createElement(TaskEnvironments,{...props,act:async()=>accepted({items:[resource]})}))});
   assert.match(text(root.toJSON()),/Latest saved copy: 2 KiB/);assert.match(text(root.toJSON()),/Last request: outcome unknown/);assert.match(text(root.toJSON()),/Last recovery check: completed/);
+  const row=root.root.findByProps({'data-test-environment':'env'});
+  assert.match(text(row.findByProps({className:'a-environment-status'})),/Environment: removed/);
+  assert.match(text(row.findByProps({className:'a-environment-evidence'})),/Last recovery check: completed/);
+  assert.doesNotMatch(text(row.findByProps({className:'a-environment-status'})),/Last recovery check/,'retained recovery is not the original operation status');
   await act(async()=>root.unmount());resource.retention.accounting.verified=false;
   await act(async()=>{root=create(React.createElement(TaskEnvironments,{...props,act:async()=>accepted({items:[resource]})}))});
   assert.match(text(root.toJSON()),/storage size has not been verified/);assert.doesNotMatch(text(root.toJSON()),/Latest saved copy: 0/);

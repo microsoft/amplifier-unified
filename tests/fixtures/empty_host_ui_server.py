@@ -438,6 +438,21 @@ async def serve(home, *, pre_import=None):
             return web.json_response({'ok': True})
         app.router.add_post('/fixture/report-selection', report_selection)
     if '--chat-controls' in sys.argv:
+        async def composer_eligibility(request):
+            # Synthetic history classification only. Publish through the real
+            # installed host so React/ProseMirror receive their actual props.
+            if request.headers.get('Authorization') != 'Bearer fixture-browser-control-token':
+                raise web.HTTPForbidden()
+            data = await request.json()
+            if (set(data) != {'sessionId', 'readOnlyReason'}
+                    or not isinstance(data['readOnlyReason'], (str, type(None)))):
+                raise web.HTTPBadRequest()
+            service = app['service']
+            service._session(data['sessionId'])['historyReadOnlyReason'] = data['readOnlyReason']
+            service._publish()
+            return web.json_response({'ok': True})
+        app.router.add_post('/fixture/composer-eligibility', composer_eligibility)
+
         async def provider_preference(request):
             preferred_model[0] = (await request.json())['model']
             save_provider_settings()

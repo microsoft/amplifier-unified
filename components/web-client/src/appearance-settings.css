@@ -33,7 +33,7 @@
 #amp-one .a-appearance-folder{font-size:12px;color:var(--a-muted)}
 #amp-one .a-appearance-folder summary{display:flex;align-items:center;gap:6px;cursor:pointer;width:max-content}
 #amp-one .a-appearance-folder code{display:block;overflow-wrap:anywhere;margin-top:5px;padding:8px;background:var(--a-soft);border-radius:7px}
-#amp-one .a-appearance-advanced{border:1px solid var(--a-line);border-radius:12px;padding:14px 16px}
+#amp-one .a-appearance-advanced{border:0;border-top:1px solid var(--a-line);border-radius:0;padding:16px 0 0}
 #amp-one .a-appearance-advanced>summary{cursor:pointer;font-weight:600;font-size:14px}
 #amp-one .a-appearance-advanced>p{margin:12px 0}
 #amp-one .a-appearance-advanced .a-css-editor{min-height:220px;max-height:400px}
@@ -96,3 +96,20 @@
 #amp-one .a-appearance-more>p{font-size:13px;color:var(--a-muted);margin:12px 0}
 #amp-one .a-appearance-more[open]>*+*{margin-top:20px}
 #amp-one .a-appearance-disclosure-status{font-weight:400;color:var(--a-muted);font-size:12px;margin-inline-start:12px}
+
+/* The library owns the group boundary; upload and editor controls retain their
+   native input/focus boundaries without an additional card at each level. */
+#amp-one .a-appearance-saved-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start;gap:12px 20px;padding:16px 0}
+#amp-one .a-appearance-saved-row+.a-appearance-saved-row{border-top:1px solid var(--a-line)}
+#amp-one .a-appearance-saved-row p{margin:6px 0 0;color:var(--a-muted);overflow-wrap:anywhere}
+#amp-one .a-appearance-saved-actions{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:10px;max-width:100%}
+#amp-one .a-appearance-saved-actions>button{margin:0}
+#amp-one .a-appearance-import{border-top:1px solid var(--a-line);padding-top:20px;min-width:0}
+#amp-one .a-appearance-import .a-file-drop{border:0;border-radius:0;padding:0;align-items:flex-start}
+#amp-one .a-appearance-import .a-file-drop>div:not(.a-check-result){display:grid;gap:8px;flex:1;min-width:0}
+#amp-one .a-appearance-import .a-file-drop button{justify-self:start;max-width:100%}
+#amp-one .a-appearance-import .a-file-drop small{display:block;margin:0;color:var(--a-muted);line-height:1.5;overflow-wrap:anywhere}
+#amp-one .a-appearance-settings .a-appearance-advanced>label{display:block;margin:18px 0 6px}
+#amp-one .a-appearance-advanced>:is(input,textarea){margin:0}
+#amp-one .a-appearance-advanced>.a-dialog-actions{margin-top:16px}
+@media(max-width:720px){#amp-one .a-appearance-saved-row{grid-template-columns:minmax(0,1fr)}#amp-one .a-appearance-saved-actions{justify-content:flex-start}}

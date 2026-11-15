@@ -483,10 +483,10 @@ export function AppearanceSettings({
   {<section className="a-appearance-saved"><h2>Saved appearances</h2>
    {savedItems.map(item=><div className="a-appearance-saved-row" key={item.id}>
     <div><strong>{item.name}</strong>{item.description&&<p>{item.description}</p>}</div>
-    <div className="a-appearance-saved-actions">
+    <div className="a-appearance-saved-actions" role="group" aria-label={'Actions for '+item.name}>
      <button type="button" className="a-soft" aria-label={'Use '+item.name} aria-disabled={controlDisabled('appearanceId')} data-action="appearance.preferences.update" onClick={()=>{if(!controlDisabled('appearanceId'))change('appearanceId',item.id)}}>Use</button>
      <button type="button" className="a-soft" aria-label={'Edit '+item.name} aria-disabled={busyFor('read')} onClick={()=>{if(!busyFor('read'))void editItem(item)}}>Edit</button>
-     <button type="button" className="a-soft" aria-disabled={busyFor('export')} data-action="theme.export" onClick={()=>{if(!busyFor('export'))void exportItem(item)}}><Download/>Export ZIP</button>
+     <button type="button" className="a-soft" aria-label={'Export ZIP for '+item.name} aria-disabled={busyFor('export')} data-action="theme.export" onClick={()=>{if(!busyFor('export'))void exportItem(item)}}><Download/>Export ZIP</button>
      <button type="button" className="a-link" aria-label={'Delete '+item.name} aria-disabled={busyFor('delete')} onClick={()=>{if(!busyFor('delete'))setDeleteTarget(item)}}>Delete</button>
     </div>
    </div>)}
