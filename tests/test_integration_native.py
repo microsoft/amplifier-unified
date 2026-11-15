@@ -22,8 +22,8 @@ def test_integration_project_preserves_declared_runtime_and_host_test_inputs():
     dev = host["dependency-groups"]["dev"]
     fixture = [item for item in dev if canonicalize_name(Requirement(item).name)
                in {"amplifier-module-tool-filesystem", "amplifier-module-context-managed",
-                   "amplifier-module-tool-exec"}]
-    assert len(fixture) == 3
+                   "amplifier-module-tool-exec", "amplifier-module-provider-anthropic"}]
+    assert len(fixture) == 4
     assert any("@663f26a878ae71e136f439fa73ded52b2eb24174" in item for item in fixture)
     assert set(dev) - set(fixture) <= set(prepared["project"]["dependencies"])
     filesystem = [item for item in prepared["project"]["dependencies"]
@@ -39,6 +39,8 @@ def test_integration_project_preserves_declared_runtime_and_host_test_inputs():
     assert executor == [
         "amplifier-module-tool-exec @ git+https://github.com/microsoft/amplifier-module-tool-exec@main"]
     assert not set(fixture) & set(prepared["project"]["dependencies"])
+    assert prepared["tool"]["uv"]["sources"]["amplifier-module-provider-anthropic"] == (
+        runtime["tool"]["uv"]["sources"]["amplifier-module-provider-anthropic"])
     for name, source in runtime["tool"]["uv"]["sources"].items():
         assert prepared["tool"]["uv"]["sources"][name] == source
     assert prepared["tool"]["uv"]["no-build-package"] == runtime["tool"]["uv"]["no-build-package"]

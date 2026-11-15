@@ -293,6 +293,14 @@ version = "1.0.0"
 source = { git = "https://github.com/microsoft/amplifier-module-loop-streaming?rev=main#072d50c5bcc0f7c57ca4d336ef03915563fa7861" }
 
 [[package]]
+name = "amplifier-module-provider-anthropic"
+version = "1.0.0"
+source = { git = "https://github.com/microsoft/amplifier-module-provider-anthropic?rev=3204656f784af914de2c3d7d6f7175ad904a00db#3204656f784af914de2c3d7d6f7175ad904a00db" }
+dependencies = [
+    { name = "anthropic" },
+]
+
+[[package]]
 name = "amplifier-module-provider-azure-openai"
 version = "1.0.0"
 source = { git = "https://github.com/microsoft/amplifier-module-provider-azure-openai?rev=main#dc47ad450da8395daf8a7909fb43c0db24ac7740" }
@@ -405,7 +413,7 @@ dependencies = [
 
 [[package]]
 name = "amplifier-unified"
-version = "0.95.0"
+version = "0.96.2"
 source = { editable = "." }
 dependencies = [
     { name = "agent-client-protocol" },
@@ -471,6 +479,7 @@ dev = [
     { name = "amplifier-module-hook-context-intelligence" },
     { name = "amplifier-module-hooks-candidate-guard" },
     { name = "amplifier-module-loop-live" },
+    { name = "amplifier-module-provider-anthropic" },
     { name = "amplifier-module-provider-openai", extra = ["native"] },
     { name = "amplifier-module-tool-apply-patch" },
     { name = "amplifier-module-tool-delegate" },
@@ -534,6 +543,7 @@ dev = [
     { name = "amplifier-module-hook-context-intelligence", git = "https://github.com/microsoft/amplifier-bundle-context-intelligence?subdirectory=modules%2Fhook-context-intelligence&rev=a80ce69d0e96e9a343501f238dcd867350dd9aa2" },
     { name = "amplifier-module-hooks-candidate-guard", git = "https://github.com/microsoft/amplifier-bundle-converge?subdirectory=modules%2Fhooks-candidate-guard&rev=da7dd8878c9e7b672e86151b32d59c0cce68bcb6" },
     { name = "amplifier-module-loop-live", git = "https://github.com/microsoft/amplifier-module-loop-live?rev=7828753b7f46c6da8f81ca13e97ee02beab30108" },
+    { name = "amplifier-module-provider-anthropic", git = "https://github.com/microsoft/amplifier-module-provider-anthropic?rev=3204656f784af914de2c3d7d6f7175ad904a00db" },
     { name = "amplifier-module-provider-openai", extras = ["native"], git = "https://github.com/microsoft/amplifier-module-provider-openai?rev=main" },
     { name = "amplifier-module-tool-apply-patch", git = "https://github.com/microsoft/amplifier-bundle-filesystem?subdirectory=modules%2Ftool-apply-patch&rev=515599f0d0763a946aa96ed1d0110db723f5c386" },
     { name = "amplifier-module-tool-delegate", git = "https://github.com/microsoft/amplifier-foundation?subdirectory=modules%2Ftool-delegate&rev=05082c89a171758f8d0fb9d8df630ea581e5bdb5" },
@@ -554,6 +564,25 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/5f/56/a8120250d128bed162cd73c76d45f6ef9991f3e068f62a8ee060afa3104a/annotated_types-0.8.0.tar.gz", hash = "sha256:13b2beaad985e05e2d6407ee4c4f35590b11f8d693a258a561055cac8f64cab7", size = 15893, upload-time = "2026-07-23T20:16:13.995Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/99/91/8acff4f5e50511b911bbccb72b8628a49c68ce14148cd9f6431094859a90/annotated_types-0.8.0-py3-none-any.whl", hash = "sha256:f072f4d804ea359e4eaf198b1af7a8b0943881a87f31bb764f8bf219bb9419e0", size = 13427, upload-time = "2026-07-23T20:16:12.938Z" },
+]
+
+[[package]]
+name = "anthropic"
+version = "1.17.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "docstring-parser" },
+    { name = "httpx2" },
+    { name = "jiter" },
+    { name = "opentelemetry-api" },
+    { name = "pydantic" },
+    { name = "sniffio" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/4e/66/4ec271f7607460005276bb09b0d1c749a9ed0cead35a488a8676f15ed6d5/anthropic-1.17.0.tar.gz", hash = "sha256:dcf77a74dde89a9fd12405fca798b012725a107f7c9488454234a74e275c2163", size = 1756371, upload-time = "2026-10-20T22:13:35.117Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/98/9d/b4d4e46ec05bf19bcfd46c1417337e7cf42b9ecb95c3c63f295e2e9fee4b/anthropic-1.17.0-py3-none-any.whl", hash = "sha256:ccb98b85e1a14f81cf1e2ba348393f341f342bad9e07e014f96c9b69f853aaa7", size = 2094718, upload-time = "2026-10-20T22:13:32.585Z" },
 ]
 
 [[package]]
@@ -892,6 +921,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/fc/f8/98eea607f65de6527f8a2e8885fc8015d3e6f5775df186e443e0964a11c3/distro-1.9.0.tar.gz", hash = "sha256:2fa77c6fd8940f116ee1d6b94a2f90b13b5ea8d019b98bc8bafdcabcdd9bdbed", size = 60722, upload-time = "2023-12-24T09:54:32.31Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/12/b3/231ffd4ab1fc9d679809f356cebee130ac7daa00d6d6f3206dd4fd137e9e/distro-1.9.0-py3-none-any.whl", hash = "sha256:7bffd925d65168f85027d8da9af6bddab658135b840670a223589bc0c8ef02b2", size = 20277, upload-time = "2023-12-24T09:54:30.421Z" },
+]
+
+[[package]]
+name = "docstring-parser"
+version = "0.18.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/e0/4d/f332313098c1de1b2d2ff91cf2674415cc7cddab2ca1b01ae29774bd5fdf/docstring_parser-0.18.0.tar.gz", hash = "sha256:292510982205c12b1248696f44959db3cdd1740237a968ea1e2e7a900eeb2015", size = 29341, upload-time = "2026-04-14T04:09:19.867Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a7/5f/ed01f9a3cdffbd5a008556fc7b2a08ddb1cc6ace7effa7340604b1d16699/docstring_parser-0.18.0-py3-none-any.whl", hash = "sha256:b3fcbed555c47d8479be0796ef7e19c2670d428d72e96da63f3a40122860374b", size = 22484, upload-time = "2026-04-14T04:09:18.638Z" },
 ]
 
 [[package]]

@@ -40,15 +40,34 @@ The test configuration enables the existing asynchronous notifier check.
 
 These Python files remain the sole implementation. The pure package tests live
 here; Unified retains host integration, permissions, Stop and real-process tests.
-Unified still bundles and imports these unchanged `amplifier_operations` files.
-This preparation adds no daemon, database migration, runtime dependency, new policy
-or automatic package selection.
+Unified selects a published artifact into the generated top-level
+`amplifier_operations/` directory. That location preserves ordinary editable and
+isolated-worker imports; this nested project remains the sole authoring owner.
+`components/operations.source.json` binds the exact original receipt and wheel.
+Author edits and component publication do not change the app default.
 
 The package version alone does not identify published or qualified bytes; use the
 actual release source receipt and artifact hashes.
 Use a separate environment for the standalone distribution: do not coinstall it
 with `amplifier-unified` while both distributions own the same package files.
-Component publication does not change Unified dependency selection.
+Never edit the generated runtime snapshot by hand. Normal app wheel, source
+archive and editable builds verify the committed selection offline, without
+requiring the author tree to match. Return to a prior selection through ordinary
+app rollback, preserving newer operation receipts and delivery cursors. This is
+independent release consumption, not standalone pip replacement.
+
+To select verified original release assets from the Unified root:
+
+```sh
+python scripts/scheduling_delivery.py select --component operations \
+  --dist /path/to/downloaded-assets --revision FULL_SOURCE_SHA \
+  --receipt-sha256 EXACT_OPERATIONS_SOURCE_SHA256
+python scripts/scheduling_delivery.py verify --component operations
+```
+
+The original 0.1.0 receipt retains its historical `amplifier_operations` author
+path. The producer also recognizes the current `components/operations` path at
+newer revisions; moving the author project never rewrites old release identity.
 The intended repository name is `amplifier-platform-operations`; repository naming
 does not rename the existing Python import or its data contracts.
 

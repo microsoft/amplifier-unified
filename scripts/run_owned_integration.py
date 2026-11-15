@@ -12,7 +12,7 @@ import integration_external
 import integration_native
 
 
-def execute(lane, work, output):
+def execute(lane, work, output, *, overflow_negative_controls=False):
     work = work.resolve()
     output = output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -27,7 +27,10 @@ def execute(lane, work, output):
         (output / 'preparation.json').write_text(Path(prepared['preparation']).read_text())
         for name in ('pyproject.toml', 'uv.lock'):
             (output / name).write_bytes((work / name).read_bytes())
-        return run_lane(lane, prepared['python'], output, env)
+        result = run_lane(lane, prepared['python'], output, env)
+        if result == 0 and overflow_negative_controls:
+            integration_native.overflow_negative_controls(ROOT, work, prepared['python'], output, env)
+        return result
     if lane in integration_clients.LANES:
         prepared = integration_clients.prepare(
             lane, work, ROOT, python=sys.executable,
@@ -77,5 +80,8 @@ if __name__ == '__main__':
     parser.add_argument('--lane', required=True)
     parser.add_argument('--work', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--overflow-negative-controls', action='store_true',
+                        help='Explicit one-off old-source proof after a passing native qualification')
     args = parser.parse_args()
-    raise SystemExit(execute(args.lane, args.work, args.output))
+    raise SystemExit(execute(args.lane, args.work, args.output,
+                             overflow_negative_controls=args.overflow_negative_controls))

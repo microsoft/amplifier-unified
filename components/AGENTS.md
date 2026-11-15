@@ -3,9 +3,11 @@
 `components/workspaces/` is the temporary authoring home for the independently
 buildable `amplifier_workspace_metadata` package. Its registration and query
 mechanism tests belong here; Unified retains initialization, filesystem effects,
-history, authority and persistence. Unified includes the same runtime sources as
-the sole installed owner; do not coinstall the standalone distribution. This
-metadata boundary is not the whole workspace domain or a generated copy.
+history, authority and persistence. Unified consumes only the published artifact
+selected into `workspace-metadata-delivery/` by `workspace-metadata.source.json`,
+as the sole installed owner; do not coinstall the standalone distribution. Never
+edit that generated copy by hand. Author edits and publication do not refresh the
+app selection. This metadata boundary is not the whole workspace domain.
 
 `components/outputs/` is temporarily authored here as an independently buildable
 Python project. Preserve `amplifier_outputs` imports and its saved-body formats.
@@ -45,6 +47,14 @@ Unified consumes only the generated `scheduling-delivery/` snapshot selected by
 `scheduling.source.json`; author edits and publication do not change this default.
 Never edit the delivery copy by hand or coinstall the standalone distribution with
 Unified, which remains the sole installed owner. Follow the author project's README.
+
+`operations/` is the temporary authoring project for `amplifier_operations`.
+Its SQLite operation observations and bounded delivery/cursor tests belong here;
+Unified retains admission, authority, Stop and execution. The top-level
+`amplifier_operations/` is the generated runtime snapshot selected by
+`operations.source.json`, preserving the installed and isolated-worker import path.
+Never edit that snapshot by hand or coinstall the standalone distribution with
+Unified. Independent author edits/publication do not refresh the app selection.
 
 ## Web client delivery
 
