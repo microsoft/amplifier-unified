@@ -16,12 +16,13 @@ import update_stage_probe as probe
 @pytest.fixture
 def layout(tmp_path):
     folders = {name: tmp_path / name for name in ('app', 'fixtures', 'capture', 'sources', 'state')}
-    for folder in folders.values():
-        folder.mkdir()
-    if os.name == 'nt':   # The app home of an installation is a private folder.
-        from amplifier_web.windows_files import directory
-        with directory(folders['app'], owned_root=folders['app'], create=True):
-            pass
+    for name, folder in folders.items():
+        if os.name == 'nt' and name == 'app':   # The app home of an installation is a private folder.
+            from amplifier_web.windows_files import directory
+            with directory(folder, owned_root=folder, create=True):
+                pass
+        else:
+            folder.mkdir()
     return SimpleNamespace(**folders)
 
 
@@ -61,8 +62,9 @@ def test_the_fixture_runs_the_command_and_the_stage_settings_of_the_updater():
     assert "stage=self.directory/'releases'/release" in updates and "shared_stage=stage/'shared-config'" in updates
 
 
+@pytest.mark.skipif(os.name == 'nt', reason='On Windows the switch is the subject: tests/test_windows_long_paths_off.py')
 def test_the_reproduction_switch_changes_only_the_project_name(layout):
-    """Elsewhere the name is the CLI name with and without the switch: the same probe passes."""
+    """Off Windows the name is the CLI name with and without the switch: the same probe passes."""
     stage = probe.build(layout.app, layout.fixtures)
     result = probe.run(stage, capture_root=layout.capture, source_store=layout.sources, state_home=layout.state,
                        before_the_fix=True)

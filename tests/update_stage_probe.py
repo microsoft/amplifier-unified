@@ -79,19 +79,28 @@ def build(app_home, fixtures, *, stage_id=STAGE_ID):
     what a real stage holds.
     """
     app_home, fixtures = Path(app_home), Path(fixtures)
-    updates = app_home / 'updates'
-    if os.name == 'nt':
-        from amplifier_web.windows_files import directory
-        with directory(updates, owned_root=app_home, create=True):  # UpdateManager.__init__
-            pass
-    else:
-        updates.mkdir(mode=0o700, exist_ok=True)
-    stage = updates / 'releases' / stage_id
-    stage.mkdir(parents=True, mode=0o700)   # UpdateManager.install
+    stage = app_home / 'updates' / 'releases' / stage_id
     shared = stage / 'shared-config'
-    shared.mkdir(mode=0o700)                # update_storage.snapshot_shared_config
     workspace = stage / 'qualification-workspace'
-    workspace.mkdir(exist_ok=True)          # UpdateManager.validate
+    if os.name == 'nt':
+        # The probe checks that its app home, the stage, is a private folder of
+        # this account. The updater makes the stage with an ordinary mkdir below
+        # the private ``updates`` folder, and on a person's PC the check accepts
+        # it (clean room, 0.98.5: the probe passed this check). On the CI runner
+        # the check refused a stage that an ordinary mkdir made (PermissionError
+        # in windows_files.validate_acl); the likely cause is that the runner's
+        # account is elevated, so the folder gets another owner. The app's
+        # private creator sets the owner explicitly. Setup makes its stage this
+        # way too (installation_runtime.prepare).
+        from amplifier_web.windows_files import directory
+        for folder in (shared, workspace):
+            with directory(folder, owned_root=app_home, create=True):
+                pass
+    else:
+        (app_home / 'updates').mkdir(mode=0o700, exist_ok=True)   # UpdateManager.__init__
+        stage.mkdir(parents=True, mode=0o700)                     # UpdateManager.install
+        shared.mkdir(mode=0o700)                                  # update_storage.snapshot_shared_config
+        workspace.mkdir()                                         # UpdateManager.validate
     provider = fixtures / 'amplifier_module_provider_update_fixture'
     provider.mkdir()
     (provider / '__init__.py').write_text(PROVIDER, encoding='utf-8')
@@ -102,7 +111,8 @@ def build(app_home, fixtures, *, stage_id=STAGE_ID):
         'providers': [{'module': 'provider-update-fixture', 'source': str(fixtures),
                        'config': {'default_model': 'fixture'}}],
     }), encoding='utf-8')
-    (shared / 'settings.yaml').write_text(json.dumps({
+    from amplifier_web.deployment import write_private
+    write_private(shared / 'settings.yaml', json.dumps({
         'bundle': {'active': 'fixture', 'added': {'fixture': str(profile)}},
         'web_bundles': {
             'excluded': list(builtin_behaviors.DEFAULT_BEHAVIORS),
@@ -115,7 +125,7 @@ def build(app_home, fixtures, *, stage_id=STAGE_ID):
             # The real capture hook: the probe also writes below the capture folder.
             'hook-context-intelligence': _installed('amplifier_module_hook_context_intelligence'),
         }},
-    }), encoding='utf-8')
+    }), owned_root=app_home)
     overrides = fixtures / 'install-overrides.txt'
     overrides.write_text('', encoding='utf-8')
     return Stage(app_home, stage, workspace, shared, profile, overrides)
