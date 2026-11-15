@@ -869,7 +869,14 @@ empty folders and a kept set. Without this, Yes in one launcher and a fresh
 start in the other would put old accounts and new app data side by side. The
 lock is outside the installation folder, so it exists in every state of an
 uninstall. An empty lock file can stay behind. An installation that has its
-own data and no take-back in progress takes no lock.
+own data and no take-back in progress takes no lock. It reads "has data"
+before it looks for a take-back: a take-back writes its records before it
+moves the first folder, so it cannot be passed.
+
+A take-back removes an empty data folder of setup just before the kept folder
+takes its place. When the app then starts without the set, or without its
+rest, a data folder of setup that is missing is made again, empty and
+private: the launcher's own check needs all six.
 
 Two records, each written as one complete private file.
 
@@ -908,11 +915,14 @@ start in these states.
 
 - The record names this installation folder and the note is gone or cannot
   be read: "Finish now?" Yes moves the rest back. No starts the app with the
-  part that is back. When that take-back moved nothing yet, the record
-  becomes `complete` again and the start is an ordinary first offer.
+  part that is back. When that take-back moved nothing yet, its note is
+  removed, the record becomes `complete` again and the start is an ordinary
+  first offer. Yes writes the note again before the checks, so a set that
+  cannot go on gets its cause at the next start and no second question.
 - The note is there and the record is lost, unreadable or of another
   transfer: the text says to restart the PC first; Yes starts the app
-  without the rest.
+  without the rest. A take-back into this folder and a note of another
+  take-back never match, whatever that note says.
 - The note is there and the kept folder is gone: the text says to put the
   folder back; Yes starts the app without the rest.
 
@@ -962,7 +972,8 @@ and takes no lock. Else, under the lock:
    installation is absent or empty. Setup creates six of them, empty.
 4. One question. Yes takes the set back. No starts fresh. The answer is
    saved with the set before the app starts, so no installation asks about
-   it again; if it cannot be saved, the app does not start.
+   it again; if it cannot be saved, the app does not start. The answer is
+   used only when the kept folder still holds the record that was offered.
 5. Every set that is not offered is named once in one message: a set of
    another folder, a newer set (with its version), an unfinished move, a set
    that holds a link, a set that was changed, a set with too many entries, a
@@ -990,11 +1001,18 @@ and renames the kept folder into its place. Windows refuses to remove
 launcher and of the program that started it. Then the kept entries move into
 that empty folder one by one. Every folder that is back is held in place
 until the take-back finished, and the rule above is checked again for all of
-them before the last step and after it. In an `app` folder that was filled,
-the folder of the databases that the last step saved and the database's own
-side files are the take-back's own, so a last step that failed can be tried
-again. An entry for which Windows gives no file number is an error with the
-restart text, never "another entry".
+them before the last step and after it. An entry for which Windows gives no
+file number is an error with the restart text, never "another entry".
+
+The last step makes entries in `app`: the folder of the databases that it
+saved, and side files that the database program puts beside `app.sqlite3`.
+In an `app` folder that was filled, the record says first that this step
+began (`settling`). When the step returned, what it made is saved with its
+identity like every other entry, so a step that failed can be tried again.
+Only when the program ended inside the step does the next run accept those
+entries by their names: a side file that the database program needs for its
+repair must not be called "in the way". A side file that is put beside the
+database at any other time is in the way and is named.
 
 Folders are held in place while they are used. The installation folder, the
 kept folder and both folders of an entry-by-entry move are opened for the
@@ -1021,6 +1039,9 @@ the take-back does not finish then either, and the message names the file.
 The person's exit in both cases is an uninstall with "keep": its move-out
 finishes the take-back without this step and moves the data out again,
 unchanged.
+An uninstall with "keep" also finishes a take-back that a newer version of
+Amplifier began and that this version refuses to finish; the new set then
+names that newer version.
 
 What the module deletes: empty folders, its own two records and its lock
 file. Nothing else.
