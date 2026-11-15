@@ -566,7 +566,8 @@ async def test_restart_guard_rechecks_after_history_and_service_lock_waits(tmp_p
     app.state['sessions'].append(source)
     entered, release = asyncio.Event(), asyncio.Event()
     revoked = False
-    async def load(_):
+    async def load(_, *, hydrate=True):
+        assert hydrate is False
         entered.set()
         if boundary == 'history': await release.wait()
     app.history.ensure_loaded = load

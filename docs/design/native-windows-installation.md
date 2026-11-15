@@ -208,9 +208,10 @@ Steps, in order:
 4. Copy the generation's verified release file beside the installation.
    Confirm that the app is stopped, then rename the launcher folder aside. It
    is kept. Every change in the installation folder waits up to 30 seconds for
-   a program that is still closing: while the app's worker programs are alive,
-   Windows refuses a rename into that folder, and they end a moment after the
-   task reports that it stopped (measured in the clean room).
+   a program that is still closing: a live worker program whose Foundation is
+   older than `e37a946b` makes Windows refuse a rename into that folder, and
+   the workers end a moment after the task reports that it stopped (measured
+   in the clean room; see "Why the app stops first").
 5. Install the launcher at the same path with the generation's exact package
    list and the launcher's own interpreter. The task, the shortcuts and the
    private Python do not change.
@@ -731,7 +732,7 @@ table with `python tests/test_windows_path_budget.py`.
 `LongPathsEnabled` off on its own runner, proves in a new process that a
 260-character path is refused, runs the real session and capture stores under a
 folder path of exactly 59 characters, and restores the runner's value. It
-installs the locked dependencies, and the lock selects Foundation `7526bb55`.
+installs the locked dependencies, and the lock selects Foundation `e37a946b`.
 Its source-store case stages a repository as deep as the default bundles
 through Foundation's real store. It requires that the store seals, builds and
 cleans up files beyond the limit, and that Windows accepts or refuses each
@@ -851,15 +852,39 @@ installation folder when that folder cannot be written.
 
 Why the app stops first. The earlier order removed the entries, rewrote
 setup's entry record `consumer-shell.json` in the installation folder, and
-only then stopped the app. While a conversation worker is alive, Windows
-refuses a new or replaced file directly in the installation folder (sharing
+only then stopped the app. While a conversation worker was alive, Windows
+refused the private write of a new or replaced file directly in the
+installation folder (sharing
 violation, error 32); a worker stays alive after its chat turn ends. So after
 any chat the rewrite failed, the app was never asked to stop, and it kept
 running and starting at sign-in with no entry left. Two clean-room runs showed
 this, and a probe in the second one measured the refusal: it is present with
-live workers and gone after the app's normal stop. Which handle in the worker
-tree causes it is not yet known. `app\config\services` accepts writes in the
-same state.
+live workers and gone after the app's normal stop. `app\config\services`
+accepts writes in the same state.
+
+The cause is Amplifier Foundation's session ownership. A live worker holds it
+below `<folder>\ownership`, and Foundation pins every folder from the drive
+root down to the session's own folder. Before Foundation `e37a946b` no pin
+shared write access. So Windows refused a rename, a move or a replacement of
+an entry directly in each pinned folder, also in the folders above the
+installation folder: `AppData\Local`, `AppData` and the profile folder
+(measured). An ordinary new file was not refused. The app's private writer
+publishes a file by a rename, so it failed. From `e37a946b` a pin on a folder
+above `ownership` shares read and write, and other programs can rename,
+replace and move entries there (measured in the clean room with three live
+workers at `e37a946b`). These refusals remain while a worker lives,
+by intent: a pinned folder itself cannot be renamed, moved or deleted, and
+nothing can be renamed or moved into `ownership` or a pinned folder below it.
+Foundation's history operations hold the folder that they work in (below
+`shared\projects`) in the same way while one operation runs.
+`tests/test_windows_live_worker_folders.py` holds a real ownership in
+setup's layout on a Windows runner and requires both halves; it runs in the
+`windows-path-length.yml` job, which installs the locked Foundation. The
+order above stays. A worker runs the Foundation that its own environment
+selected, not the one in the root `uv.lock`; that revision moves with a
+component update, and a running worker keeps the revision that it started
+with. The app's own directory reads (`windows_read_files`) hold a folder
+without write sharing while a read runs; they are unchanged.
 
 Uninstall can be repeated. An entry that an earlier, interrupted uninstall
 already removed is skipped; a task that is already gone is not an error.
@@ -887,7 +912,9 @@ that runtime. Without this check, a connected AI account made the start run a
 complete first installation: minutes without a window, a new folder on each
 attempt, and in the observed case a failure. The launcher's failure message
 has two forms: the preparation of the remaining parts failed, or the start
-failed (every other step). It names the Start menu as the next step only when
+failed (every other step). A third text replaces both when the start ended
+because the launcher did not confirm its start-at-sign-in task (see "The task
+after a computer rename" below). It names the Start menu as the next step only when
 the entry record says `installed` and the entry that opens Amplifier exists in
 the folder that the record names; setup's second run decides by the same two
 facts. Otherwise the next step is to run the setup file again. The record
@@ -1984,6 +2011,58 @@ Do not use LocalSystem or S4U to avoid account-password prompts.
 Use absolute executable/data/workspace/shared-state paths and explicit quoting.
 Configure indefinite execution, restart-on-failure and battery behavior
 deliberately. Automatic logon startup must not open a browser.
+
+**The task after a computer rename (measured November 15, 2026).** The app
+registers the task with the owner SID in the principal and in the sign-in
+trigger. Task Scheduler keeps the principal as the SID. It stores the trigger's
+user as a name, `COMPUTER\user`, whatever spelling registration gave, and it
+never rewrites that name: not when the account or the computer is renamed, and
+not when the same definition is registered again. It refuses to register a
+trigger user that does not resolve at that moment. After the computer's name
+changes, Windows still starts the task at sign-in, and `LookupAccountNameW`
+maps the stored name, and the old computer name alone, to nothing (error 1332).
+Measured on Windows Server 2022 and 2025 and on Windows 11 ARM64 runners, and
+in Windows Sandbox, which renames its guest at every boot.
+
+The ownership check compares the whole definition with the one that the app
+generates from the task's own launch record. For the trigger's user text it
+accepts exactly three forms:
+
+1. the owner SID as text;
+2. a name that Windows maps to the owner's user account;
+3. a name `authority\account` that Windows maps to nothing, when the authority
+   alone also maps to nothing and the account part alone maps to the owner's
+   user account.
+
+Form 3 is the renamed computer. It is an equivalence for this one text, not
+proof of who made the task. It also accepts a trigger that someone with the
+owner's or an administrator's rights had set to another account of the same
+account name, once that account's authority no longer exists (and the two
+variants in which an account was also renamed or deleted). In each of them the
+task still runs as the owner, with least privilege and the app's exact action:
+the principal, the task name, the action and every setting stay an exact
+comparison. An authority that still exists is refused, so a deleted or renamed
+account is not accepted. A lookup that Windows did not answer is not "no such
+name": the check then refuses and says that it could not check.
+
+Limits. A renamed Windows account is still refused (the task then needs a new
+registration). On a domain member, a local account with the owner's account
+name makes form 3 refuse a domain owner. Domain-joined, Entra-joined and
+offline PCs are not measured. The launcher runs this check before any app
+version starts, and an in-app update does not replace the launcher: an
+installation whose launcher predates this rule needs a launcher refresh or a
+new setup run before a renamed PC starts the app again.
+
+When the check does not confirm the task, the launcher says that it could not
+confirm that the entry belongs to this installation, names the entry, and
+gives the steps to delete it; a new start then registers a new entry with the
+saved port and settings. It does not say that the entry was changed, because
+it cannot know that. When Windows gave no answer about the account, it asks
+for a restart and deletes nothing. Start, Status, Stop and Uninstall each have
+this text; before, they named the internet connection, an unreachable service
+manager, or a Task Scheduler that could not be read. A start at sign-in shows
+no window: the task ends with an error, and the person sees the text at the
+next start from the Start menu.
 
 Work survives browser/terminal closure while the owner remains signed in.
 This model does **not** promise execution after sign-out or before sign-in.
