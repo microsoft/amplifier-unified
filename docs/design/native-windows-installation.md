@@ -1826,6 +1826,30 @@ The owner can end every browser session with `amplifier-unified browsers sign-ou
 (see the deployment guide). All browser session checks go through one function,
 `auth.valid_session`, so that no check can ignore that sign-out.
 
+The command and the running host are two processes, and the host looks at the
+saved record every two seconds. A ticket or code from before a sign-out must
+not open a session that outlasts it, also in that gap. Two rules give that,
+with no lock between the two processes:
+
+1. The command saves a second that is not earlier than the second in which its
+   record was saved. When a write ends in a later second, it pauses for a
+   moment and saves again with that later second (`auth.sign_out_all`). After
+   three such writes it stops and tells the owner to run the command again.
+2. For a ticket or code, the host reads the new session's second first and
+   looks at the saved record after that. When the record has changed and the
+   host has not applied it yet, the ticket or code is used up and opens no
+   session (`auth.sign_in`). The host keeps the mark of a record only when it
+   has read that record.
+
+A session that the host returns was therefore made before any record that is
+saved later, so it carries no later second than that record, and the host
+refuses it when it applies that sign-out. A session in the same second as a
+sign-out is refused. The owner signs in again one second later.
+
+This holds while the PC clock does not go backward, and while the file time
+of the record changes between two saves that are 50 milliseconds apart. The
+host tells a new record from its file time and size, not from its content.
+
 #### Remote browser sign-in on a Windows host
 
 A browser on another device cannot use the local launcher, and a Windows host

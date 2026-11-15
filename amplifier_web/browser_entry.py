@@ -29,6 +29,8 @@ _CODE = re.compile(f"[{CODE_ALPHABET}]{{{CODE_LENGTH}}}")
 REOPEN = "Open from the owner launcher again: amplifier-unified open."
 NEW_CODE = "Make sure that Amplifier is running on this PC. Then run this again: amplifier-unified browsers code."
 RELOAD = "Could not sign in. Open the sign-in page again and type the code."
+NOT_IN_USE = ("The running Amplifier does not use this address yet. Stop Amplifier and start it again. "
+              "Then run this again: amplifier-unified browsers code.")
 
 
 class BrowserEntryUnavailable(RuntimeError):
@@ -404,7 +406,7 @@ async def _signed_form(request, field):
 
 async def redeem(request):
     from aiohttp import web
-    from .auth import CSRF_COOKIE, SESSION_COOKIE, new_session
+    from .auth import CSRF_COOKIE, SESSION_COOKIE, sign_in
     origin = local_origin(request)
     store = request.app["browser_entry"]
     if not origin or not is_windows() or store is None or request.content_type != "application/x-www-form-urlencoded":
@@ -416,10 +418,12 @@ async def redeem(request):
         target = store.consume(ticket, _binding(request, origin))
     except BrowserEntryUnavailable:
         target = None
-    if target is None:
+    # A ticket from before a sign-out that this host has not applied yet opens nothing.
+    session = None if target is None else sign_in(request.app)
+    if session is None:
         return web.Response(text=REOPEN, status=403)
     response = web.HTTPSeeOther(target)
-    response.set_cookie(SESSION_COOKIE, new_session(request.app["session_secret"]),
+    response.set_cookie(SESSION_COOKIE, session,
                         max_age=request.app["server_config"]["session_ttl_seconds"],
                         httponly=True, samesite="Strict", secure=True, path="/")
     response.del_cookie(CSRF_COOKIE, path="/")
@@ -436,7 +440,7 @@ async def code_redeem(request):
     (see remote_origin). A session from a code is marked remote.
     """
     from aiohttp import web
-    from .auth import CSRF_COOKIE, SESSION_COOKIE, new_session
+    from .auth import CSRF_COOKIE, SESSION_COOKIE, sign_in
     origin = remote_origin(request)
     store = request.app["browser_codes"]
     if not origin or not is_windows() or store is None or request.content_type != "application/x-www-form-urlencoded":
@@ -453,8 +457,13 @@ async def code_redeem(request):
             except (OSError, ValueError):
                 pass
         raise web.HTTPSeeOther("/login?error=1", headers=_PRIVATE)
+    session = sign_in(request.app, remote=True)
+    if session is None:
+        # The code is from before a sign-out that this host has not applied yet.
+        # It is used up and opens nothing; this is not counted as a wrong code.
+        raise web.HTTPSeeOther("/login?error=1", headers=_PRIVATE)
     response = web.HTTPSeeOther("/", headers=_PRIVATE)
-    response.set_cookie(SESSION_COOKIE, new_session(request.app["session_secret"], remote=True),
+    response.set_cookie(SESSION_COOKIE, session,
                         max_age=request.app["server_config"]["session_ttl_seconds"],
                         httponly=True, samesite="Strict", secure=True, path="/")
     response.del_cookie(CSRF_COOKIE, path="/")
@@ -471,6 +480,7 @@ _CODE_PAGE = f"""<!doctype html>
 <h1>Sign in to Amplifier</h1>
 <p class="error" role="alert">__ERROR__</p>
 <p>1. On the Windows PC that runs Amplifier, run: <code>amplifier-unified browsers code</code></p>
+<p>If Windows does not find that command, use the full command from the Windows steps of the deployment guide.</p>
 <p>2. Type the code here within two minutes.</p>
 <form method="post" action="{CODE_REDEEM_PATH}">
 <input type="hidden" name="csrf" value="__CSRF__">
@@ -495,8 +505,8 @@ def remote_login_page(request):
     # Preserve valid issuance for favicon redirects and concurrent login forms.
     if not _verified(secret, csrf, 900, "csrf"):
         csrf = new_csrf(secret)
-    error = ("That code did not work. A code lasts two minutes and works once. "
-             "Make a new code on the PC and try again.") if request.query.get("error") else ""
+    error = ("That code did not work. Check it and type it again. A code works for two minutes "
+             "and only once. After that, make a new code on the PC.") if request.query.get("error") else ""
     response = web.Response(text=_CODE_PAGE.replace("__ERROR__", error).replace("__CSRF__", csrf),
                             content_type="text/html",
                             headers={"Cache-Control": "no-store", "Referrer-Policy": "same-origin"})
@@ -519,15 +529,19 @@ async def owner_browser_code(data_dir: Path, config: dict, origin: str) -> str:
 
     Only the caller shows the code, and only to the owner; never log it.
     """
-    _, code = await _owner_post(data_dir, config, CODE_PATH, {"origin": origin}, "code", _CODE.pattern, NEW_CODE)
+    _, code = await _owner_post(data_dir, config, CODE_PATH, {"origin": origin}, "code", _CODE.pattern, NEW_CODE,
+                                invalid=NOT_IN_USE)
     return code
 
 
-async def _owner_post(data_dir: Path, config: dict, path: str, extra: dict, field: str, pattern: str, again=REOPEN):
+async def _owner_post(data_dir: Path, config: dict, path: str, extra: dict, field: str, pattern: str, again=REOPEN,
+                      *, invalid=None):
     """Pin the privately read leaf before reading or sending the control bearer.
 
     Returns the local origin and the one named reply value. No redirect, no
     proxy, no HTTP fallback, and an unconfirmed POST is never sent again.
+    `invalid` is the text for the host's reply that the request itself is not
+    acceptable (400): for a code, the running host does not have the address.
     """
     import aiohttp
     from .auth import data_identity
@@ -569,7 +583,9 @@ async def _owner_post(data_dir: Path, config: dict, path: str, extra: dict, fiel
                                            "version": version, "revision": revision, "ownerSid": sid,
                                            **extra}) as response:
                     if response.status != 200:
-                        raise BrowserEntryUnavailable("The owner host refused browser entry. " + again)
+                        raise BrowserEntryUnavailable(
+                            invalid if invalid and response.status == 400
+                            else "The owner host refused browser entry. " + again)
                     result = await response.json()
                 value = result.get(field) if isinstance(result, dict) else None
                 if not isinstance(value, str) or not re.fullmatch(pattern, value):

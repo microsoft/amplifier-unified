@@ -17,7 +17,7 @@ from urllib.parse import quote, urlsplit
 from aiohttp import web
 from filelock import FileLock
 
-from .deployment import validate_origin, write_private
+from .deployment import canonical_host, is_loopback, validate_origin, write_private
 from . import browser_entry
 
 SESSION_COOKIE = "amplifier_unified_session"
@@ -265,6 +265,10 @@ def session_epoch(data_dir: Path) -> int:
         return now
 
 
+class SignOutUncertain(OSError):
+    """Saved, but too slowly to cover a sign-in at the same moment."""
+
+
 def sign_out_all(data_dir: Path) -> int:
     """Sign out every browser of this installation; return the saved second.
 
@@ -272,16 +276,29 @@ def sign_out_all(data_dir: Path) -> int:
     credential are involved. A running host applies the change within a few
     seconds. The time never moves backward, and a write failure is an error,
     never a silent success.
+
+    The saved second is never earlier than the second in which the record
+    was saved. A session that the host made before the record was there
+    carries that second or an earlier one, so the host refuses it (see
+    `sign_in`). A write that ends in a later second than its value is
+    therefore made again with the later second, after a short pause: the
+    host tells a new record from the file time, and two saves in one tick
+    of that time would look like one.
     """
     try:
         saved = _read_epoch(data_dir)
     except (OSError, ValueError):
         saved = 0
-    value = max(int(time.time()), saved)
-    _write_epoch(data_dir, value)
-    if _read_epoch(data_dir) != value:
-        raise OSError("The sign-out time was not saved.")
-    return value
+    for _ in range(3):
+        value = max(int(time.time()), saved)
+        _write_epoch(data_dir, value)
+        if _read_epoch(data_dir) != value:
+            raise OSError("The sign-out time was not saved.")
+        if int(time.time()) <= value:
+            return value
+        saved = value
+        time.sleep(0.05)
+    raise SignOutUncertain("The sign-out time was saved, but not within one second.")
 
 
 def _epoch_hint(data_dir: Path):
@@ -304,8 +321,10 @@ def refresh_sessions(app, streams=()) -> bool:
     hint = _epoch_hint(data_dir)
     if hint == state.hint:
         return False
-    state.hint = hint
     value = session_epoch(data_dir)
+    # Kept only now: a record that could not be read is read again next time,
+    # and until then no ticket or code opens a session (see sign_in).
+    state.hint = hint
     if value <= state.epoch:
         return False
     state.epoch = value
@@ -340,6 +359,28 @@ def new_session(secret: str, *, remote: bool = False) -> str:
     """Mark a session from a typed remote code; a local session is unchanged."""
     payload = {"kind": "session", "issued": int(time.time()), "nonce": secrets.token_urlsafe(16)}
     return _signed(secret, {**payload, "via": "remote"} if remote else payload)
+
+
+def sign_in(app, *, remote: bool = False) -> str | None:
+    """A session for a redeemed ticket or code, or None.
+
+    None while a saved sign-out waits for this host to apply it. The ticket or
+    code is then from before that sign-out, and it must not open a session
+    after it.
+
+    The order matters. The session's second is read first; the saved record
+    is looked at after that. So a session that is returned was made before
+    any record that is saved later, and `sign_out_all` saves no second that
+    is earlier than its own record. The host therefore refuses this session
+    when it applies that later sign-out.
+
+    The record is only looked at here. The watcher applies it, and it alone
+    ends the open streams.
+    """
+    value = new_session(app["session_secret"], remote=remote)
+    if _epoch_hint(app["service"].data_dir) != app["sessions"].hint:
+        return None
+    return value
 
 
 def new_csrf(secret: str) -> str:
@@ -497,8 +538,20 @@ async def auth_required(request: web.Request, handler):
     raise web.HTTPTemporaryRedirect(login_url(requested))
 
 
+def _other_device_address(request: web.Request) -> bool:
+    """The address in use is not this computer's own.
+
+    The name is read exactly as the host boundary reads it, so that
+    `localhost.` and `localhost` get the same page.
+    """
+    try:
+        return not is_loopback(canonical_host(urlsplit("//" + request.host).hostname or ""))
+    except ValueError:
+        return False  # The host boundary refuses such a name before any page.
+
+
 async def login_page(request: web.Request) -> web.Response:
-    if browser_entry.is_windows() and not browser_entry.loopback_host(urlsplit("//" + request.host).hostname):
+    if browser_entry.is_windows() and _other_device_address(request):
         # Another device cannot use the local launcher; it types an owner-made code.
         return browser_entry.remote_login_page(request)
     secret = request.app["session_secret"]

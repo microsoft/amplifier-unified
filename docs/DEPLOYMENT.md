@@ -386,8 +386,11 @@ Limits, stated plainly:
 - Never use Tailscale Funnel. It puts the address on the public internet.
 - `tailscale cert` is not used. It publishes the name of the PC in a public
   certificate log for good.
-- A LAN address without Tailscale needs a Windows Firewall rule. An
-  administrator must add that rule; Unified does not add it.
+- A LAN address without Tailscale needs two more things. The first is the LAN
+  address of the PC in `bind`, next to `127.0.0.1` (see
+  [Configure the host](#configure-the-host)). The second is a Windows Firewall
+  rule for the port. An administrator must add that rule; Unified does not add
+  it. This path is not measured on a Windows host.
 - Each code is for one address, lasts two minutes and works once. Wrong codes
   do not lock anyone out; see the
   [design](design/native-windows-installation.md#remote-browser-sign-in-on-a-windows-host).
@@ -410,6 +413,9 @@ network request: the ability to write that private folder is the authority.
 A running host applies the change within a few seconds. It then refuses every
 session from before that time, drops pending sign-in tickets and codes, and ends open
 live-update connections so that a signed-out browser cannot keep watching.
+During those few seconds a sign-in ticket or code opens no session, so that one
+from before the sign-out cannot outlast it. If the browser shows the sign-in
+page again, sign in once more.
 Sign in again in the usual way for your platform.
 
 Limits: this signs out **all** browsers; there is no sign-out for one device.

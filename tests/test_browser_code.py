@@ -99,8 +99,11 @@ def host(home, files):
                                         REMOTE.replace("https:", "http:"), OTHER, PLAIN, UNLISTED})
     app["service"] = SimpleNamespace(data_dir=home, update_manager=SimpleNamespace(
         running_identity={"instanceId": "b" * 32, "version": __version__, "revision": REVISION}))
+    app["sessions"] = auth.Sessions()                       # No sign-out yet, as on a new installation.
     entry.initialize(app)
     assert isinstance(app["browser_entry"], entry.GrantStore) and isinstance(app["browser_codes"], entry.CodeStore)
+    app.router.add_post(entry.ISSUE_PATH, entry.issue)
+    app.router.add_post(entry.REDEEM_PATH, entry.redeem)
     app.router.add_post(entry.CODE_PATH, entry.code_issue)
     app.router.add_post(entry.CODE_REDEEM_PATH, entry.code_redeem)
     app.router.add_get("/login", auth.login_page)
@@ -160,6 +163,22 @@ def make_code(app, origin=REMOTE):
     response = call(app, entry.CODE_PATH, headers=BEARER, body=issue_body(app, origin=origin))
     assert response.status == 200
     return json.loads(response.body)["code"]
+
+
+def local_ticket(app):
+    """A ticket, as the launcher on the PC gets it."""
+    body = issue_body(app)
+    del body["origin"]
+    response = call(app, entry.ISSUE_PATH, headers=BEARER, body=body)
+    assert response.status == 200
+    return json.loads(response.body)["ticket"]
+
+
+def open_ticket(app, ticket):
+    """Post the ticket form at the local address, as the local sign-in page does."""
+    csrf = auth.new_csrf(app["session_secret"])
+    return call(app, entry.REDEEM_PATH, headers={"Content-Type": FORM, "Cookie": f"{auth.CSRF_COOKIE}={csrf}"},
+                body=urlencode({"csrf": csrf, "ticket": ticket}))
 
 
 async def typed(app, code, *, at=REMOTE, csrf=None, headers=None, body=None, **options):
@@ -442,7 +461,7 @@ def test_real_https_sign_in_at_the_remote_address_with_the_product_certificate(h
     trusting = ssl.create_default_context(cadata=root.public_bytes(serialization.Encoding.PEM).decode())
     served = web.Application(middlewares=[auth.auth_required])
     for name in ("control_token", "session_secret", "server_config", "allowed_origins", "service",
-                 "browser_entry", "browser_codes"):
+                 "browser_entry", "browser_codes", "sessions"):
         served[name] = host[name]
     served.router.add_post(entry.CODE_PATH, entry.code_issue)
     served.router.add_post(entry.CODE_REDEEM_PATH, entry.code_redeem)
@@ -577,6 +596,71 @@ def test_sign_out_all_browsers_drops_pending_codes_and_remote_sessions(home, mon
     assert not auth.valid_session(app, before)
 
 
+def test_code_or_ticket_opens_no_session_while_a_saved_sign_out_waits_for_the_host(host, monkeypatch):
+    """The owner signed out; the running host looks at the saved record only every two seconds."""
+    code, ticket, later_code, later_ticket = make_code(host), local_ticket(host), make_code(host), local_ticket(host)
+    applied = host["sessions"].hint
+    monkeypatch.setattr(auth, "_epoch_hint", lambda data_dir: "a saved sign-out that the host has not applied")
+    assert wrong(redeem(host, code))
+    assert host["browser_codes"].failures == 0              # Refused, and not counted as a wrong code.
+    refused = open_ticket(host, ticket)
+    assert refused.status == 403 and auth.SESSION_COOKIE not in refused.cookies
+    assert refused.text == entry.REOPEN
+    # Both are used up: they open nothing later either.
+    monkeypatch.setattr(auth, "_epoch_hint", lambda data_dir: applied)
+    assert wrong(redeem(host, code)) and open_ticket(host, ticket).status == 403
+    # With nothing waiting, a code and a ticket sign in as before.
+    assert signed_in(redeem(host, later_code))
+    opened = open_ticket(host, later_ticket)
+    assert opened.status == 303 and auth.valid_session(host, opened.cookies[auth.SESSION_COOKIE].value)
+    assert "via" not in session_payload(opened.cookies[auth.SESSION_COOKIE].value)
+
+
+def test_with_remote_access_off_no_code_can_be_made_or_used(host):
+    """The default: only this computer's own addresses are configured."""
+    host["server_config"]["public_origins"] = [LOCAL, "https://localhost:8941"]
+    for origin in (REMOTE, OTHER, UNLISTED, LOCAL, "https://localhost:8941"):
+        assert call(host, entry.CODE_PATH, headers=BEARER, body=issue_body(host, origin=origin)).status == 400
+    assert not host["browser_codes"]._codes
+    # A code that exists all the same opens nothing: no address is a remote one.
+    code = host["browser_codes"].issue(entry.Binding("b" * 32, auth.data_identity(host["service"].data_dir), REMOTE, SID))
+    for at in (REMOTE, OTHER, UNLISTED, LOCAL, "https://localhost:8941"):
+        response = redeem(host, code, at=at)
+        assert response.status == 403 and auth.SESSION_COOKIE not in response.cookies
+    host["server_config"]["public_origins"] = []
+    assert call(host, entry.CODE_PATH, headers=BEARER, body=issue_body(host)).status == 400
+    assert redeem(host, code).status == 403 and len(host["browser_codes"]._codes) == 1
+
+
+def test_form_is_refused_when_the_host_has_no_code_store(host):
+    code = make_code(host)
+    host["browser_codes"] = None
+    response = redeem(host, code)
+    assert response.status == 403 and response.text == entry.RELOAD and auth.SESSION_COOKIE not in response.cookies
+
+
+def test_issue_handler_checks_the_credential_itself_and_again_after_it_read_the_request(host, monkeypatch):
+    """Without the middleware in front: the handler's own two checks."""
+    async def direct(headers):
+        return await entry.code_issue(await build(host, entry.CODE_PATH, headers=headers, body=issue_body(host)))
+    read = web.Request.clone
+    # Refused before the handler reads anything that the caller sent.
+    monkeypatch.setattr(web.Request, "clone", lambda *a, **k: pytest.fail("The request was read without the credential"))
+    for headers in ({}, {"Authorization": "Bearer wrong"}, {"Authorization": TOKEN}):
+        assert asyncio.run(direct(headers)).status == 403
+    monkeypatch.setattr(web.Request, "clone", read)
+    assert asyncio.run(direct(BEARER)).status == 200
+    host["browser_codes"].clear()
+
+    def changed_while_reading(request, **options):
+        host["control_token"] = "d" * 64                    # The credential changed during the body read.
+        return read(request, **options)
+    monkeypatch.setattr(web.Request, "clone", changed_while_reading)
+    response = asyncio.run(direct(BEARER))
+    assert response.status == 403 and json.loads(response.body) == {"error": "The owner control credential changed."}
+    assert not host["browser_codes"]._codes
+
+
 # The sign-in page.
 
 def test_remote_address_gets_the_code_form_and_the_local_page_is_unchanged(host):
@@ -594,6 +678,8 @@ def test_remote_address_gets_the_code_form_and_the_local_page_is_unchanged(host)
                       'spellcheck="false"', " required>", '<button type="submit">Sign in</button>'):
         assert attribute in text
     assert "1. On the Windows PC that runs Amplifier, run: <code>amplifier-unified browsers code</code>" in text
+    assert ("If Windows does not find that command, use the full command from the Windows steps "
+            "of the deployment guide.") in text
     assert "2. Type the code here within two minutes." in text and "That code did not work" not in text
     csrf = page.cookies[auth.CSRF_COOKIE]
     assert f'<input type="hidden" name="csrf" value="{csrf.value}">' in text
@@ -603,12 +689,16 @@ def test_remote_address_gets_the_code_form_and_the_local_page_is_unchanged(host)
     assert page.headers["Referrer-Policy"] == "same-origin"
     again = call(host, "/login?error=%3Cb%3Ereflected&next=%2Freflected", method="GET", at=REMOTE, origin=None,
                  headers={"Cookie": f"{auth.CSRF_COOKIE}={csrf.value}"})
-    assert ("That code did not work. A code lasts two minutes and works once. "
-            "Make a new code on the PC and try again.") in again.text
+    # A typing mistake needs no new code: the real one is still there.
+    assert ("That code did not work. Check it and type it again. A code works for two minutes "
+            "and only once. After that, make a new code on the PC.") in again.text
     assert "reflected" not in again.text and "<script" not in again.text.lower()
     assert again.cookies[auth.CSRF_COOKIE].value == csrf.value     # A valid form stays valid.
     # The page's own form signs in.
     assert signed_in(redeem(host, make_code(host), csrf=csrf.value))
+    # The host boundary reads "localhost." as this computer; so does the page.
+    for at in ("https://localhost.:8941", "https://LOCALHOST:8941"):
+        assert "one-time-code" not in call(host, "/login", method="GET", at=at, origin=None).text
 
 
 def test_other_platforms_keep_the_password_page_and_refuse_both_code_endpoints(host, monkeypatch):
@@ -704,7 +794,8 @@ def test_owner_code_uses_the_pinned_local_request_and_the_real_handler(host, fil
 
 
 @pytest.mark.parametrize("reply,message", [
-    (TimeoutError("unknown"), "no retry"), (503, "refused"),
+    (TimeoutError("unknown"), "no retry"), (503, "refused"), (409, "refused"),
+    (400, "does not use this address yet. Stop Amplifier and start it again"),
     ({"code": "abcde-fghjk"}, "no retry"), ({"ticket": "x" * 43}, "no retry"), (["ABCDEFGHJK"], "no retry")])
 def test_owner_code_never_repeats_a_refused_or_unconfirmed_request(home, monkeypatch, reply, message):
     from amplifier_web import update_readiness

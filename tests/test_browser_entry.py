@@ -119,6 +119,7 @@ def owner(tmp_path, monkeypatch):
     app["permitted_hosts"] = frozenset({"127.0.0.1", "localhost", "::1"})
     app["service"] = SimpleNamespace(data_dir=tmp_path, update_manager=SimpleNamespace(
         running_identity={"instanceId": "b" * 32, "version": __version__, "revision": REVISION}))
+    app["sessions"] = auth.Sessions()  # No sign-out yet, as on a new installation.
     entry.initialize(app)
     app.router.add_post(entry.ISSUE_PATH, entry.issue)
     app.router.add_post(entry.REDEEM_PATH, entry.redeem)
