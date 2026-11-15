@@ -192,6 +192,14 @@ def test_second_setup_restores_entries_before_start_and_waits_without_pins():
     assert "using(PinInstalled(root,start.FileName)) app=Process.Start(start);" in started
     for body in (entries, started, opened):
         assert not re.search(r"using\(PinInstalled\([^\n]*\)\s*\{", body)
+    # The question and the work are separate, so that the native check can run
+    # the work (the window and both steps) with a stand-in program.
+    assert opened.index("return SecondRun(root,listed);") < opened.index(
+        "internal static int SecondRun(string root, bool listed) {") < opened.index("using(var form=new Form")
+    harness = (ROOT / "tests/windows/native_setup.Tests.cs").read_text(encoding="utf-8")
+    for call in ("NativeInstaller.AddEntries(second)", "NativeInstaller.StartAndWait(second)",
+                 "NativeInstaller.SecondRun(root,listed)", "Window(second,true)", "Window(second,false)"):
+        assert call in harness
     assert "runtime status" in DESIGN and "clean-room run" in DESIGN
 
 

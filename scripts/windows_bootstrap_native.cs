@@ -704,7 +704,7 @@ namespace UnifiedBootstrap {
                 "-I -m amplifier_web.windows_consumer --root "+Quote(root)) {
                     UseShellExecute=true,WorkingDirectory=Path.Combine(root,"workspace")};
         }
-        static bool AddEntries(string root) {
+        internal static bool AddEntries(string root) {
             // The Start-menu and Apps-list entries, added again by the
             // installation's own program. The pin covers only the start, as for
             // the app below: setup must not hold the folder and the folders above
@@ -721,7 +721,7 @@ namespace UnifiedBootstrap {
                 using(entries) { entries.StandardOutput.ReadToEnd(); entries.WaitForExit(); return entries.ExitCode==0; }
             } catch(Exception) { return false; }
         }
-        static int StartAndWait(string root) {
+        internal static int StartAndWait(string root) {
             // 0: the launcher finished, or Windows gave no process to wait for.
             // 1: the launcher failed and said so in its own message.
             // 2: Windows could not start it.
@@ -758,6 +758,9 @@ namespace UnifiedBootstrap {
                 : "Amplifier is already installed on this PC, but it is not in the Start menu and does not start when you sign in.\n\n"+
                   "Select Yes to add it to the Start menu again and start it now. Your chats and settings are kept.",
                 MessageBoxButtons.YesNo,MessageBoxIcon.Information)!=DialogResult.Yes) return 0;
+            return SecondRun(root,listed);
+        }
+        internal static int SecondRun(string root, bool listed) {
             // The person sees that setup works: a start can take minutes, and
             // the launcher has no window of its own.
             Stage=listed?"Starting Amplifier (this can take a few minutes)":"Adding Amplifier to the Start menu";

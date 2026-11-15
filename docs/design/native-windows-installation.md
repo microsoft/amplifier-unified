@@ -841,9 +841,11 @@ Not proven here, and the condition for all of the above: that
 chats. The running host makes the same checks of the recorded runtime before
 each chat, which supports it and does not prove it. When the status is
 negative or cannot be read, the start prepares as before. The real Scheduled
-Task, the real host start and setup's second-run window also need a
-clean-room run; the checks on a runner compile the setup source and read it as
-text, and they do not run that window.
+Task and the real host start also need a clean-room run. The native check on
+a runner runs setup's second-run window and its two steps with a stand-in
+program in place of the installation's Python (exact arguments, the wait, the
+exit codes, a window that closes by itself). It does not show the question
+before the window, a message, or the real launcher.
 
 Not changed, each stated as a limit:
 
