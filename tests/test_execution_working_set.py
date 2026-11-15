@@ -293,7 +293,8 @@ async def test_ordinary_model_admission_preserves_indexed_history_budget_and_rep
         result = usage_snapshot(session)
         assert result['calls'] == 501
         assert result['metrics']['totalTokens']['value'] == 5000
-        assert result['metrics']['totalTokens']['unknownCalls'] == 1
+        assert result['metrics']['totalTokens']['pendingCalls'] == 1
+        assert result['metrics']['totalTokens']['unknownCalls'] == 0
     finally:
         await worker.close()
         await app.close()
