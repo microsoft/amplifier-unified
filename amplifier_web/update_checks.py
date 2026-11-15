@@ -29,6 +29,7 @@ _LOOKUP_WHY = {
     "timeout": "the site did not answer in time",
     "unavailable": "the site is not available from this PC right now",
     "invalid_response": "the answer could not be used",
+    "roots_unavailable": "Amplifier could not read its own list of trusted certificate issuers",
 }
 _LOOKUP_NEXT = {
     "certificate": "Check for updates again later. If this message stays, a network filter may inspect "
@@ -37,6 +38,8 @@ _LOOKUP_NEXT = {
     "unavailable": "Check the internet connection, then check for updates again. "
                    "If your organization filters downloads, pypi.org must be reachable.",
     "invalid_response": "Check for updates again later.",
+    "roots_unavailable": "Stop Amplifier and start it again. If this message stays, run the Amplifier "
+                         "installer again.",
 }
 LOOKUP_REASONS = frozenset(_LOOKUP_WHY)
 
@@ -60,6 +63,8 @@ def lookup_failure_reason(error):
         return "certificate"  # Includes a certificate for another host name.
     if isinstance(error, TimeoutError):
         return "timeout"
+    if isinstance(error, aiohttp.ClientResponseError):
+        return "invalid_response"  # The site answered: an HTTP error status or another content type.
     if isinstance(error, (aiohttp.ClientError, OSError)):
         return "unavailable"
     return "invalid_response"
@@ -99,7 +104,7 @@ async def loaded_registry_trust():
         return await asyncio.to_thread(registry_trust)
     except (OSError, ImportError):
         # Never send a request with weaker verification instead.
-        raise RegistryLookupFailure("invalid_response") from None
+        raise RegistryLookupFailure("roots_unavailable") from None
 
 
 def access_scope():

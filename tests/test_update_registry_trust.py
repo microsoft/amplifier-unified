@@ -104,6 +104,8 @@ class Registry:
         registry = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
+            protocol_version = 'HTTP/1.1'  # Keep-alive: an accepted connection stays open for reuse.
+
             def do_GET(self):
                 registry.answers += 1
                 body = json.dumps({'info': {'version': PUBLISHED}}).encode()
@@ -209,6 +211,16 @@ def test_a_root_in_the_bundled_roots_alone_is_accepted(registry, authority, tmp_
     assert registry.answers == 3
 
 
+def test_a_root_in_the_system_trust_alone_is_accepted(registry, authority, tmp_path, monkeypatch):
+    # The other half of the union: the bundled roots do not hold this root.
+    file = tmp_path / 'system-root.pem'
+    file.write_bytes(authority.pem)
+    monkeypatch.setenv('SSL_CERT_FILE', str(file))  # The system default that OpenSSL reads.
+    assert authority.der not in ssl.create_default_context(cafile=certifi.where()).get_ca_certs(binary_form=True)
+    assert lookups(tmp_path / 'cache') == {'cache': PUBLISHED, 'unscoped': PUBLISHED, 'scoped': PUBLISHED}
+    assert registry.answers == 3
+
+
 def test_a_certificate_for_another_host_is_refused(authority, tmp_path, monkeypatch):
     monkeypatch.setattr(certifi, 'where', authority.bundle)  # The root itself is trusted.
     with Registry(authority, names=('registry.other.invalid',)) as other:
@@ -221,14 +233,77 @@ def test_no_request_is_sent_when_the_roots_cannot_be_loaded(registry, tmp_path, 
     monkeypatch.setattr(certifi, 'where', lambda: str(tmp_path / 'absent-roots.pem'))
     results = lookups(tmp_path / 'cache')
     for path in ('cache', 'unscoped', 'scoped'):
-        assert isinstance(results[path], RegistryLookupFailure) and results[path].reason == 'invalid_response'
+        assert isinstance(results[path], RegistryLookupFailure) and results[path].reason == 'roots_unavailable'
     assert registry.connections == 0  # No weaker request instead.
+
+
+def test_each_failure_class_gets_the_reason_that_fits():
+    import aiohttp
+    from types import SimpleNamespace
+
+    key = SimpleNamespace(host='pypi.org', port=443, ssl=True)
+    answered = aiohttp.ClientResponseError(SimpleNamespace(real_url='x'), (), status=503)
+    cases = [
+        (aiohttp.ClientConnectorCertificateError(key, ssl.SSLCertVerificationError(1, 'x')), 'certificate'),
+        (ssl.SSLCertVerificationError(1, 'x'), 'certificate'),
+        (TimeoutError(), 'timeout'),
+        (answered, 'invalid_response'),  # The site answered; the connection is not the problem.
+        (aiohttp.ClientConnectorError(key, OSError(101, 'x')), 'unavailable'),
+        (OSError(101, 'x'), 'unavailable'),
+        (KeyError('info'), 'invalid_response'),
+        (ValueError('Unsupported component release version'), 'invalid_response'),
+        (RegistryLookupFailure('roots_unavailable'), 'roots_unavailable'),
+    ]
+    for error, reason in cases:
+        assert update_checks.lookup_failure_reason(error) == reason, error
+    assert RegistryLookupFailure('not-a-reason').reason == 'invalid_response'
+
+
+def test_trust_lost_after_a_success_is_refused_and_the_saved_success_is_not_reused(
+        registry, authority, tmp_path, monkeypatch):
+    """One live client: neither its open connection nor the saved result outlives the trust."""
+    bundled = certifi.where()
+    directory = tmp_path / 'cache'
+
+    async def scoped(cache, *, fresh):
+        try:
+            async with checking(cache, fresh=fresh):
+                return await update_checks.index_latest('amplifier-core', None)
+        except Exception as error:  # noqa: BLE001 -- the test compares exact classes below
+            return error
+
+    async def run():
+        cache = CheckCache(directory)
+        try:
+            monkeypatch.setattr(certifi, 'where', authority.bundle)
+            trusted = await scoped(cache, fresh=True)
+            saved = [entry['value'] for entry in json.loads(cache.path.read_text())['entries'].values()]
+            monkeypatch.setattr(certifi, 'where', lambda: bundled)  # The root is not trusted any more.
+            person = await scoped(cache, fresh=True)       # A person selects Check for updates.
+            automatic = await scoped(cache, fresh=False)   # The app's own check may reuse saved successes.
+        finally:
+            await cache.close()
+        reopened_cache = CheckCache(directory)             # The app after a restart.
+        try:
+            reopened = await scoped(reopened_cache, fresh=False)
+            left = list(reopened_cache.entries.values())
+        finally:
+            await reopened_cache.close()
+        return trusted, saved, person, automatic, reopened, left
+
+    trusted, saved, person, automatic, reopened, left = asyncio.run(run())
+    assert trusted == PUBLISHED and saved == [PUBLISHED]
+    for later in (person, automatic, reopened):
+        assert isinstance(later, RegistryLookupFailure) and later.reason == 'certificate', later
+    assert left == []  # No saved success is left behind.
+    # One answered request in all; each later lookup made its own refused handshake.
+    assert registry.answers == 1 and registry.connections == 4
 
 
 @pytest.mark.parametrize('reason', sorted(update_checks.LOOKUP_REASONS))
 def test_each_reason_has_plain_words_and_a_next_step(reason):
     for text in (update_checks.lookup_guidance(reason), update_checks.lookup_guidance(reason, application=True)):
-        assert 'pypi.org' in text and 'heck' in text and text.endswith('.')
+        assert 'pypi.org' in text and text.count('. ') >= 2 and text.endswith('.')
         assert not any(word in text for word in ('Error', 'Exception', 'errno', 'ssl', 'SSL', 'aiohttp'))
     assert 'The installed version is kept.' in update_checks.lookup_guidance(reason)
     assert update_checks.lookup_guidance(reason, application=True).startswith('The newest app release is installed.')

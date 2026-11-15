@@ -919,10 +919,9 @@ class UpdateManager:
                             # Still reported and never offered. Add only a closed
                             # reason and plain words; the status is unchanged.
                             row['status'] = 'check_failed'
-                            from .update_checks import LOOKUP_REASONS, lookup_guidance
-                            reason = getattr(error, 'reason', None)
-                            if reason in LOOKUP_REASONS:
-                                row.update(checkReason=reason, detail=lookup_guidance(reason))
+                            from .update_checks import RegistryLookupFailure, lookup_guidance
+                            if isinstance(error, RegistryLookupFailure):
+                                row.update(checkReason=error.reason, detail=lookup_guidance(error.reason))
                         return
                     origin = row.get('policyOrigin') or {}
                     typed_policy = (origin.get('kind') in {'prepared-manifest', 'selected-declaration',

@@ -16,7 +16,7 @@ from amplifier_web import __version__, app_component_graph, app_updates
 from amplifier_web import runtime_registry_updates as registry
 from amplifier_web import update_health
 from amplifier_web.service import AppService
-from amplifier_web.update_checks import LOOKUP_REASONS, lookup_guidance
+from amplifier_web.update_checks import LOOKUP_REASONS, RegistryLookupFailure, lookup_guidance
 from amplifier_web.updates import UpdateManager
 from test_runtime_registry_updates import core, worker  # noqa: F401
 from test_service import Runtime
@@ -93,6 +93,7 @@ FAILURES = {
     'unavailable': lambda: aiohttp.ClientConnectorError(SimpleNamespace(host='pypi.org', port=443, ssl=True),
                                                         OSError(101, SECRET)),
     'invalid_response': lambda: KeyError(SECRET),
+    'roots_unavailable': lambda: RegistryLookupFailure('roots_unavailable'),
 }
 
 
@@ -137,6 +138,49 @@ async def test_a_failed_core_lookup_is_reported_in_plain_words_and_never_offered
     assert SECRET not in json.dumps(c.state)
 
 
+async def test_a_failed_core_lookup_blocks_an_available_sibling_update(current_install, monkeypatch):
+    """Mixed result: another included source has an update, and Core cannot be checked."""
+    c = current_install
+    core_row = (await c.manager.inventory_sources(indexed=True))[0]
+    sibling = {'id': 'fixture-sibling', 'label': 'example.invalid/sibling', 'kind': 'bundle / module',
+               'path': 'cache/sibling', 'url': 'https://example.invalid/sibling', 'ref': 'main',
+               'current': 'a' * 40, 'eligible': True, 'status': 'not_checked', 'usage': 'configured',
+               'usageEvidence': [], 'updateTier': 'included', 'appSelection': core_row['appSelection']}
+    monkeypatch.setattr(c.manager, 'inventory_sources',
+                        AsyncMock(side_effect=lambda **kwargs: [dict(core_row), dict(sibling)]))
+    monkeypatch.setattr(c.manager.check_cache, 'git_policy',
+                        AsyncMock(return_value={'kind': 'branch', 'revision': 'd' * 40}))
+    c.service.state['settings'].setdefault('updates', {})['autoInstall'] = True
+
+    def statuses():
+        return {row['id']: row['status'] for row in c.manager.inventory}
+
+    # Control: with a working Core lookup the sibling update is offered.
+    await c.manager.check()
+    assert statuses() == {'runtime:amplifier-core': 'current', 'fixture-sibling': 'update'}
+    assert c.state['phase'] == 'available' and c.state['includedCanProceed'] is True
+
+    c.index.side_effect = certificate_failure()
+    before = release_directories(c.manager)
+    await c.manager.check()
+    assert statuses() == {'runtime:amplifier-core': 'check_failed', 'fixture-sibling': 'update'}
+    assert c.state['phase'] == 'error' and c.state['error']
+    assert c.state['includedCanProceed'] is False
+    assert c.state['sequence']['stage'] == 'included' and c.state['sequence']['included']['issues'] == 1
+    status = c.state['currentStatus']
+    assert status['title'] == 'A source could not be checked' and status['component'] == 'amplifier-core'
+    assert status['actionRequired'] and status['action'] == 'sources'
+
+    stage_sources = AsyncMock(wraps=c.manager.stage_cache_sources)
+    monkeypatch.setattr(c.manager, 'stage_cache_sources', stage_sources)
+    await c.manager.tick()      # Automatic installation is on: it must not start.
+    await c.manager.install()   # A person's explicit request is refused too.
+    stage_sources.assert_not_called()
+    assert release_directories(c.manager) == before and not c.state.get('pendingRelease')
+    assert c.state['detail'] == 'Resolve the included component issues and check again before installing.'
+    assert statuses()['runtime:amplifier-core'] == 'check_failed'
+
+
 async def test_a_core_release_that_cannot_be_verified_keeps_the_generic_report(current_install):
     """Not a lookup failure: the registry answers, but with a release below the app's minimum."""
     c = current_install
@@ -154,5 +198,5 @@ async def test_a_core_release_that_cannot_be_verified_keeps_the_generic_report(c
     assert release_directories(c.manager) == before and not c.state.get('pendingRelease')
 
 
-def test_saved_diagnostics_can_name_every_lookup_reason():
-    assert LOOKUP_REASONS <= app_updates.RELEASE_CHECK_REASONS
+def test_every_lookup_reason_is_tested_and_can_be_named_in_saved_diagnostics():
+    assert set(FAILURES) == LOOKUP_REASONS <= app_updates.RELEASE_CHECK_REASONS
