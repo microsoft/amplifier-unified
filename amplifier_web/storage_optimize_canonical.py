@@ -143,17 +143,43 @@ async def preview(app, row, operation):
             boundary.__exit__(None, None, None)
 
 
-def activate_candidate(plan, directory, *, media_store, guard, admit, cancelled=lambda: False,
-                       resume=False):
+def activate_candidate(plan, directory, *, media_store, admit, guard=None, binding=None,
+                       operation_id=None, cancelled=lambda: False, resume=False):
     """Thin physical-activation seam; caller retains its actual execution lease.
 
     Candidate construction must already use a genuine original admission owner.
     This function creates no such admission. Foundation owns all physical writes,
-    saved intent/reconciliation and the exact bounded legacy checkpoint ACK.
+    saved intent/reconciliation and the exact bounded checkpoint ACK. A committed
+    plan requires the actual enrolled binding and original operation identity;
+    possession of a candidate cannot create enrollment or historical admission.
     """
     from amplifier_foundation.session import media_activation as activation
     if plan.selected_records != plan.records or media_store.session_id != plan.session_id:
         raise CanonicalHeld('Only the exact complete owning canonical session may be activated')
+    if plan.committed_prefix is not None:
+        from amplifier_foundation.session import media_conversion as conversion
+        from amplifier_foundation.session.transcript_lifetime import VersionedSessionBinding
+        from amplifier_foundation.session.transcript_v2 import CommittedPrefix
+        if (type(binding) is not VersionedSessionBinding or not operation_id
+                or plan.target_prefix is not None
+                or plan.committed_session_dir != str(binding.directory)
+                or plan.session_id != binding.session_id):
+            raise CanonicalHeld('Actual same-source committed binding and stable operation identity required')
+        # The public loader verifies the candidate/plan hashes. Its return is
+        # selector data, not a writer grant or a replacement for real admission.
+        if conversion.load_candidate_plan(Path(directory)) != plan:
+            raise CanonicalHeld('Saved committed plan differs from the reviewed preview')
+        predecessor = CommittedPrefix(**plan.committed_prefix)
+        invoke = (activation.resume_committed_candidate if resume
+                  else activation.apply_committed_candidate)
+        result = invoke(Path(directory), binding=binding, expected=predecessor,
+            operation_id=operation_id, owner=plan.owner, media_store=media_store,
+            admit=admit, cancelled=cancelled)
+        if result.state != 'acknowledged':
+            raise CanonicalHeld('Committed activation remains ' + result.state)
+        return result
+    if guard is None or binding is not None or operation_id is not None:
+        raise CanonicalHeld('Legacy activation requires its exact native transcript guard')
     # The reusable helper verifies its own saved plan. Bind that plan to the
     # host's reviewed preview too, not merely to an equal session/owner string.
     saved_plan = Path(directory) / 'plan.json'

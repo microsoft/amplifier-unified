@@ -524,3 +524,174 @@ def test_uncertain_replace_is_reconciled_never_replayed(candidate, monkeypatch, 
                 guard=NativeTranscriptGuard(path), admit=lambda: True, resume=True)
         assert path.read_bytes() == before
     assert calls == ['replace']
+
+
+@pytest.fixture
+def committed_candidate(tmp_path):
+    """Real synthetic admission; not evidence about old user-image authority."""
+    from contextlib import closing
+    from amplifier_foundation.session.checkpoint import verified_media_checkpoint_refs
+    from amplifier_foundation.session.media import SessionMediaStore
+    from amplifier_foundation.session import media_conversion as conversion
+    from amplifier_foundation.session.transcript_lifetime import VersionedSessionBinding
+
+    tmp_path.chmod(0o700)
+    with closing(VersionedSessionBinding.create_new(
+        tmp_path / 'native-root', session_id='native-root',
+        operation_id='initial', admit=lambda: None,
+    )) as binding:
+        with closing(SessionMediaStore(binding.directory / 'media', binding.session_id,
+                checkpoint_verifier=verified_media_checkpoint_refs)) as store:
+            @contextmanager
+            def fence(owner):
+                assert owner == 'public-root'
+                with binding.publication():
+                    yield
+
+            original = inline_message()
+            binding.append([original], expected=binding.expected,
+                operation_id='fixture-observation', admit=lambda: None)
+            expected = binding.expected
+            original_bytes = (binding.directory / 'transcript.v2' / expected.body).read_bytes()
+            plan = conversion.preview_committed(binding.directory, expected=expected,
+                owner='public-root', fence=fence)
+            origin = {'kind': 'tool', 'session_id': binding.session_id,
+                'id': 'call-original', 'created_at': '2025-01-01T00:00:00+00:00',
+                'expires_at': '2035-01-01T00:00:00+00:00'}
+            directory = tmp_path / 'operation'
+            asyncio.run(conversion.build_candidate(plan, directory, fence=fence,
+                capability=store, eligible_record=lambda row: row == 0,
+                origin_for=lambda row, block: origin,
+                asset_reader=lambda ref: store.resolve_ref(ref, committed=False)))
+            yield plan, directory, binding, store, original, original_bytes
+
+
+def test_committed_actual_binding_dispatch_typed_ack_and_pixel_readback(committed_candidate):
+    from amplifier_foundation.session.transcript_source import open_committed_source
+    from amplifier_foundation.session.versioned_checkpoint import VersionedCheckpointReceipt
+    plan, directory, binding, store, original, original_bytes = committed_candidate
+    result = canonical.activate_candidate(plan, directory, media_store=store,
+        binding=binding, operation_id='optimize-original', admit=lambda: True)
+    assert result.state == 'acknowledged' and result.inline_removed_bytes > 0
+    assert type(result.checkpoint) is VersionedCheckpointReceipt
+    assert result.commit == binding.expected
+    assert result.checkpoint.verify() == {
+        **asdict(result.commit), 'kind': 'versioned-checkpoint-backed-v1'}
+    with open_committed_source(binding.directory, expected=result.commit) as source:
+        actual = source.window(0, 1).messages[0]
+    assert actual['role'] == original['role']
+    assert actual['tool_call_id'] == original['tool_call_id']
+    assert actual['metadata']['provider'] == original['metadata']['provider']
+    ref = actual['metadata']['experimental.media.v1']['refs'][0]
+    with store.resolve_ref(ref) as image:
+        assert image.read() == pixel()
+    assert ref['provenance']['expires_at'] == '2035-01-01T00:00:00+00:00'
+    assert b'base64' not in (binding.directory / 'transcript.v2' / result.commit.body).read_bytes()
+    assert (binding.directory / 'transcript.v2' / plan.committed_prefix['body']).read_bytes() == original_bytes
+
+
+@pytest.mark.parametrize('defect', ['missing-binding', 'missing-operation', 'changed-plan'])
+def test_committed_dispatch_refuses_incomplete_or_changed_selection(committed_candidate, defect):
+    from dataclasses import replace
+    plan, directory, binding, store, _, before = committed_candidate
+    selected = replace(plan, inline_images=plan.inline_images + 1) if defect == 'changed-plan' else plan
+    with pytest.raises((canonical.CanonicalHeld, ValueError)):
+        canonical.activate_candidate(selected, directory, media_store=store,
+            binding=None if defect == 'missing-binding' else binding,
+            operation_id=None if defect == 'missing-operation' else 'optimize-original',
+            admit=lambda: True)
+    assert (binding.directory / 'transcript.v2' / binding.expected.body).read_bytes() == before
+    assert not (directory / 'committed-activation.json').exists()
+
+
+def test_committed_dispatch_cancel_before_effect_preserves_source(committed_candidate):
+    plan, directory, binding, store, _, before = committed_candidate
+    with pytest.raises(InterruptedError):
+        canonical.activate_candidate(plan, directory, media_store=store, binding=binding,
+            operation_id='optimize-original', admit=lambda: True, cancelled=lambda: True)
+    assert (binding.directory / 'transcript.v2' / binding.expected.body).read_bytes() == before
+    assert not (directory / 'committed-activation.json').exists()
+
+
+def test_committed_dispatch_rechecks_source_before_write(committed_candidate):
+    plan, directory, binding, store, _, before = committed_candidate
+    binding.append([{'role': 'user', 'content': 'newer actual source'}],
+        expected=binding.expected, operation_id='later', admit=lambda: None)
+    current = binding.expected
+    current_bytes = (binding.directory / 'transcript.v2' / current.body).read_bytes()
+    assert current_bytes[:plan.committed_prefix['committed_bytes']] == before
+    with pytest.raises((ValueError, RuntimeError)):
+        canonical.activate_candidate(plan, directory, media_store=store, binding=binding,
+            operation_id='optimize-original', admit=lambda: True)
+    assert binding.expected == current
+    assert (binding.directory / 'transcript.v2' / current.body).read_bytes() == current_bytes
+
+
+def test_committed_dispatch_current_admission_refusal_precedes_intent(committed_candidate):
+    plan, directory, binding, store, _, before = committed_candidate
+    with pytest.raises(ValueError, match='admission'):
+        canonical.activate_candidate(plan, directory, media_store=store, binding=binding,
+            operation_id='optimize-original', admit=lambda: False)
+    assert (binding.directory / 'transcript.v2' / binding.expected.body).read_bytes() == before
+    assert not (directory / 'committed-activation.json').exists()
+
+
+def test_committed_dispatch_unknown_no_effect_does_not_replay(committed_candidate, monkeypatch):
+    plan, directory, binding, store, _, before = committed_candidate
+    calls = []
+
+    def uncertain(*args, **kwargs):
+        calls.append(1)
+        raise OSError('fixture write never started but caller cannot infer that')
+
+    monkeypatch.setattr(binding, 'rewrite_serialized', uncertain)
+    with pytest.raises(OSError):
+        canonical.activate_candidate(plan, directory, media_store=store, binding=binding,
+            operation_id='optimize-original', admit=lambda: True)
+    with pytest.raises(canonical.CanonicalHeld, match='unconfirmed'):
+        canonical.activate_candidate(plan, directory, media_store=store, binding=binding,
+            operation_id='optimize-original', admit=lambda: True, resume=True)
+    assert calls == [1]
+    assert (binding.directory / 'transcript.v2' / binding.expected.body).read_bytes() == before
+
+
+def test_committed_cold_resume_keeps_original_predecessor_without_rewrite(committed_candidate, monkeypatch):
+    from contextlib import closing
+    from amplifier_foundation.session.checkpoint import verified_media_checkpoint_refs
+    from amplifier_foundation.session.media import SessionMediaStore
+    from amplifier_foundation.session.transcript_lifetime import VersionedSessionBinding
+    from amplifier_foundation.session.transcript_source import open_committed_source
+    plan, directory, binding, store, _, before = committed_candidate
+    actual = binding.rewrite_serialized
+    calls = []
+
+    def lost(*args, **kwargs):
+        calls.append(1)
+        actual(*args, **kwargs)
+        raise OSError('fixture reply lost after real commit')
+
+    monkeypatch.setattr(binding, 'rewrite_serialized', lost)
+    with pytest.raises(OSError, match='reply lost'):
+        canonical.activate_candidate(plan, directory, media_store=store, binding=binding,
+            operation_id='optimize-original', admit=lambda: True)
+    current, session_dir = binding.expected, binding.directory
+    store.close()
+    binding.close()
+    with closing(VersionedSessionBinding.resume(session_dir,
+            session_id='native-root', expected=current)) as fresh:
+        with closing(SessionMediaStore(session_dir / 'media', 'native-root',
+                checkpoint_verifier=verified_media_checkpoint_refs)) as media:
+            def forbidden(*args, **kwargs):
+                raise AssertionError('Cold reconciliation must not rewrite a second time')
+            monkeypatch.setattr(fresh, 'rewrite_serialized', forbidden)
+            result = canonical.activate_candidate(plan, directory, media_store=media,
+                binding=fresh, operation_id='optimize-original', admit=lambda: True,
+                resume=True)
+            assert result.state == 'acknowledged' and result.commit == current
+            assert calls == [1]
+            assert asdict(current) != plan.committed_prefix
+            with open_committed_source(session_dir, expected=current) as source:
+                ref = source.window(0, 1).messages[0]['metadata']['experimental.media.v1']['refs'][0]
+            with media.resolve_ref(ref) as image:
+                assert image.read() == pixel()
+            assert (session_dir / 'transcript.v2' / plan.committed_prefix['body']).read_bytes() == before
