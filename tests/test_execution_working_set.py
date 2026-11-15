@@ -362,3 +362,36 @@ async def test_ordinary_web_send_claims_legacy_cold_execution_without_full_hydra
         assert saved['turns'] == expected['turns']
     finally:
         await app.close()
+
+
+async def test_empty_collaboration_drain_keeps_current_execution_owner(tmp_path, monkeypatch):
+    from amplifier_web.service import AppService
+    monkeypatch.setenv('AMPLIFIER_HOME', str(tmp_path / 'native'))
+    app = AppService(tmp_path / 'app', workspace=tmp_path)
+    try:
+        await app.dispatch('session.create', {'title': 'No queued collaboration'})
+        session = app._session(hydrate=False)
+        sid = session['id']
+        tree = {'nodes': [{'id': 'old', 'kind': 'tool', 'phase': 'completed'}],
+                'turns': [], 'retiredUsageNodes': []}
+        reference = records.import_tree(app.db, (sid,), tree)
+        app.db.commit()
+        dict.pop(session, 'execution', None)
+        dict.setdefault(session, MARKER, {})['execution'] = reference
+        owner = working(session)
+        assert owner is not None and owner.current['nodes'] == []
+        assert app.collaboration.fair_rows(sid, active=False) == []
+        original = ColdRecord.__getitem__
+        def no_full_owner_read(row, key):
+            if row is session and key == 'execution':
+                pytest.fail('An empty collaboration drain promoted execution history')
+            return original(row, key)
+        with monkeypatch.context() as guard:
+            guard.setattr(ColdRecord, '__getitem__', no_full_owner_read)
+            await app.collaboration.drain(sid)
+        assert getattr(session, '_working_execution', None) is owner
+        assert not dict.__contains__(session, 'execution')
+        assert dict.get(session, MARKER)['execution'] == reference
+        assert records.materialize(app.db, reference) == tree
+    finally:
+        await app.close()

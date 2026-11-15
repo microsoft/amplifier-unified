@@ -1150,7 +1150,7 @@ class Collaboration:
         try:
             async with self.service.lock:
                 from .configuration_recovery import input_cutoff, suppress_input
-                current = self.service._session(sid)
+                current = self.service._session(sid, hydrate=False)
                 cutoff = input_cutoff(current)
                 if cutoff is None:
                     self.resume_outcomes(sid)
