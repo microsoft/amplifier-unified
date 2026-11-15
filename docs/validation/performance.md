@@ -61,6 +61,14 @@ only the rows it changes. Keep ownership through the call, and verify that later
 in-place nested edits are persisted and the earlier disk checkpoint stays intact.
 Borrowed return values are not detached snapshots or reusable cache entries.
 
+Context preservation hashes the same canonical JSON array one row at a time,
+keeping temporary encodings proportional to a row rather than the full history.
+The complete source is still inspected on every call. Evidence references retain
+their exact size threshold and fresh post-checkpoint content hashes; values
+computed before a checkpoint await cannot attest to mutable rows afterward.
+Keep persistence, restoration, cancellation and failed-save behavior unchanged.
+Compare this encoding cost separately from native writes and model latency.
+
 Startup and automatic root checkpoint hooks discard their transcript result. A
 context may offer `context.history.visit` to lend its current rows to the existing
 synchronous writer and anchor calculation. That borrow ends before notification

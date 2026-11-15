@@ -25,6 +25,27 @@ def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode()).hexdigest()
 
 
+def _source_digest(messages):
+    """Hash the same canonical array without allocating one history-sized value."""
+    if type(messages) is not list:
+        return digest(messages)
+    state = hashlib.sha256(b"[")
+    try:
+        for index, row in enumerate(messages):
+            if index:
+                state.update(b",")
+            # Keep the array wrapper while encoding so nested values retain the
+            # original serializer depth. Only one row-sized encoding is retained.
+            encoded = json.dumps([row], sort_keys=True, separators=(",", ":"),
+                                 ensure_ascii=False, allow_nan=False).encode()
+            state.update(memoryview(encoded)[1:-1])
+    except UnicodeEncodeError:
+        # Preserve the original whole-input error position.
+        return digest(messages)
+    state.update(b"]")
+    return state.hexdigest()
+
+
 class ContextRecoveryError(RuntimeError):
     """Fixed, content-free failure at the host recovery boundary."""
     def __init__(self, code):
@@ -126,7 +147,7 @@ class ContextContinuity:
                     self.status.update(status="rejected", reason=str(exc), originalsAvailable=True)
         # Native storage is already lossless for these messages. Commit it before
         # any request fitter sees and potentially clips a derived copy.
-        current = digest(messages)
+        current = _source_digest(messages)
         if current != self.saved_digest:
             await _guarded(guard, self.checkpoint)
             self.saved_digest = current
@@ -154,7 +175,9 @@ class ContextContinuity:
         return [{"kind": "transcript", "sessionId": self.session_id, "messageIndex": index,
                  "sha256": digest(row), "toolCallId": row.get("tool_call_id"), "sourceRevision": current}
                 for index, row in enumerate(messages)
-                if row.get("role") == "tool" and len(json.dumps(row, ensure_ascii=False)) > 16000]
+                if row.get("role") == "tool" and (
+                    (type(row) is dict and type(row.get("content")) is str and len(row["content"]) > 16000)
+                    or len(json.dumps(row, ensure_ascii=False)) > 16000)]
 
     def save(self):
         if not self.loaded or self._recovery_busy:
