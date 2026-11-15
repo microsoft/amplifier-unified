@@ -18,12 +18,16 @@ link itself, as in every rename; it is never followed.
 Two records. `<root>-kept\\amplifier-kept.json` names the installation folder,
 the newest app version that used the data, one transfer identity and a state:
 `moving` (move-out not finished), `complete`, `adopting` (take-back not
-finished). An `adopting` record also names the identity of the installation
-folder that takes the set back: no other installation continues it.
+finished), `returned` (everything is back; only tidying is left). An
+`adopting` record also names the identity of the installation folder that
+takes the set back, of each folder that goes back whole, and of each entry of
+a folder that is filled: during a take-back every data folder of the
+installation is empty, or is one of these.
 `<root>\\amplifier-kept-return.json` is the installation's own note of a
 take-back: it tells that a take-back began also when the record is lost;
 with `done` only tidying is left; with `left` the person chose to start
-without the rest, and this installation continues no take-back.
+without the rest, and this installation continues no take-back. When the
+note is gone and the record still names this folder, the person is asked.
 An unfinished transfer is finished first, in its own direction. A move-out
 continues only the set that holds its own transfer identity (the uninstall
 journal saves it), so two installations' data never share a set.
@@ -69,14 +73,17 @@ _FULL = ("Amplifier cannot keep your chats and settings, because nine earlier ke
 _RENAMED = ("Amplifier cannot keep your chats and settings, because this folder has a changed name:\n{path}\n\n"
             "Nothing was deleted. Rename it to {name}. Then uninstall again.")
 _STUCK = ("Amplifier could not finish moving your chats and settings to this folder:\n{kept}\n\n{stayed}"
-          "Nothing was deleted. Restart this PC. Then uninstall again.")
+          "Your chats and settings were not deleted. Restart this PC. Then uninstall again.")
 _STAYED = "This stayed behind:\n{path}\n\n"
 _BOTH = ("Amplifier cannot finish keeping your chats and settings, because this file or folder exists two "
-         "times:\n{path}\n{twin}\n\nNothing was deleted. Move the first one to a place outside these two "
-         "folders. Then uninstall again.")
+         "times:\n{path}\n{twin}\n\nYour chats and settings were not deleted. Move the first one to a place "
+         "outside these two folders. Then uninstall again.")
+_KEPT_ENTRY = ("Amplifier cannot finish keeping your chats and settings, because this is in the way in the "
+               "folder for your kept chats and settings:\n{path}\n\nYour chats and settings were not deleted. "
+               "Move it to a place outside that folder. Then uninstall again.")
 _LINK_STAYED = ("Amplifier cannot finish keeping your chats and settings, because this is a link, and "
-                "Amplifier does not follow links:\n{path}\n\nNothing was deleted. Remove the link. "
-                "Then uninstall again.")
+                "Amplifier does not follow links:\n{path}\n\nYour chats and settings were not deleted. "
+                "Remove the link. Then uninstall again.")
 _RETURNING = ("Amplifier cannot keep your chats and settings yet. An earlier step that moves kept chats and "
               "settings back did not finish.\n\nNothing was deleted. Open Amplifier from the Start menu. "
               "It finishes that step, or it tells you what to do. Then uninstall again.")
@@ -87,35 +94,48 @@ _RETRY = ("Amplifier could not finish moving your kept chats and settings back.\
           "Nothing was deleted. They can be in both of these folders:\n{root}\n{kept}\n\n"
           "Restart this PC. Then open Amplifier again to finish.")
 _BLOCKED = ("Amplifier cannot finish moving your kept chats and settings back.\n\n{cause}\n\n"
-            "Nothing was deleted. They are in both of these folders. Keep both folders. "
-            "Do not uninstall Amplifier: that can delete the part that is already back.\n{root}\n{kept}")
+            "Nothing was deleted. Your chats and settings are in both of these folders. Keep both folders. "
+            "Do not uninstall Amplifier: that can delete the part that is already back.\n\n{two}")
+_TWO = "Amplifier's folder:\n{root}\nKept folder:\n{kept}"
 _CAUSE = {
-    "link": "The second folder below holds a link, and Amplifier does not follow links. "
-            "Remove the link from that folder. Then open Amplifier again.",
+    "link": "This is a link, and Amplifier does not follow links:\n{path}\n"
+            "Remove the link. Then open Amplifier again.",
+    "program-state": "This folder was put there after Amplifier kept your chats and settings:\n{path}\n"
+                     "Move it to a place outside the two folders below. Then open Amplifier again.",
+    "renamed": "This folder has a changed name:\n{path}\nRename it to {name}. Then open Amplifier again.",
+    "too-many": "This folder holds too many files and folders for Amplifier to move back:\n{path}\n"
+                "Move the ones that were added after you uninstalled Amplifier to a place outside the two "
+                "folders below. Then open Amplifier again.",
     "newer": "A newer version of Amplifier began this step, and this version cannot finish it. "
              "Install that version of Amplifier, or a newer one. Then open Amplifier again.",
-    "unreadable": "Amplifier cannot read the second folder below. Restart this PC. Then open Amplifier again.",
-    "changed": "The second folder below was changed, and Amplifier cannot use it as it is now. "
+    "unreadable": "Amplifier cannot read the kept folder below. Restart this PC. Then open Amplifier again.",
+    "changed": "The kept folder below was changed, and Amplifier cannot use it as it is now. "
                "Restart this PC. Then open Amplifier again.",
 }
+_RESUME = ("Amplifier did not finish moving your kept chats and settings back. The rest is in this folder:\n"
+           "{kept}\n\nFinish now?\n\nYes: move the rest back.\n"
+           "No: start Amplifier with the part that is already back. Amplifier will not ask again.")
 # A take-back that began here, and nothing says how to go on. Only the person's Yes starts the app.
 _GONE = ("Amplifier did not finish moving your kept chats and settings back, and it cannot find {them}. "
          "{they} in this folder:\n{kept}\n\nIf you moved or renamed that folder: select No, put it back, "
          "and open Amplifier again.\n\nStart Amplifier without {them}?\n\n"
          "Yes: start {how}.\nNo: do not start Amplifier now.")
-_UNCLEAR = ("Amplifier did not finish moving your kept chats and settings back, and it cannot read its notes "
-            "about that step. {they} in this folder:\n{kept}\n\nSelect No first. Restart this PC. Then open "
+_UNCLEAR = ("Amplifier did not finish moving your kept chats and settings back, and its notes about that "
+            "step are missing or do not match. {they} in this folder:\n{kept}\n\nSelect No first. Restart this PC. Then open "
             "Amplifier again. If you see this message again, select Yes.\n\nStart Amplifier without {them}?"
             "\n\nYes: start {how}. That folder stays as it is.\nNo: do not start Amplifier now.")
 _WORDS = {
     ("missing", True): {"them": "the rest", "they": "The rest was", "how": "with the part that is already back"},
     ("missing", False): {"them": "them", "they": "They were", "how": "fresh"},
-    ("blocked", True): {"them": "the rest", "they": "The rest is", "how": "with the part that is already back"},
-    ("blocked", False): {"them": "them", "they": "They are", "how": "fresh"},
+    ("blocked", True): {"them": "the rest", "they": "The rest can still be",
+                        "how": "with the part that is already back"},
+    ("blocked", False): {"them": "them", "they": "They can still be", "how": "fresh"},
 }
 _IN_THE_WAY = ("Amplifier cannot move your kept chats and settings back, because this is in the way:\n{path}\n\n"
                "Nothing was deleted. Move it to a place outside these two folders. Then open Amplifier again."
-               "{part}\n\n{root}\n{kept}")
+               "{part}\n\n{two}")
+_RENAMED_BACK = ("Amplifier cannot move your kept chats and settings back, because this folder has a changed "
+                 "name:\n{path}\n\nNothing was deleted. Rename it to {name}. Then open Amplifier again.{part}")
 _PART = " Until then, do not uninstall Amplifier: that can delete the part that is already back."
 _PREPARE = ("Amplifier moved your kept chats and settings back, but it could not prepare them for this "
             "version.\n\nNothing was deleted. Restart this PC. Then open Amplifier again.\n\n"
@@ -328,24 +348,24 @@ def read(kept):
             return "none", None
         record = json.loads(_raw(kept, RECORD))
         if (not isinstance(record, dict)
-                or not _FIELDS <= set(record) <= _FIELDS | {"entries", "declined", "into"}
+                or not _FIELDS <= set(record) <= _FIELDS | {"declined", "into", "back", "filled"}
                 or type(record.get("into", 0)) is not int
                 or type(record["schema"]) is not int or record["schema"] != 1
                 or not isinstance(record["root"], str) or not record["root"]
                 or not isinstance(record["version"], str) or _three(record["version"]) != record["version"]
                 or not isinstance(record["keptAt"], str)
                 or not re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", record["keptAt"])
-                or record["state"] not in ("moving", "complete", "adopting")
+                or record["state"] not in ("moving", "complete", "adopting", "returned")
                 or not isinstance(record["transfer"], str) or not re.fullmatch(_HEX32, record["transfer"])
                 or record.get("declined", True) is not True):
             raise ValueError("The kept-data record is invalid.")
-        if "entries" in record:
-            entries = record["entries"]
-            if (not isinstance(entries, dict) or set(entries) != {"folder", "names"}
-                    or entries["folder"] not in FOLDERS or not isinstance(entries["names"], dict)
-                    or not all(isinstance(name, str) and type(number) is int
-                               for name, number in entries["names"].items())):
-                raise ValueError("The kept-data record is invalid.")
+        back, filled = record.get("back", {}), record.get("filled", {})
+        if (not isinstance(back, dict) or not isinstance(filled, dict) or not set(back) | set(filled) <= set(FOLDERS)
+                or not all(type(number) is int for number in back.values())
+                or not all(isinstance(names, dict) and all(isinstance(name, str) and type(number) is int
+                                                           for name, number in names.items())
+                           for names in filled.values())):
+            raise ValueError("The kept-data record is invalid.")
         time.strptime(record["keptAt"], "%Y-%m-%dT%H:%M:%SZ")
     except (OSError, ValueError, RecursionError):
         return "unreadable", None
@@ -362,8 +382,8 @@ def _reason(root, kept, version):
         return ("unreadable" if state == "unreadable" else None), None
     if record["root"] != str(root):  # Exact spelling: the launcher accepts its folder in no other spelling.
         return "other-folder", record
-    if state == "moving":
-        return "moving", record
+    if state in ("moving", "returned"):
+        return state, record
     try:
         _private(kept, kept)
         names = _names(kept)
@@ -382,8 +402,8 @@ def _reason(root, kept, version):
         if any(_kind(kept / "app" / name) is not None for name in PROGRAM_STATE):
             return "program-state", record
         # A folder that must be filled entry by entry has its entry names saved in the record first.
-        large = any(len(json.dumps(entries)) + 24 * len(entries) > NAMES
-                    for entries in (_names(kept / name) for name in FOLDERS if name in names))
+        large = sum(len(json.dumps(entries)) + 24 * len(entries)
+                    for entries in (_names(kept / name) for name in FOLDERS if name in names)) > NAMES
     except OSError:
         return "unreadable", record
     if _parts(record["version"]) > _parts(version):
@@ -413,42 +433,68 @@ def _identity(path):
     return os.lstat(path).st_ino
 
 
-def _foreign(record, name, source, target):
+def _foreign(planned, source, target):
     """The first entry in `target` that this take-back did not move there from `source`, else None.
 
-    The record names the one folder that is filled entry by entry, and for
-    each entry that the kept folder had at the start its name and its
-    identity. An entry counts as moved only with both: another file or folder
-    that got the same name is not it. An entry that was removed is not in the way.
+    `planned` has, for each entry that the kept folder had before the fill,
+    its name and its identity. An entry counts as moved only with both:
+    another file or folder that got the same name is not it. An entry that
+    was removed is not in the way.
     """
-    here, entries = _names(target), record.get("entries")
-    if not here:
-        return None
-    if not entries or entries["folder"] != name:
-        return target / here[0]
-    planned = entries["names"]
     waiting = set(_names(source)) if _kind(source) == "folder" else set()
-    return next((target / entry for entry in here
+    return next((target / entry for entry in _names(target)
                  if entry in waiting or planned.get(entry) != _identity(target / entry)), None)
 
 
 def _obstacle(root, kept, record):
-    """The first entry of this installation that a kept folder would join or replace, else None."""
+    """The first entry of this installation that is not this take-back's own, else None.
+
+    During a take-back every data folder of the installation is one of these:
+    empty; the folder that this take-back moved there whole (the saved
+    identity); a folder that this take-back fills (only entries with a saved
+    identity, and none whose name still waits in the kept folder).
+    """
     names = _names(root)
     alias = _alias(names)
     if alias is not None:
         return root / alias
+    back, filled = record.get("back", {}), record.get("filled", {})
     for name in FOLDERS:
         if name not in names:
             continue
-        if _kind(root / name) != "folder":
-            return root / name  # A link or a file with a data folder's name is never used or passed over.
-        if _kind(kept / name) is None:
-            continue
-        foreign = _foreign(record, name, kept / name, root / name)
-        if foreign is not None:
-            return foreign
+        target = root / name
+        if _kind(target) != "folder":
+            return target  # A link or a file with a data folder's name is never used or passed over.
+        if name in filled:
+            foreign = _foreign(filled[name], kept / name, target)
+            if foreign is not None:
+                return foreign
+        elif _kind(kept / name) is None:
+            if back.get(name) != _identity(target) and _names(target):
+                return target  # Another folder took the place of the one that came back.
+        elif _names(target):
+            return target / _names(target)[0]  # Its kept folder still waits: this one must be empty.
     return None
+
+
+def _fault(kept, reason):
+    """Why a take-back that began cannot go on: the cause, its path, and the step that repairs it."""
+    try:
+        names = _names(kept)
+        alias = _alias(names)
+        if reason == "link":
+            return _CAUSE["link"].format(path=next(kept / name for name in names if _kind(kept / name) == "link"))
+        if reason == "program-state":
+            return _CAUSE["program-state"].format(path=next(
+                kept / "app" / name for name in PROGRAM_STATE if _kind(kept / "app" / name) is not None))
+        if reason == "unreadable" and alias is not None:
+            return _CAUSE["renamed"].format(path=kept / alias, name=alias.casefold())
+        if reason == "too-many":
+            return _CAUSE["too-many"].format(path=max(
+                (kept / name for name in FOLDERS if name in names), key=lambda folder: len(_names(folder))))
+    except (OSError, ValueError, StopIteration):
+        pass
+    return _CAUSE[reason if reason in ("newer", "unreadable") else "changed"]
 
 
 def _marker(root):
@@ -459,8 +505,9 @@ def _marker(root):
     try:
         note = json.loads(_raw(root, MARKER))
         if (not isinstance(note, dict)
-                or not {"schema", "transfer", "kept"} <= set(note) <= {"schema", "transfer", "kept", "done", "left"}
-                or note.get("left", True) is not True
+                or not {"schema", "transfer", "kept"} <= set(note) <= {
+                    "schema", "transfer", "kept", "done", "left", "prepare"}
+                or any(note.get(flag, True) is not True for flag in ("left", "prepare"))
                 or type(note["schema"]) is not int or note["schema"] != 1
                 or not isinstance(note["transfer"], str) or not re.fullmatch(_HEX32, note["transfer"])
                 or note["kept"] != str(kept_folder(root)) or note.get("done", True) is not True):
@@ -480,34 +527,42 @@ def _drop_marker(root):
 
 
 def _returning(root, kept):
-    """A take-back in this installation: None, `finish`, `done`, `missing` or `blocked`.
+    """A take-back in this installation: None, or one of these.
 
-    `done`: the note says that the take-back finished; only tidying is left.
-    `finish`: the record says how to go on, and it is this installation's:
-    an `adopting` record names the identity of this installation folder (so
-    the note is not needed, and another installation at the same path never
-    continues it); a `complete` record needs the note of the same transfer
-    (the take-back wrote its note and stopped before the record).
+    `done`: it finished (the record says `returned`, or the note says
+    `done`); only tidying is left.
+    `prepare`: the person chose to start without the rest (`left`), and the
+    part that is back is not prepared for this version yet. With `left` this
+    installation continues no take-back by itself.
+    `finish`: the record says how to go on, and it is this installation's: an
+    `adopting` record names the identity of this installation folder, and the
+    note names the same transfer; or a `complete` record has the note of the
+    same transfer (the take-back wrote its note and stopped before the record).
+    `confirm`: an `adopting` record names this installation folder, and the
+    note is gone or cannot be read. Nothing tells whether the person chose to
+    start without the rest: the person is asked.
     `missing`: the note is there and the kept folder is not. `blocked`: the
-    note is there and the record does not say how to go on. With these two
-    the installation can hold a part of the kept data: the app starts only on
-    the person's Yes, and an uninstall does not begin.
-    A note that says `left`: the person chose to start without the rest. This
-    installation then continues no take-back by itself.
+    note is there and the record does not say how to go on.
+    With `finish`, `confirm`, `missing` and `blocked` the installation can
+    hold a part of the kept data: the app never starts by itself, and an
+    uninstall does not begin.
     """
     marker = _marker(root)
     noted = isinstance(marker, dict)
-    if noted and marker.get("done"):
-        return "done"
-    left = noted and bool(marker.get("left"))
     state, record = read(kept)
-    if record is not None and record["root"] == str(root) and not left:
-        same = not noted or marker["transfer"] == record["transfer"]
-        if state == "adopting" and same and record.get("into") == _identity(root):
+    mine = record is not None and record["root"] == str(root)
+    if (mine and state == "returned") or (noted and marker.get("done")):
+        return "done"
+    if noted and marker.get("left"):
+        return "prepare" if marker.get("prepare") else None
+    if mine and state == "adopting" and record.get("into") == _identity(root):
+        if noted and marker["transfer"] == record["transfer"]:
             return "finish"
-        if state == "complete" and noted and same:
-            return "finish"
-    if marker is None or left:
+        if not noted:
+            return "confirm"
+    if mine and state == "complete" and noted and marker["transfer"] == record["transfer"]:
+        return "finish"
+    if marker is None:
         return None
     return "missing" if state == "absent" else "blocked"
 
@@ -519,35 +574,35 @@ def unfinished_take_back(root):
     while this is true. Reads only. A note that says `done` is not such a state.
     """
     root = Path(root)
-    return _returning(root, kept_folder(root)) in ("finish", "missing", "blocked")
-
-
-def _leftover(root, kept):
-    """Whether the record of a take-back whose note says `done` is still in the kept folder."""
-    marker = _marker(root)
-    state, record = read(kept)
-    return bool(state == "adopting" and isinstance(marker, dict) and marker.get("done")
-                and record["root"] == str(root) and record["transfer"] == marker["transfer"])
+    return _returning(root, kept_folder(root)) in ("finish", "confirm", "missing", "blocked")
 
 
 def _finished(root, kept):
-    """Tidy after a take-back whose note says `done`: its record, the empty kept folder, then the note.
+    """Tidy after a take-back that finished: its record, the empty kept folder, then the note.
 
     Never raises and never opens a database: the app can be running by now.
-    The note stays while this take-back's record cannot be removed, or cannot
-    be read: only the note tells that this record is not an unfinished take-back.
+    Each file is read once. Every step that fails keeps the proof that the
+    take-back finished: first the note says `done`, then the record goes,
+    then the note goes. A note stays while a record cannot be read.
     """
-    state, _record = read(kept)
-    if state == "unreadable":
-        return
-    if _leftover(root, kept):
-        try:
-            _forget(kept, RECORD)
-        except (OSError, ValueError, RuntimeError):
+    try:
+        marker = _marker(root)
+        state, record = read(kept)
+        if state == "unreadable":
             return
-        with suppress(OSError):  # It holds something that is not Amplifier's: it stays.
-            os.rmdir(kept)
-    _drop_marker(root)
+        if state == "returned" and record["root"] == str(root):
+            if marker is not None and not (isinstance(marker, dict) and marker.get("done")):
+                _write(root, MARKER, {"schema": 1, "transfer": record["transfer"], "kept": str(kept), "done": True})
+            if any(name.casefold() in FOLDERS for name in _names(kept)):
+                return  # A data folder is beside that record: nothing is removed.
+            _forget(kept, RECORD)
+            with suppress(OSError):  # It holds something that is not Amplifier's: it stays.
+                os.rmdir(kept)
+        elif not (isinstance(marker, dict) and marker.get("done")):
+            return
+        _drop_marker(root)
+    except (OSError, ValueError, RuntimeError):
+        return
 
 
 def _tidy(root, kept):
@@ -586,10 +641,8 @@ def _plan(root, version, transfer):
         raise Refused("kept-name", _RENAMED.format(path=root / alias, name=alias.casefold()))
     occupied = Refused("kept-folder", _OCCUPIED.format(kept=kept))
     returning = _returning(root, kept)
-    if returning in ("missing", "blocked"):
+    if returning in ("confirm", "missing", "blocked"):
         raise Refused("take-back-record", _RETURNING)
-    if returning == "done" and _leftover(root, kept):
-        raise Refused("kept-record", _STUCK.format(kept=kept, stayed=""))  # A held file: tidied at the next try.
     reason, record = _reason(root, kept, version)
     if returning == "finish":
         if reason != "use":
@@ -709,11 +762,18 @@ def _stuck(root, kept, stayed):
     if not stayed:
         return _STUCK.format(kept=kept, stayed="")
     path = stayed[0]
+    if path.parent == kept:
+        return _KEPT_ENTRY.format(path=path)  # A file or a link where the set needs a folder.
     if _kind(path) == "link":
         return _LINK_STAYED.format(path=path)
-    twin = kept / path.relative_to(root) if root in path.parents else None
-    if twin is not None and _kind(twin) is not None:
-        return _BOTH.format(path=path, twin=twin)  # A program that closed late wrote it again.
+    if root in path.parents:
+        # Below a data folder: the same name on both sides, and not two real folders. A program that
+        # closed late wrote it again. A top-level data folder itself is never named here: it must move.
+        parts = path.relative_to(root).parts
+        for depth in range(2, len(parts) + 1):
+            here, there = root.joinpath(*parts[:depth]), kept.joinpath(*parts[:depth])
+            if _kind(there) is not None and (_kind(here), _kind(there)) != ("folder", "folder"):
+                return _BOTH.format(path=here, twin=there)
     return _STUCK.format(kept=kept, stayed=_STAYED.format(path=path))
 
 
@@ -812,6 +872,8 @@ def _move_out(root, kept, version, transfer, remove, wait):
         _write(kept, RECORD, {**record, "state": "complete", "version": newest})
     elif not done and record["state"] != "moving":
         _write(kept, RECORD, {**record, "state": "moving"})  # A repeated run found something new to move.
+    if done:
+        _drop_marker(root)  # The data left: a note of an earlier take-back says nothing any more.
     if not remaining:
         stayed += [kept / "app" / name for name in state]  # Only the program state keeps the set unfinished.
     return {"kept": str(kept), "state": "complete" if done else "moving", "transfer": record["transfer"],
@@ -865,62 +927,70 @@ def _rename(source, target, deadline):
             time.sleep(0.5)
 
 
-def take_back(root, version, *, settle=True):
+def take_back(root, version, *, settle=True, confirmed=False):
     """Move the kept set of this folder back into this installation's empty data folders.
 
     The caller holds the installation's lock (`first_start`, `move_out`).
     Runs every check each time, also when it continues an interrupted
-    take-back. A folder of this installation that holds anything stops it
-    before the first change. When Windows refuses to remove an empty folder
-    (the current folder of the launcher), the kept entries are moved into it
-    one by one; the record first names that folder and its entries, so that
-    an interrupted fill can continue and accepts nothing else in that folder.
+    take-back. Before the first change, every data folder of the installation
+    must be empty, or be this take-back's own. When Windows refuses to remove
+    an empty folder (the current folder of the launcher), the kept entries are
+    moved into it one by one. The record first names every folder and entry
+    that moves, with its identity.
     The lock does not stop a program that is not Amplifier; the checks do.
 
     Last it retires the removed program's saved update status. If that fails,
     the take-back is not finished and the next start tries again. A move-out
-    passes `settle=False`: the data leaves again at once. Then the note gets
-    `done`: from there only tidying is left.
+    passes `settle=False`: the data leaves again at once. Then the record says
+    `returned`: from there only tidying is left.
+    `confirmed`: the person said to finish a take-back whose note is gone.
     """
     root, kept = Path(root), kept_folder(root)
     try:
-        return _take_back(root, kept, _version(version), settle)
+        return _take_back(root, kept, _version(version), settle, confirmed)
     except Refused:
         raise
     except (OSError, ValueError, RuntimeError) as error:
         raise Refused("take-back", _RETRY.format(root=root, kept=kept), error) from error
 
 
-def _take_back(root, kept, version, settle):
+def _take_back(root, kept, version, settle, confirmed):
     reason, record = _reason(root, kept, version)
     began = record is not None and record["state"] == "adopting"
+    two = _TWO.format(root=root, kept=kept)
     if reason != "use":
         if not began:  # Nothing is back, and nothing was changed.
             raise Refused("take-back-" + (reason or "missing"), _UNUSABLE.format(kept=kept))
-        cause = _CAUSE.get(reason, _CAUSE["changed"])
-        raise Refused("take-back-" + reason, _BLOCKED.format(root=root, kept=kept, cause=cause))
-    if began and _returning(root, kept) != "finish":
-        # The set began its way back into another installation folder, or the person chose to start without it.
-        raise Refused("take-back-orphan", _UNUSABLE.format(kept=kept))
+        raise Refused("take-back-" + reason, _BLOCKED.format(cause=_fault(kept, reason), two=two))
+    note = {"schema": 1, "transfer": record["transfer"], "kept": str(kept)}
+    if began:
+        returning = _returning(root, kept)
+        if returning == "confirm" and confirmed:
+            _write(root, MARKER, note)  # The person said to finish it: the installation's note is there again.
+        elif returning != "finish":
+            # Its way back began into another installation folder, or the person chose to start without it.
+            raise Refused("take-back-orphan", _UNUSABLE.format(kept=kept))
     part = [_PART if began else ""]
 
     def stop(path, kind="take-back-not-empty"):
-        return Refused(kind, _IN_THE_WAY.format(path=path, part=part[0], root=root, kept=kept))
+        if path.parent == root and path.name not in FOLDERS and path.name.casefold() in FOLDERS:
+            return Refused(kind, _RENAMED_BACK.format(path=path, name=path.name.casefold(), part=part[0]))
+        return Refused(kind, _IN_THE_WAY.format(path=path, part=part[0], two=two))
 
     # Before the first change, also of a continued take-back: never merge, never delete.
     blocker = _obstacle(root, kept, record) if began else _used(root)
     if blocker is not None:
         raise stop(blocker)
-    note = {"schema": 1, "transfer": record["transfer"], "kept": str(kept)}
     taken, deadline = [], time.monotonic() + WAIT
     with _held(root), _held(kept):
         if not began:
             # The installation's own note first: from here it can hold a part of the kept data.
             _write(root, MARKER, note)
-            record = {**record, "state": "adopting", "into": _identity(root)}
+            record = {**record, "state": "adopting", "into": _identity(root), "back": {
+                name: _identity(kept / name) for name in FOLDERS if _kind(kept / name) == "folder"}}
             _write(kept, RECORD, record)
             part[0] = _PART
-        present = set(_names(root))
+        back, present = record.get("back", {}), set(_names(root))
         for name in FOLDERS:
             source, target = kept / name, root / name
             if _kind(source) is None:
@@ -933,21 +1003,23 @@ def _take_back(root, kept, version, settle):
                 except OSError:
                     pass  # A current folder: fill it instead.
             if kind is None:
+                if back.get(name) != _identity(source):  # It came into the kept folder later.
+                    raise stop(source)
                 _rename(source, target, deadline)
-                if _kind(target) != "folder":  # A link took the kept folder's place and moved as a link.
-                    raise stop(target, "take-back-link")
+                if _kind(target) != "folder" or _identity(target) != back[name]:
+                    raise stop(target, "take-back-link")  # A link, or another folder, took its place and moved.
             elif kind != "folder":
                 raise stop(target)
             else:
-                if (record.get("entries") or {}).get("folder") != name:
+                if name not in record.get("filled", {}):
                     if _names(target):
                         raise stop(target)
-                    record = {**record, "entries": {
-                        "folder": name, "names": {entry: _identity(source / entry) for entry in _names(source)}}}
+                    record = {**record, "filled": {**record.get("filled", {}), name: {
+                        entry: _identity(source / entry) for entry in _names(source)}}}
                     _write(kept, RECORD, record)
-                planned = record["entries"]["names"]
+                planned = record["filled"][name]
                 with _held(source), _held(target):
-                    foreign = _foreign(record, name, source, target)
+                    foreign = _foreign(planned, source, target)
                     if foreign is not None:  # Something else is in that folder.
                         raise stop(foreign)
                     for entry in _names(source):
@@ -972,9 +1044,51 @@ def _take_back(root, kept, version, settle):
         raise Refused("take-back-prepare", _PREPARE)  # Record and note stay: the next start tries again.
     if settled == "linked":
         raise Refused("take-back-prepare", _LINKED.format(path=root / "app" / "app.sqlite3"))
-    _write(root, MARKER, {**note, "done": True})  # Finished. A stop after this line leaves only tidying.
+    _write(kept, RECORD, {**record, "state": "returned"})  # Finished. A stop after this line leaves only tidying.
+    with suppress(OSError, ValueError, RuntimeError):  # The tidy step writes it again when this fails.
+        _write(root, MARKER, {**note, "done": True})
     _finished(root, kept)
     return {"taken": taken, "updateState": settled}
+
+
+def _prepared(root, kept):
+    """Prepare the part that is back, after the person chose to start without the rest. Raises Refused."""
+    marker = _marker(root)
+    transfer = marker["transfer"] if isinstance(marker, dict) else "0" * 32
+    settled = _settle(root, transfer)
+    if settled == "unchanged":
+        raise Refused("take-back-prepare", _PREPARE)
+    if settled == "linked":
+        raise Refused("take-back-prepare", _LINKED.format(path=root / "app" / "app.sqlite3"))
+    try:
+        _write(root, MARKER, {"schema": 1, "transfer": transfer, "kept": str(kept), "left": True})
+    except (OSError, ValueError, RuntimeError) as error:
+        raise Refused("take-back", _RETRY.format(root=root, kept=kept), error) from error
+
+
+def _abandon(root, kept):
+    """The person chose to start without the rest of a take-back that did not finish. Raises Refused.
+
+    The choice is saved first: in the installation's note, and, when the kept
+    record can be read, in that record (it then names no installation folder,
+    so no installation continues it). Only then the part that is back is
+    prepared. If that fails, this start stops; the choice stays, the next
+    start prepares again, and an uninstall can begin.
+    """
+    marker = _marker(root)
+    state, record = read(kept)
+    mine = record is not None and record["root"] == str(root) and state == "adopting"
+    transfer = marker["transfer"] if isinstance(marker, dict) else record["transfer"] if mine else "0" * 32
+    part = not _fresh(root)
+    note = {"schema": 1, "transfer": transfer, "kept": str(kept), "left": True}
+    try:
+        _write(root, MARKER, {**note, "prepare": True} if part else note)
+        if mine and "into" in record:
+            _write(kept, RECORD, {key: value for key, value in record.items() if key != "into"})
+    except (OSError, ValueError, RuntimeError) as error:
+        raise Refused("take-back", _RETRY.format(root=root, kept=kept), error) from error
+    if part:
+        _prepared(root, kept)
 
 
 def _date(kept_at):
@@ -1032,29 +1146,32 @@ def _first(root, kept, version, ask, owner_notice, waiting, taken):
     if returning == "done":
         _finished(root, kept)  # Only tidying is left. The app can be running now: no database is opened.
         return None
+    if returning == "prepare":
+        _prepared(root, kept)  # The person chose to start without the rest; the first try did not work.
+        return None
     if returning == "finish":
         take_back(root, version)  # The person already said Yes. Never start before it is finished.
         taken.append(True)
         return None
+    if returning == "confirm":
+        # The record names this installation folder, and the installation's own note is gone: ask.
+        notice = _RESUME.format(kept=kept)
+        if not ask:
+            return waiting("take-back-record", notice, show=False)
+        if owner_notice(notice, confirm=True):
+            take_back(root, version, confirmed=True)
+            taken.append(True)
+        else:
+            _abandon(root, kept)
+        return None
     if returning in ("missing", "blocked"):
         # A take-back began here, and nothing says how to go on: the kept folder is gone, or the records
-        # cannot be read. Nothing more comes back by itself. Only the person's Yes starts the app.
-        part = not _fresh(root)
-        notice = (_GONE if returning == "missing" else _UNCLEAR).format(kept=kept, **_WORDS[returning, part])
+        # do not match. Nothing more comes back by itself. Only the person's Yes starts the app.
+        notice = (_GONE if returning == "missing" else _UNCLEAR).format(
+            kept=kept, **_WORDS[returning, not _fresh(root)])
         if not ask or not owner_notice(notice, confirm=True):
             return waiting("take-back-record", notice, show=False)
-        marker = _marker(root)
-        transfer = marker["transfer"] if isinstance(marker, dict) else "0" * 32
-        if part:
-            settled = _settle(root, transfer)
-            if settled == "unchanged":
-                raise Refused("take-back-prepare", _PREPARE)
-            if settled == "linked":
-                raise Refused("take-back-prepare", _LINKED.format(path=root / "app" / "app.sqlite3"))
-        try:  # The choice is saved: this installation never continues that take-back by itself.
-            _write(root, MARKER, {"schema": 1, "transfer": transfer, "kept": str(kept), "left": True})
-        except (OSError, ValueError, RuntimeError) as error:
-            raise Refused("take-back", _RETRY.format(root=root, kept=kept), error) from error
+        _abandon(root, kept)
         return None
     if not _fresh(root):
         return None  # This installation has its own data. Kept sets stay where they are.
