@@ -222,12 +222,24 @@ def anchor_turns(session):
 
 
 def rollup(calls):
-    result={key:0 for key in USAGE_KEYS}
-    result['metricKnownCalls']={key:0 for key in USAGE_KEYS}
-    result.update(calls=len(calls),costUsd=0.0,pricedCalls=0,estimatedCalls=0,unknownCalls=0,tokenUnknownCalls=0,tokenPendingCalls=0,costPendingCalls=0)
+    return _append_rollup(None, calls)
+
+
+def _append_rollup(prefix, calls):
+    """Continue the same per-call fold, never add separately rounded totals."""
+    if prefix is None:
+        result={key:0 for key in USAGE_KEYS}
+        result['metricKnownCalls']={key:0 for key in USAGE_KEYS}
+        result.update(calls=0,costUsd=0.0,pricedCalls=0,estimatedCalls=0,unknownCalls=0,tokenUnknownCalls=0,tokenPendingCalls=0,costPendingCalls=0)
+    else:
+        import copy
+        result=copy.deepcopy(prefix)
+    result['calls']+=len(calls)
     voice_calls=[node for node in calls if any(key in (node.get('usage') or {}) for key in ('voiceSeconds','usageFinalized'))]
     if voice_calls:
-        result.update(voiceSessionCalls=len(voice_calls),voiceKnownCalls=0,voicePendingCalls=0,voiceIncompleteCalls=0)
+        if 'voiceSessionCalls' not in result:
+            result.update(voiceSessionCalls=0,voiceKnownCalls=0,voicePendingCalls=0,voiceIncompleteCalls=0)
+        result['voiceSessionCalls']+=len(voice_calls)
     for node in calls:
         usage=with_gross_tokens(node.get('usage') or {})
         for key in USAGE_KEYS:
@@ -253,7 +265,7 @@ def rollup(calls):
             result['unknownCalls']+=1
             result['costPendingCalls']+=int(pending)
     result['costType']='unavailable' if not result['pricedCalls'] else 'partial' if result['unknownCalls'] else 'estimated' if result['estimatedCalls'] else 'reported'
-    reasons=sorted({node['usage']['costUnavailableReason'] for node in calls
+    reasons=sorted(set(result.get('costUnavailableReasons', [])) | {node['usage']['costUnavailableReason'] for node in calls
         if isinstance((node.get('usage') or {}).get('costUnavailableReason'),str)})
     if reasons:result['costUnavailableReasons']=reasons
     return result
@@ -323,6 +335,11 @@ def ingest(session,event):
 
 
 def refresh_usage(tree):
+    _reduce_usage(tree)
+
+
+def _reduce_usage(tree):
+    """Canonical full reduction; private groups may seed an ordered continuation."""
     lookup={n['id']:n for n in tree['nodes']}
     for candidate in tree['nodes']:
         if not candidate.get('turnId'):
@@ -343,6 +360,7 @@ def refresh_usage(tree):
     # A live event must not rescan every historical call for every old turn.
     for turn in tree['turns']:turn['aggregateUsage']=rollup(by_turn.get(turn['id'],[]))
     tree['aggregateUsage']=rollup(calls)
+    return calls, descendants, by_turn, lookup
 
 
 def generation_turns(session):

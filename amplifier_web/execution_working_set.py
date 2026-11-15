@@ -53,8 +53,10 @@ class WorkingExecution:
                                  for kind in records.COLLECTIONS})
         self.admitted = {kind: {records.key(kind, row) for row in self.current[kind]}
                          for kind in records.COLLECTIONS}
+        self.usage_prefix = None
+        self._usage_stage = None
 
-    def record(self, kind, identity):
+    def record(self, kind, identity, *, derived=False):
         present = next((row for row in self.current[kind] if records.key(kind, row) == identity), None)
         if present is not None:
             return present
@@ -64,6 +66,10 @@ class WorkingExecution:
             value = next((row for row in _stored(self.db, self.reference).get(kind, [])
                           if records.key(kind, row) == identity), None)
         if value is not None:
+            if kind in ('nodes', 'turns') and not derived:
+                # Absence is an ordinary append lookup. Only obtaining a real
+                # historical mutable row invalidates the earlier contribution.
+                self.usage_prefix = None
             self.current[kind].append(value)
             self.admitted[kind].add(identity)
         return value
@@ -123,6 +129,8 @@ class WorkingExecution:
         value.reference = copy.deepcopy(self.reference)
         value.current = copy.deepcopy(self.current)
         value.admitted = {kind: set(identities) for kind, identities in self.admitted.items()}
+        value.usage_prefix = None
+        value._usage_stage = None
         return value
 
     def expose(self):
@@ -132,6 +140,8 @@ class WorkingExecution:
     def stage(self):
         """Project resident records; immutable historical pages are not revisited."""
         from .session_projection import accounting_projection, _stored_nodes
+        from .execution_usage_prefix import preserves_contribution, Rebuild
+        preserves_usage = self.usage_prefix is not None
         reference = self.reference
         if reference.get('executionProjection') != 2:
             from .session_projection import stored_execution
@@ -145,6 +155,8 @@ class WorkingExecution:
         for row in self.current['turns']:
             changes['turns'][records.key('turns', row)] = (
                 row if not row.get('nativeHistory') and not row.get('canonicalHistory') else None)
+            if not records.is_active(row) and changes['turns'][records.key('turns', row)] is None:
+                preserves_usage = False
         for row in self.current['nodes']:
             turn = row.get('turnId')
             if turn and turn not in turns and records.read_record(
@@ -164,8 +176,15 @@ class WorkingExecution:
                     receipts[(receipt.get('sessionId'), receipt['id'])] = receipt
             nodes = _stored_nodes([row], turns, receipts)
             changes['nodes'][records.key('nodes', row)] = nodes[0] if nodes else None
+            if preserves_usage and not records.is_active(row):
+                try:
+                    preserves_usage = preserves_contribution(row, nodes[0] if nodes else None)
+                except Rebuild:
+                    preserves_usage = False
         fields = {name: value for name, value in self.current.items() if name not in {*records.COLLECTIONS, 'plan'}}
-        return records.replace_records(self.db, reference, changes, fields=fields, owner=self.owner)
+        selected = records.replace_records(self.db, reference, changes, fields=fields, owner=self.owner)
+        self._usage_stage = (selected, preserves_usage)
+        return selected
 
     def committed(self, reference):
         self.reference = copy.deepcopy(reference)
@@ -180,10 +199,19 @@ class WorkingExecution:
         finally:
             self.current = holder['current']
         if exclusive:
+            if self._usage_stage != (reference, True):
+                self.usage_prefix = None
+            if self.usage_prefix is not None:
+                from .execution_usage_prefix import Rebuild
+                try:
+                    self.usage_prefix.retired(self.current)
+                except Rebuild:
+                    self.usage_prefix = None
             for kind in records.COLLECTIONS:
                 self.current[kind] = [row for row in self.current[kind] if records.is_active(row)]
         self.admitted = {kind: {records.key(kind, row) for row in self.current[kind]}
                          for kind in records.COLLECTIONS}
+        self._usage_stage = None
 
 
 @dataclass
@@ -306,22 +334,24 @@ def readonly(session):
 
 
 def refresh_usage(session):
-    """Explicit complete accounting read; retain only changed derived records.
-
-    Tool progress with unchanged topology does not enter this path. Model usage
-    and topology changes still run the existing complete reducer, without
-    transferring historical mutation authority into the current working set.
-    """
-    from .execution import refresh_usage as refresh
+    """Continue exact ordered totals, rebuilding for earlier/unsupported edits."""
+    from .execution import refresh_usage as refresh, _reduce_usage
+    from .execution_usage_prefix import UsagePrefix, Rebuild
     owner = working(session)
     if owner is None:
         return refresh(session.get('execution', {}))
+    if owner.usage_prefix is not None:
+        try:
+            owner.usage_prefix.refresh(owner)
+            return
+        except Rebuild:
+            owner.usage_prefix = None
     value, compact = owner.usage_input()
     def identity(kind, row):
         return row['id'] if compact else records.key(kind, row)
     before = {kind: {identity(kind, row): (row.get('turnId'), row.get('aggregateUsage'))
                      for row in value.get(kind, [])} for kind in ('nodes', 'turns')}
-    refresh(value)
+    groups = _reduce_usage(value)
     owner.current['aggregateUsage'] = value['aggregateUsage']
     for kind in ('nodes', 'turns'):
         resident = {identity(kind, row) for row in owner.current[kind]}
@@ -347,3 +377,8 @@ def refresh_usage(session):
                 else:
                     owner.current[kind].append(row)
                     owner.admitted[kind].add(record_key)
+    if compact:
+        try:
+            owner.usage_prefix = UsagePrefix.build(owner, value, groups)
+        except Rebuild:
+            owner.usage_prefix = None

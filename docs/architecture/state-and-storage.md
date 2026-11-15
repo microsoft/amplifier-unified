@@ -302,9 +302,21 @@ Detached metadata reads freeze the root and current overlay without loading hist
 The last committed root and retained client/operation roots remain GC authorities
 until their owning transactions release them; failed saves never adopt a staged root.
 
+Usage totals continue the canonical per-call fold in original order from a closed
+prefix and a current suffix. The prefix is disposable private state, not a receipt
+or a second accounting authority. Current nested aliases remain live; earlier
+mutable admission, changed topology, unresolved ordered turn repairs or an oversized
+suffix use the complete reducer. Prefix advancement requires successful publication,
+the existing exclusive-ownership proof and unchanged canonical contributions after
+projection. Terminal unpriced calls keep their unknown counters; being unpriced does
+not make them active. The suffix, required ancestor/turn summaries and unresolved
+dependencies each fit the existing 128-row selection count and collectively its
+4 MiB byte envelope. Exceeding those bounds rebuilds normally and never denies work.
+Capacity admission and receipt replay keep their separate existing authority.
+
 This does not yet meet the target throughout the host. Retained messages and worker
-reports can still grow the admitted record. Full accounting/topology reduction and
-capacity replay checks still inspect the required complete history without promoting
+reports can still grow the admitted record. Complete accounting rebuilds and
+capacity replay checks still inspect the required history without promoting
 it into the current owner. Legacy/full mutable execution saves retain their content
 witness, and `MessagePreparation` still inspects historical messages. Caching prepared
 bytes reduces encoding but does not make those comparisons independent of history.
