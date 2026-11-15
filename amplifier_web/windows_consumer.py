@@ -566,26 +566,27 @@ async def _delete(root, certificate, *, resumed):
         _record(root, "uninstall", stopped.step, stopped.error,
                 services=not resumed and stopped.step not in windows_uninstall.AFTER_JOURNAL)
         raise
-    rest = done["rest"]
+    foreign = done["foreign"]
     if sys.stdout is None:
-        owner_notice(_removed_notice(root, rest["foreign"], done["certificate"]))
-    # Last: the files of this running program go after it has exited. From
-    # here this process writes nothing into the installation and ends.
+        owner_notice(_removed_notice(root, foreign, done["certificate"]))
+    # Last: the two folders that this running program runs from. After this
+    # step the process imports nothing more and ends: its own files are gone.
     try:
-        windows_uninstall.finish_after_exit(root, done["token"], rest)
+        last = await asyncio.to_thread(windows_uninstall.finish, root, done["token"])
         started = True
     except (OSError, ValueError, RuntimeError):
-        started = False
+        last, started = None, False
         if sys.stdout is None:
             # Advice to delete the folder only when nothing in it is someone else's.
             owner_notice("Windows did not let Amplifier remove its last program files. They are in this "
                          "folder, and they hold none of your chats, settings or accounts:\n" + str(root)
-                         + ("\n\nYou can delete that folder." if rest["foreign"] == [] else ""))
-    # `handedOver` and `afterExit`: what the step after exit was asked to
-    # remove, and whether it was started. Nobody observed that it finished.
+                         + ("\n\nYou can delete that folder." if foreign == [] else ""))
+    # `afterExit`: the step after exit was started; nobody observed that it
+    # finished. `programLeft`: program files that could be neither deleted
+    # nor moved, so the folder stays.
     return {"ok": True, "operation": "uninstall", "userDataRetained": False,
-            "certificate": done["certificate"], "kept": rest["foreign"] or [],
-            "handedOver": rest["contents"] + rest["folders"] + rest["files"], "afterExit": started}
+            "certificate": done["certificate"], "kept": foreign or [],
+            "afterExit": started, "programLeft": last["left"] if last else None}
 
 
 async def maintenance(root, operation):

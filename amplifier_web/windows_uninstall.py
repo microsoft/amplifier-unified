@@ -30,8 +30,12 @@ JOURNAL = "unified-uninstall.json"
 COMPLETE, STARTED = "unified-setup-complete.json", "unified-setup-started.json"  # Setup's two records.
 # The person's data, in the order of deletion: the stored keys go first.
 DATA = ("shared", "app", "capture", "ownership", "import", "workspace", "export")
-# The running program. Only the step after exit removes what is inside these.
+# The running program. `finish` deletes these last, with one difference: a
+# file that this running program has mapped is moved into PARK instead.
 RUNNING = ("python", "tools")
+# The flat folder that `finish` creates and holds for those few files. Only
+# the step after exit deletes in it.
+PARK = "unified-uninstall-last"
 CACHES = ("source-store", "cache", "temp", "python-bin", "tool-bin")
 FILES = ("components.txt", "install.log", "private-git.json", "private-git.py", "uv.zip", "git.tar.bz2",
          "consumer-maintenance.json", "Launch Unified.lnk", "Amplifier status.lnk", "Stop Amplifier.lnk",
@@ -46,9 +50,9 @@ _FOLDER_FORMS = (rf"launcher-{_VERSION}-[0-9a-f]{{8}}(-\d+)?", r"launcher-not-us
 # file, and setup's notes about a helper program that failed.
 _FILE_FORMS = (rf"amplifier_unified-{_VERSION}-py3-none-any\.whl(\.part)?", r"\.private-[0-9a-f]{32}\.tmp",
                r"child-\d+\.(stderr\.txt|failure\.json)")
-_FOLDERS = frozenset(DATA + RUNNING + CACHES + LAST[:2])
-_EXACT = frozenset(DATA + RUNNING + CACHES + FILES + LAST + (STARTED, COMPLETE, JOURNAL))
-SECONDS_AFTER_EXIT = 120  # About seven times the measured need for python and tools together.
+_FOLDERS = frozenset(DATA + RUNNING + CACHES + LAST[:2] + (PARK,))
+_EXACT = frozenset(DATA + RUNNING + CACHES + FILES + LAST + (STARTED, COMPLETE, JOURNAL, PARK))
+SECONDS_AFTER_EXIT = 120  # For a handful of files. A program that closes late gets this long.
 # The steps of `remove` that come after the journal. A failure there leaves a
 # folder that Amplifier does not start from; a second uninstall finishes it.
 AFTER_JOURNAL = frozenset({"setup-record", "data", "program", "apps-entry", "shortcuts", "receipt", "program-last"})
@@ -73,7 +77,7 @@ def sort(names):
         if name == JOURNAL:
             continue
         group = ("setup" if name in (STARTED, COMPLETE) else "data" if name in DATA
-                 else "running" if name in RUNNING else "last" if name in LAST
+                 else "running" if name in RUNNING or name == PARK else "last" if name in LAST
                  else "program" if name in CACHES or name in FILES or _form(name, _FOLDER_FORMS + _FILE_FORMS)
                  else "foreign")
         groups[group].append(name)
@@ -330,25 +334,21 @@ def remove_program(owned, *, last=False, wait=time.sleep):
     return _clear(owned, names, time.monotonic() + shell.SETTLE_SECONDS, wait)
 
 
-def remaining(owned):
-    """What is in the folder now, sorted for the step after exit, and what is foreign.
+def last_names(owned=None):
+    """The folders and files that the step after exit is asked about, by exact name.
 
-    `contents`: the two folders of the running program; that step deletes
-    what is in them. `folders`: every other folder of this installation that
-    is still here, such as an emptied data folder that Windows keeps for a
-    program; that step removes one only while it is empty. `files`: this
-    installation's own files. `foreign` is None when the folder could not be
-    listed; then every exact name is handed over, and absent ones do nothing.
+    Every exact name of this installation, and every entry in the folder now
+    that has one of its name forms. That step removes a named folder only
+    while it is empty, and it deletes a named plain file directly in the
+    installation folder. So an emptied folder that Windows still keeps for a
+    program goes when that program has ended, and nothing else is deleted.
+    The journal and the held folder are not in these lists.
     """
-    if owned is None:
-        return {"contents": list(RUNNING), "folders": list(DATA + CACHES + LAST[:2]),
-                "files": list(FILES + LAST[2:]), "foreign": None}
-    groups = sort(owned.names())
-    own = groups["program"] + groups["last"]
-    return {"contents": groups["running"],
-            "folders": groups["data"] + [name for name in own if _folder(name)],
-            "files": groups["setup"] + [name for name in own if not _folder(name)],
-            "foreign": groups["foreign"]}
+    groups = sort([] if owned is None else owned.names())
+    own = groups["setup"] + groups["program"] + groups["last"]
+    folders = list(DATA + RUNNING + CACHES + LAST[:2]) + [name for name in own if _folder(name)]
+    files = [STARTED, COMPLETE, *FILES, *LAST[2:]] + [name for name in own if not _folder(name)]
+    return list(dict.fromkeys(folders)), list(dict.fromkeys(files))
 
 
 def remove(root, *, stop, certificate, progress, choice="delete", data=remove_data, wait=time.sleep, **fields):
@@ -370,8 +370,9 @@ def remove(root, *, stop, certificate, progress, choice="delete", data=remove_da
        launcher's own check needs.
 
     `progress(name)` names the step that is about to run. Returns the
-    journal's token, the certificate outcome and what is left for the step
-    after exit. The journal and the running program's two folders stay.
+    journal's token, the certificate outcome and the entries that are not
+    Amplifier's (None when the folder could not be listed at the end). The
+    journal and the running program's two folders stay; `finish` is their step.
     """
     from . import windows_consumer_shell as shell, windows_removal
     progress("lock")
@@ -403,19 +404,48 @@ def remove(root, *, stop, certificate, progress, choice="delete", data=remove_da
             progress("program-last")
             try:
                 remove_program(owned, last=True, wait=wait)
-                rest = remaining(owned)
+                foreign = sort(owned.names())["foreign"]
             except (OSError, ValueError, RuntimeError):
-                rest = remaining(None)  # Every entry is gone already; the step after exit gets every exact name.
-    return {"token": token, "certificate": trust, "rest": rest}
+                foreign = None  # Every entry is gone already; only the last listing failed.
+    return {"token": token, "certificate": trust, "foreign": foreign}
 
 
-def finish_after_exit(root, token, rest, choice="delete"):
-    """Start the step that removes the running program's files after this process has exited.
+def finish(root, token, *, choice="delete", wait=time.sleep):
+    """The last step of a removal: the two folders that this running program runs from.
 
-    After this call the process must write nothing into the installation and
-    end. A return means that the step was started, not that the folder is gone.
+    A running program cannot delete the files that it runs from. It can move
+    them. So, under the lock, with the installation folder proven and pinned
+    again and the journal still this removal's own:
+
+    1. Create the flat folder `unified-uninstall-last` and hold it.
+    2. Start the step after exit in that folder. Windows keeps a program's
+       current folder open. From here no program can rename or replace that
+       folder, the installation folder or a folder above it, also when this
+       program has ended.
+    3. Delete `python` and `tools` through handles, as everything before. A
+       file that this running program has mapped is moved, through its
+       handle, into the held folder instead.
+
+    The step after exit deletes those few files where they are held, then the
+    emptied folders, the journal and the installation folder. It walks no
+    tree. Returns what the walk reports for the two folders. After this the
+    process imports nothing more, writes nothing into the installation, and
+    ends.
     """
-    from . import windows_removal
-    return windows_removal.finish_after_exit(
-        root, token, contents=rest["contents"], folders=rest["folders"], files=rest["files"],
-        wait_for=(os.getpid(), os.getppid()), seconds=SECONDS_AFTER_EXIT, choice=choice)
+    from . import windows_consumer_shell as shell, windows_removal
+    with single(root):
+        with windows_removal.folder(root) as owned:
+            record = pending(root)
+            if record is None or record["choice"] != choice or record["token"] != token:
+                raise ValueError("Another removal of this folder began.")
+            if altered(owned.names()):
+                raise ValueError("An entry differs from this installation's own name only by case.")
+            # What an earlier last step left. It is this installation's own
+            # folder; a new one is made, or the name refuses.
+            owned.remove([PARK], settle=shell.SETTLE_SECONDS, wait=wait)
+            folders, files = last_names(owned)
+            with owned.aside(PARK) as park:
+                windows_removal.finish_after_exit(
+                    root, token, park=PARK, folders=folders, files=files,
+                    wait_for=(os.getpid(), os.getppid()), seconds=SECONDS_AFTER_EXIT, choice=choice)
+                return owned.remove(RUNNING, settle=shell.SETTLE_SECONDS, wait=wait, park=park)
