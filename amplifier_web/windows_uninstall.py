@@ -167,10 +167,11 @@ def question(message, *, cancel=False):
 def single(root, *, wait=10.0):
     """One start or removal at a time for one installation, across processes and sign-in sessions.
 
-    A named semaphore, not a mutex: a mutex belongs to one thread, and these
-    steps move between threads. It goes away with its last handle, so a
-    program that ended without releasing it does not block the next one for
-    long. When it stays taken this raises Busy and changes nothing.
+    A named mutex. It has no count, and only the thread that took it can
+    release it, so no other program can let a second one in. Enter and leave
+    this block on one thread. A program that ended without releasing it
+    leaves it to the next taker. When it stays taken this raises Busy and
+    changes nothing.
 
     The name is in the name space that every session of this PC shares, so
     another account can create it first. The lock is therefore this person's
@@ -185,19 +186,19 @@ def single(root, *, wait=10.0):
     from .windows_files import PVOID, _API
     api = _API()
     kernel = C.WinDLL("kernel32", use_last_error=True)
-    kernel.CreateSemaphoreW.argtypes = [C.c_void_p, C.c_long, C.c_long, C.c_wchar_p]
-    kernel.CreateSemaphoreW.restype = C.c_void_p
+    kernel.CreateMutexW.argtypes = [C.c_void_p, C.c_int, C.c_wchar_p]
+    kernel.CreateMutexW.restype = C.c_void_p
     kernel.WaitForSingleObject.argtypes = [C.c_void_p, C.c_uint32]
     kernel.WaitForSingleObject.restype = C.c_uint32
-    kernel.ReleaseSemaphore.argtypes = [C.c_void_p, C.c_long, C.c_void_p]
-    kernel.ReleaseSemaphore.restype = C.c_int
+    kernel.ReleaseMutex.argtypes = [C.c_void_p]
+    kernel.ReleaseMutex.restype = C.c_int
     kernel.CloseHandle.argtypes = [C.c_void_p]
     kernel.CloseHandle.restype = C.c_int
     # One name for every sign-in session of this person on this PC. Windows
-    # needs no privilege for a semaphore in this name space.
+    # needs no privilege for a mutex in this name space. Not owned at creation.
     with api.private_security() as security:
-        handle = kernel.CreateSemaphoreW(C.byref(security), 1, 1,
-                                         "Global\\AmplifierUnified-installation-" + identity(root))
+        handle = kernel.CreateMutexW(C.byref(security), 0,
+                                     "Global\\AmplifierUnified-installation-" + identity(root))
         if not handle:
             raise C.WinError(C.get_last_error())
     try:
@@ -214,12 +215,14 @@ def single(root, *, wait=10.0):
         state = kernel.WaitForSingleObject(handle, int(wait * 1000))
         if state == 0x102:  # WAIT_TIMEOUT
             raise Busy()
-        if state != 0:
+        # 0x80, WAIT_ABANDONED: its owner ended without releasing it. This
+        # thread owns it now; every step checks the folder itself again.
+        if state not in (0, 0x80):
             raise C.WinError(C.get_last_error())
         try:
             yield
         finally:
-            kernel.ReleaseSemaphore(handle, 1, None)
+            kernel.ReleaseMutex(handle)
     finally:
         kernel.CloseHandle(handle)
 
@@ -297,17 +300,21 @@ def _clear(owned, names, deadline, wait):
 
 
 def forget_setup(owned, *, wait=time.sleep):
-    """Delete setup's records, so that a later setup run stops at this folder.
+    """Delete setup's mark of unfinished work. Setup's completion record stays.
 
-    Setup's mark of unfinished work goes first. A finished installation can
-    still have it; with that mark and without the completion record, setup
-    would take the folder for its own unfinished work and empty it.
+    A finished installation can still have that mark. With the mark and
+    without the completion record, setup would take a folder without data for
+    its own unfinished work and empty it, with everything in it.
+
+    So the completion record stays for as long as anything is left in the
+    folder: setup then installs and removes nothing there, whatever else a
+    program puts into the folder. Only the step after exit deletes the
+    record, immediately before the journal, when nothing but this removal's
+    own entries is left.
     """
     from . import windows_consumer_shell as shell
-    deadline = time.monotonic() + shell.SETTLE_SECONDS
-    for name in (STARTED, COMPLETE):
-        if _clear(owned, [name], deadline, wait):
-            raise Held([name])
+    if _clear(owned, [STARTED], time.monotonic() + shell.SETTLE_SECONDS, wait):
+        raise Held([STARTED])
 
 
 def remove_data(owned, *, wait=time.sleep):
@@ -335,20 +342,19 @@ def remove_program(owned, *, last=False, wait=time.sleep):
 
 
 def last_names(owned=None):
-    """The folders and files that the step after exit is asked about, by exact name.
+    """The folders that the step after exit is asked about, by exact name.
 
-    Every exact name of this installation, and every entry in the folder now
+    Every exact folder name of this installation, and every folder in it now
     that has one of its name forms. That step removes a named folder only
-    while it is empty, and it deletes a named plain file directly in the
-    installation folder. So an emptied folder that Windows still keeps for a
-    program goes when that program has ended, and nothing else is deleted.
-    The journal and the held folder are not in these lists.
+    while it is empty. So an emptied folder that Windows still keeps for a
+    program goes when that program has ended, and no file is deleted. The
+    held folder is not in this list. A file of this installation that is
+    still there (a program uses it) stays, and then the folder stays.
     """
     groups = sort([] if owned is None else owned.names())
-    own = groups["setup"] + groups["program"] + groups["last"]
+    own = groups["program"] + groups["last"]
     folders = list(DATA + RUNNING + CACHES + LAST[:2]) + [name for name in own if _folder(name)]
-    files = [STARTED, COMPLETE, *FILES, *LAST[2:]] + [name for name in own if not _folder(name)]
-    return list(dict.fromkeys(folders)), list(dict.fromkeys(files))
+    return list(dict.fromkeys(folders))
 
 
 def remove(root, *, stop, certificate, progress, choice="delete", data=remove_data, wait=time.sleep, **fields):
@@ -363,9 +369,10 @@ def remove(root, *, stop, certificate, progress, choice="delete", data=remove_da
        Up to here nothing in the folder has changed.
     3. The journal. Nothing in the folder is deleted before it exists. From
        here Amplifier does not start from this folder.
-    4. Setup's records, then `data`: the person's data. If any of it stays,
-       this stops. The Windows entries and the launcher are intact, so the
-       person can uninstall again.
+    4. Setup's mark of unfinished work, then `data`: the person's data. If
+       any of it stays, this stops. The Windows entries and the launcher are
+       intact, so the person can uninstall again. Setup's completion record
+       stays until the step after exit: with it, setup changes nothing here.
     5. Caches and program files; then the Windows entries; then what the
        launcher's own check needs.
 
@@ -417,18 +424,21 @@ def finish(root, token, *, choice="delete", wait=time.sleep):
     them. So, under the lock, with the installation folder proven and pinned
     again and the journal still this removal's own:
 
-    1. Create the flat folder `unified-uninstall-last` and hold it.
-    2. Start the step after exit in that folder. Windows keeps a program's
-       current folder open. From here no program can rename or replace that
-       folder, the installation folder or a folder above it, also when this
-       program has ended.
+    1. Create the flat folder `unified-uninstall-last`, and in it one folder
+       with the token as its name. Hold both.
+    2. Start the step after exit in that inner folder. Windows keeps a
+       program's current folder open. From here no program can rename or
+       replace the flat folder, the installation folder or a folder above
+       it, also when this program has ended, and the flat folder is never
+       empty, so no program can turn it into a link.
     3. Delete `python` and `tools` through handles, as everything before. A
        file that this running program has mapped is moved, through its
        handle, into the held folder instead.
 
     The step after exit deletes those few files where they are held, then the
-    emptied folders, the journal and the installation folder. It walks no
-    tree. Returns what the walk reports for the two folders. After this the
+    emptied folders, setup's completion record, the journal and the
+    installation folder. It walks no tree. Returns what the walk reports for
+    the two folders. After this the
     process imports nothing more, writes nothing into the installation, and
     ends.
     """
@@ -443,9 +453,9 @@ def finish(root, token, *, choice="delete", wait=time.sleep):
             # What an earlier last step left. It is this installation's own
             # folder; a new one is made, or the name refuses.
             owned.remove([PARK], settle=shell.SETTLE_SECONDS, wait=wait)
-            folders, files = last_names(owned)
-            with owned.aside(PARK) as park:
+            folders = last_names(owned)
+            with owned.aside(PARK, token) as park:
                 windows_removal.finish_after_exit(
-                    root, token, park=PARK, folders=folders, files=files,
+                    root, token, park=PARK, folders=folders,
                     wait_for=(os.getpid(), os.getppid()), seconds=SECONDS_AFTER_EXIT, choice=choice)
                 return owned.remove(RUNNING, settle=shell.SETTLE_SECONDS, wait=wait, park=park)

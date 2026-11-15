@@ -31,7 +31,8 @@ with that folder as its current folder. Windows keeps a program's current
 folder open without delete sharing. So the folder that the uninstall program
 held stays held when that program has ended, and no program can rename or
 replace it, the installation folder or a folder above it. The step deletes
-the few parked files there. Everything else it removes is an empty folder.
+the few parked files there. Everything else it removes is a folder, by
+RemoveDirectory, plus setup's completion record and the journal at the end.
 """
 from __future__ import annotations
 
@@ -63,16 +64,18 @@ def same_name(name):
 
 
 # All variable data travels on stdin, never in this program. This last step
-# works with paths. It never walks a tree: it deletes plain files directly in
-# one held folder, removes named folders only when they are empty, and deletes
-# named plain files directly in the held installation folder.
+# works with paths, so it deletes a file only where the path cannot lead
+# anywhere else, and everything else it removes is a folder (RemoveDirectory:
+# an empty folder goes, a link goes as a link, a folder with entries refuses).
 #
-# "Held": Windows keeps a program's current folder open without delete sharing.
-# The uninstall program starts this step in the flat folder while it holds that
-# folder itself. From then on no program can rename or replace that folder, the
-# installation folder or a folder above it. Before the step removes the flat
-# folder it makes the installation folder its current folder, and it gives that
-# one free only to remove it when it is empty.
+# Why the paths are safe. The uninstall program creates the flat folder and one
+# "hold" folder in it, holds both open, and starts this step with the hold
+# folder as its current folder. Windows keeps a program's current folder open
+# without delete sharing: the hold folder cannot be removed or renamed, and
+# neither can a folder above it. The flat folder is therefore never empty, and
+# Windows turns only an empty folder into a link. The installation folder holds
+# the flat folder, so the same is true for it. A file directly in the flat
+# folder, or directly in the installation folder, is then exactly that file.
 FINISH_SCRIPT = r"""
 $ErrorActionPreference = 'Stop'
 $p = $null
@@ -121,34 +124,23 @@ function Authorized {
             $record.token -ceq $p.token -and $record.token -cmatch '^[0-9a-f]{32}$')
     } catch { return $false }
 }
-function Clear-Link($entry) {
-    if (Later $entry) { return }
-    # Nonrecursive deletion of the link itself avoids Windows PowerShell's
-    # folder-link removal behavior. Constrained language can refuse this call;
-    # then the link stays and prevents root removal.
-    try { $entry.Delete() } catch { Keep $entry.FullName }
-}
-function Clear-File($entry) {
-    if (Later $entry) { return }
-    try {
-        if ("$($entry.Attributes)" -match 'ReadOnly|Hidden|System') {
-            if ($entry.LinkType -eq 'HardLink') { Keep $entry.FullName; return }
-            Remove-Item -LiteralPath $entry.FullName -Force
-        } else {
-            Remove-Item -LiteralPath $entry.FullName -ErrorAction SilentlyContinue
-        }
-    } catch { Keep $entry.FullName }
-}
 function Clear-Folder($entry) {
-    # Only an empty folder goes, and never with -Recurse: no file is deleted
-    # here, whatever the folder is by the time Windows removes it.
+    # RemoveDirectory only: no file is deleted here, whatever the entry is by
+    # the time Windows removes it. A plain file with a folder's name stays.
     if (Later $entry) { return }
-    if ("$($entry.Attributes)" -match 'ReparsePoint') { Clear-Link $entry; return }
     try {
-        if ((Real-Folder $entry) -and -not @(Get-ChildItem -LiteralPath $entry.FullName -Force).Count) {
-            Remove-Item -LiteralPath $entry.FullName -Force
-        } else { Keep $entry.FullName }
+        if ($entry.PSIsContainer) { $entry.Delete() } else { Keep $entry.FullName }
     } catch { Keep $entry.FullName }
+}
+function Clear-Record($name) {
+    # One of the two records directly in the held installation folder. A link,
+    # a folder, or a file that only -Force could delete is refused.
+    $file = Get-Item -LiteralPath (Join-Path $p.root $name) -Force -ErrorAction SilentlyContinue
+    if ($null -eq $file) { return }
+    if ($file.PSIsContainer -or "$($file.Attributes)" -match 'ReparsePoint|ReadOnly|Hidden|System') {
+        throw 'Record refused'
+    }
+    Remove-Item -LiteralPath $file.FullName
 }
 try {
     # Enumerate the entire stdin pipeline before parsing or touching the tree.
@@ -158,24 +150,26 @@ try {
         if ($p.root -isnot [string] -or -not $p.root -or
             $p.token -isnot [string] -or $p.token -cnotmatch '^[0-9a-f]{32}$' -or
             $p.choice -cnotin @('delete', 'keep')) { throw 'Invalid root, token or choice' }
-        $names = @($p.park) + @($p.folders) + @($p.files)
-        foreach ($name in $names) {
+        foreach ($name in @($p.park) + @($p.folders)) {
             if ($name -isnot [string] -or -not $name -or $name -in @('.', '..') -or
-                $name -match '[\\/:\x00]' -or $name -ieq 'unified-uninstall.json') {
-                throw 'Not a single entry name'
+                $name -match '[\\/:\x00]' -or $name -ieq 'unified-uninstall.json' -or
+                $name -ieq 'unified-setup-complete.json') {
+                throw 'Not a single folder name'
             }
         }
         if ($p.seconds -lt 0 -or $p.seconds -gt 3600) { throw 'Invalid duration' }
         $park = Join-Path $p.root $p.park
-        # This program's own current folder is the held flat folder. PowerShell's
+        $hold = Join-Path $park $p.token
+        # This program's own current folder is the hold folder. PowerShell's
         # location is a separate thing; it moves away so that no cmdlet refuses.
-        if ([Environment]::CurrentDirectory -ne $park) { throw 'Not started in the held folder' }
+        if ([Environment]::CurrentDirectory -ne $hold) { throw 'Not started in the held folder' }
         Set-Location -LiteralPath $p.outside
         if (-not (Authorized)) { throw 'Root or token refused' }
         Write-Host 'ready'
         $until = (Get-Date) + (New-TimeSpan -Seconds $p.seconds)
-        # 1. The parked program files, in the folder that is held. This ends
-        #    when the uninstall program has ended and the folder is empty.
+        $done = $false
+        # 1. With the hold folder held: the parked program files, directly in
+        #    the flat folder, and the named folders that are empty by now.
         do {
             if (-not (Authorized)) { throw 'Root or token refused' }
             $passes++
@@ -183,52 +177,53 @@ try {
             $alive = @($p.wait_for | ForEach-Object {
                 Get-Process -Id $_ -ErrorAction SilentlyContinue
             })
-            if (-not (Real-Folder (Get-Item -LiteralPath $park -Force))) { throw 'Held folder refused' }
             foreach ($entry in @(Get-ChildItem -LiteralPath $park -Force)) {
-                if ($entry.PSIsContainer -or "$($entry.Attributes)" -match 'ReparsePoint') {
+                if ($entry.Name -ceq $p.token) { continue }
+                if ($entry.PSIsContainer -or
+                    "$($entry.Attributes)" -match 'ReparsePoint|ReadOnly|Hidden|System') {
                     Keep $entry.FullName
-                } else { Clear-File $entry }
+                } elseif (-not (Later $entry)) {
+                    # Never -Force: no attribute of any file is changed.
+                    Remove-Item -LiteralPath $entry.FullName -ErrorAction SilentlyContinue
+                }
             }
-            $inside = @(Get-ChildItem -LiteralPath $park -Force)
-            foreach ($entry in $inside) { Keep $entry.FullName }
-            if ((-not $alive.Count -and -not $inside.Count) -or (Get-Date) -ge $until) { break }
-            Start-Sleep -Seconds 1
-        } while ((Get-Date) -lt $until)
-        # 2. Hold the installation folder itself. That gives the flat folder free.
-        [Environment]::CurrentDirectory = $p.root
-        do {
-            if (-not (Authorized)) { throw 'Root or token refused' }
-            $passes++
-            Reset
             foreach ($entry in @(Get-ChildItem -LiteralPath $p.root -Force)) {
-                if ($names -cnotcontains $entry.Name) { continue }
-                if (-not (Authorized)) { throw 'Root or token refused' }
-                if ($entry.Name -ceq $p.park -or @($p.folders) -ccontains $entry.Name) {
+                if (@($p.folders) -ccontains $entry.Name) {
+                    if (-not (Authorized)) { throw 'Root or token refused' }
                     Clear-Folder $entry
-                } elseif ("$($entry.Attributes)" -match 'ReparsePoint') { Clear-Link $entry }
-                elseif (-not $entry.PSIsContainer) { Clear-File $entry }
-                else { Keep $entry.FullName }
+                }
             }
-            $remaining = @(Get-ChildItem -LiteralPath $p.root -Force |
-                Where-Object { $names -ccontains $_.Name })
-            if (-not $remaining.Count -or (Get-Date) -ge $until) { break }
+            $inside = @(Get-ChildItem -LiteralPath $park -Force | Where-Object { $_.Name -cne $p.token })
+            foreach ($entry in $inside) { Keep $entry.FullName }
+            $rest = @(Get-ChildItem -LiteralPath $p.root -Force | Where-Object {
+                $_.Name -cne $p.park -and $_.Name -cne 'unified-uninstall.json' -and
+                $_.Name -cne 'unified-setup-complete.json'
+            })
+            foreach ($entry in $rest) { Keep $entry.FullName }
+            $done = (-not $alive.Count -and -not $inside.Count -and -not $rest.Count)
+            if ($done -or (Get-Date) -ge $until) { break }
             Start-Sleep -Seconds 1
         } while ((Get-Date) -lt $until)
         if (-not (Authorized)) { throw 'Root or token refused' }
-        $remaining = @(Get-ChildItem -LiteralPath $p.root -Force)
-        if ($remaining.Count -eq 1 -and $remaining[0].Name -ceq 'unified-uninstall.json') {
-            Clear-File $remaining[0]
-            # 3. Give the installation folder free. It goes only when it is empty.
-            [Environment]::CurrentDirectory = $p.outside
-            if (-not @(Get-ChildItem -LiteralPath $p.root -Force).Count) {
-                Remove-Item -LiteralPath $p.root -Force
-                $removed = $true
-            }
-        } else {
-            foreach ($entry in $remaining) {
-                if ($entry.Name -cne 'unified-uninstall.json' -and
-                    $script:left -cnotcontains $entry.FullName) { Keep $entry.FullName }
-            }
+        if ($done) {
+            # 2. Nothing but this removal's own entries is left. Still with the
+            #    hold folder held: setup's completion record, then the journal.
+            Clear-Record 'unified-setup-complete.json'
+            Clear-Record 'unified-uninstall.json'
+        }
+        # 3. Only folders from here, by RemoveDirectory. Hold the installation
+        #    folder; that gives the hold folder and the flat folder free.
+        [Environment]::CurrentDirectory = $p.root
+        foreach ($path in @($hold, $park)) {
+            $folder = Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+            if ($null -ne $folder) { Clear-Folder $folder }
+        }
+        if ($done) {
+            # 4. Hold the folder above; that gives the installation folder free.
+            [Environment]::CurrentDirectory = $p.parent
+            $folder = Get-Item -LiteralPath $p.root -Force -ErrorAction SilentlyContinue
+            if ($null -ne $folder) { Clear-Folder $folder }
+            $removed = -not (Test-Path -LiteralPath $p.root)
         }
     } | Out-Null
 } catch { $reason = $_.Exception.Message }
@@ -244,21 +239,23 @@ finally {
 """
 
 
-def finish_after_exit(root, token, *, park, folders, files, wait_for=(), seconds=60, report=None,
+def finish_after_exit(root, token, *, park, folders, wait_for=(), seconds=60, report=None,
                       choice="delete", ready=30):
     """Start the token-guarded last step in a held folder, outside the installation's Job.
 
-    `park` names a folder directly in `root` that the caller holds open, as
-    `Folder.aside` does. The step starts with that folder as its current
-    folder, and this call returns only when the step has said that it runs.
-    From then on Windows keeps that folder open for the step, so no program
-    can rename or replace it, the installation folder or a folder above it,
-    also when the caller has ended.
+    `park` names a folder directly in `root`, with a folder named `token` in
+    it; the caller holds both open, as `Folder.aside` does. The step starts
+    with that inner folder as its current folder, and this call returns only
+    when the step has said that it runs. From then on Windows keeps that
+    folder open for the step: no program can remove or rename it, the flat
+    folder or a folder above, also when the caller has ended, and the flat
+    folder is never empty.
 
-    The step deletes plain files directly in `park`, removes `park` and the
-    `folders` only when they are empty, deletes the plain `files` directly in
-    `root`, then the journal, then `root` only when it is empty. Links are
-    deleted as links. Entries that are not named stay.
+    The step deletes plain files directly in `park` (never with -Force), and
+    removes the `folders` only when they are empty. When nothing but this
+    removal's own entries is left, it deletes setup's completion record and
+    the journal, then the two held folders, then `root`. Folders go by
+    RemoveDirectory: a link goes as a link, a folder with entries refuses.
 
     A return does not mean that anything was removed. A step that does not
     answer within `ready` seconds raises OSError. If Windows refuses Job
@@ -272,13 +269,15 @@ def finish_after_exit(root, token, *, park, folders, files, wait_for=(), seconds
             or drive[0] not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"):
         raise ValueError("Root must be an absolute local drive path.")
     root = ntpath.normpath(root)
-    groups = [[park], list(folders), list(files)]
-    for group in groups:
-        for name in group:
-            if (not isinstance(name, str) or not name or name in {".", ".."}
-                    or any(mark in name for mark in "\\/:\0")
-                    or name.casefold() == "unified-uninstall.json"):
-                raise ValueError("Not a single entry name.")
+    parent = ntpath.dirname(root)
+    if not parent or parent == root:
+        raise ValueError("Root must be a folder below a drive's top folder.")
+    names = [park, *folders]
+    for name in names:
+        if (not isinstance(name, str) or not name or name in {".", ".."}
+                or any(mark in name for mark in "\\/:\0")
+                or name.casefold() in {"unified-uninstall.json", "unified-setup-complete.json"}):
+            raise ValueError("Not a single folder name.")
     if (not isinstance(token, str) or len(token) != 32
             or any(char not in "0123456789abcdef" for char in token)):
         raise ValueError("Token must be exactly 32 lowercase hex characters.")
@@ -295,8 +294,8 @@ def finish_after_exit(root, token, *, park, folders, files, wait_for=(), seconds
         raise OSError("Cannot locate Windows PowerShell.") from error
     outside = str(PureWindowsPath(program).parents[2])  # The Windows folder.
     payload = json.dumps({
-        "root": root, "token": token, "choice": choice, "park": park, "outside": outside,
-        "folders": groups[1], "files": groups[2], "wait_for": wait_for, "seconds": seconds,
+        "root": root, "parent": parent, "token": token, "choice": choice, "park": park,
+        "outside": outside, "folders": names[1:], "wait_for": wait_for, "seconds": seconds,
         "report": os.fspath(report) if report is not None else None,
     }, ensure_ascii=True).encode("ascii")
     environment = os.environ.copy()
@@ -313,8 +312,8 @@ def finish_after_exit(root, token, *, park, folders, files, wait_for=(), seconds
             environment[key] = ntpath.join(environment["LOCALAPPDATA"], "Temp")
     arguments = [program, "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand",
                  base64.b64encode(FINISH_SCRIPT.encode("utf-16-le")).decode("ascii")]
-    # The held folder is the step's current folder from its first moment.
-    options = dict(cwd=ntpath.join(root, park), env=environment,
+    # The hold folder is the step's current folder from its first moment.
+    options = dict(cwd=ntpath.join(root, park, token), env=environment,
                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     flags = 0x08000000 | 0x00000200  # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
     try:
@@ -326,7 +325,7 @@ def finish_after_exit(root, token, *, park, folders, files, wait_for=(), seconds
     finally:
         process.stdin.close()
     # The step writes one line when it runs in the held folder and its checks
-    # passed. Until then the caller must not let the folder go.
+    # passed. Until then the caller must not let the folders go.
     answer = []
     reader = threading.Thread(target=lambda: answer.append(process.stdout.readline()), daemon=True)
     reader.start()
@@ -593,27 +592,35 @@ class Folder:
             wait(0.5)
 
     @contextmanager
-    def aside(self, name):
-        """Create one new folder directly in this folder and hold it open.
+    def aside(self, name, hold):
+        """Create one new folder directly in this folder, and the folder `hold` in it; hold both open.
 
-        Yields the function that moves an open file into it under the next
-        free number. While the folder is held, no program can rename or
-        replace it. An entry of that name that exists already refuses.
+        Yields the function that moves an open file into the new folder under
+        the next free number. While both are held, no program can rename or
+        replace the new folder, and it is never empty: Windows turns only an
+        empty folder into a link, so a path into it stays a path into it. An
+        entry of that name that exists already refuses.
         """
-        handle = self._api.make(self._handle, name)
-        count = [0]
-
-        def park(file):
-            for _ in range(10):  # A number is taken only if a program put an entry there.
-                count[0] += 1
-                try:
-                    return self._api.park(file, handle, str(count[0]))
-                except FileExistsError:
-                    continue
-            raise OSError(17, "no free name in the held folder")
+        handle, inner = self._api.make(self._handle, name), None
         try:
+            inner = self._api.make(handle, hold)
+            # The new folder was empty for a moment. It must still be a folder.
+            if self._api.kind(handle) != "folder" or self._api.kind(inner) != "folder":
+                raise OSError(22, "the held folder changed into a link")
+            count = [0]
+
+            def park(file):
+                for _ in range(10):  # A number is taken only if a program put an entry there.
+                    count[0] += 1
+                    try:
+                        return self._api.park(file, handle, str(count[0]))
+                    except FileExistsError:
+                        continue
+                raise OSError(17, "no free name in the held folder")
             yield park
         finally:
+            if inner is not None:
+                self._api.close(inner)
             self._api.close(handle)
 
 
