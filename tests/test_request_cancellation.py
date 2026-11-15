@@ -101,6 +101,97 @@ async def test_unknown_admission_never_claims_stopped_or_replays(app, mode):
     assert len(app.runtime.inputs) == 1
 
 
+@pytest.mark.parametrize('mode', ['queue', 'auto'])
+async def test_unknown_cancellation_cannot_be_settled_by_unrelated_recipient_turn(app, mode):
+    """A clean later turn is not proof about an earlier lost acknowledgement."""
+    from test_collaborative_workspaces import finish
+    _, target = app.state['sessions']
+    app.runtime.fail = True
+    await send(app, mode=mode)
+    await settled(app, 'request-1', 'unknown')
+    await cancel(app)
+    original = copy.deepcopy(app.collaboration.receipt('request-1'))
+    # The fixture actually accepted the input before losing its acknowledgement.
+    # Host-side cancellation fences fresh authorization, not that native input.
+    inputs = copy.deepcopy(app.runtime.inputs)
+    assert len(inputs) == 1
+    assert app.collaboration.guard(original)
+    assert not app.collaboration.admission(target['id'], {'inputId': 'request-1'})['admitted']
+
+    await generation(app, target, 'recipient-read-only', ['read-only'])
+    with pytest.raises(AppError, match='Declare only your exact delivered request'):
+        await agent_action(app, target, 'coordination.reply', {
+            'requestId': 'request-1', 'kind': 'result', 'outcome': 'cancelled',
+            'text': 'No pending work observed in this later turn.'}, 'unknown-cancel-reply')
+    # Even a successfully completed unrelated turn and worker exit cannot
+    # manufacture the missing request-specific admission/settlement evidence.
+    await finish(app, target, 'read-only')
+    await app.on_runtime_event('runtime.ended', {'sessionId': target['id'], 'rootSessionId': target['id']})
+    result = (await app.dispatch('coordination.result', {'requestId': 'request-1'}))['result']
+    assert result['cancellation']['status'] == 'requested'
+    current = app.collaboration.receipt('request-1')
+    assert current['delivery'] == 'unknown' and current.get('responseRevision', 0) == 0
+    assert current['terminalOutcome'] == original['terminalOutcome']
+    assert not current.get('response')
+    assert app.runtime.inputs == inputs
+
+
+@pytest.mark.parametrize('mode', ['queue', 'auto'])
+async def test_unknown_cancellation_keeps_exact_fence_and_receipts_after_reload(app, mode):
+    app.runtime.fail = True
+    await send(app, mode=mode)
+    await settled(app, 'request-1', 'unknown')
+    first = await cancel(app, reason='Withdraw future admission; past effects remain unknown.')
+    original = copy.deepcopy(app.collaboration.receipt('request-1'))
+    source, target = app.state['sessions']
+    await app.close()
+    reopened = AppService(app.data_dir, Runtime(), workspace=app.default_workspace)
+    reopened.runtime.app = reopened
+    try:
+        duplicate = await reopened.dispatch('coordination.cancel', {
+            'sessionId': source['id'], 'requestId': 'request-1',
+            'reason': 'Withdraw future admission; past effects remain unknown.'},
+            origin='agent', caller_session_id=source['id'], command_id='cancel-1')
+        assert duplicate['duplicate'] and duplicate['result'] == first['result']
+        restored = reopened.collaboration.receipt('request-1')
+        assert restored['delivery'] == 'unknown'
+        assert restored['terminalOutcome'] == original['terminalOutcome']
+        assert restored['cancellation'] == original['cancellation']
+        assert reopened.collaboration.guard(restored)
+        assert not reopened.collaboration.admission(target['id'], {'inputId': 'request-1'})['admitted']
+        reopened._session(target['id'])['status'] = 'idle'
+        await reopened.collaboration.drain(target['id'])
+        assert not reopened.runtime.inputs
+    finally:
+        await reopened.close()
+
+
+@pytest.mark.parametrize('mode', ['queue', 'auto'])
+@pytest.mark.parametrize('accepted', [False, True])
+async def test_cancelled_unknown_requires_exact_native_evidence_not_cancellation_intent(app, mode, accepted):
+    from test_peer_admission_reconciliation import unknown_request
+    target = await unknown_request(app, identity='request-1', mode=mode)
+    await cancel(app)
+    original = copy.deepcopy(app.collaboration.receipt('request-1'))
+    evidence = ({'accepted': True, 'inputId': 'request-1', 'mode': 'queue'} if accepted else
+                {'accepted': False, 'inputId': 'request-1', 'effect': 'none'})
+    await app.on_runtime_event('runtime.delivery', {'sessionId': target['id'], 'inputId': 'request-1',
+        'interruptionRevision': 0, 'peerAdmission': evidence})
+    result = (await app.dispatch('coordination.result', {'requestId': 'request-1'}))['result']
+    assert result['receipt']['delivery'] == ('accepted' if accepted else 'not_sent')
+    assert result['cancellation']['status'] == ('requested' if accepted else 'withdrawn')
+    current = copy.deepcopy(app.collaboration.receipt('request-1'))
+    assert current['cancellation'] == original['cancellation']
+    assert current['admission'] == evidence and not current.get('response')
+    assert app.collaboration.guard(current)  # Late acceptance cannot reopen admission.
+    # Repeated native observations are idempotent; no native input is resubmitted.
+    await app.on_runtime_event('runtime.delivery', {'sessionId': target['id'], 'inputId': 'request-1',
+        'interruptionRevision': 0, 'peerAdmission': evidence})
+    await app.collaboration.drain(target['id'])
+    assert app.collaboration.receipt('request-1') == current
+    assert not app.runtime.inputs
+
+
 @pytest.mark.parametrize('mode', ['queue', 'auto', 'steer'])
 async def test_shutdown_during_admission_keeps_committed_cancellation_and_closed_wait(app, mode):
     entered = asyncio.Event()
