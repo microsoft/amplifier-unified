@@ -23,6 +23,15 @@ plus per-job checks preserves the same recovery result. Trace reads, copies,
 serialization, hashing and comparisons before filtering the final result. A small
 response, unchanged file or quiet UI does not prove that its construction was cheap.
 
+Slow `state.serialize` timings include their full/explicit scope and the number
+of already admitted owners. Fixed scalar counts describe resident messages,
+execution nodes, retired receipts and workers at entry, with separate resident,
+cold and unavailable owner coverage for each count. An absent or custom container
+is unavailable, not an empty history. These facts use raw built-in container
+lengths without loading cold fields or inspecting bodies. They share the existing
+60-entry slow-operation limit and do not identify callers, effects or historical
+completeness. Timings remain inclusive; saves can also occur inside publication.
+
 Resource collection needs an initial live-root mark and a fresh read at pruning.
 Reuse that final capture while retaining its uninterrupted owner lock; scanning
 the same mutable graph again before any yield adds cost without new evidence.

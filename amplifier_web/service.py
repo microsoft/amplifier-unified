@@ -1117,7 +1117,8 @@ class AppService:
             if getattr(self, 'workspace_work', None):
                 from .workspace_work_coverage import stage_saved_inputs
                 staged_work_inputs = stage_saved_inputs(self.workspace_work, admitted_index, admitted_ids, deleted_ids)
-            with self.performance_diagnostics.measure('state.serialize', synchronous=True):
+            with self.performance_diagnostics.measure('state.serialize', synchronous=True,
+                    serialization=(session_ids is None, admitted_index, admitted_ids)):
                 normalize_state(normalized, self.db, undo=normalization_undo)
                 saved = persist(self.data_dir, self._state, pending_views,
                                 session_ids=admitted_ids, by_id=admitted_index,
