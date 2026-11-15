@@ -109,6 +109,53 @@ async def test_preview_whole_source_real_lease_no_authority_created(host):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('format', ['legacy', 'committed'])
+async def test_browser_fixture_canonical_format_uses_actual_held_owner(host, monkeypatch, format):
+    """The browser's optional T2 source must reach the real adapter, not a stub."""
+    monkeypatch.syspath_prepend(str(Path(__file__).parent / 'fixtures'))
+    from optimize_storage_ui_server import seed_canonical
+    from amplifier_web.storage_optimize_owners import OwnerAdapters
+    app, row, operation, old = host
+    old.unlink()
+    old.with_name('transcript.jsonl.backup').unlink()
+    old.parent.rmdir()
+    old.parent.parent.chmod(0o700)
+    body = seed_canonical(old.parent, row['sessionId'], app.source['workspace'], format=format)
+    if format == 'committed':
+        row.pop('_stamp')
+        row.update(_canonicalFormat='committed', _sessionDir=str(old.parent), bytes=None)
+    else:
+        row['_stamp'] = canonical._stamp(body)
+    before = {str(p.relative_to(old.parent)): p.read_bytes()
+        for p in old.parent.rglob('*') if p.is_file()}
+    result = await OwnerAdapters(app).preview(row, operation)
+    assert result['status'] == 'held' and '_action' not in result
+    assert result['canonicalRecords'] == result['canonicalInlineImages'] == 1
+    assert 'Original image provenance' in result['reason']
+    assert not (old.parent / 'media').exists()
+    assert app.leases == 0
+    if format == 'committed':
+        from amplifier_foundation.session.transcript_source import open_committed_source
+        with open_committed_source(old.parent) as source:
+            assert result['_canonicalPlan']['committed_prefix'] == asdict(source.commit)
+        assert old.is_dir()  # The real T2 legacy fence is not a readable fallback.
+    assert {str(p.relative_to(old.parent)): p.read_bytes()
+        for p in old.parent.rglob('*') if p.is_file()} == before
+
+
+def test_browser_fixture_committed_seed_cannot_adopt_existing_history(host, monkeypatch):
+    monkeypatch.syspath_prepend(str(Path(__file__).parent / 'fixtures'))
+    from optimize_storage_ui_server import seed_canonical
+    app, row, _, path = host
+    path.parent.parent.chmod(0o700)  # Reach create-only refusal, not parent-policy refusal.
+    before = path.read_bytes()
+    with pytest.raises(FileExistsError):
+        seed_canonical(path.parent, row['sessionId'], app.source['workspace'], format='committed')
+    assert path.read_bytes() == before
+    assert not (path.parent / 'transcript.v2').exists()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize('kind,owner', [('worker', 'amplifier-unified'), ('unknown', 'amplifier-unified'),
                                       ('root', 'amplifier-cli'), ('root', None)])
 async def test_unknown_or_worker_ownership_held(host, kind, owner):

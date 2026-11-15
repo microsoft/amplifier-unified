@@ -57,6 +57,18 @@ function assertSettledOptimize(result,receipt){
  assert.equal(result.canCancel,false);
 }
 
+function assertCommittedCanonicalHold(result,nativeId){
+ const rows=result.rows.filter(row=>row.owner==='foundation'&&row.sessionId===nativeId);
+ assert.equal(rows.length,1,'A committed canonical namespace must have exactly one public outcome');
+ const row=rows[0];
+ assert.equal(row.status,'held','Enrollment must not invent historical image admission');
+ assert.equal(row.canonicalRecords,1);assert.equal(row.canonicalInlineImages,1);
+ assert.ok(Number.isSafeInteger(row.bytes)&&row.bytes>0,'T2 accounting must come from the checked prefix');
+ assert.match(row.reason,/Original image provenance and retention admission are unavailable/);
+ return Object.fromEntries(['owner','sessionId','status','canonicalRecords','canonicalInlineImages','bytes','reason']
+  .map(key=>[key,row[key]]));
+}
+
 const currentHistoryRead=(observedEpoch,currentEpoch,capture)=>capture&&observedEpoch===currentEpoch;
 
 async function browserWindowState(page){
@@ -201,6 +213,14 @@ async function sourceCheck(){
  const settled={operationId:'operation',revision:14,status:'partial',cutoffs:{requestBefore:'2026-11-12T00:00:00Z',responseBefore:null},
   summary:{coverage:{complete:true,completed:1,held:2,eligible:0,attempting:0}},canCancel:false};
  assertSettledOptimize(settled,settled);
+ const committed={...settled,rows:[{owner:'foundation',sessionId:'native',status:'held',
+  canonicalRecords:1,canonicalInlineImages:1,bytes:111,
+  reason:'Original image provenance and retention admission are unavailable; legacy pixels were preserved'}]};
+ assert.equal(assertCommittedCanonicalHold(committed,'native').bytes,111);
+ assert.throws(()=>assertCommittedCanonicalHold({...committed,rows:[]},'native'),/exactly one/);
+ assert.throws(()=>assertCommittedCanonicalHold({...committed,rows:[...committed.rows,...committed.rows]},'native'),/exactly one/);
+ assert.throws(()=>assertCommittedCanonicalHold({...committed,rows:[{...committed.rows[0],bytes:null}]},'native'),/checked prefix/);
+ assert.throws(()=>assertCommittedCanonicalHold({...committed,rows:[{...committed.rows[0],status:'completed'}]},'native'),/invent historical/);
  assert.equal(terminalOptimize({...settled,status:'applying'},'operation'),false);
  assert.throws(()=>assertSettledOptimize({...settled,status:'applying'},settled),/not terminal/);
  assert.throws(()=>assertSettledOptimize({...settled,operationId:'other'},settled),/exact saved operation/);
@@ -405,6 +425,7 @@ async function run(){
   await page.goto(base);await page.waitForSelector('#amp-one');
   evidence.browserExecuted=true;
   const before=await observe();
+  provenance.canonicalFormat=before.canonicalFormat;
   assertPendingOutbox(before);
   assert.ok(before.eventIds.length>=2,'Preservation assertions require real indexed fixture records');
   // Public new-chat navigation gives a genuine no-selection state, not an
@@ -519,6 +540,11 @@ async function run(){
    return terminalOptimize(response.result,evidence.resumeReceipt.operationId);
   },{timeout:20000,intervals:[100,250,500]}).toBe(true);
   assertSettledOptimize(evidence.lastOptimizationStatus,evidence.resumeReceipt);
+  if(before.canonicalFormat==='committed'){
+   evidence.committedCanonicalHold=assertCommittedCanonicalHold(evidence.lastOptimizationStatus,before.nativeId);
+   await expect(section).toContainText(evidence.committedCanonicalHold.reason);
+   evidence.checks.push('committed canonical prefix is inventoried once and remains visibly held without fabricated admission');
+  }
   assert.equal(requests.filter(row=>mutations.has(row.action)).length,mutationCount,
    'Terminal status polling must not issue or replay mutations');
   await expect.poll(async()=>Number((await observe()).sourceSha256!==before.sourceSha256)).toBe(1);

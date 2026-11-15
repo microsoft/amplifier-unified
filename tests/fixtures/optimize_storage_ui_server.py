@@ -73,6 +73,42 @@ def historical_pixel():
     return base64.b64encode(png).decode('ascii')
 
 
+def seed_canonical(directory, native, workspace, *, format='legacy'):
+    """Explicit synthetic history; enrollment is not image-origin admission."""
+    message = {'role': 'tool', 'name': 'historical-observation',
+        'content': [{'type': 'image', 'source': {'type': 'base64',
+            'media_type': 'image/png', 'data': historical_pixel()}}]}
+    if format == 'committed':
+        from amplifier_foundation.session.transcript_lifetime import VersionedSessionBinding
+        directory.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        # Create only a new synthetic root. Never migrate/adopt an existing one.
+        binding = VersionedSessionBinding.create_new(directory, session_id=native,
+            operation_id='fixture-initial', admit=lambda: None)
+        try:
+            binding.append([message], expected=binding.expected,
+                operation_id='fixture-unknown-inline', admit=lambda: None)
+            transcript = directory / 'transcript.v2' / binding.expected.body
+        finally:
+            binding.close()
+    elif format == 'legacy':
+        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        transcript = directory / 'transcript.jsonl'
+        transcript.write_text(json.dumps(message) + '\n')
+        transcript.chmod(0o600)
+    else:
+        raise ValueError('Unknown synthetic canonical format')
+    (directory / 'metadata.json').write_text(json.dumps({
+        'session_id': native, 'host': 'amplifier-unified', 'cwd': workspace}))
+    return transcript
+
+
+def canonical_files(directory):
+    # CI is a separate owner under this same synthetic session root. Its
+    # explicitly selected diagnostics expire; native source/recovery may not.
+    return {str(p.relative_to(directory)): digest(p) for p in directory.rglob('*')
+        if p.is_file() and p.relative_to(directory).parts[0] != 'context-intelligence'}
+
+
 def seed_capture(directory, native):
     """Small, explicit synthetic source; missing image provenance stays missing."""
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -110,7 +146,13 @@ def dependency_check():
 
 async def main(home):
     # Inherited capture configuration must never redirect this fixture to real data.
-    os.environ['AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH'] = str(home / 'native' / 'projects')
+    canonical_format = os.environ.get('AMPLIFIER_OPTIMIZE_FIXTURE_CANONICAL_FORMAT', 'legacy')
+    if canonical_format not in {'legacy', 'committed'}:
+        raise ValueError('Unknown synthetic canonical format')
+    # T2 is create-only; keep this fixture's already-running diagnostic writer
+    # in the supported separate capture root, not inside the new native source.
+    capture_root = 'captures' if canonical_format == 'committed' else 'native'
+    os.environ['AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH'] = str(home / capture_root / 'projects')
     os.environ['AMPLIFIER_SESSION_STATE_HOME'] = str(home / 'session-state')
     os.environ['HOME'] = str(home)
     import settings_ui_server as fixture
@@ -140,7 +182,17 @@ async def main(home):
             await self.boundaries.close()
 
     fixture.Runtime = Runtime
-    app = await fixture.main(home)
+    prepared_sources = {}
+
+    def prepare_native_source(session):
+        native = session.get('runtimeSessionId') or session['id']
+        directory = sessions_dir(session['workspace']) / native
+        assert directory.is_relative_to(home)
+        prepared_sources[native] = seed_canonical(directory, native,
+            session['workspace'], format='committed')
+
+    app = await fixture.main(home, prepare_native_source=(
+        prepare_native_source if canonical_format == 'committed' else None))
     service = app['service']
     diagnostics = service.diagnostics
     # Pause only this private fixture's outbound scheduler before any destination
@@ -159,18 +211,15 @@ async def main(home):
     diagnostics._client = forbid_transport
     source = service._session()
     native = source.get('runtimeSessionId') or source['id']
-    path = seed_capture(capture_dir(source['workspace'], native), native)
     canonical = sessions_dir(source['workspace']) / native
-    canonical.mkdir(parents=True, exist_ok=True, mode=0o700)
-    (canonical / 'metadata.json').write_text(json.dumps({
-        'session_id': native, 'host': 'amplifier-unified', 'cwd': source['workspace']}))
     # Deliberately unknown historic image origin/TTL; no fabricated owner grant.
-    transcript = canonical / 'transcript.jsonl'
-    transcript.write_text(json.dumps({'role': 'tool', 'name': 'historical-observation',
-        'content': [{'type': 'image', 'source': {'type': 'base64',
-            'media_type': 'image/png', 'data': historical_pixel()}}]}) + '\n')
-    transcript.chmod(0o600)
+    # Seed the new canonical root before CI creates its context-intelligence
+    # subdirectory in the same synthetic session namespace.
+    transcript = (prepared_sources[native] if canonical_format == 'committed'
+        else seed_canonical(canonical, native, source['workspace']))
+    path = seed_capture(capture_dir(source['workspace'], native), native)
     original_transcript = digest(transcript)
+    original_canonical = canonical_files(canonical)
     # The ordinary committed session/create path owns native registration.
     await service.diagnostics.flush()
     with service.diagnostics._db() as db:
@@ -243,7 +292,10 @@ async def main(home):
                         'expired': data.get('provider_payloads_expired', {}).get('raw'),
                         'usage': data.get('usage')}
         return {'nativeId': native, 'sessionId': source['id'], 'eventIds': ids,
-            'deliveries': deliveries, 'canonicalUnchanged': digest(transcript) == original_transcript,
+            'deliveries': deliveries,
+            'canonicalFormat': canonical_format,
+            'canonicalUnchanged': digest(transcript) == original_transcript
+                and original_canonical == canonical_files(canonical),
             'outboxTransport': {'schedulerStopped': diagnostics.task is None or diagnostics.task.done(),
                 'clientCalls': transport['clientCalls']},
             'sourceSha256': digest(path), 'runtimeCalls': list(service.runtime.calls),
@@ -394,8 +446,21 @@ async def offline_check(*, export=False):
                 'policyRevision': saved['revision']}, 'offline-images-preview')
             images = await settle(images['operationId'])
             assert images['summary']['coverage'].get('eligible', 0) > 0, images
-            assert any(row['owner'] == 'foundation' and row['status'] == 'held'
-                and 'provenance' in row['reason'].lower() for row in images['rows']), images
+            canonical_rows = [row for row in images['rows']
+                if row['owner'] == 'foundation' and row['sessionId'] == before['nativeId']]
+            assert len(canonical_rows) == 1, images
+            canonical_row = canonical_rows[0]
+            assert canonical_row['status'] == 'held' and 'provenance' in canonical_row['reason'].lower(), canonical_row
+            assert canonical_row['canonicalRecords'] == canonical_row['canonicalInlineImages'] == 1
+            canonical_prefix = None
+            if before['canonicalFormat'] == 'committed':
+                from dataclasses import asdict
+                from amplifier_foundation.session.transcript_source import open_committed_source
+                from amplifier_web.session_files import sessions_dir
+                with open_committed_source(sessions_dir(service._session()['workspace']) / before['nativeId']) as source:
+                    canonical_prefix = asdict(source.commit)
+                    assert canonical_row['bytes'] == source.commit.committed_bytes
+                    assert canonical_row['canonicalRecords'] == source.commit.message_count
             preview = await dispatch('preview', {'scope': 'all', 'extractImages': False,
                 'policyRevision': saved['revision']}, 'offline-preview')
             preview = await settle(preview['operationId'])
@@ -454,6 +519,10 @@ async def offline_check(*, export=False):
             assert_pending_outbox(before, final)
             print(json.dumps({'passed': True, 'browser': False, 'listener': False,
                 'realService': True, 'realRetentionOwner': True, 'syntheticSource': True,
+                'canonicalFormat': before['canonicalFormat'],
+                'canonicalPrefix': canonical_prefix,
+                'canonicalPreview': {key: canonical_row[key] for key in (
+                    'owner', 'sessionId', 'status', 'canonicalRecords', 'canonicalInlineImages', 'bytes', 'reason')},
                 'operationId': finished['operationId'], 'status': finished['status'],
                 'cutoffs': frozen, 'coverage': finished['summary']['coverage'],
                 'cancelledBeforeEffect': True, 'explicitResumeOnly': True,
