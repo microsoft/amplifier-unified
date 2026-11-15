@@ -202,6 +202,7 @@ def bootstrap():
             self.owners, self.snapshots = [], []
             self.typed_receipts = []
             self.expected_handles = {}
+            self.native_children = []
 
         async def receive(self, request):
             try:
@@ -257,18 +258,26 @@ def bootstrap():
             from amplifier_foundation.session.media import SessionMediaStore
             from amplifier_web.host.canonical_bootstrap import _ChildFactory
             from amplifier_web.host.children import Children
-            coordinator = owner.session.coordinator
-            children = coordinator.get_capability("live.children")
+            from dataclasses import asdict
+            from amplifier_foundation.session.transcript_lifetime import VersionedSessionBinding
+            from amplifier_foundation.session.transcript_writer import CommitAck
+            from amplifier_foundation.session.versioned_checkpoint import VersionedCheckpointReceipt
+            from amplifier_foundation.session.transcript_source import open_committed_source
+            scope = _media.CURRENT.get()
+            assert scope is not None and type(scope.provider) is OpenAIProvider
+            coordinator = scope.provider.coordinator
+            root_coordinator = owner.session.coordinator
+            children = root_coordinator.get_capability("live.children")
             factory = owner.canonical_binding_factory
             assert type(children) is Children and type(factory) is _ChildFactory
+            self.child_registry = children
             assert children.canonical_binding_factory is factory and factory.root is owner.canonical_binding
-            assert not children.rows, "This negative must stop before child dispatch"
             assert owner.media_graph_selection is None
             assert coordinator.get_capability("web.media.graph_selection") is None
             media = coordinator.get_capability("web.media.store")
             assert type(media) is SessionMediaStore, type(media).__name__
             assert coordinator.get_capability(fixture.MEDIA).enabled is False
-            tool = coordinator.get("tools")["media_child"]
+            tool = root_coordinator.get("tools")["media_child"]
             # Host wrappers remain intact. Diagnose their declared delegate
             # chain read-only, rather than remounting the authored tool.
             chain = []
@@ -284,8 +293,6 @@ def bootstrap():
             assert hashlib.sha256((root / "child-tool/__init__.py").read_bytes()).hexdigest() == fixture.CHILD_TOOL_SHA256
             assert callable(coordinator.get_capability("session.spawn"))
             assert callable(coordinator.get_capability("session.resume"))
-            scope = _media.CURRENT.get()
-            assert scope is not None and type(scope.provider) is OpenAIProvider
             assert scope.provider.coordinator is coordinator and _media.standard_dispatch(scope.provider.client)
             assert scope.cap is None or scope.cap.enabled is False
             body = json.loads(request.content)
@@ -294,7 +301,40 @@ def bootstrap():
                                         "https://api.openai.com/v1/responses"}
             assert body["model"] == fixture.MODEL and body.get("stream") is not True
             fixture.no_pixels(body, pixels)
-            assert "compatible media handling is not installed" in json.dumps(body)
+            is_child = coordinator is not root_coordinator
+            binding = owner.canonical_binding
+            child_row = None
+            if is_child:
+                assert coordinator.session_id == "normal-media-native-child"
+                assert children.sessions[coordinator.session_id].coordinator is coordinator
+                child_row = children.rows[coordinator.session_id]
+                assert child_row["parentSessionId"] == SESSION
+                assert child_row["callId"] == "call_media_child_spawn"
+                checkpoint = coordinator.get_capability("session.durable_checkpoint")
+                captures = dict(zip(checkpoint.__code__.co_freevars,
+                                    (cell.cell_contents for cell in checkpoint.__closure__)))
+                binding = captures["canonical_binding"]
+                assert captures["child"].coordinator is coordinator
+                assert captures["store"].canonical_binding is binding
+                assert type(binding) is VersionedSessionBinding
+                assert binding.session_id == coordinator.session_id
+                assert binding.directory == factory.parent / coordinator.session_id
+                if not any(row[0] is binding for row in self.native_children):
+                    self.native_children.append((binding, media, coordinator))
+            else:
+                assert "compatible media handling is not installed" in json.dumps(body)
+            binding.check()
+            assert type(binding.last_result) is CommitAck
+            assert type(binding.last_receipt) is VersionedCheckpointReceipt
+            assert binding.last_result.commit == binding.expected
+            prefix = asdict(binding.expected)
+            assert {key: binding.last_receipt.verify()[key] for key in prefix} == prefix
+            assert list(binding.last_receipt.iter_refs()) == []
+            with open_committed_source(binding.directory, expected=binding.expected) as cold:
+                assert cold.commit == binding.expected
+                cold_rows = cold.window(0, 100).messages
+            fixture.no_pixels(cold_rows, pixels)
+            assert not any(fixture.MEDIA in (row.get("metadata") or {}) for row in cold_rows)
             rows = await coordinator.get("context").get_messages()
             fixture.no_pixels(rows, pixels)
             assert not any(fixture.MEDIA in (row.get("metadata") or {}) for row in rows)
@@ -305,15 +345,25 @@ def bootstrap():
             phase = "count" if request.url.path.endswith("/input_tokens") else "send"
             self.requests.append(scope.request)
             self.records.append({"phase": phase, "request_id": id(scope.request),
-                                 "provider_id": id(scope.provider), "pixels_supplied": False})
+                                 "provider_id": id(scope.provider), "pixels_supplied": False,
+                                 "session_id": coordinator.session_id})
             self.snapshots.append({"recipe_selected": False, "media_store": type(media).__name__,
                                    "real_child_factory": type(factory).__name__,
-                                   "filesystem_tool_loaded": True, "child_dispatched": False})
+                                   "filesystem_tool_loaded": True, "child_dispatched": bool(children.rows),
+                                   "session_id": coordinator.session_id, "binding_id": id(binding),
+                                   "canonical_directory": str(binding.directory),
+                                   "media_root": str(media.root), "media_session_id": media.session_id,
+                                   "prefix": prefix,
+                                   "call_id": child_row["callId"] if child_row else None})
             self.dump(False)
             package = importlib.import_module(type(request).__module__.split(".")[0])
+            result = fixture.response(len(self.records))
+            if not is_child and phase == "send" and not children.rows:
+                result["output"] = [{"type": "function_call", "id": "fc_media_child_spawn",
+                                     "call_id": "call_media_child_spawn", "name": "media_child",
+                                     "arguments": '{"resume":false}', "status": "completed"}]
             return package.Response(200, json=(
-                {"object": "response.input_tokens", "input_tokens": 30}
-                if phase == "count" else fixture.response(1)))
+                {"object": "response.input_tokens", "input_tokens": 30} if phase == "count" else result))
 
         def dump(self, final):
             import traceback
@@ -364,9 +414,18 @@ def bootstrap():
             assert not transport.failures
             assert not denied, "An unintercepted connection was attempted"
             if contract_negative:
-                assert sum(row["phase"] == "send" for row in transport.records) == 1
+                assert sum(row["phase"] == "send" for row in transport.records) == 3
                 assert any(row["phase"] == "count" for row in transport.records)
-                assert transport.snapshots and all(row == transport.snapshots[0] for row in transport.snapshots)
+                assert len(transport.native_children) == 1
+                from amplifier_foundation.session.transcript_lifetime import VersionedSessionConflict
+                for binding, media, coordinator in transport.native_children:
+                    try:
+                        binding.check()
+                    except VersionedSessionConflict:
+                        pass
+                    else:
+                        raise AssertionError("Actual native child writer remained open")
+                    assert coordinator.session_id not in transport.child_registry.sessions
             else:
                 transport.check_pairs(2 if label == "first" else 1)
             assert len(transport.owners) == 1
@@ -409,10 +468,17 @@ def host_result(event):
     if operation == "memory.context":
         return {"items": []}
     if operation == "capacity.admit":
-        assert args["call"]["sessionId"] == SESSION
+        assert args["call"]["sessionId"] in {SESSION, "normal-media-native-child"}
         # This fresh fixture has the ordinary disabled budget (also independently
         # checked on the actual child owner at count/send), not an account change.
         return {"allowed": True, "budgetRevision": 0}
+    if operation == "work.effect.check":
+        assert args["toolName"] == "media_child" and args["toolInput"] == {"resume": False}
+        assert args["toolCallId"] == "call_media_child_spawn"
+        assert args["_runtimeSessionId"] == SESSION
+        # Finite synthetic host permits this sole local fixture call. No host
+        # defaults/production guard are bypassed or replaced.
+        return {"allowed": True, "effectAuthorized": True}
     raise AssertionError("Unexpected pipe fixture bridge: " + operation)
 
 
@@ -557,7 +623,7 @@ def custody(snapshot, commit, held):
         assert not held, "Idle child lost its physical media writer"
     try:
         binding = VersionedSessionBinding.resume(snapshot["canonical_directory"],
-                                                session_id=SESSION, expected=commit)
+                                                session_id=snapshot["media_session_id"], expected=commit)
     except VersionedSessionConflict as error:
         assert held and "retains the source lease" in str(error)
     else:
@@ -673,9 +739,20 @@ async def main():
             assert report["canonical_cleanup_joined"]
             if args.contract_negative:
                 assert report["snapshots"] and all(row["recipe_selected"] is False for row in report["snapshots"])
+                from amplifier_foundation.session.transcript_source import open_committed_source
+                child_snapshots = [row for row in report["snapshots"] if row["session_id"] != SESSION]
+                assert child_snapshots and all(row["call_id"] == "call_media_child_spawn" for row in child_snapshots)
+                with open_committed_source(child_snapshots[-1]["canonical_directory"]) as source:
+                    commit = source.commit
+                    rows = source.window(0, 100).messages
+                fixture.no_pixels(rows, pixels)
+                assert rows and not any(fixture.MEDIA in (row.get("metadata") or {}) for row in rows)
+                custody(child_snapshots[-1], commit, False)
                 evidence = {"mode": "installed-offline-transport" if target else "source-only",
                             "contract_blocker_reproduced": True, "root_child_hydration_qualified": False,
-                            "private_media_disabled_before_child_dispatch": True,
+                            "first_loss": "root recipe admission before upload ingestion",
+                            "actual_native_child_executed": True,
+                            "child_writer_closed_and_reacquired": True,
                             "real_file_entry": command, "receipt": receipts[-1], "observer": report,
                             "missing_contract": "Preconstruction source-known authored-tool recipe selection"}
                 fixture.no_pixels(evidence, pixels)

@@ -202,7 +202,7 @@ def catalog_status():
 
 
 # Fixed authored bytes for a real filesystem loader, not a media graph grant.
-CHILD_TOOL_SHA256 = "5fbd893bab0e9c8d672bed6d7b0369e35c705d86d5b1783701672275113daf08"
+CHILD_TOOL_SHA256 = "1a38445df51e4d831d3b6dc2c672955f1134e59558de1d404cba3f97f0e1b0ed"
 CHILD_TOOL = '''from amplifier_core import ToolResult
 
 __amplifier_module_type__ = "tool"
@@ -224,8 +224,6 @@ class MediaChild:
             rows = await self.coordinator.get("context").get_messages()
             rows = [row for row in rows if row.get("role") == "user"
                     and "experimental.media.v1" in (row.get("metadata") or {})]
-            if not rows:
-                raise ValueError("No canonical parent media rows; child was not dispatched")
             result = await self.coordinator.get_capability("session.spawn")(
                 agent_name="self", instruction="Inspect the inherited image.",
                 parent_session=self.coordinator.session, parent_messages=rows,

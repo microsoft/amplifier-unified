@@ -138,15 +138,21 @@ def test_actual_file_entry_authored_child_tool_remains_neutral_contract_blocker(
     evidence = json.loads(result.stdout)
     assert evidence["contract_blocker_reproduced"] is True
     assert evidence["root_child_hydration_qualified"] is False
-    assert evidence["private_media_disabled_before_child_dispatch"] is True
+    assert evidence["first_loss"] == "root recipe admission before upload ingestion"
+    assert evidence["actual_native_child_executed"] is True
+    assert evidence["child_writer_closed_and_reacquired"] is True
     assert evidence["receipt"]["reply_before_eof"] and evidence["receipt"]["exit_code"] == 0
     observed = evidence["observer"]
     assert observed["final"] and not observed["failures"] and not observed["socket_denials"]
     assert observed["canonical_cleanup_joined"] is True
-    assert observed["snapshots"] and all(row == {
-        "recipe_selected": False, "media_store": "SessionMediaStore",
-        "real_child_factory": "_ChildFactory", "filesystem_tool_loaded": True,
-        "child_dispatched": False} for row in observed["snapshots"])
+    assert observed["snapshots"] and all(
+        row["recipe_selected"] is False and row["media_store"] == "SessionMediaStore"
+        and row["real_child_factory"] == "_ChildFactory" and row["filesystem_tool_loaded"]
+        for row in observed["snapshots"])
+    assert {row["session_id"] for row in observed["snapshots"]} == {
+        "normal-media-file-entry", "normal-media-native-child"}
+    assert all(row["call_id"] == "call_media_child_spawn" for row in observed["snapshots"]
+               if row["session_id"] == "normal-media-native-child")
     assert all(row["pixels_supplied"] is False for row in observed["records"])
 
 
