@@ -14,7 +14,8 @@ import tarfile
 import tomllib
 import zipfile
 
-COMPONENTS = ("scheduling", "worktrees", "portability", "operations", "workspace-metadata")
+COMPONENTS = ("scheduling", "worktrees", "portability", "operations", "workspace-metadata", "kernels")
+FLAT = {"operations", "kernels"}
 
 DELIVERY = "components/scheduling-delivery"
 RECORD = "components/scheduling.source.json"
@@ -26,7 +27,7 @@ INSTALLED_LICENSE = "amplifier_web/component_delivery/scheduling-LICENSE"
 def locations(component):
     if component not in COMPONENTS:
         raise ValueError("Unknown embedded component selection")
-    directory = "amplifier_operations" if component == "operations" else f"components/{component}-delivery"
+    directory = f"amplifier_{component}" if component in FLAT else f"components/{component}-delivery"
     return (directory, f"components/{component}.source.json",
             "amplifier_" + component.replace("-", "_"), f"amplifier_web/component_delivery/{component}.json",
             f"amplifier_web/component_delivery/{component}-LICENSE")
@@ -35,8 +36,9 @@ def locations(component):
 def selected_files(source, component):
     package = "amplifier_" + component.replace("-", "_")
     return {name: digest for name, digest in source["sourceFiles"].items()
-            if name == "LICENSE" or (component == "operations" and "/" not in name and name.endswith(".py"))
-            or (component != "operations" and name.startswith(package + "/"))}
+            if name == "LICENSE" or (component in FLAT and "/" not in name and
+                (name.endswith(".py") or component == "kernels" and name == "node_runner.cjs"))
+            or (component not in FLAT and name.startswith(package + "/"))}
 
 
 def sha(raw):
@@ -94,16 +96,16 @@ def verify(root, *, component="scheduling"):
             sha((json.dumps(source, indent=2) + "\n").encode()) != record["sourceReceiptSha256"]):
         raise ValueError("Invalid component artifact selection")
     files = record["files"]
-    entrypoint = "__init__.py" if component == "operations" else package + "/__init__.py"
+    entrypoint = "__init__.py" if component in FLAT else package + "/__init__.py"
     if (not isinstance(files, dict) or "LICENSE" not in files or
             entrypoint not in files or files != selected_files(source, component) or
             inventory(root / directory) != files):
         raise ValueError("Component delivery differs from its selected artifact")
     project = tomllib.loads((root / "pyproject.toml").read_text())
     packages = project["tool"]["hatch"]["build"]["targets"]["wheel"]["packages"]
-    package_path = directory if component == "operations" else directory + "/" + package
+    package_path = directory if component in FLAT else directory + "/" + package
     if ([path for path in packages if path.rstrip("/").endswith(package)] != [package_path]
-            or component == "operations" and "components/operations" in packages):
+            or component in FLAT and f"components/{component}" in packages):
         raise ValueError("Unified must package only the selected component owner")
     declared = {requirement_key(value) for value in project["project"]["dependencies"]}
     required = {requirement_key(value) for value in record["runtimeRequirements"]}
@@ -137,7 +139,7 @@ def verify_wheel(root, artifact, *, editable=False, component="scheduling"):
             raise ValueError("Embedded delivery must not introduce another distribution owner")
         if editable:
             return  # The editable path mapping is tested by its installed import.
-        expected = {(package + "/" + name if component == "operations" else name): regular(root / directory, name)
+        expected = {(package + "/" + name if component in FLAT else name): regular(root / directory, name)
                     for name in record["files"] if name != "LICENSE"}
         if {name for name in names if name.startswith(package + "/")} != set(expected):
             raise ValueError("Wheel component membership differs from selection")
@@ -176,7 +178,7 @@ def select(root, dist, revision, receipt_sha256, *, component="scheduling"):
         runtime = [value for value in requirements if not value.endswith('; extra == "test"')]
         if any("extra" in value for value in runtime):
             raise ValueError("Review new component extras before selecting delivery")
-        files = {name: archive.read(package + "/" + name if component == "operations" else name)
+        files = {name: archive.read(package + "/" + name if component in FLAT else name)
                  for name in selected_files(receipt, component) if name != "LICENSE"}
         files["LICENSE"] = archive.read(info + "licenses/LICENSE")
     if sha(files["LICENSE"]) != receipt["sourceFiles"]["LICENSE"]:

@@ -9,14 +9,14 @@ Author edits and publication do not refresh this generated copy. The standalone
 distribution must not be coinstalled with Unified. This metadata boundary does
 not extract the full workspace domain.
 
-[`amplifier_kernels/`](../amplifier_kernels/README.md) prepares the independently
-buildable computation mechanism in its existing source location, preserving
+[`kernels/`](kernels/README.md) authors the independently buildable computation
+mechanism. Unified consumes its published artifact at generated
+`amplifier_kernels/`, selected by `kernels.source.json`; the root location preserves
 runtime bootstrap origin checks. Its real Python/Node tests use selected process
 and operation-journal peers without starting Unified. The host retains authority,
-question and recovery tests. Unified bundles this source; released ACP 0.1.7
-selects the public kernels project at an exact Git revision. The standalone
-producer workflow does not change either consumer selection; adoption remains
-separately qualified.
+question and recovery tests. Author changes and publication do not update the app
+selection or ACP's separate public Git dependency. Unified remains the sole
+installed owner; do not coinstall the standalone distribution.
 
 [`outputs/`](outputs/README.md) prepares the independently buildable output
 relationship, saved-body decoder and read-only Git evidence package. Its existing
