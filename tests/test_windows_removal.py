@@ -1007,12 +1007,16 @@ def test_native_finish_keeps_its_anchor_open_until_the_wait_ends(finish_tree):
                     **_finish_options(tree), "wait_for": [sleeper.pid], "seconds": 20})
         assert sorted(os.listdir(flat)) == [TOKEN, TOKEN + ".hold"]
         for name, action in (("remove", lambda: os.remove(anchor)),
-                             ("rename", lambda: os.rename(anchor, flat / "moved")),
-                             ("read", lambda: anchor.read_bytes())):
+                             ("rename", lambda: os.rename(anchor, flat / "moved"))):
             with pytest.raises(OSError) as refused:
                 action()
             errors[name] = refused.value.winerror
             assert errors[name] == 32, errors
+        # Python's file open reports errno, not a Win32 error code.
+        with pytest.raises(PermissionError) as refused:
+            anchor.read_bytes()
+        errors["readErrno"] = refused.value.errno
+        assert errors["readErrno"] == 13, errors
         inplace = _junction_in_place(flat, tree["outside"])
         if inplace != {"ok": False, "error": 145, "stage": "set"}:
             print("AFTER_EXIT_ANCHOR " + json.dumps({"refused": errors, "flat": inplace}))
