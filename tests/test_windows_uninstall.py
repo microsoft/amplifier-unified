@@ -123,25 +123,58 @@ class Disk:
             raise OSError(5, "The folder could not be listed")
         return sorted([path.name for path in self.root.iterdir()] + self.state.get("also_listed", []))
 
-    def _delete(self, path):
+    def _delete(self, path, left, park):
         relative = path.relative_to(self.root).as_posix()
         if path.is_dir():
             for child in sorted(path.iterdir()):
-                self._delete(child)
+                self._delete(child, left, park)
             if not any(path.iterdir()) and relative not in self.state["kept"]:
                 path.rmdir()
-        elif relative not in self.state["held"]:
+            elif not any(path.iterdir()):
+                left.append(relative.replace("/", "\\"))
+        elif relative in self.state["held"]:
+            left.append(relative.replace("/", "\\"))
+        elif relative in self.state["mapped"]:
+            if park is None:
+                left.append(relative.replace("/", "\\"))
+            else:
+                park(path)
+                return 1
+        else:
             path.unlink()
+        return 0
 
-    def remove(self, names, *, settle=0, wait=None):
-        listed = set(os.listdir(self.root))
+    def remove(self, names, *, settle=0, wait=None, park=None):
+        listed, left, parked = set(os.listdir(self.root)), [], []
         for name in names:
             if name in listed:  # The exact spelling of the listing, as the real walk; never a path lookup.
                 # The rule that everything else rests on.
                 assert (self.root / plan.JOURNAL).is_file(), f"{name} would be deleted before the journal exists"
                 self.state["calls"].append(("delete", name))
-                self._delete(self.root / name)
-        return {"removed": 0, "left": [], "leftCount": 0}
+                # Record each move, including files below the named folder.
+                def move(path):
+                    park(path)
+                    parked.append(path)
+                self._delete(self.root / name, left, move if park is not None else None)
+        result = {"removed": 0, "left": left, "leftCount": len(left)}
+        return result if park is None else {**result, "parked": len(parked)}
+
+    @contextmanager
+    def aside(self, name):
+        held = self.root / name
+        held.mkdir()
+        self.state["calls"].append(("hold", name))
+        self.state["holding"] = name
+        count = 0
+        def park(path):
+            nonlocal count
+            count += 1
+            path.rename(held / str(count))
+        try:
+            yield park
+        finally:
+            self.state["holding"] = None
+            self.state["calls"].append(("release", name))
 
     def holding(self, names):
         wanted, held = {removal.same_name(name): name for name in names}, set()
@@ -162,7 +195,8 @@ def deleter(uninstaller, monkeypatch):
         for name, text in group.items():
             (root / name).parent.mkdir(parents=True, exist_ok=True)
             (root / name).write_text(text)
-    state.update(choices=[], questions=[], held=set(), kept=set(), locked=False, busy=False, pin_failure=None,
+    state.update(choices=[], questions=[], held=set(), mapped=set(), kept=set(), locked=False,
+                 pinned=False, holding=None, busy=False, pin_failure=None,
                  after=None, after_failure=None, lock_failure=None)
 
     @contextmanager
@@ -190,9 +224,11 @@ def deleter(uninstaller, monkeypatch):
         if state["pin_failure"]:
             raise state["pin_failure"]
         state["calls"].append(("pin",))
+        state["pinned"] = True
         try:
             yield Disk(root, state)
         finally:
+            state["pinned"] = False
             state["calls"].append(("unpin",))
     monkeypatch.setattr(removal, "folder", pinned)
 
@@ -219,7 +255,9 @@ def deleter(uninstaller, monkeypatch):
     monkeypatch.setattr(deployment, "write_private", write_private)
 
     def finish_after_exit(folder, token, **options):
-        assert folder == root and not state["locked"]
+        assert folder == root and state["locked"] and state["pinned"]
+        assert state["holding"] == plan.PARK
+        assert list((root / plan.PARK).iterdir()) == []
         if state["after_failure"]:
             raise state["after_failure"]
         state["calls"].append(("after-exit",))
@@ -304,19 +342,22 @@ def test_yes_twice_deletes_in_the_one_order_that_keeps_every_interruption_safe(d
     assert calls[entries + 1:entries + 5] == [("remove", name) for name in shell.LINKS]
     assert calls[entries + 5:] == [
         ("write", shell.FILE), ("delete", "git"), ("delete", "uv"), ("delete", "consumer-install.json"),
-        ("delete", "consumer-qualified.json"), ("delete", shell.FILE), ("unpin",), ("unlock",), ("after-exit",)]
+        ("delete", "consumer-qualified.json"), ("delete", shell.FILE), ("unpin",), ("unlock",),
+        ("lock",), ("pin",), ("hold", plan.PARK), ("after-exit",), ("delete", "python"),
+        ("delete", "tools"), ("release", plan.PARK), ("unpin",), ("unlock",)]
     assert state["task"] == "absent" and state["registry"] is None and not deleter.folder.exists()
-    # Only the running program and the journal are left, and only the step after exit removes them.
-    assert {path.name for path in root.iterdir()} == {"python", "tools", plan.JOURNAL}
+    # The program folders went through the walk. Only the held folder and journal stay.
+    assert {path.name for path in root.iterdir()} == {plan.PARK, plan.JOURNAL}
     journal = deleter.journal()
     assert journal == {"schema": 1, "choice": "delete", "token": journal["token"]}
     assert re.fullmatch("[0-9a-f]{32}", journal["token"])
     assert state["after"] == {
-        "token": journal["token"], "contents": ["python", "tools"], "folders": [], "files": [],
+        "token": journal["token"], "park": plan.PARK,
+        "folders": plan.last_names()[0], "files": plan.last_names()[1],
         "wait_for": (os.getpid(), os.getppid()), "seconds": 120, "choice": "delete", "notices": 1}
     # The result claims the start of the step after exit, never its end.
     assert result == {"ok": True, "operation": "uninstall", "userDataRetained": False, "certificate": "removed",
-                      "kept": [], "handedOver": ["python", "tools"], "afterExit": True}
+                      "kept": [], "programLeft": [], "afterExit": True}
     # One confirmation, before the step after exit starts. It says only what was observed.
     (confirmation, confirm), = state["notices"]
     assert not confirm and "Your chats, settings, saved accounts and stored keys are deleted" in confirmation
@@ -383,7 +424,7 @@ def test_nothing_in_the_folder_changes_before_the_journal(deleter, monkeypatch, 
     if failure not in {"proof", "entry"}:
         state.update(busy=False, lock_failure=None, pin_failure=None, refuse_write=None, task_failure=None,
                      choices=["yes", "yes"])
-        assert deleter.run()["afterExit"] and {path.name for path in root.iterdir()} == {"python", "tools", plan.JOURNAL}
+        assert deleter.run()["afterExit"] and {path.name for path in root.iterdir()} == {plan.PARK, plan.JOURNAL}
 
 
 def refusals(deleter, monkeypatch):
@@ -460,7 +501,7 @@ def test_data_that_stays_keeps_the_entries_and_the_journal_and_a_second_uninstal
     result = deleter.run()
     assert state["calls"][:6] == [("lock",), ("outside",), ("pin",), ("stop",), ("task-remove",),
                                   ("write", plan.JOURNAL)]
-    assert result["afterExit"] and {path.name for path in root.iterdir()} == {"python", "tools", plan.JOURNAL}
+    assert result["afterExit"] and {path.name for path in root.iterdir()} == {plan.PARK, plan.JOURNAL}
     assert deleter.journal()["token"] not in {first["token"], None}
     assert state["after"]["token"] == deleter.journal()["token"]
     assert state["registry"] is None and not deleter.folder.exists()
@@ -505,17 +546,18 @@ def test_foreign_top_level_entries_stay_and_then_the_folder_stays(deleter, monke
     result = deleter.run()
     names = sorted(top(foreign))
     assert result["kept"] == names and result["afterExit"]
-    assert {path.name for path in root.iterdir()} == {*names, "python", "tools", plan.JOURNAL}
+    assert {path.name for path in root.iterdir()} == {*names, plan.PARK, plan.JOURNAL}
     assert all((root / name).read_text() == text for name, text in foreign.items())
     # Not deleted here, and not handed to the step after exit.
-    handed = state["after"]["contents"] + state["after"]["folders"] + state["after"]["files"]
+    handed = state["after"]["folders"] + state["after"]["files"]
     assert not set(names) & set(deletes(state)) and not set(names) & set(handed)
     confirmation = state["notices"][-1][0]
     assert "The folder itself stays" in confirmation and "They were not changed" in confirmation
     assert all(name in confirmation for name in names) and "you can delete it" not in confirmation
 
 
-@pytest.mark.parametrize("name", ["App", "SHARED", "Workspace", "Tools", "Consumer-Install.json", "Unified-Uninstall.json"])
+@pytest.mark.parametrize("name", ["App", "SHARED", "Workspace", "Tools", "Consumer-Install.json",
+                                  "Unified-Uninstall.json", "Unified-Uninstall-Last"])
 def test_entry_that_differs_from_an_own_name_only_by_case_deletes_nothing(deleter, name):
     # Windows opens `App` under the name `app`, but it is not the entry that this installation made.
     state, root, consumer = deleter.state, deleter.root, deleter.consumer
@@ -578,26 +620,21 @@ def test_no_entry_shares_delete_while_the_walk_holds_it():
     assert [bool(call[1] & 0x10000) for call in calls] == [True, True, False]
 
 
-def test_the_journal_and_the_running_program_are_in_no_delete_list(deleter):
+def test_the_journal_and_the_running_program_are_not_deleted_by_the_data_step(deleter):
     state, root = deleter.state, deleter.root
     owned = Disk(root, state)
     (root / plan.JOURNAL).write_text("{}")
     assert not any(plan.sort([plan.JOURNAL]).values())
-    for names in ([plan.JOURNAL], ["app", plan.JOURNAL], ["mine.txt"], ["python"], ["tools"], ["APP"]):
+    for names in ([plan.JOURNAL], ["app", plan.JOURNAL], ["mine.txt"], ["python"], ["tools"], [plan.PARK], ["APP"]):
         with pytest.raises(ValueError):
             plan._clear(owned, names, 0, None)
     assert not deletes(state)
-    listed = plan.remaining(owned)
-    everything = plan.remaining(None)
-    for rest in (listed, everything):
-        assert plan.JOURNAL not in rest["contents"] + rest["folders"] + rest["files"]
-        # The step after exit deletes inside the running program's two folders only.
-        assert rest["contents"] == ["python", "tools"]
-    assert everything["foreign"] is None and not set(plan.RUNNING) & set(everything["folders"])
+    (root / plan.JOURNAL).unlink()
     state["choices"] = ["yes", "yes"]
     deleter.run()
-    assert plan.JOURNAL not in deletes(state) and not set(plan.RUNNING) & set(deletes(state))
-    assert (root / plan.JOURNAL).is_file() and all((root / name).exists() for name in RUNNING)
+    assert plan.JOURNAL not in deletes(state)
+    assert deletes(state)[-2:] == list(plan.RUNNING)
+    assert (root / plan.JOURNAL).is_file() and not any((root / name).exists() for name in RUNNING)
 
 
 def test_emptied_folder_that_windows_keeps_is_not_data_and_a_program_file_in_use_does_not_stop(deleter):
@@ -607,10 +644,110 @@ def test_emptied_folder_that_windows_keeps_is_not_data_and_a_program_file_in_use
     result = deleter.run()
     assert result["afterExit"] and result["userDataRetained"] is False
     assert list((root / "workspace").iterdir()) == [] and (root / "cache/wheels/x.whl").exists()
-    # The step after exit removes such a folder only while it is empty; it deletes inside python and tools only.
-    assert state["after"]["contents"] == ["python", "tools"]
-    assert state["after"]["folders"] == ["workspace", "cache"] and state["after"]["files"] == []
+    # The step after exit can remove the cache only when it is empty.
+    assert state["after"]["folders"] == plan.last_names()[0]
+    assert state["after"]["files"] == plan.last_names()[1]
     assert state["registry"] is None
+
+
+def test_mapped_program_file_is_moved_and_its_folders_go(deleter):
+    state, root = deleter.state, deleter.root
+    state.update(choices=["yes", "yes"], mapped={"tools/amplifier-unified/Scripts/pythonw.exe"})
+    result = deleter.run()
+    assert result["afterExit"] and result["programLeft"] == []
+    assert not (root / "python").exists() and not (root / "tools").exists()
+    assert snapshot(root / plan.PARK) == {"1": b"MZ"}
+
+
+def test_program_file_held_without_delete_sharing_stays_in_its_folder(deleter):
+    state, root = deleter.state, deleter.root
+    state.update(choices=["yes", "yes"], held={"tools/amplifier-unified/Scripts/pythonw.exe"})
+    result = deleter.run()
+    assert result["afterExit"] and result["programLeft"] == [r"tools\amplifier-unified\Scripts\pythonw.exe"]
+    assert (root / "tools/amplifier-unified/Scripts/pythonw.exe").read_text() == "MZ"
+    assert list((root / plan.PARK).iterdir()) == []
+
+
+def test_mapped_data_is_never_moved(deleter):
+    state, root = deleter.state, deleter.root
+    state.update(choices=["yes", "yes"], mapped={"app/chats/one/message.txt"})
+    with pytest.raises(deleter.consumer.Unfinished) as stopped:
+        deleter.run()
+    assert isinstance(stopped.value.error, plan.Held) and stopped.value.step == "data"
+    assert (root / "app/chats/one/message.txt").read_text() == "hello"
+    assert not (root / plan.PARK).exists() and state["after"] is None
+
+
+@pytest.mark.parametrize("change", ["another-token", "gone", "another-choice"])
+def test_finish_refuses_a_journal_that_is_no_longer_its_own(deleter, change):
+    state, root = deleter.state, deleter.root
+    token = plan.begin(root)
+    if change == "gone":
+        (root / plan.JOURNAL).unlink()
+    else:
+        plan.begin(root, "keep" if change == "another-choice" else "delete")
+    before = snapshot(root)
+    state["calls"].clear()
+    with pytest.raises(ValueError, match="Another removal"):
+        plan.finish(root, token)
+    assert snapshot(root) == before and not deletes(state) and state["after"] is None
+    assert not state["locked"] and not state["pinned"]
+
+
+@pytest.mark.parametrize("change", ["another-token", "gone"])
+def test_public_uninstall_reports_when_its_journal_changed_before_finish(deleter, monkeypatch, change):
+    state, root = deleter.state, deleter.root
+    finish = plan.finish
+    def changed(folder, token):
+        if change == "gone":
+            (root / plan.JOURNAL).unlink()
+        else:
+            plan.begin(root)
+        return finish(folder, token)
+    monkeypatch.setattr(plan, "finish", changed)
+    monkeypatch.setattr(deleter.consumer.sys, "stdout", None)
+    state["choices"] = ["yes", "yes"]
+    result = deleter.run()
+    assert not result["afterExit"] and result["programLeft"] is None
+    assert len(state["notices"]) == 2 and "did not let Amplifier" in state["notices"][1][0]
+    assert all((root / name).exists() for name in RUNNING)
+
+
+def test_finish_removes_an_earlier_flat_folder_before_making_a_new_one(deleter):
+    state, root = deleter.state, deleter.root
+    token = plan.begin(root)
+    (root / plan.PARK).mkdir()
+    (root / plan.PARK / "old").write_text("old program file")
+    plan.finish(root, token)
+    assert list((root / plan.PARK).iterdir()) == []
+    assert state["calls"].index(("delete", plan.PARK)) < state["calls"].index(("hold", plan.PARK))
+
+
+def test_finish_stops_when_the_earlier_flat_folder_cannot_go(deleter):
+    state, root = deleter.state, deleter.root
+    token = plan.begin(root)
+    (root / plan.PARK).mkdir()
+    state["kept"].add(plan.PARK)
+    before = snapshot(root)
+    with pytest.raises(FileExistsError):
+        plan.finish(root, token)
+    assert snapshot(root) == before and state["after"] is None
+    assert not set(plan.RUNNING) & set(deletes(state)) and state["holding"] is None
+
+
+def test_last_names_has_every_own_name_but_never_the_journal_or_flat_folder(deleter):
+    root = deleter.root
+    (root / "mine.txt").write_text("foreign")
+    for owned in (None, Disk(root, deleter.state)):
+        folders, files = plan.last_names(owned)
+        assert set(plan.DATA + plan.RUNNING + plan.CACHES + plan.LAST[:2]) <= set(folders)
+        assert set(plan.FILES + plan.LAST[2:] + (plan.STARTED, plan.COMPLETE)) <= set(files)
+        assert not {plan.JOURNAL, plan.PARK, "mine.txt"} & set(folders + files)
+        assert len(folders + files) == len(set(folders + files))
+        if owned:
+            assert "launcher-1.0.0-0a1b2c3d" in folders
+            assert "child-2.stderr.txt" in files
+    assert plan.sort([plan.PARK])["running"] == [plan.PARK] and plan._folder(plan.PARK)
 
 
 @pytest.mark.parametrize("failure", ["commit", "shortcut"])
@@ -630,26 +767,23 @@ def test_failed_entry_removal_after_the_data_is_gone_is_finished_by_a_second_uni
     assert json.loads((root / consumer.RECORD).read_text())["step"] == stopped.value.step
     state.update(commit_conflict=False, link_failure=None, choices=["yes", "yes"])
     assert deleter.run()["afterExit"] and state["registry"] is None and not deleter.folder.exists()
-    assert {path.name for path in root.iterdir()} == {"python", "tools", plan.JOURNAL}
+    assert {path.name for path in root.iterdir()} == {plan.PARK, plan.JOURNAL}
 
 
-def test_folder_that_cannot_be_listed_at_the_end_hands_every_exact_name_to_the_step_after_exit(deleter, monkeypatch):
+def test_folder_that_still_cannot_be_listed_does_not_start_the_last_step(deleter, monkeypatch):
     # The Windows entries are gone by then, so an error would leave the person no way to uninstall again.
     state, root = deleter.state, deleter.root
     state.update(choices=["yes", "yes"], listing_fails=True)
     monkeypatch.setattr(deleter.consumer.sys, "stdout", None)
     result = deleter.run()
-    assert result["afterExit"] and result["kept"] == [] and state["registry"] is None
+    assert not result["afterExit"] and result["kept"] == [] and state["registry"] is None
     assert not any((root / name).exists() for name in top(DATA))
-    after = state["after"]
-    # Deletion inside the running program's folders only; every other folder only while it is empty.
-    assert after["contents"] == ["python", "tools"] and plan.JOURNAL not in after["folders"] + after["files"]
-    assert set(after["folders"]) == set(plan.DATA + plan.CACHES + plan.LAST[:2])
-    assert set(after["files"]) == set(plan.FILES + plan.LAST[2:])
-    assert plan.sort(after["contents"] + after["folders"] + after["files"])["foreign"] == []
-    confirmation = state["notices"][-1][0]
+    assert state["after"] is None and result["programLeft"] is None
+    assert all((root / name).exists() for name in RUNNING)
+    confirmation = state["notices"][0][0]
     assert "are deleted" in confirmation and "This folder can still exist afterwards" in confirmation
     assert "you can delete it" not in confirmation
+    assert len(state["notices"]) == 2 and "You can delete" not in state["notices"][1][0]
 
 
 def test_keeping_uninstall_refuses_when_another_window_began_to_delete_after_the_question(deleter):
@@ -680,7 +814,7 @@ def test_journal_that_a_program_wrote_never_replaces_one_of_the_two_choices(dele
     # Only two answers of Yes, given now, delete.
     state["choices"] = ["yes", "yes"]
     assert deleter.run()["afterExit"] and len(state["questions"]) == 5
-    assert {path.name for path in root.iterdir()} == {"python", "tools", plan.JOURNAL}
+    assert {path.name for path in root.iterdir()} == {plan.PARK, plan.JOURNAL}
 
 
 def test_journal_write_waits_for_a_closing_app_and_then_refuses(model, monkeypatch):
@@ -730,7 +864,7 @@ def test_step_after_exit_that_cannot_start_is_said_plainly(deleter, monkeypatch)
     state["choices"], state["after_failure"] = ["yes", "yes"], OSError("Cannot locate Windows PowerShell.")
     monkeypatch.setattr(deleter.consumer.sys, "stdout", None)
     result = deleter.run()
-    assert result["ok"] and result["afterExit"] is False and result["handedOver"] == ["python", "tools"]
+    assert result["ok"] and result["afterExit"] is False and result["programLeft"] is None
     confirmation, leftover = (text for text, _ in state["notices"])
     assert "are deleted" in confirmation and "did not let Amplifier remove its last program files" in leftover
     assert "none of your chats, settings or accounts" in leftover and str(deleter.root) in leftover
@@ -851,15 +985,14 @@ def test_the_lock_is_this_persons_own_and_has_one_name_for_every_sign_in_session
     assert names[1:] == ["freed", "closed"] and waits == []
 
 
-def test_step_after_exit_looks_at_a_folder_again_immediately_before_it_lists_it():
-    # The listing that named a folder can be seconds old. A folder that became a link is kept, never entered.
+def test_step_after_exit_removes_only_empty_named_folders():
+    # There is no tree walk after exit. A non-empty folder must stay.
     script = removal.FINISH_SCRIPT
-    body = script.split("function Clear-Entry($entry) {")[1].split("\ntry {\n    # Enumerate the entire stdin")[0]
-    look, list_it = body.index("$now = Get-Item -LiteralPath $path -Force"), body.index("Get-ChildItem -LiteralPath $path -Force")
-    check = body.index("if (-not (Real-Folder $now) -or (Later $now)) { Keep $path; return }")
-    assert look < check < list_it and body.count("Get-ChildItem -LiteralPath $path -Force") == 2
-    # Nothing between the fresh look and the listing but the check itself.
-    assert body[check:list_it].count("\n") == 1 and "-recurse" not in script.lower()
+    body = script.split("function Clear-Folder($entry) {")[1].split("\ntry {\n    # Enumerate")[0]
+    assert "Clear-Link $entry; return" in body
+    assert "-not @(Get-ChildItem -LiteralPath $entry.FullName -Force).Count" in body
+    assert "Remove-Item -LiteralPath $entry.FullName -Force" in body
+    assert "Clear-File" not in body
 
 
 def _setup_source():
@@ -934,7 +1067,7 @@ def test_launcher_and_launcher_refresh_names_are_known_and_exact():
 # folder holds no release), Task Scheduler, and the dialogs with their answers.
 # Everything that deletes is real.
 NATIVE_COMMAND = r"""
-import asyncio, json, os, sys
+import asyncio, ctypes, hashlib, json, os, sys
 from pathlib import Path
 repository, packages, folder, evidence, report, operation, answers, settle = sys.argv[1:9]
 sys.path[:0] = [repository, packages]
@@ -942,6 +1075,12 @@ from amplifier_web import installation_health, windows_consumer as consumer, win
 from amplifier_web import windows_files, windows_installation, windows_removal, windows_service
 from amplifier_web import windows_uninstall as plan
 root, answers, events = windows_files.address(folder), json.loads(answers), []
+images = {}
+for name, path in (("start", root / "tools/amplifier-unified/Scripts/python.exe"),
+                   ("dll", root / "python/probe/probe.dll")):
+    if path.exists():
+        images[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+library = ctypes.WinDLL(str(root / "python/probe/probe.dll")) if "dll" in images else None
 consumer.installation = lambda value: (windows_files.address(value), {})
 consumer.environment = lambda *values: {}
 async def working(home):
@@ -977,7 +1116,10 @@ try:
 except consumer.Unfinished as stopped:
     outcome.update(step=stopped.step, refused=isinstance(stopped, consumer.Refused),
                    error=type(stopped.error).__name__, notice=stopped.notice)
-outcome.update(events=events, folderAfter=os.getcwd(), left=sorted(os.listdir(root)))
+parked = {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+          for path in (root / plan.PARK).iterdir()} if (root / plan.PARK).exists() else {}
+outcome.update(events=events, folderAfter=os.getcwd(), left=sorted(os.listdir(root)),
+               images=images, parked=parked)
 Path(evidence).write_text(json.dumps(outcome))
 """
 
@@ -1024,6 +1166,10 @@ def native_installation(tmp_path):
         for name, text in tree.items():
             (root / name).parent.mkdir(parents=True, exist_ok=True)
             (root / name).write_text(text)
+        (root / "python/probe").mkdir()
+        source = next(path for path in (Path(sys.base_prefix) / "vcruntime140.dll",
+                                        Path(os.environ["SystemRoot"]) / "System32/version.dll") if path.exists())
+        shutil.copyfile(source, root / "python/probe/probe.dll")
         # A path far beyond 260 characters in a cache.
         deep = "\\\\?\\" + str(root / "cache" / "long")
         for index in range(7):
@@ -1069,8 +1215,6 @@ def native_installation(tmp_path):
         shutil.rmtree(entries, ignore_errors=True)
         shutil.rmtree(root, ignore_errors=True)
         shutil.rmtree(outside, ignore_errors=True)
-
-
 def _outside_unchanged(outside):
     assert sorted(str(path.relative_to(outside)) for path in outside.rglob("*")) == [
         "deep", str(Path("deep") / "also.txt"), "keep.txt"]
@@ -1088,27 +1232,24 @@ def test_native_delete_choice_removes_the_folder_and_nothing_outside_it(native_i
     """Yes, Yes on a whole installation: afterwards the folder does not exist."""
     native, root = native_installation, native_installation["root"]
     done = native["run"]("uninstall", ["yes", "yes"])
-    print("UNINSTALL_CHAIN " + json.dumps({key: done[key] for key in (
-        "result", "events", "folder", "folderAfter", "left", "process", "parent")}, separators=(",", ":")))
-    handed = done["result"].pop("handedOver")
     assert done["result"] == {"ok": True, "operation": "uninstall", "userDataRetained": False,
-                              "certificate": "none", "kept": [], "afterExit": True}
-    # The running program's two folders, and the emptied workspace when Windows still keeps it.
-    assert handed[:2] == ["python", "tools"] and set(handed[2:]) <= {"workspace"}
+                              "certificate": "none", "kept": [], "afterExit": True, "programLeft": []}
+    assert set(done["images"]) == {"start", "dll"}
+    assert set(done["images"].values()) <= set(done["parked"].values())
     assert done["events"] == ["question", "question", "stop", "after-exit"]
     # The process started in the installation's workspace, behind the start program, and left the folder.
     assert Path(done["folder"]) == root / "workspace" and not Path(done["folderAfter"]).is_relative_to(root)
     assert done["process"] != done["parent"]
-    # When the process ended, only the running program, the journal and at most the emptied workspace were left.
-    assert {"tools", plan.JOURNAL} <= set(done["left"]) <= {"python", "tools", plan.JOURNAL, "workspace"}
+    # Before exit only the flat folder, journal and at most the emptied workspace stayed.
+    assert {plan.PARK, plan.JOURNAL} <= set(done["left"]) <= {plan.PARK, plan.JOURNAL, "workspace"}
     # The Windows entries are gone.
     assert shell.registry(root) is None and not native["entries"].exists()
     # The step after exit removes the running program's files, then the journal, then the empty folder.
     report = _finish_report(native["report"], timeout=200)
-    print("UNINSTALL_AFTER_EXIT " + json.dumps(report, separators=(",", ":")))
     assert report["reason"] == "" and report["folderRemoved"] and not report["left"], report
     assert not os.path.lexists(root)
     _outside_unchanged(native["outside"])
+    print("UNINSTALL_CHAIN " + json.dumps({"process": done, "afterExit": report}, separators=(",", ":")))
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Real folder, Windows entries, start chain and step after exit")
@@ -1166,13 +1307,14 @@ def test_native_interrupted_removal_refuses_to_start_and_a_second_uninstall_fini
         busy.close()
     # The file is free: Yes twice finishes the removal, with the stop again and a new token.
     done = native["run"]("uninstall", ["yes", "yes"])
-    print("UNINSTALL_RESUME " + json.dumps({key: done[key] for key in ("result", "events", "left")},
-                                           separators=(",", ":")))
     assert done["result"]["afterExit"] and done["result"]["kept"] == ["mine.txt"], done
+    assert done["result"]["programLeft"] == []
+    assert set(done["images"].values()) <= set(done["parked"].values())
+    assert {plan.PARK, plan.JOURNAL, "mine.txt"} <= set(done["left"]) <= {
+        plan.PARK, plan.JOURNAL, "mine.txt", "workspace"}
     assert done["events"] == ["question", "question", "stop", "after-exit"]
     assert shell.registry(root) is None and not native["entries"].exists()
     report = _finish_report(native["report"], timeout=200)
-    print("UNINSTALL_AFTER_EXIT " + json.dumps(report, separators=(",", ":")))
     assert report["reason"] == "" and not report["folderRemoved"], report
     # Only the person's own file and the journal are left. Amplifier never starts from this folder again.
     assert sorted(os.listdir(root)) == ["mine.txt", plan.JOURNAL]
@@ -1180,6 +1322,7 @@ def test_native_interrupted_removal_refuses_to_start_and_a_second_uninstall_fini
     resumed = plan.pending(root)
     assert resumed["choice"] == "delete" and resumed["token"] != journal["token"]
     _outside_unchanged(native["outside"])
+    print("UNINSTALL_RESUME " + json.dumps({"process": done, "afterExit": report}, separators=(",", ":")))
 
 
 @pytest.mark.skipif(os.name != "nt", reason="A real case-only rename on NTFS and the real folder listing")
@@ -1207,6 +1350,8 @@ def test_native_data_folder_renamed_only_by_case_deletes_nothing(native_installa
         assert owned.holding(["app", "shared", "absent"]) == ["app", "shared"]
     assert (root / "App" / "app.sqlite3").read_text() == "data"
     _outside_unchanged(native["outside"])
+    print("UNINSTALL_CASE " + json.dumps({"step": refused["step"], "events": refused["events"],
+                                        "unchanged": True}))
 
 
 @pytest.mark.skipif(os.name != "nt", reason="The real named lock and its real owner check")
@@ -1305,195 +1450,3 @@ def test_native_entry_that_the_walk_holds_cannot_be_moved_out_of_the_folder():
             os.rmdir(link)
         shutil.rmtree(root, ignore_errors=True)
         shutil.rmtree(outside, ignore_errors=True)
-
-
-# ---------------------------------------------------------------------------
-# PROBE (temporary, not product behavior): can the last step be bound to
-# handles without compiled code?
-#   1. A program file that is mapped by a running process cannot be deleted.
-#      Can it be moved, by handle, into one flat folder of the installation?
-#   2. A helper that starts with that folder as its current folder: does
-#      Windows then refuse to rename or replace that folder, the installation
-#      folder and the folders above, also after the uninstall process ended?
-#   3. Can the helper give the folder free again and remove it?
-PROBE_SCRIPT = r"""
-$ErrorActionPreference = 'Stop'
-$text = $input | Out-String
-$p = ConvertFrom-Json -InputObject $text
-Set-Location -LiteralPath $p.system
-Write-Host 'ready'
-$r = @{ error = '' }
-try {
-    $until = (Get-Date) + (New-TimeSpan -Seconds 90)
-    while (-not (Test-Path -LiteralPath $p.go) -and (Get-Date) -lt $until) { Start-Sleep -Milliseconds 200 }
-    $r.processFolder = [Environment]::CurrentDirectory
-    $last = Join-Path $p.root 'unified-uninstall-last'
-    foreach ($f in @(Get-ChildItem -LiteralPath $last -Force)) { Remove-Item -LiteralPath $f.FullName }
-    $r.lastLeft = @(Get-ChildItem -LiteralPath $last -Force).Count
-    try { Remove-Item -LiteralPath $last -Force; $r.lastRemovedWhileHeld = $true } catch { $r.lastRemovedWhileHeld = $false }
-    [Environment]::CurrentDirectory = $p.root
-    Remove-Item -LiteralPath $last -Force
-    Remove-Item -LiteralPath (Join-Path $p.root 'workspace') -Force
-    Remove-Item -LiteralPath (Join-Path $p.root 'unified-uninstall.json')
-    try { Remove-Item -LiteralPath $p.root -Force; $r.rootRemovedWhileHeld = $true } catch { $r.rootRemovedWhileHeld = $false }
-    [Environment]::CurrentDirectory = $p.system
-    Remove-Item -LiteralPath $p.root -Force
-    $r.rootGone = -not (Test-Path -LiteralPath $p.root)
-} catch { $r.error = $_.Exception.Message }
-$r | ConvertTo-Json -Compress | Set-Content -LiteralPath $p.report -Encoding UTF8
-"""
-
-PROBE_CHILD = r"""
-import ctypes as C, json, os, subprocess, sys, threading
-from pathlib import Path
-repository, packages, folder, evidence, report, go, script = sys.argv[1:8]
-sys.path[:0] = [repository, packages]
-from amplifier_web import windows_files, windows_removal as removal
-from amplifier_web.windows_files import FILE_RENAME_INFO
-from amplifier_web.windows_service import _powershell
-root = windows_files.address(folder)
-system = Path(_powershell()).parents[2]
-os.chdir(system)
-out = {}
-library = C.WinDLL(str(root / "python" / "probe" / "probe.dll"))  # A mapped image inside the folder.
-
-native = C.WinDLL("ntdll")
-native.NtSetInformationFile.argtypes = [C.c_void_p, C.c_void_p, C.c_void_p, C.c_ulong, C.c_int]
-native.NtSetInformationFile.restype = C.c_long
-
-def rename(api, handle, directory, name):
-    # FileRenameInformation with a folder handle and a single name: no path at all.
-    encoded = name.encode("utf-16-le")
-    buffer = C.create_string_buffer(C.sizeof(FILE_RENAME_INFO) + len(encoded))
-    info = FILE_RENAME_INFO.from_buffer(buffer)
-    info.Flags, info.RootDirectory, info.FileNameLength = 0, directory, len(encoded)
-    C.memmove(C.addressof(buffer) + FILE_RENAME_INFO.FileName.offset, encoded, len(encoded))
-    block = (C.c_void_p * 2)()
-    status = native.NtSetInformationFile(handle, C.byref(block), buffer, len(buffer), 10)
-    if status < 0:
-        raise C.WinError(api.dos_error(status))
-
-try:
-    with removal.folder(root) as owned:
-        api, top = owned._api, owned._handle
-        out["first"] = owned.remove(["python", "tools"])
-        os.mkdir(root / "unified-uninstall-last")
-        last = api.open(top, "unified-uninstall-last", enter=True, delete=False)
-        moved = {}
-        for trail in out["first"]["left"]:
-            parts, handles, row = trail.split("\\"), [top], {}
-            try:
-                for part in parts[:-1]:
-                    handles.append(api.open(handles[-1], part, enter=True, delete=False))
-                handle = api.open(handles[-1], parts[-1], enter=False)
-                try:
-                    row["kind"] = api.kind(handle)
-                    try:
-                        api.delete(handle)
-                        row["deleted"] = True
-                    except OSError as error:
-                        row["deleteError"] = error.winerror
-                        try:
-                            rename(api, handle, last, str(len(moved) + 1))
-                            row["moved"] = "by folder handle"
-                        except OSError as error:
-                            row["moveError"] = error.winerror
-                            try:  # The second form: an absolute target whose folders are all held.
-                                api.move(handle, root / "unified-uninstall-last" / str(len(moved) + 1), replace=False)
-                                row["moved"] = "by held path"
-                            except OSError as error:
-                                row["pathMoveError"] = error.winerror
-                finally:
-                    api.close(handle)
-            except OSError as error:
-                row["openError"] = error.winerror
-            finally:
-                for handle in handles[:0:-1]:
-                    api.close(handle)
-            moved[trail] = row
-        out["moved"] = moved
-        out["inLast"] = sorted(os.listdir(root / "unified-uninstall-last"))
-        out["second"] = owned.remove(["python", "tools"])
-        out["names"] = owned.names()
-        out["libraryStillLoaded"] = bool(library._handle)
-        command = [_powershell(), "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", script]
-        options = dict(cwd=str(root / "unified-uninstall-last"), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                       stderr=subprocess.DEVNULL)
-        try:
-            helper = subprocess.Popen(command, creationflags=0x08000000 | 0x00000200 | 0x01000000, **options)
-            out["breakaway"] = True
-        except OSError:
-            helper = subprocess.Popen(command, creationflags=0x08000000 | 0x00000200, **options)
-            out["breakaway"] = False
-        helper.stdin.write(json.dumps({"root": str(root), "system": str(system), "go": go, "report": report}).encode("ascii"))
-        helper.stdin.close()
-        line = []
-        reader = threading.Thread(target=lambda: line.append(helper.stdout.readline()), daemon=True)
-        reader.start()
-        reader.join(45)
-        out["ready"] = line[0].decode("ascii", "replace").strip() if line else None
-        api.close(last)
-        out["helper"] = helper.pid
-except BaseException as error:
-    out["failure"] = repr(error)
-Path(evidence).write_text(json.dumps(out))
-"""
-
-
-@pytest.mark.skipif(os.name != "nt", reason="Probe of real Windows sharing rules")
-def test_native_probe_last_step_bound_to_handles(tmp_path):
-    import base64
-    from amplifier_web import windows_files
-    tag = uuid.uuid4().hex[:10]
-    root = windows_files.address(Path.home() / ("au-probe-test-" + tag))
-    with windows_files.directory(root, owned_root=root, create=True):
-        pass
-    seen = {}
-    try:
-        made = subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(root / "tools" / "amplifier-unified")],
-                              capture_output=True, text=True, timeout=120)
-        assert made.returncode == 0, made.stderr[-1500:]
-        (root / "workspace").mkdir()
-        (root / "python" / "probe" / "Lib").mkdir(parents=True)
-        (root / "python" / "probe" / "Lib" / "os.py").write_text("#")
-        source = next(path for path in (Path(sys.base_prefix) / "vcruntime140.dll",
-                                        Path(os.environ["SystemRoot"]) / "System32" / "version.dll") if path.exists())
-        shutil.copyfile(source, root / "python" / "probe" / "probe.dll")
-        (root / plan.JOURNAL).write_text("{}")
-        evidence, report, go = tmp_path / "evidence.json", tmp_path / "report.json", tmp_path / "go"
-        script = base64.b64encode(PROBE_SCRIPT.encode("utf-16-le")).decode("ascii")
-        process = subprocess.run(
-            [str(root / "tools" / "amplifier-unified" / "Scripts" / "python.exe"), "-I", "-c", PROBE_CHILD,
-             str(REPOSITORY), sysconfig.get_paths()["purelib"], str(root), str(evidence), str(report), str(go), script],
-            cwd=root / "workspace", capture_output=True, timeout=180)
-        seen["exit"] = process.returncode
-        seen["stderr"] = process.stderr.decode("utf-8", errors="replace")[-1500:]
-        seen["child"] = json.loads(evidence.read_text()) if evidence.exists() else None
-        seen["leftAfterExit"] = sorted(os.listdir(root))
-        seen["inLastAfterExit"] = sorted(os.listdir(root / "unified-uninstall-last")) if (
-            root / "unified-uninstall-last").exists() else None
-        # The uninstall process and its start program have ended. Only the helper is left.
-        for label, source, target in (("renameRoot", root, Path(str(root) + "-moved")),
-                                      ("renameLast", root / "unified-uninstall-last", root / "moved-last")):
-            try:
-                os.rename(source, target)
-                seen[label] = "renamed"
-                os.rename(target, source)
-            except OSError as error:
-                seen[label] = error.winerror
-        go.write_text("go")
-        deadline = time.monotonic() + 120
-        while time.monotonic() < deadline and not report.exists():
-            time.sleep(0.2)
-        time.sleep(0.5)
-        seen["helper"] = json.loads(report.read_text(encoding="utf-8-sig")) if report.exists() else None
-        seen["rootExists"] = os.path.lexists(root)
-    finally:
-        print("LAST_STEP_PROBE " + json.dumps(seen, separators=(",", ":")))
-        shutil.rmtree(root, ignore_errors=True)
-    child, helper = seen["child"], seen["helper"]
-    assert child and "failure" not in child and child["ready"] == "ready", seen
-    assert all(row.get("moved") for row in child["moved"].values()) and child["second"]["leftCount"] == 0, seen
-    assert seen["renameRoot"] != "renamed" and seen["renameLast"] != "renamed", seen
-    assert helper and helper["error"] == "" and helper["rootGone"] and not seen["rootExists"], seen
-    assert helper["lastRemovedWhileHeld"] is False and helper["rootRemovedWhileHeld"] is False, seen
