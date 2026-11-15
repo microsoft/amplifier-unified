@@ -1,0 +1,70 @@
+"""The app's real update compatibility probe in a stage folder, on every platform.
+
+``tests/test_windows_long_paths_off.py`` runs the same probe on native Windows
+under the longest installation folder path that setup supports.
+"""
+from __future__ import annotations
+
+import json
+import os
+from types import SimpleNamespace
+
+import pytest
+
+import update_stage_probe as probe
+
+@pytest.fixture
+def layout(tmp_path):
+    folders = {name: tmp_path / name for name in ('app', 'fixtures', 'capture', 'sources', 'state')}
+    for folder in folders.values():
+        folder.mkdir()
+    if os.name == 'nt':   # The app home of an installation is a private folder.
+        from amplifier_web.windows_files import directory
+        with directory(folders['app'], owned_root=folders['app'], create=True):
+            pass
+    return SimpleNamespace(**folders)
+
+
+def test_the_real_probe_completes_in_a_stage_and_writes_only_there_and_in_the_capture_folder(layout):
+    stage = probe.build(layout.app, layout.fixtures)
+    result = probe.run(stage, capture_root=layout.capture, source_store=layout.sources, state_home=layout.state)
+    probe.passed(result)
+    project = probe.expected_project(stage)
+    assert [path.name for path in (stage.shared / 'projects').iterdir()] == [project]
+    session = probe.session_of(stage, project)
+    assert probe.names(stage.stage, project, session) == probe.STAGE_AFTER_A_PROBE
+    assert probe.names(layout.capture, project, session) == probe.CAPTURE_AFTER_A_PROBE
+    # The app home has the stage and nothing else; the other folders of the installation are untouched.
+    assert probe.created(layout.app)[:3] == ['updates/', 'updates/releases/', f'updates/releases/{stage.stage.name}/']
+    assert all(name.startswith(f'updates/releases/{stage.stage.name}/') for name in probe.created(layout.app)[3:])
+    assert probe.created(layout.sources) == [] and probe.created(layout.state) == []
+
+
+def test_the_probe_still_refuses_a_stage_whose_provider_does_not_load(layout):
+    stage = probe.build(layout.app, layout.fixtures)
+    profile = json.loads(stage.profile.read_text(encoding='utf-8'))
+    profile['providers'] = [{'module': 'provider-update-fixture-missing', 'source': str(layout.fixtures / 'absent')}]
+    stage.profile.write_text(json.dumps(profile), encoding='utf-8')
+    result = probe.run(stage, capture_root=layout.capture, source_store=layout.sources, state_home=layout.state)
+    assert result.returncode == 1 and result.facts, result.stdout + result.stderr
+    assert result.facts['ok'] is False and result.facts['stage'] != 'complete', result.facts
+
+
+def test_the_fixture_runs_the_command_and_the_stage_settings_of_the_updater():
+    """The helper repeats these names; the updater owns them."""
+    updates = (probe.ROOT / 'amplifier_web/updates.py').read_text(encoding='utf-8')
+    assert "workspace = stage / 'qualification-workspace'" in updates
+    assert "'AMPLIFIER_WEB_HOME':str(stage),'AMPLIFIER_HOME':str(stage/'shared-config')" in updates
+    assert "str(Path(__file__).with_name('update_probe.py'))" in updates
+    assert "flags.append('--global-only')" in updates and "flags.append('--read-only')" in updates
+    assert "flags=['--install-overrides',str(overrides)]" in updates
+    assert "stage=self.directory/'releases'/release" in updates and "shared_stage=stage/'shared-config'" in updates
+
+
+def test_the_reproduction_switch_changes_only_the_project_name(layout):
+    """Elsewhere the name is the CLI name with and without the switch: the same probe passes."""
+    stage = probe.build(layout.app, layout.fixtures)
+    result = probe.run(stage, capture_root=layout.capture, source_store=layout.sources, state_home=layout.state,
+                       before_the_fix=True)
+    probe.passed(result)
+    assert [path.name for path in (stage.shared / 'projects').iterdir()] == [probe.cli_name(stage.workspace)]
