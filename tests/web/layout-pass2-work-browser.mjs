@@ -567,29 +567,60 @@ async function expandNode(selector){
 }
 async function inspectionTool(callId){
  // The maintained finish event can move the public call between message gaps.
- // Open only the observed inspect-turn groups, then require one exact call
- // suffix within those groups. Never pick a saved-window duplicate or first node.
+ // Source identity comes from the fixture's read-only public execution rows,
+ // not from a node which is absent while its group body is collapsed/deferred.
+ const source=await control({op:'inspect-work-source'});
+ const sid=(await state()).selectedSessionId;
+ const sourceNodes=source.sessions.find(row=>row.id===sid)?.execution?.nodes||[];
+ const candidates=sourceNodes.filter(node=>node.kind==='tool'&&node.toolCallId===callId);
+ assert.equal(candidates.length,1,'One maintained public fixture toolCallId '+callId);
+ const sourceNode=candidates[0];
+ assert.equal(sourceNode.turnId,'inspect','The requested call belongs to the maintained inspection scene');
+ assert.equal(typeof sourceNode.id,'string');
  await expect.poll(()=>current.page.locator('.a-messages').getAttribute('data-work-projection')
   .then(value=>{try{const row=JSON.parse(value);return row.status==='ready'&&row.current===true}catch{return false}}))
   .toBe(true);
- const groupRoot='.a-messages section[data-part="execution"][data-group-id^="inspect@"]';
- await expect(current.page.locator(groupRoot).first()).toBeVisible();
- const groupIds=await current.page.locator(groupRoot).evaluateAll(nodes=>nodes.map(node=>node.dataset.groupId));
+ const groupRoot=`.a-messages [data-group-id^=${JSON.stringify(sourceNode.turnId+'@')}]`;
+ // Discover the GROUP summaries first. Neither this locator nor the expansion
+ // prerequisite depends on rendered descendant tool rows.
+ const summaries=current.page.locator(groupRoot+' > button.a-execution-turn-line');
+ await expect(summaries.first()).toBeVisible();
+ const observedSummaries=await summaries.evaluateAll(nodes=>nodes.map(node=>({
+  groupId:node.parentElement.dataset.groupId,expanded:node.getAttribute('aria-expanded'),
+  label:node.textContent,
+ })));
+ const groupIds=observedSummaries.map(row=>row.groupId);
  assert.ok(groupIds.length&&new Set(groupIds).size===groupIds.length,'Observed inspect groups are uniquely identified');
- for(const id of groupIds)await expandGroup(`${groupRoot}[data-group-id=${JSON.stringify(id)}]`);
- const source=await control({op:'inspect-work-source'});
- const sid=(await state()).selectedSessionId;
- const sourceNode=source.sessions.find(row=>row.id===sid)?.execution?.nodes?.filter(
-  node=>node.kind==='tool'&&(node.toolCallId===callId||node.id.endsWith(':'+callId)));
- assert.equal(sourceNode?.length,1,'One maintained public fixture call '+callId);
- const suffix=`${groupRoot} [data-kind="tool"][data-node-id$=${JSON.stringify(':'+callId)}]`;
- await expect(current.page.locator(suffix)).toHaveCount(1);
- const observed=await current.page.locator(suffix).evaluate(node=>({
+ const checkpointRow=report.checkpoints.find(row=>row.id===currentCheckpoint);
+ const discovery={callId,sourceNode:{id:sourceNode.id,toolCallId:sourceNode.toolCallId,turnId:sourceNode.turnId},
+  observedSummaries,expandedSummaries:[],lookupStatus:'groups-discovered-before-tool-lookup'};
+ (checkpointRow.inspectionDiscoveries??=[]).push(discovery);await save();
+ // "Everything" can report aria-expanded=true by default while useWorkDetail
+ // defers off-screen IO. Pin the OBSERVED summary identities through the normal
+ // shared expansion action, then scroll/observe each real summary. This is not
+ // a DOM fake and does not fabricate a saved work group or tool result.
+ const expanded=new Set((await state()).view.executionExpanded||[]);
+ for(const id of groupIds){expanded.delete('closed:turn:'+id);expanded.add('turn:'+id)}
+ await action('view.update',{patch:{executionExpanded:[...expanded]}});
+ for(const id of groupIds){
+  const group=await expandGroup(`${groupRoot}[data-group-id=${JSON.stringify(id)}]`);
+  const summary=group.locator(':scope > button.a-execution-turn-line');
+  await summary.scrollIntoViewIfNeeded();
+  await expect(summary).toHaveAttribute('aria-expanded','true');
+  discovery.expandedSummaries.push({groupId:id,expanded:await summary.getAttribute('aria-expanded')});
+ }
+ discovery.lookupStatus='all-observed-summaries-expanded';await save();
+ const exactNode=`${groupRoot} [data-kind="tool"][data-node-id=${JSON.stringify(sourceNode.id)}]`;
+ await expect(current.page.locator(exactNode)).toHaveCount(1);
+ const observed=await current.page.locator(exactNode).evaluate(node=>({
   groupId:node.closest('[data-group-id]').dataset.groupId,nodeId:node.dataset.nodeId,
  }));
- const selector=`.a-messages section[data-part="execution"][data-group-id=${JSON.stringify(observed.groupId)}] [data-node-id=${JSON.stringify(observed.nodeId)}]`;
+ assert.equal(observed.nodeId,sourceNode.id,'Rendered identity is the exact fixture call, not a suffix guess');
+ assert.ok(groupIds.includes(observed.groupId),'Tool is inside a group whose summary was observed and opened');
+ const selector=`.a-messages [data-group-id=${JSON.stringify(observed.groupId)}] [data-kind="tool"][data-node-id=${JSON.stringify(observed.nodeId)}]`;
  const node=await expandNode(selector);
- return {node,selector,observedGroups:groupIds,publicFixtureNodeId:sourceNode[0].id,...observed};
+ discovery.lookupStatus='exact-fixture-call-rendered';discovery.rendered=observed;await save();
+ return {node,selector,observedGroups:groupIds,publicFixtureNodeId:sourceNode.id,toolCallId:callId,...observed};
 }
 function messageArtifact(id,version=1){
  return current.page.locator(`.a-messages .a-chat-artifacts > section.a-document-output[data-artifact-id=${JSON.stringify(id)}][data-artifact-version="${version}"]`);
@@ -612,9 +643,16 @@ async function hierarchyTopProof(group){
    right:Math.min(innerWidth,p.left+pane.clientLeft+pane.clientWidth),
    bottom:Math.min(innerHeight,p.top+pane.clientTop+pane.clientHeight)};
   const selectors=[':scope > button.a-execution-turn-line',
-   '[data-node-id="pass2-root-failed"] > button.a-execution-action-line',
-   '[data-node-id="pass2-child-failed"] > button.a-execution-action-line'];
-  return {paneClip:clip,scrollTop:pane.scrollTop,targets:selectors.map(selector=>{
+   '[data-node-id="pass2-root-failed"] > button.a-execution-action-line'];
+  // The next delegated operation is intentionally separated by its Request
+  // message. Requiring that farther row in the SAME narrow viewport tested a
+  // false compacting promise. Preserve its raw position separately; the accepted
+  // witness is parent + first operation, followed by individual descendant views.
+  const deferred=section.querySelector('[data-node-id="pass2-child-failed"] > button.a-execution-action-line');
+  const d=deferred?.getBoundingClientRect();
+  const deferredChild=d?{nodeId:'pass2-child-failed',top:d.top,bottom:d.bottom,
+   left:d.left,right:d.right,relativeToParent:d.top-section.getBoundingClientRect().top}:null;
+  return {paneClip:clip,scrollTop:pane.scrollTop,deferredChild,targets:selectors.map(selector=>{
    const node=section.querySelector(selector),r=node?.getBoundingClientRect();
    return {selector,text:node?.textContent,bounds:r?{left:r.left,right:r.right,top:r.top,bottom:r.bottom,
     width:r.width,height:r.height}:null,fullyVisible:!!r&&r.width>0&&r.height>0&&
@@ -624,7 +662,7 @@ async function hierarchyTopProof(group){
  const row=report.checkpoints.find(row=>row.id===currentCheckpoint);
  (row.topVisibilityProbes??=[]).push(proof);await save();
  assert.ok(proof.targets.every(row=>row.fullyVisible),
-  'The actual Failed summary and first two operation rows must be together inside the message viewport: '+JSON.stringify(proof));
+  'The actual Failed summary and first operation row must be together inside the message viewport: '+JSON.stringify(proof));
  assert.match(proof.targets[0].text,/Failed/);return proof;
 }
 async function eachLook(id,run,{freshPage=false}={}){
@@ -665,7 +703,8 @@ async function detailScenes(){
   await checkpoint(`W10.top-visible.${slug(look.id)}.${width}`,async()=>{
    await lookAt(look);await size(width);
    // Exact fixture expansion reset, not DOM/style mutation. Capture the natural
-   // compact parent and first two child operation lines BEFORE opening bodies.
+   // compact parent and FIRST operation line BEFORE opening bodies. The child
+   // delegate Request is intentionally interleaved before its later operation.
    await action('view.update',{patch:{executionExpanded:[
     'turn:pass2-failed@pass2-question','closed:turn:pass2-worked@pass2-worked-question',
    ],navPinned:false,navExpanded:false}});
@@ -676,7 +715,7 @@ async function detailScenes(){
    await summary.evaluate(node=>node.scrollIntoView({block:'start',behavior:'instant'}));
    await current.page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
    const top=await hierarchyTopProof(group);
-   const shots=[await capture('failed-parent-first-two-together',group,selector,{scroll:false})];
+   const shots=[await capture('failed-parent-first-operation-together',group,selector,{scroll:false})];
    assert.deepEqual((await hierarchyTopProof(group)).targets.map(row=>row.bounds),top.targets.map(row=>row.bounds),
     'Measurement/capture must not scroll the summary out of its witnessed position');
    for(const id of ['pass2-child-failed','pass2-grandchild-failed','pass2-sibling-tool']){
@@ -684,8 +723,9 @@ async function detailScenes(){
     const node=await expandNode(exact);shots.push(await capture(id,node,exact));
    }
    return {top,shots,input:'synthetic-hierarchy-input.json',
-    firstTwoMeaning:'Root tool and first child tool in the interleaved stream; no recursive-indent claim',
-    captureOrder:'Failed parent+first two collapsed operation lines first; separate expanded child/grandchild/sibling bodies afterwards'};
+    togetherMeaning:'Failed parent + first operation line; the farther child operation follows an intentional delegate Request',
+    oracleChange:'Accepted parent b37 scope: one operation in the shared viewport, no CSS change or tolerance increase; farther raw coordinates retained',
+    captureOrder:'Failed parent+first collapsed operation line first; separate expanded child/grandchild/sibling bodies afterwards'};
   });
  if(seeded)for(const look of looks)for(const width of hierarchyWidths)
   await checkpoint(`W10.hierarchy.${slug(look.id)}.${width}`,async()=>{
@@ -702,6 +742,14 @@ async function detailScenes(){
    }
    await expandNode('[data-node-id="pass2-root-failed"]');
    await expandNode('[data-node-id="pass2-worked-tool"]');
+   let hierarchyAssertions=null;
+   if(process.env.LAYOUT_REQUIRE_FIXED==='1'){
+    const {assertWorkHierarchy}=await import('../../.build/web-client/tests/work-hierarchy-geometry.mjs');
+    hierarchyAssertions={
+     failed:await assertWorkHierarchy(failed,`installed Failed ${look.id} ${width}`),
+     worked:await assertWorkHierarchy(worked,`installed Worked ${look.id} ${width}`),
+    };
+   }
    const shots=[];
    shots.push(await capture('failed-group',failed,'[data-group-id="pass2-failed@pass2-question"]'));
    shots.push(await capture('adjacent-link-baseline',current.page.locator('[data-message-id="pass2-question"]'),
@@ -709,7 +757,8 @@ async function detailScenes(){
    for(const id of ['pass2-child-failed','pass2-grandchild-failed','pass2-sibling-tool'])
     shots.push(await capture(id,current.page.locator(`[data-node-id="${id}"]`),`[data-node-id="${id}"]`));
    shots.push(await capture('worked',worked,'[data-group-id="pass2-worked@pass2-worked-question"]'));
-   return {expectedSource:'synthetic-hierarchy-input.json',hierarchyMeaning:'flat actor/owner-labelled stream, not claimed recursive indentation',shots};
+   return {expectedSource:'synthetic-hierarchy-input.json',hierarchyAssertions,
+    hierarchyMeaning:'flat actor/owner-labelled stream, not claimed recursive indentation',shots};
   });
  if(wants('W03.tool-bodies')){
  await control({op:'inspection'});await control({op:'inspection-actions'});await control({op:'inspection-finish'});await fresh();

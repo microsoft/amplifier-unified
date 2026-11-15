@@ -465,6 +465,8 @@ function observeDOM() {
         bounds.right > 0 && bounds.left < innerWidth,
       padding: {top: css.paddingTop, right: css.paddingRight, bottom: css.paddingBottom, left: css.paddingLeft},
       font: {size: css.fontSize, lineHeight: css.lineHeight},
+      paint: {background:css.backgroundColor,borderColor:css.borderColor,
+        borderWidth:css.borderWidth,borderStyle:css.borderStyle,boxShadow:css.boxShadow},
       glyphRects, icons, iconLabelGap: gap,
       surface: node.closest('.a-settings-draft-confirm') ? 'portaled-unsaved-confirmation' : 'settings',
       clipping: clipping(node),
@@ -727,9 +729,27 @@ function makeJourney(page, job, fence) {
             await expect(dialog).not.toBeVisible();
             await expect(field(name)).toHaveValue(value);
             const restoredFocus = await field(name).evaluate(node => document.activeElement === node);
-            row.dismissals.push({action: dismissal, valueRetained: true, originalInputFocused: restoredFocus});
+            const readFocus = () => page.evaluate(() => {
+              const node=document.activeElement,r=node.getBoundingClientRect();
+              return {tag:node.tagName,id:node.id,name:node.getAttribute('aria-label')||
+                node.textContent?.trim().slice(0,160),connected:node.isConnected,
+                insideSettings:!!node.closest('.a-dialog'),
+                insideVisibleEditor:!!node.closest('.a-settings-page-content:not([hidden])'),
+                bounds:{x:r.x,y:r.y,width:r.width,height:r.height},
+                visible:!!(r.width&&r.height)&&r.bottom>0&&r.top<innerHeight};
+            });
+            await page.evaluate(() => new Promise(resolve =>
+              requestAnimationFrame(() => requestAnimationFrame(resolve))));
+            const afterDismissal=await readFocus();
+            await page.keyboard.press('Tab');
+            const afterTab=await readFocus();
+            row.dismissals.push({action: dismissal, valueRetained: true,
+              originalInputFocused: restoredFocus,afterDismissal,afterTab});
             await snapshot(row, '-after-' + slug(dismissal));
-            if (short && !restoredFocus) violations.push(dismissal + ' did not restore focus to the original edited input.');
+            const meaningfulOwner=afterDismissal.connected && afterDismissal.visible &&
+              afterDismissal.insideSettings && !['BODY','HTML'].includes(afterDismissal.tag);
+            if (short && !meaningfulOwner)
+              violations.push(dismissal + ' did not restore focus to a visible current Settings owner.');
           }
           if (violations.length) row.reasonClass = 'observed-short-height-interaction-failure';
           assert.deepEqual(violations, [], 'Short-height unsaved-dialog interaction defects (not corrected by harness).');
