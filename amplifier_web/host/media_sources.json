@@ -7,7 +7,7 @@
     "openai": "ac9268e12a462d974fa7106178174e05cc3313ed",
     "openai_archive_sha256": "815c6db2b44e5bfe6a221318e438a4c55e59628f4971936cfa14bc7e2a03fe82",
     "context-intelligence": "1eaac57492937dbae8671ae155201eae4a6ba653",
-    "host": "44604744c10933a4ca6a2f7833b62805c9ce72cf"
+    "host": "ee67a57886b6679137004c2158a8a30594b5c74c"
   },
   "sources": {
     "amplifier_foundation/session/media_hook_bridge.py": "12da0011ee2d908a97e7b2fd8a58b3358b53d3e65b4894b77a170cebd30c3186",
@@ -39,13 +39,13 @@
     "amplifier_web/host/media_assembly.py": "4272605a763750c9fe404bf120248099e4103af011995e458a02dda85d4bdc84",
     "amplifier_web/host/canonical_bootstrap.py": "2209920df1eb41d31ef73a19ef0e0c5d4a75afb5db0f55b93a9c316b3663fe00",
     "amplifier_web/host/storage.py": "1856c0e03f62f38bdc2e037917d9b554d9b81e9fef728f089ad02f0032615b85",
-    "amplifier_web/host/session.py": "c77da865fbdfabe2737d19070eddb499ec20259ee984255cbfaed94599f7bb5d",
+    "amplifier_web/host/session.py": "d3fcd1d92c7075b3fb059bca58581bd01e53db354010b31c5cf5ee3d81f036e4",
     "amplifier_web/host/initialization.py": "34d3ec812f83c63daec74cc9278ab155e44f86a615ca8106e133a703b619febc",
     "amplifier_web/runtime_worker.py": "b8bc6900d1b2b49b2c5ec9ab68d386a70eff6b8cbbe7bb1175a07ef518815e67",
     "amplifier_web/app_guidance.py": "3b8559f82b06682bfeecc7a3f85d40990414d5c053b8810f26262108f1a403c4",
     "amplifier_web/memory_delivery.py": "df7234486a8aea3235a329c50d90ae8b9e9689862098e8f32684b75403772693",
     "amplifier_web/preparation_context.py": "def0336059c08694168b00ef0ce31f6597c2922de583c13c9a544275a71b6351",
-    "amplifier_web/surface_delivery.py": "f0276a412173c921e35dad6e6196840aeccd7e404513240ee5b7034344e31aad",
+    "amplifier_web/surface_delivery.py": "3cd3cd6cb490b9e0bf06b6fd85509959eaa3345519caf1cf2c21e83f93a8b954",
     "amplifier_web/file_source_guard.py": "d7717eeeaa6d2820784e3ebc0516a5c094b010fd4545924d7c731bb0d754d763",
     "amplifier_web/provider_capture.py": "31773fe5573252cccc0909ea100339e50322628a6506bff7741bbd3d81ca7d4a",
     "amplifier_web/request_recovery.py": "08d004a4e1a07c971b2d0d3cf9de44615ee31ecc320412f16c20886160233381",
