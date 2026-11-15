@@ -50,7 +50,7 @@ def _facts(kind, rows):
 
 def _page(db, kind, records, depth=0):
     if len(records) <= PAGE_ROWS:
-        return resource_files.put(db, {'records': records})
+        return resource_files.put_execution_index(db, {'records': records})
     if depth >= 64:
         raise ValueError('Execution record keys cannot be separated.')
     groups = {}
@@ -61,7 +61,7 @@ def _page(db, kind, records, depth=0):
 
 
 def _branch(db, children):
-    return resource_files.put(db, {'children': children})
+    return resource_files.put_execution_index(db, {'children': children})
 
 
 def _find(db, reference, identity, depth=0, *, read=None):
@@ -97,7 +97,7 @@ def _ordered_branch(db, children):
     for child in children.values():
         facts = [old or value for old, value in zip(facts, child['executionFacts'], strict=True)]
     count = sum(child['count'] for child in children.values())
-    return {**resource_files.put(db, {'children': children, 'count': count, 'facts': facts}),
+    return {**resource_files.put_execution_index(db, {'children': children, 'count': count, 'facts': facts}),
             'count': count, 'executionFacts': facts}
 
 
