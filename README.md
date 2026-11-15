@@ -41,17 +41,24 @@ confirm the download. You do not need WSL, Python, Git or a terminal.
 
 1. Download the setup file:
    [AmplifierUnifiedSetup-windows-x64.exe](https://github.com/microsoft/amplifier-unified/releases/latest/download/AmplifierUnifiedSetup-windows-x64.exe).
-2. Microsoft Edge holds the download. In the Downloads list, point at the file
-   and select **More actions (…)**, then **Keep**. In the message that follows,
-   select the arrow next to **Delete**, then **Keep anyway**.
+2. Microsoft Edge holds the download and says that the file "isn't commonly
+   downloaded". In the Downloads list, point at the file and select
+   **More actions (…)**, then **Keep**. Edge then shows "Publisher: Unknown".
+   Select the small arrow next to **Delete**, then **Keep anyway**.
 3. Open the file with a double-click. Do not use "Run as administrator". Select
-   **OK** to install. Setup takes about 3 minutes.
-4. Amplifier starts and opens in your browser. The first start can take a few
-   minutes. Windows asks one question: whether to install a certificate named
-   "Amplifier Unified (this PC only)". Select **Yes**. Amplifier uses this
-   certificate only for the connection between your browser and Amplifier on
-   this PC.
-5. Connect an AI account in the app.
+   **OK** to install. Setup takes about 3 minutes. Select **OK** when it has
+   finished.
+4. Amplifier starts. The first start can take a few minutes. Amplifier shows one
+   message; select **OK**. Windows then shows a "Security Warning" that asks
+   whether to install a certificate named "Amplifier Unified (this PC only)".
+   Select **Yes**. Windows preselects **No**, so do not only press Enter.
+   Amplifier uses this certificate only for the connection between your browser
+   and Amplifier on this PC. Amplifier then opens in your browser.
+5. Connect an AI account in the app. If Microsoft Edge offers to save your key
+   as a password, select **Not now**.
+
+Your first message takes longer than later ones (about a minute in our test).
+Amplifier shows "Preparing chat…" during that time.
 
 To open Amplifier later, use the Start menu: **Amplifier Unified**.
 
@@ -64,10 +71,11 @@ Limits of this preview:
 - **Folder:** everything is in `%LOCALAPPDATA%\Amplifier`.
 - **Uninstall:** open **Settings > Apps > Installed apps**, find
   **Amplifier Unified (unsigned preview)**, select **More options (…)**, then
-  **Uninstall**. Amplifier asks you to confirm. In this version, uninstall
-  stops Amplifier and removes it from the Start menu and the Apps list. It
-  leaves the folder with your chats, settings and accounts, and the program
-  files.
+  **Uninstall**, then **Uninstall** again. Amplifier asks you to confirm;
+  select **Yes**. Windows then asks whether to delete the certificate; select
+  **Yes**. In this version, uninstall stops Amplifier and removes it from the
+  Start menu and the Apps list. It leaves the folder with your chats, settings
+  and accounts, and the program files (about 1.4 GB).
 
 The [native Windows design and status](docs/design/native-windows-installation.md)
 records what is tested.
