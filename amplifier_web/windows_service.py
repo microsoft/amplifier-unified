@@ -230,20 +230,26 @@ def _lookup(name):
     is a user account. Returns None only for Windows' own answer that the name
     maps to nothing (ERROR_NONE_MAPPED from the sizing call). Every other
     outcome raises _LookupFailed, so a failed lookup is never read as "no such
-    name".
+    name" and never as a task that differs.
     """
     if sys.platform != "win32":
         raise _LookupFailed("Account names resolve only on native Windows.")
+    try:
+        return _native_lookup(name)
+    except _LookupFailed:
+        raise
+    except Exception as error:  # A native call or conversion that did not work.
+        raise _LookupFailed("The Windows account lookup did not work.") from error
+
+
+def _native_lookup(name):
     import ctypes as C
     from ctypes import wintypes as W
-    try:
-        api = C.WinDLL("advapi32", use_last_error=True)
-        api.LookupAccountNameW.argtypes = [W.LPCWSTR, W.LPCWSTR, C.c_void_p,
-                                          C.POINTER(W.DWORD), W.LPWSTR,
-                                          C.POINTER(W.DWORD), C.POINTER(W.DWORD)]
-        api.LookupAccountNameW.restype = W.BOOL
-    except (OSError, AttributeError) as error:
-        raise _LookupFailed("The Windows account lookup is unavailable.") from error
+    api = C.WinDLL("advapi32", use_last_error=True)
+    api.LookupAccountNameW.argtypes = [W.LPCWSTR, W.LPCWSTR, C.c_void_p,
+                                      C.POINTER(W.DWORD), W.LPWSTR,
+                                      C.POINTER(W.DWORD), C.POINTER(W.DWORD)]
+    api.LookupAccountNameW.restype = W.BOOL
     size, domain_size, use = W.DWORD(), W.DWORD(), W.DWORD()
     C.set_last_error(0)
     sized = api.LookupAccountNameW(None, name, None, C.byref(size), None,
@@ -261,10 +267,7 @@ def _lookup(name):
         # ERROR_NONE_MAPPED too: Windows mapped this name a moment ago.
         raise _LookupFailed(f"Windows account lookup failed (error {C.get_last_error()}).")
     from .windows_files import _API
-    try:
-        return _API().sid_text(C.cast(sid, C.c_void_p)), use.value
-    except (OSError, RuntimeError) as error:
-        raise _LookupFailed("Windows returned an unusable account SID.") from error
+    return _API().sid_text(C.cast(sid, C.c_void_p)), use.value
 
 
 def _same_account(text, sid):
@@ -339,7 +342,7 @@ def owned_spec(xml: str, sid: str, data_dir=None) -> TaskSpec:
     Scheduler-added registration dates carry no authority. Everything else must
     match our generated definition, including ALL actions, triggers and settings.
     A customized/foreign definition is never overwritten, even with --replace.
-    The one equivalence is the trigger's user text: see _same_account.
+    The one identity equivalence is the trigger's user text: see _same_account.
     """
     try:
         entry = task_name(sid)

@@ -362,7 +362,9 @@ def _windows_names(monkeypatch, table):
 
     def lookup(name):
         calls.append(name)
-        answer = table[name]  # A lookup that the rule must not make fails the test.
+        # Not a KeyError: the ownership check would turn that into a refusal.
+        assert name in table, f"the rule must not look up {name!r}"
+        answer = table[name]
         if isinstance(answer, Exception):
             raise answer
         return answer
@@ -485,8 +487,12 @@ def _fake_lookup_api(monkeypatch, answers, convert=None):
     state = {"error": 0, "calls": 0}
 
     def lookup(system, name, sid, size, domain, domain_size, use):
-        result, error, sid_size, kind, *rest = answers[state["calls"]]
         state["calls"] += 1
+        if state["calls"] > len(answers):
+            # Counted, not raised: the lookup turns every exception into a failed lookup.
+            state["error"] = 5
+            return 0
+        result, error, sid_size, kind, *rest = answers[state["calls"] - 1]
         state["error"] = error
         size._obj.value, domain_size._obj.value, use._obj.value = sid_size, (rest[0] if rest else 16), kind
         return result
@@ -524,12 +530,33 @@ def test_lookup_reports_no_such_name_only_for_windows_own_answer(monkeypatch, an
     assert state["calls"] == len(answers)
 
 
-@pytest.mark.parametrize("problem", [OSError("invalid SID"), RuntimeError("not native Win64")])
+@pytest.mark.parametrize("problem", [OSError("invalid SID"), RuntimeError("not native Win64"),
+                                     ValueError("bad SID text"), TypeError("bad pointer")])
 def test_lookup_with_a_sid_that_windows_cannot_convert_is_a_failed_lookup(monkeypatch, problem):
     state = _fake_lookup_api(monkeypatch, [(0, 122, 28, 0), (1, 0, 28, 1)], convert=problem)
     with pytest.raises(service._LookupFailed):
         service._lookup("OLDPC\\Owner")
     assert state["calls"] == 2
+    # The person is asked to try again, not to delete the entry.
+    state["calls"] = 0
+    with pytest.raises(service.TaskNotConfirmed) as refused:
+        service.owned_spec(_trigger_xml("OLDPC\\Owner"), SID)
+    assert refused.value.retry is True
+
+
+def test_the_tasks_own_action_refuses_a_task_that_is_not_confirmed_before_any_effect(monkeypatch):
+    # The launcher: Task Scheduler started this action, and the task is not the app's own.
+    value = spec(supervised=True)
+    before = dict(os.environ)
+    monkeypatch.setattr(service, "_require_python", lambda: None)
+    monkeypatch.setattr(service, "_owner", lambda: SID)
+    monkeypatch.setattr(service, "_scheduler", lambda op, sid, **kw: {
+        "exists": True, "xml": _trigger_xml("PC\\Other"), "state": 4, "lastResult": 0, "instances": 1})
+    _windows_names(monkeypatch, {"PC\\Other": (OTHER, 1)})
+    monkeypatch.setattr(os, "chdir", lambda path: pytest.fail("no effect before the task is confirmed"))
+    with pytest.raises(service.TaskNotConfirmed) as refused:
+        service._run(value.encoded())
+    assert refused.value.entry == service.task_name(SID) and dict(os.environ) == before
 
 
 def test_lookup_without_the_windows_library_is_a_failed_lookup(monkeypatch):

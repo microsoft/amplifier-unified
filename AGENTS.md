@@ -201,8 +201,8 @@ different program. Task registration/state is not authenticated host health.
 Task Scheduler stores the sign-in trigger's user as a name (`COMPUTER\user`),
 even when registration gave the SID, and never rewrites it; the principal stays
 a SID. After a computer rename Windows still starts the task, and that name
-maps to nothing. `_same_account` in `windows_service.py` is the one equivalence
-in the ownership check: keep "Windows says no such name" apart from a lookup
+maps to nothing. `_same_account` in `windows_service.py` is the one identity
+equivalence in the ownership check: keep "Windows says no such name" apart from a lookup
 that failed, and keep every other field an exact comparison. The launcher runs
 that check before any app version does, so a fix to it reaches an installed PC
 only with a new launcher. `windows-task-after-rename.yml` registers the real

@@ -581,7 +581,8 @@ def test_a_start_that_cannot_use_the_sign_in_entry_names_that_cause_and_not_the_
         assert "could not confirm that its start-at-sign-in entry in Windows belongs to this installation" in text
         assert text.count(ENTRY) == 2 and "Task Scheduler Library" in text and "press the Delete key" in text
         assert "no longer starts when you sign in, until it makes a new entry" in text
-        assert "another Amplifier installation" in text and "do not delete the entry" in text
+        assert "another Amplifier installation" in text
+        assert "do not delete the entry: use that installation, or uninstall it first." in text
         assert ("4. Restart this PC.\n5. " + ("Open Amplifier from the Start menu: Amplifier Unified."
                                                if listed else "Run the Amplifier setup file again.")
                 + " It makes a new entry. Your chats and settings stay.") in text
@@ -638,18 +639,21 @@ def test_stop_and_uninstall_name_an_entry_that_was_not_confirmed_and_a_next_step
     for wrong in ("You can keep using it", "could not read its start-at-sign-in entry",
                   "could not stop its background app", "Wait a few minutes"):
         assert wrong not in text
-    if retry:
+    if operation == "stop":
+        # One next step for both causes: the way to stop the app now.
+        assert ("Windows could not check the account" if retry else
+                "could not confirm that its start-at-sign-in entry") in text
+        assert text.endswith("To stop the app now, sign out of Windows or restart this PC.\n\n"
+                             "Reference: stop-app, TaskNotConfirmed")
+        assert "delete" not in text.lower() and "1. " not in text
+    elif retry:
         assert "Windows could not check the account" in text and "2. Restart this PC." in text
-        assert "delete" not in text.lower()
-        assert ("3. Uninstall Amplifier again." if operation == "uninstall" else "3. Select Stop Amplifier again.") in text
+        assert "delete" not in text.lower() and "3. Uninstall Amplifier again." in text
     elif operation == "uninstall":
         assert "could not confirm that its start-at-sign-in entry" in text and text.count(ENTRY) == 2
         assert "Amplifier then no longer starts when you sign in.\n1. " in text
         assert "4. Restart this PC.\n5. Uninstall Amplifier again.\n\nReference" in text
         assert "makes a new entry" not in text
-    else:
-        assert "could not confirm that its start-at-sign-in entry" in text
-        assert "To stop the app now, sign out of Windows or restart this PC." in text and "delete" not in text.lower()
     (record,) = written
     assert (record["operation"], record["step"], record["errorType"]) == (operation, step, "TaskNotConfirmed")
 

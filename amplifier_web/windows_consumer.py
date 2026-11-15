@@ -270,21 +270,22 @@ def entry_notice(purpose, entry, retry, *, listed=True):
              "Run the Amplifier setup file again.")
     again = {"start": opens, "status": opens, "stop": "Select Stop Amplifier again.",
              "uninstall": "Uninstall Amplifier again."}[purpose]
+    cause = ("Windows could not check the account of Amplifier's start-at-sign-in entry, so "
+             "Amplifier could not confirm that the entry belongs to this installation." if retry else
+             "Amplifier could not confirm that its start-at-sign-in entry in Windows belongs to "
+             "this installation. It uses and changes only an entry that it can confirm.")
+    if purpose == "stop":
+        # The person wants the app to stop. That needs no confirmed entry.
+        return opening + "\n\n" + cause + "\n\nTo stop the app now, sign out of Windows or restart this PC."
     if retry:
-        return (opening + "\n\n"
-                "Windows could not check the account of Amplifier's start-at-sign-in entry, so "
-                "Amplifier could not confirm that the entry belongs to this installation.\n\n"
+        return (opening + "\n\n" + cause + "\n\n"
                 "1. If your work or school manages this PC, connect it to that network.\n"
                 "2. Restart this PC.\n"
                 "3. " + again)
-    cause = ("Amplifier could not confirm that its start-at-sign-in entry in Windows belongs to "
-             "this installation. It uses and changes only an entry that it can confirm.")
-    if purpose == "stop":
-        return opening + "\n\n" + cause + "\n\nTo stop the app now, sign out of Windows or restart this PC."
     return (opening + "\n\n" + cause + "\n\n"
             f"The entry is the task named {entry} in Windows Task Scheduler. If you have another "
             "Amplifier installation for this Windows account, the entry can belong to it. Then do "
-            "not delete the entry.\n\n"
+            "not delete the entry: use that installation, or uninstall it first.\n\n"
             "Otherwise delete the entry. Amplifier then no longer starts when you sign in"
             + (".\n" if purpose == "uninstall" else ", until it makes a new entry in step 5.\n") +
             "1. Open the Start menu, type Task Scheduler and open it.\n"

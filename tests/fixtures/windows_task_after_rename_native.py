@@ -58,7 +58,8 @@ def require_disposable_runner():
             and os.environ.get("RUNNER_ENVIRONMENT") == "github-hosted" and os.environ.get(OPT_IN) == "1"):
         raise SystemExit("Refused: this check changes the machine's account-domain name. It runs only on a "
                          f"GitHub-hosted runner, with {OPT_IN}=1.")
-    assert sys.version_info[:2] == (3, 13) and sys.maxsize > 2 ** 32
+    if sys.version_info[:2] != (3, 13) or sys.maxsize <= 2 ** 32:
+        raise SystemExit("Refused: this check needs 64-bit CPython 3.13.")
 
 
 def evidence():
@@ -115,11 +116,13 @@ def account_domain(new_name=None):
     attributes.Length = C.sizeof(attributes)
     # POLICY_VIEW_LOCAL_INFORMATION, and POLICY_TRUST_ADMIN for the change.
     status = api.LsaOpenPolicy(None, C.byref(attributes), 0x1 | (0x8 if new_name else 0), C.byref(handle))
-    assert status == 0, f"LsaOpenPolicy {status & 0xFFFFFFFF:#x}"
+    if status:
+        raise OSError(f"LsaOpenPolicy {status & 0xFFFFFFFF:#x}")
     try:
         buffer = C.c_void_p()
         status = api.LsaQueryInformationPolicy(handle, 5, C.byref(buffer))  # PolicyAccountDomainInformation
-        assert status == 0, f"LsaQueryInformationPolicy {status & 0xFFFFFFFF:#x}"
+        if status:
+            raise OSError(f"LsaQueryInformationPolicy {status & 0xFFFFFFFF:#x}")
         try:
             info = C.cast(buffer, C.POINTER(_AccountDomain)).contents
             current = C.wstring_at(info.DomainName.Buffer, info.DomainName.Length // 2)
@@ -131,7 +134,8 @@ def account_domain(new_name=None):
                 changed.DomainName.Buffer = C.cast(text, C.c_void_p)
                 changed.DomainSid = info.DomainSid
                 status = api.LsaSetInformationPolicy(handle, 5, C.byref(changed))
-                assert status == 0, f"LsaSetInformationPolicy {status & 0xFFFFFFFF:#x}"
+                if status:
+                    raise OSError(f"LsaSetInformationPolicy {status & 0xFFFFFFFF:#x}")
             return current
         finally:
             api.LsaFreeMemory(buffer)
@@ -175,7 +179,8 @@ def run():
 
     def need(condition, label):
         report["stage"] = label
-        assert condition, label
+        if not condition:  # Not `assert`: a check must not vanish under python -O.
+            raise AssertionError(label)
         report["checks"].append(label)
 
     try:
@@ -397,7 +402,8 @@ def cleanup():
                     f"{service._q('RegistrationInfo')}/{service._q('Description')}", "")
                 spec = service.TaskSpec.decode(description[len(service.SOURCE) + 1:])
                 # Only the task that this fixture registered for its own folder.
-                assert Path(spec.data_dir) == root / "app"
+                if Path(spec.data_dir) != root / "app":
+                    raise RuntimeError("This task is not the fixture's.")
                 if task["instances"]:
                     task = service._stop(task, spec)
                 service._scheduler("remove", sid, previous=task["xml"])
@@ -408,7 +414,8 @@ def cleanup():
             code, _ = powershell(f"if (Get-LocalUser -Name '{owned['user']}' -ErrorAction SilentlyContinue) "
                                  f"{{ Remove-LocalUser -Name '{owned['user']}' }}")
             result["account"] = "absent" if code == 0 else "left"
-        assert root.parent == canonical_temp() and root.name.startswith("task-after-rename-")
+        if root.parent != canonical_temp() or not root.name.startswith("task-after-rename-"):
+            raise RuntimeError("This folder is not the fixture's.")
         shutil.rmtree("\\\\?\\" + str(root), ignore_errors=True)
         result["folder"] = "absent" if not root.exists() else "left"
     save("cleanup.json", result)
