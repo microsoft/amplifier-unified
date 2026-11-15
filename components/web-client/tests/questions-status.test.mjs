@@ -15,6 +15,28 @@ const render=q=>renderToStaticMarkup(React.createElement(Questions,{session:sess
 const notice=q=>renderToStaticMarkup(React.createElement(QuestionNotice,{session:session(q),paneRef:{current:null}}));
 const button=(root,text)=>root.root.findAllByType('button').find(row=>row.children.join('')===text);
 
+test('alternative, context and original disclosures own child bodies without answering or changing delivery',async()=>{
+ const calls=[];let root;
+ const pending=question(undefined,{status:'pending',answer:undefined,options:[{id:'keep',label:'Keep'}]});
+ try{
+  await act(async()=>{root=create(React.createElement(Questions,{session:session(pending),dispatch:(...args)=>calls.push(args)}))});
+  for(const className of ['a-question-alternative','a-question-context']){
+   const disclosure=root.root.findByProps({className});
+   assert.equal(disclosure.findByProps({className:'a-question-disclosure-body'}).parent,disclosure);
+  }
+  const alternative=root.root.findByProps({className:'a-question-alternative'});
+  await act(async()=>alternative.props.onToggle({currentTarget:{open:true}}));
+  await act(async()=>root.root.findByType('textarea').props.onChange({target:{value:'Retained private draft'}}));
+  await act(async()=>alternative.props.onToggle({currentTarget:{open:false}}));
+  assert.equal(root.root.findByType('textarea').props.value,'Retained private draft');
+  const answered=question('accepted');
+  await act(async()=>root.update(React.createElement(Questions,{session:session(answered),history:true,dispatch:(...args)=>calls.push(args)})));
+  const original=root.root.findByProps({className:'a-question-original'});
+  assert.equal(original.findByProps({className:'a-question-disclosure-body'}).parent,original);
+  assert.deepEqual(calls,[]);
+ }finally{await act(async()=>root?.unmount())}
+});
+
 test('known rejected answer is saved but not delivered; unknown and absent receipts stay uncertain',()=>{
  const rejected=question('rejected'),before=structuredClone(rejected),html=render(rejected);
  assert.match(html,/Answer saved; not delivered\./);

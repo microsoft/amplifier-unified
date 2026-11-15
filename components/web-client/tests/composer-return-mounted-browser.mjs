@@ -89,6 +89,15 @@ async function newMount({text,platform='desktop',storage='normal'}={}){
   await page.waitForFunction(()=>!!window.composerFixture);
   await expect(composer(page)).toHaveAttribute('enterkeyhint','enter');
   await expect(composer(page)).toHaveAccessibleDescription(platform==='desktop'?desktopHelp:safeHelp);
+  const description=page.locator('[data-part="composer-return-help"]');
+  await expect(description).toHaveCount(1);await expect(description).toHaveClass('a-sr-only');
+  const descriptionStyle=await description.evaluate(node=>{
+   const style=getComputedStyle(node),box=node.getBoundingClientRect();
+   return {position:style.position,clipPath:style.clipPath,width:box.width,height:box.height,hidden:!!node.closest('[hidden],[aria-hidden="true"]')};
+  });
+  assert.equal(descriptionStyle.position,'absolute');assert.equal(descriptionStyle.clipPath,'inset(50%)');
+  assert.ok(descriptionStyle.width<=1&&descriptionStyle.height<=1,'Mounted editor has no persistent visible Return instruction');
+  assert.equal(descriptionStyle.hidden,false,'Editing guidance remains accessible');
   return {context,page};
  }catch(error){await context.close();throw error;}
 }

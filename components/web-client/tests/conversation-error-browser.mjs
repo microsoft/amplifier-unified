@@ -5,7 +5,7 @@ import {chromium,expect} from '@playwright/test';
 import {fileURLToPath} from 'node:url';
 import {mkdir,writeFile} from 'node:fs/promises';
 import assert from 'node:assert/strict';
-import {assertConversationErrorGeometry,assertConversationErrorFocus} from './conversation-error-geometry.mjs';
+import {assertConversationErrorGeometry,assertConversationErrorFocus,assertConversationErrorActionAlignment} from './conversation-error-geometry.mjs';
 
 const artifacts=process.env.AMPLIFIER_TEST_ARTIFACTS||'/artifacts/conversation-error';
 const fixture=`
@@ -59,11 +59,13 @@ try{
     const summary=banner.locator('summary');
     await banner.locator('details').evaluate(node=>{node.open=false});
     metrics.push(await assertConversationErrorGeometry({banner,composer,label:label+'-closed'}));
+    metrics.push(await assertConversationErrorActionAlignment(banner,label+'-closed'));
     await page.keyboard.press('Tab');
     for(const control of [summary,banner.getByRole('button',{name:'Dismiss conversation error'}),...(category==='context_limit'?[banner.getByRole('button',{name:'Create recovery copy',exact:true})]:[])])await assertConversationErrorFocus(control,label+'-closed');
     await summary.focus();await page.keyboard.press('Enter');
     await expect(banner.locator('details')).toHaveAttribute('open','');
     metrics.push(await assertConversationErrorGeometry({banner,composer,label:label+'-open'}));
+    metrics.push(await assertConversationErrorActionAlignment(banner,label+'-open'));
     for(const control of [banner.getByRole('button',{name:'Technical details',exact:true}),banner.getByRole('button',{name:'Report a problem',exact:true}),banner.getByRole('button',{name:'Dismiss conversation error'})])await assertConversationErrorFocus(control,label+'-open');
     // Traverse the real disclosure controls without activating an external effect.
     await summary.focus();await page.keyboard.press('Tab');await expect(banner.getByRole('button',{name:'Technical details',exact:true})).toBeFocused();

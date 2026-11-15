@@ -22,26 +22,31 @@ const cases=[
 const results=[],compactGeometry=[];let browser,vite,activeScenario,activePage;
 async function compactHelpLayout(page,composer,expectedHelp,scenario){
  const help=page.locator('[data-part="composer-return-help"]'),surface=page.locator('[data-part="composer-surface"]');
- await expect(help).toHaveCount(1);await expect(help).toBeVisible();await expect(help).toHaveText(expectedHelp);
+ await expect(help).toHaveCount(1);await expect(help).toHaveText(expectedHelp);
  await expect(composer).toHaveAccessibleDescription(expectedHelp);
- assert.equal(await composer.getAttribute('aria-describedby'),await help.getAttribute('id'),'Actual editor describes the visible outside field help');
+ assert.equal(await composer.getAttribute('aria-describedby'),await help.getAttribute('id'),'Actual editor retains its effective accessible editing description');
  await expect(surface.locator('[data-part="composer-return-help"]')).toHaveCount(0);
  const measure=()=>surface.evaluate(el=>{
   const rect=node=>{const {x,y,width,height}=node.getBoundingClientRect();return {x,y,width,height};};
   const field=el.querySelector('[role="textbox"]'),form=el.closest('form'),help=form.querySelector('[data-part="composer-return-help"]');
   return {surface:rect(el),editor:rect(field),help:rect(help),configuration:rect(form.querySelector('.a-compose-configuration')),
-   helpStyle:{position:getComputedStyle(help).position,visibility:getComputedStyle(help).visibility,whiteSpace:getComputedStyle(help).whiteSpace},
-   overflow:el.scrollWidth>el.clientWidth+1,helpOverflow:help.scrollWidth>help.clientWidth+1,pageOverflow:document.documentElement.scrollWidth>innerWidth+1,
+   helpStyle:{position:getComputedStyle(help).position,visibility:getComputedStyle(help).visibility,display:getComputedStyle(help).display,
+    clip:getComputedStyle(help).clip,clipPath:getComputedStyle(help).clipPath,margin:getComputedStyle(help).margin,
+    hidden:!!help.closest('[hidden],[aria-hidden="true"]')},
+   overflow:el.scrollWidth>el.clientWidth+1,pageOverflow:document.documentElement.scrollWidth>innerWidth+1,
    buttons:[...el.querySelectorAll('button')].filter(button=>button.getClientRects().length).map(rect)};
  });
  const check=geometry=>{
   assert.ok(geometry.surface.height<=72,`Idle field remains compact, not a relaxed cap: ${geometry.surface.height}`);
   assert.ok(geometry.editor.height>=44);
-  assert.equal(geometry.overflow,false);assert.equal(geometry.helpOverflow,false);assert.equal(geometry.pageOverflow,false);
-  assert.ok(geometry.help.y>=geometry.surface.y+geometry.surface.height,'Visible Return help belongs below the border');
-  assert.ok(geometry.configuration.y>=geometry.help.y+geometry.help.height-1,'Wrapping help does not overlap model/configuration controls');
-  assert.ok(geometry.help.x>=geometry.surface.x&&geometry.help.x+geometry.help.width<=geometry.surface.x+geometry.surface.width+1);
-  assert.equal(geometry.helpStyle.position,'static');assert.equal(geometry.helpStyle.visibility,'visible');assert.equal(geometry.helpStyle.whiteSpace,'normal');
+  assert.equal(geometry.overflow,false);assert.equal(geometry.pageOverflow,false);
+  // User follow-up removes the persistent visible instruction. Retain the same
+  // effective aria-describedby text, but no painted hint or blank spacer row.
+  assert.equal(geometry.helpStyle.position,'absolute');
+  assert.equal(geometry.helpStyle.clip,'rect(0px, 0px, 0px, 0px)');assert.equal(geometry.helpStyle.clipPath,'inset(50%)');
+  assert.ok(geometry.help.width<=1&&geometry.help.height<=1,'Return description is not a painted caption');
+  assert.equal(geometry.helpStyle.hidden,false);assert.notEqual(geometry.helpStyle.display,'none');assert.notEqual(geometry.helpStyle.visibility,'hidden');
+  assert.ok(Math.abs(geometry.configuration.y-(geometry.surface.y+geometry.surface.height))<=1,'No blank Return-help spacer between field and model/configuration controls');
   assert.ok(geometry.buttons.length>=2,'Frequent add/primary actions remain present');
   for(const box of geometry.buttons){
    assert.ok(box.width>=44&&box.height>=44,'Frequent actions retain 44px touch targets');
@@ -56,17 +61,18 @@ async function compactHelpLayout(page,composer,expectedHelp,scenario){
   const geometry=await measure();compactGeometry.push({scenario,width,...geometry});
   check(geometry);
  }
- // The same assertions must reject the original cause, not only a generic tall
- // input. Temporarily move the actual help back into the writing grid column.
- await help.evaluate(node=>{window.returnHelpPlacement={parent:node.parentNode,next:node.nextSibling};document.querySelector('.a-compose-writing').append(node);});
+ // The former visible-help requirement was explicitly replaced by the user.
+ // Restore that caption temporarily: the same no-visible-hint/no-spacer oracle
+ // must reject it without changing the compact 72px/44px geometry checks.
+ const originalClass=await help.getAttribute('class');await help.evaluate(node=>{node.className='a-caption';});
  let broken;
  try{
   broken=await measure();
-  assert.ok(broken.surface.height>72||broken.buttons.some(box=>Math.abs(box.y+box.height/2-(broken.editor.y+broken.editor.height/2))>1),'Restoring inside-border help reproduces compact height/alignment regression');
-  assert.throws(()=>check(broken),'Inside-border help must fail the same compact/help placement oracle');
+  assert.ok(broken.help.width>1&&broken.help.height>1,'Negative control paints the persistent instruction again');
+  assert.throws(()=>check(broken),'Visible hint must fail the updated user-requirement oracle');
  }
- finally{await help.evaluate(node=>{const {parent,next}=window.returnHelpPlacement;parent.insertBefore(node,next);delete window.returnHelpPlacement;});}
- compactGeometry.push({scenario,negativeControl:'help returned inside writing column',rejected:true,...broken});
+ finally{await help.evaluate((node,value)=>node.className=value,originalClass);}
+ compactGeometry.push({scenario,negativeControl:'persistent visible Return instruction restored',rejected:true,...broken});
  check(await measure());
  await page.setViewportSize(originalViewport);
 }
@@ -204,6 +210,9 @@ try{
    const choice=page.getByLabel('Return key',{exact:true});
    await expect(choice).toHaveValue('automatic');await choice.selectOption('newline');
    await expect(choice).toHaveValue('newline');
+   const writingHelp=page.locator('[data-composer-return-preference] .a-appearance-option-description>p').first();
+   await expect(writingHelp).toBeVisible();await expect(writingHelp).toContainText('Return adds a new line. Use Send to send.');
+   await expect(choice).toHaveAccessibleDescription(/This browser only.*Return adds a new line/);
    assert.equal(await page.evaluate(()=>localStorage.getItem('amplifier.composer.returnKey.v1')),'newline');
    assert.equal(sends().length,beforePreference);
    await expect(composer).toHaveDraft('Preference retains this draft');

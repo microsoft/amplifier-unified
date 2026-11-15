@@ -28,3 +28,24 @@ test('blocked clipboard retains a report without changing installed sources',asy
  assert.deepEqual(calls,[['updates.diagnostics',undefined]]);
  await renderAct(async()=>root.unmount());
 });
+
+test('both padded diagnostic actions keep their identity and native pending state',async()=>{
+ let root,release,completion;const calls=[],copied=[];
+ Object.defineProperty(globalThis,'navigator',{configurable:true,value:{clipboard:{writeText:async text=>copied.push(text)}}});
+ const act=(name,args)=>{calls.push([name,args]);return new Promise(resolve=>{release=resolve})};
+ try{
+  await renderAct(async()=>{root=create(React.createElement(UpdateSupport,{state:{updates:{}},act}))});
+  const buttons=()=>root.root.findAllByType('button');
+  assert.equal(buttons().length,2);
+  assert.ok(buttons().every(button=>button.props.className==='a-soft'),'diagnostic actions stay buttons, not flush link paint');
+  assert.ok(buttons().every(button=>button.findAllByType('svg').length===1&&button.findAllByType('span').length===1));
+  assert.deepEqual(calls,[],'mount is passive');
+  await renderAct(async()=>{completion=buttons()[0].props.onClick()});
+  assert.ok(buttons().every(button=>button.props.disabled===true));
+  assert.match(JSON.stringify(root.toJSON()),/Collecting diagnostics/);
+  await renderAct(async()=>{release({accepted:true,result:report});await completion});
+  assert.ok(buttons().every(button=>button.props.disabled===false));
+  assert.deepEqual(calls,[['updates.diagnostics',undefined]]);
+  assert.equal(copied.length,1);
+ }finally{await renderAct(async()=>root?.unmount())}
+});

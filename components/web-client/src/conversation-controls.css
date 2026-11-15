@@ -20,7 +20,11 @@
 #amp-one .a-conversation-trouble-actions,#amp-one .a-conversation-trouble-details-actions{display:flex;align-items:flex-start;flex-wrap:wrap;gap:8px 12px;min-width:0}
 #amp-one .a-conversation-trouble-actions>details{flex:0 1 auto;min-width:0;max-width:100%}
 #amp-one .a-conversation-trouble-actions>details[open]{flex-basis:100%}
-#amp-one .a-conversation-trouble-actions summary{cursor:pointer;min-height:44px;padding:8px;box-sizing:border-box;white-space:normal;overflow-wrap:anywhere}
+/* A native summary is a list-item, not a flex button: center its line box with
+   the same action padding instead of leaving text at the top of a 44px target.
+   Keep the browser's disclosure marker and its keyboard/open semantics. */
+#amp-one .a-conversation-trouble-actions summary{display:list-item;list-style-position:inside;cursor:pointer;box-sizing:border-box;white-space:normal;overflow-wrap:anywhere}
+#amp-one .a-conversation-trouble-actions summary,#amp-one .a-alert[data-part=conversation-trouble] .a-link{font-size:inherit;line-height:1.5;min-height:44px;padding: max(6px,calc((44px - 1.5em)/2)) 8px}
 #amp-one .a-conversation-trouble-actions details>p{margin:8px 0 12px}
 #amp-one .a-alert[data-part=conversation-trouble] button{min-height:44px;white-space:normal;overflow-wrap:anywhere}
 #amp-one [data-part=conversation-trouble]>.a-conversation-trouble-dismiss{grid-column:2;grid-row:1;width:44px;height:44px;padding:10px;margin:0}

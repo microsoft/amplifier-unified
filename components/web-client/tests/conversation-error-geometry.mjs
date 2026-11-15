@@ -52,3 +52,39 @@ export async function assertConversationErrorFocus(control,label){
  assert.equal(result.hit,true,`${label}: focused control is not covered`);
  return result;
 }
+
+// Native disclosure markers share their text line's baseline. Check that this
+// native line box is centered like its adjacent flex-button label, not merely
+// that both hit targets have the same minimum height.
+export async function assertConversationErrorActionAlignment(banner,label,{requireAdjacentSingleLine=false}={}){
+ const geometry=await banner.locator('.a-conversation-trouble-actions').evaluate(node=>{
+  const measure=control=>{
+   const range=document.createRange();range.selectNodeContents(control);
+   const lines=[...range.getClientRects()].filter(rect=>rect.width>0&&rect.height>0);
+   const box=control.getBoundingClientRect(),css=getComputedStyle(control);
+   const text=lines.length?{top:Math.min(...lines.map(r=>r.top)),bottom:Math.max(...lines.map(r=>r.bottom))}:null;
+   return {tag:control.tagName,text:control.textContent,lineCount:lines.length,box:{left:box.left,right:box.right,top:box.top,bottom:box.bottom},
+    textBox:text,centerDelta:text?Math.abs((box.top+box.bottom-text.top-text.bottom)/2):null,
+    display:css.display,listStyle:css.listStyleType,markerContent:getComputedStyle(control,'::marker').content,
+    markerDisplay:getComputedStyle(control,'::-webkit-details-marker').display};
+  };
+  const summary=node.querySelector('summary'),action=node.querySelector(':scope>button');
+  return {summary:measure(summary),action:action?measure(action):null};
+ });
+ const {summary,action}=geometry;
+ assert.equal(summary.display,'list-item',label+' native summary marker/layout retained');
+ assert.notEqual(summary.listStyle,'none',label+' disclosure indicator is not removed');
+ assert.notEqual(summary.markerContent,'none',label+' marker content is not suppressed');
+ assert.notEqual(summary.markerContent,'""',label+' marker is not blanked');
+ assert.ok(summary.centerDelta!==null&&summary.centerDelta<=3,label+' summary glyph line centered within target: '+JSON.stringify(summary));
+ if(action){
+  assert.ok(action.centerDelta!==null&&action.centerDelta<=3,label+' action glyph line centered within target: '+JSON.stringify(action));
+  const adjacentSingleLine=summary.lineCount===1&&action.lineCount===1&&Math.abs(summary.box.top-action.box.top)<=1;
+  if(requireAdjacentSingleLine)assert.equal(adjacentSingleLine,true,label+' explicitly exercises adjacent single-line controls');
+  if(adjacentSingleLine){
+   const textCenter=target=>(target.textBox.top+target.textBox.bottom)/2;
+   assert.ok(Math.abs(textCenter(summary)-textCenter(action))<=1,label+' adjacent summary and button labels share vertical center');
+  }
+ }
+ return {label,actionAlignment:geometry};
+}

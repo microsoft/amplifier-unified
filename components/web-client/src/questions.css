@@ -38,3 +38,6 @@
 #amp-one .a-question-alternative>summary,#amp-one .a-question-context>summary,#amp-one .a-question-original>summary{font-size:13px;min-height:44px;box-sizing:border-box;align-content:center;cursor:pointer}
 #amp-one .a-question-context,#amp-one .a-question-original{font-size:12px;color:var(--a-muted)}
 #amp-one .a-question-original .a-question-prompt{color:var(--a-ink)}
+#amp-one .a-question :is(.a-question-alternative,.a-question-context,.a-question-original)>.a-question-disclosure-body{padding-block:4px 12px;padding-inline:12px 0;min-width:0;border-inline-start:1px solid var(--a-line)}
+#amp-one .a-question-disclosure-body>:first-child{margin-top:0}
+#amp-one .a-question-disclosure-body>:last-child{margin-bottom:0}

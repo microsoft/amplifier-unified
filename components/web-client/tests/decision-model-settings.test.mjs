@@ -27,6 +27,8 @@ test('fresh settings expose a canonical connection action without installing, sa
   assert.equal(root.root.findByProps({value:'decision'}).props.disabled,true);
   assert.match(root.root.findByProps({value:'decision'}).children.join(''),/connect a provider first/);
   await click(root,'Connect Jev');
+  const connect=button(root,'Connect Jev');
+  assert.equal(connect.parent.props.className,'a-control-actions','connection choices share a wrapping action row');
   assert.deepEqual(calls.filter(([action])=>action.startsWith('settings.connection.')),[['settings.connection.select',{scope:'global',module:'provider-jev'}]]);
   assert.ok(calls.every(([action])=>!['providers.save','providers.models','providers.login','updates.featureInstall'].includes(action)));
  }finally{await act(async()=>root?.unmount())}
@@ -80,6 +82,8 @@ test('both-purpose save is one explicit request with consent and the existing ac
   assert.equal(root.root.findByProps({id:'decision-service'}).props.value,'my-jev');
   assert.equal(root.root.findByProps({id:'decision-model'}).props.value,'jev-test');
   assert.equal(button(root,'Save selection').props.disabled,true);
+  assert.equal(button(root,'Save selection').parent.props.className,'a-dialog-actions a-control-actions');
+  assert.equal(button(root,'Discard changes').parent,button(root,'Save selection').parent,'dirty actions keep one shared wrapping row');
   assert.equal(root.root.findByProps({id:'decision-purpose'}).props.disabled,true,'a dirty selection cannot silently move to another purpose');
   await act(async()=>root.root.findByProps({type:'checkbox'}).props.onChange({target:{checked:true}}));
   await click(root,'Save selection');

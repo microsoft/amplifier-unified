@@ -120,14 +120,15 @@ function QuestionCard({question,sessionId,state,dispatch,onPreviewChange,history
      {choice.description&&<div id={`${q.id}-choice-${index}-description`} className="a-question-option-description"><Markdown text={choice.description} userContent fileContext={fileContext}/></div>}
     </div>)}
     {q.allowFreeText&&(q.options.length?<details className="a-question-alternative" open={alternativeOpen} onToggle={event=>setAlternativeOpen(event.currentTarget.open)}>
-     <summary>Write a different answer</summary>{answerEditor}
+     <summary>Write a different answer</summary><div className="a-question-disclosure-body">{answerEditor}</div>
     </details>:answerEditor)}
    </fieldset>
    {!q.required&&<div className="a-dialog-actions"><button className="a-soft" type="button" data-action="question.cancel" disabled={busy} onClick={skip}>Skip question</button></div>}
-   {q.required&&<details className="a-question-context"><summary>Question context</summary><p className="a-caption">This step waits for your answer. Other work can continue.</p></details>}
+   {q.required&&<details className="a-question-context"><summary>Question context</summary><div className="a-question-disclosure-body"><p className="a-caption">This step waits for your answer. Other work can continue.</p></div></details>}
   </form>:<details key="original" className="a-question-original">
-   <summary>Original question &amp; provenance</summary>{original}
+   <summary>Original question &amp; provenance</summary><div className="a-question-disclosure-body">{original}
    {q.answer&&<p className="a-caption">Answer to question revision {q.answer.questionRevision}.</p>}
+   </div>
   </details>}
   {error&&<p role="alert">{error}</p>}
   {draftWarning&&<p role="status">{draftWarning}</p>}

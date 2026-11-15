@@ -29,12 +29,6 @@
  width:44px;min-width:44px;height:44px;min-height:44px;flex:none;padding:10px;
 }
 #amp-one .a-compact-composer .a-compose-end>.a-send{border-radius:50%}
-/* Field guidance is outside the border: it cannot enlarge the writing grid row
-   and stagger the 44px actions. Normal wrapping remains visible at 320px. */
-#amp-one .a-compact-composer .a-composer-fields>.a-composer-return-help{
- display:block;min-width:0;max-width:100%;box-sizing:border-box;margin:6px 8px 0;
- white-space:normal;overflow-wrap:anywhere;line-height:1.5;
-}
 #amp-one .a-compact-composer .a-compose-configuration{
  display:flex;justify-content:flex-end;align-items:center;min-width:0;min-height:44px;padding:0 2px;
 }

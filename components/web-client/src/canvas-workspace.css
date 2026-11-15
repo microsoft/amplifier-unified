@@ -77,7 +77,7 @@
 #amp-one .a-canvas-file-path{min-width:0;max-width:100%;font-size:var(--a-text-base,14px)}
 #amp-one .a-canvas-file-path[open]{flex-basis:100%}
 #amp-one .a-canvas-file-path summary{cursor:pointer;min-height:44px;align-content:center;padding:8px;box-sizing:border-box}
-#amp-one .a-canvas-file-path>div{padding:8px 0}
+#amp-one .a-canvas-file-path>div{padding-block:4px 12px;padding-inline:20px 8px;min-width:0}
 #amp-one .a-canvas-file-path .a-soft{margin:4px 8px 0 0}
 #amp-one .a-canvas-file-path code{display:block;overflow-wrap:anywhere;margin-bottom:8px}
 #amp-one .a-canvas-file-path p{white-space:normal;overflow-wrap:anywhere}

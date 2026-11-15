@@ -1306,6 +1306,7 @@
     "input-status",
     "action-spacing",
     "shared-controls",
+    "settings-action-spacing",
     "delivery-warning",
     "legacy-outbox-notice",
     "delivery-reconciliation",
@@ -1366,6 +1367,8 @@
     "history-refresh",
     "voice-work-message",
     "external-multiparty",
-    "shared-room"
+    "shared-room",
+    "work-hierarchy",
+    "worktree-move"
   ]
 }
