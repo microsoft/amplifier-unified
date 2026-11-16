@@ -141,7 +141,9 @@ async def complete(provider, config, model, transcript, info):
         tools=[], max_output_tokens=OUTPUT_TOKENS, timeout=DEADLINE, metadata={'stream': False})
     # This invokes complete once. Providers own wire retries; the isolated
     # config also sets max_retries=0 where their public config supports it.
-    reply = await asyncio.wait_for(provider.complete(request, extended_thinking=False), DEADLINE)
+    # Established adapters may select from call options rather than the typed
+    # request's model field. Bind both to the same explicit app selection.
+    reply = await asyncio.wait_for(provider.complete(request, model=model, extended_thinking=False), DEADLINE)
     blocks = getattr(reply, 'content', None) or []
     if not blocks or any(getattr(block, 'type', None) != 'text' for block in blocks):
         raise ValueError('Nontext suggestion response')

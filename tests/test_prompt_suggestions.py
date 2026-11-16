@@ -571,7 +571,25 @@ class Provider(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(request.max_output_tokens, 512)
         self.assertFalse(request.tools)
         self.assertEqual(request.timeout, 15)
+        self.assertEqual(provider.complete.call_args.kwargs['model'], 'explicit')
         self.assertFalse(provider.complete.call_args.kwargs['extended_thinking'])
+
+    async def test_provider_call_options_cannot_silently_select_connection_default_model(self):
+        class OptionsProvider:
+            def __init__(self):
+                self.models = []
+
+            async def complete(self, request, **options):
+                # Anthropic's established dispatch selects here, not from
+                # ChatRequest.model. Keep this regression independent of SDKs.
+                self.models.append(options.get('model', 'different-connection-default'))
+                return SimpleNamespace(content=[SimpleNamespace(type='text', text='{"suggestion":null}')])
+
+        provider = OptionsProvider()
+        result = await complete(provider, {'default_model': 'different-connection-default'},
+                                'explicit-app-selection', [], {})
+        self.assertEqual(result['status'], 'empty')
+        self.assertEqual(provider.models, ['explicit-app-selection'])
 
     async def test_plan_route_refuses_without_call(self):
         provider = SimpleNamespace(complete=AsyncMock())
