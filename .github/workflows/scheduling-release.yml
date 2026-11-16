@@ -1,8 +1,7 @@
-name: Scheduling and status packages
+name: Status package
 on:
   pull_request:
     paths:
-      - components/scheduling/**
       - amplifier_web/status_protocol/**
       - components/status/**
       - scripts/scheduling_release.py
@@ -17,13 +16,13 @@ on:
       component:
         description: Standalone package to publish; does not change Unified's selection
         required: true
-        default: scheduling
+        default: status-emitter
         type: choice
-        options: [scheduling, status-emitter]
+        options: [status-emitter]
 permissions:
   contents: read
 concurrency:
-  group: ${{ inputs.component || 'scheduling' }}-package-${{ github.event_name == 'workflow_dispatch' && 'publication' || github.ref }}
+  group: status-emitter-package-${{ github.event_name == 'workflow_dispatch' && 'publication' || github.ref }}
   cancel-in-progress: false
 jobs:
   build:
@@ -31,7 +30,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        component: ${{ fromJSON(github.event_name == 'pull_request' && '["scheduling","status-emitter"]' || format('["{0}"]', inputs.component || 'scheduling')) }}
+        component: [status-emitter]
     runs-on: ubuntu-latest
     env:
       COMPONENT: ${{ matrix.component }}
@@ -79,7 +78,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        component: ${{ fromJSON(github.event_name == 'pull_request' && '["scheduling","status-emitter"]' || format('["{0}"]', inputs.component || 'scheduling')) }}
+        component: [status-emitter]
     runs-on: ${{ matrix.os }}
     env:
       COMPONENT: ${{ matrix.component }}
@@ -115,17 +114,13 @@ jobs:
           SELECTED_REVISION: ${{ steps.selection.outputs.revision }}
           PACKAGE_VERSION: ${{ steps.selection.outputs.version }}
           PROJECT_PATH: ${{ steps.selection.outputs.subdirectory }}
-          IMPORT_PACKAGE: ${{ matrix.component == 'status-emitter' && 'amplifier_status' || 'amplifier_scheduling' }}
+          IMPORT_PACKAGE: amplifier_status
         run: |
           uv venv --python 3.13 "$RUNNER_TEMP/component-installed"
           python_path="$RUNNER_TEMP/component-installed/bin/python"
           if [ "$RUNNER_OS" = Windows ]; then python_path="$RUNNER_TEMP/component-installed/Scripts/python.exe"; fi
           wheel="$RUNNER_TEMP/component-dist/amplifier_${COMPONENT//-/_}-$PACKAGE_VERSION-py3-none-any.whl"
-          if [ "$COMPONENT" = status-emitter ]; then
-            uv pip install --python "$python_path" "$wheel" 'pytest>=8'
-          else
-            uv pip install --python "$python_path" "$wheel[test]"
-          fi
+          uv pip install --python "$python_path" "$wheel" 'pytest>=8'
           mkdir "$RUNNER_TEMP/component-tests"
           git archive "$SELECTED_REVISION:$PROJECT_PATH" tests pyproject.toml | (cd "$RUNNER_TEMP/component-tests" && tar -x)
           cd "$RUNNER_TEMP/component-tests"
@@ -145,7 +140,7 @@ jobs:
     permissions:
       contents: write
     env:
-      COMPONENT: ${{ inputs.component || 'scheduling' }}
+      COMPONENT: status-emitter
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -155,7 +150,7 @@ jobs:
           python-version: '3.13'
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: ${{ inputs.component || 'scheduling' }}-distributions
+          name: status-emitter-distributions
           path: ${{ runner.temp }}/component-dist
       - name: Publish or verify the exact component release without replacing the app latest
         env:

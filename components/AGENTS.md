@@ -55,12 +55,15 @@ Never edit that generated copy by hand or coinstall the standalone distribution.
 Author edits and publication do not refresh the app selection. Its POSIX mechanism
 tests stay with the package; host authorization, policy and integration stay in Unified.
 
-`components/scheduling/` is temporarily authored here as its independently
-buildable Python project. Preserve its normal `amplifier_scheduling` import.
-Unified consumes only the generated `scheduling-delivery/` snapshot selected by
-`scheduling.source.json`; author edits and publication do not change this default.
-Never edit the delivery copy by hand or coinstall the standalone distribution with
-Unified, which remains the sole installed owner. Follow the author project's README.
+Author Scheduling's policy/store and standalone tests in
+[amplifier-platform-scheduling](https://github.com/bkrabach/amplifier-platform-scheduling).
+Preserve its normal `amplifier_scheduling` import. Unified consumes only the
+generated `scheduling-delivery/` snapshot selected by `scheduling.source.json`;
+author edits and publication do not change this default. Never restore an editable
+author copy here, edit the delivery copy by hand or coinstall the standalone
+distribution with Unified, which remains the sole installed owner. Follow
+[the selection instructions](README.md#select-a-scheduling-artifact); host admission,
+authorization, Stop and execution remain in Unified.
 
 `operations/` is the temporary authoring project for `amplifier_operations`.
 Its SQLite operation observations and bounded delivery/cursor tests belong here;

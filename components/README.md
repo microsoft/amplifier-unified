@@ -70,15 +70,51 @@ copy; Unified remains the sole installed owner. Follow the
 not coinstall the standalone distribution. The author project stays here until
 a separate repository and handoff are ready.
 
-[`scheduling/`](scheduling/README.md) is the temporary authoring home for the
-independently buildable scheduling package. It stays here until its separate
-repository and authoring handoff are ready. Unified consumes the explicitly
-selected published wheel through the generated `scheduling-delivery/` snapshot
-and [`scheduling.source.json`](scheduling.source.json). Author changes and component
-publication do not change that app default. The app remains the sole installed
-distribution owner; this is artifact assembly, not a separately updatable pip
-dependency. Follow the [selection instructions](scheduling/README.md#unified-artifact-selection).
-The web client has a different ownership arrangement, described below.
+[amplifier-platform-scheduling](https://github.com/bkrabach/amplifier-platform-scheduling)
+owns the independently buildable scheduling policy/store and its standalone tests.
+Unified consumes the explicitly selected published wheel through the generated
+`scheduling-delivery/` snapshot and [`scheduling.source.json`](scheduling.source.json).
+Author changes and component publication do not change that app default. The app
+remains the sole installed distribution owner; this is artifact assembly, not a
+separately updatable pip dependency. Do not restore a second author copy here.
+
+## Select a Scheduling artifact
+
+The current selection remains the historical Unified `scheduling-v0.1.0` release.
+The public repository's source handoff does not replace that receipt: a standalone
+release must be published, verified and selected before its delivery is complete.
+Never edit the generated snapshot or rewrite the original publication records.
+
+Download a release's four published assets (wheel, source archive,
+`scheduling-source.json` and `SHA256SUMS`) into a private directory. Verify the
+source-receipt SHA256 against the reviewed publication, then run from Unified:
+
+```sh
+python scripts/scheduling_delivery.py select --component scheduling \
+  --dist /path/to/release-assets --revision FULL_PUBLISHED_SOURCE_SHA \
+  --receipt-sha256 REVIEWED_RECEIPT_SHA256
+python scripts/scheduling_delivery.py verify
+```
+
+Selection checks the original wheel, source archive and receipt, and refuses a
+locally modified delivery copy. It needs the reviewed artifacts and receipt
+checksum, not the producer checkout or Git history. Review the generated selection
+and any runtime requirement change together; Unified declares the current Windows
+`tzdata` requirement. The app installs the selected provenance and license under
+`amplifier_web/component_delivery/`.
+
+Normal wheel, source archive and editable builds verify the selected snapshot
+offline through Hatch. The source archive carries the snapshot, receipt and build
+helpers, so rebuilding needs no Git, network or producer checkout. Editable installs
+map the selected copy; develop the standalone library in its separate environment.
+Do not coinstall `amplifier-scheduling` with Unified. The five policy/store cases
+stay with the public package; Unified keeps host integration tests.
+
+Ordinary app staging and rollback retain one installed owner and existing activation
+rules. They do not update Scheduling independently, alter schedule databases,
+discard newer schedules or replay uncertain run effects. Component publication
+belongs to the public repository; the retained Unified package workflow publishes
+Status only. Historical Scheduling artifact verification remains supported.
 
 ## Web client ownership and assembly
 
