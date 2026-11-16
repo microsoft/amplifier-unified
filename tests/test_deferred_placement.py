@@ -117,7 +117,7 @@ async def test_placement_does_not_clear_an_independent_configuration_fence(tmp_p
         app._session(sid)['configurationBusy'] = True
         release.set()
         await settle(app)
-        assert app.worktrees.read(sid, receipt['id'])['phase'] == 'applied'
+        assert app.worktrees.read(sid, receipt['id'])['phase'] == 'rejected'
         assert app._session(sid)['configurationBusy']
     finally:
         release.set()
@@ -138,27 +138,146 @@ async def test_shutdown_invalidates_commit_of_a_retained_retirement(tmp_path, mo
     await entered.wait()
     await app.worktrees.close()
     saved = app.worktrees.read(sid, receipt['id'])
-    assert saved['phase'] == 'unknown'
+    assert saved['phase'] == 'pending' and saved['step'] == 'desired'
+    assert saved['placementUnperformed'] and saved['continuation']['status'] == 'suppressed'
     from amplifier_web.worktrees import HandoffSuperseded
     with pytest.raises(HandoffSuperseded):
         await callbacks[0]({'quiesced': True, 'retired': True})
     assert app.worktrees.read(sid, receipt['id']) == saved
     assert app._session(sid).get('workingDirectory', str(root)) == str(root)
     await app.close()
+    from amplifier_web.service import AppService
+    # Old process settlement belongs to RuntimeManager. This adapter has no
+    # mounted worker; the real store path proves its next acquisition separately.
+    async def next_owner(session, commit):
+        return await commit({'quiesced': True, 'retired': False, 'inputsReplayed': False})
+    runtime.deferred_placement = AsyncMock(side_effect=next_owner)
+    restored = AppService(app.data_dir, runtime, workspace=root)
+    try:
+        await settle(restored)
+        assert restored.worktrees.read(sid, receipt['id'])['phase'] == 'applied'
+        assert restored._session(sid)['workingDirectory'] == target['path']
+        runtime.deferred_placement.assert_awaited_once()
+        runtime.collaboration_input.assert_not_awaited()
+    finally:
+        await restored.close()
+
+
+async def test_delayed_closing_projection_never_downgrades_a_newer_placement(tmp_path, monkeypatch):
+    app, runtime, root, sid, entered, release = await deferred_fixture(tmp_path, monkeypatch)
+    target = await checkout(app, sid)
+    worker = {}
+    runtime.workers = {sid: worker}
+    try:
+        receipt = (await app.dispatch('worktree.handoff', {'sessionId': sid, 'id': target['id'],
+                   'expectedExecutionRevision': 0}))['result']
+        await entered.wait()
+        async with app.lock:
+            app.worktrees.placement_closing(sid, worker)
+            record = app.worktrees.read(sid, receipt['id'])
+            record.update(phase='applied', step='applied')
+            app.worktrees.save(record)
+        await asyncio.sleep(0)
+        assert app.worktrees.read(sid, receipt['id'])['step'] == 'applied'
+    finally:
+        release.set()
+        await app.close()
+
+
+async def test_unconfirmed_placement_publication_is_not_downgraded_to_no_effect(tmp_path, monkeypatch):
+    app, runtime, root, sid, entered, release = await deferred_fixture(tmp_path, monkeypatch)
+    target = await checkout(app, sid)
+    original = app.worktrees.changed
+    def fail_commit(*args):
+        if any(row.get('step') == 'committing' for row in app.worktrees.receipts(sid)):
+            raise OSError('actual publication uncertain')
+        return original(*args)
+    try:
+        receipt = (await app.dispatch('worktree.handoff', {'sessionId': sid, 'id': target['id'],
+                   'expectedExecutionRevision': 0}))['result']
+        await entered.wait()
+        monkeypatch.setattr(app.worktrees, 'changed', fail_commit)
+        release.set()
+        await settle(app)
+        saved = app.worktrees.read(sid, receipt['id'])
+        assert saved['phase'] == 'unknown' and saved['step'] == 'committing'
+        assert not saved.get('placementUnperformed') and not saved['inputsReplayed']
+    finally:
+        monkeypatch.setattr(app.worktrees, 'changed', original)
+        release.set()
+        await app.close()
+
+
+async def test_actual_pipe_exit_before_retirement_reply_reports_runtime_failure_not_folder_uncertainty(tmp_path, monkeypatch):
+    from amplifier_web.service import AppService
+    from test_worktrees import repository
+    root = repository(tmp_path)
+    script = ("import json,sys\n"
+              "for line in sys.stdin:\n"
+              " d=json.loads(line)\n"
+              " if d['op']=='start': print(json.dumps({'type':'runtime.ready','report':{}}),flush=True)\n"
+              " elif d['op']=='retire': sys.exit(3)\n"
+              " elif d['op']=='stop': break\n")
+    runtime = RuntimeManager(command=[sys.executable, '-c', script])
+    app = AppService(tmp_path / 'app', runtime, workspace=root)
+    await app.dispatch('session.create', {})
+    session = app._session()
+    await runtime.start(session, AsyncMock())
+    try:
+        target = await checkout(app, session['id'])
+        receipt = (await app.dispatch('worktree.handoff', {'sessionId': session['id'], 'id': target['id'],
+                   'expectedExecutionRevision': 0}))['result']
+        await asyncio.wait_for(settle(app), 5)
+        saved = app.worktrees.read(session['id'], receipt['id'])
+        assert saved['phase'] == 'rejected' and saved['placementUnperformed']
+        assert saved['runtimeOutcome'] == 'unconfirmed' and saved['continuation']['status'] == 'suppressed'
+        assert not app.worktrees.execution_state(session['id'])['fenced']
+        assert session.get('workingDirectory', str(root)) == str(root)
+        assert session['id'] not in runtime._retired
+    finally:
+        await app.close()
+
+
+async def test_foreign_native_writer_is_not_released_for_an_unperformed_folder_choice(tmp_path, monkeypatch):
+    from amplifier_foundation.session import SharedSessionStore, SessionBusyError
+    root = tmp_path / 'history'
+    root.mkdir()
+    store = SharedSessionStore(root, 'foreign-native')
+    held = store.acquire(app='foreign-original-owner')
+    runtime = RuntimeManager()
+    commit = AsyncMock()
+    try:
+        with pytest.raises(SessionBusyError):
+            await runtime.deferred_placement({'id': 'display-alias', 'runtimeSessionId': 'foreign-native',
+                'workspace': str(root), 'placementRequestId': 'unperformed'}, commit)
+        commit.assert_not_awaited()
+        with pytest.raises(SessionBusyError) as still_owned:
+            store.acquire(app='not-a-takeover')
+        assert still_owned.value.owner['acquisition_id'] == held.owner['acquisition_id']
+    finally:
+        held.release()
+        await runtime.close()
 
 
 @pytest.mark.parametrize('failure', [RuntimeError('lost save'), OSError('storage failed')])
-async def test_real_retirement_or_storage_uncertainty_stays_unknown(tmp_path, monkeypatch, failure):
+@pytest.mark.parametrize('owner_unreadable', [False, True])
+async def test_runtime_failure_is_separate_from_placement_uncertainty(tmp_path, monkeypatch, failure, owner_unreadable):
     app, runtime, root, sid, _, release = await deferred_fixture(tmp_path, monkeypatch)
     runtime.deferred_placement.side_effect = failure
     target = await checkout(app, sid)
     try:
         receipt = (await app.dispatch('worktree.handoff', {'sessionId': sid, 'id': target['id'],
                     'expectedExecutionRevision': 0}))['result']
+        if owner_unreadable:
+            def missing(*args, **kwargs):
+                raise OSError('saved owner unreadable')
+            monkeypatch.setattr(app.worktrees, 'saved_owner', missing)
         await settle(app)
         saved = app.worktrees.read(sid, receipt['id'])
-        assert saved['phase'] == 'unknown' and saved['displayState'] == 'needs_recovery'
-        assert app.worktrees.execution_state(sid)['fenced']
+        assert saved['phase'] == ('unknown' if owner_unreadable else 'rejected')
+        assert app.worktrees.execution_state(sid)['fenced'] is owner_unreadable
+        if not owner_unreadable:
+            assert saved['placementUnperformed'] and saved['runtimeOutcome'] == 'unconfirmed'
         assert app._session(sid).get('workingDirectory', str(root)) == str(root)
         assert saved['continuation']['status'] == 'suppressed'
     finally:
@@ -199,7 +318,8 @@ async def test_native_soft_retirement_does_not_own_initiating_command_lock(monke
     worker.checkpoint_idle.assert_awaited_once()
 
 
-async def test_host_soft_intent_keeps_source_controls_and_input_live_then_commits_once(tmp_path):
+@pytest.mark.parametrize('held_projection_lock', [False, True])
+async def test_host_soft_intent_keeps_source_controls_and_input_live_then_commits_once(tmp_path, held_projection_lock):
     script = r'''
 import json,sys
 retirement=None
@@ -226,7 +346,17 @@ for line in sys.stdin:
     manager.bind_execution_state(lambda sid: applied)
     emit = AsyncMock()
     calls = []
+    projection_lock = asyncio.Lock()
+    projection_tasks = []
+    def closing(sid, row):
+        async def project():
+            async with projection_lock:
+                pass
+        projection_tasks.append(asyncio.create_task(project()))
+    manager._placement_closing = closing
     async def commit(proof):
+        async with projection_lock:
+            pass
         calls.append(proof)
         applied.update(directory=str(tmp_path / 'target'), revision=1)
         return 'applied'
@@ -243,12 +373,23 @@ for line in sys.stdin:
         assert (await manager.control(session['id'], 'read.only'))['accepted']
         await manager.retention.sweep()
         assert manager.workers[session['id']] is row and not calls
+        if held_projection_lock:
+            await projection_lock.acquire()
         assert (await manager.control(session['id'], 'finish.retirement'))['ok']
+        if held_projection_lock:
+            async with asyncio.timeout(2):
+                while row['pending']:
+                    await asyncio.sleep(0)
+            assert row['closing'] and not calls  # Reply passed the locked projection.
+            projection_lock.release()
         assert await asyncio.wait_for(pending, 3) == 'applied'
         assert original.returncode == 0 and len(calls) == 1
         assert manager._retired[session['id']][0]['workingDirectory'] == applied['directory']
         assert manager._retired[session['id']][0]['executionRevision'] == 1
     finally:
+        if projection_lock.locked():
+            projection_lock.release()
+        await asyncio.gather(*projection_tasks, return_exceptions=True)
         await manager.close()
 
 
@@ -278,6 +419,10 @@ async def test_deferred_manager_authority_and_real_unknown_are_distinct(app, tmp
     app.runtime.deferred_placement = AsyncMock(side_effect=place)
     pending = (await agent_action(app, source, 'worktree.handoff', {
         'sessionId': target['id'], 'id': record['id'], 'expectedExecutionRevision': 0}, 'new-move'))['result']
+    if lost_save:
+        def unreadable(*args, **kwargs):
+            raise OSError('Actual placement transaction unavailable')
+        app.worktrees.saved_owner = unreadable
     await settle(app)
     saved = app.worktrees.read(target['id'], pending['id'])
     accepted = change.endswith('_human') and not lost_save

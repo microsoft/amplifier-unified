@@ -24,6 +24,12 @@ from test_task_continuity import controls
 
 @pytest.mark.parametrize('child_phase', ['admitted-result', 'late-admission', 'already-waiting', 'in-transit', 'root-waiter'])
 async def test_native_child_and_return_observation_settle_before_move(app, child_phase, tmp_path, monkeypatch):
+    from amplifier_web.worktrees import Worktrees
+    from unittest.mock import AsyncMock
+    app.worktrees.launch = Worktrees.launch.__get__(app.worktrees)
+    async def deferred(session, commit):
+        await asyncio.Future()  # Keep source work visible; no fake release.
+    app.runtime.deferred_placement = AsyncMock(side_effect=deferred)
     saved = app._session()
     sid = saved['id']
     target = await checkout(app, sid)
@@ -76,25 +82,11 @@ async def test_native_child_and_return_observation_settle_before_move(app, child
 
     async def reply(message):
         try:
-            legacy_move = (message['operation'] == 'dispatch'
-                           and message['args'].get('action') == 'worktree.handoff')
-            if legacy_move:
-                from test_handoff_child_admission import begin
-                import uuid
-                identity = str(uuid.uuid5(uuid.NAMESPACE_URL,
-                                         'worktree-handoff:' + message['args']['id']))
-                snapshot = await begin(worker, identity)
             if message['operation'] == 'capacity.admit' and message['args']['call']['sessionId'] != sid:
                 transmitted.set()
                 if child_phase == 'in-transit':
                     await first_finished.wait()
             answer = await app.app_bridge(message['operation'], message['args'], sid)
-            if legacy_move:
-                record = app.worktrees.read(sid, identity)
-                record['finishingTurn']['nativeDrain'] = snapshot
-                app.worktrees.save(record)
-                from test_handoff_child_admission import legacy_reply
-                await legacy_reply(worker, record)
             worker.bridges[message['id']].set_result(answer)
         except BaseException as exc:
             worker.bridges[message['id']].set_exception(exc)
@@ -103,12 +95,6 @@ async def test_native_child_and_return_observation_settle_before_move(app, child
         if message.get('op') == 'bridge':
             replies.append(asyncio.create_task(reply(message)))
     monkeypatch.setattr('amplifier_web.runtime_worker.publish', publish)
-
-    async def boundary(_sid, identity, **kwargs):
-        from test_handoff_child_admission import legacy_reply
-        await legacy_reply(worker, kwargs.pop('receipt', None))
-        return await inspect(worker, identity, **kwargs)
-    app.runtime.handoff_boundary = boundary
 
     async def admitted(row):
         if projection:

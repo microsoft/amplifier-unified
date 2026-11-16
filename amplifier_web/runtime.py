@@ -584,6 +584,8 @@ class RuntimeManager:
         if current.get('hostMatches') is False and not allow_fenced:
             raise ValueError('The saved execution host differs from this local host. Cross-host execution is unavailable.')
         if current['fenced'] and not allow_fenced:
+            if current.get('recoveryInstruction'):
+                raise ValueError(current['recoveryInstruction'])
             raise ValueError('The task execution handoff is pending or unconfirmed. Choose Check move in Task execution folder to read its saved facts without repeating work. An unconfirmed writer release still needs recovery by its original owner.')
         if session is not None and (
             session.get('executionRevision', 0) != current['revision']
@@ -1288,7 +1290,10 @@ class RuntimeManager:
                         row['retirement_task'] = row['placement_task']
                         row.setdefault('stop_reason', 'retention')
                         if self._placement_closing:
-                            await self._placement_closing(sid)
+                            # Projection owns its own short service-lock task.
+                            # The next pipe frame may be this retire's reply:
+                            # never make its reader join app.lock.
+                            self._placement_closing(sid, row)
                 elif data.get("op") == "reply":
                     row["inflight"].discard(data.get("id"))
                     tracked_input = row.get('sendInputs', {}).pop(data.get('id'), None)

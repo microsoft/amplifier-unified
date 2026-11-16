@@ -254,7 +254,7 @@ async def test_selected_checkout_replaced_by_unrelated_git_repository_rejects_be
         assert 'recorded repository' in receipt['detail']
         assert not app.runtime.quiesce_for_handoff.called
         assert (app._session(sid).get('workingDirectory') or app._session(sid)['workspace']) == str(workspace)
-        assert not app._session(sid)['configurationBusy']
+        assert not app._session(sid).get('configurationBusy')
     finally:
         marker.write_bytes(original)
 

@@ -222,7 +222,11 @@ class Worktrees:
         session = self.app._session(sid, hydrate=False)
         host = session.get('executionHost')
         host_matches = not host or (host.get('scope') == 'local' and host.get('id') == local_host_identity()['id'])
+        deferred_unknown = any(row.get('phase') == 'unknown' and row.get('placementMode') == 'deferred-retirement'
+                               for row in session.get('worktreeHandoffs', []))
         return {'hostMatches': host_matches, 'executionHost': copy.deepcopy(host), 'directory': session.get('workingDirectory') or session['workspace'],
+                'recoveryInstruction': ('The saved folder transaction or native writer is unconfirmed. Its original owner must inspect recovery; no move or input will be repeated.'
+                                        if deferred_unknown else None),
                 'revision': session.get('executionRevision', 0),
                 'interruptionRevision': session.get('interruptionRevision', 0),
                 'fenced': any(self.fences(row) for row in session.get('worktreeHandoffs', [])) or
@@ -235,13 +239,25 @@ class Worktrees:
         if isinstance(self.app.runtime, RuntimeManager):
             self.app.runtime._placement_closing = self.placement_closing
 
-    async def placement_closing(self, sid):
-        async with self.app.lock:
-            if record := self.desired(sid):
+    def placement_closing(self, sid, worker):
+        record = self.desired(sid)
+        if record is None or self._closed:
+            return
+        identity = record['id']
+        async def project():
+            async with self.app.lock:
+                record = self.desired(sid)
+                if (self._closed or self.app.runtime.workers.get(sid) is not worker
+                        or record is None or record['id'] != identity or record.get('step') != 'desired'):
+                    return
                 record.update(step='retiring', revision=record['revision'] + 1,
                               detail='Saving the current worker and applying the next folder.')
                 self.save(record)
                 self.changed({sid})
+        job = asyncio.create_task(project())
+        self.jobs.add(job)
+        job.add_done_callback(self.jobs.discard)
+        job.add_done_callback(lambda done: None if done.cancelled() else done.exception())
 
     def start(self):
         # Production creates its runtime after AppService hydration. Install
@@ -1105,9 +1121,10 @@ class Worktrees:
         if record is None:
             return
         accepting = True
+        placement_attempted = False
         try:
             async def commit(proof):
-                nonlocal record
+                nonlocal record, placement_attempted
                 if not accepting or self._closed:
                     raise HandoffSuperseded('The placement owner closed before committing its folder.')
                 while candidate := self.desired(sid):
@@ -1145,12 +1162,13 @@ class Worktrees:
                         if (session.get('executionRevision', 0) != record['executionRevision']
                                 or (session.get('workingDirectory') or session['workspace']) != record['source']):
                             raise HandoffSuperseded('The applied execution folder changed before placement.')
-                        # No await until the receipt resolves. Preserve a fence
-                        # asserted by another configuration owner while this
-                        # soft choice was waiting; sync adds only our own fence.
-                        prior_busy = session.get('configurationBusy', False)
+                        from .management import Management
+                        if (session.get('configurationBusy') or session.get('configurationPending')
+                                or session.get('fileAccessPending') or Management.unresolved_configuration(session)):
+                            raise HandoffSuperseded('Another configuration owner must finish before folder placement.')
                         record.update(step='committing', release=proof, revision=record['revision'] + 1)
                         self.save(record)
+                        placement_attempted = True
                         session.update(workingDirectory=record['target'],
                                        executionRevision=record['executionRevision'] + 1,
                                        executionHost=copy.deepcopy(record['executionHost']),
@@ -1160,7 +1178,7 @@ class Worktrees:
                             raise RuntimeError('The saved placement transaction could not be confirmed.')
                         record.update(phase='applied', step='applied', revision=record['revision'] + 1,
                                       detail='Next folder is now the current folder. No input was replayed.')
-                        session['configurationBusy'] = prior_busy
+                        session['configurationBusy'] = False  # Only our synchronous committing fence.
                         if not record.get('managerPlacement') and (
                                 not proof.get('retired') or proof.get('outcome') != 'completed'
                                 or not proof.get('continuationAllowed')):
@@ -1192,14 +1210,34 @@ class Worktrees:
                 except (ValueError, OSError, sqlite3.Error):
                     saved = None
                 session = self.app._session(sid)
+                source_confirmed = bool(saved is not None and not placement_attempted
+                    and saved.get('workspace') == record['historyHome']
+                    and (saved.get('workingDirectory') or saved['workspace']) == record['source']
+                    and saved.get('executionRevision', 0) == record['executionRevision'])
                 if self.placement_committed(record, saved):
                     record.update(phase='applied', step='applied',
                                   continuation={'status': 'suppressed',
                                       'detail': 'Placement is saved; a failed observer did not authorize new input.'})
-                elif isinstance(exc, HandoffSuperseded):
+                elif source_confirmed:
+                    # This exact owner invalidated the only commit callback
+                    # before inspecting its durable source. Runtime save/crash
+                    # uncertainty is not uncertainty about an unattempted folder
+                    # transaction, nor permission to replay a model input.
+                    shutdown = isinstance(exc, asyncio.CancelledError) and self._closed
+                    reason = self.authority_changed(record)
+                    record.update(phase='pending' if shutdown and not reason else 'rejected',
+                                  step='desired', placementUnperformed=True,
+                                  failureType=type(exc).__name__,
+                                  continuation={'status': 'suppressed'},
+                                  runtimeOutcome='unconfirmed' if not record.get('release') else 'retired',
+                                  detail=('Folder choice is saved for the next native owner. The current folder is unchanged; no input will be replayed.'
+                                          if shutdown and not reason else
+                                          (str(exc) + '. ' if isinstance(exc, HandoffRepositoryChanged) else '') +
+                                          'The next folder was not applied. The saved current folder is unchanged; no input was replayed.'))
+                elif isinstance(exc, HandoffSuperseded) and not placement_attempted and saved is not None:
                     record.update(phase='rejected', detail='The next-folder choice was superseded. No folder change or input was repeated.',
                                   continuation={'status': 'suppressed'})
-                elif isinstance(exc, ValueError) and record.get('step') != 'committing':
+                elif isinstance(exc, ValueError) and not placement_attempted and saved is not None:
                     record.update(phase='rejected', detail=(
                         str(exc) + '. ' if isinstance(exc, HandoffRepositoryChanged) else '') +
                         'The next folder could not be applied. The current folder is unchanged.',

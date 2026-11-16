@@ -259,7 +259,8 @@ providers:
                 await asyncio.wait_for(stopping, 20)
                 await asyncio.wait_for(asyncio.gather(*list(app.worktrees.jobs)), 20)
                 record = app.worktrees.read(sid, receipt['id'])
-                assert record['phase'] != 'applied' and not record['inputsReplayed'], record
+                assert record['phase'] == 'rejected' and record['placementUnperformed'], record
+                assert not app.worktrees.execution_state(sid)['fenced'] and not record['inputsReplayed']
                 assert session.get('workingDirectory', str(workspace)) == str(workspace)
                 assert session.get('executionRevision', 0) == 0 and session['status'] == 'stopped'
                 assert sid not in runtime._retired and not (root / 'calls.jsonl').exists()
