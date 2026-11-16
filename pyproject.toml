@@ -72,7 +72,7 @@ exclude = [
     "/components/recall/.venv/**", "/components/recall/*.egg-info/**",
     "/components/kernels/build/**", "/components/kernels/dist/**",
     "/components/kernels/.venv/**", "/components/kernels/*.egg-info/**",
-    "/.ci/**", "/components/web-client/**",
+    "/.ci/**",
     "/components/operations/build/**", "/components/operations/dist/**",
     "/components/operations/.venv/**", "/components/operations/*.egg-info/**",
     "/components/scheduling/build/**", "/components/scheduling/dist/**",

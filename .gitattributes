@@ -121,16 +121,14 @@ package-lock.json source-context=locks
 # Preserve committed bytes and existing source/build/installed parity checks.
 /amplifier_web/static/** source-context=generated linguist-generated=true -text
 
-# Mechanically refreshed upstream client source; ownership stays discoverable.
+# Public client source selection; ownership stays discoverable.
 /components/README.md source-context=documentation
 /components/AGENTS.md source-context=guidance
 /components/web-client.source.json source-context=configuration
-/components/web-client/** source-context=generated linguist-vendored=true linguist-generated=true
 
 # Dependency entrypoints are generated from the selected client plus host commands.
 
 # The selected component and locked shared inputs have platform-independent bytes.
-/components/web-client/** -text
 /amplifier_web/ai_services.json text eol=lf
 /amplifier_web/provider_sources.json text eol=lf
 /amplifier_web/voice_options.json text eol=lf

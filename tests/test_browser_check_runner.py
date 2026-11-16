@@ -72,9 +72,27 @@ def source_test(path):
         return host
     selection = json.loads((ROOT / 'components/web-client.source.json').read_text())
     client = ROOT / '.build/web-client'
-    if not client.exists():
+    if not client.exists() and selection['delivery']['type'] == 'directory':
         client = ROOT / selection['delivery']['path']
     return client / 'tests' / name
+
+
+def test_repository_registry_is_prepared_before_coverage_and_dependency_installs():
+    workflow = yaml.safe_load((ROOT / '.github/workflows/browser-checks.yml').read_text())
+    steps = workflow['jobs']['browser']['steps']
+    prepare = next(i for i, step in enumerate(steps)
+                   if step.get('name') == 'Prepare selected client source for host checks')
+    initialize = next(i for i, step in enumerate(steps)
+                      if step.get('name') == 'Record intended coverage before dependency setup')
+    node = next(i for i, step in enumerate(steps)
+                if step.get('uses', '').startswith('actions/setup-node@'))
+    python = next(i for i, step in enumerate(steps)
+                  if step.get('uses', '').startswith('actions/setup-python@'))
+    installs = [i for i, step in enumerate(steps)
+                if 'uv sync --locked' in step.get('run', '') or 'npm ci --prefix' in step.get('run', '')]
+    assert python < node < prepare < initialize < min(installs)
+    assert 'python scripts/web_client_build.py prepare' in steps[prepare]['run']
+    assert '--plan tests/web/browser-checks.json' in steps[initialize]['run']
 
 
 def execute(tmp_path, rows, **kwargs):

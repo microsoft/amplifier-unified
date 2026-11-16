@@ -7,11 +7,10 @@ Use existing ownership and public APIs where they fit. Independent repositories
 may publish libraries, executables or optional capabilities; not all are services.
 
 The independent web client is the selected source for Unified's normal build.
-Its [temporary source delivery](../../components/README.md) keeps a pinned copy in
-`components/web-client` while the owning repository awaits public availability.
-Author client changes in `amplifier-client-web`, then refresh that selected copy
-and its provenance together. Public availability alone does not switch delivery:
-an approved cutover must change the selection and retire the copy. The old
+Its [source selection](../../components/README.md#select-public-client-source)
+pins an accepted public repository revision and production-input digest. Author
+client changes in `amplifier-client-web`, then select and qualify their built assets
+in Unified. Source acceptance does not automatically update an app release. The old
 `frontend/` source, wrapper build package and duplicate client tests are removed;
 Unified retains host/browser integration tests in `tests/web` and its assembler.
 
@@ -34,7 +33,7 @@ separate states. An inaccessible repository is not evidence that it was deleted.
 | Repository | Disposition and responsibility | Public seam / owns | Must not depend on |
 | --- | --- | --- | --- |
 | `amplifier-unified` | Existing; become family/distribution, installer, integration docs and release composition | Component manifest, installation and adoption receipts; family vision | Private copies of client/agent implementation |
-| [`amplifier-client-web`](https://github.com/microsoft/amplifier-client-web) | **Independent client source**: historical `frontend/` import preserved; Unified selects a delivery copy through its [assembly owner](../../components/README.md). Client units/build tools stay here; Unified owns host integration checks. Retained `amplifier-unified-client-web` is a separate AHP candidate | Browser persistence, UI, accessibility and transport adapter; current HTTP/SSE first, qualified AHP later | Python service objects, native session files |
+| [`amplifier-client-web`](https://github.com/microsoft/amplifier-client-web) | **Independent client source**: historical `frontend/` import preserved; Unified selects exact public source through its [assembly owner](../../components/README.md). Client units/build tools stay here; Unified owns host integration checks. Retained `amplifier-unified-client-web` is a separate AHP candidate | Browser persistence, UI, accessibility and transport adapter; current HTTP/SSE first, qualified AHP later | Python service objects, native session files |
 | `amplifier-sdk-shell` (target name; existing owner `amplifier-shell-sdk`) | Standalone source/artifact preparation covers `packages/shell-sdk`, authoring guidance and fixtures; repository access/publication and Unified artifact adoption remain pending. Authored components may release separately | Existing public slot/navigation/renderer contracts and validation | Built-in shell internals, app API singleton or private React contexts |
 | `amplifier-client-tui` (target name; existing owner `amplifier-app-tui`) | Reuse the existing separate repo; evolve connected backend to AHP | Terminal interaction, local persistence and AHP; replace legacy CLI over time | Web rendering or native runtime in connected mode |
 | [`amplifier-client-macos`](https://github.com/microsoft/amplifier-client-macos) | Existing; independently released Amplifier for Mac, with optional Tempo | Current HTTP client, native interaction, private local state, signing/updates; [desktop scope](../clients/desktop-clients.md) | Host internals, agent runtime, duplicated shared semantics |

@@ -19,7 +19,6 @@ on:
     paths:
       - 'components/web-client.source.json'
       - 'scripts/web_client_*.py'
-      - 'components/web-client/commands.json'
       - .github/workflows/platform-mechanisms.yml
       - amplifier_web/generation_leases.py
       - amplifier_web/reset.py
@@ -34,8 +33,6 @@ on:
       - amplifier_web/server.py
       - amplifier_web/static/browser-entry.js
       - amplifier_web/static/windows-login.html
-      - components/web-client/public/browser-entry.js
-      - components/web-client/public/windows-login.html
       - pyproject.toml
       - amplifier_web/runtime_protocol.py
       - amplifier_web/worker_input.py

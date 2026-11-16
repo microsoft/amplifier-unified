@@ -80,14 +80,14 @@ retains process approval, execution, observation and recovery authority.
 
 ## Web client delivery
 
-`web-client/` is a verbatim snapshot of the separate client repository selected
-by `web-client.source.json`. Maintain source, client tests and build tools in that
-owning repository, then refresh the whole snapshot and record together. Do not
-make independent fixes inside this copy. Its nested guides describe upstream
-development; this wrapper governs maintenance of the delivery copy.
+`web-client.source.json` selects an exact accepted public revision of
+[microsoft/amplifier-client-web](https://github.com/microsoft/amplifier-client-web).
+Maintain source, client tests and build tools there. Unified prepares the selected
+repository source into ignored `.build/web-client` and assembles its built assets;
+no committed client source copy is maintained here.
 
-Read [README.md](README.md) and the small source record before opting into copied
-contents. Unified assembles the selected client through
-`scripts/web_client_build.py`; ignored `.build/web-client` is disposable prepared
-source. Host/browser/producer checks and their own dependencies live in
-`tests/web`. Neither delivery nor preparation creates another client owner.
+Read [README.md](README.md#select-public-client-source) and the source record for
+selection and handoff. Unified owns `scripts/web_client_build.py` and the
+host/browser/producer checks in `tests/web`. Neither prepared source nor generated
+assets create another client owner. Source acceptance does not change the selected
+client or publish a Unified release automatically.

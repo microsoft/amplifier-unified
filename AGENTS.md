@@ -20,23 +20,21 @@ sacrificing accessibility, authority, meaningful feedback or recovery. Measure t
 whole journey, including entry, repeated setup and keyboard/focus behavior, rather
 than optimizing one control in isolation.
 
-## Web client: temporary two-repository maintenance
+## Web client: public source selection
 
 Author browser source, client tests and client build tools in
 [`amplifier-client-web`](https://github.com/microsoft/amplifier-client-web), the
-sole client authoring owner.
-Until an approved repository-delivery cutover, every client change intended for
-Unified must also reach the committed `components/web-client` delivery copy.
-Follow [component ownership and assembly](components/README.md#refresh-and-retire-the-copy):
-port any copied-tree change upstream first, then refresh the whole selected
-snapshot and `web-client.source.json` together, preserving later accepted changes.
+sole client authoring owner. Unified selects an exact accepted public revision
+and source digest in `components/web-client.source.json`; normal preparation
+fetches that selection into ignored `.build/web-client`.
+Follow [component ownership and assembly](components/README.md#select-public-client-source).
+Do not restore a committed source copy or hand-edit built assets.
 
-A client-only PR merge is not a delivered Unified change. Carry both repositories
-through, or name the integration owner and hand off exact client and Unified
-PRs/revisions with remaining work explicitly pending. Coordinate with that owner;
-do not duplicate ports or build campaigns. Report source acceptance, copy selection,
-build/paired qualification and release separately. Public visibility alone does
-not end this obligation: the approved cutover must retire the copy and this guidance.
+A client-only PR merge is not a delivered Unified change. Carry the selected
+source through paired qualification and Unified release, or name the integration
+owner and hand off exact client and Unified revisions with remaining work pending.
+Coordinate with that owner; do not duplicate ports or build campaigns. Report
+source acceptance, selection, build/paired qualification and release separately.
 
 Neither disposable `.build/web-client` nor generated `amplifier_web/static/` is
 another authoring owner. Unified owns the assembler in `scripts/` and
