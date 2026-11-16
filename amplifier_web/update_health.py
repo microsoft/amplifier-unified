@@ -631,7 +631,10 @@ def publish(manager):
         # only that limitation must still leave an otherwise quiet projection;
         # a newer failure or uncertain operation keeps its ordinary priority.
         prior = {**evidence, 'configurationChanged': False} if evidence.get('configurationChanged') else evidence
-        if current(state, prior)['status'] in {'current', 'unchecked'}:
+        # The connection fact was read from the earlier settings, like this
+        # proof. It keeps a quiet projection quiet until the refresh, and it
+        # is not used for the projection below.
+        if current(state, prior, connection=getattr(manager, '_update_connection', None))['status'] in {'current', 'unchecked'}:
             state['currentStatus'] = {'status': 'unchecked', 'title': 'Checking current configuration',
                 'detail': 'Update health will refresh against the changed settings. Existing components remain active.',
                 'actionRequired': False, 'action': None, 'component': None}

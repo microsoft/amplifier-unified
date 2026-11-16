@@ -316,8 +316,10 @@ installation and for a person's own Update request, on every platform. The
 update starts after the first connection: a connection changes the checked
 configuration, so the owner checks once more and installs that checked
 selection. An installation that never gets a connection never updates its
-components; it also cannot hold a conversation. Application updates and Smart
-Tool updates do not wait.
+components; it also cannot hold a conversation. An application update does not
+wait, and neither does a check that finds only Smart Tool updates. The other
+tier is still checked after the included tier, so it waits behind an included
+component update that waits.
 
 The rule (`profile_catalog.connection`) reads the same global settings as the
 stage and drops a provider row by the same function as composition

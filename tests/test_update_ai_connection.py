@@ -249,6 +249,24 @@ def test_page_uses_the_connection_fact_only_for_the_configuration_it_was_read_fr
     assert stale.service.state['updates']['currentStatus']['title'] == 'Updates available'
 
 
+def test_changed_settings_do_not_show_the_old_record_as_a_failure_until_the_refresh():
+    """Between a settings change and the owner's refresh, a quiet page stays quiet."""
+    def manager(known):
+        return SimpleNamespace(service=SimpleNamespace(state={'updates': recorded(), 'configurationRevision': 2}),
+                               _update_connection=known, _update_health_configuration_revision=1,
+                               _active_update_evidence={'generation': 'a' * 32, 'verifiedAt': 2, 'startedAt': 1,
+                                                        'packages': set(), 'components': set()})
+    quiet = manager(NEEDED)
+    health.publish(quiet)
+    status = quiet.service.state['updates']['currentStatus']
+    assert (status['title'], status['actionRequired']) == ('Checking current configuration', False)
+    # With no fact from the earlier settings, the record keeps its priority.
+    for known in (None, OTHER_PROFILE):
+        unknown = manager(known)
+        health.publish(unknown)
+        assert unknown.service.state['updates']['currentStatus']['title'] == COULD_NOT_FINISH
+
+
 # ---- The update owner: real check, install, tick and receipts. Remote reads and qualification are fixtures.
 
 class Runtime:
@@ -372,6 +390,8 @@ async def test_after_the_first_connection_only_a_newly_checked_selection_is_inst
     assert manager.stages == []
     state = manager.service.state['updates']
     assert (state['phase'], state['available'], state['error']) == ('checked', 0, None)
+    # The owner's own check was the last word: no request to check before installing.
+    assert state['detail'] == 'Component check complete.'
     assert not [event for event in manager.diagnostics.state['events'] if event['status'] == 'failed']
 
 
