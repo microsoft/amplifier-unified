@@ -391,6 +391,7 @@ async def test_bundled_context_omits_workspace_details_before_copy_and_encoding(
     encoded_contexts = []
 
     def copy_context(value, memo=None):
+        assert value is not workspace  # Catch the outer copy before copy's bound recursive helper.
         assert value is not workspace['resources'] and value is not workspace['setup']
         return original_copy(value, memo)
 
