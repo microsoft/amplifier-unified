@@ -748,7 +748,9 @@ class UpdateManager:
                     await self.publish(applicationIntent=intent,
                         **({'pendingApp': {**pending, 'updateIntent': intent}} if pending else {}))
                 if not self.closed and not self.awaiting_restart():
-                    await self.install()
+                    # The person asked for this update: a check that fails stops it, as above.
+                    await self.install_checked(
+                        lambda: self.service.state['updates'].get('phase') not in {'error', 'interrupted'})
             else:
                 await getattr(self, action)()
         except asyncio.CancelledError: raise
@@ -1060,6 +1062,23 @@ class UpdateManager:
             if not pending or supersedes_staged(state.get('application', {}), pending):
                 await stage(self)
         await activate(self)
+
+    async def install_checked(self, admitted, *, automatic=False):
+        """Install the checked selection. When the settings changed after that check, check once more.
+
+        Only the refusal before anything is prepared arrives here: for example
+        after a first AI connection, for which the update waited. The new
+        check's selection is installed under the caller's own admission. A
+        second refusal is reported as before.
+        """
+        from .update_sequence import StaleAppSelection
+        install = (lambda: self.install(automatic=True)) if automatic else self.install
+        try:
+            await install()
+        except StaleAppSelection:
+            await self.check(fresh=not automatic, automatic=automatic)
+            if admitted():
+                await install()
 
     async def install(self, *, automatic=False):
         if getattr(self, '_manual_handoff_commit_unknown', False):return
@@ -1768,6 +1787,7 @@ class UpdateManager:
             await self.check(fresh=False, automatic=True)
         def admitted():
             state=self.service.state['updates']
+            settings=self.service.state['settings'].get('updates',{})
             managed_preview=state.get('appAvailable') and state.get('application',{}).get('canInstall') is False
             sequence = state.get('sequence', {})
             install_intent = (sequence.get('install') if sequence.get('manualHandoff')
@@ -1776,17 +1796,7 @@ class UpdateManager:
         if admitted():
             # A newly checked desired graph still goes through install's input
             # admission. Elapsed time never replays a settled failed preparation.
-            from .update_sequence import StaleAppSelection
-            try:
-                await self.install(automatic=True)
-            except StaleAppSelection:
-                # The settings changed after this check: for example a first AI
-                # connection, for which the update waited. Nothing was prepared.
-                # Check once more, and install that checked selection by the
-                # same admission. A second refusal is reported as before.
-                await self.check(fresh=False, automatic=True)
-                if admitted():
-                    await self.install(automatic=True)
+            await self.install_checked(admitted, automatic=True)
             return
         state=self.service.state['updates']
         if self.independent_tool_results(state) and (state.get('phase') not in {'error', 'interrupted'} or any(
