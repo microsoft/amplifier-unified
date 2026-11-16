@@ -132,6 +132,7 @@ async def test_shutdown_invalidates_commit_of_a_retained_retirement(tmp_path, mo
         entered.set()
         await asyncio.Future()
     runtime.deferred_placement.side_effect = place
+    runtime.collaboration_input = AsyncMock()
     target = await checkout(app, sid)
     receipt = (await app.dispatch('worktree.handoff', {'sessionId': sid, 'id': target['id'],
                'expectedExecutionRevision': 0}))['result']
@@ -206,6 +207,16 @@ async def test_unconfirmed_placement_publication_is_not_downgraded_to_no_effect(
         saved = app.worktrees.read(sid, receipt['id'])
         assert saved['phase'] == 'unknown' and saved['step'] == 'committing'
         assert not saved.get('placementUnperformed') and not saved['inputsReplayed']
+        # Genuine commit uncertainty keeps its existing explicit expert action;
+        # this is a new deliberate reconciliation, never automatic replay.
+        runtime.handoff_boundary = AsyncMock(return_value={'ready': True})
+        reconciled = (await app.dispatch('worktree.reconcile', {'sessionId': sid, 'id': saved['id'],
+            'expectedRevision': saved['revision'], 'destination': 'source',
+            'evidence': 'Verified the isolated saved source and exclusive writer.'}))['result']
+        await settle(app)
+        assert app.worktrees.read(sid, reconciled['id'])['phase'] == 'applied'
+        assert app.worktrees.read(sid, saved['id'])['phase'] == 'reconciled'
+        assert app._session(sid)['workingDirectory'] == str(root)
     finally:
         monkeypatch.setattr(app.worktrees, 'changed', original)
         release.set()
@@ -360,8 +371,8 @@ async def test_native_soft_retirement_does_not_own_initiating_command_lock(monke
     worker.checkpoint_idle.assert_awaited_once()
 
 
-@pytest.mark.parametrize('held_projection_lock', [False, True])
-async def test_host_soft_intent_keeps_source_controls_and_input_live_then_commits_once(tmp_path, held_projection_lock):
+@pytest.mark.parametrize('held_projection_lock,stop_after_closing', [(False, False), (True, False), (True, True)])
+async def test_host_soft_intent_keeps_source_controls_and_input_live_then_commits_once(tmp_path, held_projection_lock, stop_after_closing):
     script = r'''
 import json,sys
 retirement=None
@@ -423,6 +434,12 @@ for line in sys.stdin:
                 while row['pending']:
                     await asyncio.sleep(0)
             assert row['closing'] and not calls  # Reply passed the locked projection.
+            if stop_after_closing:
+                await manager.stop(session['id'])
+                with pytest.raises(asyncio.CancelledError):
+                    await pending
+                assert not calls and session['id'] not in manager._retired
+                return
             projection_lock.release()
         assert await asyncio.wait_for(pending, 3) == 'applied'
         assert original.returncode == 0 and len(calls) == 1
