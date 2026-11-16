@@ -634,6 +634,40 @@ table with `python tests/test_windows_path_budget.py`.
   longer than the limit that was written while long paths were on. The app
   finds such history through the extended-length path form and does not start
   a second history for that chat.
+- **Update stage:** an in-app component update, and a setup run on a PC that
+  already has an AI connection, prepare the components in
+  `<folder>\app\updates\releases\<32 hex digits>` (folder path + 54). The
+  compatibility probe runs with that stage as its app home and
+  `<stage>\shared-config` as its shared home, and it mounts a worker in
+  `<stage>\qualification-workspace`. So the stage path is inside every session
+  path of the probe. The CLI name of that folder is the folder path plus 78
+  characters; under it the probe's session store folder is twice the folder
+  path plus 165, which Windows creates only up to a folder path of 41. No
+  consumer installation has one (the shortest is 34, and a session folder
+  below it fits only up to 22). Release 0.98.5 failed the component stage of
+  its first in-app update on this (258 characters at a folder path of 51; the
+  page showed "ENOENT · FileNotFoundError · Probe: prepare"). The folder now
+  has the project name `update-<first 12 hex digits of the stage ID>` (19
+  characters) on Windows, when the process runs with that stage as its app
+  home. At 59 the longest path that a stage and its probe create is 248, with
+  11 characters to spare; the probe's session folder is 202. The probe's
+  capture files go to the installation's capture folder, as before, under the
+  same name (folder 154 at 59). Each stage has its own shared home, so two
+  stages never share a session folder. Two session-store
+  shapes do not fit in a stage (the saved view, 261, and a background-job
+  record, 286); a probe writes neither. The native case checks the complete
+  list of what the real probe leaves with its test profile (one offline
+  profile, no default behaviors). The profiles of a real installation are not
+  checked there; a whole in-app update on a clean PC is the check for them.
+  A first installation without an
+  AI connection has no stage: `<folder>\app\updates\baseline-runtime` holds
+  receipts only (longest path 118).
+  **Not covered:** a chat with its own setup (dependency overrides of its
+  workspace or session) is checked in a stage with the chat's folder. An app
+  chat folder keeps its short name there and fits (250). A folder that a person
+  chose keeps the CLI name there; for the default workspace folder the probe's
+  transcript write fits only up to a folder path of 39. This is arithmetic
+  from the code and has not been run on a PC.
 - **Source store:** Amplifier Foundation owns its layout; the app supplies the
   folder: `<folder>\s` in a new installation, `<folder>\source-store` in an
   installation that an earlier setup file made. A Foundation revision before `7526bb55`
@@ -685,8 +719,20 @@ ordinary path exactly as the budget table says. In the folder `s` the deepest
 module file opens at a folder path of 59 (253 characters). In the earlier
 folder `source-store` it is refused at 59 (264) and opens at 54 (259). The
 same job requires that an installation with each folder name resolves its own
-store through the real private-folder checks. It is not setup-file or
-clean-account acceptance.
+store through the real private-folder checks. Its update-stage cases make a
+stage with the updater's layout, at folder paths of 51 and 59 (through the
+app's private-folder creator, as setup does; the updater itself uses an
+ordinary `mkdir`, which the probe's private-folder check refused on the
+runner and accepted on a clean PC, where the probe of release 0.98.5 passed
+that check and failed later, at the session store). They require that the
+session store's folder is refused under the CLI name and that the app's real
+compatibility probe then ends with the record that the Updates page showed.
+They require that the same probe, unchanged, completes under the short name,
+with modules from the locked test dependencies and no download, and that what
+it leaves with that test profile is exactly the list in
+`tests/update_stage_probe.py`. That is the
+probe in a stage, not a whole in-app update: no component is fetched or
+installed. It is not setup-file or clean-account acceptance.
 
 Setup checks the PC and the folder before its first question. Each stop names
 one cause and one next step in plain language, and never shows exception text,
