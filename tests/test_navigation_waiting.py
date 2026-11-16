@@ -57,6 +57,82 @@ def test_saved_preblock_wait_and_many_not_arbitrary_child(db):
     assert before == task()
 
 
+@pytest.mark.parametrize('other', ['unknown', 'failed', 'cancellation_requested'])
+def test_sticky_withdrawal_excludes_only_one_request_to_same_recipient(db, other):
+    first = receipt(delivery='unknown')
+    first['subscription']['withdrawal'] = {'operationId': 'withdraw'}
+    put(db, first)
+    assert project(db, session(), task()) is None
+    second = receipt(delivery='unknown' if other == 'unknown' else 'accepted')
+    if other == 'failed':
+        second['response'] = {'status': 'sealed', 'kind': 'result', 'outcome': 'failed'}
+    if other == 'cancellation_requested':
+        second['cancellation'] = {'status': 'requested'}
+    put(db, second, 'still-awaited')
+    assert project(db, session(), task())['phase'] == other
+    # Later cancellation overwrites wait.status, but not withdrawal or relevance.
+    first['subscription']['status'] = 'cancelled'
+    first['cancellation'] = {'status': 'requested'}
+    put(db, first)
+    assert project(db, session(), task())['phase'] == other
+
+
+def test_many_withdrawn_waits_cannot_starve_remaining_current_dependency(db):
+    for i in range(2000):
+        row = receipt(delivery='unknown')
+        row['subscription']['withdrawal'] = {'operationId': str(i)}
+        put(db, row, str(i))
+    put(db, receipt('remaining'), 'remaining')
+    steps = 0
+    def count():
+        nonlocal steps
+        steps += 1
+        return 0
+    db.set_progress_handler(count, 1)
+    value = project(db, session(), task())
+    db.set_progress_handler(None, 0)
+    assert [row['sessionId'] for row in value['targets']] == ['remaining']
+    assert steps < 300, steps
+
+
+def test_withdrawal_derived_table_upgrade_and_directory_refresh_keep_raw_receipts(tmp_path):
+    from test_history_directory_navigation import directory_fixture
+    from amplifier_web.navigation_waiting import refresh_directory
+    from amplifier_web.history_directory_query import workspace_counts
+    state, directory = directory_fixture(tmp_path, count=0)
+    db = directory.db
+    db.execute('CREATE TABLE commands(id TEXT PRIMARY KEY, receipt TEXT)')
+    initialize(db)
+    owner = {**session(), 'workspace': '/projects/alpha', 'workspaceId': 'a', 'sessionKind': 'root'}
+    state['sessions'] = [owner]
+    state['runtimeControl'] = {'manager': {'task.get': {'task': task()}}}
+    row = receipt(workspace='/projects/alpha', delivery='unknown')
+    put(db, row)
+    directory.sync([owner], state)
+    assert workspace_counts(directory, state)['/projects/alpha']['activityCounts']['attention'] == 1
+    row['subscription']['withdrawal'] = {'operationId': 'withdrawn'}
+    put(db, row)
+    raw = db.execute("SELECT receipt FROM commands WHERE id='request'").fetchone()[0]
+    # Simulate the old derived schema; upgrading is atomic and touches no receipts.
+    for name in ('insert', 'update', 'delete'):
+        db.execute(f'DROP TRIGGER navigation_wait_{name}')
+    db.execute('DROP TABLE navigation_dependency_requests')
+    db.execute('CREATE TABLE navigation_dependency_requests(id TEXT PRIMARY KEY)')
+    initialize(db)
+    db.execute('DELETE FROM navigation_fact_versions')
+    refresh_directory(db)
+    assert db.execute("SELECT receipt FROM commands WHERE id='request'").fetchone()[0] == raw
+    cold = json.loads(db.execute("SELECT summary FROM history_local_rows WHERE id='manager'").fetchone()[0])
+    assert project(db, cold, task()) is None
+    counts = workspace_counts(directory, {**state, 'sessions': [], 'runtimeControl': {}})
+    assert counts['/projects/alpha']['activityCounts']['attention'] == 0
+    db.commit()
+    cold_db = sqlite3.connect(tmp_path/'app.sqlite3')
+    initialize(cold_db)
+    assert project(cold_db, cold, task()) is None
+    cold_db.close()
+
+
 @pytest.mark.parametrize('field,value', [
     ('senderSessionId','other'), ('protocol',1), ('delivery','submitting'),
     ('sourceGenerationId',None), ('sourceInputIds',[]),
@@ -279,8 +355,17 @@ async def test_configuration_process_exit_retires_old_wait_without_new_input(app
     app.state['runtimeControl'][source['id']]['task.get']['task'] = source['task']
     assert project(app.db, source, source['task'])
     before_task = deepcopy(source['task'])
-    await app.on_runtime_event('runtime.ended',{'sessionId':source['id'],'reason':'configuration'})
+    # Current process-loss handling requires an exact foreground owner, not a
+    # bare root ID that might name an unrelated replacement process.
+    from amplifier_web.execution import ensure_turn
+    tree = ensure_turn(source, 'config-owner-input')
+    next(turn for turn in tree['turns'] if turn['id'] == 'config-owner-input')['runtimeOwnerId'] = 'config-owner'
+    await app.on_runtime_event('runtime.ended',{'sessionId':source['id'],'reason':'configuration',
+                                              'runtimeOwnerId':'config-owner'})
     source.update(status='idle',configurationBusy=False)
+    assert source.get('_navigationEndedGeneration') == source['collaborationGeneration']['id'], {
+        'source': {k: source.get(k) for k in ('id', '_navigationEndedGeneration', 'collaborationGeneration')},
+        'canonical': {k: app._session(source['id']).get(k) for k in ('id', '_navigationEndedGeneration', 'collaborationGeneration')}}
     assert project(app.db, source, source['task']) is None
     assert source['task'] == before_task
 
@@ -380,7 +465,8 @@ def test_first_population_is_atomic_and_reopen_does_not_reparse_receipts(tmp_pat
     db.set_trace_callback(statements.append)
     initialize(db)
     db.set_trace_callback(None)
-    assert len(statements)==2 and all('sqlite_master' in sql for sql in statements)
+    assert len(statements)==3
+    assert all('sqlite_master' in sql or 'PRAGMA table_info' in sql for sql in statements)
     db.close()
 
 

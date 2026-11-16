@@ -68,6 +68,9 @@ def project(owner, request):
         'supported': wait.get('supported'),
         **fields(wait, 'continuationId', 'notificationVersion', 'lastClaimedRevision', 'open'),
     }
+    if wait.get('withdrawal'):
+        subscription['withdrawal'] = fields(wait['withdrawal'], 'operationId', 'withdrawnAt', 'reason',
+            'sourceGenerationId', 'sourceInputIds', 'sourceInputIdsCount', 'sourceInterruptionRevision')
     if wait.get('detail'):
         subscription['reason'] = wait['detail']
     elif not known and not wait:

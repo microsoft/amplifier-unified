@@ -511,13 +511,13 @@ async def test_original_admitted_child_return_waits_for_adoption_and_is_the_only
     original = created['initialInputId']
     returned = created['subscription']['continuationId']
     creation = h.app.collaboration.receipt(created['requestId'])
-    assert h.app.collaboration.creation_guard(creation, for_reply=True) is None
+    assert h.app.collaboration.creation_guard(creation) is None
 
     await h.wait()
     for key in ('id', 'revision', 'continuationEpoch'):
         assert h.controller.tasks.record()[key] == source_task[key]
-    assert h.app.collaboration.creation_guard(creation, for_reply=True) is None
-    assert h.app.collaboration.guard(h.app.collaboration.receipt(original), for_reply=True) is None
+    assert h.app.collaboration.creation_guard(creation) is None
+    assert h.app.collaboration.guard(h.app.collaboration.receipt(original)) is None
     request = await h.report_child(created)
     assert request['subscription']['lastClaimedRevision'] == 1
     assert h.app.collaboration.receipt(returned)['delivery'] == 'queued'
@@ -538,7 +538,7 @@ async def test_original_admitted_child_return_waits_for_adoption_and_is_the_only
     assert not h.runtime.peer_admitted and not h.runtime.admitted
     await h.confirm()
     assert h.app.collaboration.creation_guard(
-        h.app.collaboration.receipt(created['requestId']), for_reply=True) is None
+        h.app.collaboration.receipt(created['requestId'])) is None
     await h.finish()
     assert [row['inputId'] for row in h.runtime.admitted] == [returned]
     resumed = h.runtime.admitted[0]
@@ -575,9 +575,9 @@ async def test_update_wait_does_not_relax_original_child_return_authority(waitin
     await h.yield_turn()
     await h.change_task(changed)
     creation = h.app.collaboration.receipt(created['requestId'])
-    assert h.app.collaboration.creation_guard(creation, for_reply=True)
+    assert h.app.collaboration.creation_guard(creation)
     assert h.app.collaboration.guard(
-        h.app.collaboration.receipt(created['initialInputId']), for_reply=True)
+        h.app.collaboration.receipt(created['initialInputId']))
     # Its original admitted generation can retain evidence, not revive its owner.
     await h.report_child(created)
     assert not h.runtime.admitted
@@ -594,7 +594,7 @@ async def test_update_wait_does_not_relax_original_child_return_authority(waitin
     assert len(returns) <= 1
     assert all(row['delivery'] == 'suppressed' for row in returns)
     assert h.app.collaboration.creation_guard(
-        h.app.collaboration.receipt(created['requestId']), for_reply=True)
+        h.app.collaboration.receipt(created['requestId']))
 
 
 @pytest.mark.parametrize('waiting', ['full'], indirect=True)

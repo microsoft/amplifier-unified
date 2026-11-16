@@ -65,7 +65,7 @@ async def test_question_later_generation_result_distinct_revision_once_and_old_r
         await revised(app, 'result-request', 1, command='stale-reply')
 
 
-@pytest.mark.parametrize('change', ['stop', 'task', 'workspace', 'child', 'stale'])
+@pytest.mark.parametrize('change', ['stop', 'workspace', 'child', 'stale'])
 async def test_later_reply_requires_current_recipient_and_original_boundary(app, change):
     source, target = app.state['sessions']
     await declared_result(app, kind='defer', outcome='deferred')
@@ -73,8 +73,6 @@ async def test_later_reply_requires_current_recipient_and_original_boundary(app,
     await generation(app, target, 'later', ['next-input'])
     if change == 'stop':
         target['interruptionRevision'] = 1
-    elif change == 'task':
-        target['task'] = {'id': 'new-task', 'revision': 2, 'status': 'active'}
     elif change == 'workspace':
         target['workspace'] += '/changed'
     elif change == 'child':
@@ -549,7 +547,7 @@ async def test_new_report_supersedes_unsubmitted_success_without_erasing_either_
 
 
 @pytest.mark.parametrize('change', ['progress', 'pause-resume', 'new-objective'])
-async def test_later_report_keeps_original_request_after_progress_only(app, change):
+async def test_later_report_keeps_original_request_after_task_progress_or_replacement(app, change):
     source, target = app.state['sessions']
     target['task'] = {'id': 'objective', 'revision': 1, 'continuationEpoch': 1, 'status': 'active'}
     await declared_result(app, kind='defer', outcome='deferred')
@@ -558,10 +556,5 @@ async def test_later_report_keeps_original_request_after_progress_only(app, chan
     target['task']['revision'] = 5
     if change != 'progress':
         target['task']['continuationEpoch'] = 5
-    if change == 'progress':
-        report = await revised(app, 'result-request', 1)
-        assert report['result']['responseRevision'] == 2
-    else:
-        with pytest.raises(AppError, match='original request boundary'):
-            await revised(app, 'result-request', 1)
-        assert app.collaboration.receipt('result-request')['responseRevision'] == 1
+    report = await revised(app, 'result-request', 1)
+    assert report['result']['responseRevision'] == 2
