@@ -84,3 +84,58 @@ def test_installed_source_reader_requires_actual_known_selected_implementation(t
         source, kind = _source(tool)
         assert kind == 'read' and source['selection'] == direct
         assert len(source['implementation']) == 64
+
+
+@pytest.mark.parametrize('state', ['current', 'changed', 'missing', 'ordinary-once'])
+async def test_service_binds_decision_to_current_private_scope(tmp_path, monkeypatch, state):
+    import asyncio
+    from unittest.mock import AsyncMock
+    from amplifier_web.service import AppService, AppError
+
+    monkeypatch.setenv('AMPLIFIER_HOME', str(tmp_path / 'native'))
+    runtime = SimpleNamespace(close=AsyncMock())
+    delivered, calls = asyncio.Event(), []
+
+    async def approval(*args):
+        calls.append(args)
+        delivered.set()
+
+    runtime.approval = approval
+    app = AppService(tmp_path / 'app', runtime, workspace=tmp_path)
+    session = app._new_session({'title': 'Exact approval'})
+    app.state['sessions'] = [session]
+    app.state['selectedSessionId'] = session['id']
+    scope = {'version': 1, 'producer': PRODUCER, 'key': 'a' * 64,
+             'description': 'Exact file call.', 'allowOptionId': 'allow',
+             'authorityLifetime': 'request'}
+    fact = {'owner': str(app.data_dir.resolve()),
+            'workspace': str(Path(session['workspace']).resolve()), 'descriptor': scope}
+    runtime.approval_scope = lambda sid, aid: (
+        copy.deepcopy(fact) if state != 'missing' and (sid, aid) == (session['id'], 'request') else None)
+    try:
+        await app.on_runtime_event('approval.requested', {
+            'sessionId': session['id'], 'id': 'request', 'prompt': 'Exact call',
+            'options': ['allow', 'deny']})
+        row = next(a for a in session['approvals'] if a['id'] == 'request')
+        args = {'sessionId': session['id'], 'id': 'request', 'decision': 'allow',
+                'expectedRequestHash': app.approval_request_hash(session, row)}
+        if state != 'ordinary-once':
+            args['expectedApprovalScope'] = scope['key']
+        if state == 'changed':
+            scope['key'] = 'b' * 64
+        if state in {'changed', 'missing'}:
+            with pytest.raises(AppError, match='exact approval target changed'):
+                await app.dispatch('approval.respond', args, origin='ui', command_id='decision')
+            assert row['status'] == 'pending' and not calls
+        else:
+            result = await app.dispatch('approval.respond', args, origin='ui', command_id='decision')
+            assert result['accepted']
+            await asyncio.wait_for(delivered.wait(), 2)
+            expected = (session['id'], 'request', 'allow')
+            if state == 'current':
+                expected += (None, scope['key'])
+            assert calls == [expected]
+            duplicate = await app.dispatch('approval.respond', args, origin='ui', command_id='decision')
+            assert duplicate['duplicate'] and calls == [expected]
+    finally:
+        await app.close()
