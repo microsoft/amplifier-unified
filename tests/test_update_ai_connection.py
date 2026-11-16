@@ -515,6 +515,10 @@ async def test_the_persons_update_after_the_first_connection_checks_again(manage
     await manager.command('check', None, 'a' * 32)
     assert state['currentStatus'] == WAITING and manager.stages == []
     manager.save(providers(PROVIDER))
+    # The owner installs nothing by itself: no saved intent, and automatic installation is off.
+    for _ in range(3):
+        await manager.tick()
+    assert manager.stages == [] and state['sequence']['install'] is False
     await manager.command('install', None, 'b' * 32)
     # One stage, from a new check of the changed settings. No refusal is recorded for the request itself.
     assert len(manager.stages) == 1
@@ -564,6 +568,14 @@ async def test_a_recheck_that_fails_installs_nothing(manager, monkeypatch, who):
         raise RuntimeError('fixture: the inventory cannot be read')
 
     monkeypatch.setattr(manager, 'inventory_sources', unreadable)
+    installs = []
+    install = manager.install
+
+    async def counted(**arguments):
+        installs.append(arguments)
+        return await install(**arguments)
+
+    monkeypatch.setattr(manager, 'install', counted)
     if who == 'owner':
         await manager.tick()
     else:
@@ -571,6 +583,8 @@ async def test_a_recheck_that_fails_installs_nothing(manager, monkeypatch, who):
     state = manager.service.state['updates']
     assert manager.stages == []
     assert (state['phase'], state['error']) == ('error', 'Update check failed. Your installed sources are unchanged.')
+    # The one installation request that was refused; nothing is requested again after the failed check.
+    assert installs == [{'automatic': True}] if who == 'owner' else installs == [{}]
 
 
 async def test_after_the_first_connection_only_a_newly_checked_selection_is_installed(manager):
