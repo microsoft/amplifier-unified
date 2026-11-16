@@ -1,5 +1,13 @@
 # Component projects
 
+[`recall/`](recall/README.md) prepares the existing conversation search and
+versioned-memory storage package for independent development and installed tests.
+Unified still assembles this authored package directly; publication and selected
+artifact delivery remain separate steps. Source access, authorization, opt-ins,
+context assembly and model execution stay in the host. Existing imports and
+database formats are unchanged, including durable explicit notes and receipts.
+Do not coinstall the standalone distribution with Unified.
+
 [`workspaces/`](workspaces/README.md) is the temporary authoring home for the
 independently buildable workspace registration metadata package and its direct
 tests. Unified consumes the published artifact selected into
