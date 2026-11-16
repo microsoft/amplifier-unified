@@ -19,6 +19,8 @@
 /components/recall/MANIFEST.in source-context=configuration
 /components/recall/.gitignore source-context=configuration
 /components/recall/LICENSE source-context=documentation
+/components/recall.source.json source-context=configuration
+/components/recall-delivery/** source-context=generated linguist-vendored=true linguist-generated=true -text
 /components/scheduling/amplifier_scheduling/** source-context=source
 /components/scheduling/tests/** source-context=tests
 /components/scheduling/MANIFEST.in source-context=configuration

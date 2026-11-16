@@ -56,17 +56,33 @@ Existing tags and assets are immutable: a completed exact-byte retry is read-onl
 a partial draft can receive only its missing matching assets. Preserve the original
 four assets for a retry because rebuilding can change archive bytes.
 
-## Current assembly boundary
+## Unified artifact selection
 
-This is an independent package preparation, not a published artifact selection.
-Unified's ordinary wheel, sdist and editable builds still include this authored
-package and remain its sole installed distribution owner. Do not coinstall the
-standalone distribution in a Unified environment. No runtime dependency, lock,
-database path or stored format changes with this move.
+Unified's ordinary wheel, sdist and editable builds consume the generated
+`components/recall-delivery/` snapshot selected by `components/recall.source.json`.
+The selection records the original public wheel, source commit/tree and receipt
+from [recall-v0.1.0](https://github.com/microsoft/amplifier-unified/releases/tag/recall-v0.1.0).
+The authored project remains independent; source edits and publication do not
+change Unified's selected default. Never edit the delivery copy by hand.
 
-A generated delivery copy remains a later explicit step after a public release,
-using the existing component selection workflow. The authored tree is
-the only current source owner; do not fabricate a selection record or copy it
-into a second writable runtime tree. A future supporting repository may use
+To select a coordinated release, download its original wheel, sdist,
+`recall-source.json` and `SHA256SUMS` into an owned directory. Verify the checksums
+and source receipt against the accepted publication, then run from the Unified root:
+
+```sh
+python scripts/scheduling_delivery.py select --component recall \
+  --dist "$RECALL_ASSETS" --revision "$RECALL_REVISION" \
+  --receipt-sha256 "$RECALL_RECEIPT_SHA256"
+python scripts/scheduling_delivery.py verify --component recall
+```
+
+Use the actual published revision and receipt hash, and review the generated copy
+and record together. Normal builds verify the selected bytes offline and include
+the receipt/license in the app wheel. Unified remains the sole installed
+distribution owner; do not coinstall the standalone distribution in its
+environment. No runtime dependency, lock, database path or stored format changes.
+The producer workflow owns standalone tests; Unified keeps its host integration tests.
+
+A future supporting repository may use
 `amplifier-platform-recall`; its creation and handoff are separate decisions from
 the preserved distribution/import names.

@@ -2,9 +2,10 @@
 
 `recall/` authors the independently buildable `amplifier_recall` storage package.
 Its SQLite mechanism tests belong here; Unified retains source access, scope,
-authorization, model execution and memory policy. This preparation still assembles
-the authored package into Unified's wheel, sdist and editable installation.
-There is no published selection or generated delivery copy yet. Preserve existing
+authorization, model execution and memory policy. Unified consumes only the published
+artifact selected into `recall-delivery/` by `recall.source.json`, as the sole
+installed owner. Never edit that generated copy by hand; author changes and
+publication do not refresh the app selection. Preserve existing
 imports and database formats; the database includes durable explicit notes and
 receipts, not only rebuildable search data. Do not coinstall the standalone
 distribution with Unified or create a second writable runtime copy.

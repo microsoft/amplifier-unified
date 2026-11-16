@@ -58,7 +58,7 @@ artifacts = ["/amplifier_web/release-source.json"]
 path = "scripts/scheduling_build_hook.py"
 
 [tool.hatch.build.targets.wheel]
-packages = ["amplifier_web", "amplifier_operations", "amplifier_kernels", "components/scheduling-delivery/amplifier_scheduling", "components/recall/amplifier_recall", "components/outputs-delivery/amplifier_outputs", "components/workspace-metadata-delivery/amplifier_workspace_metadata", "components/worktrees-delivery/amplifier_worktrees", "components/publishing-delivery/amplifier_publishing", "components/portability-delivery/amplifier_portability"]
+packages = ["amplifier_web", "amplifier_operations", "amplifier_kernels", "components/scheduling-delivery/amplifier_scheduling", "components/recall-delivery/amplifier_recall", "components/outputs-delivery/amplifier_outputs", "components/workspace-metadata-delivery/amplifier_workspace_metadata", "components/worktrees-delivery/amplifier_worktrees", "components/publishing-delivery/amplifier_publishing", "components/portability-delivery/amplifier_portability"]
 # Test/build inputs do not ship; selected component provenance is included below.
 exclude = [
     "/amplifier_kernels/LICENSE",
@@ -99,6 +99,8 @@ exclude = [
 "components/workspace-metadata-delivery/LICENSE" = "amplifier_web/component_delivery/workspace-metadata-LICENSE"
 "components/scheduling.source.json" = "amplifier_web/component_delivery/scheduling.json"
 "components/scheduling-delivery/LICENSE" = "amplifier_web/component_delivery/scheduling-LICENSE"
+"components/recall.source.json" = "amplifier_web/component_delivery/recall.json"
+"components/recall-delivery/LICENSE" = "amplifier_web/component_delivery/recall-LICENSE"
 "components/worktrees.source.json" = "amplifier_web/component_delivery/worktrees.json"
 "components/worktrees-delivery/LICENSE" = "amplifier_web/component_delivery/worktrees-LICENSE"
 "components/portability.source.json" = "amplifier_web/component_delivery/portability.json"
@@ -165,4 +167,4 @@ artifacts = ["python-docx>=1.1,<2", "python-pptx>=1,<2", "openpyxl>=3.1,<4", "re
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["tests", "components/recall/tests"]
+testpaths = ["tests"]

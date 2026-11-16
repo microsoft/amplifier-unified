@@ -317,6 +317,7 @@ def test_flat_selection_preserves_modified_root_snapshot(flat_selection, recorde
     ("workspace-metadata", "workspaces", "amplifier_workspace_metadata"),
     ("outputs", "outputs", "amplifier_outputs"),
     ("publishing", "publishing", "amplifier_publishing"),
+    ("recall", "recall", "amplifier_recall"),
 ])
 def nested_selection(tmp_path, request):
     component, author_directory, package = request.param

@@ -2,8 +2,9 @@
 
 [`recall/`](recall/README.md) prepares the existing conversation search and
 versioned-memory storage package for independent development and installed tests.
-Unified still assembles this authored package directly; publication and selected
-artifact delivery remain separate steps. Source access, authorization, opt-ins,
+Unified consumes the published artifact selected into `recall-delivery/`, recorded
+by `recall.source.json`; author edits and publication do not refresh this generated
+copy. Source access, authorization, opt-ins,
 context assembly and model execution stay in the host. Existing imports and
 database formats are unchanged, including durable explicit notes and receipts.
 Do not coinstall the standalone distribution with Unified.

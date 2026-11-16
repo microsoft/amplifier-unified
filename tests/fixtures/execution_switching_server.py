@@ -277,7 +277,7 @@ async def main(home, restart, seed_only):
                ('service.py', 'execution.py', 'cold_display.py', 'session_projection.py')})
     source_root = package.parent
     platform_paths = dict(amplifier_operations='amplifier_operations', amplifier_kernels='amplifier_kernels',
-        amplifier_recall='components/recall/amplifier_recall', amplifier_scheduling='components/scheduling-delivery/amplifier_scheduling',
+        amplifier_recall='components/recall-delivery/amplifier_recall', amplifier_scheduling='components/scheduling-delivery/amplifier_scheduling',
         amplifier_outputs='components/outputs-delivery/amplifier_outputs',
         amplifier_workspace_metadata='components/workspace-metadata-delivery/amplifier_workspace_metadata',
         amplifier_worktrees='components/worktrees-delivery/amplifier_worktrees',
