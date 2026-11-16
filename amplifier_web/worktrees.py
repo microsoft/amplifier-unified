@@ -70,6 +70,18 @@ class Worktrees:
                 and session.get('workspace') == record['historyHome']
                 and (session.get('workingDirectory') or session.get('workspace')) == record['source'])
             if record.get('placementMode') == 'deferred-retirement' and record['phase'] == 'pending':
+                if committed:
+                    record.update(phase='applied', step='applied', revision=record['revision'] + 1,
+                                  continuation={'status': 'suppressed',
+                                      'detail': 'The folder commit is saved. Restart did not replay a continuation.'})
+                    self.save(record)
+                    continue
+                if record.get('step') != 'desired':
+                    record.update(phase='unknown', revision=record['revision'] + 1,
+                                  detail='The host restarted before its runtime save or placement commit was confirmed.',
+                                  continuation={'status': 'suppressed'})
+                    self.save(record)
+                    continue
                 self.recoverable.append(record['id'])
                 continue
             notification_pending = record.get('resumeRequested') and record.get('continuation', {}).get('status') in {None, 'waiting', 'backpressured'}
@@ -1120,7 +1132,8 @@ class Worktrees:
                                       detail='Next folder is now the current folder. No input was replayed.')
                         session['configurationBusy'] = False
                         if not record.get('managerPlacement') and (
-                                not proof.get('retired') or proof.get('outcome') != 'completed'):
+                                not proof.get('retired') or proof.get('outcome') != 'completed'
+                                or not proof.get('continuationAllowed')):
                             record.update(resumeRequested=False, continuation={'status': 'suppressed',
                                 'detail': 'No successfully saved active turn authorized an automatic continuation.'})
                         self.save(record)
@@ -1130,7 +1143,10 @@ class Worktrees:
             place = getattr(runtime, 'deferred_placement', None)
             if not callable(place):
                 raise ValueError('This runtime does not support deferred folder placement.')
-            await asyncio.shield(place(copy.deepcopy(self.app._session(sid)), commit))
+            await asyncio.to_thread(self.preflight, record, self.app._session(sid))
+            # RuntimeManager retains the effect owner through a detached
+            # caller; Worktrees must not invent a second task around adapters.
+            await place({**copy.deepcopy(self.app._session(sid)), 'placementRequestId': record['id']}, commit)
             async with self.app.lock:
                 if record['phase'] == 'applied':
                     self.enqueue_continuation(record)
@@ -1138,7 +1154,11 @@ class Worktrees:
         except BaseException as exc:
             async with self.app.lock:
                 record = self.desired(sid) or record
-                saved = self.saved_owner(sid, durable=True)
+                try:
+                    saved = self.saved_owner(sid, durable=True)
+                except (ValueError, OSError, sqlite3.Error):
+                    saved = None
+                session = self.app._session(sid)
                 if self.placement_committed(record, saved):
                     record.update(phase='applied', step='applied',
                                   continuation={'status': 'suppressed',
@@ -1154,9 +1174,15 @@ class Worktrees:
                     # truthful. This is not artificial marker uncertainty.
                     record.update(phase='unknown', detail='The runtime save or folder commit could not be confirmed. Work was not replayed.',
                                   continuation={'status': 'suppressed'}, failureType=type(exc).__name__)
+                if record['phase'] != 'applied' and saved is not None:
+                    self.restore_placement(session, saved)
                 record['revision'] += 1
                 self.save(record)
-                self.changed({sid})
+                if saved is None:
+                    self._unverified_placements.add(sid)
+                    self.sync()
+                else:
+                    self.changed({sid})
                 if record.get('managerPlacement'):
                     self.enqueue_continuation(record)
             if isinstance(exc, asyncio.CancelledError):

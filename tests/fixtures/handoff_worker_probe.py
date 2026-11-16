@@ -118,7 +118,7 @@ class FixtureWait:
             await asyncio.sleep(.01)
         checkpoint = self.coordinator.get_capability('live.checkpoint')
         async def delayed(status='completed'):
-            if status == 'cancelled':
+        if status == 'completed':
                 Path(values['checkpointStarted']).write_text('ready')
                 while not Path(values['checkpointRelease']).exists():
                     await asyncio.sleep(.01)
@@ -160,13 +160,28 @@ providers:
         os.environ['VIRTUAL_ENV'] = sys.prefix
     runtime = RuntimeManager(command=command, startup_timeout=90)
     source_identities = []
-    quiesce = runtime.quiesce_for_handoff
-    async def observed_quiesce(session, request_id, **kwargs):
-        row = runtime.workers.get(session['id'])
-        if row:
+    soft_sent = asyncio.Event()
+    retirements, operations, source_processes = [], [], []
+    request = runtime._request_unlocked
+    async def observed_request(sid, op, **kwargs):
+        if op == 'retire' and kwargs.get('whenSettled'):
+            row = runtime.workers[sid]
             source_identities.append((row['process'].pid, row.get('native_worker_pid')))
-        return await quiesce(session, request_id, **kwargs)
-    runtime.quiesce_for_handoff = observed_quiesce
+            source_processes.append(row['process'])
+            soft_sent.set()
+            result = await request(sid, op, **kwargs)
+            retirements.append(result)
+            return result
+        return await request(sid, op, **kwargs)
+    runtime._request_unlocked = observed_request
+    write = runtime._write
+    async def observed_write(row, data):
+        operations.append(data['op'])
+        return await write(row, data)
+    runtime._write = observed_write
+    async def forbidden_release(*args, **kwargs):
+        raise AssertionError('Checkout must not use a second Foundation release')
+    runtime.quiesce_for_handoff = forbidden_release
     app = AppService(root / 'app', runtime, workspace=workspace)
     from amplifier_web.management import Management
     app.management = Management(app)
@@ -197,14 +212,14 @@ providers:
             await wait_file('commandStarted')
             receipt = (await app.dispatch('worktree.handoff', {'sessionId': sid,
                 'id': checkout['id'], 'expectedExecutionRevision': 0}, command_id='held-command-move'))['result']
-            async with asyncio.timeout(10):
-                while 'command' not in app.worktrees.read(sid, receipt['id']).get('waitingFor', []):
-                    await asyncio.sleep(.01)
-            assert not source_identities
+            await asyncio.wait_for(soft_sent.wait(), 10)
+            assert app.worktrees.read(sid, receipt['id'])['step'] == 'desired'
+            assert not runtime.workers[sid].get('closing')
+            assert not runtime.workers[sid].get('retirement_task')
             (root / 'commandRelease').write_text('release')
             await control
             await wait_file('checkpointStarted')
-            assert app.worktrees.read(sid, receipt['id'])['step'] == 'releasing'
+            assert app.worktrees.read(sid, receipt['id'])['step'] == 'desired'
             assert session.get('workingDirectory', str(workspace)) == str(workspace)
             from amplifier_foundation.session import SharedSessionStore, SessionBusyError
             try:
@@ -221,6 +236,8 @@ providers:
             assert len(app.worktrees.receipts(sid)) == 1 and not record['inputsReplayed']
             assert not (root / 'calls.jsonl').exists()
             assert source_identities[0][0] != source_identities[0][1]
+            assert len(retirements) == 1 and operations.count('retire') == 1
+            assert 'handoff.boundary' not in operations and source_processes[0].returncode is not None
             print(json.dumps({'phase': record['phase'], 'commandProbeNonblocking': True,
                 'delayedAuthoritativeSaveRetainedWriter': True, 'originalMoveCount': 1,
                 'providerCalls': 0, 'inputsReplayed': False, 'launcherNativePidDistinct': True}))
@@ -242,9 +259,11 @@ providers:
         record = app.worktrees.receipts(sid)[0]
         assert record['phase'] == 'applied', record
         assert record['release']['quiesced'] and not record['inputsReplayed']
+        assert record['placementMode'] == 'deferred-retirement'
+        assert len(retirements) == 1 and operations.count('retire') == 1
+        assert 'handoff.boundary' not in operations and source_processes[0].returncode is not None
         if launcher:
             launcher_pid, native_pid = source_identities[0]
-            assert native_pid == record['release']['releasedOwner']['pid']
             assert launcher_pid != native_pid, source_identities
         assert record['origin'] == 'agent' and record['sourceInputIds'] == ['native-original']
         if not cap_one:
@@ -263,9 +282,9 @@ providers:
         assert len(originals) == 1, messages
         assert any(m.get('tool_call_id') == 'move-tool' for m in messages), messages
         if with_child:
-            assert record['finishingTurn']['nativeDrain']['jobs'], record
             assert any('child-result-retained' in str(m.get('content')) for m in messages), messages
         calls = [json.loads(line) for line in (root / 'calls.jsonl').read_text().splitlines()]
+        assert calls[0]['pid'] == source_identities[0][1]
         if child_work:
             assert (root / 'child-read').read_text() == 'preserved original\n'
             assert len([row for row in calls if row['child']]) == 2, calls
@@ -275,7 +294,9 @@ providers:
             assert calls[-1]['cwd'] == checkout['path']
         if with_goal and not cap_one:
             resumed = next(row for row in calls if row['cwd'] == checkout['path'])['goal']
-            assert resumed['cap'] == goal_cap and resumed['turns_used'] == (2 if with_child else 1), resumed
+            source_budget = max(row['goal']['turns_used'] for row in calls
+                                if row['goal'] and row['cwd'] == str(workspace))
+            assert resumed['cap'] == goal_cap and resumed['turns_used'] >= source_budget, resumed
             assert max(row['goal']['turns_used'] for row in calls if row['goal']) == goal_cap, calls
         if cap_one:
             assert record['continuation']['status'] == 'suppressed', record

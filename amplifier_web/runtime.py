@@ -524,6 +524,12 @@ class RuntimeManager:
                     row['placement_task'] = pending
                 self.retention.retirements.add(pending)
                 pending.add_done_callback(self.retention.retirements.discard)
+                def settled(done):
+                    if row and row.get('placement_task') is done:
+                        row.pop('placement_task', None)
+                    if not done.cancelled():
+                        done.exception()  # Retain result even if its caller left.
+                pending.add_done_callback(settled)
         return await asyncio.shield(pending)
 
     async def _place_after_retirement(self, session, row, commit):
@@ -532,7 +538,8 @@ class RuntimeManager:
         sid = session['id']
         result = None
         if row:
-            result = await self._request_unlocked(sid, 'retire', whenSettled=True)
+            result = await self._request_unlocked(sid, 'retire', whenSettled=True,
+                                                 placementId=session['placementRequestId'])
             if not result.get('retired'):
                 raise RuntimeError('The original worker did not confirm its saved retirement.')
         async with self._locks.setdefault(sid, asyncio.Lock()):
@@ -540,7 +547,9 @@ class RuntimeManager:
                 raise RuntimeError('The original retirement was superseded. No folder was changed.')
             if row:
                 # Successful native checkpoint/closing precedes this Stop's
-                # ordinary cleanup. Never send a second Foundation release.
+                # ordinary cleanup. Never escalate a slow retirement into a
+                # force Stop: its one owner joins actual normal teardown.
+                await row['process'].wait()
                 await self.stop(sid, reason='retention')
             store = SharedSessionStore(session['workspace'],
                 session.get('runtimeSessionId') or session.get('nativeIdentity') or sid)
@@ -550,6 +559,8 @@ class RuntimeManager:
                          'historyHome': session['workspace'], 'executionHost': local_host_identity(),
                          'ownershipAcquisitionId': held.owner['acquisition_id'],
                          'retired': row is not None, 'outcome': (result or {}).get('outcome'),
+                         'continuationAllowed': (result or {}).get('continuationAllowed', False),
+                         'placementRequestId': session.get('placementRequestId'),
                          'inputsReplayed': False}
                 placed = await commit(proof)
                 if row and row.get('stop_reason') == 'retention':
@@ -1099,8 +1110,6 @@ class RuntimeManager:
             except Exception as exc:
                 outcome = 'failed'
                 reply = {"op": "bridge.result", "id": data["id"], "error": str(exc)}
-                if isinstance(getattr(exc, '_handoff_disposition', None), dict):
-                    reply['_handoffDisposition'] = exc._handoff_disposition
             if row["process"].returncode is None:
                 if timing:
                     timing.mark('reply.start')

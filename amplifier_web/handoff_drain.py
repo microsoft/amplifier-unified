@@ -1,6 +1,5 @@
-"""Private native identities for work already admitted before a checkout move."""
+"""Private native drain identities for shared configuration and app updates."""
 import copy
-import uuid
 
 
 _FIELDS = ('sessionId', 'parentSessionId', 'runId', 'callId')
@@ -29,48 +28,6 @@ def native_child(worker, call):
             result['job'] = {'ownerSessionId': owner, 'jobId': identity, 'callId': entry['callId']}
             break
     return result
-
-
-def own_target(worker, args):
-    """Omitted and host-supplied aliases identify this worker, never a peer."""
-    if not worker.session or args.get('_runtimeSessionId') != worker.session.session_id:
-        return False
-    owner = (worker.start_config or {}).get('ownerSessionId')
-    return args.get('args', {}).get('sessionId') in {None, worker.session.session_id, owner}
-
-
-def acknowledged_receipt(worker, data):
-    """Recognize only this marker's exact transport acknowledgement."""
-    marker = getattr(worker, '_handoff_boundary', None) or {}
-    drain = marker.get('drain') or {}
-    if data.get('id') != drain.get('bridgeId') or not drain.get('bridgeId'):
-        return
-    result = data.get('result')
-    if isinstance(data.get('_handoffDisposition'), dict):
-        return data['_handoffDisposition']
-    elif isinstance(result, dict) and result.get('accepted') is True:
-        return result.get('result')
-    elif isinstance(result, dict) and result.get('accepted') is False:
-        return {'id': marker['id'], 'phase': 'absent'}
-
-
-async def begin(worker, command_id):
-    """Freeze new delegation before sending the action, without cancelling work.
-
-    A known rejection releases this provisional gate. An unknown transport result
-    keeps the exact command's marker for the existing receipt reconciliation path.
-    New spawn attempts can briefly be refused even if the move ultimately rejects.
-    """
-    if not isinstance(command_id, str) or not command_id or not worker.runtime.generation:
-        return None
-    identity = str(uuid.uuid5(uuid.NAMESPACE_URL, 'worktree-handoff:' + command_id))
-    from .handoff_boundary import inspect
-    await inspect(worker, identity, arm_only=True)
-    try:
-        return _freeze(worker)
-    except BaseException:
-        await inspect(worker, identity, cancel=True)
-        raise
 
 
 def _freeze(worker):
@@ -146,20 +103,6 @@ def _freeze(worker):
     return copy.deepcopy(snapshot)
 
 
-async def finish(worker, receipt):
-    marker = getattr(worker, '_handoff_boundary', None) or {}
-    if not marker.get('drain') or not isinstance(receipt, dict) or receipt.get('id') != marker.get('id'):
-        return
-    if (receipt.get('phase') == 'pending' and not receipt.get('managerPlacement')
-            and not receipt.get('reconciles') and not receipt.get('release')
-            and receipt.get('finishingTurn', {}).get('nativeDrain') == marker['drain']['snapshot']):
-        marker['drain']['binding'] = copy.deepcopy(receipt['finishingTurn'])
-    elif (receipt.get('phase') in {'rejected', 'applied'}
-          or receipt.get('phase') == 'absent' and not marker['drain']['binding']):
-        from .handoff_boundary import inspect
-        await inspect(worker, marker['id'], cancel=True)
-
-
 def observe(worker, event):
     marker = getattr(worker, '_handoff_boundary', None) or {}
     drain = marker.get('drain')
@@ -200,24 +143,3 @@ def receipt_disposition(record):
     """Only the native boundary fields cross this private acknowledgement."""
     return {key: copy.deepcopy(record[key]) for key in
             ('id', 'phase', 'finishingTurn', 'managerPlacement', 'reconciles', 'release', 'boundaryOwner') if key in record}
-
-
-def failed_disposition(service, sid, operation, args):
-    """Called under app.lock after the handler fails, never while it may write."""
-    from .collaboration import PRINCIPAL
-    session = service._session(sid)
-    if (operation not in {'dispatch', 'action.dispatch'} or args.get('action') != 'worktree.handoff'
-            or not isinstance(args.get('_handoffSnapshot'), dict) or not args.get('id')
-            or PRINCIPAL.get() != (session.get('runtimeSessionId') or sid)
-            or args.get('args', {}).get('sessionId') not in {None, sid, session.get('runtimeSessionId')}):
-        return None
-    identity = str(uuid.uuid5(uuid.NAMESPACE_URL, 'worktree-handoff:' + args['id']))
-    path = service.worktrees.receipt_dir / (identity + '.json')
-    try:
-        path.stat()
-    except FileNotFoundError:
-        # A retained command without its native receipt is uncertain, not absent.
-        if not service.db.execute('SELECT 1 FROM commands WHERE id=?', (args['id'],)).fetchone():
-            return {'id': identity, 'phase': 'absent'}
-        return None
-    return receipt_disposition(service.worktrees.read(sid, identity))

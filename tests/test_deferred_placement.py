@@ -107,9 +107,9 @@ async def test_real_retirement_or_storage_uncertainty_stays_unknown(tmp_path, mo
 async def test_native_soft_retirement_does_not_own_initiating_command_lock(monkeypatch):
     worker = Worker()
     hooks, replies = {}, []
-    def register(name, handler, **kwargs):
-        hooks[name] = handler
-        return lambda: hooks.pop(name, None)
+    def register(event, handler, **kwargs):
+        hooks[event] = handler
+        return lambda: hooks.pop(event, None)
     goal = {'condition': 'Finish', 'turns_used': 4, 'cap': 9}
     worker.session = SimpleNamespace(coordinator=SimpleNamespace(
         session_state={'goal': goal}, hooks=SimpleNamespace(register=register)))
@@ -132,5 +132,6 @@ async def test_native_soft_retirement_does_not_own_initiating_command_lock(monke
     worker.retirement_changed.set()
     await asyncio.wait_for(retirement, 1)
     assert worker.shutdown.is_set() and worker.retirement_intent is None
-    assert replies[-1] == {'op': 'reply', 'id': 'one', 'result': {'retired': True, 'outcome': None}}
+    assert replies[-1] == {'op': 'reply', 'id': 'one', 'result': {
+        'retired': True, 'outcome': None, 'continuationAllowed': True}}
     worker.checkpoint_idle.assert_awaited_once()

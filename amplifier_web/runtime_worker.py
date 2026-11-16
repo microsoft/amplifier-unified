@@ -656,6 +656,13 @@ class Worker:
                     event["finalMessageRefs"] = refs
         publish(event)
         self.retirement_changed.set()
+        if self.retirement_intent:
+            # Lifecycle emit can precede the producer's finally block removing
+            # its last child/command. Observe its completed task, not an idle
+            # hint or a polling watchdog.
+            producer = asyncio.current_task()
+            if producer:
+                producer.add_done_callback(lambda done: self.retirement_changed.set())
         if event.get("type") == "generation.finished" and loop:
             count = sum(not job["task"].done() for job in loop.jobs.values())
             if count:
@@ -1398,8 +1405,12 @@ class Worker:
                     # ordinary retire reply owns confirmation, not this hint.
                     self.shutdown.set()
                     publish({'type': 'runtime.retiring'})
+                    task = coordinator.session_state.get('task') or {}
+                    goal = coordinator.session_state.get('goal')
                     publish({'op': 'reply', 'id': data.get('id'),
-                             'result': {'retired': True, 'outcome': self.root_generation_outcome}})
+                             'result': {'retired': True, 'outcome': self.root_generation_outcome,
+                                        'continuationAllowed': not task or (
+                                            task.get('status') == 'active' and bool(goal))}})
                     return
         except Exception as error:
             from amplifier_web.worker_diagnostics import command_failure_facts

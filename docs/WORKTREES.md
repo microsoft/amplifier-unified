@@ -53,7 +53,11 @@ Runtime save failure and uncertain storage/placement remain explicit, with no
 automatic model continuation or replay of uncertain input. A delayed retirement
 reply is not a failed folder change, nor proof of a successful save or teardown.
 
-An initial writer-ownership refusal before any release request is rejected: the
+### Retained legacy handoffs
+
+Older arm/release receipts are kept as historical evidence, not converted into
+new desired-folder intents. For those receipts an initial writer refusal before
+any release request is rejected: the
 source stays unchanged and that attempt leaves no execution fence. Release
 failure after that boundary, process death or an interrupted commit is visible as unknown.
 Previously unknown receipts are not reclassified by this distinction; a newly
@@ -74,10 +78,10 @@ a late ordered removal acknowledgement or exact worker-absence proof can settle
 that same receipt when Check move reads it. Neither the missing reply nor a
 user's explanation is proof.
 
-The existing Task execution folder card shows Waiting for this turn, Moving,
-Moved, Not moved or Needs recovery, the actual source/target folder names and
-continuation status separately. **Check move** uses the receipt identity under
-the control; users do not enter internal IDs or write a verification essay.
+The Task execution folder card shows the actual current folder and pending next
+folder, then applying/applied or an actual runtime/commit problem. Continuation
+status is separate. For legacy receipts only, **Check move** uses the receipt
+identity under the control; users do not enter internal IDs or write an essay.
 The independent expert `worktree.reconcile` API retains its deliberate
 source/target choice, current revision and user-finding contract. It is not called
 by Check move and is not evidence that an uncertain external effect is harmless.
