@@ -28,6 +28,76 @@ def captured():
     return value, state
 
 
+def acknowledged_app_with_old_component_history():
+    """Sanitized 0.100.2 shape: app receipts outlive component activation history."""
+    app_attempt, revision = '5' * 32, '2' * 40
+    phases = ['ecosystem-source-policy', 'ecosystem-source-preflight', 'ecosystem-prepare',
+              'ecosystem-runtime-lock', 'ecosystem-validation', 'ecosystem-source-preflight']
+    packages = [None, 'amplifier-module-context-managed', 'amplifier-module-hook-computer-use',
+                None, 'amplifier-module-tool-image', 'amplifier-bundle-context-intelligence']
+    rows = [{'id': f'{i + 10:032x}', 'attemptId': f'{i + 20:032x}', 'kind': 'ecosystem',
+             'status': 'failed', 'phase': phase, 'at': 1794230000 + i * 1000,
+             **({'package': packages[i]} if packages[i] else {})} for i, phase in enumerate(phases)]
+    state = {'phase': 'checked', 'error': None, 'available': 0, 'items': [],
+             'sequence': {'stage': 'complete', 'install': False},
+             'application': {'status': 'current', 'current': '0.100.2', 'runningRevision': revision},
+             'applicationResult': {'phase': 'restart-ack', 'attemptId': app_attempt,
+                 'revision': revision, 'version': '0.100.2', 'verifiedAt': 1794821240.24},
+             'diagnostics': {'lastFailure': {}, 'activeFailures': {
+                 str(i): {'latest': row} for i, row in enumerate(rows)},
+                 'completedBatches': [{'kind': 'application', 'phase': 'restart-ack',
+                     'attemptId': app_attempt, 'revision': revision, 'startedAt': 1794821240.2,
+                     'completedAt': 1794821240.3, 'applicationExtras': []}],
+                 'events': [{'kind': 'application', 'phase': 'restart-ack', 'status': 'succeeded',
+                     'attemptId': app_attempt, 'at': 1794821240.3} for _ in range(50)]}}
+    proof = {'generation': '1' * 32, 'activationUnknown': True, 'qualifiedAt': 1794470895,
+             'packages': set(filter(None, packages)), 'components': set(filter(None, packages))}
+    return state, proof
+
+
+@pytest.mark.parametrize('case', ['old', 'newer', 'activation', 'invalid-ack', 'graph', 'config'])
+def test_app_success_and_selected_component_attention_are_distinct(case):
+    state, proof = acknowledged_app_with_old_component_history()
+    selected = state['diagnostics']['activeFailures']['3']['latest']
+    if case == 'newer':
+        selected['at'] = 1794822000
+    elif case == 'activation':
+        selected['phase'] = 'ecosystem-activation'
+    elif case == 'invalid-ack':
+        state['applicationResult']['attemptId'] = '7' * 32
+    elif case == 'graph':
+        proof = {}
+    elif case == 'config':
+        proof['configurationChanged'] = True
+    before = copy.deepcopy(state)
+    result = health.current(state, proof)
+    assert result['actionRequired'] and result['status'] != 'current'
+    if case in {'old', 'activation', 'config'}:
+        assert result['failureAttemptId'] == selected['attemptId']
+        assert result['failurePhase'] == selected['phase']
+        assert result['failureAt'] == selected['at']
+        assert result['failureKind'] == 'ecosystem'
+        assert result['selectedFailure'] == selected
+        assert result['title'] == 'Application updated; earlier component issue needs review'
+        assert '0.100.2' in result['detail'] and '2026-11-' in result['detail']
+    else:
+        assert result['title'] != 'Application updated; earlier component issue needs review'
+    if proof:
+        assert result['proofLimitation']['activationUnknown'] is True
+    assert state == before
+
+
+def test_activation_retention_limit_alone_is_neutral_and_not_reinstallation():
+    state, proof = acknowledged_app_with_old_component_history()
+    state['diagnostics']['activeFailures'] = {}
+    result = health.current(state, proof)
+    assert result['status'] == 'unchecked' and not result['actionRequired']
+    assert result['title'] == 'Application is up to date'
+    assert result['proofLimitation'] == {'activationUnknown': True}
+    assert 'No reinstall is requested' in result['detail']
+    assert 'selectedFailure' not in result
+
+
 def mounted_fixture(tmp_path, monkeypatch):
     value, state = captured()
     manager = SimpleNamespace(home=tmp_path, directory=tmp_path/'updates',

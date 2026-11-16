@@ -187,8 +187,21 @@ async def collect(manager):
         'checkInProgress': bool(getattr(manager, 'check_task', None) and not manager.check_task.done()),
     }
     # Which installed proof the last health refresh of this host process found.
-    from .update_health import cached_evidence
+    from .update_health import cached_evidence, projection
     proof = cached_evidence(manager)
+    health = projection(manager, state=state, evidence=proof)
+    report['selectedFailure'] = health.get('selectedFailure', {})
+    # The selection above uses the full retained owner state, not this bounded
+    # list or the last 50 events. Omission is coverage, never failure resolution.
+    active = diagnostics.get('activeFailures', {})
+    report['activeFailureCount'] = len(active)
+    report['activeFailures'] = [event(group.get('latest', {})) for group in list(active.values())[:32]]
+    report['activeFailuresOmitted'] = max(0, len(active) - len(report['activeFailures']))
+    report['failureOverflow'] = event((diagnostics.get('failureOverflow') or {}).get('latest', {}))
+    limitation = health.get('proofLimitation', {})
+    report['updateState'].update(
+        activationUnknown=limitation.get('activationUnknown') is True,
+        configurationChanged=limitation.get('configurationChanged') is True)
     report['updateState']['healthProof'] = ('generation' if proof.get('generation') else
                                             'setup-record' if proof.get('setupRecord') else 'none')
     from .app_updates import RELEASE_CHECK_STAGES, RELEASE_CHECK_REASONS

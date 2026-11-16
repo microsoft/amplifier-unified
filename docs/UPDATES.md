@@ -336,8 +336,9 @@ Update health does not reclassify an earlier failure record. Releases before
 this rule started the component update of a new installation by themselves and
 recorded its refusal as a failed update. That record named no reason, and the
 refusal covered every incomplete selected profile, so the record cannot prove
-that only a connection was missing. It keeps its priority, and the page keeps
-"Update could not finish", until a later component update completes; the
+that only a connection was missing. It keeps its priority as component attention
+until a later component update completes; a separate application success does
+not resolve that attempt. The
 existing rule for an older preparation failure then makes it history. On such
 an installation the person sets up an AI connection; the update then starts
 (by itself, or at the person's Update request when automatic installation is
@@ -562,6 +563,17 @@ If bounded activation history has aged out, a matching selected graph can be
 reported as retained with activation verification unavailable, not falsely healthy
 or a request to reinstall. Newer failures, failed activation and unrelated source
 scope remain actionable. Settings revalidation uses a neutral pending state.
+When a verified application restart is newer than unresolved component attention,
+the headline names the successful application update and the earlier component
+issue separately, including the attempt's UTC date. Attention and source/retry
+guards remain unchanged; an application success is not component recovery.
+Current health identifies its selected failure through the sanitized diagnostic
+allowlist, independently of the last failure pointer and recent event window.
+The support report uses that same selector and includes at most 32 retained
+failure summaries, total/omitted counts, and activation/configuration proof
+limitations. It does not rename the selected record as the last failure or
+discard history. A missing older activation receipt alone remains neutral,
+does not request reinstallation, and does not claim full component verification.
 If the selected installation's graph, lock and activation still verify but its
 source-configuration key no longer matches, health reports incomplete component
 verification, not a renewed claim that an older source conflict is occurring.

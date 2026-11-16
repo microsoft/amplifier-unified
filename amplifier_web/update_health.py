@@ -428,10 +428,25 @@ def current(state, evidence=None, *, manual_verified=None, explicit_retry=False,
     batch = diagnostics.get('batch') or {}
     retry = batch.get('retry') or {}
     phase = state.get('phase')
-    def result(status, title, detail, *, action=None, component=None):
-        return {'status': status, 'title': title, 'detail': detail,
+    def result(status, title, detail, *, action=None, component=None, failure=None):
+        value = {'status': status, 'title': title, 'detail': detail,
                 'actionRequired': status in {'action-required', 'protected', 'unverified'},
                 'action': action, 'component': component}
+        limitation = {key: True for key in ('activationUnknown', 'configurationChanged')
+                      if evidence.get(key) is True}
+        if limitation:
+            value['proofLimitation'] = limitation
+        if failure:
+            # Reuse the support-report allowlist; no exception text, source URLs
+            # or private paths become current-health metadata.
+            from .update_report import event
+            selected = event(failure)
+            value['selectedFailure'] = selected
+            for source, target in (('kind', 'failureKind'), ('attemptId', 'failureAttemptId'),
+                                   ('phase', 'failurePhase'), ('at', 'failureAt')):
+                if source in selected:
+                    value[target] = selected[source]
+        return value
     if state.get('pendingReplacement') is not None:
         return result('unverified', 'Installation needs verification',
                       'The application replacement outcome is not confirmed. Work remains protected; inspect the update diagnostics before another installation.', action='diagnostics')
@@ -494,6 +509,11 @@ def current(state, evidence=None, *, manual_verified=None, explicit_retry=False,
         and application_result.get('version') == app.get('current')
         and 0 < application_batch.get('startedAt', 0)
             <= application_result.get('verifiedAt', 0) <= application_batch.get('completedAt', 0))
+    application_success = (application_verified
+        and isinstance(app.get('current'), str) and re.fullmatch(r'\d+\.\d+\.\d+', app['current'])
+        and isinstance(app.get('runningRevision'), str) and re.fullmatch('[a-f0-9]{40}', app['runningRevision'])
+        and isinstance(application_result.get('attemptId'), str)
+        and re.fullmatch('[a-f0-9]{32}', application_result['attemptId']))
     def currently_verified(row):
         manual = state.get('manualHandoff') or {}
         if (manual.get('phase') == 'manual-handoff-reconciled'
@@ -549,13 +569,35 @@ def current(state, evidence=None, *, manual_verified=None, explicit_retry=False,
         failure = max(remaining, key=lambda row: row.get('at', 0), default=diagnostics.get('lastFailure') or {})
         reason = failure.get('reason') or failure.get('probe', {}).get('reason')
         component = failure.get('package') or failure.get('probe', {}).get('package') or failure.get('component')
+        if (application_success and evidence and not state.get('error') and phase not in {'error', 'interrupted'}
+                and failure.get('kind') == 'ecosystem'
+                and 0 < failure.get('at', 0) < application_batch['startedAt']):
+            # The app's verified restart does not resolve a component attempt.
+            # Keep that attention, but name its domain and date instead of
+            # implying that the successfully installed app update just failed.
+            from datetime import datetime, timezone
+            at = failure['at']
+            date = (datetime.fromtimestamp(at, timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
+                    if at < 253402300800 else 'an earlier time')
+            detail = (f'Application {app["current"]} is installed and its restart was verified. '
+                      f'A component update from {date} still needs review. '
+                      'This is not a failure of the application update. ')
+            if evidence.get('activationUnknown'):
+                detail += 'The selected component graph matches its qualification, but its activation receipt is no longer retained. '
+            if evidence.get('configurationChanged'):
+                detail += 'The current source configuration also differs from that qualification. '
+            detail += failure_guidance(failure) or 'Inspect this earlier component attempt in diagnostics before retrying.'
+            return result('protected' if reason in DETERMINISTIC else 'action-required',
+                          'Application updated; earlier component issue needs review', detail,
+                          action='sources' if reason in DETERMINISTIC else 'diagnostics',
+                          component=component, failure=failure)
         if reason in DETERMINISTIC:
             return result('protected', 'Component source needs review',
                           failure_guidance(failure) or 'A source or configuration conflict prevented this update. Current components remain active. Review source settings or share diagnostics; unchanged automatic attempts are paused.',
-                          action='sources', component=component)
+                          action='sources', component=component, failure=failure)
         return result('action-required', 'Update could not finish',
                       failure_guidance(failure) or state.get('error') or 'The prior attempt has no applicable verified outcome. Current installation is retained; inspect diagnostics before retrying.',
-                      action='diagnostics', component=component)
+                      action='diagnostics', component=component, failure=failure)
     if any(row.get('failure') for row in state.get('pendingSmartTools', [])):
         return result('action-required', 'Some tools were not updated',
                       'Their current versions remain installed. Review the failed tool to retry or keep its current version.',
@@ -585,7 +627,7 @@ def current(state, evidence=None, *, manual_verified=None, explicit_retry=False,
                           'The active installation still matches its recorded graph, but the current source configuration differs from its qualification. Current components are kept; earlier attempts remain in history. Check for updates and review the changed source choices before installing.',
                           action='check')
         if evidence.get('activationUnknown'):
-            return result('unchecked', 'Current components kept',
+            return result('unchecked', 'Application is up to date' if application_success else 'Current components kept',
                           'The installed graph matches its recorded qualification. Its older activation receipt is no longer retained, so full activation verification is unavailable. No reinstall is requested.')
         if not evidence:
             return result('unverified', 'Component verification is incomplete',
@@ -602,9 +644,10 @@ def current(state, evidence=None, *, manual_verified=None, explicit_retry=False,
     return result('unchecked', 'Check for updates', 'The full desired component state has not been checked.', action='check')
 
 
-def publish(manager):
-    state = manager.service.state['updates']
-    evidence = cached_evidence(manager)
+def projection(manager, *, state=None, evidence=None):
+    """One selection for publication and passive support reports."""
+    state = manager.service.state['updates'] if state is None else state
+    evidence = cached_evidence(manager) if evidence is None else evidence
     # Settings mutations invalidate proof immediately without a graph scan on
     # each publication. Only an owner check/activation can establish it again.
     revision = manager.service.state.get('configurationRevision')
@@ -614,17 +657,20 @@ def publish(manager):
         # a newer failure or uncertain operation keeps its ordinary priority.
         prior = {**evidence, 'configurationChanged': False} if evidence.get('configurationChanged') else evidence
         if current(state, prior)['status'] in {'current', 'unchecked'}:
-            state['currentStatus'] = {'status': 'unchecked', 'title': 'Checking current configuration',
+            return {'status': 'unchecked', 'title': 'Checking current configuration',
                 'detail': 'Update health will refresh against the changed settings. Existing components remain active.',
                 'actionRequired': False, 'action': None, 'component': None}
-            return
         evidence = {}
-    state['currentStatus'] = current(state, evidence,
+    return current(state, evidence,
         manual_verified=getattr(manager, '_manual_handoff_verified', None),
         explicit_retry=(getattr(manager, '_update_health_configuration_revision', revision) == revision
                         and getattr(manager, '_retained_retry_available', False)),
         connection=(getattr(manager, '_update_connection', None)
                     if getattr(manager, '_update_health_configuration_revision', revision) == revision else None))
+
+
+def publish(manager):
+    manager.service.state['updates']['currentStatus'] = projection(manager)
 
 
 async def refresh(manager):
