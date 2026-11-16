@@ -332,24 +332,16 @@ decides. Its refusal of an incomplete selected profile carries a reason,
 `ai-connection-needed` when only a provider is missing and the loop is
 supported, and `incomplete-conversation-profile` otherwise.
 
-Update health treats a recorded refusal for a missing connection as history,
-not as a failed update, only when the attempt itself proves it. The candidate
-folder of an attempt holds the attempt's own copy of the settings. The proof is
-that those settings, by the rule above, select the app's own profile with no AI
-connection (`update_health.awaited_attempts`). Today's settings are not evidence
-about an earlier attempt. The form of a record is not a proof either: the
-refusal of releases before this rule named no reason and covered every
-incomplete selected profile. With the proven inputs the candidate could not
-qualify, whatever else its profile lacked; any other gap is found by the first
-attempt after a connection. The proof is made at a health refresh (host start,
-a settings change, a check), and its attempt ID is saved in
-`diagnostics.awaitedConnection`. Storage cleanup keeps the candidate folder of
-a failed attempt, because it retires only a validated candidate; a reset of the
-cache removes it, and the saved proof stays. A record with no proof stays a
-failed update: for example when the candidate is gone, or when the attempt ran
-with another profile or with a connection. No record is changed or removed. The
-failed stage's own text stays until the next check, and every other failure
-keeps its priority.
+Update health does not reclassify an earlier failure record. Releases before
+this rule started the component update of a new installation by themselves and
+recorded its refusal as a failed update. That record named no reason, and the
+refusal covered every incomplete selected profile, so the record cannot prove
+that only a connection was missing. It keeps its priority, and the page keeps
+"Update could not finish", until a later component update completes; the
+existing rule for an older preparation failure then makes it history. On such
+an installation the person sets up an AI connection; the update then starts
+(by itself, or at the person's Update request when automatic installation is
+off). A new installation never gets such a record, because no attempt starts.
 
 The owner's pass and a person's Update request share one step for a selection
 that changed after its check (`UpdateManager.install_checked`): the refusal

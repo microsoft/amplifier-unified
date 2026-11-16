@@ -35,55 +35,6 @@ def read_connection(manager):
         return {}
 
 
-def connection_refusal(row):
-    """Whether a failure record has the form of the probe's refusal of a selected profile with no provider.
-
-    The form proves nothing about the attempt. `awaited_attempts` does.
-    """
-    probe = row.get('probe') or {}
-    reason = row.get('reason') or probe.get('reason')
-    # Releases before the reason existed recorded only the place: the one
-    # ValueError that host.session.prepare_dependencies raises itself, in the
-    # phase that composes the profiles of a new candidate. That refusal covered
-    # every incomplete selected profile, so the place is not the proof.
-    unnamed = (not reason and row.get('phase') == 'ecosystem-source-policy'
-               and probe.get('stage') == 'prepare' and probe.get('errorType') == 'ValueError'
-               and re.fullmatch(r'amplifier_web\.host\.session:prepare_dependencies:[0-9]+',
-                                probe.get('failureLocation') or ''))
-    return bool(row.get('kind') == 'ecosystem' and row.get('status') == 'failed'
-                and (reason == 'ai-connection-needed' or unnamed))
-
-
-def awaited_attempts(manager, attempts):
-    """Of these attempts, those that ran with the app's own profile and no AI connection.
-
-    Proven for each attempt from the settings that it copied into its own
-    candidate folder, by the rule of the update owner's gate. Today's settings
-    are not evidence about an earlier attempt. With those inputs the candidate
-    could not qualify, whatever else its profile lacked; any other gap is found
-    by the first attempt after a connection. Storage cleanup keeps the folder
-    of a failed attempt (it retires only a validated candidate). An attempt
-    whose folder or copied settings folder is gone proves nothing, and its
-    record stays a failure.
-    """
-    from .host.config import read_config
-    from .profile_catalog import connection as selected
-    from .staged_sources import owned_path
-    proven = []
-    for attempt, candidate in attempts.items():
-        try:
-            stage = owned_path(manager.directory / 'releases' / candidate, manager.directory / 'releases')
-            if not (stage / 'shared-config').is_dir():
-                continue
-            # The reader and the arguments of the attempt's own probes.
-            config = read_config(stage, home=stage, shared_home=stage / 'shared-config', global_only=True)
-            if selected(config)['needed']:
-                proven.append(attempt)
-        except Exception:  # Unreadable evidence is no evidence; includes the settings parser's own error type.
-            continue
-    return proven
-
-
 def active_evidence(manager, *, explain_configuration=False):
     """Verify the selected graph, never prepare it or admit changed declarations.
 
@@ -593,20 +544,9 @@ def current(state, evidence=None, *, manual_verified=None, explicit_retry=False,
                 and (not package or package in evidence.get('packages', ()))
                 and (not component or component in evidence.get('components', ()))
                 and 0 < row.get('at', 0) < evidence.get('qualifiedAt', 0))
-    marked = diagnostics.get('awaitedConnection') or ()
-    def awaited_connection(row):
-        # This attempt stopped before it qualified anything, because the app's
-        # own selected profile had no AI connection: proven once from the
-        # attempt's own inputs (awaited_attempts) and saved beside the history.
-        # It installed nothing and left nothing uncertain, so it is not a
-        # failed update of the components. The record itself is kept.
-        return row.get('attemptId') in marked and connection_refusal(row)
-    remaining = [row for row in failed if not currently_verified(row) and not older_preparation(row)
-                 and not awaited_connection(row)]
+    remaining = [row for row in failed if not currently_verified(row) and not older_preparation(row)]
     if state.get('error') or phase in {'error', 'interrupted'} or remaining:
-        last = diagnostics.get('lastFailure') or {}
-        # A record that is history gives no text or component to another error.
-        failure = max(remaining, key=lambda row: row.get('at', 0), default={} if awaited_connection(last) else last)
+        failure = max(remaining, key=lambda row: row.get('at', 0), default=diagnostics.get('lastFailure') or {})
         reason = failure.get('reason') or failure.get('probe', {}).get('reason')
         component = failure.get('package') or failure.get('probe', {}).get('package') or failure.get('component')
         if reason in DETERMINISTIC:
@@ -705,20 +645,6 @@ async def refresh(manager):
             return False  # Missing/stale selection proof never offers a retry.
     retry_available = await asyncio.to_thread(retry_action)
     waiting = await asyncio.to_thread(read_connection, manager)
-    diagnostics = manager.service.state['updates'].get('diagnostics')
-    if isinstance(diagnostics, dict):
-        # Prove each connection refusal once and save the result beside the
-        # history: the proof then needs no folder read at later publications
-        # and outlives a reset of the cache, which removes the candidate folder.
-        # Nothing in the history is changed.
-        marked = diagnostics.get('awaitedConnection') or []
-        attempts = {row['attemptId']: row['revision'] for row in failure_events(manager.service.state['updates'])
-                    if connection_refusal(row) and row.get('attemptId') not in marked
-                    and all(isinstance(row.get(key), str) and re.fullmatch('[a-f0-9]{32}', row[key])
-                            for key in ('attemptId', 'revision'))}
-        proven = await asyncio.to_thread(awaited_attempts, manager, attempts) if attempts else []
-        if proven:
-            diagnostics['awaitedConnection'] = [*(diagnostics.get('awaitedConnection') or []), *proven][-8:]
     if revision == manager.service.state.get('configurationRevision'):
         manager._active_update_evidence = evidence
         manager._update_health_configuration_revision = revision

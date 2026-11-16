@@ -748,9 +748,11 @@ class UpdateManager:
                     await self.publish(applicationIntent=intent,
                         **({'pendingApp': {**pending, 'updateIntent': intent}} if pending else {}))
                 if not self.closed and not self.awaiting_restart():
-                    # The person asked for this update: a check that fails stops it, as above.
-                    await self.install_checked(
-                        lambda: self.service.state['updates'].get('phase') not in {'error', 'interrupted'})
+                    def found():
+                        # After a new check the request installs what that check found.
+                        state = self.service.state['updates']
+                        return state.get('phase') == 'available' and state.get('available', 0)
+                    await self.install_checked(found)
             else:
                 await getattr(self, action)()
         except asyncio.CancelledError: raise

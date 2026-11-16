@@ -234,9 +234,8 @@ no attempt, because a profile with no provider cannot qualify. The rule and
 bundle composition share `host.config.provider_dropped`; keep them on one rule.
 It makes a claim only for the app's own profiles. A connection changes the
 checked selection, so the owner checks again before it installs. Update health
-calls an earlier refusal "waiting" only from that attempt's own copied settings
-(`update_health.awaited_attempts`), never from today's settings or from the
-record's form.
+never reclassifies an earlier refusal record as waiting: its form does not
+prove that only a connection was missing. A later completed update settles it.
 The installed-package reader runs Git for a package from a local checkout, so
 a caller without the installation's Git folder on PATH reads "not prepared".
 A folder below the installation folder that the app itself uses as a session
