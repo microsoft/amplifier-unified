@@ -95,7 +95,7 @@ class Operations:
 
     async def observe(self, session_id, runtime_session_id, event):
         # session_id comes from the authenticated worker bridge, never the tool.
-        self.service._session(session_id)
+        self.service._session(session_id, hydrate=False)
         if (event.get("source"), event.get("kind")) not in {
             ("tool-bash", "process"),
             ("computation", "kernel"),
