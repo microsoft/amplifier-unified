@@ -1,0 +1,51 @@
+{
+  "schema": 1,
+  "source": {
+    "schema": 1,
+    "repository": "microsoft/amplifier-unified",
+    "revision": "cd7fc4b99a305518d3b9b48678c86ed27574baf5",
+    "subdirectory": "amplifier_web/status_protocol",
+    "tree": "645f4277014f37587b1208778220f3c12af28b69",
+    "version": "0.1.0",
+    "tag": "status-emitter-v0.1.0",
+    "sourceFiles": {
+      "LICENSE": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
+      "MANIFEST.in": "4d5d8c37cadfb2c9068fd03fd4eb37712705c7d9c348d70a60192c677f0f98e9",
+      "README.md": "92d99dd9f667162a1e1326bf7124a0195b65048c7ff9bb1b929185585ab486f7",
+      "__init__.py": "b299fe83643242caeeffa3b3f206c53eacc25e32468ccb13a5def87480b0f9f0",
+      "cli.py": "9dc2c87c489c2a153ac01c4b9ad4446fabe12701dd36328c93116b908ab7deac",
+      "hook.py": "fb15daf075810c99329b8b24af311156956a6a614dc630f6bda7e0c377efb28c",
+      "publisher.py": "a420977c8da9e287d9067df219e6cd509c64da65921752c8cfede964335a9008",
+      "pyproject.toml": "e52f5acdadd26338870bb13e91e8e46a01cc74a8f40683821e24b1b02737293b",
+      "reader.py": "4946c67d0c4d84660b0a288914ce441e5248f95071b5cd106b71fc2fd2a880d1",
+      "schema.py": "ff87d28b27b7b859a2c3410d8ebe7fdbe32dfe220fbc87d937f6267e1ebe6963",
+      "tests/test_standalone.py": "845d57a5ce7ce405ccd94b982d6f497c674cec3a4003f0e601b79c25ecb423f4"
+    },
+    "artifacts": {
+      "amplifier_status_emitter-0.1.0-py3-none-any.whl": {
+        "sha256": "3d6b090f9d11c724a1a0abadb1ffc7cae57ea3b82d0e9084ca250d739b6f01e5",
+        "bytes": 14157
+      },
+      "amplifier_status_emitter-0.1.0.tar.gz": {
+        "sha256": "2e9a78e7c00386ff86cdcc48dfa2b4f3c4cdd4ffb35a4a2073aa808ad38a9cc5",
+        "bytes": 13398
+      }
+    }
+  },
+  "artifact": {
+    "url": "https://github.com/microsoft/amplifier-unified/releases/download/status-emitter-v0.1.0/amplifier_status_emitter-0.1.0-py3-none-any.whl",
+    "sha256": "3d6b090f9d11c724a1a0abadb1ffc7cae57ea3b82d0e9084ca250d739b6f01e5",
+    "bytes": 14157
+  },
+  "sourceReceiptSha256": "edfee7877833f6cf0dcdd2cd7ffd489726f49e9aa31517c8a0d379630533c5b9",
+  "runtimeRequirements": [],
+  "files": {
+    "__init__.py": "b299fe83643242caeeffa3b3f206c53eacc25e32468ccb13a5def87480b0f9f0",
+    "cli.py": "9dc2c87c489c2a153ac01c4b9ad4446fabe12701dd36328c93116b908ab7deac",
+    "hook.py": "fb15daf075810c99329b8b24af311156956a6a614dc630f6bda7e0c377efb28c",
+    "publisher.py": "a420977c8da9e287d9067df219e6cd509c64da65921752c8cfede964335a9008",
+    "reader.py": "4946c67d0c4d84660b0a288914ce441e5248f95071b5cd106b71fc2fd2a880d1",
+    "schema.py": "ff87d28b27b7b859a2c3410d8ebe7fdbe32dfe220fbc87d937f6267e1ebe6963",
+    "LICENSE": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  }
+}

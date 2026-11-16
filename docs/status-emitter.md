@@ -14,14 +14,20 @@ projection is coalesced after 100 ms, and one background thread owns file writes
 No Settings change, default behavior composition, service restart, or live-host
 migration is performed by this feature.
 
-Unified includes the stdlib implementation at `amplifier_web.status_protocol` and
-the `amplifier-unified-status` reference consumer. The same source builds a separate,
-dependency-free `amplifier-status-emitter` wheel with public import `amplifier_status`
+Unified includes its selected stdlib implementation at `amplifier_web.status_protocol`
+and the `amplifier-unified-status` reference consumer. The author project at
+`components/status` builds a separate dependency-free `amplifier-status-emitter` wheel with public import `amplifier_status`
 and the `amplifier-status` consumer. Build that wheel with:
 
 ```sh
-uv build amplifier_web/status_protocol --wheel
+uv build components/status --wheel
 ```
+
+The exact public artifact selected by `components/status-emitter.source.json`
+supplies Unified's generated private runtime. Author edits and independent
+publication do not change that default. Follow the
+[selection instructions](../components/status/README.md#ownership); preserve the
+original source receipt, even when it names the historical nested author path.
 
 Independent artifact delivery uses the existing **Scheduling and status packages**
 workflow with `component: status-emitter` and a full merged main commit SHA. It

@@ -1,5 +1,12 @@
 # Component projects
 
+[`status/`](status/README.md) authors the dependency-free local status publisher,
+reader and optional hook. Unified selects the published artifact into generated
+`amplifier_web/status_protocol`, bound by `status-emitter.source.json`. Its private
+import and CLI remain distinct from standalone `amplifier_status` and
+`amplifier-status`, preserving coinstallation and uninstall isolation. Author
+edits and publication do not refresh the app's selected bytes or enable emission.
+
 [`recall/`](recall/README.md) prepares the existing conversation search and
 versioned-memory storage package for independent development and installed tests.
 Unified consumes the published artifact selected into `recall-delivery/`, recorded

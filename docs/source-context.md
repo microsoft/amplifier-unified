@@ -72,6 +72,11 @@ Use `--all --under amplifier_operations` to inspect that selected runtime.
 Kernels follows the same root-layout rule: author in `components/kernels`,
 select through `components/kernels.source.json`, and use
 `--all --under amplifier_kernels` to inspect the generated Python/Node runtime.
+Status is authored in `components/status`; the selected public artifact supplies
+generated `amplifier_web/status_protocol`, bound by
+`components/status-emitter.source.json`. Use
+`--all --under amplifier_web/status_protocol` to inspect that private runtime. Its standalone
+`amplifier_status` import and CLI remain separate, permitting coinstallation.
 Source bootstrap files in the canonical client's `public/` remain authored inputs;
 their delivery copy has the same generated-context classification as other copied
 client source. Shipped documentation in `docs/shell` is authored here. Frozen UX inventory/control

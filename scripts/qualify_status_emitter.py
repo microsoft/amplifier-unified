@@ -54,8 +54,7 @@ def matching_source(wheel, prefix, source, force_include=None):
     packaged = set()
     # The same author directory now carries installed-only standalone tests.
     # These exact test roots belong in source archives, never either wheel.
-    tests = {"amplifier_web": source/'status_protocol/tests',
-             "amplifier_status": source/'tests'}.get(prefix)
+    tests = source/'tests' if prefix == 'amplifier_status' else None
     with zipfile.ZipFile(wheel) as archive:
         for item in archive.infolist():
             if item.is_dir() or not item.filename.startswith(prefix+'/'):
@@ -187,7 +186,7 @@ def main(argv=None):
         receipt['wheelSourceFiles'] = {
             'unified': {package: matching_source(wheels['amplifier-unified']['path'], package, ROOT/package, force_include)
                         for package in project['tool']['hatch']['build']['targets']['wheel']['packages']},
-            'status': matching_source(wheels['amplifier-status-emitter']['path'], 'amplifier_status', ROOT/'amplifier_web/status_protocol')}
+            'status': matching_source(wheels['amplifier-status-emitter']['path'], 'amplifier_status', ROOT/'components/status')}
         minimum = next(item.removeprefix('amplifier-core>=') for item in
                        project['project']['dependencies']
                        if item.startswith('amplifier-core>='))

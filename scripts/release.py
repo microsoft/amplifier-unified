@@ -257,8 +257,6 @@ def verify_dist(root, dist, expected, repository=None, revision=None):
         verify_frontend(root, names, archive.read, "Wheel")
         files = [path for path in (root / "amplifier_web").rglob("*")
                  if path.is_file() and not path.is_relative_to(root / "amplifier_web/static")
-                 # This exact standalone test subtree is source-only in pyproject.toml.
-                 and not path.is_relative_to(root / "amplifier_web/status_protocol/tests")
                  and (path.suffix in {".py", ".js"} or path.name == 'release-notes.json'
                                        or path.is_relative_to(root / "amplifier_web/runtime_deps"))
                  and "__pycache__" not in path.parts and path.suffix != ".pyc"]

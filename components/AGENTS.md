@@ -78,6 +78,14 @@ Never edit that snapshot by hand or coinstall the standalone distribution with
 Unified. Author edits and publication do not refresh the app selection; the host
 retains process approval, execution, observation and recovery authority.
 
+`status/` authors the independently published local observation package. Preserve
+the public `amplifier_status` import, CLI and optional hook. Unified consumes only
+the published artifact selected into generated `amplifier_web/status_protocol`,
+bound by `status-emitter.source.json`; do not edit that private delivery copy.
+Author changes/publication do not refresh it. Unlike the other embedded packages,
+distinct private/public imports and executable names permit coinstallation. Keep
+host enablement, projection and authority in Unified.
+
 ## Web client delivery
 
 `web-client/` is a verbatim snapshot of the separate client repository selected
