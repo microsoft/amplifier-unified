@@ -1,4 +1,4 @@
-"""Cross-feature handoff races use the real runtime admission and process path."""
+"""Retained legacy release/commit races use real admission and process paths."""
 import asyncio
 import copy
 import sys
@@ -8,7 +8,7 @@ import pytest
 from amplifier_web.management import Management
 from amplifier_web.runtime import RuntimeManager
 from amplifier_web.service import AppService, AppError
-from test_worktrees import repository
+from test_worktrees import repository, retained_legacy
 
 
 SCRIPT = r'''
@@ -59,6 +59,7 @@ async def fixture(tmp_path):
     root=repository(tmp_path)
     runtime=BarrierRuntime()
     app=AppService(tmp_path/'app',runtime,workspace=root)
+    retained_legacy(app)
     app.management=Management(app)
     await app.dispatch('session.create',{})
     sid=app._session()['id']

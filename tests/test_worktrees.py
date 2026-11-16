@@ -47,6 +47,15 @@ def retained_legacy(app):
     def seed(record, session):
         record.pop('placementMode', None)
         record['step'] = 'preflight'
+        # A retained old worker produced this exact binding before the host
+        # stopped issuing checkout arm/cancel commands. New handlers never do.
+        from amplifier_web.handoff_admission import worker_instance
+        instance = worker_instance(app, record['sessionId'])
+        if instance and record.get('resumeRequested') and not record.get('managerPlacement'):
+            active = session.get('collaborationGeneration') or {}
+            record['finishingTurn'] = {'workerInstance': instance,
+                'generationId': active['id'], 'inputIds': copy.deepcopy(active.get('inputIds', [])),
+                'configurationRevision': session.get('configurationPendingRevision', 0)}
         app.worktrees.save(record)
         app._session(record['sessionId'])['configurationBusy'] = True
         app.worktrees.changed()

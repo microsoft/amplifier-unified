@@ -1,4 +1,4 @@
-"""A checkout move must let its exact originating turn reach the saved boundary."""
+"""Retained legacy receipt admission; new soft placement needs no exception."""
 import asyncio
 import copy
 from types import SimpleNamespace
@@ -10,7 +10,7 @@ from test_collaborative_workspaces import agent_action, generation, until
 from test_handoff_boundary import wait_for_step
 from test_handoff_refusal import checkout
 from test_model_admission_wait import providers
-from test_worktrees import fixture, settle
+from test_worktrees import legacy_fixture as fixture, settle
 
 
 @pytest.fixture

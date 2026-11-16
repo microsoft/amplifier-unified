@@ -107,6 +107,23 @@ async def test_soft_next_target_cannot_be_removed_or_archived(tmp_path, monkeypa
         await app.close()
 
 
+async def test_placement_does_not_clear_an_independent_configuration_fence(tmp_path, monkeypatch):
+    app, runtime, root, sid, entered, release = await deferred_fixture(tmp_path, monkeypatch)
+    target = await checkout(app, sid)
+    try:
+        receipt = (await app.dispatch('worktree.handoff', {'sessionId': sid, 'id': target['id'],
+                    'expectedExecutionRevision': 0}))['result']
+        await entered.wait()
+        app._session(sid)['configurationBusy'] = True
+        release.set()
+        await settle(app)
+        assert app.worktrees.read(sid, receipt['id'])['phase'] == 'applied'
+        assert app._session(sid)['configurationBusy']
+    finally:
+        release.set()
+        await app.close()
+
+
 async def test_shutdown_invalidates_commit_of_a_retained_retirement(tmp_path, monkeypatch):
     app, runtime, root, sid, entered, release = await deferred_fixture(tmp_path, monkeypatch)
     callbacks = []

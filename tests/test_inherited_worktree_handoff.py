@@ -8,12 +8,15 @@ from amplifier_web.service import AppError, AppService
 from test_collaborative_workspaces import app, Runtime, generation
 from test_multi_repository_worktrees import create, move
 from test_peer_creation_operation import commission, initial_accepted, plan
-from test_worktrees import repository, settle
+from test_worktrees import repository, settle, retained_legacy
 
 
 @pytest.fixture
 async def inherited(app, tmp_path):
     app.runtime.quiesce_for_handoff = AsyncMock(return_value={'quiesced': True, 'inputsReplayed': False})
+    async def deferred(session, commit):
+        return await commit({'quiesced': True, 'retired': False, 'inputsReplayed': False})
+    app.runtime.deferred_placement = AsyncMock(side_effect=deferred)
     creator = app.state['sessions'][0]
     repo = repository(tmp_path)
     checkout = await create(app, creator['id'], repo, 'creator-copy')
@@ -60,6 +63,7 @@ async def test_unknown_handoff_recovers_inherited_source_after_restart(inherited
     app, creator, peer, borrowed = inherited
     destination = await create(app, peer['id'], borrowed['path'], 'peer-copy')
     app.runtime.quiesce_for_handoff.side_effect = RuntimeError('lost release acknowledgment')
+    retained_legacy(app)
     unknown = await move(app, peer['id'], destination, 'uncertain-peer-move')
     assert unknown['phase'] == 'unknown'
     # Another legitimate association with the same folder must not select a
@@ -110,6 +114,7 @@ async def test_inherited_source_requires_matching_durable_creation_proof(inherit
 async def test_reconcile_inherited_source_rejects_swapped_repository_before_release(inherited, tmp_path):
     app, _, peer, borrowed = inherited
     app.runtime.quiesce_for_handoff.side_effect = RuntimeError('lost release acknowledgment')
+    retained_legacy(app)
     unknown = await move(app, peer['id'], None, 'uncertain-peer-move')
     assert unknown['phase'] == 'unknown'
     app.runtime.quiesce_for_handoff.side_effect = None

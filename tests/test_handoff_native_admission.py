@@ -73,8 +73,8 @@ async def test_actual_native_turn_completes_handoff_without_self_wait(app, tmp_p
     native_worker.bridges['fixture-settlement'] = asyncio.get_running_loop().create_future()
 
     async def boundary(_sid, identity, **kwargs):
-        from amplifier_web.handoff_drain import finish
-        await finish(native_worker, kwargs.pop('receipt', None))
+        from test_handoff_child_admission import legacy_reply
+        await legacy_reply(native_worker, kwargs.pop('receipt', None))
         return await inspect(native_worker, identity, **kwargs)
     app.runtime.handoff_boundary = boundary
 

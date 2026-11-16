@@ -76,11 +76,25 @@ async def test_native_child_and_return_observation_settle_before_move(app, child
 
     async def reply(message):
         try:
+            legacy_move = (message['operation'] == 'dispatch'
+                           and message['args'].get('action') == 'worktree.handoff')
+            if legacy_move:
+                from test_handoff_child_admission import begin
+                import uuid
+                identity = str(uuid.uuid5(uuid.NAMESPACE_URL,
+                                         'worktree-handoff:' + message['args']['id']))
+                snapshot = await begin(worker, identity)
             if message['operation'] == 'capacity.admit' and message['args']['call']['sessionId'] != sid:
                 transmitted.set()
                 if child_phase == 'in-transit':
                     await first_finished.wait()
             answer = await app.app_bridge(message['operation'], message['args'], sid)
+            if legacy_move:
+                record = app.worktrees.read(sid, identity)
+                record['finishingTurn']['nativeDrain'] = snapshot
+                app.worktrees.save(record)
+                from test_handoff_child_admission import legacy_reply
+                await legacy_reply(worker, record)
             worker.bridges[message['id']].set_result(answer)
         except BaseException as exc:
             worker.bridges[message['id']].set_exception(exc)
@@ -91,8 +105,8 @@ async def test_native_child_and_return_observation_settle_before_move(app, child
     monkeypatch.setattr('amplifier_web.runtime_worker.publish', publish)
 
     async def boundary(_sid, identity, **kwargs):
-        from amplifier_web.handoff_drain import finish
-        await finish(worker, kwargs.pop('receipt', None))
+        from test_handoff_child_admission import legacy_reply
+        await legacy_reply(worker, kwargs.pop('receipt', None))
         return await inspect(worker, identity, **kwargs)
     app.runtime.handoff_boundary = boundary
 

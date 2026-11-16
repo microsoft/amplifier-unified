@@ -26,10 +26,13 @@ try{
  await panel.getByRole('button',{name:'Create managed checkout'}).click();const card=panel.locator('[data-worktree-id]').first();await expect(card.getByRole('status')).toHaveText('Checkout ready');await expect(card.getByText('Local host: '+ready.host.label,{exact:true})).toBeVisible();
  await page.request.post(ready.url+'/fixture/wait-turn');
  await card.getByRole('button',{name:'Use this folder next'}).click();
- const first=panel.locator('[data-handoff-id]').first();
- await expect(first.locator('[data-part=move-status]')).toHaveText('Folder choice saved');
+ const initial=panel.locator('[data-handoff-id]').first();
+ await expect(initial.locator('[data-part=move-status]')).toHaveText('Folder choice saved');
  const before=await (await page.request.get(ready.url+'/fixture/move-observations')).json();
- const firstId=await first.getAttribute('data-handoff-id');
+ const firstId=await initial.getAttribute('data-handoff-id');
+ // Keep the original saved identity, not a position that changes when the
+ // canonical collection inserts the newer desired folder.
+ const first=panel.locator(`[data-handoff-id="${firstId}"]`);
  await expect(first.getByRole('button',{name:'Check move',exact:true})).toHaveCount(0);
  await expect(panel.locator('[data-part=execution-directory]')).toHaveText(ready.root);
  await expect(panel.locator('[data-part=next-execution-directory]')).not.toHaveText(ready.root);

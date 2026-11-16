@@ -445,7 +445,7 @@ class Worktrees:
             binding = record[side + 'Binding']
             path = Path(record[side])
             if not path.is_dir() or path.resolve(strict=True) != path:
-                raise ValueError(f'The {side} folder is unavailable or no longer its recorded canonical path')
+                raise HandoffRepositoryChanged(f'The {side} folder is unavailable or no longer its recorded canonical path')
             if binding.get('repository'):
                 if binding['kind'] == 'inherited':
                     checkout = self.git.get(binding['checkoutId'])
@@ -1145,6 +1145,10 @@ class Worktrees:
                         if (session.get('executionRevision', 0) != record['executionRevision']
                                 or (session.get('workingDirectory') or session['workspace']) != record['source']):
                             raise HandoffSuperseded('The applied execution folder changed before placement.')
+                        # No await until the receipt resolves. Preserve a fence
+                        # asserted by another configuration owner while this
+                        # soft choice was waiting; sync adds only our own fence.
+                        prior_busy = session.get('configurationBusy', False)
                         record.update(step='committing', release=proof, revision=record['revision'] + 1)
                         self.save(record)
                         session.update(workingDirectory=record['target'],
@@ -1156,7 +1160,7 @@ class Worktrees:
                             raise RuntimeError('The saved placement transaction could not be confirmed.')
                         record.update(phase='applied', step='applied', revision=record['revision'] + 1,
                                       detail='Next folder is now the current folder. No input was replayed.')
-                        session['configurationBusy'] = False
+                        session['configurationBusy'] = prior_busy
                         if not record.get('managerPlacement') and (
                                 not proof.get('retired') or proof.get('outcome') != 'completed'
                                 or not proof.get('continuationAllowed')):
@@ -1196,7 +1200,9 @@ class Worktrees:
                     record.update(phase='rejected', detail='The next-folder choice was superseded. No folder change or input was repeated.',
                                   continuation={'status': 'suppressed'})
                 elif isinstance(exc, ValueError) and record.get('step') != 'committing':
-                    record.update(phase='rejected', detail='The next folder could not be applied. The current folder is unchanged.',
+                    record.update(phase='rejected', detail=(
+                        str(exc) + '. ' if isinstance(exc, HandoffRepositoryChanged) else '') +
+                        'The next folder could not be applied. The current folder is unchanged.',
                                   failureType=type(exc).__name__)
                 else:
                     # Storage, failed save and interrupted retirement remain
