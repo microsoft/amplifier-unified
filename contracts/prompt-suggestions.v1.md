@@ -124,6 +124,13 @@ connection, credential and settings witness. A same-ID edit is not unchanged
 source. The provider process requests a final host grant immediately before its
 one completion; changed authority sends no grant. Already sent requests may finish
 and be billed even when their result is discarded.
+Freshness binds the bounded public model input, not a generic presentation-cache
+fence, raw resident row count or idle/ready spelling. Native primary/backup/append
+stamps invalidate reuse and require a fresh bounded public-tail projection; their
+change alone does not invalidate identical public input. The existing bounded
+page cache avoids rereading unchanged files on status polls. Real public appends,
+same-ID edits, provenance/acceptance changes and owner/Stop changes remain fenced;
+no whole-history hydration, event-log scan or provider retry is introduced.
 
 The client additionally fences draft/outbox/voice changes and navigation, validates
 `configRevision == suggestionModels.revision` and the request's source key, and

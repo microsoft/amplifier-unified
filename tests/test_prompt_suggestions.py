@@ -375,6 +375,67 @@ class Requests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await self.status())['status'], 'ready')
         self.app.history.windows.read.assert_not_called()
 
+    async def test_invisible_terminal_metadata_and_generic_save_do_not_stale_resident_capture(self):
+        windows = self.app.history.windows
+        original = windows.read
+        async def read_then_account(*args, **kwargs):
+            page = await original(*args, **kwargs)
+            # Same invalidation invoked by service._save and session.naming /
+            # runtime.ended events; none of these changes the public input.
+            windows.invalidate({'chat'})
+            self.app.session.update(status='ready', title='Automatic title', usage={'input': 10})
+            self.app.session['messages'].append({'id': 'checkpoint', 'role': 'system',
+                                                'text': 'Private checkpoint', 'visibility': 'internal'})
+            return page
+        with patch.object(windows, 'read', side_effect=read_then_account):
+            pending = await self.request()
+            await self.settle()
+        ready = await self.status()
+        self.assertEqual(ready['status'], 'ready')
+        self.assertEqual(ready['sourceKey'], pending['sourceKey'])
+        self.assertEqual(len(self.calls), 1)
+        self.app.session['messages'].append({'id': 'new-public', 'role': 'assistant', 'text': 'Actual append'})
+        self.assertEqual((await self.status())['status'], 'stale')
+
+    async def test_native_checkpoint_and_backup_stamps_revalidate_same_public_input_without_poll_scan(self):
+        root = Path(self.tmp.name) / 'native'
+        root.mkdir()
+        path = root / 'transcript.jsonl'
+        raw = [{'role': 'user', 'inputOrigin': 'ui', 'content': 'Human request'},
+               {'role': 'assistant', 'content': 'Completed reply'}]
+        path.write_text(''.join(json.dumps(row) + '\n' for row in raw))
+        self.app.session.update(historyManaged=True, nativeProject='fixture', nativeIdentity='chat')
+        windows = self.app.history.windows
+        with patch('amplifier_web.automatic_history.directory', return_value=root), \
+                patch('amplifier_web.transcript_windows._native_page', wraps=_native_page) as read:
+            ordinary = await windows.read('chat', limit=100)
+            last = ordinary['items'][-1]['id']
+            pending = await self.request(expectedLastMessageId=last)
+            await self.settle()
+            self.assertEqual((await self.status())['status'], 'ready')
+            baseline = read.call_count
+            for _ in range(8):
+                windows.invalidate({'chat'})  # Generic non-message publication.
+                self.assertEqual((await self.status())['sourceKey'], pending['sourceKey'])
+            self.assertEqual(read.call_count, baseline)
+            (root / 'transcript.jsonl.backup').write_bytes(path.read_bytes())
+            self.app.session.update(status='ready', nativeRevision=['checkpoint', 2])
+            self.assertEqual((await self.status())['status'], 'ready')
+            self.assertEqual(read.call_count, baseline + 1)
+            with path.open('a') as stream:
+                stream.write(json.dumps({'role': 'system', 'content': 'Private idle checkpoint',
+                                         'metadata': {'private': True}}) + '\n')
+            self.assertEqual((await self.status())['sourceKey'], pending['sourceKey'])
+            self.assertEqual(read.call_count, baseline + 2)
+            for _ in range(8):
+                self.assertEqual((await self.status())['status'], 'ready')
+            self.assertEqual(read.call_count, baseline + 2)
+            raw[-1]['content'] = 'Real same-row edit'
+            path.write_text(''.join(json.dumps(row) + '\n' for row in raw))
+            self.assertEqual((await self.status())['status'], 'stale')
+        self.assertEqual(len(self.calls), 1)
+        self.assertNotIn('Private', repr(self.calls))
+
     async def test_same_id_edit_and_append_fence_ready_candidate(self):
         await self.request()
         await self.settle()
@@ -888,6 +949,45 @@ class Integration(unittest.IsolatedAsyncioTestCase):
         await self.app.close()
         self.env.stop()
         self.tmp.cleanup()
+
+    async def test_ordinary_native_naming_event_after_done_does_not_stale_public_suggestion(self):
+        await self.app.dispatch('session.create', {}, include_state=False)
+        session = self.app._session()
+        sid = session['id']
+        session.update(status='idle', messages=[
+            {'id': 'human', 'role': 'user', 'text': 'A completed request', 'inputOrigin': 'ui'},
+            {'id': 'reply', 'role': 'assistant', 'text': 'Completed public reply'}])
+        host = self.app.prompt_suggestions
+        config = {'enabled': True, 'provider': 'saved', 'model': 'explicit',
+                  'humanTurns': 6, 'transcriptMode': 'last_n'}
+        host.settings = lambda: (config, {'id': 'saved'}, 'revision')
+        entered, release = asyncio.Event(), asyncio.Event()
+        async def respond(*args):
+            entered.set()
+            await release.wait()
+            return {'status': 'ready', 'suggestion': 'One next step.', 'usage': None, 'cost': None}
+        host.complete = respond
+        self.app.clients.attach('browser', kind='web')
+        self.app.clients.records['browser']['selectedSessionId'] = sid
+        token = BROWSER.set({'principal': 'same-cookie', 'valid': lambda: True})
+        try:
+            with self.app.clients.bind('browser'):
+                pending = await host.dispatch('session.suggestion.request', {
+                    'sessionId': sid, 'requestId': 'after-done', 'expectedLastMessageId': 'reply'}, 'ui')
+                await entered.wait()
+                prior_fence = self.app.history.windows._fence(sid)
+                await self.app.on_runtime_event('session.naming.progress', {
+                    'sessionId': sid, 'rootSessionId': sid, 'completedInputs': ['human']})
+                self.assertNotEqual(self.app.history.windows._fence(sid), prior_fence)
+                release.set()
+                await asyncio.gather(*tuple(host.jobs))
+                ready = await host.dispatch('session.suggestion.status', {
+                    'sessionId': sid, 'requestId': 'after-done'}, 'ui')
+                self.assertEqual(ready['status'], 'ready')
+                self.assertEqual(ready['sourceKey'], pending['sourceKey'])
+        finally:
+            release.set()
+            BROWSER.reset(token)
 
     async def test_uncertain_paid_input_survives_real_cold_retirement_and_reopen_without_replay(self):
         from amplifier_web.service import AppService

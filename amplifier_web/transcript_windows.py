@@ -249,6 +249,31 @@ class TranscriptWindows:
                 'coverage': {'kind': 'saved-web', 'historyComplete': False}, 'unavailableRanges': gaps,
                 '_savedComplete': start == 0 and end == len(rows) and not gaps}
 
+    def public_native_tail(self, session):
+        """Reuse a bounded utility page while its physical source is unchanged.
+
+        Generic save/event fences retire presentation caches, not public text.
+        A changed file stamp requires the same bounded canonical reader again;
+        neither a cached body nor an old stat becomes current authority.
+        """
+        from .automatic_history import directory
+        source = _source(session)
+        revision = self.reader.source_revision(directory(source), {
+            'project': source['nativeProject'],
+            'nativeId': source.get('nativeIdentity') or source.get('runtimeSessionId') or source['id']})
+        for page, _ in reversed(self.pages.values()):
+            if (page.get('_publicUtility') and page.get('_owner') == source
+                    and page.get('revision') == revision and page.get('_utilityTail')):
+                return page
+        page = _native_page(self.reader, source, None, 100, public_only=True)
+        if page['revision'] != revision:
+            raise ValueError('The public transcript source changed during reading.')
+        page.update(_publicUtility=True, _utilityTail=True)
+        page['windowKey'] = _digest([page['windowKey'], 'public-utility'])
+        size = len(json.dumps(page, ensure_ascii=False, separators=(',', ':')).encode())
+        self._retain(session['id'], page, size)
+        return page
+
     async def read(self, session_id, *, before=None, limit=100, native=False, public_only=False):
         if self.closed:
             raise ValueError('Saved message readers are closed.')
@@ -286,6 +311,8 @@ class TranscriptWindows:
             # The sanitized utility view must never replace an ordinary page
             # under its display cache identity or become an initial chat window.
             page['windowKey'] = _digest([page['windowKey'], 'public-utility'])
+            page['_publicUtility'] = True
+            page['_utilityTail'] = before is None and limit == 100
         # Detach/size only this selected page outside writer exclusion.
         def prepare():
             detached = copy.deepcopy(page)
@@ -296,7 +323,7 @@ class TranscriptWindows:
             raise ValueError('Saved message window exceeds the display budget.')
         async with self.service.lock:
             current = self.service._session(session_id, hydrate=False)
-            if (_source(current) != source or self._fence(session_id) != fence
+            if (_source(current) != source or not public_only and self._fence(session_id) != fence
                     or cold is not None and self._cold_source(current) != cold):
                 raise ValueError('The selected message source changed.')
             self._retain(session_id, page, size)

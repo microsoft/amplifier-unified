@@ -161,15 +161,16 @@ def witness(service, sid, config=None):
     session = service._session(sid, hydrate=False)
     from .transcript_windows import _source
     owner = [
-        _source(session), windows._fence(sid), session.get('archived'),
-        session.get('_deleting'), session.get('status'), session.get('interruptionRevision')]
+        _source(session), session.get('archived'), session.get('_deleting'),
+        session.get('status') in {'idle', 'ready'}, session.get('interruptionRevision')]
     if session.get('historyManaged') is True:
-        from .automatic_history import directory
-        source = _source(session)
-        revision = windows.reader.source_revision(directory(source), {
-            'project': source['nativeProject'],
-            'nativeId': source.get('nativeIdentity') or source.get('runtimeSessionId') or sid})
-        return digest([owner, revision])
+        page = windows.public_native_tail(session)
+        if page.get('unavailableRanges'):
+            raise Unavailable('transcript_unavailable')
+        projected = public_rows(display_inputs(service, session, page['items']), bounded=False)
+        if config is not None:
+            projected = select(projected, config, page['hasEarlier'])
+        return digest([owner, public_rows(projected)])
     cold = windows._cold_source(session)
     if cold is not None:
         # Immutable resource ownership, plus writer invalidation, not a cached body.
@@ -180,7 +181,7 @@ def witness(service, sid, config=None):
     projected = public_rows(display_inputs(service, session, tail), bounded=False)
     if config is not None:
         projected = select(projected, config, len(rows) > MAX_ROWS)
-    return digest([owner, len(rows), public_rows(projected)])
+    return digest([owner, public_rows(projected)])
 
 
 async def capture(service, sid, config, expected_last):
