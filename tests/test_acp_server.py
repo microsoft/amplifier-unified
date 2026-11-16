@@ -3,9 +3,11 @@ import asyncio
 import json
 
 from aiohttp import WSMsgType, WSServerHandshakeError
+from acp import RequestError
 import pytest
 
 from amplifier_web.auth import new_session
+from amplifier_web.errors import AppError
 from amplifier_web.server import create_app
 from test_coordination_generation import source_plan, until
 from test_service import Runtime as BaseRuntime
@@ -192,6 +194,114 @@ async def test_eof_retains_accepted_input_then_exact_resume_without_replay(host)
     assert (await follow)['result']['stopReason'] == 'end_turn'
     assert len([m for m in service._session(sid)['messages'] if m.get('role') == 'user']) == 2
     await second.socket.close()
+
+
+@pytest.mark.parametrize('method,owner_method,error_type', [
+    ('session/new', 'create', OSError),
+    ('session/resume', 'attach', ValueError),
+    ('session/prompt', 'prompt', AppError),
+    ('_amplifier/retire', 'retire', RuntimeError),
+])
+async def test_owner_failures_preserve_reason_without_requesting_authentication(
+        host, monkeypatch, method, owner_method, error_type):
+    app, _, runtime, path = host
+    peer = await connect(host)
+    owner, = app['service']._execution_observers.attachments
+    params = {'cwd': str(path), 'mcpServers': []}
+    if method != 'session/new':
+        created = await app['service'].dispatch('session.create', {
+            'workspace': str(path), 'bundle': 'foundation', 'select': False,
+        }, origin='ui', include_state=False)
+        sid = created['result']['sessionId']
+        params['sessionId'] = sid
+        if method != 'session/resume':
+            assert (await peer.call('session/resume', **params))['result'] == {}
+            params = {'sessionId': sid}
+        if method == 'session/prompt':
+            params['prompt'] = [{'type': 'text', 'text': 'One explicit input'}]
+    calls = []
+    reason = 'Owner refused this request; inspect retained work before retrying.'
+
+    async def refuse(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise error_type(reason)
+
+    monkeypatch.setattr(owner, owner_method, refuse)
+    row = await peer.call(method, **params)
+    assert row['error']['code'] == -31000
+    assert row['error']['message'] == reason
+    assert len(calls) == 1
+    assert not runtime.started and not runtime.sent and not runtime.stopped
+    await peer.socket.close()
+
+
+async def test_busy_resume_keeps_saved_identity_and_does_not_prompt_or_stop(host, monkeypatch):
+    app, _, runtime, path = host
+    service = app['service']
+    first = await connect(host)
+    sid = await first.new(path)
+    await first.socket.close()
+    await until(lambda: not app['acp_connections'])
+    before = json.dumps(service._session(sid), sort_keys=True)
+    sessions = {row['id'] for row in service.state['sessions']}
+    calls = []
+    reason = 'The existing worker still owns another MCP attachment; wait for its retirement before reattaching'
+
+    async def busy(identity, attachment, servers):
+        calls.append((identity, attachment, servers))
+        raise ValueError(reason)
+
+    monkeypatch.setattr(runtime, 'bind_ephemeral_mcp', busy)
+    second = await connect(host)
+    row = await second.call('session/resume', sessionId=sid, cwd=str(path), mcpServers=[])
+    assert row['error']['code'] == -31000 and row['error']['message'] == reason
+    assert len(calls) == 1 and calls[0][0] == sid
+    owner, = service._execution_observers.attachments
+    assert not owner.attached and not owner.pending
+    assert {row['id'] for row in service.state['sessions']} == sessions
+    assert json.dumps(service._session(sid), sort_keys=True) == before
+    assert not runtime.started and not runtime.sent and not runtime.stopped
+    assert not second.updates
+    await second.socket.close()
+
+
+async def test_unresolved_prompt_outcome_is_not_authentication_or_automatic_retry(host, monkeypatch):
+    app, _, runtime, path = host
+    peer = await connect(host)
+    sid = await peer.new(path)
+    owner, = app['service']._execution_observers.attachments
+    calls = []
+
+    async def unresolved(identity, input_id, text, on_event):
+        calls.append((identity, input_id, text))
+        return {'outcome': 'unknown'}
+
+    monkeypatch.setattr(owner, 'prompt', unresolved)
+    row = await peer.prompt(sid, 'Outcome is not known')
+    assert row['error']['code'] == -31000
+    assert row['error']['message'] == 'Outcome unresolved; inspect retained owner state before retrying.'
+    assert len(calls) == 1 and calls[0][0] == sid
+    assert owner.attached == {sid} and not runtime.stopped
+    await peer.socket.close()
+
+
+async def test_explicit_authentication_error_retains_standard_code_and_data(host, monkeypatch):
+    app, _, runtime, path = host
+    peer = await connect(host)
+    owner, = app['service']._execution_observers.attachments
+    calls = []
+
+    async def needs_auth(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise RequestError.auth_required({'methodId': 'fixture-sign-in'})
+
+    monkeypatch.setattr(owner, 'create', needs_auth)
+    row = await peer.call('session/new', cwd=str(path), mcpServers=[])
+    assert row['error']['code'] == -32000
+    assert row['error']['message'] == 'Authentication required'
+    assert row['error']['data'] == {'methodId': 'fixture-sign-in'}
+    assert len(calls) == 1 and not runtime.started and not runtime.sent
+    await peer.socket.close()
 
 
 async def test_http_mcp_is_transient_and_malformed_content_never_partially_admits(host):
