@@ -20,22 +20,38 @@ PreparedBundle session_cwd use the explicit execution folder. Naming receives th
 canonical history-home capability so it cannot create a second metadata owner.
 Existing file/tool permission boundaries continue to apply.
 
-Handoff saves and returns a durable pending receipt before waiting for its
-initiating turn. It blocks new task input while the existing turn, tools and
-admitted children finish. The boundary probe reports current blockers without
-waiting behind a command or checkpointing history. Cooperative release through
-the existing Foundation owner protocol is the one authoritative save/cleanup
-boundary for a checkout move. A running writer, including an idle one,
-checkpoints and stops before release. The exact native writer reported on the
-worker pipe, not its `uv` launcher PID, identifies the expected acquisition. A temporary
-native session lock then proves exclusive ownership through the move. Another
-application's owner is not silently taken over. No provider input is submitted,
-no effects are rolled back, and no uncertain operation is replayed. After release
-the app changes only the execution association and increments executionRevision.
+Handoff records a desired **next folder** and returns immediately. The actual
+working directory remains the **current folder** until placement commits. This
+soft intent does not freeze delegation, hold configuration admission, or prevent
+authorized new input from running in the current folder, including input needed
+to finish a persistent child. It is not an instruction to stop current work.
+
+One ordinary worker retirement owns the transition. Its soft phase registers
+outside the command lock; it does not mark the worker closing or count as an
+ordinary in-flight command. At a native turn boundary it yields an existing goal
+without resetting its budget, waits for local work to settle, checkpoints and
+rechecks identity, activation and Stop under the command lock. Only then does it
+close admission and exit. A caller deadline leaves that same retirement owned;
+there is no checkout arm/probe/cancel protocol or cancellation acknowledgement.
+A superseded target can leave the idle retirement to finish without applying
+the old target. No unrelated conversation or assignment has to be empty.
+
+After exact teardown the host holds the native writer lease through the short
+desired-target, authority, Git and execution-revision commit. Another application's
+owner is not silently taken over. The app changes only the execution association
+and increments executionRevision; every reactivation reads the actual committed
+folder rather than a retired worker's stale startup snapshot.
 An active task receives its existing guarded continuation after confirmed
 placement, preserving its original input ancestry and used budget. Placement and
 continuation acceptance are separate outcomes. Internal handoff does not increment the user stop
-epoch. Scheduled work must bind executionRevision and defer configurationBusy.
+epoch. Newer human input and routine task bookkeeping alone do not revoke the
+folder choice. Stop, replaced/terminal task, revoked permissions, a newer explicit
+placement and changed execution revision still supersede unperformed placement.
+
+Ordinary new moves complete automatically; **Check move is not a required step**.
+Runtime save failure and uncertain storage/placement remain explicit, with no
+automatic model continuation or replay of uncertain input. A delayed retirement
+reply is not a failed folder change, nor proof of a successful save or teardown.
 
 An initial writer-ownership refusal before any release request is rejected: the
 source stays unchanged and that attempt leaves no execution fence. Release
@@ -93,26 +109,12 @@ raw-byte inspection even when ordinary Git hides its conversion difference. This
 policy prevents passive inspection and managed creation from running repository
 conversion commands or downloading external content implicitly.
 
-The runtime admission lock consults an authoritative host execution-state reader.
-Pending and unknown handoffs fence starts and new commands until the saved target
-and revision commit; a stale queued start is also rejected after the commit. This
-applies to generic runtime inspection, task controls, schedule preparation, warming
-and retired-worker reactivation, not only the Send button. Approval responses,
-interruption and shutdown remain available for a still-owned runtime. The guard
-uses the existing handoff records and never treats mutable caller arguments as
-permission to clear an unresolved handoff.
-
-The handoff's own settings fence must not cancel the root turn that requested
-that move. A new receipt binds its current worker instance, native generation,
-input identities and configuration revision. While that exact receipt is pending
-before release, only that same root turn may pass model admission to finish.
-The source folder, checkout association, execution revision, task, latest human
-input and Stop epoch must still match. All model budgets remain enforced; new
-input, child calls, unrelated settings holds, replacement workers, older receipts
-without this binding and unknown handoff effects remain fenced. This exception
-neither releases the worker nor declares a checkpoint: the existing native
-boundary still waits for generation completion, tool replies, children and saved
-history before placement can commit once.
+The runtime admission lock consults authoritative applied execution state.
+Soft desired placement permits ordinary source-folder input, controls, approvals
+and reads. Only real retirement/commit closes admission and joins the existing
+transition. Stale queued starts cannot resurrect the old folder after commit.
+Historical uncertain handoffs and independently uncertain effects retain their
+original fences; new placement never clears them by inference.
 
 Explicit Stop supersedes an unperformed move. Its receipt becomes rejected, the
 source and completed effects stay intact, and that move's fence is released.

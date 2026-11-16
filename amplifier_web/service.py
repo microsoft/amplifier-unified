@@ -5531,17 +5531,6 @@ class AppService:
         binding_token = BINDING.set(args)
         try:
             return await self._bound_app_bridge(operation, args, session_id)
-        except Exception as exc:
-            if args.get('_handoffSnapshot') is not None:
-                from .handoff_drain import failed_disposition
-                try:
-                    async with self.lock:
-                        disposition = failed_disposition(self, session_id, operation, args)
-                    if disposition is not None:
-                        exc._handoff_disposition = disposition
-                except Exception:
-                    pass  # An unreadable receipt remains unknown, never absent.
-            raise
         finally:
             PRINCIPAL.reset(token)
             BINDING.reset(binding_token)

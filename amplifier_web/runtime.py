@@ -370,6 +370,7 @@ class RuntimeManager:
         self._retired = {}
         self._ephemeral_mcp = {}  # Current trusted attachments only; never durable session configuration.
         self._execution_state = None
+        self._placement_closing = None
         self._configuration_revision = lambda: 0
         self._input_configuration = None
         self.boundary_reply_timeout = 1
@@ -492,6 +493,70 @@ class RuntimeManager:
     def bind_execution_state(self, read):
         """Host-owned synchronous authority; never supplied by a model command."""
         self._execution_state = read
+
+    def current_placement(self, session):
+        """Refresh applied scalars for every retained-worker reactivation."""
+        current = self._check_execution(session['id'])
+        if current is None:
+            return session
+        return {**session, 'workingDirectory': current['directory'],
+                'executionRevision': current['revision'],
+                'interruptionRevision': current.get('interruptionRevision', 0)}
+
+    async def deferred_placement(self, session, commit):
+        """Join one ordinary retirement, then commit while owning the writer.
+
+        The pending intent is deliberately NOT row.closing/retirement_task or
+        ordinary inflight work. Its originating turn and later inputs can finish.
+        Only the worker's actual shutdown boundary closes admission.
+        """
+        sid = session['id']
+        async with self._locks.setdefault(sid, asyncio.Lock()):
+            row = self.workers.get(sid)
+            if row and row.get('placement_task'):
+                pending = row['placement_task']
+            else:
+                if row and (row.get('closing') or row.get('yielding') or row.get('stop_task')
+                            or self.retention.protected(sid) or sid in self._ephemeral_mcp):
+                    raise ValueError('The current runtime has another lifecycle or attached-tool owner. The folder was not changed.')
+                pending = asyncio.create_task(self._place_after_retirement(session, row, commit))
+                if row:
+                    row['placement_task'] = pending
+                self.retention.retirements.add(pending)
+                pending.add_done_callback(self.retention.retirements.discard)
+        return await asyncio.shield(pending)
+
+    async def _place_after_retirement(self, session, row, commit):
+        from amplifier_foundation.session import SharedSessionStore
+        from .host_identity import local_host_identity
+        sid = session['id']
+        result = None
+        if row:
+            result = await self._request_unlocked(sid, 'retire', whenSettled=True)
+            if not result.get('retired'):
+                raise RuntimeError('The original worker did not confirm its saved retirement.')
+        async with self._locks.setdefault(sid, asyncio.Lock()):
+            if self._closed or row and (self.workers.get(sid) is not row or row.get('stop_reason') == 'stopped'):
+                raise RuntimeError('The original retirement was superseded. No folder was changed.')
+            if row:
+                # Successful native checkpoint/closing precedes this Stop's
+                # ordinary cleanup. Never send a second Foundation release.
+                await self.stop(sid, reason='retention')
+            store = SharedSessionStore(session['workspace'],
+                session.get('runtimeSessionId') or session.get('nativeIdentity') or sid)
+            held = await asyncio.to_thread(store.acquire, app='amplifier-unified-placement')
+            try:
+                proof = {'quiesced': True, 'nativeSessionId': store.session_id,
+                         'historyHome': session['workspace'], 'executionHost': local_host_identity(),
+                         'ownershipAcquisitionId': held.owner['acquisition_id'],
+                         'retired': row is not None, 'outcome': (result or {}).get('outcome'),
+                         'inputsReplayed': False}
+                placed = await commit(proof)
+                if row and row.get('stop_reason') == 'retention':
+                    self._retired[sid] = (self.current_placement(row['start_session']), row['emit'])
+                return placed
+            finally:
+                await asyncio.to_thread(held.release)
 
     def bind_configuration_revision(self, read):
         """Capture host configuration provenance before asynchronous preparation."""
@@ -1208,6 +1273,13 @@ class RuntimeManager:
                         task = asyncio.create_task(self._cancel_capacity_bridge(sid, row, bridge))
                         row['bridge_tasks'].add(task)
                         task.add_done_callback(row['bridge_tasks'].discard)
+                elif data.get('type') == 'runtime.retiring':
+                    if row.get('placement_task'):
+                        row['closing'] = True
+                        row['retirement_task'] = row['placement_task']
+                        row.setdefault('stop_reason', 'retention')
+                        if self._placement_closing:
+                            await self._placement_closing(sid)
                 elif data.get("op") == "reply":
                     row["inflight"].discard(data.get("id"))
                     tracked_input = row.get('sendInputs', {}).pop(data.get('id'), None)
@@ -1591,6 +1663,7 @@ class RuntimeManager:
                 if guard is not None: guard()
                 if sid not in self.workers and sid in self._retired and op in {"send", "retry", "control", "resume"} and not (op == "control" and (args.get("operation", "").startswith(("operations.", "kernels.")))):
                     session, emit = self._retired[sid]
+                    session = self.current_placement(session)
                     # Retirement can occur after preservation-aware preparation but
                     # before this control. Keep its original host guard and startup
                     # preservation; the native attempt still checks the old PID.
@@ -1645,7 +1718,8 @@ class RuntimeManager:
             row.setdefault('sendInputs', {})[identity] = args['input_id']
         # A caller timing out or disconnecting does not cancel work already
         # handed to the worker. Keep it busy until the reply or process exit.
-        row["inflight"].add(identity)
+        if not (op == 'retire' and args.get('whenSettled')):
+            row["inflight"].add(identity)
         # In-flight receipt ownership protects admission. Only actual native
         # delivery/generation changes the idle hint: duplicates and no-op
         # controls need not wake the loop or emit another session.idle.
@@ -2142,6 +2216,7 @@ class RuntimeManager:
         async with self._admission(session_id):
             if session_id not in self.workers and session_id in self._retired:
                 session, emit = self._retired[session_id]
+                session = self.current_placement(session)
                 await self._start_locked(session, emit)
             reason = guard()
             if reason:
@@ -2160,6 +2235,7 @@ class RuntimeManager:
             if reason: return {"accepted": False, "reason": reason}
             if session_id not in self.workers and session_id in self._retired:
                 session, emit = self._retired[session_id]
+                session = self.current_placement(session)
                 await self._start_locked(session, emit)
             reason = guard()
             if reason: return {"accepted": False, "reason": reason}

@@ -1,0 +1,136 @@
+"""Desired folders use one ordinary retirement, not checkout marker RPCs."""
+import asyncio
+import copy
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
+
+import pytest
+
+from amplifier_web.runtime_worker import Worker
+from test_worktrees import fixture, settle
+from test_handoff_refusal import checkout
+
+
+async def deferred_fixture(tmp_path, monkeypatch):
+    app, runtime, root, sid = await fixture(tmp_path, monkeypatch)
+    entered, release = asyncio.Event(), asyncio.Event()
+    async def place(session, commit):
+        entered.set()
+        await release.wait()
+        return await commit({'quiesced': True, 'retired': True, 'outcome': 'completed',
+                             'inputsReplayed': False})
+    runtime.deferred_placement = AsyncMock(side_effect=place)
+    runtime.handoff_boundary = AsyncMock(side_effect=AssertionError('No checkout boundary RPC'))
+    return app, runtime, root, sid, entered, release
+
+
+@pytest.mark.parametrize('change', ['none', 'human', 'bookkeeping', 'stop', 'objective', 'terminal'])
+async def test_desired_folder_is_soft_and_checks_real_authority_at_commit(tmp_path, monkeypatch, change):
+    app, runtime, root, sid, entered, release = await deferred_fixture(tmp_path, monkeypatch)
+    session = app._session(sid)
+    session['task'] = {'id': 'task', 'objective': 'Finish this work', 'revision': 1, 'status': 'active'}
+    target = await checkout(app, sid)
+    try:
+        receipt = (await app.dispatch('worktree.handoff', {'sessionId': sid, 'id': target['id'],
+                    'expectedExecutionRevision': 0}, command_id='once'))['result']
+        await entered.wait()
+        assert receipt['placementMode'] == 'deferred-retirement'
+        assert not session.get('configurationBusy')
+        assert not app.worktrees.execution_state(sid)['fenced']
+        assert session.get('workingDirectory', str(root)) == str(root)
+        if change == 'human':
+            app._message(session, 'user', 'Finish the persistent child first', inputOrigin='ui')
+        elif change == 'bookkeeping':
+            session['task']['revision'] += 1
+        elif change == 'stop':
+            session['interruptionRevision'] = session.get('interruptionRevision', 0) + 1
+        elif change == 'objective':
+            session['task']['objective'] = 'A different assignment'
+        elif change == 'terminal':
+            session['task']['status'] = 'completed'
+        release.set()
+        await settle(app)
+        saved = app.worktrees.read(sid, receipt['id'])
+        accepted = change in {'none', 'human', 'bookkeeping'}
+        assert saved['phase'] == ('applied' if accepted else 'rejected')
+        assert session.get('workingDirectory', str(root)) == (target['path'] if accepted else str(root))
+        assert session.get('executionRevision', 0) == int(accepted)
+        assert not saved['inputsReplayed']
+        runtime.quiesce_for_handoff.assert_not_awaited()
+        runtime.handoff_boundary.assert_not_awaited()
+    finally:
+        release.set()
+        await app.close()
+
+
+async def test_new_desired_target_supersedes_soft_intent_without_another_retirement(tmp_path, monkeypatch):
+    app, runtime, root, sid, entered, release = await deferred_fixture(tmp_path, monkeypatch)
+    target = await checkout(app, sid)
+    try:
+        old = (await app.dispatch('worktree.handoff', {'sessionId': sid, 'id': target['id'],
+               'expectedExecutionRevision': 0}, command_id='old'))['result']
+        await entered.wait()
+        new = (await app.dispatch('worktree.handoff', {'sessionId': sid, 'id': None,
+               'expectedExecutionRevision': 0}, command_id='new'))['result']
+        assert app.worktrees.read(sid, old['id'])['supersededBy'] == new['id']
+        release.set()
+        await settle(app)
+        assert app.worktrees.read(sid, old['id'])['phase'] == 'rejected'
+        assert app.worktrees.read(sid, new['id'])['phase'] == 'applied'
+        assert app._session(sid)['workingDirectory'] == str(root)
+        runtime.deferred_placement.assert_awaited_once()
+        runtime.handoff_boundary.assert_not_awaited()
+    finally:
+        release.set()
+        await app.close()
+
+
+@pytest.mark.parametrize('failure', [RuntimeError('lost save'), OSError('storage failed')])
+async def test_real_retirement_or_storage_uncertainty_stays_unknown(tmp_path, monkeypatch, failure):
+    app, runtime, root, sid, _, release = await deferred_fixture(tmp_path, monkeypatch)
+    runtime.deferred_placement.side_effect = failure
+    target = await checkout(app, sid)
+    try:
+        receipt = (await app.dispatch('worktree.handoff', {'sessionId': sid, 'id': target['id'],
+                    'expectedExecutionRevision': 0}))['result']
+        await settle(app)
+        saved = app.worktrees.read(sid, receipt['id'])
+        assert saved['phase'] == 'unknown' and saved['displayState'] == 'needs_recovery'
+        assert app.worktrees.execution_state(sid)['fenced']
+        assert app._session(sid).get('workingDirectory', str(root)) == str(root)
+        assert saved['continuation']['status'] == 'suppressed'
+    finally:
+        release.set()
+        await app.close()
+
+
+async def test_native_soft_retirement_does_not_own_initiating_command_lock(monkeypatch):
+    worker = Worker()
+    hooks, replies = {}, []
+    def register(name, handler, **kwargs):
+        hooks[name] = handler
+        return lambda: hooks.pop(name, None)
+    goal = {'condition': 'Finish', 'turns_used': 4, 'cap': 9}
+    worker.session = SimpleNamespace(coordinator=SimpleNamespace(
+        session_state={'goal': goal}, hooks=SimpleNamespace(register=register)))
+    worker.controls = SimpleNamespace(persist=Mock())
+    idle = False
+    worker.idle = lambda: idle
+    worker.checkpoint_idle = AsyncMock(side_effect=lambda: idle)
+    monkeypatch.setattr('amplifier_web.runtime_worker.publish', replies.append)
+    async with worker.command_lock:
+        retirement = asyncio.create_task(worker.command({'op': 'retire', 'id': 'one', 'whenSettled': True}))
+        await asyncio.sleep(0)
+        assert worker.retirement_intent and not retirement.done()
+        assert not worker.shutdown.is_set()
+        await hooks['orchestrator:goal_progress']('orchestrator:goal_progress',
+            {'state': 'continuing', 'condition': 'Finish', 'turn': 4})
+        assert worker.session.coordinator.session_state['goal'] == goal
+        assert worker.session.coordinator.session_state['goal'] is not goal
+        worker.checkpoint_idle.assert_not_awaited()
+    idle = True
+    worker.retirement_changed.set()
+    await asyncio.wait_for(retirement, 1)
+    assert worker.shutdown.is_set() and worker.retirement_intent is None
+    assert replies[-1] == {'op': 'reply', 'id': 'one', 'result': {'retired': True, 'outcome': None}}
+    worker.checkpoint_idle.assert_awaited_once()

@@ -64,6 +64,7 @@ class Worker:
         self.bridge_timings = {}
         self.start_task = None
         self.tasks = set()
+        self.command_tasks = set()
         self.shutdown = asyncio.Event()
         self.telemetry = None
         self.controls = None
@@ -77,6 +78,8 @@ class Worker:
         self.activation = None
         self.config_inputs = ()
         self.command_lock = asyncio.Lock()
+        self.retirement_intent = None
+        self.retirement_changed = asyncio.Event()
         self.memory_task = None
         self.start_config = None
         self.context_bindings = {}
@@ -145,18 +148,7 @@ class Worker:
         elif isinstance(args.get('_childOrigin'), dict):
             from amplifier_web.handoff_drain import native_child
             args['_nativeChild'] = native_child(self, {'sessionId': args['_childOrigin']['runtimeSessionId']})
-        handoff_marker = None
-        from amplifier_web.handoff_drain import own_target
-        if (operation in {'dispatch', 'action.dispatch'} and args.get('action') == 'worktree.handoff'
-                and own_target(self, args)):
-            from amplifier_web.handoff_drain import begin
-            snapshot = await begin(self, args.get('id'))
-            if snapshot is not None:
-                args['_handoffSnapshot'] = snapshot
-                handoff_marker = self._handoff_boundary['id']
         identity = str(uuid.uuid4())
-        if handoff_marker:
-            self._handoff_boundary['drain'].setdefault('bridgeId', identity)
         future = asyncio.get_running_loop().create_future()
         self.bridges[identity] = future
         cancelled = False
@@ -191,27 +183,10 @@ class Worker:
                 timing.mark('write.start')
             message = {"op": "bridge", "id": identity, "operation": operation, "args": args,
                        **({'_timing': timing.snapshot()} if timing else {})}
-            if handoff_marker:
-                try:
-                    encode_message(message)  # Definite local rejection before any action bytes.
-                except Exception:
-                    from amplifier_web.handoff_boundary import inspect
-                    await inspect(self, handoff_marker, cancel=True)
-                    raise
             publish(message)
             if timing:
                 timing.mark('write.end')
             result = await asyncio.wait_for(future, timeout)
-            if handoff_marker:
-                try:
-                    if isinstance(result, dict) and result.get('accepted') is True:
-                        await self._finish_handoff_ack(result.get('result'), future)
-                    elif isinstance(result, dict) and result.get('accepted') is False:
-                        await self._finish_handoff_ack({'id': handoff_marker, 'phase': 'absent'}, future)
-                except Exception as exc:
-                    # Keep a known pending receipt; local setup failure does not
-                    # turn it into a failed action or authorize a retry.
-                    diagnostic('handoff-drain-unavailable', errorType=type(exc).__name__)
             if timing:
                 timing.mark('resumed')
             diagnostic('completed', elapsedSeconds=round(time.monotonic() - started, 3))
@@ -232,11 +207,6 @@ class Worker:
             diagnostic('cancelled', elapsedSeconds=round(time.monotonic() - started, 3))
             raise
         except Exception as exc:
-            if handoff_marker and isinstance(getattr(exc, '_handoff_disposition', None), dict):
-                try:
-                    await self._finish_handoff_ack(exc._handoff_disposition, future)
-                except Exception as disposition_error:
-                    diagnostic('handoff-drain-unavailable', errorType=type(disposition_error).__name__)
             outcome = 'failed'
             diagnostic('failed', errorType=type(exc).__name__,
                        elapsedSeconds=round(time.monotonic() - started, 3))
@@ -248,33 +218,12 @@ class Worker:
                 # Fence the exact host-side wait, including a reply in transit.
                 publish({'op': 'bridge.cancel' if cancelled else 'bridge.received', 'id': identity})
             self.bridges.pop(identity, None)
+            self.retirement_changed.set()
             if not future.done():
                 future.cancel()
             if timing:
                 timing.mark('end')
                 self.emit_timing(timing.snapshot(outcome))
-
-    def _own_handoff_ack(self, receipt):
-        """Retain the exact acknowledgement before its caller can be resumed."""
-        from amplifier_web.handoff_drain import finish
-        task = asyncio.create_task(finish(self, receipt))
-        self.tasks.add(task)
-        def settled(done):
-            self.tasks.discard(done)
-            if not done.cancelled() and (error := done.exception()) is not None:
-                # A cancelled waiter cannot report this failure itself. Retain
-                # the uncertain marker and a bounded diagnostic, never replay.
-                try:
-                    publish({'type': 'runtime.bridge', 'phase': 'handoff-drain-unavailable',
-                             'errorType': type(error).__name__})
-                except Exception:
-                    pass
-        task.add_done_callback(settled)
-        return task
-
-    async def _finish_handoff_ack(self, receipt, future):
-        task = getattr(future, '_handoff_ack', None) or self._own_handoff_ack(receipt)
-        return await asyncio.shield(task)
 
     def emit_timing(self, value):
         try:
@@ -706,6 +655,7 @@ class Worker:
                 if refs and refs.get("generationId") == event.get("generation_id"):
                     event["finalMessageRefs"] = refs
         publish(event)
+        self.retirement_changed.set()
         if event.get("type") == "generation.finished" and loop:
             count = sum(not job["task"].done() for job in loop.jobs.values())
             if count:
@@ -1183,8 +1133,11 @@ class Worker:
         if self.bridges: waiting.append('tool-replies')
         if self.approvals: waiting.append('approval')
         if self.operation_ids or self.operation_controls: waiting.append('operations')
+        if any(task is not asyncio.current_task() and not task.done() for task in self.command_tasks):
+            waiting.append('commands')
         if self.runtime.queued_inputs or not self.runtime.inbox.empty(): waiting.append('inputs')
         if (loop and (loop.pending or loop._active_jobs()) or
+                children and getattr(children, 'admissions', None) or
                 children and any(row.get("status") in {"starting", "running", "working", "idle"}
                                  for row in children.rows.values())):
             waiting.append('children')
@@ -1415,10 +1368,62 @@ class Worker:
                             if capture else {})})
         self.shutdown.set()
 
+    async def retire_when_settled(self, data):
+        """One soft intent; only the existing saved boundary closes admission."""
+        from amplifier_core import HookResult
+        coordinator = self.session.coordinator
+        async def yield_goal(event, facts):
+            goal = coordinator.session_state.get('goal')
+            if (self.retirement_intent is data and facts.get('state') == 'continuing'
+                    and goal and facts.get('condition') == goal.get('condition')
+                    and facts.get('turn') == goal.get('turns_used')
+                    and not self.shutdown.is_set()):
+                # The loop rechecks goal object identity after the hook. Keep
+                # all used budget and task facts; do not cancel admitted tools.
+                coordinator.session_state['goal'] = copy.deepcopy(goal)
+                self.controls.persist(task_only=True)
+            return HookResult()
+        unregister = coordinator.hooks.register('orchestrator:goal_progress', yield_goal,
+                                                name='unified-idle-retirement', priority=0)
+        try:
+            while not self.shutdown.is_set():
+                await self.retirement_changed.wait()
+                self.retirement_changed.clear()
+                if self.command_lock.locked() or not self.idle():
+                    continue
+                async with self.command_lock:
+                    if not await self.checkpoint_idle():
+                        continue
+                    # No await between final save/recheck and shutdown. The
+                    # ordinary retire reply owns confirmation, not this hint.
+                    self.shutdown.set()
+                    publish({'type': 'runtime.retiring'})
+                    publish({'op': 'reply', 'id': data.get('id'),
+                             'result': {'retired': True, 'outcome': self.root_generation_outcome}})
+                    return
+        except Exception as error:
+            from amplifier_web.worker_diagnostics import command_failure_facts
+            publish({'op': 'reply', 'id': data.get('id'), 'error': 'Worker retirement could not save the conversation.',
+                     'failureFacts': command_failure_facts(error)})
+        finally:
+            unregister()
+            if self.retirement_intent is data:
+                self.retirement_intent = None
+
     async def command(self, data):
         """Serialize admission with retirement and bind a per-work write token."""
 
         op = data.get("op")
+        if op == 'retire' and data.get('whenSettled'):
+            # Soft intent is received outside command_lock. In particular this
+            # command must not wait for its own initiating tool to return.
+            if self.retirement_intent is not None:
+                publish({'op': 'reply', 'id': data.get('id'), 'error': 'This worker already owns its deferred retirement.'})
+                return
+            self.retirement_intent = data
+            self.retirement_changed.set()
+            await self.retire_when_settled(data)
+            return
         # Capture before waiting for admission/preparation. Stop bypasses this
         # lock and invalidates all already waiting ordinary inputs.
         stop_revision = self.stop_revision
@@ -1640,30 +1645,16 @@ class Worker:
         try:
             op = data.get("op")
             if op == "bridge.result":
-                from amplifier_web.handoff_drain import acknowledged_receipt
-                receipt = acknowledged_receipt(self, data)
-                # Ownership precedes set_result/set_exception: the caller can
-                # be cancelled before it resumes to process this exact reply.
-                acknowledgement = self._own_handoff_ack(receipt) if receipt is not None else None
                 future = self.bridges.get(identity)
                 if future and not future.done():
-                    if acknowledgement is not None:
-                        future._handoff_ack = acknowledgement
                     timing = getattr(self, 'bridge_timings', {}).get(identity)
                     if timing:
                         timing.mark('received')
                     if data.get("error"):
                         error = RuntimeError(data["error"])
-                        if isinstance(data.get('_handoffDisposition'), dict):
-                            error._handoff_disposition = data['_handoffDisposition']
                         future.set_exception(error)
                     else:
                         future.set_result(data.get("result"))
-                elif acknowledgement is not None:
-                    try:
-                        await asyncio.shield(acknowledgement)
-                    except Exception:
-                        pass  # The retained owner reports failure and keeps uncertainty.
                 return
             if op == "resume":
                 if not self.session or not self.execution or self.execution.done():
@@ -1741,9 +1732,6 @@ class Worker:
                     result = policy.confirm(data['settingsRevision'])
             elif op == 'handoff.boundary':
                 from amplifier_web.handoff_boundary import inspect
-                from amplifier_web.handoff_drain import finish
-                if not data.get('cancel'):
-                    await finish(self, data.get('receipt'))
                 result = await inspect(self, data['request_id'], data.get('cancel', False),
                     update=data.get('update') is True, configuration=data.get('configuration') is True,
                     expected=(data.get('receipt') or {}).get(
@@ -1914,7 +1902,13 @@ class Worker:
                     continue
                 task = asyncio.create_task(self.command(data))
                 self.tasks.add(task)
-                task.add_done_callback(self.tasks.discard)
+                if not (data.get('op') == 'retire' and data.get('whenSettled')):
+                    self.command_tasks.add(task)
+                def finished(done):
+                    self.tasks.discard(done)
+                    self.command_tasks.discard(done)
+                    self.retirement_changed.set()
+                task.add_done_callback(finished)
         except asyncio.CancelledError:
             raise
         except Exception as exc:

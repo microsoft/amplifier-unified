@@ -79,6 +79,8 @@ def prepare(app, action, target, source):
         'assignmentRevision': assignment['revision'],
         'sourceHumanMessageId': app.worktrees.latest_human(source),
         'sourceTask': task_binding(app, source),
+        'sourceObjective': {key: (source.get('task') or app.coordination.task(source['id'])).get(key)
+                            for key in ('id', 'objective')},
         'sourceInterruptionRevision': source.get('interruptionRevision', 0),
         'sourceGenerationId': (source.get('collaborationGeneration') or {}).get('id'),
         'sourceGenerationTerminal': (source.get('collaborationGeneration') or {}).get('terminal'),
@@ -149,6 +151,14 @@ def guard(app, record, *, continuation=False):
         return str(exc)
     if assignment['id'] != scope['assignmentId']:
         return 'The commissioning assignment changed during placement.'
+    if record.get('placementMode') == 'deferred-retirement':
+        task = source.get('task') or app.coordination.task(source['id'])
+        if (source.get('interruptionRevision', 0) != scope['sourceInterruptionRevision']
+                or {key: task.get(key) for key in ('id', 'objective')} != scope['sourceObjective']
+                or task.get('status') in {'paused', 'blocked', 'completed'}
+                or source.get('status') in {'stopped', 'stopping', 'error', 'interrupted'}):
+            return 'The commissioning objective or Stop authority changed during placement.'
+        return None
     # The authenticated generation authorizes admission. Other retained results
     # may start later manager turns while this already accepted move settles.
     # Only changed user/task/Stop authority or membership cancels that work.

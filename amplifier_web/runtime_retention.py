@@ -55,7 +55,8 @@ class WorkerRetention:
     def eligible(row):
         return (row.get("idle") and row["process"].returncode is None
                 and not row.get("closing") and not row.get("yielding")
-                and not row.get("inflight") and not row.get("bridge_tasks"))
+                and not row.get("inflight") and not row.get("bridge_tasks")
+                and not row.get('placement_task'))
 
     def due(self, sid, row, *, rank=None, count=None, now=None):
         """The existing warm-worker policy, also rechecked by attached owners."""
