@@ -56,6 +56,7 @@ class Worker:
         self.session = self.runtime = self.execution = None
         self.approvals = {}
         self.approval_contexts = {}
+        self.approval_scopes = {}
         self.approval_deliveries = {}
         self.operation_ids = set()
         self.operation_controls = 0
@@ -92,6 +93,7 @@ class Worker:
         self.terminal_response_refs = None
         self.terminal_checkpointed = False
         self.preparation_report = {}
+        self.tool_sources = None
         if __package__:
             from .ownership import WorkerOwnership
             from .computer_episodes import ComputerEpisodes
@@ -106,10 +108,15 @@ class Worker:
         future = asyncio.get_running_loop().create_future()
         options = options or ["allow", "deny"]
         self.approvals[identity] = (future, options)
-        from amplifier_web.host.approvals import REQUEST_CONTEXT
+        from amplifier_web.host.approvals import REQUEST_CONTEXT, REQUEST_SCOPE
+        from amplifier_web.tool_approval_scope import PreparedToolApproval
         if REQUEST_CONTEXT.get() is not None:
             self.approval_contexts[identity] = REQUEST_CONTEXT.get()
-        publish({"type": "approval.requested", "id": identity, "prompt": prompt, "options": options})
+        scope = REQUEST_SCOPE.get()
+        if type(scope) is PreparedToolApproval and scope.claim():
+            self.approval_scopes[identity] = scope
+        publish({"type": "approval.requested", "id": identity, "prompt": prompt, "options": options,
+                 **({'toolScope': scope.fact} if identity in self.approval_scopes else {})})
         try:
             decision = await future
             publish({"type": "approval.resolved", "id": identity, "decision": decision})
@@ -120,6 +127,7 @@ class Worker:
         finally:
             self.approvals.pop(identity, None)
             self.approval_contexts.pop(identity, None)
+            self.approval_scopes.pop(identity, None)
 
     async def bridge(self, operation, args):
         from amplifier_web.performance_diagnostics import PhaseTiming, active_tool, TIMING_ENABLED
@@ -377,6 +385,19 @@ class Worker:
                     'inputIds': list(ids), 'inputCoverage': 'complete',
                     'stopRevision': self.stop_revision}
         coordinator.register_capability('web.work_origin_scope', origin_scope)
+        def tool_approval_context():
+            origin = origin_scope()
+            if (origin is None or self.home is None or self.workspace is None
+                    or self.ownership.yielding):
+                return None
+            from amplifier_web.access_mode import read_mode
+            return {'owner': str(Path(self.home).resolve()),
+                    'workspace': str(Path(self.workspace).resolve()),
+                    'accessMode': read_mode(self.home, self.workspace, self.session.coordinator.session_id,
+                        owner_session_id=(self.start_config or {}).get('ownerSessionId')),
+                    'epoch': origin}
+        coordinator.register_capability('web.tool_approval.context', tool_approval_context)
+        coordinator.register_capability('web.tool_sources', self.tool_sources)
         def current_full_access():
             # Read the same current policy as the host, never a startup copy.
             # Descendants retain their own live assignment while the root owns
@@ -948,9 +969,14 @@ class Worker:
             # the worker environment inherited by unrelated tool subprocesses.
             qualified_overrides = None
             install_overrides = None
+            self.tool_sources = None
+            source_captures = []
+            from amplifier_web.tool_source_proof import QualifiedToolSources
+            def capture_tool_sources(project, receipt, expected):
+                source_captures.append(QualifiedToolSources.capture(project, receipt, expected))
             if not os.environ.get("UV_OVERRIDE"):
                 with startup_timing.phase('worker.runtime.verify.before_prepare'):
-                    qualified_overrides = active_install_overrides(self.home)
+                    qualified_overrides = active_install_overrides(self.home, on_verified=capture_tool_sources)
                 install_overrides = (qualified_overrides if qualified_overrides is not None
                     else Path(__file__).with_name("runtime_deps") / "compatibility.txt")
             self.runtime = Runtime(session_id=config["id"], observer=self.observe, max_input_chars=200_000)
@@ -1004,7 +1030,10 @@ class Worker:
                     startup_timing=startup_timing)
             if qualified_overrides is not None:
                 with startup_timing.phase('worker.runtime.verify.after_prepare'):
-                    active_install_overrides(self.home, str(qualified_overrides))
+                    active_install_overrides(self.home, str(qualified_overrides), on_verified=capture_tool_sources)
+                if (len(source_captures) == 2 and source_captures[0] is not None
+                        and source_captures[0].same(source_captures[1])):
+                    self.tool_sources = source_captures[1]
             self.config_inputs = tuple(report.get("config_inputs", ()))
             from amplifier_web.attachments import encode
             self.session.coordinator.register_capability('live.attachments.encode',encode)
@@ -1555,6 +1584,10 @@ class Worker:
         decision = data['decision']
         if future.done() or decision not in options:
             raise ValueError('Approval expired or decision is not offered')
+        expected = data.get('expected_scope')
+        scope = self.approval_scopes.get(identity)
+        if expected is not None and (scope is None or scope.fact['descriptor']['key'] != expected):
+            raise ValueError('The exact tool request changed before approval delivery.')
         comment = data.get('comment', '')
         if not isinstance(comment, str) or len(comment) > 4000:
             raise ValueError('Permission guidance must be at most 4000 characters.')

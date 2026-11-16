@@ -736,7 +736,8 @@ class Children:
                 if callback := initialization.get("before_initialize"):
                     await callback(constructing)
             from .approvals import Approvals
-            approvals = (self.approvals.for_context(lambda: child.coordinator.get('context') if child else None)
+            approvals = (self.approvals.for_context(lambda: child.coordinator.get('context') if child else None,
+                                                   coordinator=lambda: child.coordinator if child else None)
                          if isinstance(self.approvals, Approvals) else self.approvals)
             try:
                 child = await child_prepared.create_session(session_id=identity, parent_id=parent.session_id,

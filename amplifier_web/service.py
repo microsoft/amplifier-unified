@@ -3632,6 +3632,11 @@ class AppService:
                 if (args.get('expectedRequestHash')
                         and args['expectedRequestHash'] != self.approval_request_hash(session, approval)):
                     raise AppError('The request changed. Review it before deciding.', 409)
+                if expected_scope := args.get('expectedApprovalScope'):
+                    from .approval_policy import descriptor
+                    current_scope = descriptor(self, session, approval)
+                    if current_scope is None or current_scope['key'] != expected_scope:
+                        raise AppError('The exact approval target changed. Review it before deciding.', 409)
                 decision = "allow" if args["decision"] in {"allow", "approve"} else "deny"
                 offered = approval.get("options") or ["allow", "deny"]
                 selected = next((value for value in offered
@@ -3646,6 +3651,9 @@ class AppService:
                                   approvalId=args['id'], inputOrigin='approval')
                 if self.runtime:
                     values = (session["id"], args["id"], selected) + ((comment,) if comment else ())
+                    if args.get('expectedApprovalScope'):
+                        values = (session["id"], args["id"], selected, comment or None,
+                                  args['expectedApprovalScope'])
                     pending.append((self.runtime.approval, values))
             elif action == "attention.read":
                 from .attention import snapshot

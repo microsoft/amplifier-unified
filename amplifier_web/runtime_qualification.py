@@ -566,7 +566,7 @@ def verify_recorded(project, receipt, *, allow_additions=False, expected=None):
         raise ValueError('The worker graph changed after qualification; its recorded generation was preserved.')
 
 
-def active_install_overrides(home, current_override=None):
+def active_install_overrides(home, current_override=None, *, on_verified=None):
     """Use a recorded generation's ordinary installer policy, never refresh.
 
     An explicit user override remains authoritative. Legacy generations have no
@@ -585,5 +585,8 @@ def active_install_overrides(home, current_override=None):
     if (project / 'uv.lock').read_bytes() != (receipt / 'runtime.lock').read_bytes():
         raise ValueError('The recorded worker installation policy changed; its generation was preserved.')
     verify_install_overrides(project, target)
-    verify_recorded(project, receipt, allow_additions=True)
+    expected = json.loads((receipt / 'runtime-installed.json').read_text())
+    verify_recorded(project, receipt, allow_additions=True, expected=expected)
+    if on_verified is not None:
+        on_verified(project, receipt, expected)
     return target
