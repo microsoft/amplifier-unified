@@ -564,7 +564,9 @@ def current(state, evidence=None, *, manual_verified=None, explicit_retry=False,
     remaining = [row for row in failed if not currently_verified(row) and not older_preparation(row)
                  and not awaited_connection(row)]
     if state.get('error') or phase in {'error', 'interrupted'} or remaining:
-        failure = max(remaining, key=lambda row: row.get('at', 0), default=diagnostics.get('lastFailure') or {})
+        last = diagnostics.get('lastFailure') or {}
+        # A record that is history gives no text or component to another error.
+        failure = max(remaining, key=lambda row: row.get('at', 0), default={} if awaited_connection(last) else last)
         reason = failure.get('reason') or failure.get('probe', {}).get('reason')
         component = failure.get('package') or failure.get('probe', {}).get('package') or failure.get('component')
         if reason in DETERMINISTIC:

@@ -237,6 +237,17 @@ def test_a_failed_update_is_reported_until_a_check_replaces_it():
     assert (result['title'], result['detail'], result['actionRequired']) == (COULD_NOT_FINISH, text, True)
 
 
+def test_a_record_that_is_history_gives_no_text_to_another_error():
+    named = changed(probe={'reason': 'ai-connection-needed'})
+    assert failure_guidance(named).startswith('This update needs an AI connection')
+    other = 'Update check failed. Your installed sources are unchanged.'
+    result = health.current(recorded(named, phase='error', error=other), SETUP_RECORD, connection=CONNECTED)
+    assert (result['title'], result['detail'], result['actionRequired']) == (COULD_NOT_FINISH, other, True)
+    # For a selection that can declare its own provider the record is the failure, with its own text.
+    own = health.current(recorded(named, phase='error', error=other), SETUP_RECORD, connection=OTHER_PROFILE)
+    assert own['detail'] == failure_guidance(named)
+
+
 def test_page_uses_the_connection_fact_only_for_the_configuration_it_was_read_from():
     def manager(read_at):
         return SimpleNamespace(service=SimpleNamespace(state={'updates': checked(), 'configurationRevision': 2}),
