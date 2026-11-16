@@ -2017,9 +2017,10 @@ between two looks end in a file with the same time, size and identity as the
 file that the host saw last. That needs a file time that does not change
 between saves and a reused identity. It is not measured on any file system.
 
-When the host misses a change, that sign-out is not applied. Sessions from
-before it stay valid for every request, and their streams stay open, until the
-record changes again or the host starts again. This is so on every system.
+When the host misses a change, that sign-out is not applied: sessions from
+before it are not refused, and their open streams are not ended. Such a
+session stays valid for every request until it expires, until the record
+changes again, or until the host starts again. This is so on every system.
 Two facts make the case narrower. The Windows private store accepts only a
 local fixed NTFS volume. Tickets and codes exist on a Windows host only, so on
 the other systems no ticket or code is part of the case.
