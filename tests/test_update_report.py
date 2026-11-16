@@ -219,11 +219,13 @@ async def test_failed_gate_observation_is_unavailable_not_clear(tmp_path, monkey
     service.runtime.has_pending_operations = fail
     monkeypatch.setattr(update_report, 'runtime_report', lambda home: {})
     report = await update_report.collect(manager)
-    assert report['activationGate']['unavailable']
-    assert report['activationGate']['blocked'] is None
-    assert report['activationGate']['reasonCode'] == 'observation-failed'
+    # The canonical gate now classifies a failed runtime sample as a blocker
+    # rather than throwing away the complete assessment.
+    assert report['activationGate']['initialRuntimeObservation'] == 'unavailable'
+    assert report['activationGate']['blocked'] is True
+    assert report['activationGate']['blockerCounts']['runtime'] == 1
     assert 'SECRET_OBSERVER' not in json.dumps(report) and '/private/path' not in json.dumps(report)
-    with pytest.raises(ValueError, match='SECRET_OBSERVER'):
-        manager.busy()  # Diagnostics did not weaken or replace admission.
+    assert manager.busy()  # Diagnostics did not weaken or replace admission.
+    assert any(row.get('reasonCode') == 'runtime-observer-unavailable' for row in manager.blockers())
     service.runtime.has_pending_operations = lambda: False
     await service.close()
