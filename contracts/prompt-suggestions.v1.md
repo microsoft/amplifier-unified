@@ -37,6 +37,13 @@ from every conversation participant and execution runtime.
   Installed providers only: no request-time installation or `Bundle.prepare`.
   Custom source selections without a qualified installed utility binding return
   unsupported rather than loading another implementation.
+  A saved branch such as `@main` may match its qualified exact installed commit
+  only when the recorded source policy and its provenance agree on repository,
+  ref, subdirectory and that installed revision, with the frozen manifest bound
+  to the same install. Shared-build commit markers are not branch policy.
+  Missing preparation reports `runtime_not_prepared`; mismatched/unproven source
+  evidence reports `qualified_source_mismatch`, without Git discovery, receipt
+  rewriting, preparation or fallback.
 - Utility-local provider configuration disables `max_retries`, overload fallback
   and refusal fallback. Provider/SDK-specific one-wire-attempt enforcement still
   requires qualification of that installed implementation; arbitrary third-party

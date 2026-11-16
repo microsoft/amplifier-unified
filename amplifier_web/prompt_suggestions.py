@@ -11,7 +11,8 @@ from .suggestion_source import Unavailable, capture, witness, eligible
 MAX_RETAINED = 128
 TTL = 60
 DEADLINE = 15
-PROVIDER_REASONS = frozenset({'custom_source_not_prepared'})
+PROVIDER_REASONS = frozenset({'custom_source_not_prepared', 'runtime_not_prepared',
+                              'qualified_source_mismatch'})
 # Set only by the authenticated HTTP adapter, never action arguments or client
 # registration. The closure rechecks cookie expiry/sign-out after async work.
 BROWSER = ContextVar('suggestion_browser', default=None)

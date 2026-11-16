@@ -10,10 +10,10 @@ import tempfile
 import time
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from amplifier_web.prompt_suggestions import PromptSuggestions, BROWSER
-from amplifier_web.suggestion_provider import complete, parse
+from amplifier_web.suggestion_provider import complete, parse, qualified_source_matches
 from amplifier_web.suggestion_settings import describe, configure
 from amplifier_web.suggestion_source import public_rows, select, Unavailable, witness
 from amplifier_web.transcript_windows import TranscriptWindows, _native_page
@@ -171,7 +171,8 @@ class Requests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.app.db.execute('SELECT count(*) FROM suggestion_requests').fetchone()[0], 5003)
 
     async def test_provider_refusal_reason_is_allowlisted_without_leaking_arbitrary_text(self):
-        for index, reason in enumerate(('custom_source_not_prepared', 'private transcript and credential')):
+        allowed = ('custom_source_not_prepared', 'runtime_not_prepared', 'qualified_source_mismatch')
+        for index, reason in enumerate((*allowed, 'private transcript and credential')):
             self.app.session['messages'][-1]['text'] = 'Different source ' + str(index)
             self.host.complete = AsyncMock(return_value={
                 'status': 'unsupported', 'suggestion': None, 'usage': None, 'cost': None, 'reason': reason})
@@ -179,7 +180,7 @@ class Requests(unittest.IsolatedAsyncioTestCase):
             await self.settle()
             result = await self.status('reason-' + str(index))
             self.assertEqual(result['status'], 'unsupported')
-            self.assertEqual(result['reason'], reason if index == 0 else None)
+            self.assertEqual(result['reason'], reason if reason in allowed else None)
             self.assertNotIn('credential', repr(result))
             self.host.complete.assert_awaited_once()
 
@@ -592,6 +593,184 @@ class Provider(unittest.IsolatedAsyncioTestCase):
                                   'source': None, 'fallbackSource': 'git+https://example.invalid/missing'})
             self.assertEqual(result['suggestion']['status'], 'unsupported')
             prepare.assert_not_called()
+
+
+class UtilitySourcePolicy(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        from amplifier_web.runtime_environment import receipt_directory
+        from amplifier_web.runtime_qualification import frozen_manifest
+        from amplifier_web.runtime_source_policy import with_origin
+        from amplifier_web.setup import SetupManager
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.home = self.root / 'app'
+        self.generation = 'a' * 32
+        self.receipts = receipt_directory(self.home, self.generation)
+        self.receipts.mkdir(parents=True)
+        (self.home / 'updates/active.json').write_text(json.dumps({'current': self.generation}))
+        self.project = self.home / 'runtime' / ('q-' + 'b' * 32)
+        self.executable = self.project / '.venv' / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
+        self.executable.parent.mkdir(parents=True)
+        self.executable.write_bytes(b'not executed by this fixture')
+        (self.receipts / 'runtime-project.json').write_text(json.dumps({'project': self.project.name}))
+        self.module = 'provider-openai'
+        self.name = 'amplifier-module-' + self.module
+        self.url = 'https://github.com/microsoft/amplifier-module-provider-openai'
+        self.revision = 'c' * 40
+        self.authored = 'git+' + self.url + '@main'
+        location = self.root / 'source-store/builds' / ('d' * 64)
+        self.graph = [{'name': self.name, 'version': '1', 'path': str(location),
+            'directUrl': {'url': location.as_uri(), 'dir_info': {'editable': False}},
+            'cacheSource': {'url': self.url, 'ref': self.revision, 'revision': self.revision,
+                            'dirty': False, 'subdirectory': '.', 'trackedContentSha256': 'e' * 64}}]
+        self.policies = {self.name: with_origin({
+            'url': self.url, 'ref': 'main', 'revision': self.revision, 'subdirectory': ''},
+            'verified-cache-branch')}
+        base = ('[project]\nname="fixture-worker"\nversion="1"\ndependencies=["' + self.name + '"]\n'
+                '[tool.uv.sources]\n"' + self.name + '"={git="' + self.url + '",branch="main"}\n').encode()
+        self.manifest = frozen_manifest(base, self.graph)
+        self.save_receipts()
+        self.manager = SetupManager(self.home, global_only=True)
+        self.manager.probe_snapshot = lambda *args: {
+            'module': self.module, 'raw': {}, 'config': {}, 'env': {},
+            'credentialGeneration': 'fixture', 'source': self.authored, 'registryHome': str(self.home / 'foundation')}
+
+    async def asyncTearDown(self):
+        await self.manager.close()
+        self.tmp.cleanup()
+
+    def save_receipts(self):
+        (self.receipts / 'runtime-installed.json').write_text(json.dumps(self.graph))
+        (self.receipts / 'runtime-sources.json').write_text(json.dumps(self.policies))
+        (self.receipts / 'runtime.toml').write_bytes(self.manifest)
+
+    def matches(self, source=None, graph=None, policies=None, manifest=None):
+        return qualified_source_matches(self.module, source or self.authored,
+            self.graph if graph is None else graph, self.policies if policies is None else policies,
+            self.manifest if manifest is None else manifest)
+
+    def test_verified_authored_branch_matches_exact_shared_build_without_relabelling_catalog(self):
+        from amplifier_web.provider_catalog import _qualified_provider_sources, generation_identity
+        # Reproduce the actual defect shape: the legacy catalog chooses cached
+        # SHA, while valid branch policy is carried separately by qualification.
+        legacy = _qualified_provider_sources(str(self.home), generation_identity(self.home))
+        self.assertEqual(legacy[self.module], 'git+' + self.url + '@' + self.revision)
+        self.assertNotEqual(legacy[self.module], self.authored)
+        before = copy.deepcopy((self.graph, self.policies, self.manifest))
+        self.assertTrue(self.matches())
+        self.assertTrue(self.matches(source='git+' + self.url + '@' + self.revision))
+        self.assertTrue(self.matches(source='git+' + self.url + '.git@refs/heads/main'))
+        self.assertEqual((self.graph, self.policies, self.manifest), before)
+
+    def test_branch_equivalence_cannot_hide_changed_source_pin_or_unqualified_provenance(self):
+        for source in ('git+https://example.invalid/fork@main', 'git+' + self.url + '@other',
+                       'git+' + self.url + '@' + 'f' * 40, self.authored + '#subdirectory=other',
+                       '/tmp/local-provider', self.authored + '#subdirectory=&other=true'):
+            with self.subTest(source=source):
+                self.assertFalse(self.matches(source=source))
+        for field, value in (('revision', 'f' * 40), ('url', self.url + '-fork'),
+                             ('subdirectory', 'other'), ('dirty', True),
+                             ('trackedContentSha256', 'missing')):
+            graph = copy.deepcopy(self.graph)
+            graph[0]['cacheSource'][field] = value
+            with self.subTest(cached=field):
+                self.assertFalse(self.matches(graph=graph))
+        self.assertFalse(self.matches(graph=[*self.graph, *self.graph]))
+        self.assertFalse(self.matches(policies={}))
+        for field, value in (('ref', 'other'), ('revision', 'f' * 40),
+                             ('url', self.url + '-fork'), ('subdirectory', 'other')):
+            policies = copy.deepcopy(self.policies)
+            policies[self.name][field] = value
+            with self.subTest(policy=field):
+                self.assertFalse(self.matches(policies=policies))
+        for kind in ('unrecorded', 'unresolved-reference', 'tag-reference', 'owned-cache-declaration'):
+            policies = copy.deepcopy(self.policies)
+            policies[self.name]['policyOrigin']['kind'] = kind
+            with self.subTest(origin=kind):
+                self.assertFalse(self.matches(policies=policies))
+        policies = copy.deepcopy(self.policies)
+        policies[self.name]['policyOrigin']['revision'] = 'f' * 40
+        self.assertFalse(self.matches(policies=policies))
+
+    def test_cached_source_requires_matching_frozen_path_and_noneditable_installed_binding(self):
+        self.assertFalse(self.matches(manifest=self.manifest.replace(str(self.root).encode(), b'/other-owner')))
+        for field, value in (('path', '/other-owner/build'),
+                             ('directUrl', {'url': (self.root / 'other').as_uri(), 'dir_info': {'editable': False}})):
+            graph = copy.deepcopy(self.graph)
+            graph[0][field] = value
+            self.assertFalse(self.matches(graph=graph))
+        graph = copy.deepcopy(self.graph)
+        graph[0]['directUrl']['dir_info']['editable'] = True
+        self.assertFalse(self.matches(graph=graph))
+        self.assertFalse(self.matches(manifest=b'not toml'))
+        self.assertFalse(self.matches(manifest=self.manifest.replace(b'"editable" = false', b'"editable" = true')))
+
+    async def test_normal_installed_branch_selection_uses_only_qualified_interpreter_worker_free(self):
+        process = SimpleNamespace(
+            stdin=SimpleNamespace(write=Mock(), drain=AsyncMock()),
+            stdout=SimpleNamespace(readline=AsyncMock(return_value=b'{"suggestionReady":true}\n')),
+            stderr=object(), returncode=0)
+        terminal = json.dumps({'suggestion': {'status': 'empty', 'suggestion': None, 'usage': None, 'cost': None}}).encode()
+        before = {name: (self.receipts / name).read_bytes() for name in
+                  ('runtime-installed.json', 'runtime-sources.json', 'runtime.toml')}
+        with patch('amplifier_web.probe_process.spawn', AsyncMock(return_value=process)) as spawn, \
+                patch('amplifier_web.probe_process.stop', AsyncMock()) as stop, \
+                patch('amplifier_web.probe_diagnostics.communicate', AsyncMock(return_value=terminal)), \
+                patch('amplifier_web.probe_diagnostics.stderr_tail', AsyncMock(return_value='')), \
+                patch('amplifier_web.provider_health.record'), \
+                patch('amplifier_web.runtime.RuntimeManager._command', side_effect=AssertionError('uv sync')), \
+                patch('amplifier_foundation.Bundle.prepare', AsyncMock(side_effect=AssertionError('prepare'))), \
+                patch('amplifier_web.runtime_qualification.installed_graph', side_effect=AssertionError('Git scan')):
+            result = await self.manager.probe('suggestion.complete', {
+                'id': 'saved-account', 'model': 'cheap-explicit', 'transcript': [], '_admit': lambda: True},
+                str(self.root))
+        self.assertEqual(result['status'], 'empty')
+        self.assertEqual(spawn.call_args.args[0], str(self.executable))
+        self.assertEqual(Path(spawn.call_args.args[1]).name, 'provider_probe.py')
+        payload = json.loads(process.stdin.write.call_args.args[0])
+        self.assertIsNone(payload['source'])  # Never install the authored branch per request.
+        self.assertEqual(payload['model'], 'cheap-explicit')
+        self.assertEqual(self.authored, 'git+' + self.url + '@main')  # No settings rewrite to SHA.
+        self.assertEqual({name: (self.receipts / name).read_bytes() for name in before}, before)
+        spawn.assert_awaited_once()
+        stop.assert_awaited_once()
+
+    async def test_unprepared_mismatched_and_disabled_choices_refuse_before_spawning(self):
+        from amplifier_web.host.config import HostConfig
+        with patch('amplifier_web.probe_process.spawn', AsyncMock(side_effect=AssertionError('spawn'))) as spawn:
+            self.authored = 'git+https://example.invalid/fork@main'
+            result = await self.manager.probe('suggestion.complete', {
+                'id': 'saved-account', 'model': 'explicit', 'transcript': [], '_admit': lambda: True}, str(self.root))
+            self.assertEqual(result['reason'], 'qualified_source_mismatch')
+            (self.receipts / 'runtime-installed.json').unlink()
+            result = await self.manager.probe('suggestion.complete', {
+                'id': 'saved-account', 'model': 'explicit', 'transcript': [], '_admit': lambda: True}, str(self.root))
+            self.assertEqual(result['reason'], 'qualified_source_mismatch')
+            (self.receipts / 'runtime-project.json').unlink()
+            result = await self.manager.probe('suggestion.complete', {
+                'id': 'saved-account', 'model': 'explicit', 'transcript': [], '_admit': lambda: True}, str(self.root))
+            self.assertEqual(result['reason'], 'runtime_not_prepared')
+            del self.manager.probe_snapshot  # Exercise the ordinary disabled-connection guard.
+            self.manager.config = lambda workspace: HostConfig(home=self.home, registry_home=self.home / 'foundation', settings={
+                'config': {'providers': [{'id': 'saved-account', 'module': self.module,
+                                          'enabled': False, 'source': self.authored}]}}, workspace=self.root)
+            with self.assertRaises(ValueError):
+                await self.manager.probe('suggestion.complete', {
+                    'id': 'saved-account', 'model': 'explicit', 'transcript': [], '_admit': lambda: True}, str(self.root))
+        spawn.assert_not_called()
+
+    def test_direct_git_qualified_install_keeps_same_policy_equivalence(self):
+        from amplifier_web.runtime_qualification import frozen_manifest
+        direct = [{'name': self.name, 'version': '1', 'directUrl': {
+            'url': self.url, 'subdirectory': '', 'vcs_info': {
+                'vcs': 'git', 'requested_revision': self.revision, 'commit_id': self.revision}}}]
+        base = ('[project]\nname="fixture-worker"\nversion="1"\ndependencies=["' + self.name + '"]\n').encode()
+        manifest = frozen_manifest(base, direct)
+        self.assertTrue(self.matches(graph=direct, manifest=manifest))
+        self.assertTrue(self.matches(source='git+' + self.url + '@' + self.revision,
+                                     graph=direct, manifest=manifest))
+        direct[0]['directUrl']['vcs_info']['commit_id'] = 'f' * 40
+        self.assertFalse(self.matches(graph=direct, manifest=manifest))
 
 
 class Parsing(unittest.TestCase):

@@ -442,17 +442,28 @@ class SetupManager:
         if action == 'suggestion.complete' and self.probe_command is None:
             from .updates import active_release
             from .runtime_environment import project_path, receipt_directory
-            from .provider_catalog import generation_identity, _qualified_provider_sources
+            from .suggestion_provider import qualified_source_matches
             generation_id = active_release(self.home).get('current')
             receipts = receipt_directory(self.home, generation_id)
             if not (receipts / 'runtime-project.json').is_file():
-                return {'status': 'unsupported', 'suggestion': None, 'usage': None, 'cost': None}
+                return {'status': 'unsupported', 'suggestion': None, 'usage': None, 'cost': None,
+                        'reason': 'runtime_not_prepared'}
             project = project_path(self.home, generation_id)
             executable = project / '.venv' / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
-            installed_sources = _qualified_provider_sources(str(self.home), generation_identity(self.home))
-            if (not executable.is_file() or snapshot['source']
-                    and installed_sources.get(module) != snapshot['source']):
-                return {'status': 'unsupported', 'suggestion': None, 'usage': None, 'cost': None}
+            if not executable.is_file():
+                return {'status': 'unsupported', 'suggestion': None, 'usage': None, 'cost': None,
+                        'reason': 'runtime_not_prepared'}
+            if snapshot['source']:
+                try:
+                    matches = qualified_source_matches(module, snapshot['source'],
+                        json.loads((receipts / 'runtime-installed.json').read_text()),
+                        json.loads((receipts / 'runtime-sources.json').read_text()),
+                        (receipts / 'runtime.toml').read_bytes())
+                except (OSError, ValueError, TypeError):
+                    matches = False
+                if not matches:
+                    return {'status': 'unsupported', 'suggestion': None, 'usage': None, 'cost': None,
+                            'reason': 'qualified_source_mismatch'}
             # Already qualified interpreter and matching installed source only:
             # unlike the setup command, this cannot run uv sync or prepare files.
             command = [str(executable), str(Path(__file__).with_name('provider_probe.py'))]
