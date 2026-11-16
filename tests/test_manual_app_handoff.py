@@ -29,6 +29,10 @@ class Runtime:
 
 @pytest.fixture
 async def manager(tmp_path, monkeypatch):
+    from amplifier_web.host.config import amplifier_home, write_private
+    write_private(amplifier_home() / 'settings.yaml', json.dumps({
+        'config': {'providers': [{'module': 'provider-anthropic',
+                                 'config': {'default_model': 'fixture-model'}}]}}))
     service = AppService(tmp_path / 'app', Runtime(), workspace=tmp_path)
     manager = UpdateManager(service)
     service.update_manager = manager

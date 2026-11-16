@@ -53,6 +53,10 @@ class Runtime:
 @pytest.fixture
 async def service(tmp_path, monkeypatch, repository):
     from amplifier_web import updates, update_sequence
+    from amplifier_web.host.config import amplifier_home, write_private
+    write_private(amplifier_home() / 'settings.yaml', json.dumps({
+        'config': {'providers': [{'module': 'provider-anthropic',
+                                 'config': {'default_model': 'fixture-model'}}]}}))
     # These tests own their cache fixtures. Shipped dependencies and cold-worker
     # installation are covered by test_update_sequence rather than live remotes.
     monkeypatch.setattr(update_sequence, 'included_sources', lambda: (set(), []))
