@@ -23,6 +23,15 @@ and the `amplifier-status` consumer. Build that wheel with:
 uv build amplifier_web/status_protocol --wheel
 ```
 
+Independent artifact delivery uses the existing **Scheduling and status packages**
+workflow with `component: status-emitter` and a full merged main commit SHA. It
+builds the wheel and source archive once, binds their contents to that source,
+and verifies the installed standalone package before publication. Assets use the
+distribution name `amplifier_status_emitter`; the public import remains
+`amplifier_status`. The receipt is `status-emitter-source.json`, and tags use
+`status-emitter-v<version>`. Publication does not change Unified's bundled source
+or enable status observations. Scheduling remains that workflow's default choice.
+
 Install the wheel in the CLI's environment, then compose this hook into the chosen
 bundle. Supply an **explicit local source**: the CLI's normal resolver rejects an
 installed module lacking a source hint. Obtain the installed directory using that

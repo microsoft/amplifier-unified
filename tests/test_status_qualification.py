@@ -31,6 +31,27 @@ def test_candidate_wheel_must_match_reviewed_source(tmp_path):
         owner.matching_source(wheel, 'different', source)
 
 
+@pytest.mark.parametrize(('prefix', 'test_root'), [
+    ('amplifier_status', 'tests'), ('amplifier_web', 'status_protocol/tests')])
+def test_standalone_tests_are_source_only_but_runtime_completeness_remains(tmp_path, prefix, test_root):
+    source = tmp_path/'source'; source.mkdir()
+    (source/'__init__.py').write_text('runtime')
+    tests = source/test_root; tests.mkdir(parents=True)
+    (tests/'test_standalone.py').write_text('installed-only test')
+    wheel = tmp_path/'candidate.whl'
+    with zipfile.ZipFile(wheel, 'w') as archive:
+        archive.writestr(prefix+'/__init__.py', 'runtime')
+    assert owner.matching_source(wheel, prefix, source) == 1
+    missing = source/'new_runtime.py'; missing.write_text('must still ship')
+    with pytest.raises(ValueError, match='omits.*new_runtime.py'):
+        owner.matching_source(wheel, prefix, source)
+    missing.unlink()
+    with zipfile.ZipFile(wheel, 'a') as archive:
+        archive.writestr(prefix+'/'+test_root+'/test_standalone.py', 'installed-only test')
+    with pytest.raises(ValueError, match='includes standalone tests'):
+        owner.matching_source(wheel, prefix, source)
+
+
 def test_core_native_wheel_must_have_exact_publication_digest(monkeypatch):
     identity = {'version':'2.0.2', 'path':'/owned/core.whl', 'sha256':'expected'}
     def registry(digest):

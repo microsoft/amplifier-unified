@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import configparser
 from email.parser import BytesParser
 import hashlib
 import json
@@ -26,7 +27,11 @@ COMPONENTS = {
     "outputs": ("components/outputs", "amplifier_outputs/"),
     "publishing": ("components/publishing", "amplifier_publishing/"),
     "recall": ("components/recall", "amplifier_recall/"),
+    "status-emitter": ("amplifier_web/status_protocol", ""),
 }
+# Distribution/artifact spelling is not an import contract. Existing components
+# keep their original mapping; status already has a distinct public namespace.
+IMPORT_PACKAGES = {"status-emitter": "amplifier_status"}
 
 
 def component_name(selected):
@@ -91,7 +96,8 @@ def safe(name):
 def package_identity(dist, selected):
     """Bind built payload and sdist inputs to Git, not merely their version labels."""
     component = component_name(selected)
-    package = "amplifier_" + component.replace("-", "_")
+    distribution = "amplifier_" + component.replace("-", "_")
+    package = IMPORT_PACKAGES.get(component, distribution)
     wheel, source = artifact_names(selected)
     expected = selected["sourceFiles"]
     prefix = COMPONENTS[component][1]
@@ -99,7 +105,7 @@ def package_identity(dist, selected):
                for name, digest in expected.items()
                if name.startswith(prefix) and (prefix or "/" not in name and
                    (name.endswith(".py") or component == "kernels" and name == "node_runner.cjs"))}
-    info = f"{package}-{selected['version']}.dist-info/"
+    info = f"{distribution}-{selected['version']}.dist-info/"
     with zipfile.ZipFile(dist / wheel) as archive:
         names = archive.namelist()
         if len(names) != len(set(names)):
@@ -113,7 +119,15 @@ def package_identity(dist, selected):
         metadata = BytesParser().parsebytes(archive.read(info + "METADATA"))
         if metadata["Name"] != "amplifier-" + component or metadata["Version"] != selected["version"]:
             raise ValueError("Wheel metadata differs from selection.")
-    prefix = f"{package}-{selected['version']}/"
+        if component == "status-emitter":
+            entry_points = configparser.ConfigParser(interpolation=None)
+            entry_points.optionxform = str
+            entry_points.read_string(archive.read(info + "entry_points.txt").decode())
+            if metadata.get_all("Requires-Dist") or metadata.get("License-Expression") != "MIT":
+                raise ValueError("Status must retain its dependency-free MIT package metadata.")
+            if sha(archive.read(info + "licenses/LICENSE")) != expected["LICENSE"]:
+                raise ValueError("Status wheel license differs from selected source.")
+    prefix = f"{distribution}-{selected['version']}/"
     with tarfile.open(dist / source) as archive:
         members = archive.getmembers()
         names = [member.name for member in members]
@@ -133,6 +147,11 @@ def package_identity(dist, selected):
         required = {name: digest for name, digest in expected.items() if name != ".gitignore"}
         if observed != required:
             raise ValueError("Source archive differs from selected project/tests.")
+        if component == "status-emitter":
+            project = tomllib.loads(archive.extractfile(prefix + "pyproject.toml").read().decode())["project"]
+            declared = {"console_scripts": project["scripts"], **project["entry-points"]}
+            if {name: dict(entry_points[name]) for name in entry_points.sections()} != declared:
+                raise ValueError("Status wheel entry points differ from selected source.")
     return {name: {"sha256": sha((dist / name).read_bytes()), "bytes": (dist / name).stat().st_size}
             for name in (wheel, source)}
 
@@ -251,8 +270,12 @@ def publish(root, revision, dist, *, component="scheduling"):
                                   "kernels": "Standalone persistent computation through caller-owned processes and observations.",
                                   "outputs": "Standalone output relationships, saved-body decoding and read-only Git review evidence.",
                                   "publishing": "Standalone immutable static releases, managed listeners and durable publishing receipts.",
-                                  "recall": "Standalone conversation search and durable versioned memory storage."}[component] + " Source: " + revision +
-                      ". Unified dependency selection is unchanged. Do not co-install with a Unified version that still bundles this package.")
+                                  "recall": "Standalone conversation search and durable versioned memory storage.",
+                                  "status-emitter": "Standalone read-only local status observations and optional hook."}[component] + " Source: " + revision +
+                      ". Unified dependency selection is unchanged." +
+                      (" The standalone import and CLI remain distinct from Unified's bundled copy."
+                       if component == "status-emitter" else
+                       " Do not co-install with a Unified version that still bundles this package."))
         release = read_release(release, tag)
     if not release["draft"]:
         raise ValueError("Component draft changed during preparation; preserve it for review.")

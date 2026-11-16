@@ -61,6 +61,7 @@ path = "scripts/scheduling_build_hook.py"
 packages = ["amplifier_web", "amplifier_operations", "amplifier_kernels", "components/scheduling-delivery/amplifier_scheduling", "components/recall-delivery/amplifier_recall", "components/outputs-delivery/amplifier_outputs", "components/workspace-metadata-delivery/amplifier_workspace_metadata", "components/worktrees-delivery/amplifier_worktrees", "components/publishing-delivery/amplifier_publishing", "components/portability-delivery/amplifier_portability"]
 # Test/build inputs do not ship; selected component provenance is included below.
 exclude = [
+    "/amplifier_web/status_protocol/tests/**", # Standalone qualification inputs, not application runtime.
     "/amplifier_kernels/LICENSE",
     "/amplifier_operations/LICENSE", # Selected license ships with app provenance.
 ]
