@@ -145,3 +145,20 @@ def test_actual_driver_records_both_sources_before_backend(tmp_path, monkeypatch
     monkeypatch.setattr(driver, 'run', before_backend)
     with pytest.raises(BackendNotStarted):
         driver.main()
+
+
+async def test_reused_native_app_explicitly_selects_each_profile_workspace(tmp_path):
+    from amplifier_web.service import AppService
+    from test_prepared_preset_native import NoModelRuntime
+    first, second = tmp_path / 'first', tmp_path / 'second'
+    first.mkdir(); second.mkdir()
+    app = AppService(tmp_path / 'app', NoModelRuntime(), workspace=first)
+    await app.close()
+    app = AppService(tmp_path / 'app', NoModelRuntime(), workspace=second)
+    try:
+        assert not any(w['path'] == str(second) for w in app.state['workspaces'])
+        await app.dispatch('workspace.add', {'path': str(second)})
+        selected = next(w for w in app.state['workspaces'] if w['id'] == app.state['selectedWorkspaceId'])
+        assert selected['path'] == str(second)
+    finally:
+        await app.close()

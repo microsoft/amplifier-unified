@@ -119,7 +119,8 @@ print(json.dumps({'prefix':sys.prefix,'wheelSha256':hashlib.sha256(wheel.read_by
     bootstrap = 'import sys;sys.path.insert(0,sys.argv.pop(1));import pytest;raise SystemExit(pytest.main(sys.argv[1:]))'
     with (output / 'pytest.log').open('w') as stream:
         result = subprocess.run([str(python), '-I', '-c', bootstrap, str(harness), '-p', 'pytest_asyncio.plugin',
-            '-c', '/dev/null', '-o', 'asyncio_mode=auto', '-v', '-s', '--tb=short', filename,
+            '-c', '/dev/null', '--rootdir=' + str(harness), '-p', 'no:cacheprovider',
+            '-o', 'asyncio_mode=auto', '-v', '-s', '--tb=short', filename,
             '--junitxml=' + str(output / 'junit.xml')], cwd=harness, env=env, stdout=stream, stderr=subprocess.STDOUT, timeout=2100)
     count = verify_cases(result.returncode, (output / 'junit.xml').read_bytes(), suite)
     record(output / 'result.json', {**selected, 'passed': True, 'cases': count, 'returncode': result.returncode})

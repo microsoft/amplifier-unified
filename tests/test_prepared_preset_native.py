@@ -87,6 +87,9 @@ async def test_native_default_prepared_preset_runtime(profile, monkeypatch):
     monkeypatch.setenv('AMPLIFIER_HOME', str(root / ('home-' + profile)))
     app = AppService(root / 'app', NoModelRuntime(), workspace=source)
     app.smart_tools = SmartToolsManager(app)
+    # A reused app data home retains its original workspace. Select this
+    # profile's fixture explicitly, just as an ordinary caller would.
+    await app.dispatch('workspace.add', {'path': str(source)})
     session = app._new_session({'title': 'Prepared ' + profile})
     app.state['sessions'] = [session]; app.state['selectedSessionId'] = session['id']; app._publish()
     tool_id = hashlib.sha256(owner.DTU_COMMIT.encode()).hexdigest()[:24]
