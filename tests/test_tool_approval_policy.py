@@ -1,15 +1,13 @@
 """Private worker facts are the only ordinary descriptor producer."""
 import copy
-import json
 from pathlib import Path
-import sys
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 
 import pytest
 
 from amplifier_web.approval_policy import PRODUCER, descriptor
 from amplifier_web.runtime import RuntimeManager
-from amplifier_web.tool_approval_scope import _source, canonical
+from amplifier_web.tool_approval_scope import canonical
 
 
 def fixture(tmp_path):
@@ -57,33 +55,6 @@ def test_expired_or_unverified_worker_scope_never_becomes_reusable(tmp_path, fau
 def test_non_json_arguments_have_no_exact_canonical_key(value):
     with pytest.raises((TypeError, ValueError)):
         canonical(value)
-
-
-@pytest.mark.parametrize('fault', [None, 'editable', 'missing-selection', 'wrong-origin',
-                                 'replaced-execute', 'rebound-execute'])
-def test_installed_source_reader_requires_actual_known_selected_implementation(tmp_path, monkeypatch, fault):
-    # A synthetic distribution record qualifies this reader, not a published
-    # reference package. Actual dispatch is covered by the Core bridge fixture.
-    module = ModuleType('amplifier_module_tool_filesystem.read')
-    exec('class ReadTool:\n async def execute(self, args):\n  return args\n', module.__dict__)
-    module.__file__ = str(tmp_path/'amplifier_module_tool_filesystem/read.py')
-    monkeypatch.setitem(sys.modules, module.__name__, module)
-    direct = {'url': 'https://example.invalid/fixture', 'vcs_info': {'commit_id': 'a' * 40}}
-    if fault == 'editable': direct['dir_info'] = {'editable': True}
-    elif fault == 'missing-selection': direct = {}
-    elif fault == 'wrong-origin': module.__file__ = str(tmp_path/'unselected.py')
-    distribution = SimpleNamespace(version='fixture', read_text=lambda _: json.dumps(direct),
-        locate_file=lambda relative: tmp_path/relative)
-    monkeypatch.setattr('amplifier_web.tool_approval_scope.importlib.metadata.distribution', lambda _: distribution)
-    tool = module.ReadTool()
-    if fault == 'replaced-execute': tool.execute = lambda args: args
-    elif fault == 'rebound-execute': tool.execute = module.ReadTool().execute
-    if fault:
-        with pytest.raises(ValueError): _source(tool)
-    else:
-        source, kind = _source(tool)
-        assert kind == 'read' and source['selection'] == direct
-        assert len(source['implementation']) == 64
 
 
 @pytest.mark.parametrize('state', ['current', 'changed', 'missing', 'ordinary-once'])

@@ -93,6 +93,7 @@ class Worker:
         self.terminal_response_refs = None
         self.terminal_checkpointed = False
         self.preparation_report = {}
+        self.tool_sources = None
         if __package__:
             from .ownership import WorkerOwnership
             from .computer_episodes import ComputerEpisodes
@@ -396,6 +397,7 @@ class Worker:
                         owner_session_id=(self.start_config or {}).get('ownerSessionId')),
                     'epoch': origin}
         coordinator.register_capability('web.tool_approval.context', tool_approval_context)
+        coordinator.register_capability('web.tool_sources', self.tool_sources)
         def current_full_access():
             # Read the same current policy as the host, never a startup copy.
             # Descendants retain their own live assignment while the root owns
@@ -967,9 +969,14 @@ class Worker:
             # the worker environment inherited by unrelated tool subprocesses.
             qualified_overrides = None
             install_overrides = None
+            self.tool_sources = None
+            source_captures = []
+            from amplifier_web.tool_source_proof import QualifiedToolSources
+            def capture_tool_sources(project, receipt, expected):
+                source_captures.append(QualifiedToolSources.capture(project, receipt, expected))
             if not os.environ.get("UV_OVERRIDE"):
                 with startup_timing.phase('worker.runtime.verify.before_prepare'):
-                    qualified_overrides = active_install_overrides(self.home)
+                    qualified_overrides = active_install_overrides(self.home, on_verified=capture_tool_sources)
                 install_overrides = (qualified_overrides if qualified_overrides is not None
                     else Path(__file__).with_name("runtime_deps") / "compatibility.txt")
             self.runtime = Runtime(session_id=config["id"], observer=self.observe, max_input_chars=200_000)
@@ -1023,7 +1030,10 @@ class Worker:
                     startup_timing=startup_timing)
             if qualified_overrides is not None:
                 with startup_timing.phase('worker.runtime.verify.after_prepare'):
-                    active_install_overrides(self.home, str(qualified_overrides))
+                    active_install_overrides(self.home, str(qualified_overrides), on_verified=capture_tool_sources)
+                if (len(source_captures) == 2 and source_captures[0] is not None
+                        and source_captures[0].same(source_captures[1])):
+                    self.tool_sources = source_captures[1]
             self.config_inputs = tuple(report.get("config_inputs", ()))
             from amplifier_web.attachments import encode
             self.session.coordinator.register_capability('live.attachments.encode',encode)

@@ -51,7 +51,7 @@ def fingerprint(value):
     return hashlib.sha256(canonical(value).encode()).hexdigest()
 
 
-def _source(tool):
+def _source(tool, proof=None):
     cls = type(tool)
     selected = _KNOWN.get((cls.__module__, cls.__name__))
     module = sys.modules.get(cls.__module__)
@@ -61,25 +61,18 @@ def _source(tool):
     if (not inspect.ismethod(execute) or execute.__self__ is not tool
             or execute.__func__ is not cls.execute):
         raise ValueError('The tool execution implementation was replaced.')
+    from .tool_source_proof import QualifiedToolSources
+    if type(proof) is not QualifiedToolSources:
+        raise ValueError('The tool has no verified worker source selection.')
     distribution = importlib.metadata.distribution(selected[0])
-    direct = json.loads(distribution.read_text('direct_url.json') or '{}')
-    if direct.get('dir_info', {}).get('editable'):
-        raise ValueError('Editable tool implementations have no reusable scope.')
-    revision = direct.get('vcs_info', {}).get('commit_id')
-    digest = direct.get('archive_info', {}).get('hashes', {}).get('sha256')
-    if not ((isinstance(revision, str) and len(revision) in {40, 64}
-             and all(char in '0123456789abcdef' for char in revision))
-            or (isinstance(digest, str) and len(digest) == 64
-                and all(char in '0123456789abcdef' for char in digest))):
-        raise ValueError('The tool has no exact installed source selection.')
     origin = Path(vars(module)['__file__']).resolve()
     package_file = cls.__module__.replace('.', '/')
-    candidates = [distribution.locate_file(package_file + '.py'),
-                  distribution.locate_file(package_file + '/__init__.py')]
-    if not any(Path(path).resolve() == origin for path in candidates):
-        raise ValueError('The imported tool does not match its selected distribution.')
+    if not any(origin.as_posix().endswith('/' + suffix) for suffix in
+               (package_file + '.py', package_file + '/__init__.py')):
+        raise ValueError('The imported tool does not match its declared module.')
+    source = proof.describe(selected[0], distribution, origin)
     return {'module': cls.__module__, 'class': cls.__name__, 'origin': str(origin),
-            'distribution': selected[0], 'version': distribution.version, 'selection': direct,
+            **source,
             # Hash the loaded entrypoint, not a claim that current disk bytes
             # prove what was imported. The package selection remains explicit.
             'implementation': hashlib.sha256(marshal.dumps(execute.__func__.__code__)).hexdigest()}, selected[1]
@@ -160,7 +153,7 @@ class ToolApprovalScope:
                     or tool.kind != FILES.get((type(tool.tool).__module__, type(tool.tool).__name__))):
                 raise ValueError('The file guard binding cannot be verified.')
             tool = tool.tool
-        source, kind = _source(tool)
+        source, kind = _source(tool, coordinator.get_capability('web.tool_sources'))
         if kind != 'bash' and guard is None:
             raise ValueError('The file tool has no enforcing source guard.')
         if kind == 'bash':

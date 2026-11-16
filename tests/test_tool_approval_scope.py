@@ -74,8 +74,8 @@ async def native(monkeypatch, tmp_path):
     await install_app_access(coordinator, bridge, execution_role='root')
     coordinator.get_capability('web.work_guard_tools')()
     original_source = tool_approval_scope._source
-    monkeypatch.setattr(tool_approval_scope, '_source', lambda item:
-        (copy.deepcopy(item.source), 'read') if item is tool else original_source(item))
+    monkeypatch.setattr(tool_approval_scope, '_source', lambda item, proof=None:
+        (copy.deepcopy(item.source), 'read') if item is tool else original_source(item, proof))
     events = []
     monkeypatch.setattr(runtime_worker, 'publish', events.append)
     worker = runtime_worker.Worker()

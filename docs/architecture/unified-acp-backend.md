@@ -159,7 +159,8 @@ match. The canonical decision rechecks that key before accepting the reply.
 
 The same producer can describe a supported exact native file call with
 `authorityLifetime: "request"`. Its key has a distinct `tool.invoke` operation
-and binds the actual registered tool, immutable installed source selection,
+and binds the actual registered tool, qualified source selection and verified
+package-content identity,
 schema, exact validated JSON arguments, resolved file targets, working folder,
 current access/mode policy and file security limits. It matches the same request
 and context across chats, not equivalent commands or paths. Current call, chat,
@@ -175,6 +176,15 @@ an exact effective-environment witness and remain once-only, as do MCP, unknown,
 editable, invalid and unverifiable tools. No display-text hashing or argument
 equivalence is used. Modes, existing approvals, observations, file checks, Work,
 budgets and native execution ownership keep their normal order and authority.
+
+The worker captures only its already validated runtime selection before and
+after preparation. Normal noneditable file-cache wheel installs remain valid
+representations of that selection; a PEP 610 Git URL is not required. Bounded
+checks bind the complete installed reference package to its RECORD inventory,
+and a Foundation source import must match the selected source and installed
+package bytes. Missing, dirty, changed or ambiguous evidence stays once-only.
+RECORD alone is not publisher authority. No new source store, approval-time
+resolver or whole-environment scan is introduced.
 
 Session-only configuration targets and unstructured tool approvals have no
 reusable descriptor. A model-authored title, reason or metadata cannot mint one.
