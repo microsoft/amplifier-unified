@@ -769,6 +769,27 @@ def test_explicit_cli_open_no_secret_output(tmp_path, monkeypatch, capsys, no_op
     assert ("Waiting up to a minute" in captured.err) is (not no_open)
 
 
+def test_a_wait_message_that_cannot_be_written_does_not_stop_the_open(tmp_path, monkeypatch, capsys):
+    # The message is for a person at a terminal. When nobody reads the output
+    # (a closed pipe), the wait must go on and the browser must still open.
+    monkeypatch.setattr(entry, "is_windows", lambda: True)
+    class Closed:
+        def write(self, text):
+            raise BrokenPipeError("closed")
+        def flush(self):
+            raise BrokenPipeError("closed")
+    opened = []
+    async def grant(*a, wait, waiting):
+        waiting()
+        return ORIGIN + "/login#ticket=" + "a" * 43
+    monkeypatch.setattr(entry, "owner_browser_url", grant)
+    monkeypatch.setattr(cli.webbrowser, "open", lambda value: opened.append(1) or True)
+    monkeypatch.setattr(sys, "argv", ["amplifier-unified", "--data-dir", str(tmp_path), "open"])
+    monkeypatch.setattr(sys, "stderr", Closed())
+    cli.main()
+    assert opened == [1] and entry.OPENED in capsys.readouterr().out.splitlines()
+
+
 @pytest.mark.parametrize("failure", ["host", "browser-refused", "browser-error"])
 def test_explicit_cli_open_confirms_nothing_when_the_browser_did_not_open(tmp_path, monkeypatch, capsys, failure):
     monkeypatch.setattr(entry, "is_windows", lambda: True)
