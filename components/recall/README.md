@@ -40,6 +40,22 @@ not establish host permissions, model behavior or native history compatibility.
 The host tests remain in Unified's `tests/test_recall.py` and
 `tests/test_memory_personalization.py`.
 
+## Independent publication
+
+The `Recall package` workflow (`.github/workflows/recall-release.yml`) qualifies
+pull requests and publishes only when the release owner explicitly dispatches it
+from `main` with a full merged source commit. Coordinate that owner before choosing
+a version or dispatching publication.
+
+It builds the standalone wheel and sdist once, binds their bytes and included
+source/tests to the selected Git tree, and tests the installed wheel outside the
+checkout without Unified, Core or Foundation. The four release assets are the
+wheel, sdist, `recall-source.json` and `SHA256SUMS`, under `recall-v<VERSION>`.
+Publication does not replace Unified's latest release or change its selected code.
+Existing tags and assets are immutable: a completed exact-byte retry is read-only;
+a partial draft can receive only its missing matching assets. Preserve the original
+four assets for a retry because rebuilding can change archive bytes.
+
 ## Current assembly boundary
 
 This is an independent package preparation, not a published artifact selection.
@@ -48,8 +64,8 @@ package and remain its sole installed distribution owner. Do not coinstall the
 standalone distribution in a Unified environment. No runtime dependency, lock,
 database path or stored format changes with this move.
 
-Independent publication and a generated delivery copy are later explicit steps
-using the existing component release/selection workflow. The authored tree is
+A generated delivery copy remains a later explicit step after a public release,
+using the existing component selection workflow. The authored tree is
 the only current source owner; do not fabricate a selection record or copy it
 into a second writable runtime tree. A future supporting repository may use
 `amplifier-platform-recall`; its creation and handoff are separate decisions from

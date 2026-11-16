@@ -25,6 +25,7 @@ COMPONENTS = {
     "kernels": ("components/kernels", ""),
     "outputs": ("components/outputs", "amplifier_outputs/"),
     "publishing": ("components/publishing", "amplifier_publishing/"),
+    "recall": ("components/recall", "amplifier_recall/"),
 }
 
 
@@ -249,7 +250,8 @@ def publish(root, revision, dist, *, component="scheduling"):
                                   "workspace-metadata": "Standalone workspace registration metadata over caller-owned records.",
                                   "kernels": "Standalone persistent computation through caller-owned processes and observations.",
                                   "outputs": "Standalone output relationships, saved-body decoding and read-only Git review evidence.",
-                                  "publishing": "Standalone immutable static releases, managed listeners and durable publishing receipts."}[component] + " Source: " + revision +
+                                  "publishing": "Standalone immutable static releases, managed listeners and durable publishing receipts.",
+                                  "recall": "Standalone conversation search and durable versioned memory storage."}[component] + " Source: " + revision +
                       ". Unified dependency selection is unchanged. Do not co-install with a Unified version that still bundles this package.")
         release = read_release(release, tag)
     if not release["draft"]:

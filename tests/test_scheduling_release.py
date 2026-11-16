@@ -494,7 +494,7 @@ def test_workspace_metadata_preserves_distribution_import_and_source_identity(tm
         release.selection(root, revision, component="workspaces")
 
 
-@pytest.mark.parametrize("component", ["outputs", "publishing"])
+@pytest.mark.parametrize("component", ["outputs", "publishing", "recall"])
 def test_nested_component_preserves_source_and_artifact_identity(tmp_path, component):
     root, revision, dist, _ = make_candidate(tmp_path, component)
     selected = release.verify(root, revision, dist, component=component)
@@ -509,7 +509,7 @@ def test_nested_component_preserves_source_and_artifact_identity(tmp_path, compo
         release.verify(root, revision, dist)
 
 
-@pytest.mark.parametrize("component", ["workspace-metadata", "outputs", "publishing"])
+@pytest.mark.parametrize("component", ["workspace-metadata", "outputs", "publishing", "recall"])
 @pytest.mark.parametrize("state", ["new", "partial", "complete"])
 def test_nested_component_uses_existing_exact_publication_recovery(tmp_path, monkeypatch, state, component):
     candidate = make_candidate(tmp_path, component)
@@ -526,7 +526,7 @@ def test_nested_component_uses_existing_exact_publication_recovery(tmp_path, mon
         assert remote.mutations == []
 
 
-@pytest.mark.parametrize("component", ["workspace-metadata", "outputs", "publishing"])
+@pytest.mark.parametrize("component", ["workspace-metadata", "outputs", "publishing", "recall"])
 def test_nested_component_changed_asset_remains_an_immutable_conflict(tmp_path, monkeypatch, component):
     candidate = make_candidate(tmp_path, component)
     remote = Remote(candidate)
