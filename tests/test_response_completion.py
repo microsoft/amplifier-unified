@@ -75,6 +75,48 @@ def test_service_annotation_requires_all_exact_identities_and_is_idempotent():
     assert not any(row.get("response") for row in session["messages"])
 
 
+@pytest.mark.parametrize("inputs,anchor", [
+    (["async-return"], None),
+    (["input"], "original"),
+    (["input", "steer"], "original"),
+    (["async-return", "steer"], "steering"),
+])
+def test_display_anchor_uses_actual_generation_inputs_not_nearby_humans(inputs, anchor):
+    # Exact terminal events model an async return, not native job execution.
+    # Neither the original request nor a later unrelated human is an inferred
+    # ancestor of the service-only generation. Mixed inputs still keep the
+    # existing display anchor; it is not a claim of one initiating task.
+    messages = [
+        {"id": "original", "role": "user", "inputId": "input"},
+        {"id": "steering", "role": "user", "inputId": "steer"},
+        {"id": "unrelated", "role": "user", "inputId": "later-human"},
+        {**saved(1), "inputId": inputs[-1]},
+        {**saved(10), "inputId": inputs[-1]},
+        {**saved(11), "inputId": inputs[-1]},
+    ]
+    session = {"id": "root", "messages": messages}
+    native = {**completion(), "type": "generation.finished", "input_ids": inputs,
+              "active_job_ids": ["still-running"]}
+    before = deepcopy(native)
+    kind, event = normalize_event(native, "root")
+    assert kind == "runtime.generation"
+    assert apply(session, event)
+    for message in messages[3:]:
+        assert message["response"] == {
+            "version": 1, "generationId": "g", "status": "completed",
+            "phase": "interim" if message["id"] == "g-1" else "final",
+            "finalMessageIds": ["g-10", "g-11"], "inputIds": inputs,
+            "anchorMessageId": anchor,
+        }
+        assert message["inputId"] == inputs[-1] and message["generationId"] == "g"
+    assert not any("response" in message for message in messages[:3])
+    # Even a finished manager turn with pending work has display facts only.
+    assert native == before
+    assert event["generation_id"] == "g" and event["input_ids"] == inputs
+    assert event["finalMessageRefs"] == before["finalMessageRefs"]
+    assert event["active_job_ids"] == ["still-running"]
+
+
 @pytest.mark.parametrize("change", [
     {"sessionId": "child"}, {"rootSessionId": "child"}, {"event": "generation.started"},
     {"finalMessageRefs": {}}, {"finalMessageRefs": {"version": 1, "generationId": "g", "sequences": [10, 10]}},
