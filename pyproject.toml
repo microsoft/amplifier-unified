@@ -77,8 +77,6 @@ exclude = [
     "/.ci/**",
     "/components/operations/build/**", "/components/operations/dist/**",
     "/components/operations/.venv/**", "/components/operations/*.egg-info/**",
-    "/components/scheduling/build/**", "/components/scheduling/dist/**",
-    "/components/scheduling/.venv/**", "/components/scheduling/*.egg-info/**",
     "/components/publishing/build/**", "/components/publishing/dist/**",
     "/components/publishing/.venv/**", "/components/publishing/*.egg-info/**",
     "/components/worktrees/build/**", "/components/worktrees/dist/**",
