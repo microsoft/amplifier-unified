@@ -16,6 +16,7 @@ on:
           - patch-placement-native
           - managed-removal-recovery
           - fresh-cleanup-native
+          - prepared-runtime-native
           - shared-work-continuity
           - manager-exception-boundary
           - remote-test-origins
@@ -31,6 +32,10 @@ on:
           - question-answer-installed
           - live-first-send
           - live-first-accepted-graph
+      candidate_ref:
+        description: Optional full same-repository candidate SHA for prepared-runtime-native (tests remain at the selected workflow revision)
+        type: string
+        default: ''
       core_wheels:
         description: Qualify published Core wheels and real runtime on both Linux architectures
         type: boolean
@@ -47,7 +52,7 @@ permissions:
   contents: read
 jobs:
   python:
-    if: ${{ !inputs.core_wheels && inputs.suite != 'remote-test-origins' && inputs.suite != 'cold-control-restore' && inputs.suite != 'goal-peer-publisher-0410' && inputs.suite != 'updater-omitted-ref' && inputs.suite != 'updater-public-selected-source' && inputs.suite != 'updater-synthetic-acquisition' && inputs.suite != 'updater-expanded-lock' && inputs.suite != 'fresh-cleanup-native' }}
+    if: ${{ !inputs.core_wheels && inputs.suite != 'remote-test-origins' && inputs.suite != 'cold-control-restore' && inputs.suite != 'goal-peer-publisher-0410' && inputs.suite != 'updater-omitted-ref' && inputs.suite != 'updater-public-selected-source' && inputs.suite != 'updater-synthetic-acquisition' && inputs.suite != 'updater-expanded-lock' && inputs.suite != 'fresh-cleanup-native' && inputs.suite != 'prepared-runtime-native' }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
@@ -1023,5 +1028,80 @@ jobs:
         with:
           name: fresh-cleanup-native-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: output/fresh-cleanup-native/
+          if-no-files-found: error
+          retention-days: 14
+
+  prepared-runtime-native:
+    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.core_wheels && inputs.suite == 'prepared-runtime-native' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    permissions:
+      contents: read
+    env:
+      CHECK_SUITE: prepared-runtime-native
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Validate optional immutable candidate input
+        env:
+          CANDIDATE_REF: ${{ inputs.candidate_ref }}
+        run: |
+          python - <<'PY'
+          import os, re
+          value = os.environ['CANDIDATE_REF']
+          assert not value or re.fullmatch('[a-f0-9]{40}', value), 'Use a full candidate commit SHA'
+          PY
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        if: inputs.candidate_ref != ''
+        with:
+          ref: ${{ inputs.candidate_ref }}
+          path: .ci/candidate
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13.17'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22.16.0'
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: '0.13.6'
+          enable-cache: false
+      - name: Read the selected product's ordinary backend pin
+        id: backend
+        env:
+          CANDIDATE_REF: ${{ inputs.candidate_ref }}
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import ast, os
+          from pathlib import Path
+          source = Path('.ci/candidate') if os.environ['CANDIDATE_REF'] else Path('.')
+          for node in ast.parse((source / 'amplifier_web/task_environments.py').read_text()).body:
+              if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name) and node.targets[0].id == 'DTU_COMMIT':
+                  print('revision=' + ast.literal_eval(node.value))
+          PY
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: microsoft/amplifier-smart-tool-digital-twin-universe
+          ref: ${{ steps.backend.outputs.revision }}
+          path: .ci/dtu-core
+          persist-credentials: false
+      - name: Run the two owned prepared runtime cases
+        env:
+          CANDIDATE_REF: ${{ inputs.candidate_ref }}
+          CLEANUP_NATIVE_ROOT: ${{ runner.temp }}/unified-prepared-native
+        run: |
+          set -euo pipefail
+          if test -n "$CANDIDATE_REF"; then export NATIVE_CANDIDATE_ROOT="$GITHUB_WORKSPACE/.ci/candidate"; fi
+          mkdir -p output/prepared-runtime-native
+          python -u scripts/fresh_cleanup_native_checks.py 2>&1 | tee output/prepared-runtime-native/driver.log
+      - name: Retain results and failed prerequisites
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: prepared-runtime-native-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: output/prepared-runtime-native/
           if-no-files-found: error
           retention-days: 14

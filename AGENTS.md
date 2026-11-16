@@ -92,6 +92,14 @@ Use measured workload budgets; this does not add a full-suite release gate.
 
 ## Keep the development release loop fast
 
+For native runner checks, use the ordinary manual `python-checks.yml` suite
+`prepared-runtime-native` on an explicit source revision; `candidate_ref` can
+select a separate immutable candidate. A standing scoped task includes dispatch,
+inspection, ordinary repairs and corrected runs after known terminal failures,
+without nomination variables or another approval round. Inspect uncertain
+original operations before new effects; preserve Stop, ownership and cleanup
+receipts. Test workflows are convenience shortcuts, not exclusive execution paths.
+
 Follow the [Fast Release Guide](docs/validation/release-qualification.md):
 **one PR → review while required CI runs → merge → automatic publication and
 installed-package smoke**. Qualify affected behavior first; reuse independent
