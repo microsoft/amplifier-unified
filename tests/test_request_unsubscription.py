@@ -401,3 +401,16 @@ async def test_withdrawal_cannot_clear_human_or_stop_boundary(task_app, boundary
     assert ctx.target['task'] == prior
     assert not await ctx.owner.tasks.continuation_allowed()
     assert ctx.target.get('interruptionRevision', 0) == (1 if boundary == 'stop' else 0)
+
+
+async def test_selected_browser_payload_updates_from_actual_withdrawal_without_client_change(task_app):
+    ctx = task_app
+    identity = await waiting_dependency(ctx)
+    ctx.app.state['selectedSessionId'] = ctx.target['id']
+    ctx.app._publish_changes(sessions={ctx.target['id']}, globals={'selectedSessionId'})
+    before = ctx.app.browser_state()['selectedActivity']
+    assert before['sessionId'] == ctx.target['id'] and before['waiting']['targets']
+    await unsubscribe(ctx.app, identity, source=ctx.target)
+    after = ctx.app.browser_state()['selectedActivity']
+    assert after['sessionId'] == ctx.target['id'] and 'waiting' not in after
+    assert ctx.target['task']['status'] == 'blocked'
