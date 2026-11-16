@@ -157,6 +157,25 @@ is `conversation`. Chat IDs, call IDs, reasons and timestamps are excluded from
 the matching key. Matching spans chats only when the actual targets and effects
 match. The canonical decision rechecks that key before accepting the reply.
 
+The same producer can describe a supported exact native file call with
+`authorityLifetime: "request"`. Its key has a distinct `tool.invoke` operation
+and binds the actual registered tool, immutable installed source selection,
+schema, exact validated JSON arguments, resolved file targets, working folder,
+current access/mode policy and file security limits. It matches the same request
+and context across chats, not equivalent commands or paths. Current call, chat,
+generation and Stop identities remain in an ephemeral execution witness.
+The live worker alone supplies the descriptor; saved events cannot create one.
+Approval and the existing Work/file execution boundaries recheck the witness,
+including after file-lock waits. A hook callback error does not approve it.
+
+This requires the optional streaming `tools.dispatch.current_call` capability
+and Unified's existing enforcing wrappers. Guarded reference read/write/edit and
+patch tools with verifiable installed sources are supported. Shell calls lack
+an exact effective-environment witness and remain once-only, as do MCP, unknown,
+editable, invalid and unverifiable tools. No display-text hashing or argument
+equivalence is used. Modes, existing approvals, observations, file checks, Work,
+budgets and native execution ownership keep their normal order and authority.
+
 Session-only configuration targets and unstructured tool approvals have no
 reusable descriptor. A model-authored title, reason or metadata cannot mint one.
 These requests retain once/deny choices; the Instance must not manufacture an

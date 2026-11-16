@@ -1,0 +1,84 @@
+"""Private worker facts are the only ordinary descriptor producer."""
+import copy
+import json
+from pathlib import Path
+import sys
+from types import ModuleType, SimpleNamespace
+
+import pytest
+
+from amplifier_web.approval_policy import PRODUCER, descriptor
+from amplifier_web.runtime import RuntimeManager
+from amplifier_web.tool_approval_scope import _source, canonical
+
+
+def fixture(tmp_path):
+    scope = {'version': 1, 'producer': PRODUCER, 'key': 'a' * 64, 'description': 'Exact file call.',
+             'allowOptionId': 'allow', 'authorityLifetime': 'request'}
+    session = {'id': 'chat', 'workspace': str(tmp_path/'workspace')}
+    approval = {'id': 'request', 'status': 'pending', 'options': ['allow', 'deny']}
+    manager = RuntimeManager.__new__(RuntimeManager)
+    row = {'process': SimpleNamespace(returncode=None), 'approvalScopes': {'request': {
+        'owner': str(tmp_path/'app'), 'workspace': session['workspace'], 'descriptor': scope}}}
+    manager.workers = {'chat': row}
+    service = SimpleNamespace(data_dir=tmp_path/'app', runtime=manager)
+    return service, session, approval, row, scope
+
+
+def test_private_live_worker_fact_and_detached_descriptor(tmp_path):
+    service, session, approval, row, scope = fixture(tmp_path)
+    assert descriptor(service, session, approval) == scope
+    value = service.runtime.approval_scope('chat', 'request')
+    value['descriptor']['key'] = 'b' * 64
+    assert descriptor(service, session, approval) == scope
+    row['approvalScopes'].clear()
+    approval.update(toolScope=value, policyScope=scope)
+    assert descriptor(service, session, approval) is None
+
+
+@pytest.mark.parametrize('fault', ['dead', 'closing', 'yielding', 'yielded', 'owner', 'workspace',
+    'lifetime', 'producer', 'boolean-version', 'key', 'options', 'resolved', 'long-description'])
+def test_expired_or_unverified_worker_scope_never_becomes_reusable(tmp_path, fault):
+    service, session, approval, row, scope = fixture(tmp_path)
+    if fault == 'dead': row['process'].returncode = 0
+    elif fault in {'closing', 'yielding', 'yielded'}: row[fault] = True
+    elif fault in {'owner', 'workspace'}: row['approvalScopes']['request'][fault] += '-other'
+    elif fault == 'lifetime': scope['authorityLifetime'] = 'conversation'
+    elif fault == 'producer': scope['producer'] = 'invented'
+    elif fault == 'boolean-version': scope['version'] = True
+    elif fault == 'key': scope['key'] = 'x' * 64
+    elif fault == 'options': approval['options'] = [['allow'], 'deny']
+    elif fault == 'resolved': approval['status'] = 'allow'
+    else: scope['description'] = 'é' * 257
+    assert descriptor(service, session, approval) is None
+
+
+@pytest.mark.parametrize('value', [float('nan'), float('inf'), {1: 'key'}, {'a': (1, 2)}, Path('/path')])
+def test_non_json_arguments_have_no_exact_canonical_key(value):
+    with pytest.raises((TypeError, ValueError)):
+        canonical(value)
+
+
+@pytest.mark.parametrize('fault', [None, 'editable', 'missing-selection', 'wrong-origin', 'replaced-execute'])
+def test_installed_source_reader_requires_actual_known_selected_implementation(tmp_path, monkeypatch, fault):
+    # A synthetic distribution record qualifies this reader, not a published
+    # reference package. Actual dispatch is covered by the Core bridge fixture.
+    module = ModuleType('amplifier_module_tool_filesystem.read')
+    exec('class ReadTool:\n async def execute(self, args):\n  return args\n', module.__dict__)
+    module.__file__ = str(tmp_path/'amplifier_module_tool_filesystem/read.py')
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    direct = {'url': 'https://example.invalid/fixture', 'vcs_info': {'commit_id': 'a' * 40}}
+    if fault == 'editable': direct['dir_info'] = {'editable': True}
+    elif fault == 'missing-selection': direct = {}
+    elif fault == 'wrong-origin': module.__file__ = str(tmp_path/'unselected.py')
+    distribution = SimpleNamespace(version='fixture', read_text=lambda _: json.dumps(direct),
+        locate_file=lambda relative: tmp_path/relative)
+    monkeypatch.setattr('amplifier_web.tool_approval_scope.importlib.metadata.distribution', lambda _: distribution)
+    tool = module.ReadTool()
+    if fault == 'replaced-execute': tool.execute = lambda args: args
+    if fault:
+        with pytest.raises(ValueError): _source(tool)
+    else:
+        source, kind = _source(tool)
+        assert kind == 'read' and source['selection'] == direct
+        assert len(source['implementation']) == 64
