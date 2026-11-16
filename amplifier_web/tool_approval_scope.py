@@ -58,7 +58,8 @@ def _source(tool):
     if not selected or module is None or vars(module).get(cls.__name__) is not cls:
         raise ValueError('The actual tool implementation is unsupported.')
     execute = tool.execute
-    if not inspect.ismethod(execute) or execute.__func__ is not cls.execute:
+    if (not inspect.ismethod(execute) or execute.__self__ is not tool
+            or execute.__func__ is not cls.execute):
         raise ValueError('The tool execution implementation was replaced.')
     distribution = importlib.metadata.distribution(selected[0])
     direct = json.loads(distribution.read_text('direct_url.json') or '{}')

@@ -59,7 +59,8 @@ def test_non_json_arguments_have_no_exact_canonical_key(value):
         canonical(value)
 
 
-@pytest.mark.parametrize('fault', [None, 'editable', 'missing-selection', 'wrong-origin', 'replaced-execute'])
+@pytest.mark.parametrize('fault', [None, 'editable', 'missing-selection', 'wrong-origin',
+                                 'replaced-execute', 'rebound-execute'])
 def test_installed_source_reader_requires_actual_known_selected_implementation(tmp_path, monkeypatch, fault):
     # A synthetic distribution record qualifies this reader, not a published
     # reference package. Actual dispatch is covered by the Core bridge fixture.
@@ -76,6 +77,7 @@ def test_installed_source_reader_requires_actual_known_selected_implementation(t
     monkeypatch.setattr('amplifier_web.tool_approval_scope.importlib.metadata.distribution', lambda _: distribution)
     tool = module.ReadTool()
     if fault == 'replaced-execute': tool.execute = lambda args: args
+    elif fault == 'rebound-execute': tool.execute = module.ReadTool().execute
     if fault:
         with pytest.raises(ValueError): _source(tool)
     else:
