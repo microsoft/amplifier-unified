@@ -362,6 +362,20 @@ Availability checks reuse a private inventory index, invalidated by generation, 
 
 Core follows published PyPI releases using the app's wheel-only policy. Foundation's host library, the streaming engine and loop-live track their configured `@main` sources. Provider/tool modules also follow their configured mutable sources. Candidate preparation resolves exact revisions in an isolated runtime and records them as validation evidence; these receipts do not replace branch-tracking configuration with commit pins. Activation still requires the candidate runtime checks described above. Application releases come from the private `microsoft/amplifier-unified` GitHub repository. Checks use the signed-in GitHub CLI and resolve the release tag to an exact commit. Installation first builds a separate uv tool environment and checks the host import, packaged frontend assets and package version. This validates packaging, not every provider account or live audio connection. Once idle, the host installs that exact revision into its normal uv tool location and restarts on the same port, workspace and data directory. Restart output is retained privately in `updates/restart.log`; the prior Git install reference is recorded in `updates/previous-app.json` for manual recovery. Ecosystem rollback does not roll back application code. If there is no accessible release or GitHub sign-in, the UI reports a failed check rather than claiming the application is current.
 
+App-authored direct Git dependencies also retain their update policy independently
+of frozen revisions. Before recording a new generation, an untyped Git requirement
+must resolve unambiguously to a branch at the exact installed commit. For an older
+generation whose app dependency was recorded as an unresolved full-SHA pin,
+prospective checking additionally requires matching current and stored app
+declarations, unchanged recorded manifest/lock/installed graph, and the exact
+stored source identity and origin. A moving branch may now be newer than that
+verified old installation; the ordinary checked-candidate resolution guard still
+binds the next revision. This proof changes only the prospective inventory and
+new candidate's policy, never the old generation's receipts. Explicit pins, tags
+(including same-name branch/tag ambiguity), custom sources, local edits and
+external resolver policy do not acquire branch authority from an `originalRef`
+spelling or matching commit.
+
 The worker's transitive Foundation override names the distribution without
 independently declaring a URL/ref. The effective `tool.uv.sources` choice owns
 that identity, including an installed fork or pin carried into a new candidate.
