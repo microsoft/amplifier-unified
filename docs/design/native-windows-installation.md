@@ -655,8 +655,10 @@ table with `python tests/test_windows_path_budget.py`.
   same name (folder 154 at 59). Each stage has its own shared home, so two
   stages never share a session folder. Two session-store
   shapes do not fit in a stage (the saved view, 261, and a background-job
-  record, 286); a probe writes neither, and the native case checks the
-  complete list of what the real probe leaves. A first installation without an
+  record, 286); a probe writes neither. The native case checks the complete
+  list of what the real probe leaves with its test profile (one offline
+  profile, no default behaviors); the profiles of a real installation are
+  checked by a whole in-app update in the clean room. A first installation without an
   AI connection has no stage: `<folder>\app\updates\baseline-runtime` holds
   receipts only (longest path 118).
   **Not covered:** a chat with its own setup (dependency overrides of its
@@ -717,12 +719,16 @@ module file opens at a folder path of 59 (253 characters). In the earlier
 folder `source-store` it is refused at 59 (264) and opens at 54 (259). The
 same job requires that an installation with each folder name resolves its own
 store through the real private-folder checks. Its update-stage cases make a
-stage as the updater does, at folder paths of 51 and 59. They require that the
+stage with the updater's layout, at folder paths of 51 and 59 (through the
+app's private-folder creator, as setup does; the updater itself uses an
+ordinary `mkdir`, which the probe's private-folder check refused on the
+runner). They require that the
 session store's folder is refused under the CLI name and that the app's real
 compatibility probe then ends with the record that the Updates page showed.
 They require that the same probe, unchanged, completes under the short name,
 with modules from the locked test dependencies and no download, and that what
-it leaves is exactly the list in `tests/update_stage_probe.py`. That is the
+it leaves with that test profile is exactly the list in
+`tests/update_stage_probe.py`. That is the
 probe in a stage, not a whole in-app update: no component is fetched or
 installed. It is not setup-file or clean-account acceptance.
 

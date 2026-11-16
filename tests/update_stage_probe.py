@@ -1,12 +1,19 @@
-"""An update stage like the updater makes, and the app's real compatibility probe in it.
+"""An update stage with the updater's layout, and the app's real compatibility probe in it.
 
 The probe is ``amplifier_web/update_probe.py``, unchanged, as a child process
 with the command and the stage settings of ``UpdateManager.validate``. It mounts
 real modules from the installed test dependencies and one provider that never
 calls a model. Nothing is downloaded.
 
-One difference from an installed app: the child runs in the test environment's
-Python, not in a frozen worker environment.
+Differences from the probe of an installed app. They are why this is a check of
+the probe's paths and not acceptance of an in-app update:
+
+- The child runs in the test environment's Python, not in a frozen worker
+  environment.
+- It checks one offline profile, with no default behavior and no other bundle.
+  The profiles of a real installation mount more modules.
+- On Windows the stage folders are made by the app's private-folder creator
+  (see ``build``); the updater uses an ordinary ``mkdir``.
 """
 from __future__ import annotations
 
@@ -72,7 +79,7 @@ def _installed(package):
 
 
 def build(app_home, fixtures, *, stage_id=STAGE_ID):
-    """Make ``<app_home>/updates/releases/<stage_id>`` the way an in-app update does.
+    """Make ``<app_home>/updates/releases/<stage_id>`` with the layout of an in-app update's stage.
 
     ``fixtures`` is an existing folder outside ``app_home``. The profile, the
     provider module and the overrides file go there, so the stage holds only

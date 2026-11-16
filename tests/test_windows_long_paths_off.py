@@ -366,7 +366,7 @@ PROJECT = 'update-' + update_stage_probe.STAGE_ID[:12]
 
 @pytest.fixture
 def stage(base, installation):
-    """A stage like the updater makes, in an installation of the given folder path length."""
+    """A stage with the updater's layout, in an installation of the given folder path length."""
     material = base / ('u' + uuid.uuid4().hex[:7])   # Test material stays outside the installation.
     material.mkdir()
 
@@ -438,7 +438,7 @@ def test_the_real_update_probe_completes_in_a_stage_with_long_paths_off(stage, m
     assert update_stage_probe.expected_project(made) == PROJECT
     assert os.listdir(made.shared / 'projects') == [PROJECT]
     session = update_stage_probe.session_of(made, PROJECT)
-    # The complete list of what the probe left: in its stage and below the capture folder.
+    # The complete list of what the probe left with the fixture's profile: in its stage and below the capture folder.
     assert update_stage_probe.left_in_stage(made, PROJECT, session) == update_stage_probe.STAGE_AFTER_A_PROBE
     assert update_stage_probe.names(install.root / 'capture', PROJECT, session) == \
         update_stage_probe.CAPTURE_AFTER_A_PROBE

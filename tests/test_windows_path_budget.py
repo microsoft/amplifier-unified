@@ -228,7 +228,7 @@ def update_stage(project=UPDATE_PROJECT, identity=ROOT_ID):
 # The two session-store shapes that do not fit in a stage. A probe writes
 # neither: the app saves a view only for a chat that it shows, and a probe
 # starts no background job. ``tests/test_windows_long_paths_off.py`` checks the
-# complete list of what the real probe leaves in a stage.
+# complete list of what the real probe leaves in a stage with its test profile.
 STAGE_NEVER_WRITTEN = {'probe view temporary', 'probe background-job record'}
 # The longest path that a stage and its probe create at the longest root, and
 # the characters that remain below the file limit.
