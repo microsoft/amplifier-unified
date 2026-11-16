@@ -107,7 +107,7 @@ key reports `capture_source_changed`; explicit invalidation without a failed gat
 reports `current_invalidated`. These observations do not change gate order,
 authorization, status, deduplication or retries. A denied final transport grant
 retains its first observed dimension even if a later check would succeed.
-When the unchanged total source witness fails, admission-time private component
+When the total source witness fails, admission-time private component
 fingerprints identify the first mismatch using a finite `current_source_` suffix:
 `owner_native`, `runtime_session`, `created`, `status`, `stop`, `archive`,
 `deleting`, `storage_mode`, `cold_resource`, `cold_stamp`, `rows_count`, `rows_id`,
@@ -150,6 +150,18 @@ change alone does not invalidate identical public input. The existing bounded
 page cache avoids rereading unchanged files on status polls. Real public appends,
 same-ID edits, provenance/acceptance changes and owner/Stop changes remain fenced;
 no whole-history hydration, event-log scan or provider retry is introduced.
+Resident and cold saved messages use the same bounded public projection and
+selection in that witness. Cooling or hydrating unchanged saved content therefore
+does not invalidate a suggestion. The existing page cache reuses a cold suffix
+only for its exact owner, indexed resource and fresh backing-file signature;
+a changed identity/signature rereads through `read_saved_window` under its existing
+8 MiB raw-read / 4 MiB record limits and 100-row suffix bound, then applies the independent
+24 KiB selected-input bound. Missing, malformed or unreadable backing sources
+fail closed. No full resource read or new cache owner is introduced.
+As with native freshness, a cold cache miss/change performs this bounded read
+synchronously at currentness admission; repeated unchanged polls only validate
+the signature/cache and bounded projected rows. This is not a latency guarantee
+for slow storage and does not change the host's 15-second overall deadline.
 
 The client additionally fences draft/outbox/voice changes and navigation, validates
 `configRevision == suggestionModels.revision` and the request's source key, and

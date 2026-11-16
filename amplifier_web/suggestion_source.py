@@ -179,7 +179,7 @@ def witness(service, sid, config=None, *, components=None):
         session.get('status') in {'idle', 'ready'}, session.get('interruptionRevision')]
     def observed(*, projected=None, cold=None, stamp=None):
         # Diagnostics borrow the SAME bounded rows/owner/stamp already used by
-        # the unchanged total witness. Keep only fixed-size private hashes.
+        # the total witness. Keep only fixed-size private hashes.
         if components is None:
             return
         source = owner[0]
@@ -197,23 +197,23 @@ def witness(service, sid, config=None, *, components=None):
         if cold is not None:
             values.update(cold_resource=cold.identity, cold_stamp=stamp)
         components.update({key: digest(values.get(key)) for key in SOURCE_COMPONENTS})
+    cold, stamp = None, None
     if session.get('historyManaged') is True:
         page = windows.public_native_tail(session)
+    else:
+        cold = windows._cold_source(session)
+        page = None
+        if cold is not None:
+            page, stamp = windows.public_saved_tail(session, cold)
+    if page is not None:
         if page.get('unavailableRanges'):
             raise Unavailable('transcript_unavailable')
         projected = public_rows(display_inputs(service, session, page['items']), bounded=False)
         if config is not None:
             projected = select(projected, config, page['hasEarlier'])
         projected = public_rows(projected)
-        observed(projected=projected)
+        observed(projected=projected, cold=cold, stamp=stamp)
         return digest([owner, projected])
-    cold = windows._cold_source(session)
-    if cold is not None:
-        # Immutable resource ownership, plus writer invalidation, not a cached body.
-        from .transcript_window import _stamp
-        stamp = _stamp(cold.directory / (cold.identity + '.json'))
-        observed(cold=cold, stamp=stamp)
-        return digest([owner, cold.identity, stamp])
     rows = dict.get(session, 'messages', ())
     tail = rows[max(0, len(rows) - MAX_ROWS):]
     projected = public_rows(display_inputs(service, session, tail), bounded=False)

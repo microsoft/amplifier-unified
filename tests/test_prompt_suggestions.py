@@ -1122,7 +1122,7 @@ class Integration(unittest.IsolatedAsyncioTestCase):
         self.env.stop()
         self.tmp.cleanup()
 
-    async def test_real_cold_retirement_diagnostic_identifies_mode_without_changing_existing_refusal(self):
+    async def test_real_cold_retirement_and_hydration_preserve_canonical_public_freshness(self):
         from amplifier_web.suggestion_source import changed_component
         await self.app.dispatch('session.create', {}, include_state=False)
         session = self.app._session()
@@ -1142,7 +1142,7 @@ class Integration(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(dict.__contains__(session, 'messages'))
         after = {}
         cold = witness(self.app, sid, config, components=after)
-        self.assertNotEqual(resident, cold)  # Existing gate remains unchanged by diagnostics.
+        self.assertEqual(resident, cold)  # Storage representation alone is not a public-input change.
         self.assertEqual(changed_component(before, after), 'current_source_storage_mode')
         page = await self.app.history.windows.read(sid, limit=100, public_only=True)
         retained = self.app.history.windows.pages[(sid, page['windowKey'])][0]['items']
@@ -1150,6 +1150,111 @@ class Integration(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(actual, expected)  # Real storage transition, identical canonical bounded input.
         self.assertFalse(dict.__contains__(session, 'messages'))  # No hydration needed to classify.
         self.assertNotIn('Public row', repr(after))
+        self.app.cold_display.hydrate(session)
+        self.assertTrue(dict.__contains__(session, 'messages'))
+        self.assertEqual(witness(self.app, sid, config), resident)
+
+    async def test_cold_utility_cache_revalidates_exact_owner_resource_and_signature_without_hydration(self):
+        from amplifier_web.saved_message_window import read_saved_window
+        await self.app.dispatch('session.create', {}, include_state=False)
+        session = self.app._session()
+        sid = session['id']
+        rows = [{'id': str(i), 'role': 'user' if i % 2 == 0 else 'assistant',
+                 'inputOrigin': 'ui' if i % 2 == 0 else 'agent',
+                 'text': 'Public row ' + str(i) + ' ' + 'x' * 1100} for i in range(20)]
+        session.update(status='idle', messages=copy.deepcopy(rows))
+        self.app._publish_changes(sessions={sid})
+        self.app._state['selectedSessionId'] = None
+        with patch.object(self.app.cold_display, 'RECENT_LIMIT', 0):
+            self.assertIn(sid, self.app.cold_display.retire(force=True))
+        config = {'transcriptMode': 'last_n', 'humanTurns': 6}
+        cold = self.app.history.windows._cold_source(session)
+        path = cold.directory / (cold.identity + '.json')
+        with patch('amplifier_web.saved_message_window.read_saved_window', wraps=read_saved_window) as read:
+            baseline = witness(self.app, sid, config)
+            for _ in range(8):
+                self.app.history.windows.invalidate({sid})
+                self.assertEqual(witness(self.app, sid, config), baseline)
+            self.assertEqual(read.call_count, 1)
+            # Physical stamp alone invalidates reuse, then identical public
+            # content passes. No cached body is trusted across that change.
+            stamp = path.stat()
+            os.utime(path, ns=(stamp.st_atime_ns, stamp.st_mtime_ns + 1000000))
+            self.assertEqual(witness(self.app, sid, config), baseline)
+            self.assertEqual(read.call_count, 2)
+            # Every public input dimension still changes semantic freshness,
+            # even under an unchanged (now physically modified) resource ID.
+            changes = [
+                lambda values: values[-1].update(text='Real text edit'),
+                lambda values: values.append({'id': 'append', 'role': 'assistant', 'text': 'New public reply'}),
+                lambda values: values[10].update(inputActor={'kind': 'system', 'id': 'other'}),
+                lambda values: values[-1].update(agentLabel='Changed speaker'),
+            ]
+            for change in changes:
+                changed = copy.deepcopy(rows)
+                change(changed)
+                path.write_text(json.dumps(changed))
+                self.assertNotEqual(witness(self.app, sid, config), baseline)
+            path.write_text('invalid saved source')
+            with self.assertRaises(ValueError):
+                witness(self.app, sid, config)
+        self.assertFalse(dict.__contains__(session, 'messages'))
+        self.assertLessEqual(len(self.app.history.windows.pages), 32)
+        self.assertLessEqual(self.app.history.windows.bytes, 32 * 1024 * 1024)
+
+    async def test_nonpaid_pending_suggestion_survives_real_cooling_naming_and_hydration(self):
+        await self.app.dispatch('session.create', {}, include_state=False)
+        session = self.app._session()
+        sid = session['id']
+        session.update(status='idle', messages=[
+            {'id': str(i), 'role': 'user' if i % 2 == 0 else 'assistant',
+             'inputOrigin': 'ui' if i % 2 == 0 else 'agent',
+             'text': 'Public completed input ' + str(i) + ' ' + 'x' * 1100} for i in range(20)])
+        self.app._publish_changes(sessions={sid})
+        host = self.app.prompt_suggestions
+        config = {'enabled': True, 'provider': 'saved', 'model': 'explicit',
+                  'humanTurns': 6, 'transcriptMode': 'last_n'}
+        host.settings = lambda: (config, {'id': 'saved'}, 'revision')
+        entered, release = asyncio.Event(), asyncio.Event()
+        async def respond(*args):
+            entered.set()
+            await release.wait()
+            return {'status': 'ready', 'suggestion': 'One next step.', 'usage': None, 'cost': None}
+        host.complete = AsyncMock(side_effect=respond)
+        self.app.clients.attach('browser', kind='web')
+        self.app.clients.records['browser']['selectedSessionId'] = sid
+        token = BROWSER.set({'principal': 'same-cookie', 'valid': lambda: True})
+        try:
+            with self.app.clients.bind('browser'):
+                pending = await host.dispatch('session.suggestion.request', {
+                    'sessionId': sid, 'requestId': 'cooling', 'expectedLastMessageId': '19'}, 'ui')
+                await entered.wait()
+                self.app._state['selectedSessionId'] = None  # No live stream subscription in fixture.
+                with patch.object(self.app.cold_display, 'RECENT_LIMIT', 0):
+                    self.assertIn(sid, self.app.cold_display.retire(force=True))
+                self.assertFalse(dict.__contains__(session, 'messages'))
+                record = next(iter(host.records.values()))
+                self.assertTrue(host.current(record))
+                self.assertFalse(dict.__contains__(session, 'messages'))
+                await self.app.on_runtime_event('session.naming.progress', {
+                    'sessionId': sid, 'rootSessionId': sid, 'completedInputs': ['18']})
+                self.app.cold_display.hydrate(session)
+                self.assertTrue(host.current(record))
+                release.set()
+                await asyncio.gather(*tuple(host.jobs))
+                ready = await host.dispatch('session.suggestion.status', {
+                    'sessionId': sid, 'requestId': 'cooling'}, 'ui')
+                self.assertEqual(ready['status'], 'ready')
+                self.assertEqual(ready['sourceKey'], pending['sourceKey'])
+                host.complete.assert_awaited_once()
+                session['interruptionRevision'] = 1
+                stale = await host.dispatch('session.suggestion.status', {
+                    'sessionId': sid, 'requestId': 'cooling'}, 'ui')
+                self.assertEqual(stale['status'], 'stale')
+                self.assertEqual(stale['reason'], 'current_source_stop')
+        finally:
+            release.set()
+            BROWSER.reset(token)
 
     async def test_ordinary_native_naming_event_after_done_does_not_stale_public_suggestion(self):
         await self.app.dispatch('session.create', {}, include_state=False)

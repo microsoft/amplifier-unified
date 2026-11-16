@@ -274,6 +274,31 @@ class TranscriptWindows:
         self._retain(session['id'], page, size)
         return page
 
+    def public_saved_tail(self, session, cold):
+        """Bounded saved suffix for utility freshness, never cold hydration.
+
+        Reuse the existing page cache only for the exact resource/index, owner
+        and fresh physical signature. A change re-enters the canonical bounded
+        reader; physical storage identity is not the utility's public input.
+        """
+        from .resource_files import detached_signature
+        from .saved_message_window import read_saved_window
+        source = _source(session)
+        signature = list(detached_signature(cold))
+        binding = {'source': source, 'resource': cold.identity,
+                   'directory': str(cold.directory), 'index': cold.indexed, 'signature': signature}
+        for page, _ in reversed(self.pages.values()):
+            if page.get('_savedUtilityBinding') == binding:
+                return page, signature
+        page = read_saved_window(cold, self.reader, session_id=session['id'], fence=0, limit=100)
+        if list(detached_signature(cold)) != signature:
+            raise ValueError('The public saved source changed during reading.')
+        page['_savedUtilityBinding'] = binding
+        page['windowKey'] = _digest([page['windowKey'], 'public-utility'])
+        size = len(json.dumps(page, ensure_ascii=False, separators=(',', ':')).encode())
+        self._retain(session['id'], page, size)
+        return page, signature
+
     async def read(self, session_id, *, before=None, limit=100, native=False, public_only=False):
         if self.closed:
             raise ValueError('Saved message readers are closed.')
