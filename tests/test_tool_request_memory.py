@@ -147,7 +147,7 @@ async def flow(tmp_path, monkeypatch, request):
         await session.cleanup()
 
 
-async def decide(flow, role, *, decision='allow', change=None, arguments=None):
+async def decide(flow, role, *, decision='allow', change=None, arguments=None, scoped=True):
     count = len(flow.events)
     task = asyncio.create_task(flow.turn(role, arguments))
     try:
@@ -162,11 +162,16 @@ async def decide(flow, role, *, decision='allow', change=None, arguments=None):
         else:
             pytest.fail('Approval did not arrive')
         request, = pending
-        assert request.get('toolScope') and not flow.errors, flow.errors
+        if scoped:
+            assert request.get('toolScope') and not flow.errors, flow.errors
+        else:
+            assert 'toolScope' not in request
         if change:
             change()
-        await flow.worker.resolve_approval({'approval_id': request['id'], 'decision': decision,
-            'expected_scope': request['toolScope']['descriptor']['key']})
+        answer = {'approval_id': request['id'], 'decision': decision}
+        if scoped:
+            answer['expected_scope'] = request['toolScope']['descriptor']['key']
+        await flow.worker.resolve_approval(answer)
         await asyncio.wait_for(task, 5)
         return request
     finally:
@@ -218,6 +223,40 @@ async def test_same_configured_mcp_reconnect_does_not_invalidate_approval(flow):
 async def test_postapproval_stop_at_work_boundary_prevents_shell_effect(flow):
     flow.callbacks.append(lambda: flow.facts['epoch'].update(stopRevision=1))
     await decide(flow, 'bash')
+    assert not flow.tools['bash'].effects
+
+
+@pytest.mark.parametrize('resolved', [(r'C:\Program Files\Git\bin\bash.exe', False),
+                                      (r'C:\Windows\System32\bash.exe', True), (None, False)])
+async def test_cached_windows_shell_keeps_exact_descriptor(flow, monkeypatch, resolved):
+    meanings = []
+    original = tool_approval_scope.fingerprint
+    def observe(value):
+        meanings.append(copy.deepcopy(value))
+        return original(value)
+    monkeypatch.setattr(tool_approval_scope, 'fingerprint', observe)
+    flow.tools['bash']._windows_bash_resolved = resolved
+    first = await decide(flow, 'bash', decision='deny')
+    assert all(item['binding']['resolvedWindowsBash'] == list(resolved) for item in meanings)
+    flow.facts['epoch']['session'] = 'another-chat'
+    same = await decide(flow, 'bash', decision='deny')
+    assert same['toolScope']['descriptor']['key'] == first['toolScope']['descriptor']['key']
+    flow.tools['bash']._windows_bash_resolved = (r'D:\Other\bash.exe', resolved[1])
+    changed_path = await decide(flow, 'bash', decision='deny')
+    flow.tools['bash']._windows_bash_resolved = (r'D:\Other\bash.exe', not resolved[1])
+    changed_kind = await decide(flow, 'bash', decision='deny')
+    assert len({item['toolScope']['descriptor']['key']
+                for item in (first, changed_path, changed_kind)}) == 3
+    assert not flow.tools['bash'].effects
+
+
+@pytest.mark.parametrize('resolved', [[], ['bash.exe', False], 'bash.exe', ('bash.exe',),
+                                      ('bash.exe', False, 'extra'), (42, False), ('bash.exe', 0)])
+async def test_invalid_cached_windows_shell_has_no_reusable_scope(flow, resolved):
+    flow.tools['bash']._windows_bash_resolved = resolved
+    await decide(flow, 'bash', decision='deny', scoped=False)
+    assert flow.errors and all('resolved Windows shell binding is invalid' in item['error']
+                               for item in flow.errors)
     assert not flow.tools['bash'].effects
 
 

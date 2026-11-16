@@ -234,9 +234,18 @@ class ToolApprovalScope:
                   'denied_commands', 'require_approval') if hasattr(security_tool, key)}
         binding = {}
         if kind == 'bash':
+            resolved = getattr(effective, '_windows_bash_resolved', None)
+            if resolved is not None:
+                # Canonical Bash caches (executable or None, is_wsl). Normalize
+                # only this owned field; request arguments still require JSON.
+                if (type(resolved) is not tuple or len(resolved) != 2
+                        or (resolved[0] is not None and type(resolved[0]) is not str)
+                        or type(resolved[1]) is not bool):
+                    raise ValueError('The resolved Windows shell binding is invalid.')
+                resolved = list(resolved)
             binding = {'shell': '/bin/bash' if os.name != 'nt' else
                        getattr(effective, '_windows_shell_preference', None),
-                       'resolvedWindowsBash': getattr(effective, '_windows_bash_resolved', None)}
+                       'resolvedWindowsBash': resolved}
         elif kind == 'mcp':
             binding = _mcp(tool, proof)
         meaning = {'producer': PRODUCER, 'operation': 'tool.invoke',
