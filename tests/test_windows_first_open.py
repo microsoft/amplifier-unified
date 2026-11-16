@@ -130,6 +130,9 @@ def test_an_argument_with_a_space_reaches_the_program_that_takes_over_as_one_arg
 def test_the_launcher_step_ends_at_its_limit_and_says_not_confirmed(tmp_path):
     """The limit ends the step, and nothing else: the program that took the
     command over had started, and it had not finished when the step returned."""
+    from amplifier_web import updates  # Loaded before the time is taken, not inside it.
+    assert updates.process
+    limit, tolerance = 4, 3  # Seconds. The tolerance is for the start of the process on a busy PC.
     handover = script(tmp_path, "handover.py", HANDOVER)
     started, finished = tmp_path / "started.txt", tmp_path / "finished.txt"
     slow = script(tmp_path, "slow.py", "import os, time\n"
@@ -138,14 +141,16 @@ def test_the_launcher_step_ends_at_its_limit_and_says_not_confirmed(tmp_path):
                   f"with open({str(finished)!r}, 'w') as record:\n    record.write('done')\n"
                   f"print({entry.OPENED!r}, flush=True)\n")
     begun = time.monotonic()
-    result = asyncio.run(consumer.browser_opened((sys.executable, handover, slow), ENVIRONMENT, limit=4))
+    result = asyncio.run(consumer.browser_opened((sys.executable, handover, slow), ENVIRONMENT, limit=limit))
     elapsed = time.monotonic() - begun
     at_return = (started.exists(), finished.exists())
     assert result is False
     # Not a command that failed at once: the program ran. Not a step that
     # waited for the program's end: the program was still in its 10 seconds.
     assert at_return == (True, False)
-    assert elapsed >= 3.9  # The step waited for its limit of 4 seconds.
+    # The step ended at its limit: not before it, and not at a longer limit
+    # (twice the limit, 8 seconds, is outside the tolerance).
+    assert limit - 0.1 <= elapsed < limit + tolerance
     if os.name == "nt":
         # The program that took over is another process there. The launcher
         # cannot end it, so it goes on and reaches its end (in the product:
@@ -348,5 +353,8 @@ def test_native_open_ends_at_its_limit_when_no_host_of_this_version_comes(instal
 
     away, other = asyncio.run(both())
     print(f"\nopen limit 3 s: ended after {away:.1f} s with no listener, {other:.1f} s with another version")
-    assert 3 <= away < 30 and 3 <= other < 30
+    # Not before the wait. After it: at most one health request that started
+    # before its end (its own limit is 5 seconds), and 2 seconds of tolerance.
+    latest = 3 + 5 + 2
+    assert 3 <= away < latest and 3 <= other < latest
     assert earlier.asked >= 2 and earlier.requested == 0  # Asked again, and never for a grant.

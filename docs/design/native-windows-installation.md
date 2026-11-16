@@ -448,7 +448,9 @@ installed and an in-app update does not change it, so the line's text is fixed.
 For the same reason the wait is in `open`: a launcher from an earlier setup file
 gets it from the new generation. Such a launcher allows the command 30 seconds
 and reads the exit status; if the restart takes longer, it shows its earlier
-message, and the browser still opens when the host is there.
+message. `open` goes on to the end of its own wait, so the browser can still
+open after that message: when the new host answers within the wait and gives
+the grant.
 
 The hand-over also keeps each argument whole. The Windows C runtime joins an
 `os.execv` list with spaces and quotes nothing, so the installation folder of a
@@ -459,10 +461,12 @@ person whose user name has a space would reach the app as two arguments.
 installation keeps the launcher of its setup file. An installation that a
 setup file before this change made, in a folder with a space, keeps the plain
 list. From its first app update, the `amplifier-unified` commands that are
-handed to the app generation do not reach the app: the Start-menu entry cannot
-open Amplifier, and a first start that updates the app opens no browser. The
-task that starts the background app does not use this hand-over (read from
-source). Such an installation needs its launcher replaced
+handed to the app generation do not reach the app. Read from source, for the
+two places where a person meets it: the Start-menu entry gets no status from
+its `service status` command and shows "Amplifier could not start", and a
+first start that updates the app opens no browser. The task that starts the
+background app does not use this hand-over (also read from source). Such an
+installation needs its launcher replaced
 (`windows_launcher_refresh`); nothing does that automatically. Measured on a
 Windows runner: a plain list splits an argument with a space, and with an
 interpreter under a folder with a space the command does not arrive. Not run:
