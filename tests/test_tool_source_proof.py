@@ -3,6 +3,7 @@ import base64
 import hashlib
 import importlib.metadata
 import json
+import os
 from pathlib import Path
 import shutil
 import sys
@@ -10,6 +11,7 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
+from amplifier_web import session_files, tool_source_proof
 from amplifier_web.tool_approval_scope import _source
 from amplifier_web.tool_source_proof import QualifiedToolSources
 
@@ -219,3 +221,107 @@ def test_unlocked_noneditable_local_package_is_not_silently_trusted(package):
     (package.receipt / 'runtime-installed.json').write_text(json.dumps(package.expected))
     with pytest.raises(ValueError):
         _source(package.load(package.installed), package.capture())
+
+
+def _windows_stat_clocks(monkeypatch, *, changed=None, missing=None):
+    """Retain real file identity/bytes while modeling CPython's two clocks."""
+    original_stat, original_fstat = Path.stat, os.fstat
+    state = {'read': False}
+    def modeled(info, family):
+        values = {key: getattr(info, key) for key in dir(info) if key.startswith('st_')}
+        values.update(st_birthtime_ns=100, st_ctime_ns=200 if family == 'fd' else 100)
+        if state['read'] and changed and changed[0] == family:
+            values[changed[1]] += 1
+        if missing == family:
+            values.pop('st_birthtime_ns')
+        return SimpleNamespace(**values)
+    monkeypatch.setattr(session_files, '_WINDOWS', True)
+    monkeypatch.setattr(Path, 'stat', lambda self, **kwargs: modeled(original_stat(self, **kwargs), 'path'))
+    monkeypatch.setattr(os, 'fstat', lambda fd: modeled(original_fstat(fd), 'fd'))
+    return state
+
+
+def _observe_file_read(monkeypatch, path, *, after_read=lambda: None, after_close=lambda: None):
+    original_open = Path.open
+    class Observed:
+        def __init__(self, stream): self.stream = stream
+        def __enter__(self): return self
+        def __exit__(self, *args):
+            result = self.stream.__exit__(*args)
+            after_close()
+            return result
+        def fileno(self): return self.stream.fileno()
+        def read(self, limit):
+            value = self.stream.read(limit)
+            after_read()
+            return value
+    def opened(self, mode='r', *args, **kwargs):
+        stream = original_open(self, mode, *args, **kwargs)
+        return Observed(stream) if self == path and mode == 'rb' else stream
+    monkeypatch.setattr(Path, 'open', opened)
+
+
+@pytest.mark.parametrize('windows', [False, True])
+def test_distinct_windows_stat_clocks_preserve_qualified_package(package, monkeypatch, windows):
+    _windows_stat_clocks(monkeypatch)
+    monkeypatch.setattr(session_files, '_WINDOWS', windows)
+    tool = package.load()
+    if windows:
+        proof = package.capture()
+        assert _source(tool, proof)[1] == 'read'
+        assert proof.same(package.capture())
+    else:
+        # POSIX ctime must remain equal across named and descriptor metadata.
+        assert package.capture() is None
+
+
+@pytest.mark.parametrize('changed', [('fd', 'st_ctime_ns'), ('path', 'st_ctime_ns'),
+                                    ('fd', 'st_birthtime_ns'), ('path', 'st_birthtime_ns')])
+def test_windows_same_family_clock_drift_is_refused(tmp_path, monkeypatch, changed):
+    path = tmp_path / 'receipt'
+    path.write_bytes(b'original')
+    state = _windows_stat_clocks(monkeypatch, changed=changed)
+    _observe_file_read(monkeypatch, path, after_read=lambda: state.update(read=True))
+    with pytest.raises(ValueError):
+        tool_source_proof._read(path, tmp_path)
+
+
+@pytest.mark.parametrize('missing', ['fd', 'path'])
+def test_missing_windows_birthtime_never_supplies_optional_proof(package, monkeypatch, missing):
+    _windows_stat_clocks(monkeypatch, missing=missing)
+    assert package.capture() is None
+
+
+@pytest.mark.parametrize('change', ['edit', 'replace', 'remove'])
+def test_windows_named_file_mutation_after_read_is_refused(tmp_path, monkeypatch, change):
+    path = tmp_path / 'receipt'
+    path.write_bytes(b'original')
+    before = path.stat()
+    replacement = tmp_path / 'replacement'
+    replacement.write_bytes(b'original')
+    os.utime(replacement, ns=(before.st_atime_ns, before.st_mtime_ns))
+    _windows_stat_clocks(monkeypatch)
+    def mutate():
+        if change == 'edit':
+            path.write_bytes(b'changed!')  # Same length; mtime still fences it.
+            os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000))
+        elif change == 'replace': replacement.replace(path)  # Same bytes/mtime, new object.
+        else: path.unlink()
+    _observe_file_read(monkeypatch, path, after_close=mutate)
+    with pytest.raises((OSError, ValueError)):
+        tool_source_proof._read(path, tmp_path)
+
+
+@pytest.mark.parametrize('fault', ['symlink', 'oversize'])
+def test_read_retains_symlink_and_size_refusal(tmp_path, fault):
+    path = tmp_path / 'receipt'
+    path.write_bytes(b'original')
+    if fault == 'symlink':
+        link = tmp_path / 'link'
+        try:
+            link.symlink_to(path)
+        except OSError:
+            pytest.skip('This account cannot create symlinks')
+        path = link
+    with pytest.raises(ValueError):
+        tool_source_proof._read(path, tmp_path, 3 if fault == 'oversize' else 8)
