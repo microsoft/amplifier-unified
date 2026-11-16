@@ -86,6 +86,11 @@ class Requests(unittest.IsolatedAsyncioTestCase):
     async def settle(self):
         await asyncio.gather(*tuple(self.host.jobs))
 
+    async def terminal_request(self, request_id, **values):
+        await self.request(request_id, **values)
+        await self.settle()
+        return await self.status(request_id)
+
     async def test_request_is_private_and_never_changes_history(self):
         original = copy.deepcopy(self.app.session)
         pending = await self.request()
@@ -109,20 +114,20 @@ class Requests(unittest.IsolatedAsyncioTestCase):
         await self.request()
         await self.settle()
         await self.request()
-        self.assertEqual((await self.request('other'))['status'], 'duplicate_source')
+        self.assertEqual((await self.terminal_request('other'))['status'], 'duplicate_source')
         self.assertEqual(len(self.calls), 1)
         await self.host.close()
         self.host = PromptSuggestions(self.app)
         self.host.settings = lambda: (self.config, {'id': 'explicit-account'}, self.revision)
         self.assertEqual((await self.request())['status'], 'expired')
-        self.assertEqual((await self.request('third'))['status'], 'duplicate_source')
+        self.assertEqual((await self.terminal_request('third'))['status'], 'duplicate_source')
 
     async def test_new_browser_document_and_disposable_fence_do_not_repeat_paid_source(self):
         await self.request()
         await self.settle()
         self.app.history.windows.invalidate({'chat'})
         self.app.clients.current.set('two')
-        self.assertEqual((await self.request('new-document'))['status'], 'duplicate_source')
+        self.assertEqual((await self.terminal_request('new-document'))['status'], 'duplicate_source')
         self.assertEqual(len(self.calls), 1)
 
     async def test_historical_claims_do_not_impose_lifetime_quota_or_scan_before_admission(self):
@@ -149,7 +154,7 @@ class Requests(unittest.IsolatedAsyncioTestCase):
         self.app.db.set_trace_callback(statements.append)
         try:
             self.assertEqual((await self.request('uncertain'))['status'], 'expired')
-            self.assertEqual((await self.request('same-source'))['status'], 'duplicate_source')
+            self.assertEqual((await self.terminal_request('same-source'))['status'], 'duplicate_source')
             self.app.session['messages'][-1]['text'] = 'A genuinely new completed source'
             self.assertEqual((await self.request('new-source'))['status'], 'pending')
             await self.settle()
@@ -163,7 +168,7 @@ class Requests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(any('count(' in sql.lower() for sql in statements))
         self.assertEqual(self.app.db.execute('SELECT * FROM suggestion_requests WHERE identity=?',
                                             (original_claim[0],)).fetchone(), original_claim)
-        self.assertEqual(self.app.db.execute('SELECT count(*) FROM suggestion_requests').fetchone()[0], 5002)
+        self.assertEqual(self.app.db.execute('SELECT count(*) FROM suggestion_requests').fetchone()[0], 5003)
 
     async def test_provider_refusal_reason_is_allowlisted_without_leaking_arbitrary_text(self):
         for index, reason in enumerate(('custom_source_not_prepared', 'private transcript and credential')):
@@ -193,7 +198,7 @@ class Requests(unittest.IsolatedAsyncioTestCase):
         self.host.settings = lambda: (self.config, {'id': 'explicit-account'}, self.revision)
         self.host.complete = AsyncMock(side_effect=AssertionError('replayed'))
         self.app.clients.current.set('two')
-        self.assertEqual((await self.request('after-restart'))['status'], 'duplicate_source')
+        self.assertEqual((await self.terminal_request('after-restart'))['status'], 'duplicate_source')
         self.host.complete.assert_not_called()
 
     async def test_expiry_is_absolute_admission_epoch_milliseconds_and_never_extended(self):
@@ -291,7 +296,7 @@ class Requests(unittest.IsolatedAsyncioTestCase):
         self.host.settings = lambda: (self.config, {'id': 'explicit-account'}, self.revision)
         self.host.complete = AsyncMock(side_effect=AssertionError('native source replay'))
         with patch('amplifier_web.automatic_history.directory', return_value=root):
-            self.assertEqual((await self.request('native-restart', expectedLastMessageId=last))['status'],
+            self.assertEqual((await self.terminal_request('native-restart', expectedLastMessageId=last))['status'],
                              'duplicate_source')
         self.host.complete.assert_not_called()
 
@@ -321,6 +326,27 @@ class Requests(unittest.IsolatedAsyncioTestCase):
         await self.request()
         with self.assertRaisesRegex(Exception, 'different inputs'):
             await self.request(expectedLastMessageId='other')
+
+    async def test_exact_tombstone_precedes_capture_and_cancelled_capture_never_replays_request(self):
+        entered = asyncio.Event()
+        async def pending_capture(*args):
+            self.assertFalse(self.app.db.in_transaction)
+            self.assertEqual(len(list(self.app.db.execute('SELECT identity FROM suggestion_requests'))), 1)
+            entered.set()
+            await asyncio.Event().wait()
+        with patch('amplifier_web.prompt_suggestions.capture', side_effect=pending_capture):
+            await self.request('before-capture')
+            await entered.wait()
+            await self.host.dispatch('session.suggestion.cancel',
+                {'sessionId': 'chat', 'requestId': 'before-capture'}, 'ui')
+            await self.settle()
+        self.assertEqual(self.calls, [])
+        await self.host.close()
+        self.host = PromptSuggestions(self.app)
+        self.host.settings = lambda: (self.config, {'id': 'explicit-account'}, self.revision)
+        self.host.complete = AsyncMock(side_effect=AssertionError('request replay'))
+        self.assertEqual((await self.request('before-capture'))['status'], 'expired')
+        self.host.complete.assert_not_called()
 
     async def test_status_does_not_read_or_hydrate_transcript(self):
         await self.request()
@@ -598,6 +624,86 @@ class Integration(unittest.IsolatedAsyncioTestCase):
         await self.app.close()
         self.env.stop()
         self.tmp.cleanup()
+
+    async def test_uncertain_paid_input_survives_real_cold_retirement_and_reopen_without_replay(self):
+        from amplifier_web.service import AppService
+        from amplifier_web.cold_display import ColdRecord
+        await self.app.dispatch('session.create', {}, include_state=False)
+        session = self.app._session()
+        sid = session['id']
+        session.update(status='idle', historyManaged=False, messages=[
+            {'id': str(i), 'role': 'user' if i % 2 == 0 else 'assistant',
+             'inputOrigin': 'ui' if i % 2 == 0 else 'agent',
+             'text': 'Public message ' + str(i) + ' ' + 'x' * 1100} for i in range(20)])
+        self.assertIsInstance(session, ColdRecord)
+        self.app._publish_changes(sessions={sid})
+        config = {'enabled': True, 'provider': 'saved', 'model': 'explicit',
+                  'humanTurns': 6, 'transcriptMode': 'last_n'}
+        host = self.app.prompt_suggestions
+        host.settings = lambda: (config, {'id': 'saved'}, 'revision')
+        outbound = []
+        async def uncertain(record, config, rows):
+            from amplifier_web.suggestion_settings import digest
+            expected = digest(['suggestion-input-v1', record['principal'], sid,
+                               record['configRevision'], rows])
+            self.assertFalse(self.app.db.in_transaction, 'paid claim must commit before transport')
+            self.assertEqual(self.app.db.execute('SELECT source FROM suggestion_requests WHERE identity=?',
+                                                (record['identity'],)).fetchone(), (expected,))
+            outbound.append(copy.deepcopy(rows))
+            raise TimeoutError('No terminal provider outcome')
+        host.complete = uncertain
+        self.app.clients.attach('browser', kind='web')
+        self.app.clients.records['browser']['selectedSessionId'] = sid
+        args = {'sessionId': sid, 'requestId': 'resident-attempt', 'expectedLastMessageId': '19'}
+        token = BROWSER.set({'principal': 'same-cookie', 'valid': lambda: True})
+        try:
+            with self.app.clients.bind('browser'):
+                pending = await host.dispatch('session.suggestion.request', args, 'ui')
+                self.assertEqual(pending['status'], 'pending')
+                await asyncio.gather(*tuple(host.jobs))
+                result = await host.dispatch('session.suggestion.status',
+                    {'sessionId': sid, 'requestId': 'resident-attempt'}, 'ui')
+                self.assertEqual(result['status'], 'timeout')
+            claims = list(self.app.db.execute('SELECT * FROM suggestion_requests'))
+            self.assertEqual(len(outbound), 1)
+            # Ordinary committed ColdDisplay retirement; no mocked resource
+            # references, hydration shortcut or replacement serialization.
+            self.app._state['selectedSessionId'] = None
+            self.app.clients.records['browser']['selectedSessionId'] = None
+            with patch.object(self.app.cold_display, 'RECENT_LIMIT', 0):
+                self.assertIn(sid, self.app.cold_display.retire(force=True))
+            self.assertFalse(dict.__contains__(session, 'messages'))
+            self.assertTrue(dict.get(session, '_coldFields', {}).get('messages'))
+            await self.app.close()
+            self.app = AppService(self.root / 'app', self.runtime, workspace=self.root)
+            host = self.app.prompt_suggestions
+            host.settings = lambda: (config, {'id': 'saved'}, 'revision')
+            host.complete = AsyncMock(side_effect=AssertionError('Unchanged cold source paid twice'))
+            self.app.clients.attach('browser', kind='web')
+            reopened = self.app._session(sid, hydrate=False)
+            # Startup reconciliation may materialize a saved display owner.
+            # Put it through the same ordinary retirement, not a mocked marker.
+            self.app._state['selectedSessionId'] = None
+            self.app.clients.records['browser']['selectedSessionId'] = None
+            if dict.__contains__(reopened, 'messages'):
+                with patch.object(self.app.cold_display, 'RECENT_LIMIT', 0):
+                    self.assertIn(sid, self.app.cold_display.retire(force=True))
+            self.assertFalse(dict.__contains__(reopened, 'messages'))
+            self.app.clients.records['browser']['selectedSessionId'] = sid
+            with self.app.clients.bind('browser'):
+                pending = await host.dispatch('session.suggestion.request', {
+                    **args, 'requestId': 'cold-attempt'}, 'ui')
+                self.assertEqual(pending['status'], 'pending')
+                await asyncio.gather(*tuple(host.jobs))
+                result = await host.dispatch('session.suggestion.status',
+                    {'sessionId': sid, 'requestId': 'cold-attempt'}, 'ui')
+                self.assertEqual(result['status'], 'duplicate_source')
+            host.complete.assert_not_called()
+            self.assertFalse(dict.__contains__(reopened, 'messages'), 'bounded capture must not hydrate cold history')
+            self.assertEqual(list(self.app.db.execute('SELECT * FROM suggestion_requests WHERE identity=?',
+                                                     (claims[0][0],))), claims)
+        finally:
+            BROWSER.reset(token)
 
     async def test_settings_authority_projection_and_no_model_runtime_call(self):
         current = self.app.state.get('configurationRevision', 0)

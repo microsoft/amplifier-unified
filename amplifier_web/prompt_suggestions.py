@@ -185,20 +185,17 @@ class PromptSuggestions:
                     except (ValueError, OSError):
                         self._finish(record, 'unsupported', reason='transcript_unavailable')
             if record['status'] == 'pending':
-                # Client IDs and disposable display-cache fences may change on
-                # reconnect/restart. They isolate candidates, not paid effects.
-                source = digest([record['principal'], sid,
-                                 witness(self.service, sid, config, durable=True), revision])
-                if self.service.db.execute('SELECT 1 FROM suggestion_requests WHERE source=?', (source,)).fetchone():
-                    self._finish(record, 'duplicate_source')
-                else:
-                    # Commit a tombstone before any task can reach a provider.
-                    self.service.db.execute('INSERT INTO suggestion_requests VALUES (?,?)', (key, source))
-                    self.service.db.commit()
-                    task = asyncio.create_task(self.run(record, config))
-                    record['task'] = task
-                    self.jobs.add(task)
-                    task.add_done_callback(self._done)
+                # Exact request tombstone precedes capture and every effect.
+                # Its domain-separated provisional source is replaced only
+                # after a bounded canonical input has passed fresh admission.
+                record['identity'] = key
+                self.service.db.execute('INSERT INTO suggestion_requests VALUES (?,?)',
+                                        (key, digest(['suggestion-request-v1', key])))
+                self.service.db.commit()
+                task = asyncio.create_task(self.run(record, config))
+                record['task'] = task
+                self.jobs.add(task)
+                task.add_done_callback(self._done)
             self.records[key] = record
             return self.wire(record)
 
@@ -220,10 +217,26 @@ class PromptSuggestions:
             async with asyncio.timeout(DEADLINE):
                 rows, source_key = await capture(self.service, record['sessionId'], config,
                                                  record['expectedLastMessageId'])
-                if (source_key != record['sourceKey'] or not self.current(record)
-                        or record['status'] != 'pending'):
-                    self._finish(record, 'stale')
-                    return
+                async with self.service.lock:
+                    if (source_key != record['sourceKey'] or not self.current(record)
+                            or record['status'] != 'pending'):
+                        if record['status'] == 'pending':
+                            self._finish(record, 'stale')
+                        return
+                    # Paid identity is the exact bounded utility input, not the
+                    # current resident/native/cold storage representation or a
+                    # disposable reader fence. Rows are detached capture output.
+                    source = digest(['suggestion-input-v1', record['principal'],
+                                     record['sessionId'], record['configRevision'], rows])
+                    if self.service.db.execute('SELECT 1 FROM suggestion_requests WHERE source=?',
+                                               (source,)).fetchone():
+                        self._finish(record, 'duplicate_source')
+                        return
+                    # Retain uncertainty forever once transport can occur.
+                    # Never authorize a provider before this claim commits.
+                    self.service.db.execute('UPDATE suggestion_requests SET source=? WHERE identity=?',
+                                            (source, record['identity']))
+                    self.service.db.commit()
                 result = await self.complete(record, config, rows)
                 if record['status'] == 'pending':
                     if self.current(record):

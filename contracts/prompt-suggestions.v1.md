@@ -110,6 +110,14 @@ No candidate is inserted or sent without an explicit user acceptance.
 Content-free durable request/source hashes are claimed before inference, preventing
 same-request/source replay after reconnect or restart. Each claim retains two
 fixed-size SHA-256 hashes in indexed SQLite columns, not an in-memory journal.
+An exact-request tombstone commits before bounded capture. After capture, fresh
+authorization/currentness is rechecked under admission exclusion and the paid
+source claim commits from the exact bounded canonical model input plus
+principal/conversation/configuration identity, before provider dispatch. Resident,
+native and cold-storage stamps remain freshness checks, not paid identity:
+unchanged captured input cannot pay again merely because its storage retired.
+Duplicate input can therefore report `pending` while capture runs, then
+`duplicate_source` without inference.
 Storage grows with distinct admitted requests; there is no lifetime request-count
 quota or automatic age-based deletion that could reauthorize an uncertain paid
 effect. Candidate memory remains independently bounded to 128 records. Claims

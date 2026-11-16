@@ -155,14 +155,14 @@ def select(rows, config, has_earlier):
     return rows[human[max(0, len(human) - config['humanTurns'])]:] if human else rows
 
 
-def witness(service, sid, config=None, *, durable=False):
+def witness(service, sid, config=None):
     """No cold hydration or prefix traversal. Resident witness is <=100 rows."""
     windows = service.history.windows
     session = service._session(sid, hydrate=False)
     from .transcript_windows import _source
-    owner = ([_source(session)] if durable else [
+    owner = [
         _source(session), windows._fence(sid), session.get('archived'),
-        session.get('_deleting'), session.get('status'), session.get('interruptionRevision')])
+        session.get('_deleting'), session.get('status'), session.get('interruptionRevision')]
     if session.get('historyManaged') is True:
         from .automatic_history import directory
         source = _source(session)
