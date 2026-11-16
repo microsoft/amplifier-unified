@@ -103,8 +103,14 @@ async def test_lost_reply_remains_unknown_and_new_explicit_input_does_not_replay
 async def test_external_full_uses_existing_access_choice_without_native_remount(app_factory, tmp_path):
     app = app_factory()
     session = await create(app, tmp_path)
-    await send(app, session, 'permission', 'ask-external')
-    assert [row for row in operations(tmp_path) if row['kind'] == 'permission'][-1]['outcome']['outcome'] == 'cancelled'
+    await app.dispatch('conversation.send', {'sessionId': session['id'], 'text': 'permission'}, command_id='ask-external')
+    await until(lambda: bool(session['approvals']))
+    card = session['approvals'][-1]
+    assert card['status'] == 'pending'
+    await app.dispatch('approval.respond', {'sessionId': session['id'], 'id': card['id'],
+                       'decision': 'deny', 'optionId': 'deny-this', 'expectedRequestHash': card['requestHash']})
+    await until(lambda: session['id'] not in app.external_conversations.turns)
+    assert [row for row in operations(tmp_path) if row['kind'] == 'permission'][-1]['outcome'] == {'outcome': 'selected', 'optionId': 'deny-this'}
     report = (await app.dispatch('access.get', {'sessionId': session['id']}))['result']
     await app.dispatch('access.set', {'sessionId': session['id'], 'scope': 'session',
                        'mode': 'full', 'expectedRevision': report['revision']}, command_id='full-external')

@@ -258,7 +258,7 @@ class ACPParticipant:
     async def request_permission(self, session_id, tool_call, options, **_kwargs):
         if session_id != self.session_id or self._decision_output is not None:
             return {'outcome': {'outcome': 'cancelled'}}
-        return await self.permission(options)
+        return await self.permission(tool_call, options)
 
     async def read_text_file(self, **_kwargs):
         from acp import RequestError

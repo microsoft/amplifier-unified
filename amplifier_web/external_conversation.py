@@ -80,12 +80,15 @@ class Turn:
 
 class ExternalConversations:
     def __init__(self, service):
+        from .external_approvals import ExternalApprovals
+
         self.service = service
         self.participants = {}
         self.turns = {}
         self.retirements = {}
         self.closing = False
         self.shared = SharedConversations(self)
+        self.approvals = ExternalApprovals(self)
 
     def watch_retirement(self, sid, identity, participant):
         async def available(current):
@@ -203,6 +206,7 @@ class ExternalConversations:
         session['externalAgent'].update(activeInputId=message['inputId'], activeAgentId=binding['id'])
 
     def restore(self, session):
+        self.approvals.restore(session)
         if is_shared(session):
             return self.shared.restore(session)
         external = session.get('externalAgent', {})
@@ -266,7 +270,7 @@ class ExternalConversations:
             if participant is None:
                 participant = ACPParticipant(selected, source['cwd'],
                     update=lambda update: self._update(sid, binding['id'], update),
-                    permission=lambda options: self._permission(sid, binding['id'], options))
+                    permission=lambda tool, options: self._permission(sid, binding['id'], options, tool))
                 self.participants[key] = participant
                 self.watch_retirement(sid, binding['id'], participant)
             turn = Turn(input_id, current.get('interruptionRevision', 0), participant, binding['id'])
@@ -326,6 +330,8 @@ class ExternalConversations:
                 await turn.participant.close()
         finally:
             async with self.service.lock:
+                session = self.service._session(sid)
+                self.approvals.expire(session, turn=turn, terminal=True)
                 if self.turns.get(sid) is turn:
                     self.turns.pop(sid)
 
@@ -343,29 +349,22 @@ class ExternalConversations:
                 session['streamingInputId'] = turn.input_id
                 session['streaming'] = session.get('streaming', '') + update['content']['text']
             elif kind in {'tool_call', 'tool_call_update'}:
+                self.approvals.observe(session, turn, update)
                 self.service._activity(session, 'tools', update.get('title') or 'External agent is using a tool')
             else:
                 return
             self.service._publish_progress(session_ids={sid}, record_only=True)
 
-    async def _permission(self, sid, identity, options):
-        async with self.service.lock:
-            session = self.service._session(sid)
-            turn = self.turns.get(sid)
-            if (turn is not None and turn.agent_id == identity and turn.dispatched and not turn.stop
-                    and session.get('interruptionRevision', 0) == turn.revision
-                    and self.service.access_mode.full(session)):
-                allowed = next((option for kind in ('allow_always', 'allow_once')
-                                for option in options if option.kind == kind), None)
-                if allowed is not None:
-                    return {'outcome': {'outcome': 'selected', 'optionId': allowed.option_id}}
-            # This text-only pilot has no new approval UI. Existing Full access
-            # can authorize offered choices; otherwise do not invent consent.
+    async def _permission(self, sid, identity, options, tool=None):
+        turn = self.turns.get(sid)
+        if turn is None or tool is None:
             return {'outcome': {'outcome': 'cancelled'}}
+        return await self.approvals.request(sid, identity, turn, tool, options)
 
     async def _settle(self, sid, turn, delivery, status, *, stop_reason=None, error=None):
         async with self.service.lock:
             session = self.service._session(sid)
+            self.approvals.expire(session, turn=turn, terminal=True)
             binding = addressed(session, turn.agent_id)
             if session.get('streaming'):
                 self.service._message(session, 'assistant', session['streaming'], inputId=turn.input_id,
@@ -386,6 +385,10 @@ class ExternalConversations:
             self.service._publish_changes(sessions={sid})
 
     async def stop(self, sid):
+        async with self.service.lock:
+            session = self.service._session(sid)
+            self.approvals.expire(session, resolve=False)
+            self.service._publish_changes(sessions={sid})
         if is_shared(self.service._session(sid)):
             return await self.shared.stop(sid)
         turn = self.turns.get(sid)

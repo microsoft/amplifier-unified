@@ -1200,6 +1200,14 @@
         "AMPLIFIER_TEST_PYTHON": "{root}/.venv/bin/python",
         "AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/external-multiparty"
       }
+    },
+    {
+      "id": "external-approval",
+      "command": ["node", "tests/web/external-approval-browser.mjs"],
+      "env": {
+        "AMPLIFIER_TEST_PYTHON": "{root}/.venv/bin/python",
+        "AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/external-approval"
+      }
     }
   ],
   "scenarioOrder": [
@@ -1370,6 +1378,8 @@
     "voice-work-message",
     "external-multiparty",
     "shared-room",
-    "work-hierarchy"
+    "work-hierarchy",
+    "external-approval",
+    "attachment-preview"
   ]
 }
