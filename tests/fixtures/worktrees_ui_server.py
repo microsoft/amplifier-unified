@@ -37,8 +37,10 @@ async def main(home):
     original_changed = service.worktrees.changed
     publication_failure = False
     def changed(*args):
+        nonlocal publication_failure
         if publication_failure and any(row.get('step') == 'committing'
                                        for row in service.worktrees.receipts(session['id'])):
+            publication_failure = False
             raise OSError('Fixture could not confirm the placement transaction')
         return original_changed(*args)
     service.worktrees.changed = changed

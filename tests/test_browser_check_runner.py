@@ -3998,7 +3998,9 @@ def layout_pass2_browser_additions(rows, readiness_scripts=()):
                   or (any(Path(part).name == Path(script).name for part in row['command'])
                       and ('--deferred' in row['command']) == (name == 'deferred-placement'))]
         assert owners == [expected], f'{name}: expected one exact selected-client owner and environment'
-        assert script not in readiness_scripts, f'{name}: duplicate readiness owner'
+        # The ordinary and deferred journeys share a script; a readiness entry
+        # for that script duplicates either mode, and must identify both.
+        assert script not in readiness_scripts, f'{name}/deferred-placement: duplicate readiness owner'
         identities.add(name)
     return identities
 
@@ -4036,7 +4038,7 @@ def test_layout_pass2_guard_requires_all_four_independent_fixture_owners():
             layout_pass2_browser_additions([row for row in rows if row is not owner])
         with pytest.raises(AssertionError, match=name):
             layout_pass2_browser_additions(rows + [owner])
-        with pytest.raises(AssertionError, match=name):
+        with pytest.raises(AssertionError, match='worktree-move|deferred-placement' if name == 'deferred-placement' else name):
             layout_pass2_browser_additions(rows, {owner['command'][1]})
 
 
@@ -4219,7 +4221,7 @@ def test_layout_pass2_assembly_order_cannot_drop_or_repeat_new_client_rows(tmp_p
     client.write_text(json.dumps(client_plan))
     plan, _ = runner.load_plan(tmp_path, host)
     assert layout_pass2_browser_additions(plan['scenarios']) == {
-        'worktree-move', 'work-hierarchy', 'settings-action-spacing', 'settings-draft-focus'}
+        'worktree-move', 'deferred-placement', 'work-hierarchy', 'settings-action-spacing', 'settings-draft-focus'}
     if fault == 'omitted':
         host_plan['scenarioOrder'].remove(name)
     else:

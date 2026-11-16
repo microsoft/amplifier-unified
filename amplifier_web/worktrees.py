@@ -77,7 +77,17 @@ class Worktrees:
                                       'detail': 'The folder commit is saved. Restart did not replay a continuation.'})
                     self.save(record)
                     continue
-                if record.get('step') != 'desired':
+                if record.get('step') == 'retiring' and source_retained:
+                    # A retiring projection precedes the placement callback.
+                    # A new host may apply only after its next exclusive native
+                    # acquisition; it never reconstructs the old retire command
+                    # or replays the interrupted model continuation.
+                    record.update(step='desired', revision=record['revision'] + 1,
+                                  runtimeOutcome='unconfirmed', placementUnperformed=True,
+                                  continuation={'status': 'suppressed'},
+                                  detail='The current folder is still saved. Next folder waits for exclusive native ownership; no input will be replayed.')
+                    self.save(record)
+                if record.get('step') != 'desired' or not source_retained:
                     record.update(phase='unknown', revision=record['revision'] + 1,
                                   detail='The host restarted before its runtime save or placement commit was confirmed.',
                                   continuation={'status': 'suppressed'})
@@ -1192,6 +1202,9 @@ class Worktrees:
             if not callable(place):
                 raise ValueError('This runtime does not support deferred folder placement.')
             await asyncio.to_thread(self.preflight, record, self.app._session(sid))
+            async with self.app.lock:
+                if reason := self.authority_changed(self.desired(sid) or record):
+                    raise HandoffSuperseded(reason)
             # RuntimeManager retains the effect owner through a detached
             # caller; Worktrees must not invent a second task around adapters.
             await place({**copy.deepcopy(self.app._session(sid)), 'placementRequestId': record['id']}, commit)
@@ -1232,7 +1245,7 @@ class Worktrees:
                                   runtimeOutcome='unconfirmed' if not record.get('release') else 'retired',
                                   detail=('Folder choice is saved for the next native owner. The current folder is unchanged; no input will be replayed.'
                                           if shutdown and not reason else
-                                          (str(exc) + '. ' if isinstance(exc, HandoffRepositoryChanged) else '') +
+                                          (str(exc) + '. ' if isinstance(exc, (HandoffRepositoryChanged, HandoffSuperseded)) else '') +
                                           'The next folder was not applied. The saved current folder is unchanged; no input was replayed.'))
                 elif isinstance(exc, HandoffSuperseded) and not placement_attempted and saved is not None:
                     record.update(phase='rejected', detail='The next-folder choice was superseded. No folder change or input was repeated.',

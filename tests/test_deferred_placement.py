@@ -154,6 +154,7 @@ async def test_shutdown_invalidates_commit_of_a_retained_retirement(tmp_path, mo
     runtime.deferred_placement = AsyncMock(side_effect=next_owner)
     restored = AppService(app.data_dir, runtime, workspace=root)
     try:
+        restored.worktrees.start()
         await settle(restored)
         assert restored.worktrees.read(sid, receipt['id'])['phase'] == 'applied'
         assert restored._session(sid)['workingDirectory'] == target['path']
@@ -188,8 +189,11 @@ async def test_unconfirmed_placement_publication_is_not_downgraded_to_no_effect(
     app, runtime, root, sid, entered, release = await deferred_fixture(tmp_path, monkeypatch)
     target = await checkout(app, sid)
     original = app.worktrees.changed
+    failed = False
     def fail_commit(*args):
-        if any(row.get('step') == 'committing' for row in app.worktrees.receipts(sid)):
+        nonlocal failed
+        if not failed and any(row.get('step') == 'committing' for row in app.worktrees.receipts(sid)):
+            failed = True
             raise OSError('actual publication uncertain')
         return original(*args)
     try:
@@ -259,10 +263,47 @@ async def test_foreign_native_writer_is_not_released_for_an_unperformed_folder_c
         await runtime.close()
 
 
+@pytest.mark.parametrize('foreign_owner', [False, True])
+async def test_restart_retiring_intent_uses_new_exclusive_lease_without_replaying_control(tmp_path, monkeypatch, foreign_owner):
+    from amplifier_foundation.session import SharedSessionStore
+    from amplifier_web.service import AppService
+    app, runtime, root, sid, entered, release = await deferred_fixture(tmp_path, monkeypatch)
+    target = await checkout(app, sid)
+    receipt = (await app.dispatch('worktree.handoff', {'sessionId': sid, 'id': target['id'],
+               'expectedExecutionRevision': 0}))['result']
+    await entered.wait()
+    await app.close()
+    record = app.worktrees.read(sid, receipt['id'])
+    record.update(phase='pending', step='retiring')
+    app.worktrees.save(record)
+    store = SharedSessionStore(root, sid)
+    held = store.acquire(app='original-foreign-worker') if foreign_owner else None
+    fresh = RuntimeManager()
+    request = fresh._request_unlocked = AsyncMock(side_effect=AssertionError('No old native command replay'))
+    restored = AppService(app.data_dir, fresh, workspace=root)
+    try:
+        restored.worktrees.start()
+        await asyncio.wait_for(settle(restored), 5)
+        saved = restored.worktrees.read(sid, receipt['id'])
+        assert saved['phase'] == ('rejected' if foreign_owner else 'applied'), saved
+        assert saved['continuation']['status'] == 'suppressed'
+        assert not saved['inputsReplayed'] and not fresh.workers
+        request.assert_not_awaited()
+        if not foreign_owner:
+            assert saved['release']['ownershipAcquisitionId'] and not saved['release']['retired']
+            after = store.acquire(app='proof-placement-released')
+            after.release()
+    finally:
+        if held:
+            held.release()
+        await restored.close()
+
+
 @pytest.mark.parametrize('failure', [RuntimeError('lost save'), OSError('storage failed')])
 @pytest.mark.parametrize('owner_unreadable', [False, True])
 async def test_runtime_failure_is_separate_from_placement_uncertainty(tmp_path, monkeypatch, failure, owner_unreadable):
     app, runtime, root, sid, _, release = await deferred_fixture(tmp_path, monkeypatch)
+    owner_reader = app.worktrees.saved_owner
     runtime.deferred_placement.side_effect = failure
     target = await checkout(app, sid)
     try:
@@ -281,6 +322,7 @@ async def test_runtime_failure_is_separate_from_placement_uncertainty(tmp_path, 
         assert app._session(sid).get('workingDirectory', str(root)) == str(root)
         assert saved['continuation']['status'] == 'suppressed'
     finally:
+        monkeypatch.setattr(app.worktrees, 'saved_owner', owner_reader)
         release.set()
         await app.close()
 
@@ -401,6 +443,7 @@ async def test_deferred_manager_authority_and_real_unknown_are_distinct(app, tmp
     from test_manager_placement import prepared, checkout as manager_checkout
     source, target, _, root = await prepared(app, tmp_path)
     record = await manager_checkout(app, source, target, root)
+    owner_reader = app.worktrees.saved_owner
     async def place(session, commit):
         if change == 'assignment':
             value = app.assignments.current(source)
@@ -414,15 +457,15 @@ async def test_deferred_manager_authority_and_real_unknown_are_distinct(app, tmp
         else:
             (source if change.startswith('manager') else target)['task'] = {'id': 'replaced', 'objective': 'other'}
         if lost_save:
+            def once(*args, **kwargs):
+                app.worktrees.saved_owner = owner_reader
+                raise OSError('Actual placement transaction unavailable')
+            app.worktrees.saved_owner = once
             raise RuntimeError('Native checkpoint result was lost')
         return await commit({'quiesced': True, 'retired': True, 'outcome': 'completed'})
     app.runtime.deferred_placement = AsyncMock(side_effect=place)
     pending = (await agent_action(app, source, 'worktree.handoff', {
         'sessionId': target['id'], 'id': record['id'], 'expectedExecutionRevision': 0}, 'new-move'))['result']
-    if lost_save:
-        def unreadable(*args, **kwargs):
-            raise OSError('Actual placement transaction unavailable')
-        app.worktrees.saved_owner = unreadable
     await settle(app)
     saved = app.worktrees.read(target['id'], pending['id'])
     accepted = change.endswith('_human') and not lost_save
