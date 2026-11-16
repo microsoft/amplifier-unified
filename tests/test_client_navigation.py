@@ -143,6 +143,53 @@ async def test_selected_hidden_workspace_still_restores_durably(app, tmp_path, m
     assert stored['selectedWorkspaceId'] == workspace['id']
 
 
+@pytest.mark.parametrize('workspace_id', [None, 'stale-registration'])
+async def test_path_fallback_restores_hidden_canonical_registration(app, monkeypatch, workspace_id):
+    from pathlib import Path
+    from amplifier_web import client_navigation, workspace_selection
+    from amplifier_web.state_records import load as load_saved_state
+
+    first = next(row for row in app._state['sessions'] if row['title'] == 'First')
+    path = Path(first['workspace']).resolve()
+    assert path.is_dir()
+    canonical_id = uuid.uuid5(uuid.NAMESPACE_URL, str(path)).hex
+    retained = next(row for row in app._state['workspaces'] if row['path'] == str(path))
+    retained['id'] = 'retained-path-registration'
+    if workspace_id is None:
+        first.pop('workspaceId', None)
+    else:
+        first['workspaceId'] = workspace_id
+    app._state['hiddenNativeWorkspaces'] = []
+    app._publish_changes(sessions={first['id']}, globals={'workspaces', 'hiddenNativeWorkspaces'})
+    assert canonical_id not in {row['id'] for row in app._state['workspaces']}
+
+    def forbidden_resolution(*args, **kwargs):
+        pytest.fail('No hidden folders must keep the existing path-match fast selection')
+
+    with app.clients.bind('one'), monkeypatch.context() as patch:
+        patch.setattr(workspace_selection, 'registration_for_session', forbidden_resolution)
+        assert client_navigation.accepts(app, first)
+
+    app._state['hiddenNativeWorkspaces'] = [canonical_id]
+    app._publish_changes(globals={'hiddenNativeWorkspaces'})
+
+    def forbidden_selection(*args, **kwargs):
+        pytest.fail('The hidden canonical path registration requires shared restoration')
+
+    with monkeypatch.context() as patch:
+        patch.setattr(client_navigation, 'select', forbidden_selection)
+        result = await select(app, first['id'], command_id='restore-path-' + (workspace_id or 'absent'))
+    assert result['state']['selectedSessionId'] == first['id']
+    assert app._state['hiddenNativeWorkspaces'] == []
+    saved = load_saved_state(app.db)
+    assert saved['hiddenNativeWorkspaces'] == []
+    assert {row['id'] for row in saved['workspaces'] if row['path'] == str(path)} == {
+        canonical_id, retained['id']}
+    stored = json.loads(app.db.execute('SELECT value FROM client_views WHERE id=?', ('one',)).fetchone()[0])
+    assert stored['selectedSessionId'] == first['id']
+    assert stored['selectedWorkspaceId'] == canonical_id
+
+
 async def test_selection_failure_restores_client_and_receipt(app, monkeypatch):
     first = app._state['sessions'][0]['id']
     previous = deepcopy(app.clients.records['one'])
