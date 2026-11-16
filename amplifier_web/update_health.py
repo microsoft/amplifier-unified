@@ -61,8 +61,10 @@ def awaited_attempts(manager, attempts):
     candidate folder, by the rule of the update owner's gate. Today's settings
     are not evidence about an earlier attempt. With those inputs the candidate
     could not qualify, whatever else its profile lacked; any other gap is found
-    by the first attempt after a connection. An attempt whose folder or copied
-    settings folder is gone proves nothing, and its record stays a failure.
+    by the first attempt after a connection. Storage cleanup keeps the folder
+    of a failed attempt (it retires only a validated candidate). An attempt
+    whose folder or copied settings folder is gone proves nothing, and its
+    record stays a failure.
     """
     from .host.config import read_config
     from .profile_catalog import connection as selected
@@ -705,9 +707,10 @@ async def refresh(manager):
     waiting = await asyncio.to_thread(read_connection, manager)
     diagnostics = manager.service.state['updates'].get('diagnostics')
     if isinstance(diagnostics, dict):
-        # Prove each connection refusal once, while its candidate folder exists
-        # (storage cleanup removes an unused candidate later), and save the
-        # result beside the history. Nothing in the history is changed.
+        # Prove each connection refusal once and save the result beside the
+        # history: the proof then needs no folder read at later publications
+        # and outlives a reset of the cache, which removes the candidate folder.
+        # Nothing in the history is changed.
         marked = diagnostics.get('awaitedConnection') or []
         attempts = {row['attemptId']: row['revision'] for row in failure_events(manager.service.state['updates'])
                     if connection_refusal(row) and row.get('attemptId') not in marked

@@ -57,6 +57,13 @@ APP_PROFILE = {
     'one of two removed': (providers(PROVIDER, {**PROVIDER, 'id': 'second'},
                                      configurator={'disabled': {'providers': ['anthropic']}}), False),
     # Composition merges two rows of one identity into the later module, then drops by that module.
+    # The settings reader merges rows of one `id` itself; it keeps two rows of one `instance_id`.
+    'two rows of one instance name, the later module disabled': (providers(
+        {**PROVIDER, 'instance_id': 'same'}, {'module': 'provider-openai', 'instance_id': 'same'},
+        overrides={'provider-openai': {'enabled': False}}), True),
+    'two rows of one instance name, the earlier module disabled': (providers(
+        {**PROVIDER, 'instance_id': 'same'}, {'module': 'provider-openai', 'instance_id': 'same'},
+        overrides={'provider-anthropic': {'enabled': False}}), False),
     'two rows of one name, the later module disabled': (providers(
         {**PROVIDER, 'id': 'same'}, {'module': 'provider-openai', 'id': 'same'},
         overrides={'provider-openai': {'enabled': False}}), True),
@@ -300,7 +307,7 @@ def test_an_attempt_is_proven_from_its_own_copy_of_the_settings(tmp_path, settin
 def test_an_attempt_with_no_evidence_is_not_proven(tmp_path):
     # The candidate never copied the settings: an absent folder is not "no settings".
     assert health.awaited_attempts(attempt_folder(tmp_path / 'a', copied=False), dict(ATTEMPT)) == []
-    # Storage cleanup removed the candidate, or it was never there.
+    # A reset of the cache removed the candidate, or it was never there.
     gone = SimpleNamespace(directory=tmp_path / 'b' / 'updates', home=tmp_path / 'b')
     assert health.awaited_attempts(gone, dict(ATTEMPT)) == []
     # Unreadable settings prove nothing.
@@ -501,6 +508,71 @@ async def test_update_starts_by_itself_after_the_first_connection(manager):
     assert manager.service.state['updates']['currentStatus']['title'] == COULD_NOT_FINISH
 
 
+async def test_the_persons_update_after_the_first_connection_checks_again(manager):
+    """With automatic installation off this is the person's ordinary path out of the waiting state."""
+    manager.service.state['settings']['updates'].update(autoCheck=False, autoInstall=False)
+    state = manager.service.state['updates']
+    await manager.command('check', None, 'a' * 32)
+    assert state['currentStatus'] == WAITING and manager.stages == []
+    manager.save(providers(PROVIDER))
+    await manager.command('install', None, 'b' * 32)
+    # One stage, from a new check of the changed settings. No refusal is recorded for the request itself.
+    assert len(manager.stages) == 1
+    failed = [event for event in manager.diagnostics.state['events'] if event['status'] == 'failed']
+    assert {event['phase'] for event in failed} == {'ecosystem-validation', 'ecosystem-stage'}
+    assert manager.diagnostics.state['lastFailure']['errorType'] == 'TimeoutError'  # The fixture's stage.
+    assert state['sequence']['install'] is True
+
+
+@pytest.mark.parametrize('who', ['owner', 'person'])
+async def test_a_second_settings_change_during_the_recheck_is_reported_and_not_repeated(manager, who):
+    from amplifier_web.update_sequence import StaleAppSelection
+    await manager.tick()
+    no_attempt(manager)
+    manager.save(providers(PROVIDER))
+    checks = []
+    check = manager.check
+
+    async def check_then_change(**arguments):
+        result = await check(**arguments)
+        checks.append(arguments)
+        manager.save(providers(PROVIDER, {'module': 'provider-openai'}))
+        return result
+
+    manager.check = check_then_change
+    state = manager.service.state['updates']
+    if who == 'owner':
+        # The owner's loop records this as a failed background update, as before this change.
+        with pytest.raises(StaleAppSelection):
+            await manager.tick()
+        assert checks == [{'fresh': False, 'automatic': True}]
+    else:
+        await manager.command('install', None, 'c' * 32)
+        assert checks == [{'fresh': True, 'automatic': False}]
+        assert state['phase'] == 'error' and state['error'].startswith('Update failed during ')
+        assert state['currentStatus']['title'] == COULD_NOT_FINISH
+    assert manager.stages == []
+
+
+@pytest.mark.parametrize('who', ['owner', 'person'])
+async def test_a_recheck_that_fails_installs_nothing(manager, monkeypatch, who):
+    await manager.tick()
+    no_attempt(manager)
+    manager.save(providers(PROVIDER))
+
+    async def unreadable(**arguments):
+        raise RuntimeError('fixture: the inventory cannot be read')
+
+    monkeypatch.setattr(manager, 'inventory_sources', unreadable)
+    if who == 'owner':
+        await manager.tick()
+    else:
+        await manager.command('install', None, 'c' * 32)
+    state = manager.service.state['updates']
+    assert manager.stages == []
+    assert (state['phase'], state['error']) == ('error', 'Update check failed. Your installed sources are unchanged.')
+
+
 async def test_after_the_first_connection_only_a_newly_checked_selection_is_installed(manager):
     await manager.tick()
     no_attempt(manager)
@@ -552,7 +624,7 @@ async def test_an_installation_with_the_old_record_is_plain_after_its_next_check
     # History is kept as it was. The proof is saved beside it.
     assert diagnostics['lastFailure'] == RECORDED and diagnostics['activeFailures'] == history
     assert diagnostics['awaitedConnection'] == [RECORDED['attemptId']]
-    # Storage cleanup removes the unused candidate later. The saved proof stays, also for a restarted host
+    # A reset of the cache removes the candidate. The saved proof stays, also for a restarted host
     # and after the person selects another profile.
     shutil.rmtree(stage)
     manager.save(CUSTOM_PROFILE)

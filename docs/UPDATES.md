@@ -341,13 +341,21 @@ about an earlier attempt. The form of a record is not a proof either: the
 refusal of releases before this rule named no reason and covered every
 incomplete selected profile. With the proven inputs the candidate could not
 qualify, whatever else its profile lacked; any other gap is found by the first
-attempt after a connection. The proof is made at a health refresh while the
-candidate folder exists, and its attempt ID is saved in
-`diagnostics.awaitedConnection`, because storage cleanup removes an unused
-candidate later. A record with no proof stays a failed update: for example when
-the candidate is already gone, or when the attempt ran with another profile or
-with a connection. No record is changed or removed. The failed stage's own text
-stays until the next check, and every other failure keeps its priority.
+attempt after a connection. The proof is made at a health refresh (host start,
+a settings change, a check), and its attempt ID is saved in
+`diagnostics.awaitedConnection`. Storage cleanup keeps the candidate folder of
+a failed attempt, because it retires only a validated candidate; a reset of the
+cache removes it, and the saved proof stays. A record with no proof stays a
+failed update: for example when the candidate is gone, or when the attempt ran
+with another profile or with a connection. No record is changed or removed. The
+failed stage's own text stays until the next check, and every other failure
+keeps its priority.
+
+The owner's pass and a person's Update request share one step for a selection
+that changed after its check (`UpdateManager.install_checked`): the refusal
+before anything is prepared leads to one new check, and that checked selection
+is installed under the caller's own admission. A second refusal, and a check
+that fails, are reported as before; nothing is repeated.
 
 A proven catalog-data-only change reuses an already qualified runtime. This requires an exact tree comparison, an allowlisted data contract and unchanged app-profile inputs. Unknown files, code, dependency or profile changes take the qualification path. Failed qualification leaves the active pointer unchanged.
 
