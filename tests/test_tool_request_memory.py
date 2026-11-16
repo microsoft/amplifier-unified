@@ -57,13 +57,15 @@ class ExactTool:
 
 
 @pytest_asyncio.fixture
-async def flow(tmp_path, monkeypatch):
+async def flow(tmp_path, monkeypatch, request):
     modules = ('loop-live', 'context-simple')
     paths = {name: Path(importlib.util.find_spec('amplifier_module_' + name.replace('-', '_')).origin).parent
              for name in modules}
     plan = {'session': {'orchestrator': {'module': 'loop-live', 'config': {
-                'max_iterations': 2, 'min_delay_between_calls_ms': 0, 'programmatic_dispatch': True}},
+                'max_iterations': 2, 'min_delay_between_calls_ms': 0}},
              'context': {'module': 'context-simple'}}}
+    if getattr(request, 'param', None) is False:
+        plan['session']['orchestrator']['config']['programmatic_dispatch'] = False
     session = await PreparedBundle(plan, BundleModuleResolver(paths),
         Bundle(name='request-memory', session=plan['session'])).create_session(
             session_id='request-memory', session_cwd=tmp_path)
@@ -224,3 +226,16 @@ async def test_previously_allowed_tool_does_not_gain_an_approval_prompt(flow):
     await flow.turn('catalog')
     assert flow.tools['catalog'].effects == [{'command': 'exact request'}]
     assert not [e for e in flow.events if e['type'] == 'approval.requested']
+
+
+@pytest.mark.parametrize('flow', [False], indirect=True)
+@pytest.mark.parametrize('role', ['bash', 'catalog', 'mcp'])
+async def test_explicitly_disabled_programmatic_dispatch_still_describes_ordinary_call(flow, role):
+    def no_lease():
+        dispatcher = flow.coordinator.get_capability('tools.dispatch')
+        assert dispatcher.enabled is False
+        with pytest.raises(RuntimeError, match='No active authorized programmatic caller'):
+            dispatcher.bind()
+    flow.callbacks.append(no_lease)
+    await decide(flow, role)
+    assert len(flow.tools[role].effects) == 1
