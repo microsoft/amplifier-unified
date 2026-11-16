@@ -34,11 +34,22 @@ async def main(home):
         await turn_finished.wait()
         return await commit({'quiesced': True, 'retired': False, 'inputsReplayed': False})
     runtime.deferred_placement = AsyncMock(side_effect=deferred)
+    original_changed = service.worktrees.changed
+    publication_failure = False
+    def changed(*args):
+        if publication_failure and any(row.get('step') == 'committing'
+                                       for row in service.worktrees.receipts(session['id'])):
+            raise OSError('Fixture could not confirm the placement transaction')
+        return original_changed(*args)
+    service.worktrees.changed = changed
     await service.dispatch('view.update', {'patch': {'panel':'chat-work','runtimeDraft':{'tab':'direction'},'draft':'Keep my worktree draft'}})
     async def fail_next(request):
-        runtime.deferred_placement.side_effect = RuntimeError('Fixture lost retirement confirmation')
+        nonlocal publication_failure
+        publication_failure = True
         return web.json_response({'ok':True})
     async def restore(request):
+        nonlocal publication_failure
+        publication_failure = False
         runtime.deferred_placement.side_effect = deferred
         return web.json_response({'ok':True})
     async def change_source(request):
