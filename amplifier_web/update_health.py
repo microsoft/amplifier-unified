@@ -31,8 +31,55 @@ def read_connection(manager):
     from .profile_catalog import connection as selected
     try:
         return selected(configuration(manager)[1])
-    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+    except Exception:  # Includes the settings parser's own error type.
         return {}
+
+
+def connection_refusal(row):
+    """Whether a failure record has the form of the probe's refusal of a selected profile with no provider.
+
+    The form proves nothing about the attempt. `awaited_attempts` does.
+    """
+    probe = row.get('probe') or {}
+    reason = row.get('reason') or probe.get('reason')
+    # Releases before the reason existed recorded only the place: the one
+    # ValueError that host.session.prepare_dependencies raises itself, in the
+    # phase that composes the profiles of a new candidate. That refusal covered
+    # every incomplete selected profile, so the place is not the proof.
+    unnamed = (not reason and row.get('phase') == 'ecosystem-source-policy'
+               and probe.get('stage') == 'prepare' and probe.get('errorType') == 'ValueError'
+               and re.fullmatch(r'amplifier_web\.host\.session:prepare_dependencies:[0-9]+',
+                                probe.get('failureLocation') or ''))
+    return bool(row.get('kind') == 'ecosystem' and row.get('status') == 'failed'
+                and (reason == 'ai-connection-needed' or unnamed))
+
+
+def awaited_attempts(manager, attempts):
+    """Of these attempts, those that ran with the app's own profile and no AI connection.
+
+    Proven for each attempt from the settings that it copied into its own
+    candidate folder, by the rule of the update owner's gate. Today's settings
+    are not evidence about an earlier attempt. With those inputs the candidate
+    could not qualify, whatever else its profile lacked; any other gap is found
+    by the first attempt after a connection. An attempt whose folder or copied
+    settings folder is gone proves nothing, and its record stays a failure.
+    """
+    from .host.config import read_config
+    from .profile_catalog import connection as selected
+    from .staged_sources import owned_path
+    proven = []
+    for attempt, candidate in attempts.items():
+        try:
+            stage = owned_path(manager.directory / 'releases' / candidate, manager.directory / 'releases')
+            if not (stage / 'shared-config').is_dir():
+                continue
+            # The reader and the arguments of the attempt's own probes.
+            config = read_config(stage, home=stage, shared_home=stage / 'shared-config', global_only=True)
+            if selected(config)['needed']:
+                proven.append(attempt)
+        except Exception:  # Unreadable evidence is no evidence; includes the settings parser's own error type.
+            continue
+    return proven
 
 
 def active_evidence(manager, *, explain_configuration=False):
@@ -544,23 +591,14 @@ def current(state, evidence=None, *, manual_verified=None, explicit_retry=False,
                 and (not package or package in evidence.get('packages', ()))
                 and (not component or component in evidence.get('components', ()))
                 and 0 < row.get('at', 0) < evidence.get('qualifiedAt', 0))
+    marked = diagnostics.get('awaitedConnection') or ()
     def awaited_connection(row):
-        # The stage stopped before it qualified anything, because the app's own
-        # selected profile had no AI connection. It installed nothing and left
-        # nothing uncertain, so it is not a failed update of the components.
-        # Only a provider can be missing from the app's own profiles; for any
-        # other selection the same refusal can name a fault of that bundle.
-        probe = row.get('probe') or {}
-        reason = row.get('reason') or probe.get('reason')
-        # Releases before the reason existed recorded only the place: the one
-        # ValueError that host.session.prepare_dependencies raises itself, in
-        # the phase that composes the profiles of a new candidate.
-        unnamed = (not reason and row.get('phase') == 'ecosystem-source-policy'
-                   and probe.get('stage') == 'prepare' and probe.get('errorType') == 'ValueError'
-                   and re.fullmatch(r'amplifier_web\.host\.session:prepare_dependencies:[0-9]+',
-                                    probe.get('failureLocation') or ''))
-        return bool(connection.get('appProfile') and row.get('kind') == 'ecosystem'
-                    and row.get('status') == 'failed' and (reason == 'ai-connection-needed' or unnamed))
+        # This attempt stopped before it qualified anything, because the app's
+        # own selected profile had no AI connection: proven once from the
+        # attempt's own inputs (awaited_attempts) and saved beside the history.
+        # It installed nothing and left nothing uncertain, so it is not a
+        # failed update of the components. The record itself is kept.
+        return row.get('attemptId') in marked and connection_refusal(row)
     remaining = [row for row in failed if not currently_verified(row) and not older_preparation(row)
                  and not awaited_connection(row)]
     if state.get('error') or phase in {'error', 'interrupted'} or remaining:
@@ -633,10 +671,7 @@ def publish(manager):
         # only that limitation must still leave an otherwise quiet projection;
         # a newer failure or uncertain operation keeps its ordinary priority.
         prior = {**evidence, 'configurationChanged': False} if evidence.get('configurationChanged') else evidence
-        # The connection fact was read from the earlier settings, like this
-        # proof. It keeps a quiet projection quiet until the refresh, and it
-        # is not used for the projection below.
-        if current(state, prior, connection=getattr(manager, '_update_connection', None))['status'] in {'current', 'unchecked'}:
+        if current(state, prior)['status'] in {'current', 'unchecked'}:
             state['currentStatus'] = {'status': 'unchecked', 'title': 'Checking current configuration',
                 'detail': 'Update health will refresh against the changed settings. Existing components remain active.',
                 'actionRequired': False, 'action': None, 'component': None}
@@ -668,6 +703,19 @@ async def refresh(manager):
             return False  # Missing/stale selection proof never offers a retry.
     retry_available = await asyncio.to_thread(retry_action)
     waiting = await asyncio.to_thread(read_connection, manager)
+    diagnostics = manager.service.state['updates'].get('diagnostics')
+    if isinstance(diagnostics, dict):
+        # Prove each connection refusal once, while its candidate folder exists
+        # (storage cleanup removes an unused candidate later), and save the
+        # result beside the history. Nothing in the history is changed.
+        marked = diagnostics.get('awaitedConnection') or []
+        attempts = {row['attemptId']: row['revision'] for row in failure_events(manager.service.state['updates'])
+                    if connection_refusal(row) and row.get('attemptId') not in marked
+                    and all(isinstance(row.get(key), str) and re.fullmatch('[a-f0-9]{32}', row[key])
+                            for key in ('attemptId', 'revision'))}
+        proven = await asyncio.to_thread(awaited_attempts, manager, attempts) if attempts else []
+        if proven:
+            diagnostics['awaitedConnection'] = [*(diagnostics.get('awaitedConnection') or []), *proven][-8:]
     if revision == manager.service.state.get('configurationRevision'):
         manager._active_update_evidence = evidence
         manager._update_health_configuration_revision = revision

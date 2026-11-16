@@ -31,7 +31,8 @@ def incomplete(facts):
     error = ValueError('The selected conversation profile is incomplete: ' + ', '.join(facts['missing']))
     # A profile that lacks only a provider is waiting for the person's AI
     # connection. Any other gap is a fault of the selected bundle.
-    error.diagnostic_facts = {'reason': 'ai-connection-needed' if facts['missing'] == ['providers']
+    error.diagnostic_facts = {'reason': 'ai-connection-needed'
+                              if facts['missing'] == ['providers'] and facts['supportedLoop']
                               else 'incomplete-conversation-profile'}
     return error
 
@@ -42,18 +43,20 @@ def connection(config):
     A component update qualifies the selected profile, and `characteristics`
     calls it incomplete while it has no provider. The app's own profiles with
     the app's own behaviors declare none: their providers are the person's
-    connections, which composition adds and `provider_dropped` removes. There
-    this answers the probe's question from the same settings by the same rule.
+    connections, which composition merges, then drops by `provider_dropped`.
+    There this answers the probe's question from the same settings by the same
+    steps.
     Any other selection may declare a provider of its own, and only its
     composition can tell: `needed` stays false and the update's probe decides.
     """
     from .builtin_behaviors import DEFAULT_BEHAVIORS
-    from .host.config import PRECONFIGURED_BUNDLES, provider_dropped
+    from .host.config import PRECONFIGURED_BUNDLES, merge, provider_dropped
     name = config.active_bundle
     own = (name in PRECONFIGURED_BUNDLES and config.registrations.get(name) == PRECONFIGURED_BUNDLES[name]
            and not config.bundle_sources
            and all(uri in DEFAULT_BEHAVIORS for uri in config.app_bundles))
-    connected = any(not provider_dropped(row, config.settings) for row in config.providers)
+    # Composition merges rows of one identity before it drops any.
+    connected = any(not provider_dropped(row, config.settings) for row in merge([], config.providers))
     return {'appProfile': own, 'needed': own and not connected}
 
 

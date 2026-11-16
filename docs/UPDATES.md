@@ -323,21 +323,31 @@ tier is still checked after the included tier, so it waits behind an included
 component update that waits.
 
 The rule (`profile_catalog.connection`) reads the same global settings as the
-stage and drops a provider row by the same function as composition
-(`host.config.provider_dropped`). It makes a claim only for the app's own
+stage, and it merges and drops provider rows by the same steps as composition
+(`host.config.merge`, `host.config.provider_dropped`). It makes a claim only for the app's own
 profiles from their own source with the app's own behaviors, which declare no
 provider. A profile from another source, a bundle source override or another
 app behavior can declare a provider itself: there the stage runs and the probe
 decides. Its refusal of an incomplete selected profile carries a reason,
-`ai-connection-needed` when only a provider is missing and
-`incomplete-conversation-profile` otherwise.
+`ai-connection-needed` when only a provider is missing and the loop is
+supported, and `incomplete-conversation-profile` otherwise.
 
-Update health treats a recorded refusal for a missing connection on the app's
-own profile as history, not as a failed update: the stage stopped before it
-qualified anything. This includes the unnamed record that releases before this
-rule wrote for an update that the app started by itself. The record stays in
-diagnostics. The failed stage's own text stays until the next check, and every
-other failure keeps its priority.
+Update health treats a recorded refusal for a missing connection as history,
+not as a failed update, only when the attempt itself proves it. The candidate
+folder of an attempt holds the attempt's own copy of the settings. The proof is
+that those settings, by the rule above, select the app's own profile with no AI
+connection (`update_health.awaited_attempts`). Today's settings are not evidence
+about an earlier attempt. The form of a record is not a proof either: the
+refusal of releases before this rule named no reason and covered every
+incomplete selected profile. With the proven inputs the candidate could not
+qualify, whatever else its profile lacked; any other gap is found by the first
+attempt after a connection. The proof is made at a health refresh while the
+candidate folder exists, and its attempt ID is saved in
+`diagnostics.awaitedConnection`, because storage cleanup removes an unused
+candidate later. A record with no proof stays a failed update: for example when
+the candidate is already gone, or when the attempt ran with another profile or
+with a connection. No record is changed or removed. The failed stage's own text
+stays until the next check, and every other failure keeps its priority.
 
 A proven catalog-data-only change reuses an already qualified runtime. This requires an exact tree comparison, an allowlisted data contract and unchanged app-profile inputs. Unknown files, code, dependency or profile changes take the qualification path. Failed qualification leaves the active pointer unchanged.
 

@@ -56,6 +56,13 @@ APP_PROFILE = {
     'named connection removed': (providers({**PROVIDER, 'id': 'work'}, configurator={'disabled': {'providers': ['work']}}), True),
     'one of two removed': (providers(PROVIDER, {**PROVIDER, 'id': 'second'},
                                      configurator={'disabled': {'providers': ['anthropic']}}), False),
+    # Composition merges two rows of one identity into the later module, then drops by that module.
+    'two rows of one name, the later module disabled': (providers(
+        {**PROVIDER, 'id': 'same'}, {'module': 'provider-openai', 'id': 'same'},
+        overrides={'provider-openai': {'enabled': False}}), True),
+    'two rows of one name, the earlier module disabled': (providers(
+        {**PROVIDER, 'id': 'same'}, {'module': 'provider-openai', 'id': 'same'},
+        overrides={'provider-anthropic': {'enabled': False}}), False),
     'a default behavior switched off': ({'web_bundles': {'excluded': [next(iter(
         __import__('amplifier_web.builtin_behaviors', fromlist=['APPENDED_DEFAULTS']).APPENDED_DEFAULTS))]}}, True),
     'development starter default': ({'bundle': {'releaseDefault': 'amplifier-development'}}, True),
@@ -115,6 +122,16 @@ async def test_the_probe_names_why_a_selected_profile_is_refused(tmp_path, monke
     assert kept['failureLocation'].startswith('amplifier_web.host.session:prepare_dependencies:')
 
 
+def test_a_profile_with_another_fault_is_not_named_as_waiting_for_a_connection():
+    from amplifier_web.profile_catalog import incomplete
+    def reason(**facts):
+        return incomplete(facts).diagnostic_facts['reason']
+    assert reason(missing=['providers'], supportedLoop=True) == 'ai-connection-needed'
+    assert reason(missing=['providers'], supportedLoop=False) == 'incomplete-conversation-profile'
+    assert reason(missing=['context', 'providers'], supportedLoop=True) == 'incomplete-conversation-profile'
+    assert reason(missing=[], supportedLoop=False) == 'incomplete-conversation-profile'
+
+
 # ---- The page state: a pure projection.
 
 APPLICATION = {'id': 'application', 'kind': 'app', 'status': 'current'}
@@ -165,25 +182,32 @@ COULD_NOT_FINISH = 'Update could not finish'
 NO_OUTCOME = 'The prior attempt has no applicable verified outcome. Current installation is retained; inspect diagnostics before retrying.'
 
 
-def recorded(failure=RECORDED, **changes):
-    """That installation after 'Check for updates': everything current, the record kept."""
+def recorded(failure=RECORDED, *, proven=True, **changes):
+    """That installation after 'Check for updates': everything current, the record kept.
+
+    `proven`: the attempt was proven, from its own copy of the settings, to have run with
+    the app's own profile and no AI connection (see the tests of that proof below).
+    """
     current = {'status': 'current', 'available': 0, 'missing': 0, 'protected': 0, 'issues': 0}
     group = {'id': failure['id'], 'kind': 'ecosystem', 'first': failure, 'latest': failure, 'occurrences': 1}
     return {'phase': 'checked', 'error': None, 'available': 0, 'appAvailable': False,
             'sequence': {'stage': 'complete', 'install': False, 'included': current, 'other': current},
             'application': {'status': 'current'}, 'items': [],
-            'diagnostics': {'events': [], 'lastFailure': failure, 'activeFailures': {'ecosystem:cause': group}},
+            'diagnostics': {'events': [], 'lastFailure': failure, 'activeFailures': {'ecosystem:cause': group},
+                            **({'awaitedConnection': [failure['attemptId']]} if proven else {})},
             **changes}
 
 
-@pytest.mark.parametrize('known', [NEEDED, CONNECTED])
-def test_an_installation_that_holds_the_record_reaches_a_plain_state(known):
+# Today's settings are not evidence about an earlier attempt: no connection fact changes these results.
+@pytest.mark.parametrize('today', [NEEDED, CONNECTED, OTHER_PROFILE, None])
+def test_an_installation_that_holds_the_record_reaches_a_plain_state(today):
+    # Until this change, and still without a proof, the page concludes a failed update from the record.
+    unproven = recorded(proven=False)
+    old = health.current(unproven, SETUP_RECORD, connection=today)
+    assert (old['title'], old['detail'], old['actionRequired']) == (COULD_NOT_FINISH, NO_OUTCOME, True)
     state = recorded()
     before = copy.deepcopy(state)
-    # Until this change the page concluded a failed update from the record.
-    old = health.current(state, SETUP_RECORD)
-    assert (old['title'], old['detail'], old['actionRequired']) == (COULD_NOT_FINISH, NO_OUTCOME, True)
-    plain = health.current(state, SETUP_RECORD, connection=known)
+    plain = health.current(state, SETUP_RECORD, connection=today)
     assert (plain['status'], plain['title'], plain['actionRequired']) == ('current', 'You\u2019re up to date', False)
     # The record stays in history: the projection changes nothing.
     assert state == before
@@ -199,21 +223,27 @@ def changed(**changes):
     return {**RECORDED, **changes, 'probe': probe}
 
 
-@pytest.mark.parametrize('failure', [
-    changed(probe={'failureLocation': 'amplifier_web.host.session:live_plan:1021'}),
-    changed(probe={'failureLocation': 'amplifier_web.host.config:substitute:216'}),
-    changed(probe={'errorType': 'RuntimeError'}),
-    changed(probe={'stage': 'capabilities'}),
-    changed(probe={'reason': 'incomplete-conversation-profile'}),
-    changed(probe={'reason': 'bundle-load-failed'}),
-    changed(reason='disk-full'),
-    changed(phase='ecosystem-prepare'),
-    changed(phase='ecosystem-compatibility'),
-    changed(status='interrupted'),
-    changed(kind='application'),
-], ids=['other function', 'missing value', 'other error', 'other probe stage', 'other profile gap', 'bundle load',
-        'disk full', 'prepare phase', 'compatibility phase', 'interrupted', 'application'])
-def test_every_other_failure_still_needs_attention(failure):
+NAMED = changed(probe={'reason': 'ai-connection-needed'})
+OTHER_FAILURES = {
+    'other function': changed(probe={'failureLocation': 'amplifier_web.host.session:live_plan:1021'}),
+    'missing value': changed(probe={'failureLocation': 'amplifier_web.host.config:substitute:216'}),
+    'other error': changed(probe={'errorType': 'RuntimeError'}),
+    'other probe stage': changed(probe={'stage': 'capabilities'}),
+    'other profile gap': changed(probe={'reason': 'incomplete-conversation-profile'}),
+    'bundle load': changed(probe={'reason': 'bundle-load-failed'}),
+    'disk full': changed(reason='disk-full'),
+    'prepare phase': changed(phase='ecosystem-prepare'),
+    'compatibility phase': changed(phase='ecosystem-compatibility'),
+    'interrupted': changed(status='interrupted'),
+    'application': changed(kind='application'),
+}
+
+
+@pytest.mark.parametrize('case', OTHER_FAILURES)
+def test_every_other_failure_still_needs_attention(case):
+    """Also for an attempt that is marked: the mark covers only the refusal for a missing connection."""
+    failure = OTHER_FAILURES[case]
+    assert not health.connection_refusal(failure)
     result = health.current(recorded(failure), SETUP_RECORD, connection=NEEDED)
     assert result['actionRequired'] and result['title'] in {COULD_NOT_FINISH, 'Component source needs review'}
     # Also when new components are available: a real failure is not replaced by 'waits'.
@@ -221,13 +251,78 @@ def test_every_other_failure_still_needs_attention(failure):
     assert waiting['actionRequired'] and waiting != WAITING
 
 
-def test_the_record_is_a_failure_for_a_selection_that_can_declare_its_own_provider():
-    for failure in (RECORDED, changed(probe={'reason': 'ai-connection-needed'})):
-        result = health.current(recorded(failure), SETUP_RECORD, connection=OTHER_PROFILE)
+@pytest.mark.parametrize('failure', [RECORDED, NAMED], ids=['record of 0.98.7', 'named reason'])
+def test_the_form_of_a_record_is_not_a_proof(failure):
+    """The older refusal covered every incomplete selected profile, and a named one can come from any selection."""
+    assert health.connection_refusal(failure)
+    for today in (NEEDED, CONNECTED, OTHER_PROFILE, None):
+        result = health.current(recorded(failure, proven=False), SETUP_RECORD, connection=today)
         assert (result['title'], result['actionRequired']) == (COULD_NOT_FINISH, True)
-    # The app's own profile with the named reason: nothing but the connection was missing.
-    named = health.current(recorded(changed(probe={'reason': 'ai-connection-needed'})), SETUP_RECORD, connection=NEEDED)
-    assert named['status'] == 'current'
+    # A mark for another attempt proves nothing about this one.
+    state = recorded(failure, proven=False)
+    state['diagnostics']['awaitedConnection'] = ['f' * 32]
+    assert health.current(state, SETUP_RECORD, connection=NEEDED)['title'] == COULD_NOT_FINISH
+
+
+# ---- The proof: the settings that the attempt itself copied into its candidate folder.
+
+CUSTOM_PROFILE = {'bundle': {'active': 'other', 'added': {'other': OTHER_SOURCE}}}
+ATTEMPT = {RECORDED['attemptId']: RECORDED['revision']}
+
+
+def attempt_folder(tmp_path, settings='absent', *, copied=True):
+    """An update owner's folder with the candidate that the recorded attempt left."""
+    directory = tmp_path / 'updates'
+    stage = directory / 'releases' / RECORDED['revision']
+    stage.mkdir(parents=True)
+    if copied:
+        (stage / 'shared-config').mkdir()
+        if settings != 'absent':
+            (stage / 'shared-config/settings.yaml').write_text(yaml.safe_dump(settings))
+    return SimpleNamespace(directory=directory, home=tmp_path)
+
+
+@pytest.mark.parametrize('settings,proven', [
+    ('absent', True),                                   # A new installation: no settings file existed.
+    ({}, True),
+    (providers(PROVIDER, configurator={'disabled': {'providers': ['anthropic']}}), True),
+    (providers(PROVIDER), False),                       # It had a connection: the refusal had another cause.
+    (CUSTOM_PROFILE, False),                            # Another profile can lack more than a provider.
+    ({'sources': {'bundles': {'foundation': OTHER_SOURCE}}}, False),
+    ({'bundle': {'app': [OTHER_SOURCE + '#subdirectory=behaviors/other.yaml']}}, False),
+], ids=['no settings file', 'empty settings', 'connection removed', 'had a connection', 'other profile',
+        'bundle source override', 'other behavior'])
+def test_an_attempt_is_proven_from_its_own_copy_of_the_settings(tmp_path, settings, proven):
+    manager = attempt_folder(tmp_path, settings)
+    assert health.awaited_attempts(manager, dict(ATTEMPT)) == ([RECORDED['attemptId']] if proven else [])
+
+
+def test_an_attempt_with_no_evidence_is_not_proven(tmp_path):
+    # The candidate never copied the settings: an absent folder is not "no settings".
+    assert health.awaited_attempts(attempt_folder(tmp_path / 'a', copied=False), dict(ATTEMPT)) == []
+    # Storage cleanup removed the candidate, or it was never there.
+    gone = SimpleNamespace(directory=tmp_path / 'b' / 'updates', home=tmp_path / 'b')
+    assert health.awaited_attempts(gone, dict(ATTEMPT)) == []
+    # Unreadable settings prove nothing.
+    broken = attempt_folder(tmp_path / 'c')
+    (broken.directory / 'releases' / RECORDED['revision'] / 'shared-config/settings.yaml').write_text('config: [')
+    assert health.awaited_attempts(broken, dict(ATTEMPT)) == []
+    # Another attempt's folder is not this attempt's evidence.
+    other = attempt_folder(tmp_path / 'd')
+    assert health.awaited_attempts(other, {RECORDED['attemptId']: 'e' * 32}) == []
+
+
+@pytest.mark.skipif(not hasattr(__import__('os'), 'symlink'), reason='needs symbolic links')
+def test_a_linked_candidate_folder_is_not_evidence(tmp_path):
+    real = attempt_folder(tmp_path / 'elsewhere')
+    directory = tmp_path / 'updates'
+    (directory / 'releases').mkdir(parents=True)
+    try:
+        (directory / 'releases' / RECORDED['revision']).symlink_to(
+            real.directory / 'releases' / RECORDED['revision'], target_is_directory=True)
+    except OSError:
+        pytest.skip('this account cannot create symbolic links')
+    assert health.awaited_attempts(SimpleNamespace(directory=directory, home=tmp_path), dict(ATTEMPT)) == []
 
 
 def test_a_failed_update_is_reported_until_a_check_replaces_it():
@@ -238,14 +333,26 @@ def test_a_failed_update_is_reported_until_a_check_replaces_it():
 
 
 def test_a_record_that_is_history_gives_no_text_to_another_error():
-    named = changed(probe={'reason': 'ai-connection-needed'})
-    assert failure_guidance(named).startswith('This update needs an AI connection')
+    assert failure_guidance(NAMED).startswith('This update needs an AI connection')
     other = 'Update check failed. Your installed sources are unchanged.'
-    result = health.current(recorded(named, phase='error', error=other), SETUP_RECORD, connection=CONNECTED)
+    result = health.current(recorded(NAMED, phase='error', error=other), SETUP_RECORD, connection=CONNECTED)
     assert (result['title'], result['detail'], result['actionRequired']) == (COULD_NOT_FINISH, other, True)
-    # For a selection that can declare its own provider the record is the failure, with its own text.
-    own = health.current(recorded(named, phase='error', error=other), SETUP_RECORD, connection=OTHER_PROFILE)
-    assert own['detail'] == failure_guidance(named)
+    # An unproven record is the failure, with its own text.
+    own = health.current(recorded(NAMED, proven=False, phase='error', error=other), SETUP_RECORD, connection=CONNECTED)
+    assert own['detail'] == failure_guidance(NAMED)
+
+
+def test_unreadable_settings_make_no_claim(tmp_path):
+    """The gate then lets the update's own preparation report them, as before this rule."""
+    (tmp_path / 'shared').mkdir()
+    (tmp_path / 'shared/settings.yaml').write_text('config: [')
+    manager = SimpleNamespace(home=tmp_path)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(host_config, 'amplifier_home', lambda: tmp_path / 'shared')
+        patch.setattr(session_files, 'amplifier_home', lambda: tmp_path / 'shared')
+        assert health.read_connection(manager) == {}
+        (tmp_path / 'shared/settings.yaml').write_text('{}')
+        assert health.read_connection(manager) == NEEDED
 
 
 def test_page_uses_the_connection_fact_only_for_the_configuration_it_was_read_from():
@@ -260,22 +367,18 @@ def test_page_uses_the_connection_fact_only_for_the_configuration_it_was_read_fr
     assert stale.service.state['updates']['currentStatus']['title'] == 'Updates available'
 
 
-def test_changed_settings_do_not_show_the_old_record_as_a_failure_until_the_refresh():
-    """Between a settings change and the owner's refresh, a quiet page stays quiet."""
-    def manager(known):
-        return SimpleNamespace(service=SimpleNamespace(state={'updates': recorded(), 'configurationRevision': 2}),
-                               _update_connection=known, _update_health_configuration_revision=1,
-                               _active_update_evidence={'generation': 'a' * 32, 'verifiedAt': 2, 'startedAt': 1,
-                                                        'packages': set(), 'components': set()})
-    quiet = manager(NEEDED)
-    health.publish(quiet)
-    status = quiet.service.state['updates']['currentStatus']
-    assert (status['title'], status['actionRequired']) == ('Checking current configuration', False)
-    # With no fact from the earlier settings, the record keeps its priority.
-    for known in (None, OTHER_PROFILE):
-        unknown = manager(known)
-        health.publish(unknown)
-        assert unknown.service.state['updates']['currentStatus']['title'] == COULD_NOT_FINISH
+@pytest.mark.parametrize('proven', [True, False])
+def test_a_proven_record_stays_history_while_changed_settings_wait_for_the_refresh(proven):
+    """The proof is about the earlier attempt, so a settings change does not suspend it."""
+    manager = SimpleNamespace(
+        service=SimpleNamespace(state={'updates': recorded(proven=proven), 'configurationRevision': 2}),
+        _update_connection=NEEDED, _update_health_configuration_revision=1,
+        _active_update_evidence={'generation': 'a' * 32, 'verifiedAt': 2, 'startedAt': 1,
+                                 'packages': set(), 'components': set()})
+    health.publish(manager)
+    status = manager.service.state['updates']['currentStatus']
+    assert (status['title'], status['actionRequired']) == (
+        ('Checking current configuration', False) if proven else (COULD_NOT_FINISH, True))
 
 
 # ---- The update owner: real check, install, tick and receipts. Remote reads and qualification are fixtures.
@@ -412,28 +515,53 @@ async def test_after_the_first_connection_only_a_newly_checked_selection_is_inst
     assert not [event for event in manager.diagnostics.state['events'] if event['status'] == 'failed']
 
 
-async def test_an_installation_with_the_old_record_is_plain_after_its_next_check(manager, monkeypatch):
-    """The state that v0.98.7 left: the failed stage's phase and text, its record and its retry witness."""
+def left_by_0987(manager, monkeypatch, settings='absent', *, candidate=True):
+    """The state that v0.98.7 left: the failed stage's phase and text, its record, its retry witness and its candidate."""
     monkeypatch.setattr(health, 'setup_evidence', lambda m: dict(SETUP_RECORD))  # The installed runtime is a fixture.
-    text = 'Ecosystem update failed during ecosystem source policy. Current sources remain active; no conversation work was replayed.'
-    state = manager.service.state['updates']
     diagnostics = manager.diagnostics.state
     diagnostics.update(attemptId=RECORDED['attemptId'], kind='ecosystem', revision=RECORDED['revision'],
                        lastFailure=copy.deepcopy(RECORDED),
                        batch={'attemptId': RECORDED['attemptId'], 'kind': 'ecosystem',
                               'retry': {'inputKey': 'recorded-inputs', 'mode': 'changed-inputs'}})
     manager.diagnostics._track_failure(copy.deepcopy(RECORDED))
-    await manager.publish(phase='error', error=text)
-    assert (state['currentStatus']['title'], state['currentStatus']['detail']) == (COULD_NOT_FINISH, text)
+    stage = manager.directory / 'releases' / RECORDED['revision']
+    if candidate:
+        (stage / 'shared-config').mkdir(parents=True)
+        if settings != 'absent':
+            (stage / 'shared-config/settings.yaml').write_text(yaml.safe_dump(settings))
+    return stage
+
+
+FAILED_STAGE = 'Ecosystem update failed during ecosystem source policy. Current sources remain active; no conversation work was replayed.'
+
+
+async def test_an_installation_with_the_old_record_is_plain_after_its_next_check(manager, monkeypatch):
+    import shutil
+    stage = left_by_0987(manager, monkeypatch)
+    state = manager.service.state['updates']
+    diagnostics = manager.diagnostics.state
+    await manager.publish(phase='error', error=FAILED_STAGE)
+    assert (state['currentStatus']['title'], state['currentStatus']['detail']) == (COULD_NOT_FINISH, FAILED_STAGE)
     history = copy.deepcopy(diagnostics['activeFailures'])
-    assert len(history) == 1 and next(iter(history.values()))['displayError'] == text
+    assert len(history) == 1 and next(iter(history.values()))['displayError'] == FAILED_STAGE
     # Measured in that clean room: the check after the failed stage found every component current.
     manager.installed = 'b' * 40
     await manager.check()
     assert state['currentStatus']['status'] == 'current' and state['currentStatus']['title'] == 'You\u2019re up to date'
     assert not update_attention(manager.service.state)
-    # History is kept as it was.
+    # History is kept as it was. The proof is saved beside it.
     assert diagnostics['lastFailure'] == RECORDED and diagnostics['activeFailures'] == history
+    assert diagnostics['awaitedConnection'] == [RECORDED['attemptId']]
+    # Storage cleanup removes the unused candidate later. The saved proof stays, also for a restarted host
+    # and after the person selects another profile.
+    shutil.rmtree(stage)
+    manager.save(CUSTOM_PROFILE)
+    await manager.check()
+    assert state['currentStatus']['title'] == 'You\u2019re up to date'
+    restarted = UpdateManager(manager.service)
+    assert restarted.diagnostics.state['awaitedConnection'] == [RECORDED['attemptId']]
+    assert health.current(manager.service.state['updates'], SETUP_RECORD)['status'] == 'current'
+    manager.save({})
     # A later component update still waits for a connection, and then runs.
     manager.installed = 'a' * 40
     await manager.check()
@@ -444,11 +572,31 @@ async def test_an_installation_with_the_old_record_is_plain_after_its_next_check
     assert len(manager.stages) == 1
 
 
+@pytest.mark.parametrize('evidence', ['candidate removed', 'other profile at the time', 'connection at the time'])
+async def test_an_old_record_without_proof_stays_a_failure(manager, monkeypatch, evidence):
+    """What cannot be proven from the attempt's own inputs is not called waiting, whatever today's settings are."""
+    left_by_0987(manager, monkeypatch, candidate=evidence != 'candidate removed',
+                 settings={'other profile at the time': CUSTOM_PROFILE,
+                           'connection at the time': providers(PROVIDER)}.get(evidence, 'absent'))
+    state = manager.service.state['updates']
+    manager.installed = 'b' * 40
+    # Today: the app's own profile and no connection.
+    await manager.check()
+    assert (state['currentStatus']['title'], state['currentStatus']['detail']) == (COULD_NOT_FINISH, NO_OUTCOME)
+    assert 'awaitedConnection' not in manager.diagnostics.state
+    assert [item['id'] for item in update_attention(manager.service.state)] == ['updates:current']
+    # New components and no connection: the record keeps its priority over the waiting state.
+    manager.installed = 'a' * 40
+    await manager.check()
+    await manager.tick()
+    assert state['currentStatus']['title'] == COULD_NOT_FINISH and manager.stages == []
+
+
 async def test_a_selection_with_its_own_providers_is_qualified_and_its_refusal_is_reported(manager):
     """No claim is made for another profile: its stage runs, and the probe decides."""
     from amplifier_web.profile_catalog import incomplete
     manager.save({'bundle': {'active': 'other', 'added': {'other': OTHER_SOURCE}}})
-    manager.refusal = CommandFailure({'probe': probe_failure(incomplete({'missing': ['providers']}), 'prepare')})
+    manager.refusal = CommandFailure({'probe': probe_failure(incomplete({'missing': ['providers'], 'supportedLoop': True}), 'prepare')})
     await manager.tick()
     assert len(manager.stages) == 1
     failure = manager.diagnostics.state['lastFailure']
@@ -459,8 +607,14 @@ async def test_a_selection_with_its_own_providers_is_qualified_and_its_refusal_i
                         'Nothing was changed. Set up an AI connection in Settings, then update again.')
     assert state['phase'] == 'error' and state['error'] == guidance
     assert (state['currentStatus']['title'], state['currentStatus']['detail']) == (COULD_NOT_FINISH, guidance)
-    # Unchanged inputs are not tried again by the owner; the record stays a failure after a check.
+    # Unchanged inputs are not tried again by the owner; the record stays a failure after a check:
+    # the attempt's own copy of the settings names another profile, so nothing proves a wait.
     await manager.check()
     await manager.tick()
     assert len(manager.stages) == 1
+    assert manager.service.state['updates']['currentStatus']['title'] == COULD_NOT_FINISH
+    assert 'awaitedConnection' not in manager.diagnostics.state
+    # Also after the person selects the app's own profile: today's settings do not reclassify that attempt.
+    manager.save({})
+    await manager.check()
     assert manager.service.state['updates']['currentStatus']['title'] == COULD_NOT_FINISH
