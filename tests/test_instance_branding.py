@@ -254,6 +254,23 @@ async def test_public_branding_caches_login_metadata_and_mutation_auth(server_ap
     assert (await client.get('/', allow_redirects=False)).status == 307
 
 
+async def test_final_serialized_record_overflow_is_input_error_and_keeps_saved_state(server_app, aiohttp_client, monkeypatch):
+    client = await aiohttp_client(server_app)
+    headers = {'Authorization': 'Bearer ' + server_app['control_token']}
+    store = server_app['service'].instance_branding
+    store.update(store.prepare({'name': 'Saved', 'color': '#123456'}))
+    before, snapshot = store.path.read_bytes(), store.snapshot()
+    server_app['service'].state['instanceBranding'] = snapshot
+    monkeypatch.setattr(branding, '_RECORD_LIMIT', len(before))
+    response = await client.post('/api/actions', headers=headers, json={
+        'action': 'instanceBranding.update', 'args': {'patch': {'name': '\U0001f600' * 120}}})
+    assert response.status == 400
+    assert 'too large' in (await response.json())['error']
+    assert store.path.read_bytes() == before
+    assert store.snapshot() == snapshot
+    assert server_app['service'].state['instanceBranding'] == snapshot
+
+
 async def test_actions_broadcast_and_invalidate_all_browser_snapshots_without_visiting_chats(server_app, monkeypatch):
     service = server_app['service']
     queues = []

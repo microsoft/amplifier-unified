@@ -2826,6 +2826,8 @@ class AppService:
                 try:
                     diagnostic_result = self.instance_branding.update(
                         prepared_branding, reset=action == 'instanceBranding.reset')
+                except ValueError as exc:
+                    raise AppError(str(exc)) from None
                 except OSError:
                     raise AppError('Could not confirm this server’s app name and icon were saved. Check the server’s configuration before retrying.', 409) from None
                 self.state['instanceBranding'] = diagnostic_result

@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import re
 import socket
+import stat
 import struct
 import unicodedata
 import warnings
@@ -21,7 +22,42 @@ from .deployment import canonical_host, write_private
 MAX_IMAGE_BYTES = 2 * 1024 * 1024
 MAX_IMAGE_TEXT = 4 * ((MAX_IMAGE_BYTES + 2) // 3)
 SIZES = (32, 180, 192, 512)
-_RECORD_LIMIT = 2 * 1024 * 1024
+# Match the existing native private-file read AND publication boundary.
+_RECORD_LIMIT = 1024 * 1024
+_WINDOWS = os.name == 'nt'
+
+
+def _record_bytes(record):
+    content = json.dumps(record, ensure_ascii=True).encode('ascii')
+    if len(content) > _RECORD_LIMIT:
+        raise ValueError('App name and icon are too large to save. Choose a smaller icon.')
+    return content
+
+
+def _image_text_budget():
+    # Every valid name has at most 120 code points. A non-BMP character needs
+    # twelve ASCII bytes when escaped; reserve that plus the complete JSON and
+    # color overhead even when this upload arrives before a later name edit.
+    largest_labels = {'version': 1, 'name': '\U0001f600' * 120,
+                      'color': '#ffffff', 'image': ''}
+    return _RECORD_LIMIT - len(json.dumps(largest_labels, ensure_ascii=True).encode('ascii'))
+
+
+def _record_absent(path):
+    """Observe absence without creating paths or imposing a private-root ACL.
+
+    This preflight never reads stored content. Any existing record, link,
+    junction or inaccessible component still goes through the native boundary.
+    """
+    for part in reversed([path, *path.parents]):
+        try:
+            info = part.lstat()
+        except FileNotFoundError:
+            return True
+        if (stat.S_ISLNK(info.st_mode)
+                or getattr(info, 'st_file_attributes', 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT):
+            return False
+    return False
 
 
 def definitions(schema, string):
@@ -91,7 +127,16 @@ def safe_image(value):
                 # A new pixel-only image drops EXIF, text, ICC and other metadata.
                 clean = Image.new('RGBA', image.size)
                 clean.paste(image)
-                return base64.b64encode(_png(clean)).decode('ascii')
+                budget = _image_text_budget()
+                while True:
+                    encoded = base64.b64encode(_png(clean)).decode('ascii')
+                    if len(encoded) <= budget:
+                        return encoded
+                    if max(clean.size) == 1:
+                        raise ValueError('This icon is too large to save. Choose a smaller image.')
+                    clean = clean.resize((max(1, clean.width * 7 // 8),
+                                          max(1, clean.height * 7 // 8)),
+                                         Image.Resampling.LANCZOS)
     except (UnidentifiedImageError, OSError, SyntaxError, EOFError, OverflowError,
             struct.error, Image.DecompressionBombError,
             Image.DecompressionBombWarning):
@@ -115,8 +160,10 @@ class InstanceBranding:
         self._refresh()
 
     def _load(self):
+        if _WINDOWS and _record_absent(self.path):
+            return {'version': 1, 'name': '', 'color': '', 'image': ''}
         try:
-            if os.name == 'nt':
+            if _WINDOWS:
                 from . import windows_files
                 with windows_files.directory(self.path.parent, owned_root=self.root) as pinned:
                     raw = pinned.read_private(self.path.name, limit=_RECORD_LIMIT)
@@ -170,8 +217,11 @@ class InstanceBranding:
     def update(self, prepared=None, *, reset=False):
         record = ({'version': 1, 'name': '', 'color': '', 'image': ''} if reset
                   else {**self._record, **(prepared or {})})
+        # Validate the exact merged bytes before either the private writer or
+        # the in-memory snapshot changes. Keep one encoding through publication.
+        content = _record_bytes(record)
         if record != self._record:
-            write_private(self.path, json.dumps(record, ensure_ascii=True), owned_root=self.root)
+            write_private(self.path, content, owned_root=self.root)
             self._record = record
             self._refresh()
         return self.snapshot()
