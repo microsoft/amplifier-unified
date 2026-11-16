@@ -80,10 +80,12 @@ separately updatable pip dependency. Do not restore a second author copy here.
 
 ## Select a Scheduling artifact
 
-The current selection remains the historical Unified `scheduling-v0.1.0` release.
-The public repository's source handoff does not replace that receipt: a standalone
-release must be published, verified and selected before its delivery is complete.
-Never edit the generated snapshot or rewrite the original publication records.
+Unified selects Scheduling 0.1.0 from the public repository's
+[`scheduling-v0.1.0` release](https://github.com/bkrabach/amplifier-platform-scheduling/releases/tag/scheduling-v0.1.0).
+The source record binds its original publication and exact runtime bytes. Historical
+Unified publication receipts remain unchanged; source handoff and component
+publication do not automatically refresh this app selection. Never edit the
+generated snapshot or rewrite original publication records.
 
 Download a release's four published assets (wheel, source archive,
 `scheduling-source.json` and `SHA256SUMS`) into a private directory. Verify the
