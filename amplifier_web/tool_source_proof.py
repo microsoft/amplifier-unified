@@ -21,6 +21,8 @@ import sys
 import tomllib
 from urllib.parse import unquote, urlsplit
 
+from .session_files import source_change_time
+
 _LIMIT = 4 * 1024 * 1024
 _FILES = 128
 
@@ -39,15 +41,24 @@ def _read(path, root, limit=_LIMIT):
         if current == root:
             break
         current = current.parent
+    named = path.stat(follow_symlinks=False)
+    _require(stat.S_ISREG(named.st_mode) and named.st_size <= limit)
     with path.open('rb') as stream:
         before = os.fstat(stream.fileno())
         _require(stat.S_ISREG(before.st_mode) and before.st_size <= limit)
         content = stream.read(limit + 1)
         after = os.fstat(stream.fileno())
     latest = path.stat(follow_symlinks=False)
-    fields = ('st_dev', 'st_ino', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
+    fields = ('st_dev', 'st_ino', 'st_mode', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
+    # Windows path ctime can be creation time while fstat exposes ChangeTime.
+    # Keep both full same-family fences; compare only matching clocks across
+    # families, using explicit birthtime on Windows (missing evidence refuses).
     _require(len(content) == before.st_size and all(
-        getattr(before, key) == getattr(after, key) == getattr(latest, key) for key in fields))
+        getattr(before, key) == getattr(after, key)
+        and getattr(named, key) == getattr(latest, key) for key in fields))
+    _require(all(getattr(before, key) == getattr(named, key) for key in fields[:-1])
+             and source_change_time(before) == source_change_time(after)
+             == source_change_time(named) == source_change_time(latest))
     return content
 
 
