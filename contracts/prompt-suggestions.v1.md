@@ -98,6 +98,15 @@ assert a missing model rather than a missing endpoint. These facts share candida
 ownership/expiry and never enter shared state, action status or durable claims.
 Earlier failed receipts without diagnostics remain unattributed. No failure
 authorizes a retry, fallback or assumption of zero provider cost.
+Currentness refusal uses only a first-failed-gate reason: `current_closed`,
+`current_auth`, `current_epoch`, `current_audience`, `current_selected`,
+`current_config`, `current_session`, `current_archived`, `current_deleting`,
+`current_eligibility`, `current_busy` or `current_sourcewitness`. Exceptions at an
+existing gate report that gate, without error text or values. A changed capture
+key reports `capture_source_changed`; explicit invalidation without a failed gate
+reports `current_invalidated`. These observations do not change gate order,
+authorization, status, deduplication or retries. A denied final transport grant
+retains its first observed dimension even if a later check would succeed.
 
 ## Privacy, freshness and cost admission
 

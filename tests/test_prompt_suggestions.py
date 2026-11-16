@@ -1,6 +1,7 @@
 """Offline utility-request regressions; runnable with unittest or pytest."""
 import asyncio
 import copy
+from contextlib import ExitStack
 import json
 import os
 from pathlib import Path
@@ -374,6 +375,98 @@ class Requests(unittest.IsolatedAsyncioTestCase):
         for _ in range(8):
             self.assertEqual((await self.status())['status'], 'ready')
         self.app.history.windows.read.assert_not_called()
+
+    async def test_currentness_classifier_preserves_original_gates_and_only_static_dimensions(self):
+        await self.request()
+        await self.settle()
+        record = next(iter(self.host.records.values()))
+        def original():
+            from amplifier_web.suggestion_settings import digest
+            try:
+                config, _, revision = self.host.settings()
+                client = self.app.clients.records.get(record['client'], {})
+                if (self.host.closed or self.app.closed or not record['authenticated']()
+                        or record['epoch'] != self.host._epoch()
+                        or digest([
+                            record['principal'], client.get('deviceOwner', 'local-owner'),
+                            record['client']]) != record['audience']
+                        or client.get('selectedSessionId') != record['sessionId']
+                        or record['configRevision'] != revision):
+                    return False
+                session = self.app._session(record['sessionId'], hydrate=False)
+                from amplifier_web.prompt_suggestions import eligible, witness
+                return (not session.get('archived') and not session.get('_deleting')
+                        and eligible(self.app, session) and session.get('status') in {'idle', 'ready'}
+                        and witness(self.app, record['sessionId'], config) == record['sourceKey'])
+            except (ValueError, KeyError, OSError):
+                return False
+        cases = [
+            ('closed', patch.object(self.host, 'closed', True)),
+            ('auth', patch.dict(record, authenticated=lambda: False)),
+            ('epoch', patch.object(self.host, '_epoch', return_value='PRIVATE epoch')),
+            ('audience', patch.dict(self.app.clients.records['one'], deviceOwner='PRIVATE owner')),
+            ('selected', patch.dict(self.app.clients.records['one'], selectedSessionId='PRIVATE session')),
+            ('config', patch.object(self.host, 'settings', return_value=(self.config, {}, 'PRIVATE revision'))),
+            ('session', patch.object(self.app, '_session', side_effect=ValueError('PRIVATE path'))),
+            ('archived', patch.dict(self.app.session, archived=True)),
+            ('deleting', patch.dict(self.app.session, _deleting=True)),
+            ('eligibility', patch.dict(self.app.session, sessionKind='internal')),
+            ('busy', patch.dict(self.app.session, status='working')),
+            ('sourcewitness', patch.dict(record, sourceKey='PRIVATE input')),
+            ('sourcewitness', patch('amplifier_web.prompt_suggestions.witness', side_effect=OSError('PRIVATE file'))),
+        ]
+        for name, change in cases:
+            with self.subTest(name=name), ExitStack() as stack:
+                stack.enter_context(patch.object(self.app, '_session', return_value=self.app.session))
+                stack.enter_context(change)
+                self.assertFalse(original())
+                self.assertEqual(self.host.current_failure(record), 'current_' + name)
+                record.pop('_currentFailure', None)
+                self.assertFalse(self.host.current(record))
+                self.assertEqual(record['_currentFailure'], 'current_' + name)
+                self.assertNotIn('PRIVATE', record['_currentFailure'])
+        record.pop('_currentFailure', None)
+        self.assertTrue(original())
+        self.assertIsNone(self.host.current_failure(record))
+        self.assertTrue(self.host.current(record))
+        # First failed gate is stable, rather than overwritten by later ones.
+        authenticated = record['authenticated']
+        record['authenticated'] = lambda: False
+        try:
+            self.assertFalse(self.host.current(record))
+        finally:
+            record['authenticated'] = authenticated
+        with patch.dict(self.app.session, status='working'):
+            self.assertFalse(self.host.current(record))
+        self.assertEqual(record['_currentFailure'], 'current_auth')
+
+    async def test_status_and_capture_mismatch_publish_only_finite_stale_reason_without_retry(self):
+        await self.request()
+        await self.settle()
+        self.app.session['messages'][-1]['text'] = 'Actually changed public input'
+        result = await self.status()
+        self.assertEqual((result['status'], result['reason']), ('stale', 'current_sourcewitness'))
+        self.assertNotIn('_currentFailure', result)
+        self.assertEqual(len(self.calls), 1)
+        self.app.session['messages'][-1]['text'] = 'Next captured input'
+        with patch('amplifier_web.prompt_suggestions.capture', AsyncMock(return_value=([], 'different-key'))):
+            result = await self.terminal_request('capture-key')
+        self.assertEqual((result['status'], result['reason']), ('stale', 'capture_source_changed'))
+        self.assertEqual(len(self.calls), 1)
+
+    async def test_final_grant_first_false_dimension_survives_later_successful_recheck(self):
+        host = self.host
+        del host.complete  # Exercise the real host-to-setup final-admission closure.
+        async def probe(action, args, workspace):
+            self.assertEqual(action, 'suggestion.complete')
+            with patch.object(host, '_epoch', return_value='PRIVATE newer epoch'):
+                self.assertFalse(args['_admit']())
+            return {'status': 'stale', 'suggestion': None, 'usage': None, 'cost': None}
+        host._manager = SimpleNamespace(probe=AsyncMock(side_effect=probe), close=AsyncMock())
+        result = await self.terminal_request('grant')
+        self.assertEqual((result['status'], result['reason']), ('stale', 'current_epoch'))
+        self.assertNotIn('PRIVATE', repr(result))
+        host._manager.probe.assert_awaited_once()
 
     async def test_invisible_terminal_metadata_and_generic_save_do_not_stale_resident_capture(self):
         windows = self.app.history.windows

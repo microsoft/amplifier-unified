@@ -12,8 +12,12 @@ from .suggestion_provider import failure, FAILURE_REASONS
 MAX_RETAINED = 128
 TTL = 60
 DEADLINE = 15
+CURRENT_REASONS = frozenset('current_' + name for name in (
+    'closed', 'auth', 'epoch', 'audience', 'selected', 'config', 'session',
+    'archived', 'deleting', 'eligibility', 'busy', 'sourcewitness'))
+STALE_REASONS = CURRENT_REASONS | {'capture_source_changed', 'current_invalidated'}
 PROVIDER_REASONS = frozenset({'custom_source_not_prepared', 'runtime_not_prepared',
-                              'qualified_source_mismatch'}) | FAILURE_REASONS
+                              'qualified_source_mismatch'}) | FAILURE_REASONS | STALE_REASONS
 # Set only by the authenticated HTTP adapter, never action arguments or client
 # registration. The closure rechecks cookie expiry/sign-out after async work.
 BROWSER = ContextVar('suggestion_browser', default=None)
@@ -79,23 +83,52 @@ class PromptSuggestions:
         return value
 
     def current(self, record):
+        reason = self.current_failure(record)
+        if reason is not None:
+            # Private finite observation only. Retain the FIRST failed gate,
+            # including a final transport grant that later status cannot replay.
+            record.setdefault('_currentFailure', reason)
+        return reason is None
+
+    def current_failure(self, record):
+        dimension = 'current_config'
         try:
             config, _, revision = self.settings()
+            dimension = 'current_audience'
             client = self.service.clients.records.get(record['client'], {})
-            if (self.closed or self.service.closed or not record['authenticated']()
-                    or record['epoch'] != self._epoch()
-                    or digest([record['principal'], client.get('deviceOwner', 'local-owner'),
-                               record['client']]) != record['audience']
-                    or client.get('selectedSessionId') != record['sessionId']
-                    or record['configRevision'] != revision):
-                return False
+            if self.closed or self.service.closed:
+                return 'current_closed'
+            dimension = 'current_auth'
+            if not record['authenticated']():
+                return dimension
+            dimension = 'current_epoch'
+            if record['epoch'] != self._epoch():
+                return dimension
+            dimension = 'current_audience'
+            if digest([record['principal'], client.get('deviceOwner', 'local-owner'),
+                       record['client']]) != record['audience']:
+                return dimension
+            if client.get('selectedSessionId') != record['sessionId']:
+                return 'current_selected'
+            if record['configRevision'] != revision:
+                return 'current_config'
+            dimension = 'current_session'
             session = self.service._session(record['sessionId'], hydrate=False)
-            return (not session.get('archived') and not session.get('_deleting')
-                    and eligible(self.service, session)
-                    and session.get('status') in {'idle', 'ready'}
-                    and witness(self.service, record['sessionId'], config) == record['sourceKey'])
+            if session.get('archived'):
+                return 'current_archived'
+            if session.get('_deleting'):
+                return 'current_deleting'
+            dimension = 'current_eligibility'
+            if not eligible(self.service, session):
+                return dimension
+            if session.get('status') not in {'idle', 'ready'}:
+                return 'current_busy'
+            dimension = 'current_sourcewitness'
+            if witness(self.service, record['sessionId'], config) != record['sourceKey']:
+                return dimension
+            return None
         except (ValueError, KeyError, OSError, AppError):
-            return False
+            return dimension
 
     @staticmethod
     def wire(record):
@@ -104,6 +137,9 @@ class PromptSuggestions:
                  'configRevision', 'usage', 'cost', 'reason', 'expiresAt')}
 
     def _finish(self, record, status, **values):
+        if status == 'stale' and 'reason' not in values:
+            observed = record.get('_currentFailure')
+            values['reason'] = observed if observed in CURRENT_REASONS else 'capture_source_changed'
         record.update(status=status, suggestion=None, **values)
 
     def _expire(self, record):
@@ -245,7 +281,8 @@ class PromptSuggestions:
                 if record['status'] == 'pending':
                     if self.current(record):
                         record.update({key: result.get(key) for key in ('status', 'suggestion', 'usage', 'cost')})
-                        reason = result.get('reason')
+                        reason = (record.get('_currentFailure') if record['status'] == 'stale'
+                                  and record.get('_currentFailure') in CURRENT_REASONS else result.get('reason'))
                         record['reason'] = reason if isinstance(reason, str) and reason in PROVIDER_REASONS else None
                     else:
                         self._finish(record, 'stale')
@@ -257,19 +294,22 @@ class PromptSuggestions:
                 self._finish(record, 'timeout')
         except Unavailable as exc:
             if record['status'] == 'pending':
-                self._finish(record, 'stale' if str(exc) == 'source_changed' else 'unsupported', reason=str(exc))
+                self._finish(record, 'stale' if str(exc) == 'source_changed' else 'unsupported',
+                             reason='capture_source_changed' if str(exc) == 'source_changed' else str(exc))
         except Exception as exc:
             if record['status'] == 'pending':
                 # Do not retain exception strings: SDK errors may quote bodies,
                 # credentials, endpoint URLs or other private response content.
                 if provider_started:
                     record.update(failure(exc, 'construction'))
+                    if record.get('_currentFailure') in CURRENT_REASONS:
+                        record['reason'] = record['_currentFailure']
                 else:
                     self._finish(record, 'failed')
 
     def invalidate(self):
         for record in self.records.values():
-            self._finish(record, 'stale')
+            self._finish(record, 'stale', reason=record.get('_currentFailure') or 'current_invalidated')
             if record.get('task') and not record['task'].cancelling():
                 record['task'].cancel()
 
