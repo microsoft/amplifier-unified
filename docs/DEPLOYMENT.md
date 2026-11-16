@@ -356,8 +356,10 @@ device to it. For a LAN address without Tailscale, see
 Do steps 1 to 4 one after the other. After step 1, Amplifier cannot start
 again until step 3 is done: its certificate does not name the new address yet.
 If Amplifier does not start in between, do step 3 and start it again. To go
-back instead, do step 2 of [Turn remote access off](#turn-remote-access-off)
-and start Amplifier.
+back instead, set the lists back and then start Amplifier. With Tailscale, run
+the command of step 2 of [Turn remote access off](#turn-remote-access-off).
+With a LAN address, run the command of step 3 of
+[LAN without Tailscale](#lan-without-tailscale): it sets both lists back.
 
 1. Add the Tailscale address **after** the local address. The first address in
    the list is the main one: when a connected service sends you back to
