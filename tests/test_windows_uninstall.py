@@ -1523,7 +1523,8 @@ try:
         outcome["result"] = asyncio.run(consumer.maintenance(root, operation))
 except consumer.Unfinished as stopped:
     outcome.update(step=stopped.step, refused=isinstance(stopped, consumer.Refused),
-                   error=type(stopped.error).__name__, notice=stopped.notice)
+                   error=type(stopped.error).__name__, notice=stopped.notice,
+                   detail=str(stopped.error)[:400], code=getattr(stopped.error, "winerror", None))
 parked = {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
           for path in (root / plan.PARK).iterdir()
           if path.is_file() and not path.name.endswith(".hold")} if (root / plan.PARK).exists() else {}
@@ -1644,6 +1645,13 @@ def _tree(root):
                   for name in folders + files)
 
 
+def _finished(done):
+    """The result of a run that finished. A run that stopped fails here, with what its process observed."""
+    assert "result" in done, {key: done.get(key) for key in (
+        "step", "error", "code", "detail", "refused", "notice", "events", "left")}
+    return done["result"]
+
+
 def _without_kept_file(names):
     kept = [name for name in names if re.fullmatch(r"[0-9a-f]{32}\.hold", name)]
     assert len(kept) == 1, names
@@ -1663,8 +1671,8 @@ def test_native_delete_choice_removes_the_folder_and_nothing_outside_it(native_i
     other, = set(STORES) - {native["store"]}
     assert (root / native["store"] / "objects" / "s").read_text() == "s" and not os.path.lexists(root / other)
     done = native["run"]("uninstall", ["yes", "yes"])
-    assert done["result"] == {"ok": True, "operation": "uninstall", "userDataRetained": False,
-                              "certificate": "none", "kept": [], "afterExit": True, "programLeft": []}
+    assert _finished(done) == {"ok": True, "operation": "uninstall", "userDataRetained": False,
+                               "certificate": "none", "kept": [], "afterExit": True, "programLeft": []}
     assert set(done["images"]) == {"start", "dll"}
     assert set(done["images"].values()) <= set(done["parked"].values())
     assert done["events"] == ["question", "question", "stop", "after-exit"]
@@ -1697,7 +1705,7 @@ def test_native_delete_choice_keeps_a_folder_s_in_an_earlier_installation(native
     mine.parent.mkdir(parents=True)
     mine.write_text("not Amplifier's")
     done = native["run"]("uninstall", ["yes", "yes"])
-    assert done["result"]["afterExit"] and done["result"]["kept"] == ["s"], done
+    assert _finished(done)["afterExit"] and done["result"]["kept"] == ["s"], done
     assert done["result"]["programLeft"] == [] and done["result"]["userDataRetained"] is False
     assert {plan.PARK, plan.JOURNAL, plan.COMPLETE, "s"} <= _without_kept_file(done["left"]) <= {
         plan.PARK, plan.JOURNAL, plan.COMPLETE, "s", "workspace"}
@@ -1721,7 +1729,7 @@ def test_native_keep_choice_leaves_the_source_store_and_every_file(native_instal
     before = _tree(root)
     assert str(store.relative_to(root)) in before
     done = native["run"]("uninstall", ["no"])
-    assert done["result"] == {"ok": True, "operation": "uninstall", "userDataRetained": True,
+    assert _finished(done) == {"ok": True, "operation": "uninstall", "userDataRetained": True,
                               "installationFilesRetained": True, "certificate": "none"}
     assert done["events"] == ["question", "stop"]
     # Every entry that was in the folder is still there, the store with its bytes. No removal began.
@@ -1898,7 +1906,7 @@ def test_native_interrupted_removal_refuses_to_start_and_a_second_uninstall_fini
             assert "select Uninstall Amplifier" in refused["notice"] and not refused["events"]
         # No to the second uninstall changes nothing.
         declined = native["run"]("uninstall", ["no"])
-        assert declined["result"] == {"ok": True, "cancelled": True} and declined["events"] == ["question"]
+        assert _finished(declined) == {"ok": True, "cancelled": True} and declined["events"] == ["question"]
         assert _tree(root) == before and plan.pending(root) == journal
         # While another Amplifier window holds the installation's lock, Open and Uninstall refuse.
         with plan.single(root):
@@ -1909,13 +1917,13 @@ def test_native_interrupted_removal_refuses_to_start_and_a_second_uninstall_fini
         assert _tree(root) == before and plan.pending(root) == journal
         # Yes and then No changes nothing either.
         declined = native["run"]("uninstall", ["yes", "no"])
-        assert declined["result"] == {"ok": True, "cancelled": True} and declined["events"] == ["question", "question"]
+        assert _finished(declined) == {"ok": True, "cancelled": True} and declined["events"] == ["question", "question"]
         assert _tree(root) == before and plan.pending(root) == journal
     finally:
         busy.close()
     # The file is free: Yes twice finishes the removal, with the stop again and a new token.
     done = native["run"]("uninstall", ["yes", "yes"])
-    assert done["result"]["afterExit"] and done["result"]["kept"] == ["mine.txt"], done
+    assert _finished(done)["afterExit"] and done["result"]["kept"] == ["mine.txt"], done
     assert done["result"]["programLeft"] == []
     assert set(done["images"].values()) <= set(done["parked"].values())
     assert {plan.PARK, plan.JOURNAL, plan.COMPLETE, "mine.txt"} <= _without_kept_file(done["left"]) <= {
