@@ -18,10 +18,9 @@ from pathlib import Path, PurePosixPath
 import re
 import stat
 import sys
+import tomllib
 from urllib.parse import unquote, urlsplit
 
-_PACKAGES = {'amplifier-module-tool-filesystem': 'amplifier_module_tool_filesystem',
-             'amplifier-module-tool-apply-patch': 'amplifier_module_tool_apply_patch'}
 _LIMIT = 4 * 1024 * 1024
 _FILES = 128
 
@@ -54,6 +53,17 @@ def _read(path, root, limit=_LIMIT):
 
 def _digest(value):
     return hashlib.sha256(value).hexdigest()
+
+
+def _module_entries(distribution):
+    """Use installed module ownership, without loading any entry point."""
+    selected = [entry for entry in distribution.entry_points if entry.group == 'amplifier.modules']
+    entries = {entry.name: entry.value for entry in selected}
+    roots = {value.split(':', 1)[0].split('.', 1)[0] for value in entries.values()}
+    _require(entries and len(roots) == 1 and len(entries) == len(selected))
+    package, = roots
+    _require(package.isidentifier())
+    return package, entries
 
 
 def _inventory(package):
@@ -120,24 +130,41 @@ class QualifiedToolSources:
                      and json.loads(contents[paths[1]]) == expected
                      and contents[paths[2]] == contents[paths[3]])
             value.stamps = {path: _digest(raw) for path, raw in contents.items()}
+            try:
+                value.locked = tomllib.loads(contents[paths[2]].decode()).get('package', [])
+            except (ValueError, UnicodeError):
+                value.locked = []  # Source-cache proof does not need a registry record.
             _require(isinstance(expected, list))
-            value.rows = {}
+            value.rows, value.packages, value.entries = {}, {}, {}
             for row in expected:
-                if row.get('name') in _PACKAGES:
-                    _require(row['name'] not in value.rows)
-                    value.rows[row['name']] = json.loads(json.dumps(row))
-            value.payloads = {}
+                try:
+                    name = row['name']
+                    distribution = importlib.metadata.distribution(name)
+                    package, entries = _module_entries(distribution)
+                    _require(name not in value.rows)
+                    value.rows[name] = json.loads(json.dumps(row))
+                    value.packages[name], value.entries[name] = package, entries
+                except (ValueError, TypeError, KeyError, AttributeError,
+                        importlib.metadata.PackageNotFoundError):
+                    continue
+            value.payloads, value.selections = {}, {}
             for name in value.rows:
                 try:
                     distribution = importlib.metadata.distribution(name)
                     row, direct, installed = value._installed(name, distribution)
                     payload = _inventory(installed)
-                    _require(payload == _record(distribution, _PACKAGES[name]))
+                    _require(payload == _record(distribution, value.packages[name]))
                     # verify_recorded has just checked this cache source's
                     # revision, clean checkout and tracked-content digest.
-                    selected = value._selected_package(row, direct, _PACKAGES[name])
-                    _require(_inventory(selected) == payload)
+                    if row.get('cacheSource'):
+                        selected = value._selected_package(row, direct, value.packages[name])
+                        _require(_inventory(selected) == payload)
+                        selection = {key: row['cacheSource'][key] for key in
+                            ('url', 'revision', 'subdirectory', 'trackedContentSha256')}
+                    else:
+                        selection = value._locked_source(row, direct)
                     value.payloads[name] = payload
+                    value.selections[name] = selection
                 except (OSError, ValueError, TypeError, KeyError, AttributeError,
                         csv.Error, importlib.metadata.PackageNotFoundError):
                     pass  # One unsupported tool does not disable other tools.
@@ -148,7 +175,15 @@ class QualifiedToolSources:
     def same(self, other):
         return (type(other) is QualifiedToolSources and self.project == other.project
                 and self.receipt == other.receipt and self.stamps == other.stamps
-                and self.rows == other.rows and self.payloads == other.payloads)
+                and self.rows == other.rows and self.payloads == other.payloads
+                and self.packages == other.packages and self.entries == other.entries
+                and self.selections == other.selections)
+
+    def owner(self, module):
+        names = [name for name, package in self.packages.items()
+                 if module == package or module.startswith(package + '.')]
+        _require(len(names) == 1)
+        return names[0]
 
     def check(self):
         _require(Path(sys.prefix).resolve() == self.prefix.resolve())
@@ -156,13 +191,14 @@ class QualifiedToolSources:
             _require(_digest(_read(path, path.parent)) == digest)
 
     def _installed(self, name, distribution):
-        package = _PACKAGES[name]
+        package = self.packages[name]
         _require(name in self.rows)
         row = self.rows[name]
         direct = json.loads(distribution.read_text('direct_url.json') or '{}')
         _require(distribution.metadata['Name'].lower().replace('_', '-') == name
                  and distribution.version == row['version'] and direct == row.get('directUrl', {})
                  and direct.get('dir_info', {}).get('editable', False) is False)
+        _require(_module_entries(distribution) == (package, self.entries[name]))
         installed = Path(distribution.locate_file(package))
         _require(installed.is_absolute() and installed.is_relative_to(self.prefix)
                  and not installed.is_symlink())
@@ -181,6 +217,35 @@ class QualifiedToolSources:
                       if (path / '__init__.py').is_file()]
         _require(len(candidates) == 1)
         return candidates[0]
+
+    def _locked_source(self, row, direct):
+        """Installed-only wheels use the existing qualified lock selection.
+
+        This binds a captured payload, not an independently downloaded archive
+        or publisher attestation. No resolver/download runs here.
+        """
+        candidates = [entry for entry in self.locked if entry.get('name') == row['name']
+                      and entry.get('version') == row['version']]
+        _require(len(candidates) == 1 and 'dir_info' not in direct and 'path' not in row)
+        entry, = candidates
+        source = entry.get('source', {})
+        artifacts = [entry.get('sdist', {}), *entry.get('wheels', [])]
+        hashes = sorted({artifact['hash'] for artifact in artifacts
+                         if re.fullmatch(r'sha256:[a-f0-9]{64}', artifact.get('hash', ''))})
+        if not direct:
+            _require(set(source) == {'registry'} and isinstance(source['registry'], str) and hashes)
+        elif 'archive_info' in direct:
+            _require(set(source) == {'url'} and source['url'] == direct.get('url') and hashes)
+            digest = direct['archive_info'].get('hashes', {}).get('sha256')
+            _require(isinstance(digest, str) and 'sha256:' + digest in hashes)
+        else:
+            vcs = direct.get('vcs_info', {})
+            locked = urlsplit(source.get('git', ''))
+            _require(set(source) == {'git'} and vcs.get('vcs') == 'git'
+                     and re.fullmatch('[a-f0-9]{40}', vcs.get('commit_id', ''))
+                     and locked.fragment == vcs['commit_id']
+                     and locked._replace(query='', fragment='').geturl() == direct.get('url'))
+        return {'lockedSource': source, 'lockedArtifactHashes': hashes}
 
     def _cache_root(self, module, cached, *, build=False):
         subdirectory = cached.get('subdirectory')
@@ -205,13 +270,14 @@ class QualifiedToolSources:
 
     def describe(self, name, distribution, origin):
         self.check()
-        package = _PACKAGES[name]
+        package = self.packages[name]
         row, direct, installed = self._installed(name, distribution)
         _require(name in self.payloads)
         payload = self.payloads[name]
         _require(_inventory(installed) == payload == _record(distribution, package))
-        selected = self._selected_package(row, direct, package)
-        _require(_inventory(selected) == payload)
+        if row.get('cacheSource'):
+            selected = self._selected_package(row, direct, package)
+            _require(_inventory(selected) == payload)
         origin = Path(origin)
         # The known class's module path is supplied by the caller, never input.
         mounted = next((parent for parent in origin.parents if parent.name == package), None)
@@ -219,13 +285,18 @@ class QualifiedToolSources:
         if mounted != installed:
             # A source-store object and its private wheel build view differ in
             # path, but share the verified selection and complete package bytes.
+            _require(row.get('cacheSource'))
             module = mounted.parent.parent if mounted.parent.name == 'src' else mounted.parent
             self._cache_root(module, row['cacheSource'])
             _require(_inventory(mounted) == payload)
         relative = origin.relative_to(mounted).as_posix()
         _require(relative in payload)
-        identity = {'distribution': name, 'version': row['version'], 'selection': direct,
-                    'qualifiedSource': row.get('cacheSource'),
+        # Placement and file:// build paths are checked above, but are not an
+        # agent-wide permission identity. Identical selected content may live
+        # in another qualified worker/cache without being a different request.
+        identity = {'distribution': name, 'version': row['version'],
+                    'modules': self.entries[name],
+                    'qualifiedSource': self.selections[name],
                     'packageContent': _digest(json.dumps(payload, sort_keys=True).encode())}
         self.check()
         return identity

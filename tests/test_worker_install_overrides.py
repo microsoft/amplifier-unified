@@ -172,6 +172,7 @@ async def test_tool_source_witness_requires_both_matching_verification_boundarie
         result = QualifiedToolSources()
         result.project, result.receipt = project, receipt
         result.stamps, result.rows, result.payloads = {}, {}, {'fixture': payload}
+        result.packages, result.entries, result.selections = {}, {}, {}
         return result
     before, after = witness('original'), witness('original')
     if change == 'payload': after.payloads['fixture'] = 'changed'

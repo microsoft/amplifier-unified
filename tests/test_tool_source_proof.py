@@ -15,27 +15,31 @@ from amplifier_web.tool_source_proof import QualifiedToolSources
 
 
 @pytest.fixture
-def package(tmp_path, monkeypatch):
+def package(tmp_path, monkeypatch, request):
     home = tmp_path / 'home'
     project = home / 'runtime' / ('q-' + '1' * 32)
     prefix = project / '.venv'
     site = prefix / 'lib/python3.13/site-packages'
     receipt = home / 'updates/releases' / ('2' * 32)
     source = receipt / 'foundation/cache/reference'
-    name = 'amplifier-module-tool-filesystem'
-    package_name = 'amplifier_module_tool_filesystem'
+    role = getattr(request, 'param', 'filesystem')
+    name = 'amplifier-module-tool-' + role
+    package_name = name.replace('-', '_')
+    class_name = 'ReadTool' if role == 'filesystem' else 'SelectedTool'
     installed = site / package_name
     mounted = source / package_name
     for path in (installed, mounted):
         path.mkdir(parents=True)
         (path / '__init__.py').write_text('')
-        (path / 'read.py').write_text('class ReadTool:\n async def execute(self, args):\n  return args\n')
+        (path / 'read.py').write_text(f'class {class_name}:\n async def execute(self, args):\n'
+                                     '  def nested(value):\n   return value\n  return nested(args)\n')
         (path / 'helper.py').write_text('meaning = 1\n')
     (source / '.amplifier_cache_meta.json').write_text(json.dumps(
         {'commit': 'a' * 40, 'git_url': 'https://example.invalid/reference'}))
-    info = site / 'amplifier_module_tool_filesystem-1.0.dist-info'
+    info = site / (package_name + '-1.0.dist-info')
     info.mkdir()
     (info / 'METADATA').write_text(f'Name: {name}\nVersion: 1.0\n')
+    (info / 'entry_points.txt').write_text(f'[amplifier.modules]\ntool-{role} = {package_name}:mount\n')
     direct = {'url': source.as_uri(), 'dir_info': {'editable': False}}
     (info / 'direct_url.json').write_text(json.dumps(direct))
     def record():
@@ -64,7 +68,7 @@ def package(tmp_path, monkeypatch):
         module.__file__ = str(origin / 'read.py')
         exec(compile((origin / 'read.py').read_text(), module.__file__, 'exec'), module.__dict__)
         monkeypatch.setitem(sys.modules, module.__name__, module)
-        return module.ReadTool()
+        return getattr(module, class_name)()
     return SimpleNamespace(home=home, project=project, receipt=receipt, prefix=prefix,
         installed=installed, mounted=mounted, source=source, info=info, direct=direct,
         expected=expected, distribution=distribution, record=record, load=load,
@@ -75,7 +79,8 @@ def package(tmp_path, monkeypatch):
 def test_noneditable_local_wheel_matches_exact_qualified_package(package, origin):
     proof = package.capture()
     source, kind = _source(package.load(getattr(package, origin)), proof)
-    assert kind == 'read' and source['selection'] == package.direct
+    assert kind == 'read' and 'selection' not in source and 'origin' not in source
+    assert source['modules'] == {'tool-filesystem': 'amplifier_module_tool_filesystem:mount'}
     assert source['qualifiedSource']['revision'] == 'a' * 40
     assert len(source['packageContent']) == len(source['implementation']) == 64
     assert proof.same(package.capture())
@@ -97,7 +102,7 @@ def test_source_store_build_wheel_and_distinct_mounted_object_share_exact_payloa
     (package.receipt / 'runtime-installed.json').write_text(json.dumps(package.expected))
     mounted = object_root / subdirectory / package.mounted.name
     source, kind = _source(package.load(mounted), package.capture())
-    assert kind == 'read' and source['selection'] == package.direct
+    assert kind == 'read' and 'selection' not in source
     assert source['qualifiedSource']['subdirectory'] == subdirectory
 
 
@@ -154,3 +159,63 @@ def test_known_loaded_implementation_is_still_required(package, monkeypatch, fau
     else: tool.execute = type(tool)().execute
     with pytest.raises(ValueError):
         _source(tool, proof)
+
+
+@pytest.mark.parametrize('package', ['bash', 'catalog'], indirect=True)
+def test_other_selected_module_owns_its_python_tool(package):
+    source, kind = _source(package.load(), package.capture())
+    assert kind == 'ordinary'  # Fixture class, not the canonical BashTool.
+    assert source['distribution'] == package.expected[0]['name']
+    assert set(source['modules']) == {package.expected[0]['name'].replace('amplifier-module-', '')}
+
+
+def test_same_selected_package_under_another_cache_path_has_same_semantics(package):
+    before, _ = _source(package.load(), package.capture())
+    relocated = package.source.parent / 'relocated'
+    shutil.copytree(package.source, relocated)
+    package.direct['url'] = relocated.as_uri()
+    package.expected[0]['path'] = str(relocated)
+    (package.info / 'direct_url.json').write_text(json.dumps(package.direct))
+    (package.receipt / 'runtime-installed.json').write_text(json.dumps(package.expected))
+    after, _ = _source(package.load(relocated / package.mounted.name), package.capture())
+    assert before == after
+
+
+def test_module_entrypoint_change_invalidates_private_source_proof(package):
+    proof = package.capture()
+    (package.info / 'entry_points.txt').write_text('[amplifier.modules]\nother = elsewhere:mount\n')
+    with pytest.raises(ValueError):
+        _source(package.load(), proof)
+
+
+@pytest.mark.parametrize('form', ['registry', 'archive'])
+def test_qualified_locked_wheel_does_not_require_a_source_cache(package, form):
+    row = package.expected[0]
+    row.pop('path'); row.pop('cacheSource')
+    digest = 'c' * 64
+    url = 'https://packages.invalid/tool.whl'
+    direct = {} if form == 'registry' else {'url': url, 'archive_info': {'hashes': {'sha256': digest}}}
+    row['directUrl'] = direct
+    (package.info / 'direct_url.json').write_text(json.dumps(direct))
+    (package.receipt / 'runtime-installed.json').write_text(json.dumps(package.expected))
+    source = '{registry = "https://packages.invalid/simple"}' if form == 'registry' else '{url = "' + url + '"}'
+    lock = ('[[package]]\nname = "' + row['name'] + '"\nversion = "1.0"\nsource = ' + source
+            + '\nwheels = [{url = "' + url + '", hash = "sha256:' + digest + '"}]\n')
+    (package.receipt / 'runtime.lock').write_text(lock)
+    (package.project / 'uv.lock').write_text(lock)
+    proof = package.capture()
+    described, _ = _source(package.load(package.installed), proof)
+    assert described['qualifiedSource']['lockedArtifactHashes'] == ['sha256:' + digest]
+    with pytest.raises(ValueError):
+        _source(package.load(), proof)  # Unselected source import remains unsupported.
+    (package.installed / 'helper.py').write_text('changed = True\n')
+    package.record()  # A rewritten RECORD cannot change the captured baseline.
+    with pytest.raises(ValueError):
+        _source(package.load(package.installed), proof)
+
+
+def test_unlocked_noneditable_local_package_is_not_silently_trusted(package):
+    package.expected[0].pop('cacheSource')
+    (package.receipt / 'runtime-installed.json').write_text(json.dumps(package.expected))
+    with pytest.raises(ValueError):
+        _source(package.load(package.installed), package.capture())

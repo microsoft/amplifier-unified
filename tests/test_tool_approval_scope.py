@@ -34,7 +34,8 @@ class SyntheticTool:
         self.working_dir = str(workspace)
         self.allowed_paths = [str(workspace)]
         self.effects = []
-        self.source = {'fixture': 'selected-synthetic-source', 'revision': 'one'}
+        self.source = {'fixture': 'selected-synthetic-source', 'revision': 'one',
+                       'modules': {'tool-filesystem': 'amplifier_module_tool_filesystem:mount'}}
 
     async def execute(self, arguments):
         self.effects.append(copy.deepcopy(arguments))
@@ -57,6 +58,7 @@ async def native(monkeypatch, tmp_path):
                                            'context': {'module': 'context-simple'}}, 'providers': []})
     await session.initialize()
     coordinator = session.coordinator
+    coordinator.config['tools'] = [{'module': 'tool-filesystem', 'config': {}}]
     tool = SyntheticTool(tmp_path)
     await coordinator.mount('tools', tool, name=tool.name)
     coordinator.register_capability('session.working_dir', str(tmp_path))
@@ -272,7 +274,7 @@ async def test_missing_observer_keeps_ordinary_once_approval(native):
     assert native.tool.effects == [{'value': 1, 'file_path': 'fixture.txt'}]
 
 
-async def test_shell_and_mismatched_typed_request_stay_once_only(native, monkeypatch):
+async def test_mismatched_request_or_unconfigured_tool_stays_once_only(native, monkeypatch):
     current = ToolCall(id='mismatch', name=native.tool.name,
                        arguments={'value': 1, 'file_path': 'fixture.txt'})
     with native.loop.approved_dispatch.run_scope(native.coordinator):
@@ -281,7 +283,7 @@ async def test_shell_and_mismatched_typed_request_stay_once_only(native, monkeyp
             for name, args in [('different', current.arguments), (native.tool.name, {'value': 2})]:
                 request = ApprovalRequest(tool_name=name, action='Review', details=args, risk_level='medium')
                 assert native.scope.request(request) is None
-            monkeypatch.setattr(tool_approval_scope, '_source', lambda tool: ({'fixture': 'shell'}, 'bash'))
+            native.coordinator.config['tools'] = []
             request = ApprovalRequest(tool_name=native.tool.name, action='Review',
                                       details=current.arguments, risk_level='medium')
             assert native.scope.request(request) is None
