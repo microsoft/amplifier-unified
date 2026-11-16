@@ -24,7 +24,7 @@ than optimizing one control in isolation.
 
 Author browser source, client tests and client build tools in
 [`amplifier-client-web`](https://github.com/microsoft/amplifier-client-web), the
-sole client authoring owner. It remains private; do not change its visibility.
+sole client authoring owner.
 Until an approved repository-delivery cutover, every client change intended for
 Unified must also reach the committed `components/web-client` delivery copy.
 Follow [component ownership and assembly](components/README.md#refresh-and-retire-the-copy):
@@ -225,6 +225,19 @@ store lacks many public roots (seen in Windows Sandbox: the package registry's
 root entered only after a Windows program asked for that site). An outbound request
 that must work there verifies against the system store plus the bundled roots,
 built per request (`update_checks.registry_trust`). Never turn verification off.
+A new installation has no component generation until its first component
+update; update health then verifies setup's record (`update_health.setup_evidence`),
+which is weaker than a qualified generation and never authorizes preparation.
+The installed-package reader runs Git for a package from a local checkout, so
+a caller without the installation's Git folder on PATH reads "not prepared".
+A folder below the installation folder that the app itself uses as a session
+workspace gets a CLI project name that repeats the installation path, so its
+session paths pass the Windows limit with long paths off (the first chat of
+0.94.1, the update stage's compatibility probe of 0.98.5). Give such a folder a
+short project name in `session_files.project_slug`, add its rows to
+`tests/test_windows_path_budget.py`, and run its real writer in
+`tests/test_windows_long_paths_off.py`. A folder that a person chose keeps its
+name.
 
 ## Keep agent context and coordination useful
 

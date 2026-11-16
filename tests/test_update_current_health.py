@@ -51,6 +51,23 @@ def mounted_fixture(tmp_path, monkeypatch):
     return manager, stage, project, source
 
 
+def test_a_generation_record_removed_during_verification_cannot_skip_the_package_comparison(tmp_path, monkeypatch):
+    from amplifier_web import runtime_qualification
+    manager, stage, project, source = mounted_fixture(tmp_path, monkeypatch)
+    assert health.active_evidence(manager)
+    changed = copy.deepcopy(source['runtime-installed.json'])
+    changed[0]['version'] = '0.0.0+changed'
+    monkeypatch.setattr(runtime_qualification, 'installed_graph', lambda p: changed)
+    assert health.active_evidence(manager) == {}  # Control: a changed package gives no proof.
+    real = runtime_qualification.verify_recorded
+
+    def verify(project, receipt, **options):
+        (Path(receipt) / 'runtime-installed.json').unlink()  # Gone after the proof read it.
+        return real(project, receipt, **options)
+    monkeypatch.setattr(runtime_qualification, 'verify_recorded', verify)
+    assert health.active_evidence(manager) == {}
+
+
 def test_captured060_current_graph_removes_old_health_cards_not_history(tmp_path, monkeypatch):
     manager,stage,project,source=mounted_fixture(tmp_path,monkeypatch)
     original=copy.deepcopy(manager.diagnostics.state)

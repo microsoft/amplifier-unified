@@ -10,6 +10,8 @@ The installation folder here has exactly the longest path that setup supports,
 with the same layout as a consumer installation. Arithmetic for every path
 shape is in ``tests/test_windows_path_budget.py``; this file checks that the
 paths the stores really create have those lengths, and that Windows accepts them.
+It also runs the app's real update compatibility probe in a stage folder there
+(``tests/update_stage_probe.py``).
 """
 from __future__ import annotations
 
@@ -28,6 +30,7 @@ import uuid
 import pytest
 
 import test_windows_path_budget as budget
+import update_stage_probe
 
 pytestmark = pytest.mark.skipif(os.name != 'nt', reason='Windows path limits need native Windows')
 REQUIRED = os.environ.get('AMPLIFIER_REQUIRE_LONG_PATHS_OFF') == '1'
@@ -350,6 +353,128 @@ def test_history_longer_than_the_limit_is_found_and_the_chat_stays_under_its_nam
     other, folder = install.chat()
     assert session_files.project_slug(folder) == 'chat-' + other.replace('-', '')[:16]
     write_view(save_session(install.root / 'app', folder, other))
+
+
+# Update stage. The compatibility probe of an in-app update runs in
+# ``<installation folder>\app\updates\releases\<32 hex>`` with that stage as its
+# app home. 51 is the installation folder path of the clean-room PC on which the
+# probe failed (account name of 18 characters); the other is the longest that
+# setup supports.
+CLEAN_ROOM_ROOT = 51
+PROJECT = 'update-' + update_stage_probe.STAGE_ID[:12]
+
+
+@pytest.fixture
+def stage(base, installation):
+    """A stage with the updater's layout, in an installation of the given folder path length."""
+    material = base / ('u' + uuid.uuid4().hex[:7])   # Test material stays outside the installation.
+    material.mkdir()
+
+    def create(size):
+        install = installation(size)
+        made = update_stage_probe.build(install.root / 'app', material)
+        assert install.below(made.stage) == budget.STAGE.replace(budget.HEX32, update_stage_probe.STAGE_ID)
+        assert len(str(made.stage)) == budget.length(budget.STAGE, size)
+        return install, made
+
+    yield create
+    remove_tree(EXTENDED + str(material))
+
+
+def run_probe(install, made, **options):
+    """The app's real probe, with the folders that the installation gives its update."""
+    return update_stage_probe.run(made, capture_root=install.root / 'capture',
+                                  source_store=install.root / budget.SOURCE_FOLDER,
+                                  state_home=install.root / 'ownership', **options)
+
+
+@pytest.mark.parametrize('size', [CLEAN_ROOM_ROOT, budget.MAX_ROOT])
+def test_the_update_probe_fails_under_the_cli_name_the_failure_this_fix_removes(stage, monkeypatch, size):
+    from amplifier_web import session_files
+    from amplifier_web.host.storage import SessionStore
+    install, made = stage(size)
+    # The settings that the updater gives its probe.
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(made.stage))
+    monkeypatch.setenv('AMPLIFIER_HOME', str(made.shared))
+    monkeypatch.setattr(session_files, '_SHORT_CHAT_PROJECTS', False)   # the behavior before this change
+    sessions = session_files.sessions_dir(made.workspace)
+    cli = sessions.parent.name
+    assert cli == update_stage_probe.cli_name(made.workspace)
+    assert len(cli) == len(budget.cli_project(size, budget.CHECK_FOLDER)) == size + 78
+    assert (len(str(sessions.parent)), len(str(sessions))) == (2 * size + 156, 2 * size + 165)
+    if size == CLEAN_ROOM_ROOT:
+        assert (len(cli), len(str(sessions.parent)), len(str(sessions))) == (129, 258, 267)   # computed there
+    assert len(str(sessions.parent)) > budget.FOLDER_LIMIT
+    # The call that failed on the clean-room PC: the session store creates its folder.
+    with pytest.raises(FileNotFoundError) as refusal:
+        SessionStore.for_app(made.stage, made.workspace)
+    assert refusal.value.errno == errno.ENOENT and length_refusal(refusal.value)
+    print(f'MEASURED installation folder {size}: stage {len(str(made.stage))}, CLI project name {len(cli)}, '
+          f'project folder {len(str(sessions.parent))} (limit {budget.FOLDER_LIMIT}), sessions folder '
+          f'{len(str(sessions))}; refused with {type(refusal.value).__name__}, errno {refusal.value.errno}, '
+          f'Windows error {refusal.value.winerror}')
+    # The picture measured there: the projects folder exists and is empty.
+    assert os.listdir(made.shared / 'projects') == []
+    # The real probe, with those names: the record that the Updates page showed.
+    result = run_probe(install, made, before_the_fix=True)
+    assert result.returncode == 1 and result.facts, result.stdout + result.stderr
+    assert {name: result.facts.get(name) for name in ('ok', 'stage', 'errorType', 'osError')} == {
+        'ok': False, 'stage': 'prepare', 'errorType': 'FileNotFoundError', 'osError': 'ENOENT'}, result.facts
+    assert result.facts['failureLocation'].startswith('amplifier_web.host.storage:__init__:'), result.facts
+    assert os.listdir(made.shared / 'projects') == []
+    print(f'MEASURED installation folder {size}: the real probe under the CLI name ended with exit code '
+          f'{result.returncode} and {json.dumps(result.facts, sort_keys=True)}')
+    # With the short name the same call creates the folder.
+    monkeypatch.setattr(session_files, '_SHORT_CHAT_PROJECTS', True)
+    store = SessionStore.for_app(made.stage, made.workspace)
+    assert store.base_dir == made.shared / 'projects' / PROJECT / 'sessions' and store.base_dir.is_dir()
+    assert os.listdir(made.shared / 'projects') == [PROJECT]
+
+
+@pytest.mark.parametrize('size', [CLEAN_ROOM_ROOT, budget.MAX_ROOT])
+def test_the_real_update_probe_completes_in_a_stage_with_long_paths_off(stage, monkeypatch, size):
+    install, made = stage(size)
+    update_stage_probe.passed(run_probe(install, made))
+    assert update_stage_probe.expected_project(made) == PROJECT
+    assert os.listdir(made.shared / 'projects') == [PROJECT]
+    session = update_stage_probe.session_of(made, PROJECT)
+    # The complete list of what the probe left with the fixture's profile: in its stage and below the capture folder.
+    assert update_stage_probe.left_in_stage(made, PROJECT, session) == update_stage_probe.STAGE_AFTER_A_PROBE
+    assert update_stage_probe.names(install.root / 'capture', PROJECT, session) == \
+        update_stage_probe.CAPTURE_AFTER_A_PROBE
+    # Nothing else in the installation changed: the person's shared home, the ownership store, the source store.
+    for folder in ('shared', 'ownership', budget.SOURCE_FOLDER):
+        assert os.listdir(install.root / folder) == []
+    assert os.listdir(install.root / 'app') == ['updates']
+    # The lengths are the budget's rows, and every path that exists is inside the Windows limits.
+    rows = {name: budget.length(relative, size) for name, kind, relative in budget.update_stage(PROJECT, session)}
+    folder = made.shared / 'projects' / PROJECT / 'sessions' / session
+    assert len(str(folder)) == rows['probe session folder']
+    assert len(str(folder / 'live-jobs' / 'owner.lock')) == rows['probe job-store lock']
+    assert len(str(made.stage / 'runtime-reports' / session / 'module-load-failures.json')) == rows['probe report']
+    capture = install.root / 'capture' / PROJECT / 'sessions' / session / 'context-intelligence'
+    assert (len(str(capture)), len(str(capture / 'events.jsonl'))) == (
+        rows['probe capture folder'], rows['probe event log'])
+    files, folders = install.longest()
+    longest = budget.STAGE_LONGEST[1] - (budget.MAX_ROOT - size)
+    assert files <= longest <= budget.FILE_LIMIT and folders <= budget.FOLDER_LIMIT
+    if size == budget.MAX_ROOT:
+        assert (len(str(folder)), len(str(capture))) == (202, 154)
+    print(f'MEASURED installation folder {size}: the real probe completed under the project name {PROJECT}; '
+          f'session folder {len(str(folder))}, capture folder {len(str(capture))}, longest file that exists '
+          f'{files}, longest folder that exists {folders}; longest path that the budget allows there {longest}')
+    # The same stores at the same depth, through their real writers: a second
+    # save also writes the backup files and goes through every temporary name.
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(made.stage))
+    monkeypatch.setenv('AMPLIFIER_HOME', str(made.shared))
+    other = str(uuid.uuid4())
+    saved = save_session(made.stage, made.workspace, other)
+    assert saved == folder.with_name(other) and (saved / 'transcript.jsonl.backup').is_file()
+    assert len(str(saved / 'transcript.jsonl.backup')) == rows['probe transcript backup']
+    assert capture_events(made.workspace, other) == capture.parents[1] / other / 'context-intelligence'
+    assert os.listdir(made.shared / 'projects') == [PROJECT]
+    files, folders = install.longest()
+    assert files <= longest and folders <= budget.FOLDER_LIMIT
 
 
 # The deepest module source file of the default bundles, by its real name (125

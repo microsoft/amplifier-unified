@@ -266,6 +266,20 @@ else:
     return output.strip() == 'compatible'
 
 
+def exec_arguments(arguments):
+    """The argument list for os.execv, with every argument kept whole.
+
+    On Windows the C runtime joins the list with spaces and quotes nothing.
+    A folder name with a space (a user name such as "Jane Doe") would reach
+    the app as two arguments, and no command would work after an app update.
+    Quote each argument there in the way that subprocess does.
+    """
+    if os.name != "nt":
+        return list(arguments)
+    import subprocess
+    return [subprocess.list2cmdline([argument]) for argument in arguments]
+
+
 def delegate(argv=None):
     """Exec the exact qualified interpreter, retaining CLI args and data scope.
 
@@ -312,4 +326,7 @@ def delegate(argv=None):
     os.environ["AMPLIFIER_WEB_HOME"] = str(home)
     # Match qualification's isolated import path. A repository in the caller's
     # working directory must not replace the app in this tested environment.
-    os.execv(str(python), [str(python), "-I", "-m", "amplifier_web", *args])
+    # On Windows this starts the app as a new process and ends this one at
+    # once with exit status 0. The caller of a command still receives the
+    # app's output, but never its exit status.
+    os.execv(str(python), exec_arguments([str(python), "-I", "-m", "amplifier_web", *args]))

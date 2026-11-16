@@ -42,6 +42,17 @@ def test_qualified_launch_preserves_arguments_and_data_scope(qualified, monkeypa
     monkeypatch.delenv('AMPLIFIER_APP_GENERATION_EXEC')
 
 
+def test_windows_hand_over_keeps_an_argument_with_a_space_whole(monkeypatch):
+    # Windows joins the exec list with spaces. Each argument is quoted, so
+    # that "C:\\Users\\Jane Doe\\app" stays one argument for the app.
+    plain = ["python.exe", "--data-dir", "C:\\Users\\Jane Doe\\app", "", 'say "hello"', "open"]
+    monkeypatch.setattr(generations.os, "name", "posix")
+    assert generations.exec_arguments(plain) == plain  # exec passes the list as it is.
+    monkeypatch.setattr(generations.os, "name", "nt")
+    assert generations.exec_arguments(plain) == [
+        "python.exe", "--data-dir", '"C:\\Users\\Jane Doe\\app"', '""', '"say \\"hello\\""', "open"]
+
+
 def test_manual_reinstall_and_development_launch_take_precedence(qualified, monkeypatch):
     home, bootstrap, dist, target, graph = qualified
     monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(home))

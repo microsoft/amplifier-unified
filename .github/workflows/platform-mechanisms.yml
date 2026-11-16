@@ -30,6 +30,7 @@ on:
       - amplifier_web/host/storage.py
       - amplifier_web/auth.py
       - amplifier_web/browser_entry.py
+      - amplifier_web/application_generations.py
       - amplifier_web/server.py
       - amplifier_web/static/browser-entry.js
       - amplifier_web/static/windows-login.html
@@ -45,6 +46,7 @@ on:
       - amplifier_web/CPYTHON-LICENSE.txt
       - amplifier_web/voice_diagnostics.py
       - amplifier_web/update_checks.py
+      - amplifier_web/update_health.py
       - amplifier_web/app_component_graph.py
       - amplifier_web/windows_jobs.py
       - amplifier_web/windows_launch_guard.py
@@ -90,6 +92,7 @@ on:
       - tests/test_deployment.py
       - tests/test_update_checks.py
       - tests/test_update_registry_trust.py
+      - tests/test_update_health_setup_record.py
       - tests/test_windows_tls.py
       - tests/test_windows_trust.py
       - tests/test_session_sign_out.py
@@ -99,6 +102,7 @@ on:
       - tests/test_windows_installation.py
       - tests/test_windows_ports.py
       - tests/test_windows_consumer.py
+      - tests/test_windows_first_open.py
       - tests/test_windows_consumer_shell.py
       - tests/test_installation_runtime.py
       - tests/test_installation_health.py
@@ -266,6 +270,26 @@ jobs:
         run: |
           .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -p no:cacheprovider tests/test_update_registry_trust.py
           if ($LASTEXITCODE -ne 0) { throw 'Registry lookup trust checks failed.' }
+      # Update health of a new installation: the real reader of setup's record
+      # on native Windows (private files, the installed-package reader and its
+      # Git child policy) with this runner's Git. No task, no app, no network.
+      - name: Check update health of a new installation against setup's record
+        shell: pwsh
+        run: |
+          .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -p no:cacheprovider tests/test_update_health_setup_record.py
+          if ($LASTEXITCODE -ne 0) { throw 'Setup-record update health checks failed.' }
+      # First start with an update: the real `open` command, handed over with
+      # os.execv as an app generation is, against this installation's host
+      # while that host restarts as another package version. Real private
+      # files, pinned HTTPS and grant store, in a folder with a space in its
+      # name. A recorder stands in for the browser; Task Scheduler, the update
+      # and the Windows certificate question are not part of this check.
+      - name: Check that the first start's open step waits for a restarting host and opens the browser once
+        shell: pwsh
+        run: |
+          .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -s -p no:cacheprovider tests/test_windows_first_open.py | Tee-Object -Variable report
+          if ($LASTEXITCODE -ne 0) { throw 'Windows first-start open checks failed.' }
+          if ($report -match 'skipped') { throw 'A native first-start open case was skipped; on this lane it must run.' }
       - name: Check sign-out of all browsers and remote sign-in by code (real private store, real HTTPS)
         shell: pwsh
         run: |

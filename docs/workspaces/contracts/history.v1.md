@@ -48,6 +48,15 @@ SessionRef is unchanged.
   failed, do not keep a chat on the path slug.
 - A CLI or TUI started inside such a folder on Windows computes the path slug. It
   lists a chat kept under the path slug and does not list one under the short name.
+- The folder in which an update checks its candidate
+  (`<app data>\updates\releases\<stage id>\qualification-workspace`) is also the
+  app's own. Its check sessions are not saved conversations: their history is
+  in the stage's own store (`<stage>\shared-config`), not in the person's shared
+  home. Their capture records go to the installation's capture folder under
+  the same project name.
+  On Windows, in a process that runs with that stage as its app home, the
+  folder uses the project name `update-<first 12 hex digits of the stage id>`,
+  for the same path-limit reason. It never equals a path slug or a chat name.
 
 ## The promises
 

@@ -7,6 +7,7 @@ on this computer and types on that device.
 """
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, replace
 import hashlib
 import hmac
@@ -27,6 +28,16 @@ CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"  # 32 symbols: no 0, 1, I or 
 CODE_LENGTH = 10
 _CODE = re.compile(f"[{CODE_ALPHABET}]{{{CODE_LENGTH}}}")
 REOPEN = "Open from the owner launcher again: amplifier-unified open."
+# The line that `amplifier-unified open` prints after the browser accepted the
+# address. The Windows launcher reads it, because the exit status says nothing
+# there: a command that an app generation takes over ends with status 0 for its
+# caller, whatever it did. The launcher is the code that setup installed and an
+# update cannot change it, so this text must stay as it is.
+OPENED = "Amplifier opened in your browser."
+# How long `open` waits for this installation's host. The host restarts to
+# finish an update, also one that it found at its first start; it is then away
+# for some seconds, and before that the earlier version still answers.
+HOST_WAIT = 60.0
 NEW_CODE = "Make sure that Amplifier is running on this PC. Then run this again: amplifier-unified browsers code."
 RELOAD = "Could not sign in. Open the sign-in page again and type the code."
 GUIDE = ("https://github.com/microsoft/amplifier-unified/blob/main/docs/DEPLOYMENT.md"
@@ -517,13 +528,26 @@ def remote_login_page(request):
     return response
 
 
-async def owner_browser_url(data_dir: Path, config: dict) -> str:
+async def owner_browser_url(data_dir: Path, config: dict, *, wait=0.0, pause=1.0, waiting=None) -> str:
     """Pinned owner request; no redirect/proxy/HTTP fallback or uncertain reissue.
 
     The returned URL contains a single-use grant, never the control bearer.
     Callers must not print it or include browser backend exceptions in output.
+
+    For up to `wait` seconds, a host that does not answer, or that answers as
+    another package version, is asked again: it is restarting. `waiting` is
+    called once before the first pause. Only the health request is repeated.
+    The grant request is sent once, to the first host that matches; a refused
+    or unconfirmed grant request ends the call.
+
+    The first round asks every local address, as a call without a wait does.
+    After it, a health request starts only before the end of the wait. A
+    request can take 5 seconds and the grant request 5 more, so the requests
+    need about 10 seconds after the wait. That is not a limit for the whole
+    call: a pause that ends late (a PC that slept) ends the call late.
     """
-    origin, ticket = await _owner_post(data_dir, config, ISSUE_PATH, {}, "ticket", r"[A-Za-z0-9_-]{43}")
+    origin, ticket = await _owner_post(data_dir, config, ISSUE_PATH, {}, "ticket", r"[A-Za-z0-9_-]{43}",
+                                       wait=wait, pause=pause, waiting=waiting)
     return origin + "/login#ticket=" + ticket
 
 
@@ -538,13 +562,17 @@ async def owner_browser_code(data_dir: Path, config: dict, origin: str) -> str:
 
 
 async def _owner_post(data_dir: Path, config: dict, path: str, extra: dict, field: str, pattern: str, again=REOPEN,
-                      *, invalid=None):
+                      *, invalid=None, wait=0.0, pause=1.0, waiting=None):
     """Pin the privately read leaf before reading or sending the control bearer.
 
     Returns the local origin and the one named reply value. No redirect, no
     proxy, no HTTP fallback, and an unconfirmed POST is never sent again.
     `invalid` is the text for the host's reply that the request itself is not
     acceptable (400): for a code, the running host does not have the address.
+
+    `wait`, `pause` and `waiting` are the wait of owner_browser_url for a host
+    that is restarting. Only the health request is repeated, never the POST.
+    Without a wait, every local address is asked once, with no pause.
     """
     import aiohttp
     from .auth import data_identity
@@ -563,37 +591,50 @@ async def _owner_post(data_dir: Path, config: dict, path: str, extra: dict, fiel
         raise BrowserEntryUnavailable("Cannot verify the installed package identity for browser entry.")
     version, revision = package
     headers = {"Authorization": "Bearer " + token}
+    deadline = time.monotonic() + wait
+    repeated = False
     async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5), trust_env=False) as client:
-        for url in urls:
-            origin = url.removesuffix("/api/health")
-            try:
-                async with client.get(url, ssl=pin, allow_redirects=False, headers=headers) as response:
-                    if response.status != 200:
+        while True:
+            for url in urls:
+                if repeated and time.monotonic() >= deadline:
+                    break  # The wait is over: no further health request starts.
+                origin = url.removesuffix("/api/health")
+                try:
+                    async with client.get(url, ssl=pin, allow_redirects=False, headers=headers) as response:
+                        if response.status != 200:
+                            continue
+                        health = await response.json()
+                    if (not isinstance(health, dict) or health.get("ok") is not True
+                            or health.get("app") != "amplifier-unified" or _package_identity(health) != package
+                            or health.get("dataIdentity") != data_identity(data_dir)
+                            or not isinstance(health.get("instanceId"), str)
+                            or not re.fullmatch("[a-f0-9]{32}", health["instanceId"])):
                         continue
-                    health = await response.json()
-                if (not isinstance(health, dict) or health.get("ok") is not True
-                        or health.get("app") != "amplifier-unified" or _package_identity(health) != package
-                        or health.get("dataIdentity") != data_identity(data_dir)
-                        or not isinstance(health.get("instanceId"), str)
-                        or not re.fullmatch("[a-f0-9]{32}", health["instanceId"])):
+                except (aiohttp.ClientError, OSError, TimeoutError, ValueError):
                     continue
-            except (aiohttp.ClientError, OSError, TimeoutError, ValueError):
-                continue
-            try:
-                async with client.post(origin + path, ssl=pin, allow_redirects=False,
-                                       headers={**headers, "Origin": origin}, json={
-                                           "instanceId": health["instanceId"], "dataIdentity": health["dataIdentity"],
-                                           "version": version, "revision": revision, "ownerSid": sid,
-                                           **extra}) as response:
-                    if response.status != 200:
-                        raise BrowserEntryUnavailable(
-                            invalid if invalid and response.status == 400
-                            else "The owner host refused browser entry. " + again)
-                    result = await response.json()
-                value = result.get(field) if isinstance(result, dict) else None
-                if not isinstance(value, str) or not re.fullmatch(pattern, value):
-                    raise ValueError("Invalid reply")
-            except (aiohttp.ClientError, OSError, TimeoutError, ValueError):
-                raise BrowserEntryUnavailable("Browser entry response was not confirmed; no retry was made. " + again) from None
-            return origin, value
+                try:
+                    async with client.post(origin + path, ssl=pin, allow_redirects=False,
+                                           headers={**headers, "Origin": origin}, json={
+                                               "instanceId": health["instanceId"], "dataIdentity": health["dataIdentity"],
+                                               "version": version, "revision": revision, "ownerSid": sid,
+                                               **extra}) as response:
+                        if response.status != 200:
+                            raise BrowserEntryUnavailable(
+                                invalid if invalid and response.status == 400
+                                else "The owner host refused browser entry. " + again)
+                        result = await response.json()
+                    value = result.get(field) if isinstance(result, dict) else None
+                    if not isinstance(value, str) or not re.fullmatch(pattern, value):
+                        raise ValueError("Invalid reply")
+                except (aiohttp.ClientError, OSError, TimeoutError, ValueError):
+                    raise BrowserEntryUnavailable("Browser entry response was not confirmed; no retry was made. " + again) from None
+                return origin, value
+            repeated = True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            if waiting is not None:
+                waiting()
+                waiting = None
+            await asyncio.sleep(min(pause, remaining))
     raise BrowserEntryUnavailable("The owned local host is not reachable or its identity does not match. " + again)

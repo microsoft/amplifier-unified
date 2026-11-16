@@ -68,7 +68,6 @@ The web client has a different ownership arrangement, described below.
 
 The [Amplifier web client](https://github.com/microsoft/amplifier-client-web) owns
 browser source, client tests, production dependencies and its build tools.
-That repository is currently private; this is not permission to make it public.
 Until an approved repository-delivery cutover, **client changes intended for
 Unified must be maintained in both repositories**: author in the client repository,
 then refresh the committed [`web-client/`](web-client/) delivery copy here.
@@ -76,8 +75,8 @@ then refresh the committed [`web-client/`](web-client/) delivery copy here.
 source digest and delivery location. This is one authoring owner and one required
 selected delivery copy, not two places to develop the client.
 
-Until the client repository is public and its review is complete, release
-acceptance verifies that the canonical selected commit and this entire copy stay
+While selected-copy delivery remains in use, release acceptance verifies that
+the canonical selected commit and this entire copy stay
 byte-for-byte synchronized. Notify both owners when changing either side and
 carry source, selection record and generated assets through the same handoff.
 A qualified pinned snapshot need not equal the latest client branch tip: record
@@ -201,7 +200,7 @@ Shared catalogs, SDK and normative contracts retain their existing owners. No
 wrapper package, lock or duplicate client tests are generated in Unified.
 
 Public visibility alone does not retire this obligation. Only an approved
-public/repository-delivery cutover may change delivery to `{"type":"repository"}`;
+repository-delivery cutover may change delivery to `{"type":"repository"}`;
 remove the copied tree and update this guide and agent guidance in the same review.
 Preparation then fetches the exact commit through Unified's repository-access
 policy. Client verification, artifact format and runtime do not change with

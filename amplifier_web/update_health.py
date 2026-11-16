@@ -87,7 +87,9 @@ def active_evidence(manager, *, explain_configuration=False):
         project = project_path(manager.home, generation)
         if (project / 'uv.lock').read_bytes() != (stage / 'runtime.lock').read_bytes():
             return {}
-        verify_recorded(project, stage)
+        # Compare with the record that was read and validated above: a record
+        # that disappears after that read must not skip the comparison.
+        verify_recorded(project, stage, expected=graph)
         # An observation that raced a new pointer/configuration is not evidence
         # for whichever installation won that race.
         if active_release(manager.home) != pointer:
@@ -115,6 +117,74 @@ def active_evidence(manager, *, explain_configuration=False):
                 'packages': {row['name'] for row in graph}, 'components': components, **limitation}
     except (OSError, ValueError, TypeError, KeyError, AttributeError):
         return {}  # Unknown evidence is not a healthy installed graph.
+
+
+def _never_selected(pointer):
+    """True while the pointer has never named a component generation."""
+    return not pointer.get('current') and not pointer.get('previous')
+
+
+def setup_evidence(manager):
+    """Verify setup's own record on an installation that never selected a generation.
+
+    Setup installs the declared worker dependencies and records them. No
+    generation is selected until the first component update, so the generation
+    proof above is always empty there, and no check can produce it.
+
+    This applies the checks of a conversation-worker start to that record: lock,
+    manifest, recorded packages and installer policy. Packages are compared by
+    name, version and source, and a local checkout also by its tracked content;
+    the files of an installed wheel are not read, and packages that were added
+    after setup are not compared with anything.
+    It is not a qualification. It carries no activation time, so it cannot
+    supersede a recorded failure, and preparation never consults it.
+    """
+    import subprocess
+    from .installation_runtime import status
+    from .runtime_environment import receipt_directory
+    from .updates import active_release
+    try:
+        pointer = active_release(manager.home)
+        if not _never_selected(pointer):
+            # A selected generation is verified by its own receipts only. An
+            # installation that went back from a generation keeps its report.
+            return {}
+        record = receipt_directory(manager.home) / 'runtime-installed.json'
+        recorded = record.read_bytes()
+        observed = status(manager.home)
+        if (observed.get('ok') is not True or observed.get('prepared') is not True
+                or observed.get('generation') is not None
+                or type(observed.get('packageCount')) is not int or observed['packageCount'] < 1
+                # The packages were compared with exactly the record read above ...
+                or observed.get('recordSha256') != hashlib.sha256(recorded).hexdigest()
+                or record.read_bytes() != recorded  # ... and it did not change since.
+                or active_release(manager.home) != pointer):
+            return {}
+        return {'setupRecord': True, 'packageCount': observed['packageCount']}
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, subprocess.SubprocessError):
+        return {}  # Unknown evidence is not a healthy installed graph.
+
+
+def cached_evidence(manager):
+    """The proof of the last refresh, as far as it still applies.
+
+    Setup's record is a proof only while the pointer has never named a
+    generation. An activation writes the pointer, then promotes the workers,
+    and publishes and refreshes only after that; a failed promotion publishes
+    no selection at all. So the published copy is not enough: a held setup
+    proof is checked against the pointer itself, one small file read for each
+    use. The proof of a generation is returned as it is.
+    """
+    evidence = getattr(manager, '_active_update_evidence', None) or {}
+    if not evidence.get('setupRecord'):
+        return evidence
+    if manager.service.state['updates'].get('release'):
+        return {}
+    from .updates import active_release
+    try:
+        return evidence if _never_selected(active_release(manager.home)) else {}
+    except (OSError, ValueError, TypeError, AttributeError):
+        return {}  # An unreadable pointer is not "no generation".
 
 
 def preparation_key(manager, rows):
@@ -537,13 +607,18 @@ def current(state, evidence=None, *, manual_verified=None, explicit_retry=False,
         if local_changes:
             return result('unchecked', 'Custom sources kept',
                           'Local source changes are kept as configured and are not replaced automatically. Source details remain available; no repair is required for intentional customization.')
+        if evidence.get('setupRecord'):
+            # A new installation: the check found nothing newer, and setup's
+            # record still matches. Do not call these components qualified.
+            return result('current', 'You’re up to date',
+                          'No newer version of the app or its components was found. The components that setup recorded are installed as recorded.')
         return result('current', 'You’re up to date', 'The current application and qualified components are ready. Earlier attempts remain in history; configured fixed versions are kept.')
     return result('unchecked', 'Check for updates', 'The full desired component state has not been checked.', action='check')
 
 
 def publish(manager):
     state = manager.service.state['updates']
-    evidence = getattr(manager, '_active_update_evidence', {})
+    evidence = cached_evidence(manager)
     # Settings mutations invalidate proof immediately without a graph scan on
     # each publication. Only an owner check/activation can establish it again.
     revision = manager.service.state.get('configurationRevision')
@@ -570,6 +645,9 @@ async def refresh(manager):
     import asyncio
     revision = manager.service.state.get('configurationRevision')
     evidence = await asyncio.to_thread(active_evidence, manager, explain_configuration=True)
+    if not evidence:
+        # With no selected generation, setup's record is the only installed proof.
+        evidence = await asyncio.to_thread(setup_evidence, manager)
     from .update_partial import retained_after_check
     from .update_sequence import verify_app_selection
     def retry_action():

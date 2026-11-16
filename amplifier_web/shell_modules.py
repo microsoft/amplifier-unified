@@ -619,6 +619,12 @@ class ShellModules:
                         task=task_for(state, row), db=self.service.db)
         overview = ({'items': [copy.deepcopy(workspace)] if workspace else [], 'nextOffset': None} if pinned_scope else listing(self.service.state['workspaces'], {'query': '', 'offset': 0})) if wants('workspaceOverview') else None
         shortcuts = projections.workspace_shortcuts(scoped, workspace_id=workspace_id if pinned_scope else None) if wants('workspaceShortcuts') else None
+        context_workspace = workspace
+        if workspace is not None and context_visible_ids is not None:
+            # Private bundled context needs the selected registration, not its
+            # resource inventory or setup receipts. Full/custom reads retain both.
+            context_workspace = {key: value for key, value in workspace.items()
+                                 if key not in {'resources', 'setup'}}
         # Only summaries and the selected registration leave this query. No
         # transcripts, draft text, credentials, runtime mounts or full catalog.
         result = {} if _page_only else {'view': view, 'viewRevision': client['views'].get(instance['id'], {}).get('viewRevision', 0),
@@ -627,7 +633,7 @@ class ShellModules:
                 'workHomeContext': work_home_context(work_state, pinned_workspace_id=work_pin),
                 'navigationActivityById': activity_by_id,
                 'selectedWorkspaceId': workspace_id, 'selectedSessionId': state.get('selectedSessionId'),
-                'workspaces': [copy.deepcopy(workspace)] if workspace else [],
+                'workspaces': [copy.deepcopy(context_workspace)] if context_workspace else [],
                 'workspaceDefaults': copy.deepcopy(state.get('workspaceDefaults', {})),
                 'settings': {'workspaces': copy.deepcopy(state.get('settings', {}).get('workspaces', {}))},
                 'pinnedSessionIds': list(state.get('pinnedSessionIds', [])),

@@ -136,8 +136,8 @@ async def _status_once(home, wait=0):
             # not that the service manager is out of reach.
             return {'ok': False, 'service': initial_state, 'message': str(problem),
                     'nextStep': 'Restart Windows, then read the status again.' if problem.retry else
-                                f'Review the task {problem.entry} in Task Scheduler. Amplifier uses and '
-                                'changes only a task that it can confirm as its own.',
+                                f'Review the task {problem.entry} in Task Scheduler. Amplifier uses '
+                                'only a task that it can confirm as its own.',
                     'entry': {'name': problem.entry, 'retry': problem.retry}}
         from .reset import service_manager_help
         return {'ok': False, 'service': initial_state, 'message': "The background service manager could not be reached.",
