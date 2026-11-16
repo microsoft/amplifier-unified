@@ -287,8 +287,8 @@ def entry_notice(purpose, entry, retry, *, listed=True):
     """The person's text when Amplifier did not confirm its start-at-sign-in entry.
 
     `purpose` is `start`, `status`, `stop`, `uninstall` or `removal` (an
-    uninstall that goes on with a removal that began earlier: data is already
-    deleted then); `entry` is the task's
+    uninstall that goes on with a removal that began earlier: the app has
+    stopped, and data can already be deleted); `entry` is the task's
     name in Task Scheduler. The check cannot say why the entry differs (a
     changed setting, another installation, a renamed Windows account), so the
     text does not say that someone changed it. With `retry`, Windows gave no

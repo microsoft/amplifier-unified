@@ -272,8 +272,8 @@ def kept_folder_question(notices):
     the uninstall question; the sentence that says what No does; the sentence
     that says what Cancel does. A message, a second question, a question
     with two buttons, or a question without those sentences is another case:
-    it fails here. The whole text is not compared: Windows can add a
-    sentence about the certificate.
+    it fails here. The whole text is not compared: Amplifier adds a
+    sentence about the certificate when Windows trusts it.
     """
     return (len(notices) == 1 and notices[0]["kind"] == "question" and notices[0]["cancel"] is True
             and notices[0]["answer"] == "no"
