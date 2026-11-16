@@ -369,7 +369,11 @@ def project(session, *, resolver=None, message_overlay=None, work_overlay=None):
         result['executionWindow']={**groups,'part':'groups'}
     # Reports and completed generation bodies are not activity badges.
     from .browser_workers import project as worker_view
-    workers, summary = worker_view(session.get('workers', []), result.get('execution', {}))
+    loading = (work_overlay is not None
+        and result.get('execution', {}).get('detailsDeferred') is True
+        and result.get('workProjection', {}).get('status') == 'loading'
+        and result.get('workProjection', {}).get('current') is False)
+    workers, summary = worker_view(session.get('workers', []), result.get('execution', {}), loading=loading)
     result['workers']=[compact(row,session['id'],'workers',SUMMARY_LIMIT) for row in workers]
     if summary is not None:
         result['workerSummary'] = summary
