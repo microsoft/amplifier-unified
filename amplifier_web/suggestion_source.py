@@ -28,17 +28,29 @@ def public_rows(rows, *, bounded=True):
         text = row.get('text')
         if not isinstance(text, str) or not text.strip():
             continue
+        from .naming_context import clean_text, MAX_TEXT_BYTES
+        # Refuse overlong individual text rather than silently using the naming
+        # helper's clipped prefix as a complete conversation message.
+        if len(text) > MAX_TEXT_BYTES or len(text.encode()) > MAX_TEXT_BYTES:
+            raise Unavailable('transcript_limit')
+        text = clean_text(text)
+        if not text:
+            continue
         # Check chars before encoding: a giant row never allocates a giant copy.
         if bounded and len(text) > MAX_BYTES:
             raise Unavailable('transcript_limit')
         item = {key: row[key] for key in ('id', 'role', 'text', 'agentId', 'agentLabel')
                 if isinstance(row.get(key), str)}
+        item['text'] = text
         peer = row.get('peerEnvelope')
         if row['role'] == 'user' and isinstance(peer, dict) and isinstance(peer.get('senderSessionId'), str):
             item['agentId'] = peer['senderSessionId']
             item['agentLabel'] = 'Another conversation'
-        elif row['role'] == 'user' and row.get('inputOrigin') in {'agent', 'peer', 'scheduler'}:
+        elif row['role'] == 'user' and (row.get('inputOrigin') in {
+                'agent', 'peer', 'scheduler', 'approval', 'observation'}
+                or row.get('scheduledRunId') or row.get('approvalId') or row.get('questionId')):
             item['agentId'] = row.get('inputOrigin')
+            item['agentId'] = item['agentId'] or 'service'
             item['agentLabel'] = 'Agent or scheduled input'
         if not bounded:
             result.append(item)
@@ -49,6 +61,13 @@ def public_rows(rows, *, bounded=True):
             raise Unavailable('transcript_limit')
         result.append(item)
     return result
+
+
+def eligible(service, session):
+    from .session_navigation import is_top_level
+    from .updates import work_paused
+    return (is_top_level(session) and not session.get('scheduledRunId')
+            and not work_paused(getattr(service, '_state', {})))
 
 
 def select(rows, config, has_earlier):
@@ -63,13 +82,14 @@ def select(rows, config, has_earlier):
     return rows[human[max(0, len(human) - config['humanTurns'])]:] if human else rows
 
 
-def witness(service, sid, config=None):
+def witness(service, sid, config=None, *, durable=False):
     """No cold hydration or prefix traversal. Resident witness is <=100 rows."""
     windows = service.history.windows
     session = service._session(sid, hydrate=False)
     from .transcript_windows import _source
-    owner = [_source(session), windows._fence(sid), session.get('archived'),
-             session.get('_deleting'), session.get('status'), session.get('interruptionRevision')]
+    owner = ([_source(session)] if durable else [
+        _source(session), windows._fence(sid), session.get('archived'),
+        session.get('_deleting'), session.get('status'), session.get('interruptionRevision')])
     if session.get('historyManaged') is True:
         from .automatic_history import directory
         source = _source(session)

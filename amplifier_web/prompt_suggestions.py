@@ -6,7 +6,7 @@ import time
 
 from .errors import AppError
 from .suggestion_settings import digest, selected
-from .suggestion_source import Unavailable, capture, witness
+from .suggestion_source import Unavailable, capture, witness, eligible
 
 MAX_RECEIPTS = 4096
 MAX_RETAINED = 128
@@ -88,6 +88,7 @@ class PromptSuggestions:
                 return False
             session = self.service._session(record['sessionId'], hydrate=False)
             return (not session.get('archived') and not session.get('_deleting')
+                    and eligible(self.service, session)
                     and session.get('status') in {'idle', 'ready'}
                     and witness(self.service, record['sessionId'], config) == record['sourceKey'])
         except (ValueError, KeyError, OSError, AppError):
@@ -165,7 +166,9 @@ class PromptSuggestions:
                 self._finish(record, 'missing_selection')
             else:
                 session = self.service._session(sid, hydrate=False)
-                if session.get('archived') or session.get('_deleting'):
+                if not eligible(self.service, session):
+                    self._finish(record, 'unsupported', reason='conversation_unavailable')
+                elif session.get('archived') or session.get('_deleting'):
                     self._finish(record, 'stale')
                 elif session.get('status') not in {'idle', 'ready'}:
                     self._finish(record, 'busy')
@@ -180,7 +183,10 @@ class PromptSuggestions:
                     except (ValueError, OSError):
                         self._finish(record, 'unsupported', reason='transcript_unavailable')
             if record['status'] == 'pending':
-                source = digest([audience, sid, record['sourceKey'], revision])
+                # Client IDs and disposable display-cache fences may change on
+                # reconnect/restart. They isolate candidates, not paid effects.
+                source = digest([record['principal'], sid,
+                                 witness(self.service, sid, config, durable=True), revision])
                 if self.service.db.execute('SELECT 1 FROM suggestion_requests WHERE source=?', (source,)).fetchone():
                     self._finish(record, 'duplicate_source')
                 elif self.service.db.execute('SELECT count(*) FROM suggestion_requests').fetchone()[0] >= MAX_RECEIPTS:

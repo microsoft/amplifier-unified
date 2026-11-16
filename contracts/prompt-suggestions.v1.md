@@ -21,6 +21,10 @@ from every conversation participant and execution runtime.
   user-role inputs. A selection is independently bounded to 100 source rows and
   24 KiB of UTF-8 text/labels/identities. `full` requires a complete gap-free
   display window within those bounds; it does not silently degrade to a suffix.
+  Individual raw text is limited to 16 KiB before sanitation. The existing
+  naming text cleaner removes context/system-reminder envelopes (including
+  unclosed envelopes), data URLs and encoded payloads; neither mode sends those.
+  Internal/worker/scheduled-only sources and update-activation pauses are ineligible.
 - One tool-free utility `provider.complete` call uses the selected account/model,
   512 output tokens and a 15-second overall host deadline including preparation.
   The standard isolated provider-probe constructor is reused, not a second SDK
@@ -65,8 +69,10 @@ The occupied slot remains held until the physical request/cleanup settles.
 
 ## Privacy, freshness and cost admission
 
-The authenticated HTTP attachment supplies device-owner and client identities;
-callers cannot supply a principal or audience. The requesting browser must display
+The authenticated HTTP adapter supplies a live cookie-backed principal alongside
+device-owner and client identities; a bearer credential plus a spoofed `web`
+registration does not authorize private suggestions. Callers cannot supply a
+principal or audience. The requesting browser must display
 the intended conversation. Today's host has one authenticated user: this is not a
 new multi-user ACL system. A future multi-user host must bind these operations to
 its real principal-specific display authorization before enabling the feature.

@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -68,6 +69,7 @@ class Requests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         await self.host.close()
         await self.app.history.windows.close()
+        self.app.db.close()
         BROWSER.reset(self.browser_token)
         self.tmp.cleanup()
 
@@ -113,6 +115,14 @@ class Requests(unittest.IsolatedAsyncioTestCase):
         self.host.settings = lambda: (self.config, {'id': 'explicit-account'}, self.revision)
         self.assertEqual((await self.request())['status'], 'expired')
         self.assertEqual((await self.request('third'))['status'], 'duplicate_source')
+
+    async def test_new_browser_document_and_disposable_fence_do_not_repeat_paid_source(self):
+        await self.request()
+        await self.settle()
+        self.app.history.windows.invalidate({'chat'})
+        self.app.clients.current.set('two')
+        self.assertEqual((await self.request('new-document'))['status'], 'duplicate_source')
+        self.assertEqual(len(self.calls), 1)
 
     async def test_conflicting_request_id_is_rejected(self):
         await self.request()
@@ -215,6 +225,18 @@ class Requests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.request('missing'))['status'], 'missing_selection')
         self.assertEqual(self.calls, [])
 
+    async def test_internal_worker_scheduled_and_update_pause_are_unavailable(self):
+        for kind in ('worker', 'internal'):
+            self.app.session['sessionKind'] = kind
+            self.assertEqual((await self.request(kind))['status'], 'unsupported')
+        self.app.session['sessionKind'] = 'root'
+        self.app.session['scheduledRunId'] = 'run'
+        self.assertEqual((await self.request('scheduled'))['status'], 'unsupported')
+        self.app.session.pop('scheduledRunId')
+        self.app._state = {'updates': {'phase': 'activating'}}
+        self.assertEqual((await self.request('paused'))['status'], 'unsupported')
+        self.assertEqual(self.calls, [])
+
     async def test_ttl_and_failures_never_retry(self):
         async def fail(*args):
             self.calls.append('attempt')
@@ -231,6 +253,19 @@ class Requests(unittest.IsolatedAsyncioTestCase):
 
 
 class Source(unittest.TestCase):
+    def test_sanitizes_closed_and_unclosed_host_envelopes_payloads_and_nonhuman_inputs(self):
+        rows = public_rows([
+            {'id': '1', 'role': 'user', 'text': '<system-reminders>PRIVATE</system-reminders> Human'},
+            {'id': '2', 'role': 'user', 'text': 'Visible <context_file path="x">FILE'},
+            {'id': '3', 'role': 'user', 'text': 'data:image/png;base64,PRIVATE', 'inputOrigin': 'approval'},
+            {'id': '4', 'role': 'user', 'text': 'Scheduled', 'scheduledRunId': 'run'},
+        ])
+        self.assertEqual(rows[0]['text'], 'Human')
+        self.assertEqual(rows[1]['text'], 'Visible')
+        self.assertNotIn('PRIVATE', repr(rows))
+        self.assertTrue(rows[2]['agentId'])
+        self.assertTrue(rows[3]['agentId'])
+
     def test_private_roles_delivery_recovery_and_labels(self):
         rows = [
             {'id': 'human', 'role': 'user', 'text': 'Public human'},
@@ -439,6 +474,95 @@ class Integration(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn('synthetic-one', repr(result))
             with patch.dict(os.environ, {'SUGGESTION_FIXTURE_KEY': 'synthetic-two'}):
                 self.assertNotEqual(one, describe(manager, self.root)['revision'])
+
+    async def test_cookie_endpoint_rejects_bearer_spoof_and_partitions_principals(self):
+        from aiohttp import web
+        from aiohttp.test_utils import TestClient, TestServer
+        from amplifier_web.auth import auth_required, new_session, SESSION_COOKIE, Sessions
+        from amplifier_web.live_clients import client_context
+        from amplifier_web.errors import AppError
+        await self.app.dispatch('session.create', {}, include_state=False)
+        session = self.app._session()
+        session.update(status='idle', messages=[
+            {'id': 'human', 'role': 'user', 'text': 'Human'},
+            {'id': 'assistant', 'role': 'assistant', 'text': 'Reply'}])
+        host = self.app.prompt_suggestions
+        host.settings = lambda: ({'enabled': True, 'provider': 'saved', 'model': 'model',
+                                  'humanTurns': 6, 'transcriptMode': 'last_n'}, {'id': 'saved'}, 'revision')
+        host.complete = AsyncMock(return_value={'status': 'ready', 'suggestion': 'SECRET CANDIDATE',
+                                               'usage': None, 'cost': None})
+        for identity in ('one', 'two'):
+            self.app.clients.attach(identity, kind='web')
+            self.app.clients.records[identity]['selectedSessionId'] = session['id']
+        @web.middleware
+        async def errors(request, handler):
+            try:
+                return await handler(request)
+            except AppError as exc:
+                return web.json_response({'error': str(exc)}, status=403)
+        http = web.Application(middlewares=[errors, auth_required, client_context])
+        http.update(service=self.app, session_secret='synthetic-secret', control_token='control',
+                    server_config={'session_ttl_seconds': 600}, sessions=Sessions(), allowed_origins=set())
+        async def endpoint(request):
+            payload = await request.json()
+            result = await self.app.dispatch(payload['action'], payload['args'], include_state=False)
+            return web.json_response(result)
+        http.router.add_post('/api/actions', endpoint)
+        cookie_one, cookie_two = new_session('synthetic-secret'), new_session('synthetic-secret')
+        args = {'sessionId': session['id'], 'requestId': 'request', 'expectedLastMessageId': 'assistant'}
+        async with TestClient(TestServer(http)) as client:
+            def headers(cookie, identity='one', bearer=False):
+                return {'X-Amplifier-Client': identity,
+                        **({'Authorization': 'Bearer control'} if bearer else {}),
+                        'Cookie': SESSION_COOKIE + '=' + cookie}
+            response = await client.post('/api/actions', json={'action': 'session.suggestion.request', 'args': args},
+                                         headers=headers(cookie_one, bearer=True))
+            self.assertEqual(response.status, 403)  # Even valid cookie cannot bless bearer route.
+            response = await client.post('/api/actions', json={'action': 'session.suggestion.request', 'args': args},
+                                         headers=headers(cookie_one))
+            self.assertEqual((await response.json())['result']['status'], 'pending')
+            await asyncio.gather(*tuple(host.jobs))
+            status = {'action': 'session.suggestion.status', 'args': {
+                'sessionId': session['id'], 'requestId': 'request'}}
+            for cookie, identity in ((cookie_two, 'one'), (cookie_one, 'two')):
+                response = await client.post('/api/actions', json=status, headers=headers(cookie, identity))
+                body = await response.json()
+                self.assertEqual(body['result']['status'], 'expired')
+                self.assertNotIn('SECRET', repr(body))
+            response = await client.post('/api/actions', json=status, headers=headers(cookie_one))
+            self.assertEqual((await response.json())['result']['suggestion'], 'SECRET CANDIDATE')
+            response = await client.post('/api/actions', json=status, headers=headers(cookie_one, bearer=True))
+            self.assertEqual(response.status, 403)
+            self.assertNotIn('SECRET', await response.text())
+
+    async def test_owned_probe_handshake_revokes_after_subprocess_creation(self):
+        """Real process/pipes/cleanup; synthetic provider and zero network."""
+        from amplifier_web.setup import SetupManager
+        # The script represents a prepared provider waiting at final admission.
+        script = (
+            "import json,sys\n"
+            "json.loads(sys.stdin.readline())\n"
+            "print('{\"suggestionReady\":true}', flush=True)\n"
+            "grant=json.loads(sys.stdin.readline())\n"
+            "print(json.dumps({'suggestion':{'status':'ready' if grant['admitted'] else 'stale',"
+            "'suggestion':'candidate' if grant['admitted'] else None,'usage':None,'cost':None}}),flush=True)\n"
+        )
+        manager = SetupManager(self.root / 'app', global_only=True, probe_command=[sys.executable, '-c', script])
+        manager.probe_snapshot = lambda *args: {'module': 'provider-fixture', 'raw': {}, 'config': {},
+            'env': dict(os.environ), 'credentialGeneration': 'fixture', 'source': None, 'registryHome': str(self.root)}
+        count = 0
+        def admit():
+            nonlocal count
+            count += 1
+            return count == 1
+        try:
+            result = await manager.probe('suggestion.complete', {
+                'id': 'fixture', 'model': 'explicit', 'transcript': [], '_admit': admit}, str(self.root))
+            self.assertEqual(result['status'], 'stale')
+            self.assertIsNone(result['suggestion'])
+            self.assertEqual(count, 2)
+        finally:
+            await manager.close()
 
 
 if __name__ == '__main__':

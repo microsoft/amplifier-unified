@@ -70,7 +70,8 @@ def _native_page(reader, source, before, limit, *, public_only=False):
             # Host-service recovery and peer inputs are not the current human.
             provenance = metadata.get('amplifier_input') or {}
             if (provenance.get('kind') == 'service' or metadata.get('live_recovery_job')
-                    or metadata.get('private') or value.get('private') or value.get('partial')):
+                    or metadata.get('private') or value.get('private') or value.get('partial')
+                    or value.get('visibility') in {'internal', 'developer'}):
                 continue
             text = text_content({'content': _public_blocks(value, text_only=True)['blocks']})
             if not text:
@@ -273,6 +274,10 @@ class TranscriptWindows:
                 page['_savedComplete'] = before is None and not page['hasEarlier'] and not page['unavailableRanges']
             page['_savedOwner'] = {'source': source, 'fence': fence,
                                    'resource': cold.identity if cold is not None else None}
+        if public_only:
+            # The sanitized utility view must never replace an ordinary page
+            # under its display cache identity or become an initial chat window.
+            page['windowKey'] = _digest([page['windowKey'], 'public-utility'])
         # Detach/size only this selected page outside writer exclusion.
         def prepare():
             detached = copy.deepcopy(page)
