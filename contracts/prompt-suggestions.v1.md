@@ -107,6 +107,16 @@ key reports `capture_source_changed`; explicit invalidation without a failed gat
 reports `current_invalidated`. These observations do not change gate order,
 authorization, status, deduplication or retries. A denied final transport grant
 retains its first observed dimension even if a later check would succeed.
+When the unchanged total source witness fails, admission-time private component
+fingerprints identify the first mismatch using a finite `current_source_` suffix:
+`owner_native`, `runtime_session`, `created`, `status`, `stop`, `archive`,
+`deleting`, `storage_mode`, `cold_resource`, `cold_stamp`, `rows_count`, `rows_id`,
+`rows_role`, `rows_text`, `rows_actor` or `rows_label`. Unknown/unavailable
+breakdowns retain `current_sourcewitness`. Sixteen fixed-size fingerprints borrow
+the same bounded projection already used by the total witness, without another
+source read; they do not replace or relax that witness. They live only in the
+bounded private request record and are removed at expiry. No fingerprint values,
+row values or arbitrary component keys enter wire/shared state/durable claims.
 
 ## Privacy, freshness and cost admission
 

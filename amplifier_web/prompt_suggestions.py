@@ -6,7 +6,7 @@ import time
 
 from .errors import AppError
 from .suggestion_settings import digest, selected
-from .suggestion_source import Unavailable, capture, witness, eligible
+from .suggestion_source import Unavailable, capture, witness, eligible, changed_component, SOURCE_REASONS
 from .suggestion_provider import failure, FAILURE_REASONS
 
 MAX_RETAINED = 128
@@ -14,7 +14,7 @@ TTL = 60
 DEADLINE = 15
 CURRENT_REASONS = frozenset('current_' + name for name in (
     'closed', 'auth', 'epoch', 'audience', 'selected', 'config', 'session',
-    'archived', 'deleting', 'eligibility', 'busy', 'sourcewitness'))
+    'archived', 'deleting', 'eligibility', 'busy', 'sourcewitness')) | SOURCE_REASONS
 STALE_REASONS = CURRENT_REASONS | {'capture_source_changed', 'current_invalidated'}
 PROVIDER_REASONS = frozenset({'custom_source_not_prepared', 'runtime_not_prepared',
                               'qualified_source_mismatch'}) | FAILURE_REASONS | STALE_REASONS
@@ -124,8 +124,9 @@ class PromptSuggestions:
             if session.get('status') not in {'idle', 'ready'}:
                 return 'current_busy'
             dimension = 'current_sourcewitness'
-            if witness(self.service, record['sessionId'], config) != record['sourceKey']:
-                return dimension
+            components = {}
+            if witness(self.service, record['sessionId'], config, components=components) != record['sourceKey']:
+                return changed_component(record.get('_sourceComponents'), components)
             return None
         except (ValueError, KeyError, OSError, AppError):
             return dimension
@@ -144,6 +145,7 @@ class PromptSuggestions:
 
     def _expire(self, record):
         self._finish(record, 'expired')
+        record.pop('_sourceComponents', None)
         if record.get('task') and not record['task'].done() and not record['task'].cancelling():
             record['task'].cancel()
 
@@ -219,7 +221,9 @@ class PromptSuggestions:
                 else:
                     try:
                         record['epoch'] = self._epoch()
-                        record['sourceKey'] = witness(self.service, sid, config)
+                        components = {}
+                        record['sourceKey'] = witness(self.service, sid, config, components=components)
+                        record['_sourceComponents'] = components
                     except (ValueError, OSError):
                         self._finish(record, 'unsupported', reason='transcript_unavailable')
             if record['status'] == 'pending':

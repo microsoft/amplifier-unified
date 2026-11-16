@@ -5,6 +5,20 @@ from .suggestion_settings import digest
 
 MAX_ROWS = 100
 MAX_BYTES = 24 * 1024
+SOURCE_COMPONENTS = (
+    'owner_native', 'runtime_session', 'created', 'status', 'stop', 'archive', 'deleting',
+    'storage_mode', 'cold_resource', 'cold_stamp', 'rows_count', 'rows_id', 'rows_role',
+    'rows_text', 'rows_actor', 'rows_label')
+SOURCE_REASONS = frozenset('current_source_' + key for key in SOURCE_COMPONENTS)
+
+
+def changed_component(before, after):
+    """One finite label; neither fingerprints nor caller-controlled keys escape."""
+    if isinstance(before, dict) and isinstance(after, dict):
+        for key in SOURCE_COMPONENTS:
+            if before.get(key) != after.get(key):
+                return 'current_source_' + key
+    return 'current_sourcewitness'
 
 
 class Unavailable(ValueError):
@@ -155,7 +169,7 @@ def select(rows, config, has_earlier):
     return rows[human[max(0, len(human) - config['humanTurns'])]:] if human else rows
 
 
-def witness(service, sid, config=None):
+def witness(service, sid, config=None, *, components=None):
     """No cold hydration or prefix traversal. Resident witness is <=100 rows."""
     windows = service.history.windows
     session = service._session(sid, hydrate=False)
@@ -163,6 +177,26 @@ def witness(service, sid, config=None):
     owner = [
         _source(session), session.get('archived'), session.get('_deleting'),
         session.get('status') in {'idle', 'ready'}, session.get('interruptionRevision')]
+    def observed(*, projected=None, cold=None, stamp=None):
+        # Diagnostics borrow the SAME bounded rows/owner/stamp already used by
+        # the unchanged total witness. Keep only fixed-size private hashes.
+        if components is None:
+            return
+        source = owner[0]
+        values = {
+            'owner_native': [source[key] for key in ('id', 'nativeProject', 'nativeIdentity')],
+            'runtime_session': source['runtimeSessionId'], 'created': source['createdAt'],
+            'archive': owner[1], 'deleting': owner[2], 'status': owner[3], 'stop': owner[4],
+            'storage_mode': 'cold' if cold is not None else 'native' if session.get('historyManaged') is True else 'resident'}
+        if projected is not None:
+            values.update(rows_count=len(projected),
+                          **{'rows_' + key: [row.get(key) for row in projected]
+                             for key in ('id', 'role', 'text')},
+                          rows_actor=[row.get('inputActor') for row in projected],
+                          rows_label=[[row.get('agentId'), row.get('agentLabel')] for row in projected])
+        if cold is not None:
+            values.update(cold_resource=cold.identity, cold_stamp=stamp)
+        components.update({key: digest(values.get(key)) for key in SOURCE_COMPONENTS})
     if session.get('historyManaged') is True:
         page = windows.public_native_tail(session)
         if page.get('unavailableRanges'):
@@ -170,18 +204,24 @@ def witness(service, sid, config=None):
         projected = public_rows(display_inputs(service, session, page['items']), bounded=False)
         if config is not None:
             projected = select(projected, config, page['hasEarlier'])
-        return digest([owner, public_rows(projected)])
+        projected = public_rows(projected)
+        observed(projected=projected)
+        return digest([owner, projected])
     cold = windows._cold_source(session)
     if cold is not None:
         # Immutable resource ownership, plus writer invalidation, not a cached body.
         from .transcript_window import _stamp
-        return digest([owner, cold.identity, _stamp(cold.directory / (cold.identity + '.json'))])
+        stamp = _stamp(cold.directory / (cold.identity + '.json'))
+        observed(cold=cold, stamp=stamp)
+        return digest([owner, cold.identity, stamp])
     rows = dict.get(session, 'messages', ())
     tail = rows[max(0, len(rows) - MAX_ROWS):]
     projected = public_rows(display_inputs(service, session, tail), bounded=False)
     if config is not None:
         projected = select(projected, config, len(rows) > MAX_ROWS)
-    return digest([owner, public_rows(projected)])
+    projected = public_rows(projected)
+    observed(projected=projected)
+    return digest([owner, projected])
 
 
 async def capture(service, sid, config, expected_last):

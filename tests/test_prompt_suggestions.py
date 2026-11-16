@@ -445,7 +445,7 @@ class Requests(unittest.IsolatedAsyncioTestCase):
         await self.settle()
         self.app.session['messages'][-1]['text'] = 'Actually changed public input'
         result = await self.status()
-        self.assertEqual((result['status'], result['reason']), ('stale', 'current_sourcewitness'))
+        self.assertEqual((result['status'], result['reason']), ('stale', 'current_source_rows_text'))
         self.assertNotIn('_currentFailure', result)
         self.assertEqual(len(self.calls), 1)
         self.app.session['messages'][-1]['text'] = 'Next captured input'
@@ -453,6 +453,48 @@ class Requests(unittest.IsolatedAsyncioTestCase):
             result = await self.terminal_request('capture-key')
         self.assertEqual((result['status'], result['reason']), ('stale', 'capture_source_changed'))
         self.assertEqual(len(self.calls), 1)
+
+    async def test_private_source_components_classify_changes_without_altering_total_gate(self):
+        from amplifier_web.suggestion_source import SOURCE_COMPONENTS
+        await self.request()
+        await self.settle()
+        record = next(iter(self.host.records.values()))
+        components = copy.deepcopy(record['_sourceComponents'])
+        self.assertEqual(set(components), set(SOURCE_COMPONENTS))
+        self.assertTrue(all(len(value) == 64 for value in components.values()))
+        cases = [
+            ('owner_native', self.app.session, {'nativeIdentity': 'SECRET native'}),
+            ('runtime_session', self.app.session, {'runtimeSessionId': 'SECRET runtime'}),
+            ('created', self.app.session, {'createdAt': 123}),
+            ('stop', self.app.session, {'interruptionRevision': 1}),
+            ('rows_id', self.app.session['messages'][-1], {'id': 'SECRET id'}),
+            ('rows_role', self.app.session['messages'][-1], {'role': 'user'}),
+            ('rows_text', self.app.session['messages'][-1], {'text': 'SECRET candidate'}),
+            ('rows_actor', self.app.session['messages'][-1], {'inputActor': {'kind': 'system', 'id': 'SECRET actor'}}),
+            ('rows_label', self.app.session['messages'][-1], {'agentLabel': 'SECRET label'}),
+        ]
+        for name, target, values in cases:
+            with self.subTest(name=name), patch.dict(target, values):
+                self.assertNotEqual(witness(self.app, 'chat', self.config), record['sourceKey'])
+                self.assertEqual(self.host.current_failure(record), 'current_source_' + name)
+            self.assertIsNone(self.host.current_failure(record))
+        with patch.dict(self.app.session, messages=[*self.app.session['messages'], {
+                'id': 'append', 'role': 'assistant', 'text': 'SECRET append'}]):
+            self.assertEqual(self.host.current_failure(record), 'current_source_rows_count')
+        with patch.dict(self.app.session, status='ready', title='SECRET title', updatedAt=999,
+                        usage={'output': 123}, nativeRevision=['invisible', 1]):
+            self.assertEqual(witness(self.app, 'chat', self.config), record['sourceKey'])
+            self.assertIsNone(self.host.current_failure(record))
+        self.assertEqual(record['_sourceComponents'], components)  # Admission baseline never moves.
+        self.app.session['messages'][-1]['text'] = 'SECRET changed'
+        result = await self.status()
+        self.assertEqual(result['reason'], 'current_source_rows_text')
+        self.assertNotIn('SECRET', repr(result))
+        self.assertNotIn('_sourceComponents', result)
+        self.assertTrue(all(value not in repr(result) for value in components.values()))
+        self.assertNotIn('components', repr(list(self.app.db.execute('SELECT * FROM suggestion_requests'))))
+        self.host._expire(record)
+        self.assertNotIn('_sourceComponents', record)
 
     async def test_final_grant_first_false_dimension_survives_later_successful_recheck(self):
         host = self.host
@@ -645,6 +687,43 @@ class Requests(unittest.IsolatedAsyncioTestCase):
 
 
 class Source(unittest.TestCase):
+    def test_component_fingerprints_preserve_exact_total_witness_and_single_bounded_native_read(self):
+        from amplifier_web.suggestion_settings import digest
+        from amplifier_web.suggestion_source import changed_component, SOURCE_COMPONENTS
+        from amplifier_web.transcript_windows import _source
+        with tempfile.TemporaryDirectory() as root:
+            app = Service(Path(root))
+            try:
+                config = {'transcriptMode': 'last_n', 'humanTurns': 6}
+                def old_resident():
+                    session = app.session
+                    owner = [_source(session), session.get('archived'), session.get('_deleting'),
+                             session.get('status') in {'idle', 'ready'}, session.get('interruptionRevision')]
+                    return digest([owner, public_rows(select(public_rows(session['messages'], bounded=False),
+                                                             config, False))])
+                baseline = {}
+                self.assertEqual(witness(app, 'chat', config, components=baseline), old_resident())
+                self.assertEqual(witness(app, 'chat', config), old_resident())
+                self.assertEqual(len(baseline), 16)
+                for key in SOURCE_COMPONENTS:
+                    current = {**baseline, key: 'SECRET HASH'}
+                    self.assertEqual(changed_component(baseline, current), 'current_source_' + key)
+                self.assertEqual(changed_component(None, {'SECRET': 'value'}), 'current_sourcewitness')
+                self.assertEqual(changed_component(baseline, {**baseline, 'SECRET': 'value'}), 'current_sourcewitness')
+                app.session.update(historyManaged=True, nativeIdentity='native', nativeProject='project')
+                page = {'items': copy.deepcopy(app.session['messages']), 'hasEarlier': False, 'unavailableRanges': []}
+                with patch.object(app.history.windows, 'public_native_tail', return_value=page) as read:
+                    observed = {}
+                    total = witness(app, 'chat', config, components=observed)
+                read.assert_called_once_with(app.session)
+                self.assertEqual(total, old_resident())  # Same total owner/row expression as before.
+                self.assertNotEqual(observed['storage_mode'], baseline['storage_mode'])
+                # A fingerprint map is never used as an authority substitute.
+                self.assertEqual(len(observed), 16)
+                self.assertNotIn('Human', repr(observed))
+            finally:
+                app.db.close()
+
     def test_sanitizes_closed_and_unclosed_host_envelopes_payloads_and_nonhuman_inputs(self):
         rows = public_rows([
             {'id': '1', 'role': 'user', 'text': '<system-reminders>PRIVATE</system-reminders> Human'},
@@ -1042,6 +1121,35 @@ class Integration(unittest.IsolatedAsyncioTestCase):
         await self.app.close()
         self.env.stop()
         self.tmp.cleanup()
+
+    async def test_real_cold_retirement_diagnostic_identifies_mode_without_changing_existing_refusal(self):
+        from amplifier_web.suggestion_source import changed_component
+        await self.app.dispatch('session.create', {}, include_state=False)
+        session = self.app._session()
+        sid = session['id']
+        session.update(status='idle', historyManaged=False, messages=[
+            {'id': str(i), 'role': 'user' if i % 2 == 0 else 'assistant',
+             'inputOrigin': 'ui' if i % 2 == 0 else 'agent',
+             'text': 'Public row ' + str(i) + ' ' + 'x' * 1100} for i in range(20)])
+        self.app._publish_changes(sessions={sid})
+        config = {'transcriptMode': 'last_n', 'humanTurns': 6}
+        before = {}
+        resident = witness(self.app, sid, config, components=before)
+        expected = public_rows(select(public_rows(dict.get(session, 'messages')), config, False))
+        self.app._state['selectedSessionId'] = None
+        with patch.object(self.app.cold_display, 'RECENT_LIMIT', 0):
+            self.assertIn(sid, self.app.cold_display.retire(force=True))
+        self.assertFalse(dict.__contains__(session, 'messages'))
+        after = {}
+        cold = witness(self.app, sid, config, components=after)
+        self.assertNotEqual(resident, cold)  # Existing gate remains unchanged by diagnostics.
+        self.assertEqual(changed_component(before, after), 'current_source_storage_mode')
+        page = await self.app.history.windows.read(sid, limit=100, public_only=True)
+        retained = self.app.history.windows.pages[(sid, page['windowKey'])][0]['items']
+        actual = public_rows(select(public_rows(retained), config, page['hasEarlier']))
+        self.assertEqual(actual, expected)  # Real storage transition, identical canonical bounded input.
+        self.assertFalse(dict.__contains__(session, 'messages'))  # No hydration needed to classify.
+        self.assertNotIn('Public row', repr(after))
 
     async def test_ordinary_native_naming_event_after_done_does_not_stale_public_suggestion(self):
         await self.app.dispatch('session.create', {}, include_state=False)
