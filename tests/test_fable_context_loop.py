@@ -1000,6 +1000,15 @@ async def test_provider_count_diagnostics_reach_real_context_intelligence_captur
     for record, (status, error_type, request_id) in zip(records, expected, strict=True):
         timestamp = record['timestamp']
         assert isinstance(timestamp, str) and timestamp
+        # Earlier event producers predate the closed HTTP400 diagnostic schema.
+        # Accept either complete shape, never arbitrary fields.
+        detail = {}
+        if status == 400 and 'diagnostic_version' in record['data']:
+            detail = {
+                'diagnostic_version': 1, 'api_error_type': 'invalid_request_error',
+                'reason_code': 'unknown', 'schema_path': 'unknown',
+                'detail_status': 'unrecognized',
+            }
         assert record == {
             'event': event, 'workspace': project_slug, 'timestamp': timestamp,
             'data': {
@@ -1008,6 +1017,7 @@ async def test_provider_count_diagnostics_reach_real_context_intelligence_captur
                 'source': 'anthropic.messages.count_tokens',
                 'category': 'request_error', 'error_type': error_type,
                 'status_code': status, 'request_id': request_id,
+                **detail,
             },
         }
     assert json.loads(json.dumps(records, allow_nan=False)) == records
