@@ -249,7 +249,8 @@ async def test_real_resolver_preserves_pin_and_rejects_hidden_incompatibility(tm
         retained.verify(project)
 
 
-async def test_real_worker_lock_keeps_app_memory_source_with_pinned_module(tmp_path, monkeypatch):
+@pytest.mark.parametrize('legacy', [False, True])
+async def test_real_worker_lock_keeps_app_memory_source_with_pinned_module(tmp_path, monkeypatch, legacy):
     uv = shutil.which('uv')
     assert uv, 'This resolver regression requires the qualification environment to provide uv'
     shipped = tomllib.loads(runtime.manifest_path().read_text())
@@ -309,6 +310,68 @@ async def test_real_worker_lock_keeps_app_memory_source_with_pinned_module(tmp_p
     locked = runtime.locked_sources(project)
     assert locked[MEMORY].fragment == current
     assert locked[MEMORY_HOOK].fragment == hook_revision
+
+    # Exercise the actual next-generation entry point, not a replacement for
+    # update_manifest. Keep the app-authored Memory requirement AND override;
+    # only source URLs are redirected to this owned offline Git fixture.
+    from amplifier_web import runtime_source_policy as policy
+    from test_runtime_updates import Diagnostics
+    baseline['project']['dependencies'].append(MEMORY_HOOK)
+    baseline['tool']['uv']['sources'] = {
+        MEMORY_HOOK: {'git': local_url, 'rev': hook_revision,
+                      'subdirectory': 'modules/hooks-memory-inject'}}
+    manifest = tmp_path / 'app-worker.toml'
+    manifest.write_bytes(encode(baseline))
+    monkeypatch.setattr(runtime, 'manifest_path', lambda: manifest)
+    monkeypatch.setattr('amplifier_web.app_updates.installed_extras', lambda: [])
+    home = tmp_path / 'two-generation-app'
+    manager = SimpleNamespace(home=home, diagnostics=Diagnostics())
+    first = '1' * 32
+    receipt = runtime.receipt_directory(home, first)
+    receipt.mkdir(parents=True)
+    prepared = await runtime.stage(manager, first, [], finalize=False)
+    await updates.process(uv, 'sync', '--locked', '--project', str(prepared), timeout=90)
+    if legacy:
+        # The original freeze captured this exact unresolved-reference shape.
+        # Simulate only that older policy writer, not preparation or resolution.
+        original = policy.qualify_app_policies
+        async def old_writer(policies, *args):
+            return policies
+        monkeypatch.setattr(policy, 'qualify_app_policies', old_writer)
+    final = await qualification.freeze(manager, first, prepared)
+    if legacy:
+        monkeypatch.setattr(policy, 'qualify_app_policies', original)
+    qualification.verify_recorded(final, receipt)
+    recorded = json.loads((receipt / 'runtime-sources.json').read_text())[MEMORY]
+    assert recorded['ref'] == (current if legacy else 'main')
+    assert recorded['policyOrigin']['kind'] == ('unresolved-reference' if legacy else 'verified-app-declaration')
+    if legacy:
+        assert recorded['policyOrigin']['originalRef'] == 'main'
+    (home / 'updates/active.json').write_text(json.dumps({'current': first}))
+    before = {path: path.read_bytes() for path in receipt.iterdir() if path.is_file()}
+    frozen_lock = (final / 'uv.lock').read_bytes()
+    (repo / 'revision.txt').write_text('second generation branch advance')
+    git(repo, 'commit', '-am', 'advance after first freeze')
+    newest = git(repo, 'rev-parse', 'HEAD')
+    rows = await runtime.update_inventory(home)
+    memory = next(row for row in rows if row.get('package') == MEMORY)
+    hook = next(row for row in rows if row.get('package') == MEMORY_HOOK)
+    assert memory['eligible'] and memory['ref'] == 'main' and memory['current'] == current
+    assert not hook['eligible'] and hook['ref'] == hook_revision
+    second = '2' * 32
+    next_receipt = runtime.receipt_directory(home, second)
+    next_receipt.mkdir()
+    next_project = await runtime.stage(manager, second, [{**memory, 'status': 'update', 'latest': newest}],
+                                       finalize=False)
+    assert runtime.locked_sources(next_project)[MEMORY].fragment == newest
+    assert runtime.locked_sources(next_project)[MEMORY_HOOK].fragment == hook_revision
+    await updates.process(uv, 'sync', '--locked', '--project', str(next_project), timeout=90)
+    next_final = await qualification.freeze(manager, second, next_project)
+    qualification.verify_recorded(next_final, next_receipt)
+    assert json.loads((next_receipt / 'runtime-sources.json').read_text())[MEMORY]['ref'] == 'main'
+    assert {path: path.read_bytes() for path in before} == before
+    assert (final / 'uv.lock').read_bytes() == frozen_lock
+    qualification.verify_recorded(final, receipt)
 
 
 @pytest.mark.parametrize('case', ['direct', 'active-extra', 'inactive-extra', 'inactive-marker', 'unrelated', 'root'])

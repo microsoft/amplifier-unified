@@ -461,12 +461,14 @@ async def freeze(manager, generation, project, *, baseline_manifest=None):
         policies[name] = policy
     from .runtime_source_policy import qualify_cache_policies
     policies = await qualify_cache_policies(policies, checked, process)
+    baseline_manifest = environments.declared_manifest() if baseline_manifest is None else baseline_manifest
+    from .runtime_source_policy import qualify_app_policies
+    policies = await qualify_app_policies(policies, checked, project, baseline_manifest, process)
     if not graph:
         raise ValueError('The prepared worker has no installed distribution evidence.')
     # Qualification reproduces the prepared policy, not newer app declarations.
     # A lazy profile can start from an older generation after an app update.
     content = frozen_manifest((Path(project) / 'pyproject.toml').read_bytes(), graph)
-    baseline_manifest = environments.declared_manifest() if baseline_manifest is None else baseline_manifest
     # Share only a fully qualified immutable graph with the same Python/OS
     # contract. Active environments are never uv-synced or repaired in place.
     # Generation receipts retain separate ref policy and rollback identity.
