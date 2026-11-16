@@ -205,6 +205,189 @@ def test_installed_history_wins_and_cached_upcoming_history_survives_without_lat
     assert len(release_notes.history([{'invalid':True}]))==1
 
 
+def ordinary(number):
+    return {**entry(number), 'notices': []}
+
+
+def test_retention_keeps_all_notices_and_latest_ordinary_without_mutating_inputs():
+    protected = entry('0.0.1')
+    protected['notices'][0]['previousTitles'] = ['Original title']
+    protected['authoredExtension'] = {'keep': ['exact']}
+    rows = [ordinary(f'0.1.{i}') for i in range(300)] + [protected]
+    before = copy.deepcopy(rows)
+    kept = release_notes.retain(rows)
+    assert kept == [*reversed(rows[44:300]), protected]
+    assert rows == before
+    kept[-1]['notices'][0]['action'] = 'Detached'
+    assert rows == before
+    assert release_notes.MAX_RELEASES == 512 and release_notes.MAX_BYTES == 512_000
+
+
+def test_retention_reclaims_ordinary_count_capacity_for_old_notices():
+    protected = [entry(f'0.0.{i}') for i in range(300)]
+    rows = [ordinary(f'0.1.{i}') for i in range(300)] + protected
+    kept = release_notes.retain(rows)
+    assert len(kept) == 512
+    assert [r for r in kept if r['notices']] == list(reversed(protected))
+    assert [r['version'] for r in kept if not r['notices']] == [
+        f'0.1.{i}' for i in range(299, 87, -1)]
+
+
+def test_retention_uses_utf8_bytes_and_removes_oldest_ordinary_first(monkeypatch):
+    protected = entry('0.0.1')
+    first, second = ordinary('0.1.1'), ordinary('0.1.2')
+    first['changes'] = second['changes'] = ['é' * 1000]
+    limit = len(release_notes.serialize([second, protected]).encode('utf-8'))
+    monkeypatch.setattr(release_notes, 'MAX_BYTES', limit)
+    kept = release_notes.retain([first, protected, second])
+    assert kept == [second, protected]
+    assert len(release_notes.serialize(kept).encode('utf-8')) == limit
+
+
+@pytest.mark.parametrize('pressure', ['count', 'bytes'])
+def test_protected_only_overflow_is_explicit_not_an_empty_history(monkeypatch, pressure):
+    rows = [entry('0.1.0'), entry('0.1.1')]
+    monkeypatch.setattr(release_notes, 'MAX_RELEASES' if pressure == 'count' else 'MAX_BYTES', 1)
+    with pytest.raises(release_notes.HistoryOverflow, match='protected'):
+        release_notes.retain(rows)
+
+
+def test_valid_notice_text_can_exceed_real_utf8_budget_without_losing_guidance():
+    rows = [dict(entry(f'0.1.{i}'), changes=['é' * 1400] * 12) for i in range(16)]
+    assert len(release_notes.serialize(rows).encode('utf-8')) > release_notes.MAX_BYTES
+    assert len(rows) < release_notes.MAX_RELEASES
+    with pytest.raises(release_notes.HistoryOverflow, match='protected'):
+        release_notes.retain(rows)
+
+
+def test_required_prepared_version_must_fit_beside_protected_notices(monkeypatch):
+    monkeypatch.setattr(release_notes, 'MAX_RELEASES', 1)
+    with pytest.raises(release_notes.HistoryOverflow, match='current release'):
+        release_notes.retain([entry('0.1.0'), ordinary('0.1.1')], expected='0.1.1')
+
+
+@pytest.mark.parametrize('invalid', [
+    {'version': '0.0.0', 'title': 'Bad', 'changes': [], 'notices': []},
+    ordinary('0.1.299'),
+    ordinary('99.0.0'),
+])
+def test_retention_validates_even_rows_that_would_be_discarded(invalid):
+    rows = [ordinary(f'0.1.{i}') for i in range(300)] + [invalid]
+    with pytest.raises(ValueError):
+        release_notes.retain(rows, expected='0.1.299')
+
+
+def test_cached_ordinary_cannot_displace_packaged_notices_or_aliases(monkeypatch):
+    protected = entry('0.0.1')
+    protected['notices'][0]['previousTitles'] = ['Earlier title']
+    stale = ordinary('0.0.1')
+    cached = [ordinary(f'0.1.{i}') for i in range(511)] + [stale]
+    before = copy.deepcopy(cached)
+    monkeypatch.setattr(release_notes, 'bundled', lambda: [protected])
+    kept = release_notes.history(cached)
+    assert kept == [*[ordinary(f'0.1.{i}') for i in range(510, 254, -1)], protected]
+    assert cached == before
+    assert release_notes.notice_id(kept[-1], kept[-1]['notices'][0]) == 'release-notice:0.0.1:defaults'
+
+
+def test_cached_conflict_does_not_revive_superseded_packaged_guidance(monkeypatch):
+    monkeypatch.setattr(release_notes, 'bundled', lambda: [ordinary('0.0.1')])
+    assert release_notes.history([entry('0.0.1')]) == [ordinary('0.0.1')]
+    assert release_notes.history([entry('0.0.2'), entry('0.0.2')]) == [ordinary('0.0.1')]
+
+
+def test_packaged_precedence_is_resolved_before_any_source_is_pruned(tmp_path, monkeypatch):
+    rows = [ordinary('0.0.1'), *[ordinary(f'0.1.{i}') for i in range(300)]]
+    path = tmp_path / 'release-notes.json'
+    path.write_text(document(rows))
+    monkeypatch.setattr(release_notes, 'PATH', path)
+    release_notes.bundled.cache_clear()
+    try:
+        # The old cached notice is superseded by a packaged ordinary record,
+        # even though that record itself falls outside the displayed window.
+        kept = release_notes.history([entry('0.0.1')])
+        assert kept == [ordinary(f'0.1.{i}') for i in range(299, 43, -1)]
+        assert not any(row['notices'] for row in kept)
+    finally:
+        release_notes.bundled.cache_clear()
+
+
+def test_cached_notice_all_fields_survive_validation_selection_and_repeated_merge(monkeypatch):
+    protected = entry('0.0.1')
+    protected['extension'] = {'keep': [1, 2]}
+    protected['notices'][0].update(previousTitles=[], extension='unchanged')
+    monkeypatch.setattr(release_notes, 'bundled', lambda: [])
+    saved = release_notes.history([protected, *[ordinary(f'0.1.{i}') for i in range(300)]])
+    assert saved[-1] == protected
+    assert release_notes.history(saved) == saved
+
+
+def test_valid_sources_with_too_many_combined_notices_fail_explicitly(monkeypatch):
+    monkeypatch.setattr(release_notes, 'MAX_RELEASES', 3)
+    monkeypatch.setattr(release_notes, 'bundled', lambda: [entry('0.1.0'), entry('0.1.1')])
+    with pytest.raises(release_notes.HistoryOverflow, match='protected'):
+        release_notes.history([entry('0.1.2'), entry('0.1.3')])
+
+
+def test_missing_or_malformed_bundled_history_still_uses_damaged_app_fallback(tmp_path, monkeypatch):
+    path = tmp_path / 'release-notes.json'
+    monkeypatch.setattr(release_notes, 'PATH', path)
+    for raw in (None, 'not JSON', document([{'invalid': True}])):
+        if raw is not None:
+            path.write_text(raw)
+        release_notes.bundled.cache_clear()
+        assert release_notes.bundled() == []
+    release_notes.bundled.cache_clear()
+
+
+def test_merged_utf8_pressure_protects_guidance_and_keeps_future_ceiling(monkeypatch):
+    protected = entry('0.0.1')
+    future = ordinary('99.0.0')
+    future['changes'] = ['é' * 1200]
+    old = ordinary('0.1.0')
+    old['changes'] = ['é' * 1200]
+    monkeypatch.setattr(release_notes, 'bundled', lambda: [protected, old])
+    monkeypatch.setattr(release_notes, 'MAX_BYTES',
+                        len(release_notes.serialize([future, protected]).encode('utf-8')))
+    assert release_notes.history([future]) == [future, protected]
+    assert release_notes.history([future], latest='v0.99.5') == [old, protected]
+
+
+def test_overflow_is_not_swallowed_by_bundled_or_cache_fallback(tmp_path, monkeypatch):
+    rows = [entry('0.1.0'), entry('0.1.1')]
+    path = tmp_path / 'release-notes.json'
+    path.write_text(document(rows))
+    monkeypatch.setattr(release_notes, 'PATH', path)
+    monkeypatch.setattr(release_notes, 'MAX_RELEASES', 1)
+    release_notes.bundled.cache_clear()
+    try:
+        with pytest.raises(release_notes.HistoryOverflow):
+            release_notes.bundled()
+    finally:
+        release_notes.bundled.cache_clear()
+    monkeypatch.setattr(release_notes, 'bundled', lambda: [])
+    with pytest.raises(release_notes.HistoryOverflow):
+        release_notes.history(rows)
+
+
+def test_unread_and_editorial_acknowledgements_unchanged_after_retention(monkeypatch):
+    protected = entry('0.0.1')
+    old_state = {'updates': {'application': {'releaseNotes': [protected]}}}
+    old = snapshot(old_state)['items'][0]
+    protected = copy.deepcopy(protected)
+    protected['notices'][0].update(title='Editorial correction', previousTitles=[old['title']])
+    monkeypatch.setattr(release_notes, 'bundled', lambda: [protected])
+    state = {'attentionRead': {old['id']: old['fingerprint']},
+             'updates': {'application': {'releaseNotes': release_notes.history(
+                 [ordinary(f'0.1.{i}') for i in range(511)])}}}
+    read_before = copy.deepcopy(state['attentionRead'])
+    current = snapshot(state)['items'][0]
+    assert current['id'] == old['id'] and current['read']
+    state['updates']['application']['releaseNotes'][-1]['notices'][0]['action'] = 'Changed action'
+    assert not snapshot(state)['items'][0]['read']
+    assert state['attentionRead'] == read_before
+
+
 @pytest.mark.parametrize('failure',['check','notes'])
 async def test_failed_refresh_preserves_saved_upcoming_notices_across_restart(tmp_path,monkeypatch,failure):
     from unittest.mock import AsyncMock
