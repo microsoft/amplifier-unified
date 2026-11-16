@@ -49,7 +49,12 @@ jobs:
         env:
           SELECTED_REVISION: ${{ inputs.revision || github.sha }}
           EVENT_NAME: ${{ github.event_name }}
+          REQUESTED_COMPONENT: ${{ inputs.component }}
         run: |
+          if [ "$EVENT_NAME" = workflow_dispatch ] && [ "$REQUESTED_COMPONENT" != "$COMPONENT" ]; then
+            echo 'This workflow only publishes status-emitter.' >&2
+            exit 1
+          fi
           flags=()
           if [ "$EVENT_NAME" = pull_request ]; then flags+=(--qualification); fi
           python scripts/scheduling_release.py plan --component "$COMPONENT" --revision "$SELECTED_REVISION" "${flags[@]}" --output "$GITHUB_OUTPUT"

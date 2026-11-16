@@ -29,14 +29,14 @@ publication do not change that default. Follow the
 [selection instructions](../components/status/README.md#ownership); preserve the
 original source receipt, even when it names the historical nested author path.
 
-Independent artifact delivery uses the existing **Scheduling and status packages**
+Independent artifact delivery uses the existing **Status package**
 workflow with `component: status-emitter` and a full merged main commit SHA. It
 builds the wheel and source archive once, binds their contents to that source,
 and verifies the installed standalone package before publication. Assets use the
 distribution name `amplifier_status_emitter`; the public import remains
 `amplifier_status`. The receipt is `status-emitter-source.json`, and tags use
 `status-emitter-v<version>`. Publication does not change Unified's bundled source
-or enable status observations. Scheduling remains that workflow's default choice.
+or enable status observations. Status is this workflow's only component choice.
 
 Install the wheel in the CLI's environment, then compose this hook into the chosen
 bundle. Supply an **explicit local source**: the CLI's normal resolver rejects an
