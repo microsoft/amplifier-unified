@@ -1,6 +1,7 @@
 """A publication shares read preparation, never mutable or client-owned state."""
 from collections import Counter
 from copy import deepcopy
+from pathlib import Path
 
 import pytest
 
@@ -19,7 +20,10 @@ async def test_publication_prepares_web_batch_once_and_keeps_snapshots_private(
     app.state['fixtureCatalog'] = {'nested': {'values': [1, 2]}}
     queues = []
     for index in range(client_count):
+        # Initial shell-client creation writes its saved baseline. It must
+        # invalidate a frame; measure the existing read-only client views here.
         with app.clients.bind(f'client-{index}'):
+            app.shell.client(f'client-{index}')
             queues.append(app.subscribe())
     with app.clients.bind('client-0'):
         duplicate = app.subscribe()
@@ -94,6 +98,8 @@ async def test_publication_prepares_web_batch_once_and_keeps_snapshots_private(
 @pytest.mark.parametrize('reader', ['explicit', 'unbound', 'nonweb'])
 async def test_mixed_publication_keeps_full_readers_outside_frame(app_factory, monkeypatch, reader):
     app, rows = fixture(app_factory, count=12)
+    for workspace in app.state['workspaces']:
+        Path(workspace['path']).mkdir(parents=True, exist_ok=True)
     cold = add_history(app, 'publication-full-history')
     messages = deepcopy(cold['messages'])
     monkeypatch.setattr(app.cold_display, 'RECENT_LIMIT', 0)
@@ -147,11 +153,12 @@ async def test_failed_publication_does_not_project_or_deliver(app_factory, monke
     def failed_save():
         raise OSError('publication save failed')
 
-    monkeypatch.setattr(app, '_save', failed_save)
-    monkeypatch.setattr(app, 'browser_state', lambda: pytest.fail('Projected an uncommitted publication'))
-    with pytest.raises(OSError, match='publication save failed'):
-        app._publish(session_ids={rows[0]['id']})
-    assert app.state['revision'] == revision
-    assert app._progress_dirty and app._progress_session_ids == {rows[0]['id']}
-    assert queue.empty()
-    assert app.directory._read_frame.get() is None
+    with monkeypatch.context() as failure:
+        failure.setattr(app, '_save', failed_save)
+        failure.setattr(app, 'browser_state', lambda: pytest.fail('Projected an uncommitted publication'))
+        with pytest.raises(OSError, match='publication save failed'):
+            app._publish(session_ids={rows[0]['id']})
+        assert app.state['revision'] == revision
+        assert app._progress_dirty and app._progress_session_ids == {rows[0]['id']}
+        assert queue.empty()
+        assert app.directory._read_frame.get() is None
