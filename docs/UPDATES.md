@@ -311,7 +311,8 @@ A component update qualifies the selected conversation profile, and a profile
 with no provider cannot qualify. While the app's own profile is selected and no
 AI connection is set up, the update owner starts no component candidate and
 records no attempt. Settings says that components update after an AI connection
-is set up, and that nothing failed. This holds for the automatic update of a new
+is set up, and that nothing failed. The published status is `waiting` with
+`action: connect`; it requires no attention. This holds for the automatic update of a new
 installation and for a person's own Update request, on every platform. The
 update starts after the first connection: a connection changes the checked
 configuration, so the owner checks once more and installs that checked

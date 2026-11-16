@@ -333,6 +333,12 @@ async def manager(tmp_path, monkeypatch):
     await service.close()
 
 
+def update_attention(state):
+    """The update owner's own attention rows; a release's notices are not its subject."""
+    return [item for item in snapshot(state)['items']
+            if item['id'] == 'updates:current' or item['id'].startswith('source:')]
+
+
 def no_attempt(manager):
     state = manager.service.state['updates']
     diagnostics = manager.diagnostics.state
@@ -346,7 +352,7 @@ def no_attempt(manager):
     assert state['phase'] == 'available' and state['available'] == 1 and state['error'] is None
     assert state['currentStatus'] == WAITING
     # Nothing for the person to repair, and no source row to act on.
-    assert not snapshot(manager.service.state)['items']
+    assert not update_attention(manager.service.state)
 
 
 async def test_first_start_without_a_connection_starts_no_update(manager):
@@ -421,11 +427,11 @@ async def test_an_installation_with_the_old_record_is_plain_after_its_next_check
     assert (state['currentStatus']['title'], state['currentStatus']['detail']) == (COULD_NOT_FINISH, text)
     history = copy.deepcopy(diagnostics['activeFailures'])
     assert len(history) == 1 and next(iter(history.values()))['displayError'] == text
-    # v0.98.7's failed stage left its sources installed, so the next check finds nothing newer.
+    # Measured in that clean room: the check after the failed stage found every component current.
     manager.installed = 'b' * 40
     await manager.check()
     assert state['currentStatus']['status'] == 'current' and state['currentStatus']['title'] == 'You\u2019re up to date'
-    assert not snapshot(manager.service.state)['items']
+    assert not update_attention(manager.service.state)
     # History is kept as it was.
     assert diagnostics['lastFailure'] == RECORDED and diagnostics['activeFailures'] == history
     # A later component update still waits for a connection, and then runs.
