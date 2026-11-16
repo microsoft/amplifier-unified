@@ -64,8 +64,11 @@ def _native_page(reader, source, before, limit, *, public_only=False):
     for item in result['rows']:
         value = item['value']
         at = message_time(value)
+        utility_fields = {}
         if public_only:
             from .native_message_projection import _public_blocks
+            from .voice_input_projection import public_input
+            from .suggestion_source import speaker
             metadata = value.get('metadata') or {}
             # Host-service recovery and peer inputs are not the current human.
             provenance = metadata.get('amplifier_input') or {}
@@ -74,12 +77,17 @@ def _native_page(reader, source, before, limit, *, public_only=False):
                     or value.get('visibility') in {'internal', 'developer'}):
                 continue
             text = text_content({'content': _public_blocks(value, text_only=True)['blocks']})
+            voice = public_input(text, provenance)
+            if voice:
+                text = voice['text']
+            utility_fields['inputActor'] = speaker(value)
             if not text:
                 continue
         else:
             text = text_content(value)
         exact_input = native_input_id(value)
         items.append({'id': item['displayId'], 'role': value['role'],
+            **utility_fields,
             **({'nativeInputId': exact_input} if exact_input else {}),
             '_windowDigest': hashlib.sha256(text.encode()).hexdigest(),
             'text': text, 'source': 'native', 'via': 'chat',
@@ -292,6 +300,10 @@ class TranscriptWindows:
                     or cold is not None and self._cold_source(current) != cold):
                 raise ValueError('The selected message source changed.')
             self._retain(session_id, page, size)
+        if public_only:
+            # Utility callers own their own input-acceptance projection. Browser
+            # wire decoration adds native progress even to accepted ACP inputs.
+            return {key: copy.deepcopy(value) for key, value in page.items() if not key.startswith('_')}
         return self._wire(page, session_id)
 
     def _wire(self, page, session_id):

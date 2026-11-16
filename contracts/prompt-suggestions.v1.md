@@ -16,6 +16,11 @@ from every conversation participant and execution runtime.
   transcript text, native model context, private files, system/developer blocks,
   reasoning, tool payloads, recovery/service inputs or unsent drafts from a client.
   Public speaker IDs/labels are data, not instructions or recipient authority.
+  `inputActor.kind` is human, agent, system or unknown from canonical saved
+  provenance; role=user alone never establishes a human. ACP/shared accepted
+  conversation inputs do not require native generation receipts. Native inputs
+  retain their own progress checks, exact peer receipt attribution and public
+  voice-input projection: spoken requests do not include reference-history envelopes.
 - `last_n` defaults to six human messages and the following public conversation
   messages, counting humans across the displayed conversation, not agent-authored
   user-role inputs. A selection is independently bounded to 100 source rows and
@@ -58,7 +63,11 @@ Existing configuration authority applies. No setting changes a chat's model.
 promptly with `pending` or a typed terminal result.
 `session.suggestion.status|cancel {sessionId,requestId}` targets that exact private
 request. All return `{requestId,sessionId,status,suggestion,sourceKey,
-configRevision,usage,cost,reason}`; unavailable fields are null.
+configRevision,usage,cost,reason,expiresAt}`; unavailable fields are null.
+`expiresAt` is admission wall time plus 60 seconds, expressed as epoch
+**milliseconds**, fixed across pending/ready reads and exact request retries.
+Clients use the earlier of that timestamp and their original request-start
+60-second deadline, never a new TTL measured from receiving a response.
 
 Statuses: `pending`, `ready`, `empty`, `disabled`, `missing_selection`,
 `unsupported`, `stale`, `failed`, `timeout`, `cancelled`, `expired`,
@@ -80,7 +89,10 @@ its real principal-specific display authorization before enabling the feature.
 Candidate bodies live only in a bounded in-memory request owner (128 records),
 never shared session state, action status, agent readback, history, native storage
 or durable command receipts. Candidates expire 60 seconds after admission, including
-without polling. Cross-client reads cannot reveal another candidate.
+without polling. Separate cookie principals cannot read another principal's
+candidate. Client IDs provide presentation partitioning, **not a security boundary
+between tabs sharing the same login cookie**: that authenticated user can choose
+another client ID in an HTTP header. No cross-tab secret isolation is claimed.
 
 Before dispatch, after provider construction and before publishing/reading a
 candidate, recheck current client/audience, saved sign-out witness, source owner,

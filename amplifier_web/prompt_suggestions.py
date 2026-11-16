@@ -98,7 +98,7 @@ class PromptSuggestions:
     def wire(record):
         return {key: record.get(key) for key in
                 ('requestId', 'sessionId', 'status', 'suggestion', 'sourceKey',
-                 'configRevision', 'usage', 'cost', 'reason')}
+                 'configRevision', 'usage', 'cost', 'reason', 'expiresAt')}
 
     def _finish(self, record, status, **values):
         record.update(status=status, suggestion=None, **values)
@@ -152,6 +152,7 @@ class PromptSuggestions:
             record = {**args, 'audience': audience, 'client': self.service.clients.current.get(),
                       'principal': BROWSER.get()['principal'], 'authenticated': BROWSER.get()['valid'],
                       'created': time.monotonic(), 'status': 'pending', 'suggestion': None,
+                      'expiresAt': time.time() * 1000 + TTL * 1000,
                       'sourceKey': None, 'configRevision': None, 'usage': None, 'cost': None}
             if self.service.db.execute('SELECT 1 FROM suggestion_requests WHERE identity=?', (key,)).fetchone():
                 return self.wire({**record, 'status': 'expired'})

@@ -1,4 +1,6 @@
 """Bounded display-only transcript selection and fresh currentness witnesses."""
+import json
+
 from .suggestion_settings import digest
 
 MAX_ROWS = 100
@@ -7,6 +9,78 @@ MAX_BYTES = 24 * 1024
 
 class Unavailable(ValueError):
     pass
+
+
+def speaker(row):
+    """Canonical input provenance, never provider role or text-prefix guesses."""
+    actor = row.get('inputActor') or {}
+    actor = actor if isinstance(actor, dict) else {}
+    peer = row.get('peerEnvelope') or {}
+    peer = peer if isinstance(peer, dict) else {}
+    kind, identity = actor.get('kind'), actor.get('id')
+    origin = row.get('inputOrigin')
+    if kind in {'agent', 'system', 'unknown'}:
+        return {'kind': kind, **({'id': identity} if isinstance(identity, str) else {})}
+    if row.get('agentId'):
+        return {'kind': 'agent', 'id': row['agentId']}
+    if peer.get('senderSessionId'):
+        return {'kind': 'agent', 'id': peer['senderSessionId']}
+    if origin in {'agent', 'peer', 'scheduler', 'approval', 'observation', 'system'}:
+        return {'kind': 'agent' if origin in {'agent', 'peer'} else 'system',
+                'id': origin}
+    if row.get('scheduledRunId') or row.get('approvalId') or row.get('questionId'):
+        return {'kind': 'system'}
+    metadata = row.get('metadata') or {}
+    marker = metadata.get('amplifier_input') if isinstance(metadata, dict) else None
+    if marker is not None:
+        if isinstance(marker, dict) and type(marker.get('version')) is int and marker['version'] == 1:
+            source = marker.get('source')
+            if marker.get('kind') == 'service' or source in {'system', 'scheduler', 'observation'}:
+                return {'kind': 'system'}
+            if source in {'agent', 'peer'}:
+                return {'kind': 'agent'}
+            if marker.get('kind') in {'user', 'steer'} and source == 'user' and isinstance(marker.get('id'), str):
+                return {'kind': 'human'}
+        return {'kind': 'unknown'}
+    if row.get('role') == 'assistant':
+        return {'kind': 'agent'}
+    if kind == 'human' or origin in {'ui', 'user', 'voice'}:
+        return {'kind': 'human', **({'id': identity} if isinstance(identity, str) else {})}
+    return {'kind': 'unknown'}
+
+
+def display_inputs(service, session, rows):
+    """Native progress and external conversation acceptance are different facts."""
+    from .input_status import annotate
+    result = []
+    external = bool(session.get('externalAgent'))
+    for row in rows:
+        item = row
+        if row.get('role') == 'user':
+            if external:
+                # ACP/shared human inputs do not have native generation events.
+                # Their canonical conversation acceptance is the display proof.
+                if (row.get('delivery') or {}).get('status') != 'accepted':
+                    continue
+                item = {key: value for key, value in row.items() if key != 'inputStatus'}
+            elif row.get('inputId') or row.get('nativeInputId'):
+                item = annotate(session, row)
+            if row.get('source') == 'native' and row.get('nativeInputId'):
+                # Native role=user/source=user can also carry a peer delivery.
+                # Resolve only its exact local receipt; never scan history or
+                # infer a human from a host-looking string in the message body.
+                saved = service.db.execute('SELECT receipt FROM commands WHERE id=?',
+                                           (row['nativeInputId'],)).fetchone()
+                if saved:
+                    try:
+                        receipt = json.loads(saved[0])
+                    except (ValueError, TypeError):
+                        receipt = {}
+                    if isinstance(receipt, dict) and receipt.get('commandAction') == 'coordination.send':
+                        actor = {'kind': 'system' if receipt.get('origin') == 'system' else 'agent'}
+                        item = {**item, 'inputActor': actor}
+        result.append(item)
+    return result
 
 
 def public_rows(rows, *, bounded=True):
@@ -28,6 +102,10 @@ def public_rows(rows, *, bounded=True):
         text = row.get('text')
         if not isinstance(text, str) or not text.strip():
             continue
+        from .voice_input_projection import public_input
+        voice = public_input(text, metadata.get('amplifier_input'))
+        if voice:
+            text = voice['text']
         from .naming_context import clean_text, MAX_TEXT_BYTES
         # Refuse overlong individual text rather than silently using the naming
         # helper's clipped prefix as a complete conversation message.
@@ -42,21 +120,16 @@ def public_rows(rows, *, bounded=True):
         item = {key: row[key] for key in ('id', 'role', 'text', 'agentId', 'agentLabel')
                 if isinstance(row.get(key), str)}
         item['text'] = text
-        peer = row.get('peerEnvelope')
-        if row['role'] == 'user' and isinstance(peer, dict) and isinstance(peer.get('senderSessionId'), str):
-            item['agentId'] = peer['senderSessionId']
-            item['agentLabel'] = 'Another conversation'
-        elif row['role'] == 'user' and (row.get('inputOrigin') in {
-                'agent', 'peer', 'scheduler', 'approval', 'observation'}
-                or row.get('scheduledRunId') or row.get('approvalId') or row.get('questionId')):
-            item['agentId'] = row.get('inputOrigin')
-            item['agentId'] = item['agentId'] or 'service'
-            item['agentLabel'] = 'Agent or scheduled input'
+        item['inputActor'] = speaker(row)
+        if row['role'] == 'user' and item['inputActor']['kind'] != 'human':
+            item['agentId'] = item['inputActor'].get('id') or item['inputActor']['kind']
+            item.setdefault('agentLabel', 'Input from ' + item['inputActor']['kind'])
         if not bounded:
             result.append(item)
             continue
         size += len(text.encode()) + sum(len(item.get(key, '').encode())
                                         for key in ('id', 'role', 'agentId', 'agentLabel'))
+        size += sum(len(value.encode()) for value in item['inputActor'].values())
         if size > MAX_BYTES or len(result) >= MAX_ROWS:
             raise Unavailable('transcript_limit')
         result.append(item)
@@ -76,7 +149,7 @@ def select(rows, config, has_earlier):
             raise Unavailable('full_transcript_exceeds_bound')
         return rows
     human = [index for index, row in enumerate(rows)
-             if row['role'] == 'user' and not row.get('agentId')]
+             if row['role'] == 'user' and speaker(row)['kind'] == 'human']
     if len(human) < config['humanTurns'] and has_earlier:
         raise Unavailable('human_turn_window_exceeds_bound')
     return rows[human[max(0, len(human) - config['humanTurns'])]:] if human else rows
@@ -104,7 +177,7 @@ def witness(service, sid, config=None, *, durable=False):
         return digest([owner, cold.identity, _stamp(cold.directory / (cold.identity + '.json'))])
     rows = dict.get(session, 'messages', ())
     tail = rows[max(0, len(rows) - MAX_ROWS):]
-    projected = public_rows(tail, bounded=False)
+    projected = public_rows(display_inputs(service, session, tail), bounded=False)
     if config is not None:
         projected = select(projected, config, len(rows) > MAX_ROWS)
     return digest([owner, len(rows), public_rows(projected)])
@@ -119,16 +192,14 @@ async def capture(service, sid, config, expected_last):
         raise Unavailable('transcript_unavailable')
     # Borrow only this bounded, maintained display page. Do not read raw native
     # context or expand textDetail into an unrelated history read.
-    from .input_status import annotate
     session = service._session(sid, hydrate=False)
-    rows = public_rows([annotate(session, row) if row.get('inputId') or row.get('nativeInputId') else row
-                        for row in retained[0]['items']], bounded=False)
+    rows = public_rows(display_inputs(service, session, retained[0]['items']), bounded=False)
     if not rows or rows[-1]['role'] != 'assistant':
         raise Unavailable('no_completed_assistant')
     if rows[-1]['id'] != expected_last:
         raise Unavailable('source_changed')
     selected = public_rows(select(rows, config, page['hasEarlier']))
-    if not any(row['role'] == 'user' and not row.get('agentId') for row in selected):
+    if not any(row['role'] == 'user' and speaker(row)['kind'] == 'human' for row in selected):
         raise Unavailable('no_human_turn')
     after = witness(service, sid, config)
     if before != after:

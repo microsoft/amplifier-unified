@@ -7,6 +7,7 @@ from pathlib import Path
 import sqlite3
 import sys
 import tempfile
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -37,7 +38,7 @@ class Service:
         self.closed = False
         self.clients = Clients()
         self.session = {'id': 'chat', 'status': 'idle', 'messages': [
-            {'id': 'human', 'role': 'user', 'text': 'Plan the next step.'},
+            {'id': 'human', 'role': 'user', 'text': 'Plan the next step.', 'inputOrigin': 'ui'},
             {'id': 'assistant', 'role': 'assistant', 'text': 'The plan is ready.'}]}
         self.history = SimpleNamespace(windows=TranscriptWindows(self))
         self.projections = SimpleNamespace(resolver=None)
@@ -123,6 +124,145 @@ class Requests(unittest.IsolatedAsyncioTestCase):
         self.app.clients.current.set('two')
         self.assertEqual((await self.request('new-document'))['status'], 'duplicate_source')
         self.assertEqual(len(self.calls), 1)
+
+    async def test_recreated_window_and_request_owners_with_different_access_order_do_not_replay(self):
+        await self.request()
+        await self.settle()
+        await self.host.close()
+        await self.app.history.windows.close()
+        self.app.history.windows = TranscriptWindows(self.app)
+        # Exercise both an unrelated first access and eviction of chat's fence.
+        self.app.history.windows._fence('unrelated')
+        self.app.history.windows._fence('chat')
+        for i in range(70):
+            self.app.history.windows._fence('other-' + str(i))
+        self.host = PromptSuggestions(self.app)
+        self.host.settings = lambda: (self.config, {'id': 'explicit-account'}, self.revision)
+        self.host.complete = AsyncMock(side_effect=AssertionError('replayed'))
+        self.app.clients.current.set('two')
+        self.assertEqual((await self.request('after-restart'))['status'], 'duplicate_source')
+        self.host.complete.assert_not_called()
+
+    async def test_expiry_is_absolute_admission_epoch_milliseconds_and_never_extended(self):
+        before = time.time() * 1000
+        pending = await self.request()
+        after = time.time() * 1000
+        self.assertGreaterEqual(pending['expiresAt'], before + 60000)
+        self.assertLessEqual(pending['expiresAt'], after + 60000)
+        await self.settle()
+        self.assertEqual((await self.status())['expiresAt'], pending['expiresAt'])
+        self.assertEqual((await self.request())['expiresAt'], pending['expiresAt'])
+        record = next(iter(self.host.records.values()))
+        self.host._expire(record)
+        self.assertEqual((await self.status())['status'], 'expired')
+        self.assertEqual((await self.status())['expiresAt'], pending['expiresAt'])
+
+    async def test_external_and_shared_accepted_inputs_do_not_require_native_generation_status(self):
+        for participation in ('exclusive', 'shared'):
+            with self.subTest(participation=participation):
+                self.app.session['externalAgent'] = {'participation': participation}
+                self.app.session['messages'] = [
+                    {'id': 'human', 'inputId': 'external-' + participation, 'role': 'user',
+                     'text': 'Accepted external human ' + participation, 'inputOrigin': 'ui',
+                     'delivery': {'status': 'accepted', 'scope': 'conversation'}, 'roomSequence': 1},
+                    {'id': 'assistant', 'role': 'assistant', 'text': 'External response',
+                     'agentId': 'agent-a', 'agentLabel': 'Agent A', 'roomSequence': 2}]
+                with patch('amplifier_web.input_status.annotate', side_effect=AssertionError('native progress')):
+                    self.assertEqual((await self.request(participation))['status'], 'pending')
+                    await self.settle()
+                    self.assertEqual((await self.status(participation))['status'], 'ready')
+                sent = self.calls[-1]
+                self.assertEqual(sent[0]['text'], 'Accepted external human ' + participation)
+                self.assertEqual(sent[0]['inputActor']['kind'], 'human')
+                self.assertEqual(sent[1]['agentId'], 'agent-a')
+        self.assertEqual(len(self.calls), 2)
+
+    async def test_unknown_and_agent_system_actor_inputs_never_gain_human_voice(self):
+        self.app.session['messages'][0]['inputActor'] = {'kind': 'human', 'id': 'person'}
+        self.app.session['messages'][1:1] = [
+            {'id': 'agent', 'role': 'user', 'text': 'Agent says go', 'inputOrigin': 'ui',
+             'inputActor': {'kind': 'agent', 'id': 'agent-b'}},
+            {'id': 'system', 'role': 'user', 'text': 'System input', 'inputOrigin': 'ui',
+             'inputActor': {'kind': 'system', 'id': 'host'}},
+            {'id': 'legacy', 'role': 'user', 'text': 'Unknown legacy input'}]
+        self.config['humanTurns'] = 1
+        await self.request()
+        await self.settle()
+        self.assertEqual((await self.status())['status'], 'ready')
+        self.assertEqual([row['inputActor']['kind'] for row in self.calls[0]],
+                         ['human', 'agent', 'system', 'unknown', 'agent'])
+        self.assertEqual([row['text'] for row in self.calls[0]][1:4],
+                         ['Agent says go', 'System input', 'Unknown legacy input'])
+
+    async def test_native_peer_voice_and_legacy_provenance_exact_outbound_projection(self):
+        from amplifier_web.voice_input_projection import PREFIX, START, END
+        root = Path(self.tmp.name)
+        voice = PREFIX + START + json.dumps([{'role': 'user', 'text': 'PRIVATE REFERENCE HISTORY'}]) + END + 'Current spoken request'
+        def native(text, identity, source='user', **extra):
+            return {'role': 'user', 'content': text, 'metadata': {'amplifier_input': {
+                'version': 1, 'kind': 'user', 'id': identity, 'source': source}}, **extra}
+        raw = [native('Known human', 'human-input'),
+               native('Peer input', 'peer-input'),  # Source=user is not sufficient when exact peer receipt exists.
+               native('System actor', 'system-input', inputActor={'kind': 'system', 'id': 'host'}),
+               {'role': 'user', 'content': 'Legacy unknown'},
+               native(voice, 'voice:call:request'),
+               {'role': 'assistant', 'content': 'Completed reply'}]
+        (root / 'transcript.jsonl').write_text(''.join(json.dumps(row) + '\n' for row in raw))
+        self.app.db.execute('CREATE TABLE commands (id TEXT PRIMARY KEY, receipt TEXT)')
+        self.app.db.execute('INSERT INTO commands VALUES (?,?)', ('peer-input', json.dumps({
+            'commandAction': 'coordination.send', 'origin': 'agent'})))
+        self.app.session.update(historyManaged=True, nativeProject=str(root), nativeIdentity='chat',
+            messageAnnotations={'input-status:' + identity: {'inputStatus': {
+                'version': 1, 'inputId': identity, 'phase': 'done', 'basis': 'generation_finished'}}
+                for identity in ('human-input', 'peer-input', 'system-input', 'voice:call:request')})
+        self.config['transcriptMode'] = 'full'
+        with patch('amplifier_web.automatic_history.directory', return_value=root):
+            ordinary = await self.app.history.windows.read('chat', limit=100)
+            last = ordinary['items'][-1]['id']
+            await self.request(expectedLastMessageId=last)
+            await self.settle()
+            self.assertEqual((await self.status())['status'], 'ready')
+        outbound = self.calls[0]
+        self.assertEqual([row['text'] for row in outbound],
+                         ['Known human', 'Peer input', 'System actor', 'Legacy unknown',
+                          'Current spoken request', 'Completed reply'])
+        self.assertEqual([row['inputActor']['kind'] for row in outbound],
+                         ['human', 'agent', 'system', 'unknown', 'human', 'agent'])
+        self.assertNotIn('PRIVATE REFERENCE', repr(outbound))
+        await self.host.close()
+        await self.app.history.windows.close()
+        self.app.history.windows = TranscriptWindows(self.app)
+        for i in range(75):
+            self.app.history.windows._fence('other-native-' + str(i))
+        self.host = PromptSuggestions(self.app)
+        self.host.settings = lambda: (self.config, {'id': 'explicit-account'}, self.revision)
+        self.host.complete = AsyncMock(side_effect=AssertionError('native source replay'))
+        with patch('amplifier_web.automatic_history.directory', return_value=root):
+            self.assertEqual((await self.request('native-restart', expectedLastMessageId=last))['status'],
+                             'duplicate_source')
+        self.host.complete.assert_not_called()
+
+    async def test_native_utility_page_does_not_replace_ordinary_cached_page(self):
+        root = Path(self.tmp.name)
+        (root / 'transcript.jsonl').write_text(json.dumps({
+            'role': 'assistant', 'content': [
+                {'type': 'text', 'text': 'Internal existing display', 'visibility': 'internal'},
+                {'type': 'text', 'text': 'Public reply'}]}) + '\n')
+        self.app.session.update(historyManaged=True, nativeProject=str(root), nativeIdentity='chat')
+        windows = self.app.history.windows
+        with patch('amplifier_web.automatic_history.directory', return_value=root):
+            ordinary = await windows.read('chat', limit=20)
+            ordinary_key = ('chat', ordinary['windowKey'])
+            retained = copy.deepcopy(windows.pages[ordinary_key])
+            windows.initial['chat'] = {'key': ordinary_key}
+            before = copy.deepcopy(windows.project(self.app.session))
+            utility = await windows.read('chat', limit=20, public_only=True)
+            self.assertNotEqual(utility['windowKey'], ordinary['windowKey'])
+            self.assertEqual(utility['items'][0]['text'], 'Public reply')
+            self.assertEqual(windows.pages[ordinary_key], retained)
+            self.assertEqual(windows.project(self.app.session), before)
+            again = await windows.read('chat', limit=20)
+            self.assertEqual(again, ordinary)
 
     async def test_conflicting_request_id_is_rejected(self):
         await self.request()
@@ -281,7 +421,7 @@ class Source(unittest.TestCase):
         self.assertEqual(result[-1]['agentLabel'], 'Agent B')
 
     def test_human_turn_window_counts_humans_not_agent_user_roles(self):
-        rows = [{'id': str(i), 'role': 'user', 'text': str(i)} for i in range(9)]
+        rows = [{'id': str(i), 'role': 'user', 'text': str(i), 'inputOrigin': 'ui'} for i in range(9)]
         rows.insert(8, {'id': 'agent', 'role': 'user', 'agentId': 'bot', 'text': 'agent input'})
         selected = select(rows, {'transcriptMode': 'last_n', 'humanTurns': 2}, True)
         self.assertEqual([r['id'] for r in selected], ['7', 'agent', '8'])
@@ -430,7 +570,7 @@ class Integration(unittest.IsolatedAsyncioTestCase):
         await self.app.dispatch('session.create', {}, include_state=False)
         session = self.app._session()
         session.update(status='idle', messages=[
-            {'id': 'human', 'role': 'user', 'text': 'What next?'},
+            {'id': 'human', 'role': 'user', 'text': 'What next?', 'inputOrigin': 'ui'},
             {'id': 'assistant', 'role': 'assistant', 'text': 'Review the plan.'}])
         host = self.app.prompt_suggestions
         host.settings = lambda: ({'enabled': True, 'provider': 'saved', 'model': 'model',
@@ -484,7 +624,7 @@ class Integration(unittest.IsolatedAsyncioTestCase):
         await self.app.dispatch('session.create', {}, include_state=False)
         session = self.app._session()
         session.update(status='idle', messages=[
-            {'id': 'human', 'role': 'user', 'text': 'Human'},
+            {'id': 'human', 'role': 'user', 'text': 'Human', 'inputOrigin': 'ui'},
             {'id': 'assistant', 'role': 'assistant', 'text': 'Reply'}])
         host = self.app.prompt_suggestions
         host.settings = lambda: ({'enabled': True, 'provider': 'saved', 'model': 'model',
@@ -530,6 +670,11 @@ class Integration(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(body['result']['status'], 'expired')
                 self.assertNotIn('SECRET', repr(body))
             response = await client.post('/api/actions', json=status, headers=headers(cookie_one))
+            self.assertEqual((await response.json())['result']['suggestion'], 'SECRET CANDIDATE')
+            # Same-cookie client IDs are a presentation partition, not a secret
+            # tab credential. The same authenticated user can select known ID
+            # "one"; the contract deliberately does not promise tab isolation.
+            response = await client.post('/api/actions', json=status, headers=headers(cookie_one, 'one'))
             self.assertEqual((await response.json())['result']['suggestion'], 'SECRET CANDIDATE')
             response = await client.post('/api/actions', json=status, headers=headers(cookie_one, bearer=True))
             self.assertEqual(response.status, 403)
