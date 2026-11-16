@@ -117,8 +117,13 @@ class FixtureWait:
         while not Path(values['commandRelease']).exists():
             await asyncio.sleep(.01)
         checkpoint = self.coordinator.get_capability('live.checkpoint')
+        saves = 0
         async def delayed(status='completed'):
-            if status == 'completed':
+            nonlocal saves
+            saves += 1
+            # tool.invoke itself checkpoints before its control reply. Delay
+            # the next ordinary retirement save, not that tool's own save.
+            if saves == 2:
                 Path(values['checkpointStarted']).write_text('ready')
                 while not Path(values['checkpointRelease']).exists():
                     await asyncio.sleep(.01)
@@ -210,15 +215,19 @@ providers:
                     while not (root / name).exists():
                         await asyncio.sleep(.01)
             await wait_file('commandStarted')
+            print(json.dumps({'checkpoint': 'command-started'}), flush=True)
             receipt = (await app.dispatch('worktree.handoff', {'sessionId': sid,
                 'id': checkout['id'], 'expectedExecutionRevision': 0}, command_id='held-command-move'))['result']
             await asyncio.wait_for(soft_sent.wait(), 10)
+            print(json.dumps({'checkpoint': 'soft-intent-sent'}), flush=True)
             assert app.worktrees.read(sid, receipt['id'])['step'] == 'desired'
             assert not runtime.workers[sid].get('closing')
             assert not runtime.workers[sid].get('retirement_task')
             (root / 'commandRelease').write_text('release')
-            await control
+            await asyncio.wait_for(control, 15)
+            print(json.dumps({'checkpoint': 'command-finished'}), flush=True)
             await wait_file('checkpointStarted')
+            print(json.dumps({'checkpoint': 'save-held'}), flush=True)
             assert app.worktrees.read(sid, receipt['id'])['step'] == 'desired'
             assert session.get('workingDirectory', str(workspace)) == str(workspace)
             from amplifier_foundation.session import SharedSessionStore, SessionBusyError
@@ -230,7 +239,7 @@ providers:
                 proof.release()
                 raise AssertionError('The delayed saved boundary released its writer early')
             (root / 'checkpointRelease').write_text('release')
-            await asyncio.gather(*list(app.worktrees.jobs))
+            await asyncio.wait_for(asyncio.gather(*list(app.worktrees.jobs)), 45)
             record = app.worktrees.read(sid, receipt['id'])
             assert record['phase'] == 'applied' and session['workingDirectory'] == checkout['path']
             assert len(app.worktrees.receipts(sid)) == 1 and not record['inputsReplayed']
@@ -308,7 +317,14 @@ providers:
             'childResultRetained': with_child, 'childToolAndSecondModelAfterParent': child_work,
             'launcherNativePidDistinct': launcher, 'canonicalAlias': canonical, 'provider': 'scripted-offline'}))
     finally:
-        await app.close()
+        for name in ('commandRelease', 'checkpointRelease'):
+            (root / name).write_text('fixture cleanup')
+        print(json.dumps({'checkpoint': 'fixture-cleanup',
+            'moves': [{'phase': row['phase'], 'step': row.get('step'), 'detail': row.get('detail')}
+                      for row in app.worktrees.receipts(None)],
+            'workers': [{'id': key, 'closing': row.get('closing'), 'inflight': len(row.get('inflight', [])),
+                         'exit': row['process'].returncode} for key, row in runtime.workers.items()]}), flush=True)
+        await asyncio.wait_for(app.close(), 30)
 
 
 asyncio.run(main())

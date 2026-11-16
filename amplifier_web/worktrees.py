@@ -1108,10 +1108,23 @@ class Worktrees:
         try:
             async def commit(proof):
                 nonlocal record
+                if not accepting or self._closed:
+                    raise HandoffSuperseded('The placement owner closed before committing its folder.')
                 while candidate := self.desired(sid):
                     if not accepting or self._closed:
                         raise HandoffSuperseded('The placement owner closed before committing its folder.')
                     session = self.app._session(sid)
+                    async with self.app.lock:
+                        latest = self.desired(sid)
+                        if latest is None:
+                            return
+                        if latest['id'] != candidate['id']:
+                            continue
+                        # Retain the real saved teardown even if Stop or a
+                        # later Git/authority check prevents folder placement.
+                        candidate.update(release=proof, revision=candidate['revision'] + 1)
+                        self.save(candidate)
+                        record = candidate
                     # Git may wait, but neither the short service lock nor the
                     # native command lock is held. Runtime admission and the
                     # exclusive writer lease protect the actual commit.

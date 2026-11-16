@@ -1,6 +1,7 @@
 """Desired folders use one ordinary retirement, not checkout marker RPCs."""
 import asyncio
 import copy
+import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -10,6 +11,7 @@ from amplifier_web.runtime_worker import Worker
 from test_worktrees import fixture, settle
 from test_handoff_refusal import checkout
 from test_collaborative_workspaces import app
+from amplifier_web.runtime import RuntimeManager
 
 
 async def deferred_fixture(tmp_path, monkeypatch):
@@ -178,6 +180,59 @@ async def test_native_soft_retirement_does_not_own_initiating_command_lock(monke
     assert replies[-1] == {'op': 'reply', 'id': 'one', 'result': {
         'retired': True, 'outcome': None, 'continuationAllowed': True}}
     worker.checkpoint_idle.assert_awaited_once()
+
+
+async def test_host_soft_intent_keeps_source_controls_and_input_live_then_commits_once(tmp_path):
+    script = r'''
+import json,sys
+retirement=None
+def emit(value): print(json.dumps(value),flush=True)
+for line in sys.stdin:
+    data=json.loads(line)
+    if data['op']=='start':
+        emit({'type':'runtime.ready','report':{}})
+    elif data['op']=='retire':
+        retirement=data['id']
+    elif data['op']=='control' and data['operation']=='finish.retirement':
+        emit({'op':'reply','id':data['id'],'result':{'ok':True}})
+        emit({'type':'runtime.retiring'})
+        emit({'op':'reply','id':retirement,'result':{'retired':True,'outcome':'completed','continuationAllowed':True}})
+        break
+    elif data['op']=='stop': break
+    else:
+        emit({'op':'reply','id':data['id'],'result':{'accepted':True}})
+'''
+    manager = RuntimeManager(command=[sys.executable, '-c', script])
+    manager.retention.wake = lambda: None
+    session = {'id': 'soft-fixture', 'workspace': str(tmp_path), 'placementRequestId': 'same-intent'}
+    applied = {'directory': str(tmp_path), 'revision': 0, 'fenced': False}
+    manager.bind_execution_state(lambda sid: applied)
+    emit = AsyncMock()
+    calls = []
+    async def commit(proof):
+        calls.append(proof)
+        applied.update(directory=str(tmp_path / 'target'), revision=1)
+        return 'applied'
+    await manager.start(session, emit)
+    original = manager.workers[session['id']]['process']
+    pending = asyncio.create_task(manager.deferred_placement(session, commit))
+    try:
+        async with asyncio.timeout(2):
+            while not manager.workers[session['id']]['pending']:
+                await asyncio.sleep(0)
+        row = manager.workers[session['id']]
+        assert not row.get('closing') and not row.get('retirement_task') and not row['inflight']
+        assert (await manager._request(session['id'], 'send', text='finish child', input_id='once'))['accepted']
+        assert (await manager.control(session['id'], 'read.only'))['accepted']
+        await manager.retention.sweep()
+        assert manager.workers[session['id']] is row and not calls
+        assert (await manager.control(session['id'], 'finish.retirement'))['ok']
+        assert await asyncio.wait_for(pending, 3) == 'applied'
+        assert original.returncode == 0 and len(calls) == 1
+        assert manager._retired[session['id']][0]['workingDirectory'] == applied['directory']
+        assert manager._retired[session['id']][0]['executionRevision'] == 1
+    finally:
+        await manager.close()
 
 
 @pytest.mark.parametrize('change', ['assignment', 'manager_stop', 'target_stop', 'manager_human',
