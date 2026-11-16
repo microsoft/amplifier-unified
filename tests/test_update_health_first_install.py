@@ -5,8 +5,11 @@ test_update_health_setup_record.py for the record and its limits). The real
 service, update manager, application check and status projection run; only
 external answers are injected.
 """
+import json
+
 import pytest
 
+import amplifier_web
 from amplifier_web import runtime_environment as environments
 from amplifier_web import runtime_registry_updates as registry
 from amplifier_web import update_report
@@ -65,4 +68,40 @@ async def test_each_check_reads_the_record_again_and_preparation_never_uses_it(s
         assert (status['status'], status['title'], status['detail']) == (
             'unverified', 'Component verification is incomplete', INCOMPLETE)
         assert status['actionRequired'] is True
+        assert await health_proof(c.manager) == 'none'
+
+
+async def test_the_first_activation_never_shows_setups_proof_for_the_new_generation(setup_record, monkeypatch):  # noqa: F811
+    """The real activation: every publication after the pointer names a generation is inspected.
+
+    The candidate is a staged, validated folder; the worker promotion is a
+    stand-in. This is not a qualified generation, so the settled report is the
+    incomplete one. The question here is only what is shown while it is selected.
+    """
+    async with checked_install(setup_record.home, core_row(setup_record), monkeypatch) as c:
+        await c.manager.check()
+        assert c.state['currentStatus']['detail'] == UP_TO_DATE and await health_proof(c.manager) == 'setup-record'
+        target = 'd' * 32
+        stage = c.manager.directory / 'releases' / target
+        stage.mkdir(parents=True)
+        (stage / 'validated.json').write_text(json.dumps(
+            {'generationSchema': 1, 'workerProtocol': 1, 'createdAt': 1, 'hostVersion': amplifier_web.__version__}))
+        c.service.runtime.promote_generation = lambda generation, protected=None: None
+        await c.manager.publish(pendingRelease=target)
+
+        seen = []
+        publish = c.service._publish_changes
+
+        def observe(*args, **kwargs):
+            seen.append((active_release(setup_record.home).get('current'), dict(c.state.get('currentStatus') or {})))
+            return publish(*args, **kwargs)
+        monkeypatch.setattr(c.service, '_publish_changes', observe)
+        await c.manager.activate()
+
+        assert active_release(setup_record.home)['current'] == target and c.state['phase'] == 'installed'
+        selected = [status for generation, status in seen if generation == target]
+        assert len(selected) >= 2  # The installed state, and the state after the refreshed proof.
+        for status in selected:
+            assert status.get('detail') != UP_TO_DATE, status
+        assert c.state['currentStatus']['title'] == 'Component verification is incomplete'
         assert await health_proof(c.manager) == 'none'

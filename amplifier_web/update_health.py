@@ -106,35 +106,55 @@ def active_evidence(manager, *, explain_configuration=False):
 
 
 def setup_evidence(manager):
-    """Verify setup's own record on an installation with no component generation.
+    """Verify setup's own record on an installation that never selected a generation.
 
     Setup installs the declared worker dependencies and records them. No
     generation is selected until the first component update, so the generation
     proof above is always empty there, and no check can produce it.
 
     This applies the checks of a conversation-worker start to that record: lock,
-    manifest, recorded packages (later additions allowed) and installer policy.
-    Packages are compared by name, version and source, and a local checkout
-    also by its tracked content; the files of an installed wheel are not read.
+    manifest, recorded packages and installer policy. Packages are compared by
+    name, version and source, and a local checkout also by its tracked content;
+    the files of an installed wheel are not read, and packages that were added
+    after setup are not compared with anything.
     It is not a qualification. It carries no activation time, so it cannot
     supersede a recorded failure, and preparation never consults it.
     """
     import subprocess
     from .installation_runtime import status
+    from .runtime_environment import receipt_directory
     from .updates import active_release
     try:
         pointer = active_release(manager.home)
-        if pointer.get('current'):
-            return {}  # A selected generation is verified by its own receipts only.
+        if pointer.get('current') or pointer.get('previous'):
+            # A selected generation is verified by its own receipts only. An
+            # installation that went back from a generation keeps its report.
+            return {}
+        record = receipt_directory(manager.home) / 'runtime-installed.json'
+        recorded = record.read_bytes()
         observed = status(manager.home)
         if (observed.get('ok') is not True or observed.get('prepared') is not True
                 or observed.get('generation') is not None
                 or type(observed.get('packageCount')) is not int or observed['packageCount'] < 1
+                or record.read_bytes() != recorded  # The record changed during the read.
                 or active_release(manager.home) != pointer):
             return {}
         return {'setupRecord': True, 'packageCount': observed['packageCount']}
     except (OSError, ValueError, TypeError, KeyError, AttributeError, subprocess.SubprocessError):
         return {}  # Unknown evidence is not a healthy installed graph.
+
+
+def cached_evidence(manager):
+    """The proof of the last refresh, as far as it still applies.
+
+    Setup's record is a proof only while no generation is selected. An
+    activation publishes its installed state before it refreshes the proof;
+    the earlier setup proof must not describe the generation selected since.
+    """
+    evidence = getattr(manager, '_active_update_evidence', None) or {}
+    if evidence.get('setupRecord') and manager.service.state['updates'].get('release'):
+        return {}
+    return evidence
 
 
 def preparation_key(manager, rows):
@@ -537,14 +557,14 @@ def current(state, evidence=None, *, manual_verified=None, explicit_retry=False)
             # A new installation: the check found nothing newer, and setup's
             # record still matches. Do not call these components qualified.
             return result('current', 'You’re up to date',
-                          'No newer version of the app or its components was found. The installed components match the list that setup recorded.')
+                          'No newer version of the app or its components was found. The components that setup recorded are installed as recorded.')
         return result('current', 'You’re up to date', 'The current application and qualified components are ready. Earlier attempts remain in history; configured fixed versions are kept.')
     return result('unchecked', 'Check for updates', 'The full desired component state has not been checked.', action='check')
 
 
 def publish(manager):
     state = manager.service.state['updates']
-    evidence = getattr(manager, '_active_update_evidence', {})
+    evidence = cached_evidence(manager)
     # Settings mutations invalidate proof immediately without a graph scan on
     # each publication. Only an owner check/activation can establish it again.
     revision = manager.service.state.get('configurationRevision')

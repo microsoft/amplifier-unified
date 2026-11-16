@@ -45,7 +45,7 @@ LOCK = ('version=1\n[[package]]\nname="amplifier-core"\nversion="2.0.2"\n'
         'source={ registry = "https://pypi.org/simple" }\n')
 PACKAGES = (('amplifier-core', '2.0.2'), ('PyYAML', '6.0.3'))
 UP_TO_DATE = ('No newer version of the app or its components was found. '
-              'The installed components match the list that setup recorded.')
+              'The components that setup recorded are installed as recorded.')
 QUALIFIED = ('The current application and qualified components are ready. Earlier attempts remain in history; '
              'configured fixed versions are kept.')
 INCOMPLETE = ('The active component graph or configuration could not be verified. Current components are kept. '
@@ -142,6 +142,10 @@ CHANGES = {
     'missing-record': lambda i: (i.receipt / 'runtime-installed.json').unlink(),
     'empty-record': lambda i: (i.receipt / 'runtime-installed.json').write_text('[]'),
     'no-setup-record': lambda i: shutil.rmtree(i.receipt),  # An installation that setup did not record.
+    # Same name and version, another source: the package now comes from a Git commit.
+    'changed-source': lambda i: (next((i.project / '.venv').rglob('PyYAML-6.0.3.dist-info')) / 'direct_url.json'
+                                 ).write_text(json.dumps({'url': 'https://example.invalid/pyyaml',
+                                                          'vcs_info': {'vcs': 'git', 'commit_id': 'a' * 40}})),
 }
 
 
@@ -153,6 +157,87 @@ def test_a_missing_or_changed_setup_record_keeps_the_incomplete_report(setup_rec
     assert (status['status'], status['title'], status['detail']) == (
         'unverified', 'Component verification is incomplete', INCOMPLETE)
     assert status['actionRequired'] is True and status['action'] == 'check'
+
+
+def during_verification(monkeypatch, change):
+    """Run `change` after the reader has read setup's record and before it compares the packages."""
+    real = qualification.verify_recorded
+
+    def verify(project, receipt, **options):
+        change(Path(receipt) / 'runtime-installed.json')
+        return real(project, receipt, **options)
+    monkeypatch.setattr(qualification, 'verify_recorded', verify)
+
+
+RECORD_RACES = {
+    'removed': lambda record: record.unlink(),
+    'replaced': lambda record: record.write_text(json.dumps([{'name': 'amplifier-core', 'version': '2.0.2'}])),
+}
+
+
+def test_the_status_reader_compares_the_packages_with_the_record_that_it_read(setup_record, monkeypatch):
+    # The reader of `runtime status` and of setup itself, with no second guard behind it.
+    replace_package(setup_record, 'PyYAML', '6.0.3', '6.0.4')
+    during_verification(monkeypatch, RECORD_RACES['removed'])
+    assert installation_runtime.status(setup_record.home)['ok'] is False
+
+
+@pytest.mark.parametrize('race', sorted(RECORD_RACES))
+@pytest.mark.parametrize('package', ['changed', 'as-recorded'])
+def test_a_record_that_changes_during_verification_gives_no_proof(setup_record, monkeypatch, race, package):
+    if package == 'changed':
+        # The comparison must not be skipped: this package is not what setup recorded.
+        replace_package(setup_record, 'PyYAML', '6.0.3', '6.0.4')
+    during_verification(monkeypatch, RECORD_RACES[race])
+    proof = evidence(setup_record)  # The one read during which the record changed.
+    assert proof == {}
+    assert health.current(CHECKED, proof)['title'] == 'Component verification is incomplete'
+
+
+def test_a_generation_that_is_selected_during_verification_gives_no_proof(setup_record, monkeypatch):
+    real = installation_runtime.status
+
+    def status(home):
+        observed = real(home)  # Setup's record verifies ...
+        (Path(home) / 'updates' / 'active.json').write_text(json.dumps({'current': 'b' * 32, 'at': 1}))
+        return observed        # ... and a first generation is selected before the answer returns.
+    monkeypatch.setattr(installation_runtime, 'status', status)
+    assert evidence(setup_record) == {}
+
+
+def test_an_installation_that_went_back_from_its_first_generation_keeps_the_earlier_report(setup_record):
+    # After a rollback to setup's components the pointer names no generation, but it had one.
+    (setup_record.home / 'updates' / 'active.json').write_text(json.dumps(
+        {'current': None, 'previous': 'b' * 32, 'at': 1}))
+    assert installation_runtime.status(setup_record.home)['ok'] is True  # The record itself still verifies.
+    assert evidence(setup_record) == {}
+    assert reported(setup_record)['title'] == 'Component verification is incomplete'
+
+
+def cached(install, proof, release):
+    """A manager whose last health refresh found `proof`; `release` is the generation selected now."""
+    state = {**CHECKED, 'release': release}
+    return SimpleNamespace(home=install.home, _active_update_evidence=proof,
+                           service=SimpleNamespace(state={'updates': state}))
+
+
+def test_a_cached_setup_proof_does_not_describe_a_generation_that_was_selected_since(setup_record):
+    proof = evidence(setup_record)
+    assert proof['setupRecord'] is True
+    manager = cached(setup_record, proof, None)
+    health.publish(manager)
+    assert manager.service.state['updates']['currentStatus']['detail'] == UP_TO_DATE
+    # An activation publishes its installed state before the next refresh of the proof.
+    manager = cached(setup_record, proof, 'b' * 32)
+    health.publish(manager)
+    status = manager.service.state['updates']['currentStatus']
+    assert (status['status'], status['title']) == ('unverified', 'Component verification is incomplete')
+    # A generation's own proof is not touched by this rule.
+    generation = {'generation': 'b' * 32, 'startedAt': 8, 'verifiedAt': 9, 'attemptId': 'x',
+                  'configuration': 'c' * 64, 'packages': set(), 'components': set()}
+    manager = cached(setup_record, generation, 'b' * 32)
+    health.publish(manager)
+    assert manager.service.state['updates']['currentStatus']['detail'] == QUALIFIED
 
 
 TOOL_FAULTS = {
@@ -210,6 +295,17 @@ def test_the_proof_needs_git_on_the_path_when_a_package_comes_from_a_local_check
     assert reported(setup_record)['detail'] == UP_TO_DATE  # With Git again, the same record verifies.
     # A changed tracked file of that checkout is a changed component.
     (checkout / 'module.py').write_bytes(b'value = 2\n')
+    assert reported(setup_record)['title'] == 'Component verification is incomplete'
+
+
+def test_another_revision_of_a_local_checkout_is_a_changed_component(setup_record):
+    checkout = local_checkout(setup_record)
+    assert reported(setup_record)['detail'] == UP_TO_DATE
+    # Same tracked files, another commit: only the revision differs from the record.
+    subprocess.run(['git', '-c', 'user.email=test@example.invalid', '-c', 'user.name=Fixture',
+                    'commit', '-q', '--allow-empty', '-m', 'two'], cwd=checkout, check=True,
+                   capture_output=True, timeout=60)
+    assert evidence(setup_record) == {}
     assert reported(setup_record)['title'] == 'Component verification is incomplete'
 
 

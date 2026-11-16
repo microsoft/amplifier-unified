@@ -526,11 +526,18 @@ async def freeze(manager, generation, project, *, baseline_manifest=None):
     return final
 
 
-def verify_recorded(project, receipt, *, allow_additions=False):
-    evidence = Path(receipt) / 'runtime-installed.json'
-    if not evidence.exists():
-        return
-    expected = json.loads(evidence.read_text())
+def verify_recorded(project, receipt, *, allow_additions=False, expected=None):
+    """Compare the installed packages with a recorded list.
+
+    A caller that has read and validated the record passes it as `expected`.
+    The comparison then uses exactly that list: a record that disappears after
+    the caller's read cannot turn the comparison into a silent pass.
+    """
+    if expected is None:
+        evidence = Path(receipt) / 'runtime-installed.json'
+        if not evidence.exists():
+            return
+        expected = json.loads(evidence.read_text())
     actual = installed_graph(project)
     if allow_additions:
         names = {row['name'] for row in expected}

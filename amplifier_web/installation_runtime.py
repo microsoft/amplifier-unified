@@ -124,7 +124,7 @@ def _baseline_status(home):
                 or any(not isinstance(row, dict) or not isinstance(row.get("name"), str)
                        or not isinstance(row.get("version"), str) for row in graph)):
             raise ValueError("No valid initial dependency inventory.")
-        verify_recorded(project, receipt, allow_additions=True)
+        verify_recorded(project, receipt, allow_additions=True, expected=graph)
         verify_install_overrides(project, receipt / "runtime-install-overrides.txt")
         return {"ok": True, "prepared": True, "generation": None,
                 "packageCount": len(graph), "profileCount": 0,
