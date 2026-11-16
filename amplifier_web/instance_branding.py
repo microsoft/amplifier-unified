@@ -180,7 +180,7 @@ class InstanceBranding:
         return f'/instance-icon/{size}.png?v={self._snapshot["revision"]}'
 
     def icon(self, size):
-        from PIL import Image, ImageDraw, ImageOps
+        from PIL import Image, ImageOps
         if size not in SIZES:
             raise ValueError('Choose an app icon size of 32, 180, 192 or 512.')
         # Requests encode off the event loop. A preference change during that
@@ -194,14 +194,14 @@ class InstanceBranding:
                     image = ImageOps.pad(source.convert('RGBA'), (size, size),
                                          method=Image.Resampling.LANCZOS, color=(0, 0, 0, 0))
             else:
-                image = Image.new('RGB', (512, 512), snapshot['color'])
-                draw = ImageDraw.Draw(image)
-                # Font-independent, familiar A badge with a generous safe area.
-                rgb = image.getpixel((0, 0))
-                ink = '#101828' if sum(c * w for c, w in zip(rgb, (.2126, .7152, .0722))) > 165 else '#ffffff'
-                draw.polygon([(128, 376), (222, 136), (290, 136), (384, 376),
-                              (316, 376), (256, 210), (196, 376)], fill=ink)
-                draw.rectangle((200, 294, 312, 344), fill=ink)
+                image = Image.new('RGBA', (512, 512), snapshot['color'])
+                # Keep the shipped Amplifier mark recognizable, with enough
+                # surrounding instance color to distinguish installed apps.
+                mark_path = Path(__file__).parent / 'static/branding/pwa/pwa-512.png'
+                with Image.open(mark_path) as source:
+                    mark = source.convert('RGBA')
+                    mark.thumbnail((384, 384), Image.Resampling.LANCZOS)
+                    image.alpha_composite(mark, ((512 - mark.width) // 2, (512 - mark.height) // 2))
                 image = image.resize((size, size), Image.Resampling.LANCZOS)
             cached = _png(image)
             if self._current[1]['revision'] == snapshot['revision']:
