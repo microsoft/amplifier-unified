@@ -45,7 +45,7 @@ LOCK = ('version=1\n[[package]]\nname="amplifier-core"\nversion="2.0.2"\n'
         'source={ registry = "https://pypi.org/simple" }\n')
 PACKAGES = (('amplifier-core', '2.0.2'), ('PyYAML', '6.0.3'))
 UP_TO_DATE = ('No newer version of the app or its components was found. '
-              'The components that setup installed are unchanged.')
+              'The installed components match the list that setup recorded.')
 QUALIFIED = ('The current application and qualified components are ready. Earlier attempts remain in history; '
              'configured fixed versions are kept.')
 INCOMPLETE = ('The active component graph or configuration could not be verified. Current components are kept. '

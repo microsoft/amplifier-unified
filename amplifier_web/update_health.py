@@ -114,6 +114,8 @@ def setup_evidence(manager):
 
     This applies the checks of a conversation-worker start to that record: lock,
     manifest, recorded packages (later additions allowed) and installer policy.
+    Packages are compared by name, version and source, and a local checkout
+    also by its tracked content; the files of an installed wheel are not read.
     It is not a qualification. It carries no activation time, so it cannot
     supersede a recorded failure, and preparation never consults it.
     """
@@ -535,7 +537,7 @@ def current(state, evidence=None, *, manual_verified=None, explicit_retry=False)
             # A new installation: the check found nothing newer, and setup's
             # record still matches. Do not call these components qualified.
             return result('current', 'You’re up to date',
-                          'No newer version of the app or its components was found. The components that setup installed are unchanged.')
+                          'No newer version of the app or its components was found. The installed components match the list that setup recorded.')
         return result('current', 'You’re up to date', 'The current application and qualified components are ready. Earlier attempts remain in history; configured fixed versions are kept.')
     return result('unchecked', 'Check for updates', 'The full desired component state has not been checked.', action='check')
 
