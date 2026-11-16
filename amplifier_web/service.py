@@ -16,7 +16,6 @@ import uuid
 from weakref import WeakValueDictionary
 
 from jsonschema import validate, ValidationError
-import tinycss2
 from .errors import AppError
 from .execution import ensure_turn, ingest as ingest_execution, finish as finish_execution, finish_background, interrupt_unfinished, restore_voice_usage
 from .execution_working_set import current as current_execution, exact as execution_record, turns_for_inputs
@@ -282,42 +281,7 @@ from .access_mode import definitions as access_mode_definitions
 ACTION_DEFINITIONS.update(access_mode_definitions(schema, string))
 
 
-def validate_theme(css):
-    """Reject network-bearing or malformed skins; assets must travel with the file."""
-    if not css.strip():
-        raise AppError("The skin is empty.")
-    if "</style" in css.lower():
-        raise AppError("A skin must contain CSS only.")
-    rules = tinycss2.parse_stylesheet(css, skip_comments=True, skip_whitespace=True)
-    def visit(nodes):
-        for node in nodes:
-            if node.type == "error":
-                raise AppError("The stylesheet contains invalid CSS: " + node.message)
-            if node.type == "at-rule" and node.lower_at_keyword in {"import", "namespace", "document"}:
-                raise AppError("Skins must be self-contained; external imports are unsupported.")
-            if node.type == "url":
-                check_url(node.value)
-            if node.type == "function" and node.lower_name == "url":
-                arguments = [argument for argument in node.arguments if argument.type not in ('comment', 'whitespace')]
-                if len(arguments) != 1 or arguments[0].type != 'string':
-                    raise AppError('Use one literal asset reference in url(), not substitutions.')
-                check_url(arguments[0].value)
-            if node.type == 'function' and node.lower_name in {'image-set', '-webkit-image-set', 'image', 'src'}:
-                # These CSS image forms also accept bare strings as URLs.
-                # Fail closed for nested/unknown substitutions, not just var().
-                from .appearance_packages import literal_image_functions
-                literal_image_functions(node)
-                for argument in node.arguments:
-                    if argument.type == 'string':
-                        check_url(argument.value)
-            for attr in ("prelude", "content", "arguments"):
-                child = getattr(node, attr, None)
-                if child:
-                    visit(child)
-    def check_url(value):
-        if not value.startswith(("data:image/png;base64,", "data:image/jpeg;base64,", "data:image/webp;base64,", "data:font/woff;base64,", "data:font/woff2;base64,")):
-            raise AppError("Embed images and fonts in the skin instead of loading external URLs.")
-    visit(rules)
+from .appearance_packages import validate_theme
 
 
 from .theme_library import definitions as theme_library_definitions
