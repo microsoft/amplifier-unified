@@ -121,6 +121,162 @@ def test_installed_graph_file_uri_keeps_git_identity_and_dirty_refusal(tmp_path,
     assert all(env is child_env for env in reads)
 
 
+def _root_distribution(project, name, source=None):
+    metadata = project / '.venv/Lib/site-packages' / (name + '-1.0.dist-info')
+    metadata.mkdir(parents=True)
+    (metadata / 'METADATA').write_text(f'Metadata-Version: 2.1\nName: {name}\nVersion: 1.0\n')
+    if source is not None:
+        (metadata / 'direct_url.json').write_text(json.dumps({'url': source.as_uri(), 'dir_info': {}}))
+    return runtime_qualification.importlib.metadata.PathDistribution(metadata)
+
+
+def test_installed_roots_keep_aliases_graph_order_and_fresh_content(tmp_path, monkeypatch):
+    import hashlib
+    import subprocess
+    project = tmp_path / 'project'
+    roots, expected = [], {}
+    for name in ('one', 'two'):
+        root = tmp_path / name
+        root.mkdir()
+        (root / 'module').mkdir()
+        content = ('source ' + name + '\n').encode()
+        (root / 'tracked.txt').write_bytes(content)
+        def git(*args):
+            return subprocess.check_output(['git', '-c', 'user.name=Fixture',
+                '-c', 'user.email=fixture@example.invalid', *args], cwd=root, text=True).strip()
+        git('init')
+        git('add', 'tracked.txt')
+        git('commit', '-m', 'fixture')
+        revision = git('rev-parse', 'HEAD')
+        url = 'https://example.invalid/' + name
+        (root / '.amplifier_cache_meta.json').write_text(json.dumps({'git_url': url, 'ref': 'main'}))
+        expected[root] = {'url': url, 'ref': 'main', 'revision': revision, 'dirty': False,
+            'trackedContentSha256': hashlib.sha256(b'tracked.txt\0' + content).hexdigest()}
+        roots.append(root)
+    entries = [('zeta', roots[0]), ('beta', roots[1]), ('alias', roots[0] / 'module'), ('plain', None)]
+    distributions = [_root_distribution(project, name, source) for name, source in entries]
+    monkeypatch.setattr(runtime_qualification.importlib.metadata, 'distributions', lambda **kw: distributions)
+    original = runtime_qualification._installed_root
+    reads, observed = [], {}
+    def read(root, env):
+        reads.append(root)
+        value = original(root, env)
+        observed[root] = value
+        return value
+    monkeypatch.setattr(runtime_qualification, '_installed_root', read)
+    graph = runtime_qualification.installed_graph(project)
+    oracle = []
+    for name, source in entries:
+        row = {'name': name, 'version': '1.0'}
+        if source is not None:
+            root = roots[0] if name in {'zeta', 'alias'} else roots[1]
+            row.update(path=str(source), directUrl={'url': source.as_uri(), 'dir_info': {}},
+                cacheSource={**expected[root], 'subdirectory': 'module' if name == 'alias' else '.'})
+        oracle.append(row)
+    assert graph == sorted(oracle, key=lambda row: row['name'])
+    assert sorted(reads) == sorted(roots)  # Two package paths share one physical root.
+    (roots[0] / 'tracked.txt').write_bytes(b'source NEW\n')
+    with pytest.raises(ValueError, match='changed after qualification'):
+        runtime_qualification.verify_recorded(project, tmp_path, expected=graph)
+    assert all(reads.count(root) == 2 for root in roots)
+    assert observed[roots[0]]['dirty'] is True
+    assert observed[roots[0]]['trackedContentSha256'] != expected[roots[0]]['trackedContentSha256']
+
+
+@pytest.mark.parametrize('root_fails', [False, True])
+def test_installed_roots_preserve_error_before_later_distribution(tmp_path, monkeypatch, root_fails):
+    root = tmp_path / 'root'
+    (root / '.git').mkdir(parents=True)
+    (root / '.amplifier_cache_meta.json').write_text('{}')
+    project = tmp_path / 'project'
+    first = _root_distribution(project, 'first', root)
+    broken = _root_distribution(project, 'broken')
+    (broken._path / 'direct_url.json').write_text('{invalid')
+    monkeypatch.setattr(runtime_qualification.importlib.metadata, 'distributions', lambda **kw: [first, broken])
+    def read(root, env):
+        if root_fails:
+            raise ValueError('earlier checkout failed')
+        return {}
+    monkeypatch.setattr(runtime_qualification, '_installed_root', read)
+    error = ValueError if root_fails else json.JSONDecodeError
+    message = 'earlier checkout failed' if root_fails else 'property name'
+    with pytest.raises(error, match=message):
+        runtime_qualification.installed_graph(project)
+
+
+@pytest.mark.parametrize('fail', [False, True])
+def test_installed_roots_bound_concurrency_and_settle_before_exit(tmp_path, monkeypatch, fail):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event, Lock, Thread
+    project = tmp_path / 'project'
+    roots, distributions = [], []
+    for index in range(9):
+        root = tmp_path / str(index)
+        (root / '.git').mkdir(parents=True)
+        (root / '.amplifier_cache_meta.json').write_text('{}')
+        roots.append(root)
+        distributions.append(_root_distribution(project, 'fixture-' + str(index), root))
+    monkeypatch.setattr(runtime_qualification.importlib.metadata, 'distributions', lambda **kw: distributions)
+    release, fail_now, two_started, shutting_down, done = (Event() for _ in range(5))
+    lock = Lock()
+    active = peak = 0
+    started, finished, shutdowns, outcome = [], [], [], []
+    class Readers(ThreadPoolExecutor):
+        def shutdown(self, wait=True, *, cancel_futures=False):
+            shutdowns.append((wait, cancel_futures))
+            shutting_down.set()
+            return super().shutdown(wait=wait, cancel_futures=cancel_futures)
+    def read(root, env):
+        nonlocal active, peak
+        with lock:
+            started.append(root)
+            active += 1
+            peak = max(peak, active)
+            if active == 2:
+                two_started.set()
+        try:
+            if fail and root == roots[0]:
+                assert fail_now.wait(5), 'fixture did not release the failed read'
+                raise ValueError('first checkout failed')
+            assert release.wait(5), 'fixture did not release the root read'
+            return {'revision': root.name}
+        finally:
+            with lock:
+                active -= 1
+                finished.append(root)
+    def verify():
+        try:
+            outcome.append(runtime_qualification.installed_graph(project))
+        except BaseException as error:
+            outcome.append(error)
+        finally:
+            done.set()
+    monkeypatch.setattr(runtime_qualification, 'ThreadPoolExecutor', Readers)
+    monkeypatch.setattr(runtime_qualification, '_installed_root', read)
+    caller = Thread(target=verify)
+    caller.start()
+    try:
+        assert two_started.wait(5)
+        assert active == peak == 2 and not done.is_set()
+        if fail:
+            fail_now.set()
+            assert shutting_down.wait(5)
+            assert not done.is_set()  # Other started reads still hold the call.
+        release.set()
+    finally:
+        fail_now.set()
+        release.set()
+        caller.join(5)
+    assert not caller.is_alive() and done.is_set() and active == 0
+    assert sorted(started) == sorted(finished) and peak == 2
+    assert shutdowns == [(True, True)]
+    if fail:
+        assert type(outcome[0]) is ValueError and str(outcome[0]) == 'first checkout failed'
+    else:
+        assert [row['name'] for row in outcome[0]] == ['fixture-' + str(i) for i in range(9)]
+        assert len(started) == 9
+
+
 @pytest.mark.parametrize('platform', ['win32', 'linux', 'darwin'])
 def test_installed_git_metadata_policy_is_windows_only(monkeypatch, platform):
     from amplifier_web import reset

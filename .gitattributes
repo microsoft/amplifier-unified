@@ -14,6 +14,11 @@
 /tests/** source-context=tests
 /tests/web/** source-context=tests
 /scripts/**/tests/** source-context=tests
+/components/recall/amplifier_recall/** source-context=source
+/components/recall/tests/** source-context=tests
+/components/recall/MANIFEST.in source-context=configuration
+/components/recall/.gitignore source-context=configuration
+/components/recall/LICENSE source-context=documentation
 /components/scheduling/amplifier_scheduling/** source-context=source
 /components/scheduling/tests/** source-context=tests
 /components/scheduling/MANIFEST.in source-context=configuration

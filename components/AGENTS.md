@@ -1,5 +1,14 @@
 # Component ownership
 
+`recall/` authors the independently buildable `amplifier_recall` storage package.
+Its SQLite mechanism tests belong here; Unified retains source access, scope,
+authorization, model execution and memory policy. This preparation still assembles
+the authored package into Unified's wheel, sdist and editable installation.
+There is no published selection or generated delivery copy yet. Preserve existing
+imports and database formats; the database includes durable explicit notes and
+receipts, not only rebuildable search data. Do not coinstall the standalone
+distribution with Unified or create a second writable runtime copy.
+
 `components/workspaces/` is the temporary authoring home for the independently
 buildable `amplifier_workspace_metadata` package. Its registration and query
 mechanism tests belong here; Unified retains initialization, filesystem effects,
