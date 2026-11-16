@@ -83,6 +83,22 @@ reported finite token counters only; missing usage and unknown cost stay null.
 Cancellation requests process cleanup but never claim to undo provider effects.
 The occupied slot remains held until the physical request/cleanup settles.
 
+Failed utility calls may carry a static allowlisted `reason:"<stage>_<category>"`.
+Stages are
+`construction` (including import/configuration/metadata), `transport` (inside the
+provider call; not proof that a network request occurred), `parse` (JSON syntax)
+and `output` (response blocks/schema/usage). Categories come from closed host
+exception-class/status allowlists (authentication, permission, rate_limit,
+not_found, invalid_request, timeout, connection, service, configuration,
+missing_dependency, value_error, type_error, internal, invalid_output).
+Unknown exception classes yield only `provider_failed`; there is no arbitrary
+diagnostic dictionary or error-type passthrough. No SDK error prose,
+body, endpoint, module name, prompt or credential is copied. `not_found` does not
+assert a missing model rather than a missing endpoint. These facts share candidate
+ownership/expiry and never enter shared state, action status or durable claims.
+Earlier failed receipts without diagnostics remain unattributed. No failure
+authorizes a retry, fallback or assumption of zero provider cost.
+
 ## Privacy, freshness and cost admission
 
 The authenticated HTTP adapter supplies a live cookie-backed principal alongside

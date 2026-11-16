@@ -7,12 +7,13 @@ import time
 from .errors import AppError
 from .suggestion_settings import digest, selected
 from .suggestion_source import Unavailable, capture, witness, eligible
+from .suggestion_provider import failure, FAILURE_REASONS
 
 MAX_RETAINED = 128
 TTL = 60
 DEADLINE = 15
 PROVIDER_REASONS = frozenset({'custom_source_not_prepared', 'runtime_not_prepared',
-                              'qualified_source_mismatch'})
+                              'qualified_source_mismatch'}) | FAILURE_REASONS
 # Set only by the authenticated HTTP adapter, never action arguments or client
 # registration. The closure rechecks cookie expiry/sign-out after async work.
 BROWSER = ContextVar('suggestion_browser', default=None)
@@ -214,6 +215,7 @@ class PromptSuggestions:
             str(self.service.data_dir))
 
     async def run(self, record, config):
+        provider_started = False
         try:
             async with asyncio.timeout(DEADLINE):
                 rows, source_key = await capture(self.service, record['sessionId'], config,
@@ -238,6 +240,7 @@ class PromptSuggestions:
                     self.service.db.execute('UPDATE suggestion_requests SET source=? WHERE identity=?',
                                             (source, record['identity']))
                     self.service.db.commit()
+                provider_started = True
                 result = await self.complete(record, config, rows)
                 if record['status'] == 'pending':
                     if self.current(record):
@@ -255,11 +258,14 @@ class PromptSuggestions:
         except Unavailable as exc:
             if record['status'] == 'pending':
                 self._finish(record, 'stale' if str(exc) == 'source_changed' else 'unsupported', reason=str(exc))
-        except Exception:
+        except Exception as exc:
             if record['status'] == 'pending':
                 # Do not retain exception strings: SDK errors may quote bodies,
                 # credentials, endpoint URLs or other private response content.
-                self._finish(record, 'failed')
+                if provider_started:
+                    record.update(failure(exc, 'construction'))
+                else:
+                    self._finish(record, 'failed')
 
     def invalidate(self):
         for record in self.records.values():

@@ -506,6 +506,9 @@ class SetupManager:
                 raise ProbeProcessFailure(process.returncode, stderr) from None
             if action!='providers.schema' and generation(module,raw)==credential_generation:
                 api_observation = action!='providers.models' or result.get('modelsProvenance')=='provider-api'
+                if action == 'suggestion.complete':
+                    # A typed utility failure is not an authenticated success.
+                    api_observation = result.get('suggestion', {}).get('status') in {'ready', 'empty'}
                 if (not result.get('error') and api_observation) or result.get('authenticationRequired') is True:
                     record(self.home,args['id'],credential_generation,authentication_required=result.get('authenticationRequired') is True)
             if result.get('error'):

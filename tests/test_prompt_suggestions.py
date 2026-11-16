@@ -184,6 +184,24 @@ class Requests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn('credential', repr(result))
             self.host.complete.assert_awaited_once()
 
+    async def test_failed_reason_is_private_finite_and_unknown_sdk_payloads_are_discarded(self):
+        for index, reason in enumerate(('transport_authentication', 'parse_invalid_output',
+                                        'output_invalid_output', 'transport_https://private/key')):
+            self.app.session['messages'][-1]['text'] = 'New failed source ' + str(index)
+            self.host.complete = AsyncMock(return_value={
+                'status': 'failed', 'suggestion': None, 'usage': None, 'cost': None, 'reason': reason,
+                'diagnostic': {'body': 'SECRET candidate https://private/key'}, 'error': 'SECRET'})
+            result = await self.terminal_request('failure-' + str(index))
+            self.assertEqual(result['reason'], reason if index < 3 else None)
+            self.assertNotIn('SECRET', repr(result))
+            self.assertNotIn('diagnostic', result)
+            self.assertNotIn('SECRET', repr(list(self.host.records.values())))
+            self.app.clients.current.set('two')
+            self.assertEqual((await self.status('failure-' + str(index)))['status'], 'expired')
+            self.app.clients.current.set('one')
+        self.assertNotIn('transport_authentication',
+                         repr(list(self.app.db.execute('SELECT * FROM suggestion_requests'))))
+
     async def test_recreated_window_and_request_owners_with_different_access_order_do_not_replay(self):
         await self.request()
         await self.settle()
@@ -611,6 +629,55 @@ class Provider(unittest.IsolatedAsyncioTestCase):
                                   'source': None, 'fallbackSource': 'git+https://example.invalid/missing'})
             self.assertEqual(result['suggestion']['status'], 'unsupported')
             prepare.assert_not_called()
+
+    async def test_real_query_classifies_only_fixed_stage_and_class_without_sdk_error_text(self):
+        from amplifier_web.provider_probe import query
+        from amplifier_web.suggestion_provider import failure, FAILURE_REASONS
+        private = 'SECRET candidate credential https://private.invalid/key'
+        class UnknownError(Exception):
+            status_code = 401
+            def __str__(self):
+                raise AssertionError('Never inspect SDK error prose')
+        for name, status, expected in (
+                ('AuthenticationError', 401, 'transport_authentication'),
+                ('RateLimitError', 429, 'transport_rate_limit'),
+                ('NotFoundError', 404, 'transport_not_found'),
+                ('BadRequestError', 400, 'transport_invalid_request'),
+                ('TypeError', None, 'transport_type_error')):
+            kind = type(name, (Exception,), {'status_code': status})
+            exc = kind(private)
+            with self.subTest(name=name):
+                self.assertEqual(failure(exc, 'transport')['reason'], expected)
+        self.assertEqual(failure(UnknownError(private), 'transport')['reason'], 'provider_failed')
+        self.assertEqual(failure(ValueError(private), private)['reason'], 'provider_failed')
+        cases = [
+            (type('AuthenticationError', (Exception,), {'status_code': 401})(private),
+             None, 'transport_authentication'),
+            (UnknownError(private), None, 'provider_failed'),
+            (None, SimpleNamespace(type='text', text=private), 'parse_invalid_output'),
+            (None, SimpleNamespace(type='text', text='{"other":"SECRET"}'), 'output_invalid_output'),
+            (None, SimpleNamespace(type='tool_call', text=private), 'output_invalid_output')]
+        for exc, block, expected in cases:
+            provider = SimpleNamespace(get_info=lambda: {}, complete=AsyncMock(
+                side_effect=exc, return_value=SimpleNamespace(content=[block], usage=None)))
+            with patch('amplifier_web.provider_probe.provider_class', return_value=object), \
+                    patch('amplifier_web.provider_probe.construct_schema_provider',
+                          return_value=SimpleNamespace(get_info=lambda: {})), \
+                    patch('amplifier_web.provider_probe.config_schema', AsyncMock(return_value={'fields': []})), \
+                    patch('amplifier_web.provider_probe.construct_provider', return_value=provider), \
+                    patch('amplifier_web.provider_probe.close_provider', AsyncMock()) as close:
+                result = await query({'action': 'suggestion.complete', 'module': 'fixture',
+                                      'config': {}, 'model': 'explicit', 'transcript': [],
+                                      '_admit': AsyncMock(return_value=True)})
+            self.assertEqual(result['suggestion']['reason'], expected)
+            self.assertIn(expected, FAILURE_REASONS)
+            self.assertNotIn('SECRET', repr(result))
+            self.assertNotIn('diagnostic', result['suggestion'])
+            provider.complete.assert_awaited_once()
+            self.assertEqual(close.await_count, 2)
+        with patch('amplifier_web.provider_probe.provider_class', side_effect=TypeError(private)):
+            result = await query({'action': 'suggestion.complete', 'module': 'fixture'})
+        self.assertEqual(result['suggestion']['reason'], 'construction_type_error')
 
 
 class UtilitySourcePolicy(unittest.IsolatedAsyncioTestCase):
@@ -1062,6 +1129,40 @@ class Integration(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result['status'], 'stale')
             self.assertIsNone(result['suggestion'])
             self.assertEqual(count, 2)
+        finally:
+            await manager.close()
+
+    async def test_real_probe_protocol_preserves_safe_reason_with_malicious_sdk_error(self):
+        """Real query/main, owned pipes and host decode; no SDK/network."""
+        from amplifier_web.setup import SetupManager
+        script = 'import sys; sys.path.insert(0, ' + repr(str(Path(__file__).resolve().parents[1])) + ')\n' + """
+from types import SimpleNamespace
+from amplifier_web import provider_probe as probe
+class AuthenticationError(Exception):
+    status_code = 401
+    def __str__(self):
+        raise AssertionError('Never read SDK body SECRET https://private/key')
+class Fixture:
+    def __init__(self, config=None): pass
+    def get_info(self): return {}
+    def get_config_schema(self): return {'fields': []}
+    async def complete(self, request, **kwargs):
+        raise AuthenticationError('SECRET candidate credential https://private/key')
+probe.provider_class = lambda module: Fixture
+probe.main()
+"""
+        manager = SetupManager(self.root / 'app', global_only=True, probe_command=[sys.executable, '-c', script])
+        manager.probe_snapshot = lambda *args: {'module': 'provider-fixture', 'raw': {}, 'config': {},
+            'env': dict(os.environ), 'credentialGeneration': 'fixture', 'source': None, 'registryHome': str(self.root)}
+        try:
+            with patch('amplifier_web.provider_health.generation', return_value='fixture'), \
+                    patch('amplifier_web.provider_health.record') as health:
+                result = await asyncio.wait_for(manager.probe('suggestion.complete', {
+                    'id': 'fixture', 'model': 'explicit', 'transcript': [], '_admit': lambda: True}, str(self.root)), 15)
+            health.assert_not_called()
+            self.assertEqual(result, {'status': 'failed', 'suggestion': None, 'usage': None,
+                                      'cost': None, 'reason': 'transport_authentication'})
+            self.assertNotIn('SECRET', repr(result))
         finally:
             await manager.close()
 

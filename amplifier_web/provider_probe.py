@@ -99,6 +99,10 @@ async def query(request):
     except HostProbeFailure:
         raise
     except Exception as exc:
+        if request.get('action') == 'suggestion.complete':
+            from amplifier_web.suggestion_provider import failure, FAILURE_STAGES
+            stage = progress['stage']
+            return {'suggestion': failure(exc, stage if stage in FAILURE_STAGES else 'construction')}
         raise ProbeFailure(request.get('module'), progress['stage'], exc) from None
 
 
@@ -166,7 +170,7 @@ async def _query(request, progress):
             if not callable(request.get('_admit')) or not await request['_admit']():
                 return {'suggestion': {'status': 'stale', 'suggestion': None, 'usage': None, 'cost': None}}
             return {'suggestion': await complete(provider, config, request.get('model'),
-                                                 request['transcript'], info)}
+                                                 request['transcript'], info, progress=progress)}
         if request['action'] == 'providers.imageModels':
             supported = callable(getattr(provider, 'list_image_models', None)) and isinstance(image_info, dict)
             result['imageModelsSupported'] = supported
