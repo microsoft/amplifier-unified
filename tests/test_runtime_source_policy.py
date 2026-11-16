@@ -165,7 +165,8 @@ def app_generated(prepared, monkeypatch):
 
 
 @pytest.mark.parametrize('case', ['branch', 'tag', 'same-name-tag', 'unknown', 'moved',
-                                 'separate-config', 'external-override', 'authored-pin', 'local-source'])
+                                 'separate-config', 'external-override', 'authored-pin', 'local-source',
+                                 'during-proof'])
 async def test_new_app_direct_policy_requires_exact_branch_kind(app_generated, monkeypatch, case):
     home, generation, project, graph, receipt, manifest, _ = app_generated
     baseline = manifest.read_bytes()
@@ -180,10 +181,17 @@ async def test_new_app_direct_policy_requires_exact_branch_kind(app_generated, m
     calls = []
     async def runner(*args, **kwargs):
         calls.append(args)
+        if case == 'during-proof':
+            (project / 'pyproject.toml').write_bytes(baseline + b'\n# concurrent source edit\n')
         return (('b' * 40 if case == 'moved' else REVISION) + '\trefs/heads/main\n'
-                if case in {'branch', 'same-name-tag', 'moved'} else '') + (
+                if case in {'branch', 'same-name-tag', 'moved', 'during-proof'} else '') + (
                 REVISION + '\trefs/tags/main\n' if case in {'tag', 'same-name-tag'} else '')
     policies = policy.freeze_policies(home, generation, project, graph)
+    if case == 'during-proof':
+        with pytest.raises(environments.ProtectedRuntimeSource):
+            await policy.qualify_app_policies(policies, {}, project, baseline, runner)
+        assert policies['fixture-component']['ref'] == REVISION
+        return
     result = await policy.qualify_app_policies(policies, {}, project, baseline, runner)
     saved = result['fixture-component']
     assert (saved['ref'] == 'main') is (case == 'branch')

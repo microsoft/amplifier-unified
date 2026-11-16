@@ -208,12 +208,14 @@ def app_candidate(policy, declaration, resolved):
 
 async def qualify_app_policies(policies, checked, project, baseline, runner):
     """Record new app-root policy only at the exact installed branch revision."""
-    from .runtime_environment import locked_sources
+    from .runtime_environment import locked_sources, ProtectedRuntimeSource
     from .update_checks import ref_policy
     if external_resolver(project):
         return policies
     declared = app_declarations(baseline)
-    prepared = app_declarations((Path(project) / 'pyproject.toml').read_bytes())
+    manifest = Path(project) / 'pyproject.toml'
+    content = manifest.read_bytes()
+    prepared = app_declarations(content)
     locked = locked_sources(project)
     for name, declaration in declared.items():
         policy = policies.get(name, {})
@@ -224,6 +226,8 @@ async def qualify_app_policies(policies, checked, project, baseline, runner):
             proof = await ref_policy(declaration['url'], declaration['ref'], runner)
         except (OSError, ValueError, RuntimeError, TimeoutError):
             continue  # Unavailable kind proof cannot turn an exact pin into a branch.
+        if external_resolver(project) or manifest.read_bytes() != content or locked_sources(project) != locked:
+            raise ProtectedRuntimeSource(name, 'runtime-source-changed')
         if proof.get('kind') == 'branch' and proof.get('revision') == policy['revision']:
             policies[name] = with_origin({**policy, 'ref': declaration['ref']},
                 'verified-app-declaration', manifestSha256=hashlib.sha256(baseline).hexdigest())
