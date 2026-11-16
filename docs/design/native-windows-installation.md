@@ -2129,28 +2129,32 @@ offline PCs are not measured.
 An installation whose launcher predates this rule is not covered. The launcher
 runs the check before any app version starts, and an in-app update does not
 replace the launcher. After a computer rename such a launcher still refuses
-the task that holds the old name, with the earlier messages. Two things end
-that: a launcher that has the rule, or a new task. Neither is measured.
+the task that holds the old name, with the earlier messages. The refusal
+ends when the stored name maps to the account again (the PC gets its old name
+back), and with one of two repairs: a launcher that has the rule, or a new
+task. None of the three is measured on a PC.
 
 - A launcher that has the rule. For an installation that the setup file made,
   only `amplifier_web.windows_launcher_refresh` replaces the launcher. A
   second setup run does not: on an installed PC setup offers to add missing
-  Start-menu and Apps-list entries and to open the app, and it does not
-  install the program files again. Nothing in the app or in setup runs the
-  refresh; a person runs it, with the Python of the active app version. The
-  refresh has its own conditions (for one, it installs nothing when no newer
-  app version is active). It reads the task with the active app version's
-  ownership check. So after a rename the refresh ends at that read and changes
-  nothing, unless the active app version has this rule.
+  Start-menu and Apps-list entries and to open the app (with a program file
+  missing it offers nothing), and it does not install the program files
+  again. Nothing in the app or in setup runs the refresh; a person runs it,
+  with the Python of the active app version. The refresh has its own
+  conditions (for one, it installs nothing when no newer app version is
+  active). It reads the task with the active app version's ownership check.
+  So after a rename the refresh ends at that read and changes nothing, unless
+  the active app version has this rule.
 - A new task. The person deletes the task in Task Scheduler, restarts the PC
-  and opens Amplifier. A start without a task registers a new one, and Task
-  Scheduler stores the name of that moment. A launcher older than 0.98.6 can
-  run the long first-start preparation at that start. The launcher is
-  unchanged, so a later computer rename brings the refusal back.
+  and opens Amplifier. A start without a task registers a new one when its
+  own checks pass, and Task Scheduler stores the name of that moment. A
+  launcher older than 0.98.6 can run the long first-start preparation at that
+  start. The launcher is unchanged, so a later computer rename brings the
+  refusal back.
 
 An installation that is renamed while both its launcher and its active app
 version predate the rule cannot update itself, because the app does not run.
-Only a new task helps there.
+Of the two repairs, only a new task helps there.
 
 When the check does not confirm the task, the launcher says that it could not
 confirm that the entry belongs to this installation, names the entry, and
