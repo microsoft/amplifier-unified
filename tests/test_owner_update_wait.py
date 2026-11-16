@@ -9,7 +9,7 @@ import asyncio
 import copy
 import json
 from contextlib import contextmanager
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -926,6 +926,120 @@ async def test_withdrawn_update_needs_positive_boundary_cancellation(waiting, ac
     with pytest.raises((TimeoutError, RuntimeError)):
         await drain.observe_waiters(h.manager)
     assert h.row == original
+    assert not h.runtime.admitted and not h.receipts('updates.app')
+
+
+def delayed_native_cancellation(h, monkeypatch):
+    """Use the real retained-reply owner; hold only its transport acknowledgement."""
+    from amplifier_web.runtime import RuntimeManager
+    entered, release = asyncio.Event(), asyncio.Event()
+    requests = []
+    native = h.runtime.handoff_boundary
+
+    async def request(sid, operation, *, guard, **args):
+        assert operation == 'handoff.boundary' and args['cancel'] is True
+        guard()
+        requests.append((sid, copy.deepcopy(args)))
+        result = await native(sid, args['request_id'], cancel=True, receipt=args['receipt'])
+        entered.set()
+        await release.wait()
+        return result
+
+    h.runtime.workers[h.sid]['process'] = SimpleNamespace(returncode=None)
+    monkeypatch.setattr(h.runtime, 'boundary_reply_timeout', .01, raising=False)
+    monkeypatch.setattr(h.runtime, '_request', request, raising=False)
+    monkeypatch.setattr(h.runtime, 'handoff_boundary', MethodType(RuntimeManager.handoff_boundary, h.runtime))
+    return entered, release, requests
+
+
+@pytest.mark.parametrize('already_suppressed', [False, True])
+async def test_pending_cancel_holds_ready_update_until_exact_late_ack(waiting, monkeypatch, already_suppressed):
+    h = waiting
+    await h.ready()
+    await h.change_task('completed')
+    if already_suppressed:
+        h.row['suppressed'] = drain.continuation_guard(h.app, {'updateYield': h.row}, authority_only=True)
+        drain.save_wait(h.app, h.row, 'suppressed')
+    original = copy.deepcopy(h.row)
+    receipt = copy.deepcopy(drain.wait_receipt(h.app, h.sid, original['commandId']))
+    entered, release, requests = delayed_native_cancellation(h, monkeypatch)
+    worker = h.runtime.workers[h.sid]
+    try:
+        assert await drain.prepare(h.manager, h.release) is False
+        assert entered.is_set() and len(requests) == 1
+        pending = worker['boundary_waits'][original['boundaryId']]['task']
+        assert not pending.done()
+        assert h.runtime.native[h.sid]._handoff_boundary is None
+        assert h.row == original and h.row['ready'] is True
+        assert drain.wait_receipt(h.app, h.sid, original['commandId']) == receipt
+        assert h.app.state['updates']['drain']['phase'] == 'waiting'
+        assert await drain.prepare(h.manager, h.release) is False
+        assert len(requests) == 1 and not pending.cancelled()
+        assert not h.runtime.admitted and not h.receipts('updates.app')
+        release.set()
+        assert await asyncio.wait_for(asyncio.shield(pending), 5) == {'cancelled': True}
+        assert await drain.prepare(h.manager, h.release)
+        assert h.sid not in h.app.state['updates']['drain']['workers']
+        assert h.app.state['updates']['drain']['phase'] == 'released'
+        saved = drain.wait_receipt(h.app, h.sid, original['commandId'])['receipt']
+        assert saved['status'] == 'suppressed' and saved['boundary']['boundaryId'] == original['boundaryId']
+        assert saved['boundary']['owner'] == original['owner']
+        assert h.controller.tasks.record()['status'] == 'completed'
+        assert len(requests) == 1 and not worker['boundary_waits']
+        assert not h.runtime.admitted and not h.runtime.sent and not h.receipts('updates.app')
+    finally:
+        release.set()
+        await asyncio.gather(*(row['task'] for row in worker.get('boundary_waits', {}).values()), return_exceptions=True)
+
+
+@pytest.mark.parametrize('replacement', ['row', 'owner'])
+async def test_pending_cancel_cannot_settle_replaced_waiter(waiting, monkeypatch, replacement):
+    h = waiting
+    await h.ready()
+    await h.change_task('completed')
+    original = h.row
+    receipt = copy.deepcopy(drain.wait_receipt(h.app, h.sid, original['commandId']))
+    entered, release, requests = delayed_native_cancellation(h, monkeypatch)
+    worker = h.runtime.workers[h.sid]
+    observing = asyncio.create_task(drain.observe_waiters(h.manager))
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        if replacement == 'row':
+            current = {**copy.deepcopy(original), 'boundaryId': 'replacement-boundary'}
+            h.app.state['updates']['drain']['workers'][h.sid] = current
+        else:
+            current = original
+            h.runtime.workers[h.sid] = {'runtimeOwnerId': 'replacement-owner',
+                                       'process': SimpleNamespace(returncode=None)}
+        before = copy.deepcopy(current)
+        assert await asyncio.wait_for(observing, 5) is (None if replacement == 'row' else False)
+        assert h.row is current and h.row == before
+        assert drain.wait_receipt(h.app, h.sid, original['commandId']) == receipt
+        assert h.app.state['updates']['drain']['phase'] == 'waiting'
+        release.set()
+        await asyncio.gather(*(row['task'] for row in worker['boundary_waits'].values()))
+        assert h.row == before and len(requests) == 1
+        assert drain.wait_receipt(h.app, h.sid, original['commandId']) == receipt
+        assert not h.runtime.admitted and not h.receipts('updates.app')
+    finally:
+        release.set()
+        await asyncio.gather(observing, *(row['task'] for row in worker.get('boundary_waits', {}).values()), return_exceptions=True)
+
+
+@pytest.mark.parametrize('reply', [
+    {'ready': False, 'waitingFor': ['boundary-reply']},
+    {'ready': True, 'waitingFor': ['boundary-reply'], 'requestPending': True},
+    {'ready': False, 'waitingFor': ['boundary-reply'], 'requestPending': True, 'unknown': True},
+])
+async def test_malformed_pending_cancel_is_not_a_cancellation_ack(waiting, monkeypatch, reply):
+    h = waiting
+    await h.ready()
+    await h.change_task('completed')
+    original = copy.deepcopy(h.row)
+    monkeypatch.setattr(h.runtime, 'handoff_boundary', AsyncMock(return_value=reply))
+    with pytest.raises(RuntimeError, match='did not confirm cancellation'):
+        await drain.prepare(h.manager, h.release)
+    assert h.row == original and h.app.state['updates']['drain']['phase'] == 'waiting'
     assert not h.runtime.admitted and not h.receipts('updates.app')
 
 
