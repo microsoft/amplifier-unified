@@ -154,6 +154,43 @@ def test_prepare_optional_build_runs_only_the_existing_build_once(preparation, m
     assert release.version_at(root) == '1.2.4'
 
 
+def test_prepare_prunes_shared_history_before_bounds_and_is_idempotent(preparation):
+    root, notes = preparation
+    path = root / 'amplifier_web/release-notes.json'
+    protected = json.loads(path.read_text())['releases'][0]
+    protected['notices'][0]['previousTitles'] = ['Original title']
+    protected['extension'] = {'untouched': True}
+    ordinary = [{'version': f'0.1.{i}', 'title': 'Ordinary', 'changes': ['Fix'], 'notices': []}
+                for i in range(511)]
+    path.write_text(json.dumps({'schemaVersion': 1, 'releases': [protected, *ordinary]}))
+    release.prepare(root, '1.2.4', notes)
+    result = json.loads(path.read_text())['releases']
+    assert result == [json.loads(notes.read_text()), protected, *reversed(ordinary[256:])]
+    assert len(result) == 257  # One new + 255 older ordinary entries, plus the notice.
+    before = {p: ((root/p).read_bytes(), (root/p).stat().st_mtime_ns) for p in
+              ('pyproject.toml', 'amplifier_web/__init__.py', 'uv.lock', 'amplifier_web/release-notes.json')}
+    assert release.prepare(root, '1.2.4', notes)['changedFiles'] == []
+    assert before == {p: ((root/p).read_bytes(), (root/p).stat().st_mtime_ns) for p in before}
+
+
+@pytest.mark.parametrize('pressure', ['count', 'bytes'])
+def test_prepare_unfit_new_entry_fails_before_writing_any_metadata(preparation, pressure):
+    root, notes = preparation
+    module = root / 'amplifier_web/release_notes.py'
+    if pressure == 'count':
+        module.write_text(module.read_text().replace('MAX_RELEASES = 512', 'MAX_RELEASES = 1'))
+    else:
+        module.write_text(module.read_text().replace('MAX_BYTES = 512_000', 'MAX_BYTES = 500'))
+        authored = json.loads(notes.read_text())
+        authored['changes'] = ['é' * 200]
+        notes.write_text(json.dumps(authored))
+    names = ('pyproject.toml', 'amplifier_web/__init__.py', 'uv.lock', 'amplifier_web/release-notes.json')
+    before = {name: (root/name).read_bytes() for name in names}
+    with pytest.raises(ValueError, match='current release'):
+        release.prepare(root, '1.2.4', notes)
+    assert before == {name: (root/name).read_bytes() for name in names}
+
+
 @pytest.mark.parametrize('valid_component', [True, False])
 def test_prepare_verifies_selected_client_instead_of_matching_host_version(
         preparation, monkeypatch, valid_component):
