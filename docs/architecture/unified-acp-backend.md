@@ -124,6 +124,13 @@ can retire a released, settled worker through the existing acknowledged retireme
 path before supplying fresh tools. Connected owners, active/protected work and
 unconfirmed retirement are not replaced. Retry after that work settles.
 
+Non-authentication owner failures, including busy attachments and unresolved
+prompt outcomes, use Unified's implementation-specific error code `-31000` with
+the owner's reason. ACP reserves `-32000` for authentication; an ownership
+refusal does not request sign-in. A request failure does not establish whether
+earlier work ran or authorize automatic retry. Inspect the retained outcome
+before deciding on another input.
+
 Host shutdown remains different from client disconnect and follows existing
 recovery policy. This feature does not promise survival of process/machine loss.
 The authenticated WebSocket hop is internal to the shipped launcher and host,

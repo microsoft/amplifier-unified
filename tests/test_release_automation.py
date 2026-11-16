@@ -394,15 +394,15 @@ def test_release_distribution_verification_checks_source_assets_and_references(r
 
 
 @pytest.mark.parametrize('missing', [None, 'status_protocol/publisher.py', 'other/tests/helper.py'])
-def test_release_omits_only_standalone_status_tests_from_required_wheel_source(repository, missing):
-    standalone = 'amplifier_web/status_protocol/tests/test_standalone.py'
+def test_release_requires_selected_status_runtime_but_not_component_author_tests(repository, missing):
+    standalone = 'components/status/tests/test_standalone.py'
     for name in [standalone, 'amplifier_web/status_protocol/publisher.py', 'amplifier_web/other/tests/helper.py']:
         path = repository / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text('VALUE = "reviewed source"\n')
     dist = distributions(repository)
     wheel = next(dist.glob('*.whl'))
-    omitted = {standalone}
+    omitted = set()
     if missing:
         omitted.add('amplifier_web/' + missing)
     with zipfile.ZipFile(wheel) as archive:
@@ -410,8 +410,15 @@ def test_release_omits_only_standalone_status_tests_from_required_wheel_source(r
     with zipfile.ZipFile(wheel, 'w') as archive:
         for name, data in entries.items():
             archive.writestr(name, data)
-    # Standalone tests remain in the source archive, as in the actual app build.
-    with tarfile.open(next(dist.glob('*.tar.gz'))) as archive:
+    # The app source archive retains author inputs; its wheel owns only selected runtime.
+    source = next(dist.glob('*.tar.gz'))
+    with tarfile.open(source) as archive:
+        members = [(item, archive.extractfile(item).read()) for item in archive.getmembers()]
+    with tarfile.open(source, 'w:gz') as archive:
+        for item, raw in members:
+            archive.addfile(item, io.BytesIO(raw))
+        archive.add(repository / standalone, 'amplifier_unified-1.2.3/' + standalone)
+    with tarfile.open(source) as archive:
         assert archive.extractfile('amplifier_unified-1.2.3/' + standalone).read() == (repository / standalone).read_bytes()
     if missing:
         with pytest.raises(ValueError, match='validated source/assets: amplifier_web/' + missing):
@@ -720,7 +727,7 @@ def test_real_sdist_build_excludes_untracked_ci_checkouts(repository):
                  'components/portability.source.json', 'components/operations.source.json',
                  'components/workspace-metadata.source.json', 'components/kernels.source.json',
                  'components/outputs.source.json', 'components/publishing.source.json',
-                 'components/recall.source.json'):
+                 'components/recall.source.json', 'components/status-emitter.source.json'):
         target = repository / name; target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(project / name, target)
     for component in ('scheduling', 'worktrees', 'portability', 'workspace-metadata', 'outputs', 'publishing', 'recall'):
@@ -728,6 +735,7 @@ def test_real_sdist_build_excludes_untracked_ci_checkouts(repository):
                         repository / f'components/{component}-delivery')
     shutil.copytree(project / 'amplifier_operations', repository / 'amplifier_operations')
     shutil.copytree(project / 'amplifier_kernels', repository / 'amplifier_kernels')
+    shutil.copytree(project / 'amplifier_web/status_protocol', repository / 'amplifier_web/status_protocol')
     (repository / 'README.md').write_text('Package build fixture')
     for dependency in ('loop-live', 'recipes'):
         checkout = repository / '.ci' / dependency

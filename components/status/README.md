@@ -93,9 +93,30 @@ services. Host event integration and crash/recovery qualification remain separat
 
 ## Ownership
 
-This directory remains the sole author of the implementation. Its standalone
+This directory is the sole author of the implementation. Its standalone
 wheel owns `amplifier_status` and `amplifier-status`; Unified's existing private
 import and `amplifier-unified-status` command have distinct names and files.
+Unified consumes the exact public artifact selected into generated
+`amplifier_web/status_protocol`, recorded by `components/status-emitter.source.json`.
+Author edits and publication do not refresh that selection. Never edit the
+generated runtime by hand. The two distributions remain safe to coinstall.
 Building or publishing this package does not replace an installed application or
 change its enabled features. Artifact and source hashes identify qualified bytes;
 the version number alone is not a compatibility or adoption claim.
+
+To update Unified's selected default, download the original four release assets
+from the exact reviewed `status-emitter-v<version>` release, then use the existing
+selection command from the Unified root:
+
+```sh
+python scripts/scheduling_delivery.py select --component status-emitter \
+  --dist /absolute/reviewed-release-assets --revision FULL_PUBLISHED_SOURCE_SHA \
+  --receipt-sha256 REVIEWED_STATUS_EMITTER_SOURCE_JSON_SHA256
+python scripts/scheduling_delivery.py verify --component status-emitter
+```
+
+The original receipt retains its actual source path and revision, including
+releases authored at `amplifier_web/status_protocol`. Selection maps only the
+published runtime modules into Unified's private namespace; builds never fetch,
+select, or refresh an artifact. Qualify the ordinary wheel, editable install and
+Git-free source archive plus the coinstallation/uninstall probe before delivery.

@@ -26,6 +26,8 @@ from .errors import AppError
 from .runtime_protocol import MAX_MESSAGE_BYTES
 
 RETIREMENT = 'com.microsoft.amplifier.retirement'
+# Implementation-specific failure; ACP reserves -32000 for authentication.
+_REQUEST_FAILED = -31000
 
 
 def _http_servers(servers):
@@ -152,7 +154,7 @@ class HostAgent:
                 identity = await self.owner.create(cwd, mcp_servers=_http_servers([
                     row.model_dump(mode='json', by_alias=True) for row in (mcp_servers or [])]))
             except (AppError, ValueError, OSError) as error:
-                raise RequestError(-32000, str(error)) from None
+                raise RequestError(_REQUEST_FAILED, str(error)) from None
         return NewSessionResponse(session_id=identity)
 
     async def resume_session(self, session_id, cwd, mcp_servers=None, **kwargs):
@@ -164,7 +166,7 @@ class HostAgent:
                 identity = await self.owner.attach(session_id, cwd, mcp_servers=_http_servers([
                     row.model_dump(mode='json', by_alias=True) for row in (mcp_servers or [])]))
             except (AppError, ValueError, OSError) as error:
-                raise RequestError(-32000, str(error)) from None
+                raise RequestError(_REQUEST_FAILED, str(error)) from None
             if identity != session_id:
                 raise RequestError.internal_error({'details': 'Owner did not attach the exact saved identity.'})
         return ResumeSessionResponse()
@@ -222,9 +224,9 @@ class HostAgent:
         try:
             result = await self.owner.prompt(session_id, input_id, '\n'.join(block.text for block in prompt), observe)
         except (AppError, ValueError, RuntimeError) as error:
-            raise RequestError(-32000, str(error)) from None
+            raise RequestError(_REQUEST_FAILED, str(error)) from None
         if result.get('outcome') not in {'completed', 'cancelled'}:
-            raise RequestError(-32000, 'Outcome unresolved; inspect retained owner state before retrying.')
+            raise RequestError(_REQUEST_FAILED, 'Outcome unresolved; inspect retained owner state before retrying.')
         if result.get('text') and not streamed:
             await text(result['text'])
         return PromptResponse(stop_reason='end_turn' if result['outcome'] == 'completed' else 'cancelled')
@@ -244,7 +246,7 @@ class HostAgent:
             async with self.creation:
                 disposition = await self.owner.retire(params['sessionId'])
         except (AppError, ValueError, RuntimeError) as error:
-            raise RequestError(-32000, str(error)) from None
+            raise RequestError(_REQUEST_FAILED, str(error)) from None
         return {'sessionId': params['sessionId'], 'disposition': disposition}
 
 

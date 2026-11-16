@@ -27,7 +27,7 @@ COMPONENTS = {
     "outputs": ("components/outputs", "amplifier_outputs/"),
     "publishing": ("components/publishing", "amplifier_publishing/"),
     "recall": ("components/recall", "amplifier_recall/"),
-    "status-emitter": ("amplifier_web/status_protocol", ""),
+    "status-emitter": ("components/status", ""),
 }
 # Distribution/artifact spelling is not an import contract. Existing components
 # keep their original mapping; status already has a distinct public namespace.
@@ -35,6 +35,8 @@ IMPORT_PACKAGES = {"status-emitter": "amplifier_status"}
 
 
 def component_name(selected):
+    if selected["subdirectory"] == "amplifier_web/status_protocol":
+        return "status-emitter"  # Original public artifact keeps its authored identity.
     # Original published flat projects retain their historical authored paths.
     if selected["subdirectory"] in {"amplifier_operations", "amplifier_kernels"}:
         return selected["subdirectory"].removeprefix("amplifier_")
@@ -64,9 +66,10 @@ def selection(root, revision, *, qualification=False, component="scheduling"):
         raise ValueError("Select a full merged commit SHA.")
     if not qualification:
         run("git", "merge-base", "--is-ancestor", revision, "origin/main", cwd=root)
-    if component in {"operations", "kernels"}:
+    if component in {"operations", "kernels", "status-emitter"}:
+        original = "amplifier_web/status_protocol" if component == "status-emitter" else f"amplifier_{component}"
         projects = run("git", "ls-tree", "--name-only", revision, "--",
-                       project_path + "/pyproject.toml", f"amplifier_{component}/pyproject.toml", cwd=root).decode().splitlines()
+                       project_path + "/pyproject.toml", original + "/pyproject.toml", cwd=root).decode().splitlines()
         if len(projects) != 1:
             raise ValueError(f"Expected one {component} author project at the selected revision.")
         project_path = projects[0].removesuffix("/pyproject.toml")

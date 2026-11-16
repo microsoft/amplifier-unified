@@ -13,10 +13,15 @@
 /.github/** source-context=tooling
 /tests/** source-context=tests
 /tests/web/** source-context=tests
-/amplifier_web/status_protocol/tests/** source-context=tests
-/amplifier_web/status_protocol/README.md source-context=documentation
-/amplifier_web/status_protocol/LICENSE source-context=documentation
-/amplifier_web/status_protocol/MANIFEST.in source-context=configuration
+/amplifier_web/status_protocol/** source-context=generated linguist-vendored=true linguist-generated=true -text
+/components/status/*.py source-context=source
+/components/status/tests/** source-context=tests
+/components/status/README.md source-context=documentation
+/components/status/LICENSE source-context=documentation
+/components/status/MANIFEST.in source-context=configuration
+/components/status/pyproject.toml source-context=configuration
+/components/status/.gitignore source-context=configuration
+/components/status-emitter.source.json source-context=configuration
 /scripts/**/tests/** source-context=tests
 /components/recall/amplifier_recall/** source-context=source
 /components/recall/tests/** source-context=tests

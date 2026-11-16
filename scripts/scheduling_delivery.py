@@ -14,8 +14,8 @@ import tarfile
 import tomllib
 import zipfile
 
-COMPONENTS = ("scheduling", "worktrees", "portability", "operations", "workspace-metadata", "kernels", "outputs", "publishing", "recall")
-FLAT = {"operations", "kernels"}
+COMPONENTS = ("scheduling", "worktrees", "portability", "operations", "workspace-metadata", "kernels", "outputs", "publishing", "recall", "status-emitter")
+FLAT = {"operations", "kernels", "status-emitter"}
 
 DELIVERY = "components/scheduling-delivery"
 RECORD = "components/scheduling.source.json"
@@ -27,6 +27,11 @@ INSTALLED_LICENSE = "amplifier_web/component_delivery/scheduling-LICENSE"
 def locations(component):
     if component not in COMPONENTS:
         raise ValueError("Unknown embedded component selection")
+    if component == "status-emitter":
+        # Public amplifier_status remains coinstallable with Unified's private copy.
+        return ("amplifier_web/status_protocol", "components/status-emitter.source.json",
+                "amplifier_web/status_protocol", "amplifier_web/component_delivery/status-emitter.json",
+                "amplifier_web/component_delivery/status-emitter-LICENSE")
     directory = f"amplifier_{component}" if component in FLAT else f"components/{component}-delivery"
     return (directory, f"components/{component}.source.json",
             "amplifier_" + component.replace("-", "_"), f"amplifier_web/component_delivery/{component}.json",
@@ -82,7 +87,8 @@ def verify(root, *, component="scheduling"):
     record = json.loads(regular(root, record_path))
     source = record["source"]
     version = source["version"]
-    wheel = f"{package}-{version}-py3-none-any.whl"
+    distribution = "amplifier_" + component.replace("-", "_")
+    wheel = f"{distribution}-{version}-py3-none-any.whl"
     expected_url = (f"https://github.com/{source['repository']}/releases/download/"
                     f"{source['tag']}/{wheel}")
     if (record.get("schema") != 1 or
@@ -104,8 +110,14 @@ def verify(root, *, component="scheduling"):
     project = tomllib.loads((root / "pyproject.toml").read_text())
     packages = project["tool"]["hatch"]["build"]["targets"]["wheel"]["packages"]
     package_path = directory if component in FLAT else directory + "/" + package
-    if ([path for path in packages if path.rstrip("/").endswith(package)] != [package_path]
-            or component in FLAT and f"components/{component}" in packages):
+    if component == "status-emitter":
+        selected_owner = ("amplifier_web" in packages and not
+                          {path.rstrip("/") for path in packages} &
+                          {"components/status", "amplifier_status", package})
+    else:
+        selected_owner = ([path for path in packages if path.rstrip("/").endswith(package)] == [package_path]
+                          and not (component in FLAT and f"components/{component}" in packages))
+    if not selected_owner:
         raise ValueError("Unified must package only the selected component owner")
     declared = {requirement_key(value) for value in project["project"]["dependencies"]}
     required = {requirement_key(value) for value in record["runtimeRequirements"]}
@@ -139,6 +151,8 @@ def verify_wheel(root, artifact, *, editable=False, component="scheduling"):
             raise ValueError("Embedded delivery must not introduce another distribution owner")
         if editable:
             return  # The editable path mapping is tested by its installed import.
+        if component == "status-emitter" and any(name.startswith("amplifier_status/") for name in names):
+            raise ValueError("Unified must not install the standalone status namespace")
         expected = {(package + "/" + name if component in FLAT else name): regular(root / directory, name)
                     for name in record["files"] if name != "LICENSE"}
         if {name for name in names if name.startswith(package + "/")} != set(expected):
@@ -171,14 +185,16 @@ def select(root, dist, revision, receipt_sha256, *, component="scheduling"):
     if (dist / "SHA256SUMS").read_text() != "".join(f"{sha(regular(dist, name))}  {name}\n" for name in names):
         raise ValueError("Published component checksums differ")
     with zipfile.ZipFile(dist / wheel) as archive:
-        info = f"{package}-{receipt['version']}.dist-info/"
+        distribution = "amplifier_" + component.replace("-", "_")
+        public_package = "amplifier_status" if component == "status-emitter" else package
+        info = f"{distribution}-{receipt['version']}.dist-info/"
         metadata = BytesParser().parsebytes(archive.read(info + "METADATA"))
         requirements = metadata.get_all("Requires-Dist", [])
         # The component's optional test runner is not an app runtime requirement.
         runtime = [value for value in requirements if not value.endswith('; extra == "test"')]
         if any("extra" in value for value in runtime):
             raise ValueError("Review new component extras before selecting delivery")
-        files = {name: archive.read(package + "/" + name if component in FLAT else name)
+        files = {name: archive.read(public_package + "/" + name if component in FLAT else name)
                  for name in selected_files(receipt, component) if name != "LICENSE"}
         files["LICENSE"] = archive.read(info + "licenses/LICENSE")
     if sha(files["LICENSE"]) != receipt["sourceFiles"]["LICENSE"]:

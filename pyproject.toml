@@ -61,13 +61,15 @@ path = "scripts/scheduling_build_hook.py"
 packages = ["amplifier_web", "amplifier_operations", "amplifier_kernels", "components/scheduling-delivery/amplifier_scheduling", "components/recall-delivery/amplifier_recall", "components/outputs-delivery/amplifier_outputs", "components/workspace-metadata-delivery/amplifier_workspace_metadata", "components/worktrees-delivery/amplifier_worktrees", "components/publishing-delivery/amplifier_publishing", "components/portability-delivery/amplifier_portability"]
 # Test/build inputs do not ship; selected component provenance is included below.
 exclude = [
-    "/amplifier_web/status_protocol/tests/**", # Standalone qualification inputs, not application runtime.
+    "/amplifier_web/status_protocol/LICENSE", # Selected license ships with app provenance.
     "/amplifier_kernels/LICENSE",
     "/amplifier_operations/LICENSE", # Selected license ships with app provenance.
 ]
 
 [tool.hatch.build.targets.sdist]
 exclude = [
+    "/components/status/build/**", "/components/status/dist/**",
+    "/components/status/.venv/**", "/components/status/*.egg-info/**",
     "/components/recall/build/**", "/components/recall/dist/**",
     "/components/recall/.venv/**", "/components/recall/*.egg-info/**",
     "/components/kernels/build/**", "/components/kernels/dist/**",
@@ -90,6 +92,8 @@ exclude = [
 ]
 
 [tool.hatch.build.targets.wheel.force-include]
+"components/status-emitter.source.json" = "amplifier_web/component_delivery/status-emitter.json"
+"amplifier_web/status_protocol/LICENSE" = "amplifier_web/component_delivery/status-emitter-LICENSE"
 "components/outputs.source.json" = "amplifier_web/component_delivery/outputs.json"
 "components/outputs-delivery/LICENSE" = "amplifier_web/component_delivery/outputs-LICENSE"
 "components/publishing.source.json" = "amplifier_web/component_delivery/publishing.json"

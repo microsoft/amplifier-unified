@@ -357,3 +357,82 @@ def test_nested_selection_refuses_two_installed_owners(nested_selection):
         'packages=[', f'packages=["components/{author_directory}/{package}",'))
     with pytest.raises(ValueError, match="only the selected"):
         delivery.verify(root, component=component)
+
+
+@pytest.fixture
+def status_selection(tmp_path):
+    producer, revision, dist, _ = make_candidate(tmp_path, "status-emitter")
+    root = tmp_path / "status-consumer"
+    (root / "components").mkdir(parents=True)
+    (root / "amplifier_web").mkdir()
+    (root / "amplifier_web/__init__.py").write_text("")
+    (root / "pyproject.toml").write_text(
+        '[project]\nname="amplifier-unified"\nversion="1.0.0"\ndependencies=[]\n'
+        '[tool.hatch.build.targets.wheel]\npackages=["amplifier_web"]\n')
+    checksum = delivery.sha((dist / "status-emitter-source.json").read_bytes())
+    delivery.select(root, dist, revision, checksum, component="status-emitter")
+    return root, revision, dist, checksum
+
+
+def test_status_private_delivery_ignores_author_and_preserves_original_receipt(status_selection):
+    root, _, dist, _ = status_selection
+    before = delivery.verify(root, component="status-emitter")
+    assert before["source"] == json.loads((dist / "status-emitter-source.json").read_bytes())
+    assert before["source"]["subdirectory"] == "amplifier_web/status_protocol"
+    assert set(before["files"]) == {"LICENSE", "__init__.py"}
+    assert not (root / ".git").exists()
+    author = root / "components/status"; author.mkdir()
+    (author / "__init__.py").write_text('raise RuntimeError("unselected author")\n')
+    assert delivery.verify(root, component="status-emitter") == before
+    result = subprocess.check_output([sys.executable, "-c",
+        "import amplifier_web.status_protocol as s; print(s.value); print(s.__file__)"],
+        cwd=root, text=True)
+    assert result.splitlines() == ["selected", str(root / "amplifier_web/status_protocol/__init__.py")]
+    assert not (root / "amplifier_status").exists()
+
+
+@pytest.mark.parametrize("extra", ["components/status", "amplifier_status", "amplifier_web/status_protocol"])
+def test_status_private_delivery_rejects_another_packaged_owner(status_selection, extra):
+    root, *_ = status_selection
+    project = root / "pyproject.toml"
+    project.write_text(project.read_text().replace('packages=[', f'packages=["{extra}",'))
+    with pytest.raises(ValueError, match="only the selected"):
+        delivery.verify(root, component="status-emitter")
+
+
+@pytest.mark.parametrize("fault", [None, "private-body", "public-namespace", "missing-receipt"])
+def test_status_app_wheel_has_exact_private_selection(status_selection, fault):
+    root, *_ = status_selection
+    directory, record, package, installed_record, installed_license = delivery.locations("status-emitter")
+    selection = delivery.verify(root, component="status-emitter")
+    files = {package + "/" + name: (root / directory / name).read_bytes()
+             for name in selection["files"] if name != "LICENSE"}
+    files.update({installed_record: (root / record).read_bytes(),
+                  installed_license: (root / directory / "LICENSE").read_bytes(),
+                  "amplifier_unified-1.0.0.dist-info/METADATA": b"Name: amplifier-unified\nVersion: 1.0.0\n"})
+    if fault == "private-body":
+        files[package + "/__init__.py"] = b"unselected = True\n"
+    elif fault == "public-namespace":
+        files["amplifier_status/__init__.py"] = files[package + "/__init__.py"]
+    elif fault == "missing-receipt":
+        del files[installed_record]
+    wheel = root / "app.whl"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        for name, raw in files.items():
+            archive.writestr(name, raw)
+    if fault:
+        with pytest.raises(ValueError):
+            delivery.verify_wheel(root, wheel, component="status-emitter")
+    else:
+        delivery.verify_wheel(root, wheel, component="status-emitter")
+
+
+def test_status_reselection_preserves_modified_private_runtime(status_selection):
+    root, revision, dist, checksum = status_selection
+    path = root / "amplifier_web/status_protocol/__init__.py"
+    path.write_text("local_work = True\n")
+    before = (root / "components/status-emitter.source.json").read_bytes()
+    with pytest.raises(ValueError, match="locally modified"):
+        delivery.select(root, dist, revision, checksum, component="status-emitter")
+    assert path.read_text() == "local_work = True\n"
+    assert (root / "components/status-emitter.source.json").read_bytes() == before

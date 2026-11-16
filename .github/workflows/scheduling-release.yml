@@ -4,6 +4,7 @@ on:
     paths:
       - components/scheduling/**
       - amplifier_web/status_protocol/**
+      - components/status/**
       - scripts/scheduling_release.py
       - tests/test_scheduling_release.py
       - .github/workflows/scheduling-release.yml
