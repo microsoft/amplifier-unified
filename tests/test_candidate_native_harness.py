@@ -563,3 +563,154 @@ def test_pr_base_check_reports_missing_shallow_history_then_accepts_fetched_base
     p.production_preserved(clone, base)
     (clone / 'amplifier_web/source.py').write_text('changed')
     with pytest.raises(ValueError, match='production'): p.production_preserved(clone, base)
+
+
+@pytest.mark.parametrize('path,binary,payload', [
+    ('', False, b'{"full_name":"microsoft/amplifier-unified"}'),
+    ('actions/runs/123/attempts/1', False, b'{"id":123}'),
+    ('git/trees/' + 'a' * 40 + '?recursive=1', False, b'{"tree":[]}'),
+    ('actions/artifacts/55/zip', True, b'\x00PK\xffbinary'),
+])
+def test_controller_root_endpoint_and_child_api_argv(monkeypatch, path, binary, payload):
+    calls = []
+    def run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return SimpleNamespace(stdout=payload, stderr=b'', returncode=0)
+    monkeypatch.setattr(control.subprocess, 'run', run)
+    api = control.GitHub()
+    value = api.get(path, binary=binary)
+    assert value == (payload if binary else json.loads(payload))
+    assert calls[0][0] == ['gh', 'api', 'repos/microsoft/amplifier-unified' + ('/' + path if path else '')]
+    assert calls[0][1]['capture_output'] and calls[0][1]['check']
+    assert 0 < calls[0][1]['timeout'] <= 120
+
+
+@pytest.mark.parametrize('failure', ['nonzero', 'timeout', 'oversize', 'json'])
+def test_controller_api_failures_are_safe_nonqualifying_and_not_retried(monkeypatch, failure, capsys):
+    canary = b'opaque-credential-canary=do-not-retain'
+    calls = []
+    def run(argv, **kwargs):
+        calls.append(argv)
+        if failure == 'nonzero':
+            raise subprocess.CalledProcessError(1, argv, output=canary, stderr=canary + b' (HTTP 404)')
+        if failure == 'timeout':
+            raise subprocess.TimeoutExpired(argv, 1, output=canary, stderr=canary)
+        return SimpleNamespace(stdout=canary, stderr=canary, returncode=0)
+    monkeypatch.setattr(control.subprocess, 'run', run)
+    with pytest.raises(control.APIReadFailure) as error:
+        control.GitHub().get('', limit=1 if failure == 'oversize' else 1000)
+    assert len(calls) == 1
+    row = error.value.diagnostic
+    assert row['endpoint'] == 'repository'
+    assert row['category'] == {'nonzero': 'api_nonzero', 'timeout': 'api_timeout',
+                               'oversize': 'api_oversize', 'json': 'api_json'}[failure]
+    assert ('returncode' in row) is (failure == 'nonzero')
+    assert 'status' not in row  # Opaque gh stderr is NOT authenticated HTTP status evidence.
+    assert 'canary' not in str(error.value) + json.dumps(row) + str(capsys.readouterr())
+
+
+def test_controller_deadline_precedes_process_dispatch(monkeypatch):
+    api = control.GitHub(); api.deadline = 0
+    monkeypatch.setattr(control.subprocess, 'run', lambda *a, **k: pytest.fail('expired API effect'))
+    with pytest.raises(control.APIReadFailure) as error: api.get('')
+    assert error.value.diagnostic == {'category': 'api_deadline', 'endpoint': 'repository'}
+
+
+def controller_arguments(tmp_path):
+    return ['issue', '--harness', 'a' * 40, '--harness-tree', 'b' * 40,
+            '--candidate', 'c' * 40, '--candidate-tree', 'd' * 40, '--pr', '2134',
+            '--run', '123', '--attempt', '1', '--output', str(tmp_path / 'admission.json')]
+
+
+def test_controller_early_failure_record_exists_before_admission_and_exit_stays_nonzero(tmp_path, monkeypatch, capsys):
+    canary = 'secret-failure-payload-do-not-publish'
+    def issue(api, *args):
+        before = json.loads((tmp_path / 'failure.json').read_text())
+        assert before['phase'] == 'started' and before['kind'] == 'nonproduction-candidate-diagnostic'
+        assert not (tmp_path / 'admission.json').exists()
+        raise subprocess.CalledProcessError(1, ['gh', canary], output=canary, stderr=canary)
+    monkeypatch.setattr(control, 'issue', issue)
+    assert control.main(controller_arguments(tmp_path)) == 1
+    row = json.loads((tmp_path / 'failure.json').read_text())
+    assert row['phase'] == 'failed' and row['operation'] == 'issue'
+    assert row['identity']['harness'] == 'a' * 40 and row['identity']['run'] == 123
+    assert not (tmp_path / 'admission.json').exists()
+    assert canary not in json.dumps(row) + str(capsys.readouterr())
+
+
+@pytest.mark.parametrize('failure', ['api', 'timeout', 'selection', 'filesystem'])
+def test_controller_diagnostic_never_turns_failure_into_admission(tmp_path, monkeypatch, failure, capsys):
+    def issue(*args):
+        if failure == 'api':
+            raise control.APIReadFailure('api_nonzero', 'repository', returncode=1)
+        if failure == 'timeout':
+            raise subprocess.TimeoutExpired(['opaque-secret'], 1, output='credential-canary')
+        if failure == 'filesystem':
+            raise OSError('credential-canary')
+        raise ValueError('credential-canary')
+    monkeypatch.setattr(control, 'issue', issue)
+    assert control.main(controller_arguments(tmp_path)) == 1
+    row = json.loads((tmp_path / 'failure.json').read_text())
+    assert row['category'] == {'api': 'api_nonzero', 'timeout': 'command_timeout',
+                               'selection': 'validation', 'filesystem': 'filesystem'}[failure]
+    assert 'credential-canary' not in json.dumps(row) + str(capsys.readouterr())
+    assert not (tmp_path / 'admission.json').exists()
+
+
+def test_controller_request_mismatch_is_retained_before_issue(tmp_path, monkeypatch):
+    monkeypatch.setattr(control, 'issue', lambda *a: pytest.fail('mismatched request entered issuer'))
+    monkeypatch.setenv('CANDIDATE', 'c' * 40); monkeypatch.setenv('CANDIDATE_TREE', 'd' * 40)
+    monkeypatch.setenv('CANDIDATE_PR', '2134')
+    args = controller_arguments(tmp_path) + ['--requested-candidate', 'e' * 40,
+        '--requested-candidate-tree', 'd' * 40, '--requested-pr', '2134']
+    assert control.main(args) == 1
+    assert json.loads((tmp_path / 'failure.json').read_text())['phase'] == 'failed'
+    assert not (tmp_path / 'admission.json').exists()
+
+
+def test_controller_success_leaves_normal_admission_separate_from_diagnostics(tmp_path, monkeypatch):
+    def issue(api, nomination, run, attempt, root, output):
+        p.save(output, {'kind': p.KIND, 'selection': {'synthetic': True}})
+    monkeypatch.setattr(control, 'issue', issue)
+    assert control.main(controller_arguments(tmp_path)) == 0
+    assert json.loads((tmp_path / 'failure.json').read_text())['phase'] == 'completed'
+    assert json.loads((tmp_path / 'admission.json').read_text())['kind'] == p.KIND
+
+
+def test_controller_workflow_retains_failure_but_cannot_start_execution_from_it():
+    import yaml
+    workflow = yaml.safe_load((SCRIPTS.parent / p.WORKFLOW).read_text())
+    steps = workflow['jobs']['control']['steps']
+    upload = next(x for x in steps if x.get('name') == 'Retain controller admission or early failure')
+    assert upload['if'] == 'always()'
+    assert upload['with']['path'].splitlines() == [
+        'output/candidate-admission/admission.json', 'output/candidate-admission/failure.json']
+    assert upload['with']['if-no-files-found'] == 'error'
+    assert workflow['jobs']['execution']['needs'] == 'control'
+    assert 'if' not in workflow['jobs']['execution']  # Default success dependency, never always().
+    selection = next(x for x in steps if x.get('id') == 'select')
+    assert 'set -euo pipefail' in selection['run'] and 'continue-on-error' not in selection
+    assert '--requested-candidate' in selection['run']
+
+
+def test_controller_real_cli_retains_safe_early_failure_without_admission(tmp_path):
+    canary = 'opaque-gh-credential-canary-do-not-retain'
+    executable = tmp_path / 'gh'
+    executable.write_text('#!' + sys.executable + '\nimport sys\n'
+                          'assert sys.argv[1:]==["api","repos/microsoft/amplifier-unified"]\n'
+                          'print(' + repr(canary) + ')\n'
+                          'print(' + repr(canary) + ',file=sys.stderr)\nraise SystemExit(7)\n')
+    executable.chmod(0o700)
+    # Match the workflow's normal script invocation; -I would remove the trusted
+    # script directory and prevent its adjacent stdlib-only protocol import.
+    result = subprocess.run([sys.executable, str(SCRIPTS / 'candidate_native_control.py'),
+                             *controller_arguments(tmp_path)], cwd=tmp_path,
+                            env={'PATH': str(tmp_path), 'GH_TOKEN': canary},
+                            capture_output=True, text=True, timeout=10)
+    assert result.returncode == 1  # Original gh failure does not turn into CLI success.
+    assert not (tmp_path / 'admission.json').exists()
+    row = json.loads((tmp_path / 'failure.json').read_text())
+    assert row['category'] == 'api_nonzero' and row['returncode'] == 7 and row['endpoint'] == 'repository'
+    assert row['phase'] == 'failed' and row['stage'] == 'issue'
+    assert len((tmp_path / 'failure.json').read_bytes()) < 2048
+    assert canary not in result.stdout + result.stderr + json.dumps(row)

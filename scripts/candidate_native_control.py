@@ -17,11 +17,13 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import time
 import zipfile
 
 from candidate_native_protocol import (REPOSITORY, WORKFLOW, KIND, require, sha, select, save,
-                                       verify_cases, digest, PLAN_FIELDS, PROFILES, dependencies_absent)
+                                       verify_cases, digest, PLAN_FIELDS, PROFILES, dependencies_absent,
+                                       validate_request)
 
 QUALIFIERS = (WORKFLOW, 'scripts/candidate_native_protocol.py', 'scripts/candidate_native_control.py',
               'scripts/candidate_native_execution.py', 'tests/fixtures/candidate_native_adapter.py',
@@ -35,18 +37,42 @@ STEPS = ('Validate fixed selection before candidate code', 'Build and install ex
          'Run two sequential prepared profiles', 'Upload native evidence')
 
 
+class APIReadFailure(ValueError):
+    """Finite diagnostics only; never expose gh argv, stderr, body or credentials."""
+    def __init__(self, category, endpoint, *, returncode=None):
+        self.diagnostic = {'category': category, 'endpoint': endpoint}
+        if type(returncode) is int:
+            self.diagnostic['returncode'] = returncode
+        super().__init__('Candidate controller API read failed: ' + category)
+
+
 class GitHub:
     def __init__(self):
         self.deadline = time.monotonic() + 120
 
     def get(self, path, *, binary=False, limit=8 * 1024 ** 2):
         # All paths constructed here from fixed literals or validated integers/SHA.
+        endpoint = {'': 'repository', 'actions': 'actions', 'git': 'git',
+                    'compare': 'ancestry', 'rules': 'rules', 'pulls': 'pull_request',
+                    'contents': 'qualifier'}.get(path.split('/', 1)[0], 'other')
         left = self.deadline - time.monotonic()
-        require(left > 0, 'API evidence deadline exhausted')
-        process = subprocess.run(['gh', 'api', 'repos/' + REPOSITORY + '/' + path],
-                                 capture_output=True, timeout=left, check=True)
-        require(len(process.stdout) <= limit, 'API evidence exceeds bound')
-        return process.stdout if binary else json.loads(process.stdout)
+        if left <= 0:
+            raise APIReadFailure('api_deadline', endpoint)
+        target = 'repos/' + REPOSITORY + ('/' + path if path else '')
+        try:
+            process = subprocess.run(['gh', 'api', target], capture_output=True, timeout=left, check=True)
+        except subprocess.CalledProcessError as exc:
+            raise APIReadFailure('api_nonzero', endpoint, returncode=exc.returncode) from None
+        except subprocess.TimeoutExpired:
+            raise APIReadFailure('api_timeout', endpoint) from None
+        if len(process.stdout) > limit:
+            raise APIReadFailure('api_oversize', endpoint)
+        if binary:
+            return process.stdout
+        try:
+            return json.loads(process.stdout)
+        except (ValueError, UnicodeError):
+            raise APIReadFailure('api_json', endpoint) from None
 
 
 def facts(api, nomination, run_id, attempt):
@@ -225,17 +251,54 @@ def verify_payload(archive, report, proof):
         require(hashlib.sha256(archive.read(artifact_name)).hexdigest() == case['artifactSha256'], 'Retained native artifact changed')
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('operation', choices=('issue', 'verify'))
     for key in ('harness', 'harness-tree', 'candidate', 'candidate-tree', 'pr', 'run', 'attempt', 'output'):
         parser.add_argument('--' + key, required=True, type=int if key in ('pr', 'run', 'attempt') else str)
     parser.add_argument('--root', default='.')
     parser.add_argument('--internal', action='store_true', help='Workflow verifier before run terminal; external acceptance must omit')
-    args = parser.parse_args()
+    for key in ('requested-candidate', 'requested-candidate-tree', 'requested-pr'):
+        parser.add_argument('--' + key)
+    args = parser.parse_args(argv)
+    diagnostic = {
+        'kind': 'nonproduction-candidate-diagnostic', 'phase': 'started', 'operation': args.operation,
+        'stage': 'request', 'identity': {
+            **{key: getattr(args, key) if sha(getattr(args, key), 40) else None
+               for key in ('harness', 'harness_tree', 'candidate', 'candidate_tree')},
+            **{key: getattr(args, key) if getattr(args, key) > 0 else None for key in ('pr', 'run', 'attempt')}},
+    }
+    failure_path = Path(args.output).with_name('failure.json')
+    # Persist a safe prerequisite record BEFORE request validation/API/issuance.
+    save(failure_path, diagnostic)
+    try:
+        requested = (args.requested_candidate, args.requested_candidate_tree, args.requested_pr)
+        if any(value is not None for value in requested):
+            validate_request(
+                {'CANDIDATE': args.candidate, 'CANDIDATE_TREE': args.candidate_tree, 'CANDIDATE_PR': str(args.pr)},
+                dict(zip(('REQUESTED_C', 'REQUESTED_C_TREE', 'REQUESTED_PR'), requested)))
+        diagnostic['stage'] = args.operation
+        execute(args, GitHub())
+    except Exception as exc:
+        diagnostic.update(phase='failed', **(
+            exc.diagnostic if isinstance(exc, APIReadFailure) else
+            {'category': 'command_nonzero', 'returncode': exc.returncode} if isinstance(exc, subprocess.CalledProcessError) else
+            {'category': 'command_timeout'} if isinstance(exc, subprocess.TimeoutExpired) else
+            {'category': 'filesystem'} if isinstance(exc, OSError) else
+            {'category': 'validation'} if isinstance(exc, (ValueError, KeyError, TypeError)) else
+            {'category': 'controller'}))
+        save(failure_path, diagnostic)
+        # Exception strings, captured streams and environment are intentionally absent.
+        print(json.dumps(diagnostic, sort_keys=True), file=sys.stderr)
+        return 1
+    diagnostic['phase'] = 'completed'
+    save(failure_path, diagnostic)
+    return 0
+
+
+def execute(args, api):
     n = {'repository': REPOSITORY, 'harness': args.harness, 'harnessTree': args.harness_tree,
          'candidate': args.candidate, 'candidateTree': args.candidate_tree, 'pr': args.pr}
-    api = GitHub()
     if args.operation == 'issue':
         require(not args.internal, 'Internal flag does not issue authority')
         issue(api, n, args.run, args.attempt, args.root, args.output)
@@ -264,4 +327,4 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())

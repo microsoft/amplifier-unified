@@ -100,16 +100,16 @@ jobs:
           set -euo pipefail
           mkdir -p output/candidate-admission
           python - <<'PY'
-          import os, sys
-          sys.path.insert(0, 'scripts')
-          from candidate_native_protocol import validate_request
-          validate_request(
-              {k: os.environ[k] for k in ('CANDIDATE', 'CANDIDATE_TREE', 'CANDIDATE_PR')},
-              {k: os.environ[k] for k in ('REQUESTED_C', 'REQUESTED_C_TREE', 'REQUESTED_PR')})
+          import json
+          from pathlib import Path
+          # Even argument parsing/early interruption must leave a non-authorizing record.
+          Path('output/candidate-admission/failure.json').write_text(json.dumps({
+              'kind': 'nonproduction-candidate-diagnostic', 'phase': 'not-started', 'stage': 'arguments'}))
           PY
           python scripts/candidate_native_control.py issue --root . \
             --harness "$NOMINATED_H" --harness-tree "$NOMINATED_H_TREE" \
             --candidate "$CANDIDATE" --candidate-tree "$CANDIDATE_TREE" --pr "$CANDIDATE_PR" \
+            --requested-candidate "$REQUESTED_C" --requested-candidate-tree "$REQUESTED_C_TREE" --requested-pr "$REQUESTED_PR" \
             --run "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
             --output output/candidate-admission/admission.json
           python - <<'PY' >> "$GITHUB_OUTPUT"
@@ -117,10 +117,14 @@ jobs:
           p = json.load(open('output/candidate-admission/admission.json'))['selection']
           print('candidate=' + p['candidate']); print('harness=' + p['harness'])
           PY
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - name: Retain controller admission or early failure
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: candidate-admission-${{ github.run_id }}-${{ github.run_attempt }}
-          path: output/candidate-admission/admission.json
+          path: |
+            output/candidate-admission/admission.json
+            output/candidate-admission/failure.json
           if-no-files-found: error
 
   execution:
