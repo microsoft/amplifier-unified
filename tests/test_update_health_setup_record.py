@@ -259,7 +259,9 @@ def test_the_cached_proof_of_a_generation_is_not_touched_and_costs_no_pointer_re
     assert health.cached_evidence(cached(setup_record, {})) == {}
 
 
-def test_a_record_that_is_replaced_for_the_comparison_and_restored_gives_no_proof(setup_record, monkeypatch):
+@pytest.mark.parametrize('restored', ['after-the-reader-returns', 'before-the-reader-returns'])
+def test_a_record_that_is_replaced_for_the_comparison_and_restored_gives_no_proof(
+        setup_record, monkeypatch, restored):
     record = setup_record.receipt / 'runtime-installed.json'
     original = record.read_bytes()
     replace_package(setup_record, 'PyYAML', '6.0.3', '6.0.4')  # Not what setup recorded.
@@ -272,6 +274,10 @@ def test_a_record_that_is_replaced_for_the_comparison_and_restored_gives_no_proo
         record.write_bytes(original)   # ... and setup's own record is back when it returns.
         return observed
     monkeypatch.setattr(installation_runtime, 'status', status)
+    if restored == 'before-the-reader-returns':
+        # Setup's record is back as soon as the reader has read the other list:
+        # a hash that the reader takes from a second read would be of setup's record.
+        during_verification(monkeypatch, lambda path: path.write_bytes(original))
     assert evidence(setup_record) == {}
 
 
