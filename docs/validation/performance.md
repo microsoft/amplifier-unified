@@ -87,7 +87,7 @@ actual copy/publication paths and preserve source HEAD, staged blobs/modes, fail
 and cancellation cleanup; a manual index refresh is not production qualification.
 
 Fresh installed-graph verification reads each physical checkout once with at most
-four readers per call, preserves failure ordering, and settles all started reads
+two readers per call, preserves failure ordering, and settles all started reads
 before synchronous return or raise; this adds no async Stop guarantee or live
 latency claim.
 

@@ -217,7 +217,7 @@ def test_installed_roots_bound_concurrency_and_settle_before_exit(tmp_path, monk
         roots.append(root)
         distributions.append(_root_distribution(project, 'fixture-' + str(index), root))
     monkeypatch.setattr(runtime_qualification.importlib.metadata, 'distributions', lambda **kw: distributions)
-    release, fail_now, four_started, shutting_down, done = (Event() for _ in range(5))
+    release, fail_now, two_started, shutting_down, done = (Event() for _ in range(5))
     lock = Lock()
     active = peak = 0
     started, finished, shutdowns, outcome = [], [], [], []
@@ -232,8 +232,8 @@ def test_installed_roots_bound_concurrency_and_settle_before_exit(tmp_path, monk
             started.append(root)
             active += 1
             peak = max(peak, active)
-            if active == 4:
-                four_started.set()
+            if active == 2:
+                two_started.set()
         try:
             if fail and root == roots[0]:
                 assert fail_now.wait(5), 'fixture did not release the failed read'
@@ -256,8 +256,8 @@ def test_installed_roots_bound_concurrency_and_settle_before_exit(tmp_path, monk
     caller = Thread(target=verify)
     caller.start()
     try:
-        assert four_started.wait(5)
-        assert active == peak == 4 and not done.is_set()
+        assert two_started.wait(5)
+        assert active == peak == 2 and not done.is_set()
         if fail:
             fail_now.set()
             assert shutting_down.wait(5)
@@ -268,7 +268,7 @@ def test_installed_roots_bound_concurrency_and_settle_before_exit(tmp_path, monk
         release.set()
         caller.join(5)
     assert not caller.is_alive() and done.is_set() and active == 0
-    assert sorted(started) == sorted(finished) and peak == 4
+    assert sorted(started) == sorted(finished) and peak == 2
     assert shutdowns == [(True, True)]
     if fail:
         assert type(outcome[0]) is ValueError and str(outcome[0]) == 'first checkout failed'

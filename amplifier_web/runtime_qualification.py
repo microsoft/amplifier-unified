@@ -149,7 +149,7 @@ def installed_graph(project):
     rows, links = [], []
     roots = {}  # One fresh evidence snapshot per real checkout, per call.
     git_env = _installed_git_environment()
-    readers = ThreadPoolExecutor(max_workers=4)
+    readers = ThreadPoolExecutor(max_workers=2)
     try:
         try:
             for dist in importlib.metadata.distributions(path=[str(path) for path in paths if path.is_dir()]):
