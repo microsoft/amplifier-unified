@@ -558,13 +558,19 @@ def test_the_tasks_own_action_refuses_a_task_that_is_not_confirmed_before_any_ef
     tree = ET.fromstring(service.task_xml(value))
     tree.find(f"{service._q('Triggers')}/{service._q('LogonTrigger')}/{service._q('UserId')}").text = "PC\\Other"
     registered = ET.tostring(tree, encoding="unicode")
-    monkeypatch.setattr(service, "_scheduler", lambda op, sid, **kw: {
-        "exists": True, "xml": registered, "state": 4, "lastResult": 0, "instances": 1})
+    operations = []
+
+    def scheduler(op, sid, **kw):
+        operations.append(op)
+        return {"exists": True, "xml": registered, "state": 4, "lastResult": 0, "instances": 1}
+    monkeypatch.setattr(service, "_scheduler", scheduler)
     calls = _windows_names(monkeypatch, {"PC\\Other": (OTHER, 1)})
     monkeypatch.setattr(os, "chdir", lambda path: pytest.fail("no effect before the task is confirmed"))
     with pytest.raises(service.TaskNotConfirmed) as refused:
         service._run(value.encoded())
     assert refused.value.entry == service.task_name(SID) and dict(os.environ) == before
+    # The task was read once and nothing was asked of Task Scheduler after that.
+    assert operations == ["query"]
     # Refused for the trigger's user, and for nothing else in the definition.
     assert calls == ["PC\\Other"] and refused.value.retry is False
     assert str(refused.value.__cause__) == "Task trigger belongs to another user."

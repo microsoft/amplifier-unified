@@ -257,10 +257,12 @@ def entry_notice(purpose, entry, retry, *, listed=True):
     `purpose` is `start`, `status`, `stop` or `uninstall`; `entry` is the task's
     name in Task Scheduler. The check cannot say why the entry differs (a
     changed setting, another installation, a renamed Windows account), so the
-    text does not say that someone changed it. It also does not say that
-    Amplifier changed nothing: a start can make an entry and then not confirm
-    it. With `retry`, Windows gave no answer about the entry's account: that
-    can pass, and nothing is deleted.
+    text does not say that someone changed it. The cause sentence makes no
+    claim about what Amplifier changed: a start can make an entry and then
+    not confirm it. (Only the uninstall opening says that nothing was changed;
+    an uninstall reads the entry before it changes anything.) With `retry`,
+    Windows gave no answer about the entry's account: that can pass, and
+    nothing is deleted.
     `listed` is False when Amplifier is not in the Start menu: the setup file
     then opens it.
     """
