@@ -136,6 +136,37 @@ alias for suppressing approval prompts. Revoking a remembered policy must not
 claim to undo an effect or revoke an already accepted configuration grant unless
 the serving owner explicitly performs that grant revocation.
 
+### Optional Instance-owned matching policy
+
+An Instance can negotiate `_meta["com.microsoft.amplifier.approval-policy"]`
+at initialization with `{version: 1, owner: "instance", instanceId: "<UUID>"}`.
+Unified returns the same version/owner, producer
+`com.microsoft.amplifier.unified.configuration/v1`, and `reusableRequests: true`.
+An absent or unsupported negotiation leaves ordinary ACP allow/deny unchanged.
+Unified has no remembered-rule store and offers no independent automatic mode.
+
+For a pending native configuration grant, Unified can then add a descriptor to
+`toolCall._meta` under that namespace. Its `key` hashes the canonical effects,
+global/project/local scopes, resolved settings destinations and Unified data
+home. Its `description` states those effects, scopes and grant lifetime;
+`allowOptionId` names the current `allow_once` choice, and `authorityLifetime`
+is `conversation`. Chat IDs, call IDs, reasons and timestamps are excluded from
+the matching key. Matching spans chats only when the actual targets and effects
+match. The canonical decision rechecks that key before accepting the reply.
+
+Session-only configuration targets and unstructured tool approvals have no
+reusable descriptor. A model-authored title, reason or metadata cannot mint one.
+These requests retain once/deny choices; the Instance must not manufacture an
+Always rule. An Instance may separately offer its explicitly selected automatic
+policy for supported current requests, without bypassing Unified's remaining
+authority, Stop, budget or operating-system checks.
+
+Instance owns agent-wide rule storage, the owner-authorized connector actors,
+policy controls and revocation. Removing a rule stops future matching approvals.
+An already accepted configuration grant remains until its existing Stop,
+grant-revoke or expiry boundary. Upgrades select neither remembered rules nor
+automatic approval, and this negotiation grants no authority by itself.
+
 Disconnect releases observation and future use of the attachment's transient HTTP
 MCP settings. Admitted work retains its mounted tools and can finish. Reattachment
 can retire a released, settled worker through the existing acknowledged retirement

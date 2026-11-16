@@ -24,6 +24,7 @@ from aiohttp import WSMsgType, web
 from .execution_owner import ExecutionOwner, ensure_observers
 from .errors import AppError
 from .runtime_protocol import MAX_MESSAGE_BYTES
+from . import approval_policy
 
 RETIREMENT = 'com.microsoft.amplifier.retirement'
 # Implementation-specific failure; ACP reserves -32000 for authentication.
@@ -144,6 +145,7 @@ class HostAgent:
         response = await self.client.request_permission(session_id=identity,
             tool_call=ToolCallUpdate(tool_call_id=approval['id'], title=approval.get('title') or 'Permission needed',
                 status='pending', kind='other', raw_input=details,
+                field_meta={approval_policy.NAMESPACE: approval['policyScope']} if approval.get('policyScope') else None,
                 content=[{'type': 'content', 'content': {'type': 'text', 'text': text}}]), options=options)
         outcome = response.outcome
         return outcome.option_id if outcome.outcome == 'selected' else 'deny'
@@ -156,11 +158,14 @@ class HostAgent:
         if self.initialized:
             raise RequestError.invalid_request({'details': 'Connection already initialized.'})
         self.initialized = True
+        policy = approval_policy.negotiate(kwargs.get(approval_policy.NAMESPACE))
+        self.owner.approval_policy = policy is not None
         return InitializeResponse(protocol_version=1, agent_capabilities=AgentCapabilities(
             load_session=False, mcp_capabilities=McpCapabilities(http=True, sse=False),
             session_capabilities=SessionCapabilities(resume=SessionResumeCapabilities())),
             field_meta={RETIREMENT: {'version': 1, 'method': '_amplifier/retire',
-                'notification': '_amplifier/retirementRequested'}})
+                'notification': '_amplifier/retirementRequested'},
+                **({approval_policy.NAMESPACE: policy} if policy else {})})
 
     async def new_session(self, cwd, mcp_servers=None, **kwargs):
         self.require_initialized()
