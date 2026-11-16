@@ -157,6 +157,64 @@ is `conversation`. Chat IDs, call IDs, reasons and timestamps are excluded from
 the matching key. Matching spans chats only when the actual targets and effects
 match. The canonical decision rechecks that key before accepting the reply.
 
+The same producer can describe a supported exact native tool call with
+`authorityLifetime: "request"`. Its key has a distinct `tool.invoke` operation
+and binds the actual registered tool, qualified source selection and verified
+package-content identity,
+schema, exact validated JSON arguments, module configuration, working folder,
+current access/mode policy and applicable security limits. File calls also bind
+resolved targets. It matches the same request
+and context across chats, not equivalent commands or paths. Current call, chat,
+generation and Stop identities remain in an ephemeral execution witness.
+The live worker alone supplies the descriptor; saved events cannot create one.
+Approval and the existing Work/file execution boundaries recheck the witness,
+including after file-lock waits. A hook callback error does not approve it.
+
+This requires the optional streaming `tools.dispatch.current_call` capability
+and Unified's existing enforcing wrappers. Guarded reference read/write/edit and
+patch tools and other registered Python tools with verifiable selected module
+ownership are supported. Shell requests bind the exact command and arguments,
+explicit shell/configuration, working folder and current policy. This is
+permission memory, not transitive executable/environment attestation or a claim
+that repeating a command has the same effects. No display-text hashing or argument
+equivalence is used. Modes, existing approvals, observations, file checks, Work,
+budgets and native execution ownership keep their normal order and authority.
+
+Canonical MCP wrappers additionally bind the configured server, transport and
+authorization, exact remote tool name, mounted schema and arguments. This does
+not attest the remote account or promise a freshly queried remote catalog or
+implementation. Reconnecting the same configured client does not change the
+matching key. Replacing that client during a pending approval does invalidate
+the private current-call witness. Authorization values participate only in the
+opaque key; descriptors do not expose credentials. Existing MCP configuration
+provenance, connection and execution checks continue to apply.
+
+Always permits future new matching requests across the agent's chats. It never
+authorizes replay, proves idempotence, or resumes an uncertain prior effect.
+Remembering a request adds no prompt to calls already allowed by normal policy.
+Instance rule revocation affects future decisions; it does not undo an accepted
+effect. Automatic policy remains a separate explicit choice and is not enabled
+by this support.
+
+The worker captures only its already validated runtime selection before and
+after preparation. Normal noneditable file-cache wheel installs remain valid
+representations of that selection; a PEP 610 Git URL is not required. Bounded
+checks bind the complete installed module package to its RECORD inventory,
+and a Foundation source import must match the selected source and installed
+package bytes. Missing, dirty, changed or ambiguous evidence stays once-only.
+Registry/archive wheel imports can instead bind the already qualified installed
+distribution, its exact recorded lock selection and captured package inventory.
+They do not require a Git cache. This is not an independent verification of a
+downloaded archive or publisher; those tools must execute from their installed
+package, while a source import still needs the selected-source equivalence check.
+Installed module entry points bind the actual Python implementation to the
+host's selected module/configuration. Ephemeral install/cache locations are
+checked by the private witness, not included in the cross-chat key when selected
+source and package content are identical. Editable, absent, ambiguous, invalid
+or unverifiable implementations retain once/deny. RECORD alone is not publisher
+authority. No new source store, approval-time
+resolver or whole-environment scan is introduced.
+
 Session-only configuration targets and unstructured tool approvals have no
 reusable descriptor. A model-authored title, reason or metadata cannot mint one.
 These requests retain once/deny choices; the Instance must not manufacture an

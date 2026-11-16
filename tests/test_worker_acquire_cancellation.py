@@ -84,7 +84,7 @@ async def test_worker_cancel_waits_for_real_acquire_and_release(tmp_path, monkey
     monkeypatch.setattr('amplifier_web.history_revision.recover_pending', forbidden)
     monkeypatch.setattr('amplifier_web.host.session.prepare_manager', forbidden)
     monkeypatch.setattr('amplifier_web.runtime_bootstrap.bootstrap_app_package', lambda: None)
-    monkeypatch.setattr('amplifier_web.runtime_qualification.active_install_overrides', lambda *args: None)
+    monkeypatch.setattr('amplifier_web.runtime_qualification.active_install_overrides', lambda *args, **kwargs: None)
     monkeypatch.setitem(sys.modules, 'amplifier_module_loop_live.runtime',
                         SimpleNamespace(Runtime=lambda **kwargs: worker.runtime))
     events = []

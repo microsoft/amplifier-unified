@@ -461,12 +461,14 @@ async def freeze(manager, generation, project, *, baseline_manifest=None):
         policies[name] = policy
     from .runtime_source_policy import qualify_cache_policies
     policies = await qualify_cache_policies(policies, checked, process)
+    baseline_manifest = environments.declared_manifest() if baseline_manifest is None else baseline_manifest
+    from .runtime_source_policy import qualify_app_policies
+    policies = await qualify_app_policies(policies, checked, project, baseline_manifest, process)
     if not graph:
         raise ValueError('The prepared worker has no installed distribution evidence.')
     # Qualification reproduces the prepared policy, not newer app declarations.
     # A lazy profile can start from an older generation after an app update.
     content = frozen_manifest((Path(project) / 'pyproject.toml').read_bytes(), graph)
-    baseline_manifest = environments.declared_manifest() if baseline_manifest is None else baseline_manifest
     # Share only a fully qualified immutable graph with the same Python/OS
     # contract. Active environments are never uv-synced or repaired in place.
     # Generation receipts retain separate ref policy and rollback identity.
@@ -566,7 +568,7 @@ def verify_recorded(project, receipt, *, allow_additions=False, expected=None):
         raise ValueError('The worker graph changed after qualification; its recorded generation was preserved.')
 
 
-def active_install_overrides(home, current_override=None):
+def active_install_overrides(home, current_override=None, *, on_verified=None):
     """Use a recorded generation's ordinary installer policy, never refresh.
 
     An explicit user override remains authoritative. Legacy generations have no
@@ -585,5 +587,8 @@ def active_install_overrides(home, current_override=None):
     if (project / 'uv.lock').read_bytes() != (receipt / 'runtime.lock').read_bytes():
         raise ValueError('The recorded worker installation policy changed; its generation was preserved.')
     verify_install_overrides(project, target)
-    verify_recorded(project, receipt, allow_additions=True)
+    expected = json.loads((receipt / 'runtime-installed.json').read_text())
+    verify_recorded(project, receipt, allow_additions=True, expected=expected)
+    if on_verified is not None:
+        on_verified(project, receipt, expected)
     return target

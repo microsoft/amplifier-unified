@@ -671,8 +671,11 @@ def test_active_generation_uses_qualified_policy_without_overriding_user_choice(
     (receipt / 'runtime.lock').write_text('version=1\n[[package]]\nname="amplifier-core"\nversion="1.6.1"\nsource={registry="https://pypi.org/simple"}\n')
     runtime_environment.prepare_project(tmp_path, release)
     calls = []
-    monkeypatch.setattr(runtime_qualification, 'verify_recorded', lambda project, directory, **policy: calls.append((project, directory)))
-    assert runtime_qualification.active_install_overrides(tmp_path) == target
+    monkeypatch.setattr(runtime_qualification, 'verify_recorded', lambda project, directory, **policy: calls.append((project, directory, policy)))
+    observed = []
+    assert runtime_qualification.active_install_overrides(tmp_path, on_verified=lambda *args: observed.append(args)) == target
+    assert observed == [(calls[0][0], receipt, [])]
+    assert calls[0][2] == {'allow_additions': True, 'expected': []}
     assert runtime_qualification.active_install_overrides(tmp_path, str(target)) == target
     assert len(calls) == 2
     assert runtime_qualification.active_install_overrides(tmp_path, '/user/explicit-overrides.txt') is None

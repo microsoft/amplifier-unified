@@ -3,7 +3,7 @@ import asyncio
 import json
 import os
 from types import SimpleNamespace
-from unittest.mock import call
+from unittest.mock import ANY, call
 
 import pytest
 
@@ -96,7 +96,7 @@ async def test_worker_failure_receipt_does_not_publish_timings(tmp_path, monkeyp
     from amplifier_foundation.session.activation import ActivationGate
     monkeypatch.setattr('amplifier_web.runtime_bootstrap.bootstrap_app_package', lambda: None)
     monkeypatch.setattr('amplifier_web.host.config.app_home', lambda: tmp_path)
-    monkeypatch.setattr('amplifier_web.runtime_qualification.active_install_overrides', lambda *args: None)
+    monkeypatch.setattr('amplifier_web.runtime_qualification.active_install_overrides', lambda *args, **kwargs: None)
     monkeypatch.setattr('amplifier_web.history_revision.recover_pending', lambda *args: None)
     monkeypatch.setitem(sys.modules, 'amplifier_module_loop_live.runtime',
                         SimpleNamespace(Runtime=lambda **kwargs: SimpleNamespace(session_id='fixture')))
@@ -173,9 +173,9 @@ async def test_worker_verification_clocks_follow_actual_policy_branches(policy_w
         assert names.index(expected[0]) < names.index('manager.prepare')
     if branch == 'qualified':
         assert names.index('manager.prepare') < names.index(expected[1])
-    calls = [] if branch == 'explicit' else [call(state.home)]
+    calls = [] if branch == 'explicit' else [call(state.home, on_verified=ANY)]
     if branch == 'qualified':
-        calls.append(call(state.home, str(state.qualified)))
+        calls.append(call(state.home, str(state.qualified), on_verified=ANY))
     assert state.policy.call_args_list == calls
     assert state.order == (['prepare'] if branch == 'explicit' else
                            ['policy', 'prepare', 'policy'] if branch == 'qualified' else ['policy', 'prepare'])
@@ -194,7 +194,7 @@ async def test_worker_verification_clocks_preserve_exact_refusal_and_cancellatio
                ValueError('The worker graph changed after qualification; its recorded generation was preserved.'))
     original_args = failure.args
 
-    def verify(*args):
+    def verify(*args, **kwargs):
         assert dict(os.environ) == state.parent_env
         state.order.append('policy')
         if state.policy.call_count == failed_call:
@@ -214,9 +214,9 @@ async def test_worker_verification_clocks_preserve_exact_refusal_and_cancellatio
     assert all(row['status'] == 'succeeded' for row in rows[:-1])
     assert receipt['phases'][-1] == rows[-1]
     assert str(failure) not in json.dumps(receipt)
-    calls = [call(state.home)]
+    calls = [call(state.home, on_verified=ANY)]
     if failed_call == 2:
-        calls.append(call(state.home, str(state.qualified)))
+        calls.append(call(state.home, str(state.qualified), on_verified=ANY))
         state.prepare.assert_awaited_once()
         assert state.options['install_overrides'] == state.qualified
     else:
