@@ -757,6 +757,8 @@ def test_status_names_a_task_that_was_not_confirmed_instead_of_an_unreachable_se
         assert "could not check the account" in result["message"] and "Restart Windows" in result["nextStep"]
     else:
         assert "could not confirm" in result["message"] and entry in result["nextStep"]
+        assert "uses only a task that it can confirm" in result["nextStep"]
+    assert "changes only" not in result["nextStep"] + result["message"]
     # Any other failure keeps the earlier answer.
     monkeypatch.setattr(health, "service_state", lambda home: (_ for _ in ()).throw(
         windows_service.WindowsServiceError("Task Scheduler refused the operation.")))

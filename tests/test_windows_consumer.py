@@ -573,12 +573,13 @@ def test_a_start_that_cannot_use_the_sign_in_entry_names_that_cause_and_not_the_
     result = json.loads(capsys.readouterr().out)
     text = result["message"]
     assert result["errorType"] == type(problem).__name__ and text.startswith("Amplifier could not start")
-    for wrong in ("internet", "first start", "private detail", "install it again"):
+    for wrong in ("internet", "first start", "private detail", "install it again", "changes only"):
         assert wrong not in text
     if cause == "not-confirmed":
         # The cause without a claim that someone changed the entry, the exact
         # entry, what deleting it does, and the case in which not to delete it.
-        assert "could not confirm that its start-at-sign-in entry in Windows belongs to this installation" in text
+        assert ("could not confirm that its start-at-sign-in entry in Windows belongs to this installation. "
+                "It uses only an entry that it can confirm.\n\n") in text
         assert text.count(ENTRY) == 2 and "Task Scheduler Library" in text and "press the Delete key" in text
         assert "no longer starts when you sign in, until it makes a new entry" in text
         assert "another Amplifier installation" in text
@@ -636,8 +637,9 @@ def test_stop_and_uninstall_name_an_entry_that_was_not_confirmed_and_a_next_step
     (text,) = [text for text, confirm in notices if not confirm]
     assert text.startswith(opening + "\n\n") and text.endswith(f"Reference: {step}, TaskNotConfirmed")
     # The earlier texts for these steps name a wrong cause or a wrong next step.
+    # No claim about changes either: a start can make an entry and then not confirm it.
     for wrong in ("You can keep using it", "could not read its start-at-sign-in entry",
-                  "could not stop its background app", "Wait a few minutes"):
+                  "could not stop its background app", "Wait a few minutes", "changes only"):
         assert wrong not in text
     if operation == "stop":
         # One next step for both causes: the way to stop the app now.

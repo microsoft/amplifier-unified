@@ -2126,8 +2126,19 @@ registration). On a domain member, a local account with the owner's account
 name makes form 3 refuse a domain owner. Domain-joined, Entra-joined and
 offline PCs are not measured. The launcher runs this check before any app
 version starts, and an in-app update does not replace the launcher: an
-installation whose launcher predates this rule needs a launcher refresh or a
-new setup run before a renamed PC starts the app again.
+installation whose launcher predates this rule still refuses its task after a
+computer rename, with the earlier messages, until its launcher is replaced.
+Only `amplifier_web.windows_launcher_refresh` replaces the launcher of an
+existing installation. A second setup run does not: on an installed PC setup
+adds missing Start-menu and Apps-list entries and opens the app, and it does
+not install the program files again. Nothing runs the refresh by itself. The
+refresh reads the task with the active app version's code, so by that code it
+works before the rename, and after the rename only when the active app version
+already has this rule (not measured). An installation that is renamed while
+both its launcher and its app version predate the rule cannot update itself,
+because the app does not run. Then the person deletes the task in Task
+Scheduler and opens Amplifier, which registers a new task under the new name
+(not measured).
 
 When the check does not confirm the task, the launcher says that it could not
 confirm that the entry belongs to this installation, names the entry, and

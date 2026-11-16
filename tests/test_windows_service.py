@@ -542,6 +542,10 @@ def test_lookup_with_a_sid_that_windows_cannot_convert_is_a_failed_lookup(monkey
     with pytest.raises(service.TaskNotConfirmed) as refused:
         service.owned_spec(_trigger_xml("OLDPC\\Owner"), SID)
     assert refused.value.retry is True
+    # For this reason: the same two calls and the same conversion, not a call beyond the script.
+    assert state["calls"] == 2
+    assert isinstance(refused.value.__cause__, service._LookupFailed)
+    assert refused.value.__cause__.__cause__ is problem
 
 
 def test_the_tasks_own_action_refuses_a_task_that_is_not_confirmed_before_any_effect(monkeypatch):
@@ -550,27 +554,40 @@ def test_the_tasks_own_action_refuses_a_task_that_is_not_confirmed_before_any_ef
     before = dict(os.environ)
     monkeypatch.setattr(service, "_require_python", lambda: None)
     monkeypatch.setattr(service, "_owner", lambda: SID)
+    # The registered definition is this launch's own, except for the trigger's user.
+    tree = ET.fromstring(service.task_xml(value))
+    tree.find(f"{service._q('Triggers')}/{service._q('LogonTrigger')}/{service._q('UserId')}").text = "PC\\Other"
+    registered = ET.tostring(tree, encoding="unicode")
     monkeypatch.setattr(service, "_scheduler", lambda op, sid, **kw: {
-        "exists": True, "xml": _trigger_xml("PC\\Other"), "state": 4, "lastResult": 0, "instances": 1})
-    _windows_names(monkeypatch, {"PC\\Other": (OTHER, 1)})
+        "exists": True, "xml": registered, "state": 4, "lastResult": 0, "instances": 1})
+    calls = _windows_names(monkeypatch, {"PC\\Other": (OTHER, 1)})
     monkeypatch.setattr(os, "chdir", lambda path: pytest.fail("no effect before the task is confirmed"))
     with pytest.raises(service.TaskNotConfirmed) as refused:
         service._run(value.encoded())
     assert refused.value.entry == service.task_name(SID) and dict(os.environ) == before
+    # Refused for the trigger's user, and for nothing else in the definition.
+    assert calls == ["PC\\Other"] and refused.value.retry is False
+    assert str(refused.value.__cause__) == "Task trigger belongs to another user."
 
 
 def test_lookup_without_the_windows_library_is_a_failed_lookup(monkeypatch):
     import ctypes
 
+    problem, loads = OSError("advapi32 did not load"), []
+
     def missing(*args, **kwargs):
-        raise OSError("advapi32 did not load")
+        loads.append(args)
+        raise problem
     monkeypatch.setattr(service, "sys", SimpleNamespace(platform="win32"))
     monkeypatch.setattr(ctypes, "WinDLL", missing, raising=False)
-    with pytest.raises(service._LookupFailed):
+    with pytest.raises(service._LookupFailed) as failed:
         service._lookup("OLDPC\\Owner")
+    # The stand-in ran, and it is the reason.
+    assert loads == [("advapi32",)] and failed.value.__cause__ is problem
     with pytest.raises(service.TaskNotConfirmed) as refused:
         service.owned_spec(_trigger_xml("OLDPC\\Owner"), SID)
-    assert refused.value.retry is True
+    assert refused.value.retry is True and len(loads) == 2
+    assert refused.value.__cause__.__cause__ is problem
 
 
 @pytest.mark.parametrize("sid", ["", "x", "S-1-5-18", None, "OLDPC\\Owner"])
