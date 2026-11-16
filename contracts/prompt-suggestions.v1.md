@@ -108,10 +108,13 @@ invalidates/rereads settings when existing global `configurationRevision` change
 No candidate is inserted or sent without an explicit user acceptance.
 
 Content-free durable request/source hashes are claimed before inference, preventing
-same-request/source replay after reconnect or restart. The journal is capped at
-4096 claims; saturation returns busy rather than evicting a claim and permitting
-a paid replay. It contains neither prompts, candidate bodies nor credentials.
-This is finite deduplication, not exactly-once remote billing or a general job queue.
+same-request/source replay after reconnect or restart. Each claim retains two
+fixed-size SHA-256 hashes in indexed SQLite columns, not an in-memory journal.
+Storage grows with distinct admitted requests; there is no lifetime request-count
+quota or automatic age-based deletion that could reauthorize an uncertain paid
+effect. Candidate memory remains independently bounded to 128 records. Claims
+contain neither prompts, candidate bodies nor credentials. This is durable local
+deduplication, not exactly-once remote billing or a general job queue.
 
 ## Qualification boundary
 

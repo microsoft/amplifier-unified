@@ -8,10 +8,10 @@ from .errors import AppError
 from .suggestion_settings import digest, selected
 from .suggestion_source import Unavailable, capture, witness, eligible
 
-MAX_RECEIPTS = 4096
 MAX_RETAINED = 128
 TTL = 60
 DEADLINE = 15
+PROVIDER_REASONS = frozenset({'custom_source_not_prepared'})
 # Set only by the authenticated HTTP adapter, never action arguments or client
 # registration. The closure rechecks cookie expiry/sign-out after async work.
 BROWSER = ContextVar('suggestion_browser', default=None)
@@ -41,8 +41,9 @@ class PromptSuggestions:
         self.jobs = set()
         self.closed = False
         self._manager = None
-        # Content-free, bounded dedup. At capacity refuse new requests rather
-        # than evicting an old key and silently authorizing a paid replay.
+        # Retain fixed-size, indexed content-free claims. Candidate memory is
+        # bounded separately; historical claims neither load into memory nor
+        # impose a lifetime request quota. Never age out uncertain paid effects.
         service.db.execute('CREATE TABLE IF NOT EXISTS suggestion_requests '
                            '(identity TEXT PRIMARY KEY, source TEXT NOT NULL UNIQUE)')
 
@@ -190,8 +191,6 @@ class PromptSuggestions:
                                  witness(self.service, sid, config, durable=True), revision])
                 if self.service.db.execute('SELECT 1 FROM suggestion_requests WHERE source=?', (source,)).fetchone():
                     self._finish(record, 'duplicate_source')
-                elif self.service.db.execute('SELECT count(*) FROM suggestion_requests').fetchone()[0] >= MAX_RECEIPTS:
-                    self._finish(record, 'busy', reason='request_receipts_full')
                 else:
                     # Commit a tombstone before any task can reach a provider.
                     self.service.db.execute('INSERT INTO suggestion_requests VALUES (?,?)', (key, source))
@@ -229,6 +228,8 @@ class PromptSuggestions:
                 if record['status'] == 'pending':
                     if self.current(record):
                         record.update({key: result.get(key) for key in ('status', 'suggestion', 'usage', 'cost')})
+                        reason = result.get('reason')
+                        record['reason'] = reason if isinstance(reason, str) and reason in PROVIDER_REASONS else None
                     else:
                         self._finish(record, 'stale')
         except asyncio.CancelledError:

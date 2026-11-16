@@ -125,6 +125,59 @@ class Requests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.request('new-document'))['status'], 'duplicate_source')
         self.assertEqual(len(self.calls), 1)
 
+    async def test_historical_claims_do_not_impose_lifetime_quota_or_scan_before_admission(self):
+        # Preserve a failed/uncertain attempt, then grow only unrelated claim
+        # metadata beyond the former 4096-installation-lifetime hard stop.
+        async def fail(*args):
+            self.calls.append('uncertain-attempt')
+            raise TimeoutError()
+        self.host.complete = fail
+        await self.request('uncertain')
+        await self.settle()
+        self.assertEqual((await self.status('uncertain'))['status'], 'timeout')
+        original_claim = self.app.db.execute('SELECT * FROM suggestion_requests').fetchone()
+        from amplifier_web.suggestion_settings import digest
+        self.app.db.executemany('INSERT INTO suggestion_requests VALUES (?,?)',
+            ((digest(['historical-request', i]), digest(['historical-source', i])) for i in range(5000)))
+        self.app.db.commit()
+        await self.host.close()
+        self.host = PromptSuggestions(self.app)
+        self.host.settings = lambda: (self.config, {'id': 'explicit-account'}, self.revision)
+        self.host.complete = AsyncMock(return_value={
+            'status': 'ready', 'suggestion': 'A new useful next step.', 'usage': None, 'cost': None})
+        statements = []
+        self.app.db.set_trace_callback(statements.append)
+        try:
+            self.assertEqual((await self.request('uncertain'))['status'], 'expired')
+            self.assertEqual((await self.request('same-source'))['status'], 'duplicate_source')
+            self.app.session['messages'][-1]['text'] = 'A genuinely new completed source'
+            self.assertEqual((await self.request('new-source'))['status'], 'pending')
+            await self.settle()
+            self.assertEqual((await self.status('new-source'))['status'], 'ready')
+        finally:
+            self.app.db.set_trace_callback(None)
+        self.host.complete.assert_awaited_once()
+        selects = [sql for sql in statements if sql.upper().startswith('SELECT')]
+        self.assertTrue(selects)
+        self.assertTrue(all('WHERE identity=' in sql or 'WHERE source=' in sql for sql in selects))
+        self.assertFalse(any('count(' in sql.lower() for sql in statements))
+        self.assertEqual(self.app.db.execute('SELECT * FROM suggestion_requests WHERE identity=?',
+                                            (original_claim[0],)).fetchone(), original_claim)
+        self.assertEqual(self.app.db.execute('SELECT count(*) FROM suggestion_requests').fetchone()[0], 5002)
+
+    async def test_provider_refusal_reason_is_allowlisted_without_leaking_arbitrary_text(self):
+        for index, reason in enumerate(('custom_source_not_prepared', 'private transcript and credential')):
+            self.app.session['messages'][-1]['text'] = 'Different source ' + str(index)
+            self.host.complete = AsyncMock(return_value={
+                'status': 'unsupported', 'suggestion': None, 'usage': None, 'cost': None, 'reason': reason})
+            await self.request('reason-' + str(index))
+            await self.settle()
+            result = await self.status('reason-' + str(index))
+            self.assertEqual(result['status'], 'unsupported')
+            self.assertEqual(result['reason'], reason if index == 0 else None)
+            self.assertNotIn('credential', repr(result))
+            self.host.complete.assert_awaited_once()
+
     async def test_recreated_window_and_request_owners_with_different_access_order_do_not_replay(self):
         await self.request()
         await self.settle()
