@@ -1090,7 +1090,9 @@ class UpdateManager:
                     and not availability(row) for row in self.inventory if row.get('updateTier') == 'included'))):
             await self.publish(detail='Resolve the included component issues and check again before installing.')
             return
-        if state.get('sequence'):
+        if state.get('sequence') and state['sequence'].get('install') is not True:
+            # Saved once: an update that waits (for an AI connection, or for
+            # changed inputs) reaches this line again at every minute tick.
             await self.publish(sequence={**state['sequence'], 'install': True})
         if state.get('pendingSmartTools') and not self.independent_tool_results(state):
             await self.activateSmartTools()
@@ -1147,6 +1149,17 @@ class UpdateManager:
                     raise ValueError('The interrupted component preparation must be reconciled before another installation.')
             if not candidates:
                 await self.publish(detail='Check for updates before installing. No eligible updates are available.')
+                return
+            from .update_health import read_connection
+            waiting = await asyncio.to_thread(read_connection, self)
+            changed = getattr(self, '_update_connection', None) != waiting
+            self._update_connection = waiting
+            if waiting.get('needed'):
+                # The selected profile has no provider, so no candidate could
+                # qualify. This is not an attempt: no candidate, no diagnostic
+                # batch and no retry record. A minute tick repeats no publication.
+                if changed or not automatic:
+                    await self.publish(detail='Components update after an AI connection is set up.')
                 return
             from .update_sequence import verify_app_selection
             await asyncio.to_thread(verify_app_selection, self, self.inventory)
@@ -1761,7 +1774,17 @@ class UpdateManager:
         if not managed_preview and install_intent and state.get('available',0) and state.get('phase') == 'available':
             # A newly checked desired graph still goes through install's input
             # admission. Elapsed time never replays a settled failed preparation.
-            await self.install(automatic=True)
+            from .update_sequence import StaleAppSelection
+            try:
+                await self.install(automatic=True)
+            except StaleAppSelection:
+                # The settings changed after this check: for example a first AI
+                # connection, for which the update waited. Nothing was prepared.
+                # Check once more and install only that checked selection.
+                await self.check(fresh=False, automatic=True)
+                state = self.service.state['updates']
+                if state.get('available',0) and state.get('phase') == 'available':
+                    await self.install(automatic=True)
             return
         if self.independent_tool_results(state) and (state.get('phase') not in {'error', 'interrupted'} or any(
                 row.get('runnerUpdate') and not row.get('failure') for row in state['pendingSmartTools'])):

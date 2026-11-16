@@ -23,6 +23,18 @@ def configuration(manager):
     return configuration_key(config.settings, manager.home), config
 
 
+def read_connection(manager):
+    """Read whether a component update must wait for an AI connection.
+
+    Unreadable settings make no claim: the update's own preparation reports them.
+    """
+    from .profile_catalog import connection as selected
+    try:
+        return selected(configuration(manager)[1])
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        return {}
+
+
 def active_evidence(manager, *, explain_configuration=False):
     """Verify the selected graph, never prepare it or admit changed declarations.
 
@@ -336,9 +348,10 @@ def failure_events(state):
     return rows
 
 
-def current(state, evidence=None, *, manual_verified=None, explicit_retry=False):
+def current(state, evidence=None, *, manual_verified=None, explicit_retry=False, connection=None):
     """Pure projection of operation/desired/active state; no IO and no read flags."""
     evidence = evidence or {}
+    connection = connection or {}
     seq = state.get('sequence') or {}
     app = state.get('application') or {}
     diagnostics = state.get('diagnostics') or {}
@@ -461,7 +474,23 @@ def current(state, evidence=None, *, manual_verified=None, explicit_retry=False)
                 and (not package or package in evidence.get('packages', ()))
                 and (not component or component in evidence.get('components', ()))
                 and 0 < row.get('at', 0) < evidence.get('qualifiedAt', 0))
-    remaining = [row for row in failed if not currently_verified(row) and not older_preparation(row)]
+    def awaited_connection(row):
+        # The stage stopped before it qualified anything, because the app's own
+        # selected profile had no AI connection. It installed nothing and left
+        # nothing uncertain, so it is not a failed update of the components.
+        # Only a provider can be missing from the app's own profiles; for any
+        # other selection the same refusal can name a fault of that bundle.
+        probe = row.get('probe') or {}
+        reason = row.get('reason') or probe.get('reason')
+        # Releases before the reason existed recorded only the place: the one
+        # ValueError that host.session.prepare_dependencies raises itself.
+        unnamed = (not reason and probe.get('stage') == 'prepare' and probe.get('errorType') == 'ValueError'
+                   and re.fullmatch(r'amplifier_web\.host\.session:prepare_dependencies:[0-9]+',
+                                    probe.get('failureLocation') or ''))
+        return bool(connection.get('appProfile') and row.get('kind') == 'ecosystem'
+                    and row.get('status') == 'failed' and (reason == 'ai-connection-needed' or unnamed))
+    remaining = [row for row in failed if not currently_verified(row) and not older_preparation(row)
+                 and not awaited_connection(row)]
     if state.get('error') or phase in {'error', 'interrupted'} or remaining:
         failure = max(remaining, key=lambda row: row.get('at', 0), default=diagnostics.get('lastFailure') or {})
         reason = failure.get('reason') or failure.get('probe', {}).get('reason')
@@ -477,6 +506,13 @@ def current(state, evidence=None, *, manual_verified=None, explicit_retry=False)
         return result('action-required', 'Some tools were not updated',
                       'Their current versions remain installed. Review the failed tool to retry or keep its current version.',
                       action='tools')
+    if (connection.get('needed') and not state.get('appAvailable') and not seq.get('nextStage')
+            and any((seq.get(tier) or {}).get('available') for tier in ('included', 'other'))):
+        # Not a failure and not an attempt: a component update qualifies the
+        # selected conversation profile, which has no provider yet.
+        return result('waiting', 'Components update after you set up an AI connection',
+                      'Nothing failed. Amplifier checks new components together with your AI connection, so this update waits for one. Set up an AI connection in Settings; the update can then start.',
+                      action='connect')
     if state.get('available') or seq.get('nextStage') or any(
             (seq.get(tier) or {}).get('available') for tier in ('included', 'other')):
         return result('available', 'Updates available',
@@ -525,7 +561,9 @@ def publish(manager):
     state['currentStatus'] = current(state, evidence,
         manual_verified=getattr(manager, '_manual_handoff_verified', None),
         explicit_retry=(getattr(manager, '_update_health_configuration_revision', revision) == revision
-                        and getattr(manager, '_retained_retry_available', False)))
+                        and getattr(manager, '_retained_retry_available', False)),
+        connection=(getattr(manager, '_update_connection', None)
+                    if getattr(manager, '_update_health_configuration_revision', revision) == revision else None))
 
 
 async def refresh(manager):
@@ -542,10 +580,13 @@ async def refresh(manager):
         except (OSError, ValueError, TypeError, KeyError):
             return False  # Missing/stale selection proof never offers a retry.
     retry_available = await asyncio.to_thread(retry_action)
+    waiting = await asyncio.to_thread(read_connection, manager)
     if revision == manager.service.state.get('configurationRevision'):
         manager._active_update_evidence = evidence
         manager._update_health_configuration_revision = revision
         manager._retained_retry_available = retry_available
+        manager._update_connection = waiting
     else:
         manager._active_update_evidence = {}
         manager._retained_retry_available = False
+        manager._update_connection = None

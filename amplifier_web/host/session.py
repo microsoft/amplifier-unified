@@ -10,7 +10,7 @@ import json
 import os
 from pathlib import Path
 
-from .config import HostConfig, expand_environment, load_config, merge, write_private, provider_mount_sources
+from .config import HostConfig, expand_environment, load_config, merge, write_private, provider_mount_sources, provider_dropped
 from .components import HostComponents, ComponentResolver, compose_bundles, imagegen_defaults, capability_defaults, explicit_context_forwarding, installed_package_source
 from .components import declarations, git_source
 from ..provider_environment import iter_provider_rows, materialize_bundle_providers
@@ -378,7 +378,7 @@ def _apply_settings(bundle, config):
             if kind == "providers" and not override_id:
                 override_id = row["module"].removeprefix("provider-")
             override = merge(overrides.get(row.get("module"), {}), overrides.get(override_id, {}))
-            if override.get("enabled") is False or (kind == "providers" and (row.get("id") or row.get("instance_id") or row["module"].removeprefix("provider-")) in settings.get("configurator", {}).get("disabled", {}).get("providers", [])):
+            if provider_dropped(row, settings) if kind == "providers" else override.get("enabled") is False:
                 if kind == "providers":
                     # Removing a connection must not erase its old image intent
                     # and silently authorize another account through routing.
@@ -1018,7 +1018,8 @@ async def prepare_dependencies(workspace, *, bundle=None, install_overrides=None
             if (bundle or config.active_bundle) == config.active_bundle:
                 if facts['hasLoop'] and not facts['supportedLoop']:
                     live_plan(loaded.to_mount_plan())  # Explain the unsupported choice.
-                raise ValueError('The selected conversation profile is incomplete: ' + ', '.join(facts['missing']))
+                from ..profile_catalog import incomplete
+                raise incomplete(facts)
             return None
     adapted, _ = live_plan(loaded.to_mount_plan())
     components = getattr(loaded, '_host_components', None) or required_components()

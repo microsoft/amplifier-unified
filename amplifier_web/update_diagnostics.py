@@ -23,7 +23,7 @@ STORAGE_REASONS = {getattr(errno, name): reason for name, reason in {
     'ENOSPC': 'disk-full', 'EDQUOT': 'disk-quota-exceeded',
     'EACCES': 'storage-permission-denied', 'EPERM': 'storage-permission-denied',
     'EROFS': 'read-only-storage'}.items() if hasattr(errno, name)}
-RECOVERY_REASONS = {'smart-tool-startup-failed', 'smart-tool-update-failed', 'missing-configured-environment', 'incompatible-conversation-loop', 'protected-runtime-source', 'runtime-source-constraint', 'runtime-source-unbound', 'runtime-source-conflict', 'runtime-source-changed', 'runtime-resolution-mismatch', 'runtime-installed-source-mismatch', *PREPARATION_REASONS.values(), *STORAGE_REASONS.values()}
+RECOVERY_REASONS = {'smart-tool-startup-failed', 'smart-tool-update-failed', 'missing-configured-environment', 'incompatible-conversation-loop', 'ai-connection-needed', 'incomplete-conversation-profile', 'protected-runtime-source', 'runtime-source-constraint', 'runtime-source-unbound', 'runtime-source-conflict', 'runtime-source-changed', 'runtime-resolution-mismatch', 'runtime-installed-source-mismatch', *PREPARATION_REASONS.values(), *STORAGE_REASONS.values()}
 RUNTIME_SOURCE_REASONS = {'protected-runtime-source', 'runtime-source-constraint', 'runtime-source-unbound',
                         'runtime-source-conflict', 'runtime-source-changed', 'runtime-resolution-mismatch',
                         'runtime-installed-source-mismatch'}
@@ -117,6 +117,7 @@ def failure_guidance(event):
         'disk-quota-exceeded': 'The update stopped because its storage quota was reached. Increase the quota or free space, then try again.',
         'storage-permission-denied': 'The update could not access a required file. Review the installation’s file permissions before trying again.',
         'read-only-storage': 'The update destination is read-only. Make the installation writable before trying again.',
+        'ai-connection-needed': 'This update needs an AI connection, and the selected conversation profile has none. Nothing was changed. Set up an AI connection in Settings, then update again.',
     }.get(event.get('reason') or event.get('probe', {}).get('reason'))
 
 
