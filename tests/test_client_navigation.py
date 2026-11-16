@@ -117,7 +117,8 @@ async def test_selected_hidden_workspace_still_restores_durably(app, tmp_path, m
     from amplifier_web.workspace_selection import _registration
 
     first = next(row for row in app._state['sessions'] if row['title'] == 'First')
-    workspace = next(row for row in app._state['workspaces'] if row['id'] == first['workspaceId'])
+    workspace = next(row for row in app._state['workspaces'] if row['path'] == first['workspace'])
+    first['workspaceId'] = workspace['id']
     workspace['nativeProject'] = project_slug(workspace['path'])
     selected_alias = (workspace['id'] if alias == 'registered' else
         uuid.uuid5(uuid.NAMESPACE_URL, 'amplifier-project:' + workspace['nativeProject']).hex)
@@ -126,7 +127,7 @@ async def test_selected_hidden_workspace_still_restores_durably(app, tmp_path, m
     unrelated = _registration(path)
     app._state['workspaces'].append(unrelated)
     app._state['hiddenNativeWorkspaces'] = [selected_alias, unrelated['id']]
-    app._publish_changes(globals={'workspaces', 'hiddenNativeWorkspaces'})
+    app._publish_changes(sessions={first['id']}, globals={'workspaces', 'hiddenNativeWorkspaces'})
 
     def forbidden(*args, **kwargs):
         pytest.fail('Restoring the selected workspace must use shared persistence')
