@@ -17,6 +17,8 @@ SESSION_ACTIONS = {
     'configuration.operation.reconcile', 'configuration.operation.resume', 'configuration.operation.cancel',
 }
 GLOBAL_ACTIONS = {
+    'instanceBranding.update': {'instanceBranding'},
+    'instanceBranding.reset': {'instanceBranding'},
     'externalAgents.save': set(), 'externalAgents.remove': set(),
     'view.update': set(),
     'session.archive': {'conversationOrganization'},
