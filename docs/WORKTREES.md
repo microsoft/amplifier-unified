@@ -52,6 +52,14 @@ Ordinary new moves complete automatically; **Check move is not a required step**
 Runtime save failure and uncertain storage/placement remain explicit, with no
 automatic model continuation or replay of uncertain input. A delayed retirement
 reply is not a failed folder change, nor proof of a successful save or teardown.
+When the sole commit callback has been invalidated and durable placement proves
+the source unchanged, an unattempted folder change is reported as not applied,
+separately from any unconfirmed runtime save. Stop does not leave an artificial
+folder fence. Graceful shutdown retains the desired folder; a restart before
+the commit likewise waits for fresh exclusive native ownership and current
+authority, without resending the old retirement or replaying a continuation.
+Unreadable placement, a potentially attempted commit and foreign native ownership
+are not inferred safe from process absence.
 
 ### Retained legacy handoffs
 
