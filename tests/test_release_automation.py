@@ -393,6 +393,35 @@ def test_release_distribution_verification_checks_source_assets_and_references(r
     with pytest.raises(ValueError,match='missing asset'):release.verify_dist(repository,dist,'1.2.3')
 
 
+@pytest.mark.parametrize('missing', [None, 'status_protocol/publisher.py', 'other/tests/helper.py'])
+def test_release_omits_only_standalone_status_tests_from_required_wheel_source(repository, missing):
+    standalone = 'amplifier_web/status_protocol/tests/test_standalone.py'
+    for name in [standalone, 'amplifier_web/status_protocol/publisher.py', 'amplifier_web/other/tests/helper.py']:
+        path = repository / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('VALUE = "reviewed source"\n')
+    dist = distributions(repository)
+    wheel = next(dist.glob('*.whl'))
+    omitted = {standalone}
+    if missing:
+        omitted.add('amplifier_web/' + missing)
+    with zipfile.ZipFile(wheel) as archive:
+        entries = {name: archive.read(name) for name in archive.namelist() if name not in omitted}
+    with zipfile.ZipFile(wheel, 'w') as archive:
+        for name, data in entries.items():
+            archive.writestr(name, data)
+    # Standalone tests remain in the source archive, as in the actual app build.
+    with tarfile.open(next(dist.glob('*.tar.gz'))) as archive:
+        assert archive.extractfile('amplifier_unified-1.2.3/' + standalone).read() == (repository / standalone).read_bytes()
+    if missing:
+        with pytest.raises(ValueError, match='validated source/assets: amplifier_web/' + missing):
+            release.verify_dist(repository, dist, '1.2.3')
+        assert not (dist / 'SHA256SUMS').exists()
+    else:
+        release.verify_dist(repository, dist, '1.2.3')
+        assert len((dist / 'SHA256SUMS').read_text().splitlines()) == 2
+
+
 @pytest.mark.parametrize('kind', ['wheel', 'source'])
 @pytest.mark.parametrize('change', ['missing', 'changed', 'extra'])
 @pytest.mark.parametrize('asset', ['build.json', 'vendor/pdfjs/font.bin', 'licenses/vendor.txt'])

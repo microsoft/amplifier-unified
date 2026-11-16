@@ -126,7 +126,7 @@ jobs:
             uv pip install --python "$python_path" "$wheel[test]"
           fi
           mkdir "$RUNNER_TEMP/component-tests"
-          git archive "$SELECTED_REVISION:$PROJECT_PATH" tests pyproject.toml | tar -x -C "$RUNNER_TEMP/component-tests"
+          git archive "$SELECTED_REVISION:$PROJECT_PATH" tests pyproject.toml | (cd "$RUNNER_TEMP/component-tests" && tar -x)
           cd "$RUNNER_TEMP/component-tests"
           "$python_path" -I -c 'from pathlib import Path; import importlib,os,sys; package=importlib.import_module(os.environ["IMPORT_PACKAGE"]); assert Path(package.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())'
           "$python_path" -I -m pytest -q tests --junitxml=installed-tests.xml
