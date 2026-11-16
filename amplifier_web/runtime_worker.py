@@ -1388,7 +1388,11 @@ class Worker:
                 # The loop rechecks goal object identity after the hook. Keep
                 # all used budget and task facts; do not cancel admitted tools.
                 coordinator.session_state['goal'] = copy.deepcopy(goal)
-                self.controls.persist(task_only=True)
+                try:
+                    self.controls.persist(task_only=True)
+                except BaseException:
+                    coordinator.session_state['goal'] = goal
+                    raise
             return HookResult()
         unregister = coordinator.hooks.register('orchestrator:goal_progress', yield_goal,
                                                 name='unified-idle-retirement', priority=0)

@@ -9,6 +9,7 @@ import pytest
 from amplifier_web.runtime_worker import Worker
 from test_worktrees import fixture, settle
 from test_handoff_refusal import checkout
+from test_collaborative_workspaces import app
 
 
 async def deferred_fixture(tmp_path, monkeypatch):
@@ -85,6 +86,48 @@ async def test_new_desired_target_supersedes_soft_intent_without_another_retirem
         await app.close()
 
 
+async def test_soft_next_target_cannot_be_removed_or_archived(tmp_path, monkeypatch):
+    from amplifier_web.service import AppError
+    app, runtime, root, sid, entered, release = await deferred_fixture(tmp_path, monkeypatch)
+    target = await checkout(app, sid)
+    try:
+        await app.dispatch('worktree.handoff', {'sessionId': sid, 'id': target['id'],
+                           'expectedExecutionRevision': 0})
+        await entered.wait()
+        for action in ('worktree.remove', 'worktree.archive'):
+            with pytest.raises(AppError, match='unresolved handoff'):
+                await app.dispatch(action, {'sessionId': sid, 'id': target['id'],
+                                           'expectedRevision': target['revision']})
+        assert not app._session(sid).get('configurationBusy')
+    finally:
+        release.set()
+        await settle(app)
+        await app.close()
+
+
+async def test_shutdown_invalidates_commit_of_a_retained_retirement(tmp_path, monkeypatch):
+    app, runtime, root, sid, entered, release = await deferred_fixture(tmp_path, monkeypatch)
+    callbacks = []
+    async def place(session, commit):
+        callbacks.append(commit)
+        entered.set()
+        await asyncio.Future()
+    runtime.deferred_placement.side_effect = place
+    target = await checkout(app, sid)
+    receipt = (await app.dispatch('worktree.handoff', {'sessionId': sid, 'id': target['id'],
+               'expectedExecutionRevision': 0}))['result']
+    await entered.wait()
+    await app.worktrees.close()
+    saved = app.worktrees.read(sid, receipt['id'])
+    assert saved['phase'] == 'unknown'
+    from amplifier_web.worktrees import HandoffSuperseded
+    with pytest.raises(HandoffSuperseded):
+        await callbacks[0]({'quiesced': True, 'retired': True})
+    assert app.worktrees.read(sid, receipt['id']) == saved
+    assert app._session(sid).get('workingDirectory', str(root)) == str(root)
+    await app.close()
+
+
 @pytest.mark.parametrize('failure', [RuntimeError('lost save'), OSError('storage failed')])
 async def test_real_retirement_or_storage_uncertainty_stays_unknown(tmp_path, monkeypatch, failure):
     app, runtime, root, sid, _, release = await deferred_fixture(tmp_path, monkeypatch)
@@ -135,3 +178,42 @@ async def test_native_soft_retirement_does_not_own_initiating_command_lock(monke
     assert replies[-1] == {'op': 'reply', 'id': 'one', 'result': {
         'retired': True, 'outcome': None, 'continuationAllowed': True}}
     worker.checkpoint_idle.assert_awaited_once()
+
+
+@pytest.mark.parametrize('change', ['assignment', 'manager_stop', 'target_stop', 'manager_human',
+                                  'target_human', 'manager_task', 'target_task'])
+@pytest.mark.parametrize('lost_save', [False, True])
+async def test_deferred_manager_authority_and_real_unknown_are_distinct(app, tmp_path, change, lost_save):
+    from test_collaborative_workspaces import agent_action
+    from test_manager_placement import prepared, checkout as manager_checkout
+    source, target, _, root = await prepared(app, tmp_path)
+    record = await manager_checkout(app, source, target, root)
+    async def place(session, commit):
+        if change == 'assignment':
+            value = app.assignments.current(source)
+            value['members'][target['id']]['status'] = 'detached'
+            app.assignments.save(value)
+        elif change.endswith('_stop'):
+            row = source if change.startswith('manager') else target
+            row['interruptionRevision'] = row.get('interruptionRevision', 0) + 1
+        elif change.endswith('_human'):
+            app._message(source if change.startswith('manager') else target, 'user', 'Continue this work', inputOrigin='ui')
+        else:
+            (source if change.startswith('manager') else target)['task'] = {'id': 'replaced', 'objective': 'other'}
+        if lost_save:
+            raise RuntimeError('Native checkpoint result was lost')
+        return await commit({'quiesced': True, 'retired': True, 'outcome': 'completed'})
+    app.runtime.deferred_placement = AsyncMock(side_effect=place)
+    pending = (await agent_action(app, source, 'worktree.handoff', {
+        'sessionId': target['id'], 'id': record['id'], 'expectedExecutionRevision': 0}, 'new-move'))['result']
+    await settle(app)
+    saved = app.worktrees.read(target['id'], pending['id'])
+    accepted = change.endswith('_human') and not lost_save
+    revoked = not change.endswith('_human')
+    assert saved['phase'] == ('unknown' if lost_save else 'applied' if accepted else 'rejected')
+    assert target.get('workingDirectory', target['workspace']) == (record['path'] if accepted else str(tmp_path))
+    assert app.worktrees.execution_state(target['id'])['fenced'] is lost_save
+    assert not saved['inputsReplayed']
+    app.runtime.handoff_boundary.assert_not_awaited()
+    app.runtime.quiesce_for_handoff.assert_not_awaited()
+    assert all(row[0] != target['id'] for row in app.runtime.inputs)

@@ -10,7 +10,7 @@ import pytest
 from amplifier_web.handoff_boundary import inspect
 from amplifier_web.runtime_worker import Worker
 from amplifier_web.service import AppService
-from test_worktrees import fixture, settle
+from test_worktrees import legacy_fixture as fixture, settle
 from test_handoff_refusal import checkout
 
 

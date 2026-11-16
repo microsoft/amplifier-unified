@@ -1,0 +1,104 @@
+{
+  "citations": [
+    {
+      "git_blob": "b60aeff19eff9c0676fe29f6bbe178375396944d",
+      "path": "README.md",
+      "ref": "1b055e861d4380cbbccff56e3142588ae806882b",
+      "sha256": "29f92db8310c0bad987a123e9184cb3a935b6adb2850f828e66776fce6884c4c",
+      "url": "https://github.com/microsoft/amplifier-client-web/blob/1b055e861d4380cbbccff56e3142588ae806882b/README.md"
+    },
+    {
+      "git_blob": "2340a58175980650fa4636963a28251953287ebf",
+      "path": "package.json",
+      "ref": "1b055e861d4380cbbccff56e3142588ae806882b",
+      "sha256": "6a883c73941de85dd5b011e1d460c2ed2a593cd3506b00bf3a25ddab88f52011",
+      "url": "https://github.com/microsoft/amplifier-client-web/blob/1b055e861d4380cbbccff56e3142588ae806882b/package.json"
+    },
+    {
+      "git_blob": "0e34faa293821a1b86d1b109f72e3d4aeccb4a72",
+      "path": "AGENTS.md",
+      "ref": "1b055e861d4380cbbccff56e3142588ae806882b",
+      "sha256": "63e371d12e7d4c70284ab775f508af7ba20803bff18150d3aec5d6dcea2e23d6",
+      "url": "https://github.com/microsoft/amplifier-client-web/blob/1b055e861d4380cbbccff56e3142588ae806882b/AGENTS.md"
+    }
+  ],
+  "consumer_cta": {
+    "basis": "Existing approved README route; target release assets/availability not freshly audited in this plan.",
+    "label": "Use Amplifier",
+    "url": "https://github.com/microsoft/amplifier-unified#install"
+  },
+  "display_name": "Amplifier Web Client",
+  "edges": [
+    {
+      "from": "self",
+      "relation": "contains",
+      "to": "ui"
+    },
+    {
+      "from": "self",
+      "relation": "contains",
+      "to": "private"
+    },
+    {
+      "from": "self",
+      "relation": "uses",
+      "to": "host"
+    },
+    {
+      "from": "self",
+      "relation": "uses",
+      "to": "inputs"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "self",
+      "kind": "self",
+      "label": "Amplifier Web Client",
+      "repository": "microsoft/amplifier-client-web"
+    },
+    {
+      "id": "ui",
+      "kind": "internal",
+      "label": "Conversation & workspace UI"
+    },
+    {
+      "id": "private",
+      "kind": "internal",
+      "label": "Private client view state"
+    },
+    {
+      "id": "host",
+      "kind": "external",
+      "label": "Amplifier Unified host",
+      "repository": "microsoft/amplifier-unified"
+    },
+    {
+      "id": "inputs",
+      "kind": "external",
+      "label": "Selected catalogs, SDK & branding"
+    }
+  ],
+  "notes": [
+    "Connects by the current Unified HTTP/SSE/WebSocket interface, not the separate AHP client interface.",
+    "Source authoring and selected delivery copy are separate; keep components/web-client and its provenance current through the documented handoff.",
+    "Developer source is not a standalone consumer installer."
+  ],
+  "purpose": "Present Amplifier conversations, workspaces and interactive work surfaces in a browser.",
+  "ref": "1b055e861d4380cbbccff56e3142588ae806882b",
+  "repository": "microsoft/amplifier-client-web",
+  "roles": [
+    "Experience"
+  ],
+  "scope": "selected frontend component",
+  "start_cta": {
+    "basis": "Existing approved README route; target release assets/availability not freshly audited in this plan.",
+    "label": "Use Amplifier",
+    "url": "https://github.com/microsoft/amplifier-unified#install"
+  },
+  "summary": "The selected browser frontend for the current Amplifier Unified application.",
+  "supports_roles": [
+    "Conversation"
+  ],
+  "visibility": "public"
+}

@@ -118,7 +118,7 @@ class FixtureWait:
             await asyncio.sleep(.01)
         checkpoint = self.coordinator.get_capability('live.checkpoint')
         async def delayed(status='completed'):
-        if status == 'completed':
+            if status == 'completed':
                 Path(values['checkpointStarted']).write_text('ready')
                 while not Path(values['checkpointRelease']).exists():
                     await asyncio.sleep(.01)

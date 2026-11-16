@@ -20,6 +20,11 @@
       }
     },
     {
+      "id": "deferred-placement",
+      "command": ["node", "tests/worktree-move-browser.mjs", "--deferred"],
+      "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/deferred-placement"}
+    },
+    {
       "id": "worktree-move",
       "command": ["node", "tests/worktree-move-browser.mjs"],
       "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/worktree-move"}

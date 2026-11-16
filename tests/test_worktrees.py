@@ -29,9 +29,35 @@ async def fixture(tmp_path, monkeypatch):
     monkeypatch.setenv('AMPLIFIER_HOME', str(tmp_path / 'native'))
     monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path / 'app'))
     runtime = SimpleNamespace(quiesce_for_handoff=AsyncMock(return_value={'quiesced': True, 'inputsReplayed': False}), close=AsyncMock())
+    async def placement(session, commit):
+        return await commit({'quiesced': True, 'retired': False, 'inputsReplayed': False})
+    runtime.deferred_placement = AsyncMock(side_effect=placement)
     app = AppService(tmp_path / 'app', runtime, workspace=root)
     await app.dispatch('session.create', {})
     return app, runtime, root, app._session()['id']
+
+
+def retained_legacy(app):
+    """Seed the pre-existing receipt shape before its retained finisher runs.
+
+    No production compatibility switch: new requests always use desired
+    placement. These tests specifically retain the old release/marker evidence.
+    """
+    launch = app.worktrees.launch
+    def seed(record, session):
+        record.pop('placementMode', None)
+        record['step'] = 'preflight'
+        app.worktrees.save(record)
+        app._session(record['sessionId'])['configurationBusy'] = True
+        app.worktrees.changed()
+        launch(record, session)
+    app.worktrees.launch = seed
+
+
+async def legacy_fixture(tmp_path, monkeypatch):
+    values = await fixture(tmp_path, monkeypatch)
+    retained_legacy(values[0])
+    return values
 
 
 async def settle(app):
@@ -54,9 +80,9 @@ async def test_ui_agent_handoff_preserves_task_voice_artifacts_drafts_and_home(t
         assert session['workspace'] == str(root) and session['workingDirectory'] == created['path']
         for key in ['messages', 'task', 'artifactRefs']: assert session[key] == retained[key]
         assert app.state['view']['draft'] == 'Keep this unsent draft'
-        assert app.state['selectedSessionId'] == sid and runtime.quiesce_for_handoff.await_count == 1
+        assert app.state['selectedSessionId'] == sid and runtime.deferred_placement.await_count == 1
         duplicate = await app.app_bridge('dispatch', {'action': 'worktree.handoff', 'id': 'move', 'args': command}, sid)
-        assert duplicate['result']['duplicate'] and runtime.quiesce_for_handoff.await_count == 1
+        assert duplicate['result']['duplicate'] and runtime.deferred_placement.await_count == 1
         with pytest.raises(AppError, match='still uses'): await app.dispatch('worktree.remove', {'sessionId': sid, 'id': created['id'], 'expectedRevision': created['revision']})
         with pytest.raises(AppError, match='calling task'): await app.app_bridge('dispatch', {'action': 'worktree.list', 'args': {'sessionId': 'wrong'}}, sid)
         await app.dispatch('worktree.handoff', {'sessionId': sid, 'id': None, 'expectedExecutionRevision': 1}, command_id='back')
@@ -107,7 +133,7 @@ async def test_canvas_file_capture_follows_execution_while_files_keep_workspace(
 
 @pytest.mark.parametrize('destination', ['source', 'target'])
 async def test_unknown_restart_and_explicit_reconcile_never_resubmit(tmp_path, monkeypatch, destination):
-    app, runtime, root, sid = await fixture(tmp_path, monkeypatch)
+    app, runtime, root, sid = await legacy_fixture(tmp_path, monkeypatch)
     runtime.quiesce_for_handoff.side_effect = RuntimeError('lost confirmation')
     inspected = (await app.dispatch('worktree.inspect', {'sessionId': sid}))['result']
     created = (await app.dispatch('worktree.create', {'sessionId': sid, 'sourceRevision': inspected['repository']['sourceRevision']}, command_id='create'))['result']
@@ -183,18 +209,20 @@ async def test_restart_detects_commit_receipt_without_execution_view(tmp_path, m
     finally: await app.close()
 
 
-async def test_pending_handoff_cannot_overlap_or_delete_its_target(tmp_path, monkeypatch):
+async def test_pending_desired_folder_can_be_superseded_but_cannot_delete_its_target(tmp_path, monkeypatch):
     app, runtime, root, sid = await fixture(tmp_path, monkeypatch)
     release = asyncio.Event()
-    async def delayed(*_):
-        await release.wait(); return {'quiesced': True}
-    runtime.quiesce_for_handoff.side_effect = delayed
+    async def delayed(session, commit):
+        await release.wait()
+        return await commit({'quiesced': True, 'retired': False})
+    runtime.deferred_placement.side_effect = delayed
     try:
         revision = app.worktrees.git.inspect(root)['sourceRevision']
         record = (await app.dispatch('worktree.create', {'sessionId': sid, 'sourceRevision': revision}, command_id='create'))['result']
         args = {'sessionId': sid, 'id': record['id'], 'expectedExecutionRevision': 0}
-        await app.dispatch('worktree.handoff', args, command_id='move')
-        with pytest.raises(AppError, match='pending'): await app.dispatch('worktree.handoff', args, command_id='overlap')
+        first = (await app.dispatch('worktree.handoff', args, command_id='move'))['result']
+        second = (await app.dispatch('worktree.handoff', args, command_id='overlap'))['result']
+        assert app.worktrees.read(sid, first['id'])['supersededBy'] == second['id']
         with pytest.raises(AppError, match='unresolved handoff'):
             await app.dispatch('worktree.remove', {'sessionId': sid, 'id': record['id'], 'expectedRevision': record['revision']})
         release.set(); await settle(app)
@@ -222,7 +250,7 @@ async def test_local_host_association_survives_restart_and_foreign_target_is_rej
     try:
         assert app.worktrees.git.get(created['id'])['executionHost'] == host
         assert app.worktrees.read(sid, receipt['id'])['executionHost'] == host
-        assert runtime.quiesce_for_handoff.await_count == 1
+        assert runtime.deferred_placement.await_count == 1
         monkeypatch.setattr('amplifier_web.host_identity.socket.gethostname', lambda: 'different-host')
         # Inspection remains available, but a hostname change cannot become an
         # implicit cross-host migration or release the wrong local owner.
@@ -238,6 +266,6 @@ async def test_local_host_association_survives_restart_and_foreign_target_is_rej
         await admission.retention.close()
         with pytest.raises(AppError, match='different local host'):
             await app.dispatch('worktree.handoff', {'sessionId':sid,'id':None,'expectedExecutionRevision':1}, command_id='foreign-move')
-        assert runtime.quiesce_for_handoff.await_count == 1
+        assert runtime.deferred_placement.await_count == 1
     finally:
         await app.close()

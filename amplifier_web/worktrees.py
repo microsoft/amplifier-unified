@@ -50,6 +50,7 @@ class Worktrees:
         self.receipt_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.jobs = set()
         self.placement_jobs = {}
+        self._closed = False
         self.mutations = asyncio.Lock()
         self._creation_paths = {}
         self._moving_paths = ()
@@ -758,8 +759,11 @@ class Worktrees:
             task = session.get('task') or self.app.coordination.task(sid)
             record['taskBinding'] = {key: task.get(key) for key in ('id', 'revision')}
             if action == 'worktree.handoff':
+                principal = self.app._session(manager['sourceSessionId']) if manager else session
+                access = self.app.access_mode.snapshot(principal)
                 record.update(placementMode='deferred-retirement', step='desired',
                     taskObjective={'id': task.get('id'), 'objective': task.get('objective')},
+                    placementAccess={'sessionId': principal['id'], 'revision': access['revision']},
                     detail='Next folder saved. Current work and authorized input may finish in the current folder.')
                 for prior in pending:
                     prior.update(phase='rejected', revision=prior['revision'] + 1, supersededBy=identity,
@@ -810,6 +814,10 @@ class Worktrees:
         if session.get('interruptionRevision', 0) != record.get('interruptionRevision', 0):
             return 'The user stopped this conversation after requesting the move.'
         if record.get('placementMode') == 'deferred-retirement':
+            access = record.get('placementAccess')
+            if (access and self.app.access_mode.snapshot(self.app._session(access['sessionId']))['revision']
+                    != access['revision']):
+                return 'The permission boundary changed after the next folder was chosen.'
             task = session.get('task') or self.app.coordination.task(session['id'])
             if ({key: task.get(key) for key in ('id', 'objective')} != record.get('taskObjective')
                     or task.get('status') in {'paused', 'blocked', 'completed'}):
@@ -1096,16 +1104,21 @@ class Worktrees:
         record = self.desired(sid)
         if record is None:
             return
+        accepting = True
         try:
             async def commit(proof):
                 nonlocal record
                 while candidate := self.desired(sid):
+                    if not accepting or self._closed:
+                        raise HandoffSuperseded('The placement owner closed before committing its folder.')
                     session = self.app._session(sid)
                     # Git may wait, but neither the short service lock nor the
                     # native command lock is held. Runtime admission and the
                     # exclusive writer lease protect the actual commit.
                     await asyncio.to_thread(self.preflight, candidate, session)
                     async with self.app.lock:
+                        if not accepting or self._closed:
+                            raise HandoffSuperseded('The placement owner closed before committing its folder.')
                         latest = self.desired(sid)
                         if latest is None:
                             return
@@ -1152,6 +1165,9 @@ class Worktrees:
                     self.enqueue_continuation(record)
                     self.changed({sid})
         except BaseException as exc:
+            # A detached runtime retirement may finish after this owner closes.
+            # Its callback cannot commit after this terminal uncertainty record.
+            accepting = False
             async with self.app.lock:
                 record = self.desired(sid) or record
                 try:
@@ -1163,7 +1179,7 @@ class Worktrees:
                     record.update(phase='applied', step='applied',
                                   continuation={'status': 'suppressed',
                                       'detail': 'Placement is saved; a failed observer did not authorize new input.'})
-                elif isinstance(exc, HandoffSuperseded) or self.authority_changed(record):
+                elif isinstance(exc, HandoffSuperseded):
                     record.update(phase='rejected', detail='The next-folder choice was superseded. No folder change or input was repeated.',
                                   continuation={'status': 'suppressed'})
                 elif isinstance(exc, ValueError) and record.get('step') != 'committing':
@@ -1173,7 +1189,9 @@ class Worktrees:
                     # Storage, failed save and interrupted retirement remain
                     # truthful. This is not artificial marker uncertainty.
                     record.update(phase='unknown', detail='The runtime save or folder commit could not be confirmed. Work was not replayed.',
-                                  continuation={'status': 'suppressed'}, failureType=type(exc).__name__)
+                                  failureType=type(exc).__name__)
+                    if not record.get('managerPlacement'):
+                        record['continuation'] = {'status': 'suppressed'}
                 if record['phase'] != 'applied' and saved is not None:
                     self.restore_placement(session, saved)
                 record['revision'] += 1
@@ -1189,5 +1207,6 @@ class Worktrees:
                 raise
 
     async def close(self):
+        self._closed = True
         for job in list(self.jobs): job.cancel()
         if self.jobs: await asyncio.gather(*self.jobs, return_exceptions=True)

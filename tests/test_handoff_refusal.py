@@ -9,7 +9,7 @@ from amplifier_foundation.session import SharedSessionStore
 from amplifier_web.runtime import RuntimeManager, SessionInUseError
 from amplifier_web.service import AppService
 from amplifier_web.update_blockers import blockers
-from test_worktrees import fixture, settle
+from test_worktrees import legacy_fixture as fixture, settle
 
 
 async def checkout(app, sid):
