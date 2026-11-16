@@ -28,6 +28,11 @@ def test_prepared_suite_is_one_ordinary_manual_job():
     assert not (ROOT / '.github/workflows/prepared-runtime-native.yml').exists()
     assert not list((ROOT / 'scripts').glob('candidate_native_*.py'))
     assert 'registered.json' not in (ROOT / 'tests/test_prepared_preset_native.py').read_text()
+    driver = (ROOT / 'scripts/fresh_cleanup_native_checks.py').read_text()
+    # Selection remains a pre-effect snapshot; the terminal result must not
+    # inherit its initial unrun label after the exact case guard succeeds.
+    assert "'native': 'unrun'" in driver and "'native': 'passed'" in driver
+    assert driver.index('count = verify_cases(') < driver.index("'native': 'passed'")
 
 
 def test_checkout_gate_uses_actual_bytes_and_distinct_evidence(monkeypatch):

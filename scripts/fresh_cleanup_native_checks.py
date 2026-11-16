@@ -123,7 +123,7 @@ print(json.dumps({'prefix':sys.prefix,'wheelSha256':hashlib.sha256(wheel.read_by
             '-o', 'asyncio_mode=auto', '-v', '-s', '--tb=short', filename,
             '--junitxml=' + str(output / 'junit.xml')], cwd=harness, env=env, stdout=stream, stderr=subprocess.STDOUT, timeout=2100)
     count = verify_cases(result.returncode, (output / 'junit.xml').read_bytes(), suite)
-    record(output / 'result.json', {**selected, 'passed': True, 'cases': count, 'returncode': result.returncode})
+    record(output / 'result.json', {**selected, 'native': 'passed', 'passed': True, 'cases': count, 'returncode': result.returncode})
 
 
 if __name__ == '__main__':
