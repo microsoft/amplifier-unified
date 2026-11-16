@@ -40,8 +40,15 @@ async def test_operation_bridge_keeps_cold_owner_and_persists_late_alias(tmp_pat
 
     app = AppService(home, runtime, workspace=tmp_path)
     try:
+        # Startup legitimately reads messages for uncertain-delivery recovery.
+        # Retire an unviewed idle owner through the normal committed boundary,
+        # using the existing cold-display test's recent-owner/time override.
+        await app.dispatch('session.create', {'title': 'Other foreground chat'})
         session = app._session(sid, hydrate=False)
         assert isinstance(session, ColdRecord)
+        with monkeypatch.context() as retirement:
+            retirement.setattr(app.cold_display, 'RECENT_LIMIT', 0)
+            assert sid in app.cold_display.retire(force=True)
         assert not any(dict.__contains__(session, key) for key in ('messages', 'execution'))
         references = copy.deepcopy(dict.get(session, MARKER))
         original = snapshot(session)
