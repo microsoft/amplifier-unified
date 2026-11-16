@@ -583,7 +583,7 @@ def current(state, evidence=None, *, manual_verified=None, explicit_retry=False,
         # Not a failure and not an attempt: a component update qualifies the
         # selected conversation profile, which has no provider yet.
         return result('waiting', 'Components update after you set up an AI connection',
-                      'Nothing failed. Amplifier checks new components together with your AI connection, so this update waits for one. Set up an AI connection in Settings; the update can then start.',
+                      'Nothing failed. Amplifier checks new components together with an AI connection, and none is set up yet. Set up an AI connection in Settings. The update can then start.',
                       action='connect')
     if state.get('available') or seq.get('nextStage') or any(
             (seq.get(tier) or {}).get('available') for tier in ('included', 'other')):
