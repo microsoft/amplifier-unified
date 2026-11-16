@@ -69,8 +69,16 @@ def accepts(service, session):
     from .managed_chats import is_managed
     if not is_managed(session):
         workspace = workspace_for(service, session)
-        if workspace is None or service.state.get('hiddenNativeWorkspaces'):
+        if workspace is None:
             return False
+        hidden = service.state.get('hiddenNativeWorkspaces', ())
+        if hidden:
+            from .workspace_selection import registration_for_session, restoration_ids
+            # A retained registration found by path can differ from the one
+            # shared selection would create for a missing/stale workspace ID.
+            registration = registration_for_session(service.state, session)
+            if restoration_ids(registration).intersection(hidden):
+                return False
     canvas = service.state.get('canvas', {})
     if canvas.get('kind') and not canvas.get('placeholder') and not canvas.get('app'):
         return not canvas.get('_versionWrite') and any(row['id'] == canvas.get('id') for row in service.state.get('canvasArtifacts', []))
