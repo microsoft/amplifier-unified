@@ -1,6 +1,7 @@
 """Negotiated, canonical scopes without an engine-side persistent policy store."""
 import asyncio
 import copy
+from types import SimpleNamespace
 
 import pytest
 
@@ -122,3 +123,28 @@ async def test_changed_resolved_target_refuses_before_grant(app, tmp_path):
         await app.dispatch('approval.respond', {'sessionId': source['id'], 'id': grant['id'],
             'decision': 'allow', 'expectedRequestHash': observed['requestHash'], 'expectedApprovalScope': old['key']})
     assert app.configuration_authority.record(grant['id'])['status'] == 'pending'
+
+
+@pytest.mark.parametrize('parts', [('é' * 75, 'é' * 75), ('line\nbreak',), ('del\x7fname',)])
+def test_unrepresentable_display_scope_keeps_once_only(tmp_path, parts):
+    workspace = tmp_path.joinpath(*parts)
+    workspace.mkdir(parents=True)
+    source = {'id': 'synthetic-owner', 'workspace': str(workspace), 'interruptionRevision': 0}
+    grant = {'id': 'capability:synthetic', 'status': 'pending', 'sessionId': source['id'],
+             'workspace': str(workspace), 'interruptionRevision': 0, 'effects': ['file_access'], 'scopes': ['local']}
+    # Test the wire-boundary producer independently of legacy project-directory
+    # naming limits; SDK and real canonical-grant paths are exercised above.
+    service = SimpleNamespace(data_dir=tmp_path/'app',
+        configuration_authority=SimpleNamespace(record=lambda identity: grant if identity == grant['id'] else None))
+    assert descriptor(service, source, {'id': grant['id'], 'status': 'pending'}) is None
+    assert grant['status'] == 'pending'
+
+
+async def test_global_scope_discloses_shared_settings_destination(app):
+    source = app.state['sessions'][0]
+    grant = await request(app, source, 'global', scopes=['global'])
+    value = scope(app, source, grant)
+    from amplifier_web.preferences import SettingsStore
+    assert 'shared Amplifier settings' in value['description']
+    assert str(SettingsStore(app.data_dir).path(source['workspace'], 'global').resolve()) in value['description']
+    assert len(value['description'].encode('utf-8')) <= 512

@@ -149,6 +149,9 @@ For a pending native configuration grant, Unified can then add a descriptor to
 `toolCall._meta` under that namespace. Its `key` hashes the canonical effects,
 global/project/local scopes, resolved settings destinations and Unified data
 home. Its `description` states those effects, scopes and grant lifetime;
+global scope explicitly identifies shared Amplifier settings. Descriptions
+must fit the receiver's 512-byte UTF-8 bound and contain no control characters;
+an unrepresentable scope falls back to once/deny without truncation.
 `allowOptionId` names the current `allow_once` choice, and `authorityLifetime`
 is `conversation`. Chat IDs, call IDs, reasons and timestamps are excluded from
 the matching key. Matching spans chats only when the actual targets and effects

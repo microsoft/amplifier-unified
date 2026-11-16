@@ -7,6 +7,7 @@ import hashlib
 import json
 from pathlib import Path
 import time
+import unicodedata
 import uuid
 
 from .configuration_authority import EFFECTS
@@ -54,11 +55,18 @@ def descriptor(service, session, approval):
     meaning = {'producer': PRODUCER, 'operation': 'configuration.grant',
                'owner': owner, 'effects': effects, 'scopes': scopes, 'targets': targets}
     key = hashlib.sha256(json.dumps(meaning, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
-    where = 'this app' if scopes == ['global'] else 'workspace ' + str(Path(session['workspace']).resolve())
+    where = ('shared Amplifier settings ' + targets['global'] + '; app ' + owner
+             if scopes == ['global'] else 'workspace ' + str(Path(session['workspace']).resolve()))
+    if 'global' in scopes and len(scopes) > 1:
+        where += '; shared Amplifier settings ' + targets['global']
     description = ('Configuration changes: ' + ', '.join(effect.replace('_', ' ') for effect in effects)
                    + '; scopes: ' + ', '.join(scopes) + '; ' + where
-                   + '. Matching applies across this agent’s chats. Each accepted grant lasts until Stop, grant revocation or expiry; revoking the rule stops future approvals.')
-    if len(description) > 512:
+                   + ". Matching applies across this agent's chats. Grant lasts until Stop, grant revoke or expiry; removing the rule affects future approvals.")
+    try:
+        size = len(description.encode('utf-8'))
+    except UnicodeError:
+        return None
+    if size > 512 or any(unicodedata.category(char) == 'Cc' for char in description):
         return None  # Never truncate a reusable scope into misleading wording.
     return {'version': 1, 'producer': PRODUCER, 'key': key, 'description': description,
             'allowOptionId': 'allow', 'authorityLifetime': 'conversation'}
