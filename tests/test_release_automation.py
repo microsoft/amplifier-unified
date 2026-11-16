@@ -727,7 +727,7 @@ def test_real_sdist_build_excludes_untracked_ci_checkouts(repository):
                  'components/portability.source.json', 'components/operations.source.json',
                  'components/workspace-metadata.source.json', 'components/kernels.source.json',
                  'components/outputs.source.json', 'components/publishing.source.json',
-                 'components/recall.source.json'):
+                 'components/recall.source.json', 'components/status-emitter.source.json'):
         target = repository / name; target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(project / name, target)
     for component in ('scheduling', 'worktrees', 'portability', 'workspace-metadata', 'outputs', 'publishing', 'recall'):
@@ -735,6 +735,7 @@ def test_real_sdist_build_excludes_untracked_ci_checkouts(repository):
                         repository / f'components/{component}-delivery')
     shutil.copytree(project / 'amplifier_operations', repository / 'amplifier_operations')
     shutil.copytree(project / 'amplifier_kernels', repository / 'amplifier_kernels')
+    shutil.copytree(project / 'amplifier_web/status_protocol', repository / 'amplifier_web/status_protocol')
     (repository / 'README.md').write_text('Package build fixture')
     for dependency in ('loop-live', 'recipes'):
         checkout = repository / '.ci' / dependency
