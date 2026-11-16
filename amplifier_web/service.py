@@ -1344,23 +1344,32 @@ class AppService:
             affected_detail.update(index.by_id[key].get('parentId') for key in session_ids
                                    if key in index.by_id)
             affected_detail.discard(None)
-        for queue in self.queues:
-            key = (self.queue_clients.get(queue), self.queue_sessions.get(queue))
-            if session_ids is not None and key[1] is not None and key[1] not in session_ids:
-                continue
-            if detail_only and session_ids is not None and key[1] is None and key[0] is not None:
-                record = self.clients.records.get(key[0], {})
-                interested = {record.get('selectedSessionId'), self._state.get('voice', {}).get('sessionId'),
-                              (record.get('view', {}).get('subagentHistory') or {}).get('sessionId')}
-                if not interested.intersection(affected_detail):
+        def deliver():
+            for queue in self.queues:
+                key = (self.queue_clients.get(queue), self.queue_sessions.get(queue))
+                if session_ids is not None and key[1] is not None and key[1] not in session_ids:
                     continue
-            if key not in published:
-                with self.clients.bind(key[0]):
-                    published[key] = self.session_state(key[1]) if key[1] is not None else self.browser_state()
-            snapshot = published[key]
-            if queue.full():
-                queue.get_nowait()
-            queue.put_nowait(snapshot)
+                if detail_only and session_ids is not None and key[1] is None and key[0] is not None:
+                    record = self.clients.records.get(key[0], {})
+                    interested = {record.get('selectedSessionId'), self._state.get('voice', {}).get('sessionId'),
+                                  (record.get('view', {}).get('subagentHistory') or {}).get('sessionId')}
+                    if not interested.intersection(affected_detail):
+                        continue
+                if key not in published:
+                    with self.clients.bind(key[0]):
+                        published[key] = self.session_state(key[1]) if key[1] is not None else self.browser_state()
+                snapshot = published[key]
+                if queue.full():
+                    queue.get_nowait()
+                queue.put_nowait(snapshot)
+        # Full/session readers may hydrate mutable owners. Reuse preparation
+        # only across this uninterrupted batch of bound web projections.
+        if all(self.queue_sessions.get(queue) is None
+               and self.clients.records.get(self.queue_clients.get(queue), {}).get('kind') == 'web'
+               for queue in self.queues):
+            self.directory.read_frame(deliver)
+        else:
+            deliver()
         if hasattr(self, "coordination"):
             self.coordination.notify()
         if self.update_manager:

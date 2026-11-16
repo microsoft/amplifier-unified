@@ -100,6 +100,13 @@ observe in-place edits even without a publication or revision bump. Compare smal
 and paginated catalogs, cold and warm polls, and exact public facts; this reduces
 status polling cost, not the model's response time or all chat-loading work.
 
+Direct shell-resource assembly and an uninterrupted publication to bound web
+clients share that same synchronous read boundary. Prepare admitted metadata
+once while preserving each client's selection, private drafts and detached
+snapshot. A publication containing any full/session or non-web reader keeps its
+existing path because those readers can hydrate mutable owners. End reuse before
+callbacks or awaits; each new call still observes in-place edits and query fences.
+
 The first web chat view contains at most 20 recent messages. Explicit earlier
 history reads keep their existing cursor and up-to-100-message page; canonical
 history and execution input are unchanged. Measure both server delivery and
