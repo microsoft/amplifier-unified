@@ -69,7 +69,10 @@ def accepts(service, session):
     from .managed_chats import is_managed
     if not is_managed(session):
         workspace = workspace_for(service, session)
-        if workspace is None or service.state.get('hiddenNativeWorkspaces'):
+        if workspace is None:
+            return False
+        from .workspace_selection import restoration_ids
+        if restoration_ids(workspace).intersection(service.state.get('hiddenNativeWorkspaces', ())):
             return False
     canvas = service.state.get('canvas', {})
     if canvas.get('kind') and not canvas.get('placeholder') and not canvas.get('app'):

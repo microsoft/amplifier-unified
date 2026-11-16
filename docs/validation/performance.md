@@ -93,6 +93,12 @@ latency claim.
 
 ## Separate current presentation from historical evidence
 
+Selecting an already admitted chat uses the existing private client commit when
+its workspace needs no restoration. Unrelated hidden workspaces must not force
+both conversations through history serialization. Keep actual workspace
+restoration, unsaved Canvas changes and dormant admission on their existing
+shared-write path; selection must also preserve pending runtime publications.
+
 The native status adapter prepares its live scalar rows once per synchronous
 poll, sharing the existing directory read frame across its observation reads.
 Each leased query retains its own durable/native fences, and the next poll must
