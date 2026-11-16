@@ -553,8 +553,10 @@ def current(state, evidence=None, *, manual_verified=None, explicit_retry=False,
         probe = row.get('probe') or {}
         reason = row.get('reason') or probe.get('reason')
         # Releases before the reason existed recorded only the place: the one
-        # ValueError that host.session.prepare_dependencies raises itself.
-        unnamed = (not reason and probe.get('stage') == 'prepare' and probe.get('errorType') == 'ValueError'
+        # ValueError that host.session.prepare_dependencies raises itself, in
+        # the phase that composes the profiles of a new candidate.
+        unnamed = (not reason and row.get('phase') == 'ecosystem-source-policy'
+                   and probe.get('stage') == 'prepare' and probe.get('errorType') == 'ValueError'
                    and re.fullmatch(r'amplifier_web\.host\.session:prepare_dependencies:[0-9]+',
                                     probe.get('failureLocation') or ''))
         return bool(connection.get('appProfile') and row.get('kind') == 'ecosystem'

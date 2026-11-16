@@ -1158,8 +1158,8 @@ class UpdateManager:
                 # The selected profile has no provider, so no candidate could
                 # qualify. This is not an attempt: no candidate, no diagnostic
                 # batch and no retry record. A minute tick repeats no publication.
-                if changed or not automatic:
-                    await self.publish(detail='Components update after an AI connection is set up.')
+                if changed:
+                    await self.publish()
                 return
             from .update_sequence import verify_app_selection
             await asyncio.to_thread(verify_app_selection, self, self.inventory)
