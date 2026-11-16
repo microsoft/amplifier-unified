@@ -348,6 +348,87 @@ def test_pending_certificate_review_does_not_issue_browser_grant(tmp_path, monke
     assert result["health"]["ok"] and reviews == [(tmp_path, ["private-target"], "private-pin")]
 
 
+def opening_launch(tmp_path, monkeypatch, outcome, *, listed=True):
+    """Launch with trust established, up to the one `open` command; record every effect."""
+    from amplifier_web import windows_installation, windows_consumer_shell, deployment, browser_entry, updates
+    monkeypatch.setattr(consumer, "installation", lambda root: (root, {}))
+    monkeypatch.setattr(consumer, "environment", lambda *a: {"private": "environment"})
+    monkeypatch.setattr(windows_consumer_shell, "listed", lambda root: listed)
+    async def prepared(*args, identity, progress):
+        return {"background": True, "created": False, "health": {"ok": True}}
+    monkeypatch.setattr(windows_installation, "prepare_background", prepared)
+    monkeypatch.setattr(deployment, "load_server_config", lambda home: {})
+    monkeypatch.setattr(browser_entry, "_owner_probe_targets", lambda *a: (["private-target"], "private-pin"))
+    events = []
+    monkeypatch.setattr(windows_installation, "review_browser_trust",
+                        lambda *a, fresh: events.append(("trust",)) or True)
+    async def process(*args, env, timeout):
+        events.append(("command", args, env, timeout))
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+    monkeypatch.setattr(updates, "process", process)
+    monkeypatch.setattr(windows_installation, "owner_notice",
+                        lambda message, **kw: events.append(("notice", message, kw)) or True)
+    return asyncio.run(consumer.launch(tmp_path)), events
+
+
+def test_first_start_reports_the_browser_on_the_open_commands_own_confirmation(tmp_path, monkeypatch):
+    from amplifier_web import browser_entry
+    from amplifier_web.update_diagnostics import CommandOutput
+    result, events = opening_launch(tmp_path, monkeypatch, CommandOutput(
+        "Amplifier is not ready yet.\n" + browser_entry.OPENED))
+    assert result["browser"] == {"opened": True} and result["health"]["ok"]
+    launcher = tmp_path / "tools/amplifier-unified/Scripts/amplifier-unified.exe"
+    # Trust first, then the one command; no message.
+    assert events == [("trust",), ("command", (launcher, "--data-dir", tmp_path / "app", "--workspace",
+                                               tmp_path / "workspace", "open"),
+                                   {"private": "environment"}, 120)]
+    # `open` waits for a restarting host and then needs about 10 seconds for
+    # its last two requests. The launcher adds 50 seconds for the start of the
+    # command (the generation check alone may take 30) and the browser call.
+    assert events[1][3] == browser_entry.HOST_WAIT + 60 > browser_entry.HOST_WAIT + 10 + 30
+
+
+def unconfirmed():
+    from amplifier_web.update_diagnostics import CommandFailure, CommandOutput, CommandTimeout
+    return [
+        # Windows, after a generation took the command over: exit status 0 and
+        # no confirmation. This was the silent first start of November 15.
+        CommandOutput(""),
+        CommandOutput("Browser opening disabled; no browser grant was issued."),
+        CommandFailure({"returncode": 1}), CommandTimeout(120.0), OSError("launcher missing"),
+    ]
+
+
+@pytest.mark.parametrize("outcome", unconfirmed(), ids=lambda value: type(value).__name__)
+def test_browser_that_did_not_open_gives_one_plain_message_and_no_second_attempt(tmp_path, monkeypatch, outcome):
+    result, events = opening_launch(tmp_path, monkeypatch, outcome)
+    assert result["browser"] == {"opened": False, "reason": "not-confirmed"} and result["health"]["ok"]
+    assert [event[0] for event in events] == ["trust", "command", "notice"]  # One command, one message.
+    message, options = events[2][1:]
+    assert options == {}  # A statement, not a question.
+    # Not "did not open" and not "is running": after its limit the launcher
+    # knows neither. A command that a generation took over can still open the
+    # browser, so the person looks for a tab first.
+    assert message == ("Amplifier may not have opened in your browser.\n\n"
+                       "Look for an Amplifier tab in your browser. If there is none, "
+                       "open Amplifier from the Start menu: Amplifier Unified. "
+                       "If this message appears again, restart this PC.")
+
+
+def test_browser_message_names_setup_when_the_start_menu_entry_does_not_exist(tmp_path, monkeypatch):
+    # After an uninstall the folder can run without its Start-menu entry. The
+    # next step must exist: the setup file adds the entry again.
+    from amplifier_web.update_diagnostics import CommandOutput
+    result, events = opening_launch(tmp_path, monkeypatch, CommandOutput(""), listed=False)
+    assert result["browser"] == {"opened": False, "reason": "not-confirmed"}
+    assert [event[0] for event in events] == ["trust", "command", "notice"]
+    assert events[2][1] == ("Amplifier may not have opened in your browser.\n\n"
+                            "Look for an Amplifier tab in your browser. If there is none, "
+                            "run the Amplifier setup file again. It keeps your chats and settings.")
+
+
 @pytest.mark.parametrize("first_setup", [True, False])
 def test_first_setup_creates_the_identity_in_this_process_and_hands_windows_that_root(
         tmp_path, monkeypatch, first_setup):
@@ -573,12 +654,13 @@ def test_a_start_that_cannot_use_the_sign_in_entry_names_that_cause_and_not_the_
     result = json.loads(capsys.readouterr().out)
     text = result["message"]
     assert result["errorType"] == type(problem).__name__ and text.startswith("Amplifier could not start")
-    for wrong in ("internet", "first start", "private detail", "install it again"):
+    for wrong in ("internet", "first start", "private detail", "install it again", "changes only"):
         assert wrong not in text
     if cause == "not-confirmed":
         # The cause without a claim that someone changed the entry, the exact
         # entry, what deleting it does, and the case in which not to delete it.
-        assert "could not confirm that its start-at-sign-in entry in Windows belongs to this installation" in text
+        assert ("could not confirm that its start-at-sign-in entry in Windows belongs to this installation. "
+                "It uses only an entry that it can confirm.\n\n") in text
         assert text.count(ENTRY) == 2 and "Task Scheduler Library" in text and "press the Delete key" in text
         assert "no longer starts when you sign in, until it makes a new entry" in text
         assert "another Amplifier installation" in text
@@ -636,8 +718,9 @@ def test_stop_and_uninstall_name_an_entry_that_was_not_confirmed_and_a_next_step
     (text,) = [text for text, confirm in notices if not confirm]
     assert text.startswith(opening + "\n\n") and text.endswith(f"Reference: {step}, TaskNotConfirmed")
     # The earlier texts for these steps name a wrong cause or a wrong next step.
+    # No claim about changes either: a start can make an entry and then not confirm it.
     for wrong in ("You can keep using it", "could not read its start-at-sign-in entry",
-                  "could not stop its background app", "Wait a few minutes"):
+                  "could not stop its background app", "Wait a few minutes", "changes only"):
         assert wrong not in text
     if operation == "stop":
         # One next step for both causes: the way to stop the app now.

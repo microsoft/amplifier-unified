@@ -173,6 +173,33 @@ def environment(root, value):
     return env
 
 
+async def browser_opened(command, env, *, limit=None):
+    """Run the owner's `open` command once; True only when it confirmed the browser.
+
+    The confirmation is a line of its output, never its exit status. On
+    Windows a command that an app generation takes over ends with status 0 for
+    this caller, whatever it did; a first start that updates the app is such a
+    case. The command is never run a second time.
+
+    `open` itself waits for a host that is restarting, and needs about 10
+    seconds more for its last two requests. The limit here adds 50 seconds
+    for the start of the command (the check of the generation that takes it
+    over has its own limit of 30 seconds) and for the browser call.
+
+    False means "not confirmed", not "not opened": after the limit, a command
+    that a generation took over still runs and can open the browser later.
+    """
+    from . import browser_entry
+    from .updates import process
+    if limit is None:
+        limit = browser_entry.HOST_WAIT + 60
+    try:
+        output = await process(*command, "open", env=env, timeout=limit)
+    except (OSError, ValueError, RuntimeError, TimeoutError):
+        return False
+    return browser_entry.OPENED in str(output).splitlines()
+
+
 async def launch(root, *, open_browser=True, progress=None):
     from .windows_installation import (AddressUnavailable, address_message, change_address,
                                        prepare_background, owner_notice, review_browser_trust)
@@ -213,14 +240,20 @@ async def launch(root, *, open_browser=True, progress=None):
             return {**result, "browser": {"opened": False, "reason": "certificate-review-pending"}}
         # The normal owner entry controls browser authentication and trust
         # behavior. Do not print or expose its transient grant in this process.
-        from .updates import process
-        try:
-            await process(str(launcher), "--data-dir", str(root / "app"),
-                          "--workspace", str(root / "workspace"), "open", env=env, timeout=30)
-        except (OSError, ValueError, RuntimeError, TimeoutError):
-            owner_notice("Amplifier is running in the background, but browser entry did not finish. "
-                         "Use the installation's retained status information to inspect the result. "
-                         "No certificate trust or security policy was changed.")
+        if not await browser_opened((launcher, "--data-dir", root / "app",
+                                     "--workspace", root / "workspace"), env):
+            # Say only what is known here: the browser was not confirmed. It
+            # can still open, so the person looks for a tab before a new start.
+            # The same next step as a failed start: the Start menu only when
+            # its entry exists (after an uninstall, setup adds it again).
+            from .windows_consumer_shell import listed
+            owner_notice("Amplifier may not have opened in your browser.\n\n"
+                         "Look for an Amplifier tab in your browser. If there is none, " + (
+                "open Amplifier from the Start menu: Amplifier Unified. "
+                "If this message appears again, restart this PC." if listed(root) else
+                "run the Amplifier setup file again. It keeps your chats and settings."))
+            return {**result, "browser": {"opened": False, "reason": "not-confirmed"}}
+        return {**result, "browser": {"opened": True}}
     return result
 
 
@@ -257,8 +290,12 @@ def entry_notice(purpose, entry, retry, *, listed=True):
     `purpose` is `start`, `status`, `stop` or `uninstall`; `entry` is the task's
     name in Task Scheduler. The check cannot say why the entry differs (a
     changed setting, another installation, a renamed Windows account), so the
-    text does not say that someone changed it. With `retry`, Windows gave no
-    answer about the entry's account: that can pass, and nothing is deleted.
+    text does not say that someone changed it. The cause sentence makes no
+    claim about what Amplifier changed: a start can make an entry and then
+    not confirm it. (Only the uninstall opening says that nothing was changed;
+    an uninstall reads the entry before it changes anything.) With `retry`,
+    Windows gave no answer about the entry's account: that can pass, and
+    nothing is deleted.
     `listed` is False when Amplifier is not in the Start menu: the setup file
     then opens it.
     """
@@ -273,7 +310,7 @@ def entry_notice(purpose, entry, retry, *, listed=True):
     cause = ("Windows could not check the account of Amplifier's start-at-sign-in entry, so "
              "Amplifier could not confirm that the entry belongs to this installation." if retry else
              "Amplifier could not confirm that its start-at-sign-in entry in Windows belongs to "
-             "this installation. It uses and changes only an entry that it can confirm.")
+             "this installation. It uses only an entry that it can confirm.")
     if purpose == "stop":
         # The person wants the app to stop. That needs no confirmed entry.
         return opening + "\n\n" + cause + "\n\nTo stop the app now, sign out of Windows or restart this PC."

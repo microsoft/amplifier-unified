@@ -285,7 +285,7 @@ class HistoryDirectory:
     @property
     def observation_revision(self):
         from .history_directory_observations import revision
-        return revision(self, self._frozen_state if self.snapshot else self.service._state)
+        return self.read_frame(revision, self, self._frozen_state if self.snapshot else self.service._state)
 
     @property
     def navigation_revision(self):

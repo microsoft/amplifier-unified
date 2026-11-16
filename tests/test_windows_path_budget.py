@@ -194,6 +194,127 @@ def test_default_workspace_folder_limits_are_stated_not_hidden():
     assert {name: root for name, root in measured.items() if root < MAX_ROOT} == DEFAULT_WORKSPACE_LONGEST_ROOT
 
 
+# Update stage. An in-app component update, and a setup run on a PC that
+# already has an AI connection, prepare the components in the stage folder
+# ``<root>\app\updates\releases\<32 hex>``. The compatibility probe then runs
+# with the stage as its app home and ``<stage>\shared-config`` as its shared
+# home, so the stage path is inside every session path of the probe. The probe
+# mounts a worker in ``<stage>\qualification-workspace`` (the check folder).
+#
+# A first installation has no stage: ``<root>\app\updates\baseline-runtime``
+# holds receipts only, and no probe runs there.
+STAGE = f'app\\updates\\releases\\{HEX32}'
+CHECK_FOLDER = f'{STAGE}\\qualification-workspace'
+BASELINE = 'app\\updates\\baseline-runtime'
+UPDATE_PROJECT = 'update-7260914d5698'   # session_files.update_check_project_name (19)
+
+
+def update_stage(project=UPDATE_PROJECT, identity=ROOT_ID):
+    """What a stage holds, and every path shape of the one session that a probe makes there."""
+    return [
+        ('stage folder', FOLDER, STAGE),
+        ('check folder', FOLDER, CHECK_FOLDER),
+        ('copied shared settings', FILE, f'{STAGE}\\shared-config\\settings.yaml'),
+        ('longest receipt', FILE, f'{STAGE}\\runtime-policy-reconciliation.json'),
+        ('source binding', FILE, f'{STAGE}\\foundation\\cache\\.source-bindings\\{HEX64}.json'),
+        ('probe report', FILE, f'{STAGE}\\runtime-reports\\{identity}\\module-load-failures.json'),
+        ('probe job-store lock', FILE,
+         f'{STAGE}\\shared-config\\projects\\{project}\\sessions\\{identity}\\live-jobs\\owner.lock'),
+    ] + [('probe ' + name, kind, f'{STAGE}\\shared-config' + relative.removeprefix('shared'))
+         for name, kind, relative in session_store(project, identity)
+    ] + [('probe ' + name, kind, relative) for name, kind, relative in capture_store(project, identity)]
+
+
+# The two session-store shapes that do not fit in a stage. A probe writes
+# neither: the app saves a view only for a chat that it shows, and a probe
+# starts no background job. ``tests/test_windows_long_paths_off.py`` checks the
+# complete list of what the real probe leaves in a stage with its test profile.
+STAGE_NEVER_WRITTEN = {'probe view temporary', 'probe background-job record'}
+# The longest path that a stage and its probe create at the longest root, and
+# the characters that remain below the file limit.
+STAGE_LONGEST = ('probe history temporary', 248)
+STAGE_SPARE = 11
+
+
+def test_update_stage_and_its_probe_fit_under_the_longest_root():
+    rows = update_stage()
+    assert {name for name, kind, relative in rows if not fits(kind, relative)} == STAGE_NEVER_WRITTEN
+    written = [(length(relative), name) for name, kind, relative in rows if name not in STAGE_NEVER_WRITTEN]
+    assert max(written) == STAGE_LONGEST[::-1] and FILE_LIMIT - max(written)[0] == STAGE_SPARE
+    folders = [length(relative) for name, kind, relative in rows if kind == FOLDER and name not in STAGE_NEVER_WRITTEN]
+    assert max(folders) == 202 <= FOLDER_LIMIT   # the probe's session folder
+    # The check folder is the app's own folder. Its name is not a CLI name and not a chat name.
+    assert len(UPDATE_PROJECT) == 19 and not UPDATE_PROJECT.startswith(('-', 'chat-'))
+    # A chat that needs its own setup is checked in a stage too, under the chat's short name.
+    chat = update_stage(CHAT_PROJECT)
+    assert {name for name, kind, relative in chat if not fits(kind, relative)} == STAGE_NEVER_WRITTEN
+    assert max(length(relative) for name, kind, relative in chat if name not in STAGE_NEVER_WRITTEN) == 250
+
+
+# Documented limit, not fixed here: a chat with its own setup (dependency
+# overrides of its workspace or session) is checked in a stage too, with the
+# chat's folder as the workspace (``runtime_profiles.py``). An app chat folder
+# has its short name there and fits (250 above). A folder that a person chose
+# keeps the CLI name inside the stage. Each number is the longest installation
+# folder path at which that row fits for the default workspace folder
+# (``<root>\workspace``). Arithmetic from the code; not run on a PC.
+CHAT_SETUP_IN_DEFAULT_WORKSPACE_LONGEST_ROOT = {
+    'probe history temporary': 39,
+    'probe request observation': 42,
+    'probe oversized-request copy': 42,
+    'probe pending transcript append': 46,
+    'probe transcript backup': 50,
+    'probe job-store lock': 52,
+    'probe request observation temporary': 54,
+    'probe metadata lock beside the folder': 55,
+    'probe session folder': 56,
+}
+
+
+def test_chat_setup_limits_in_a_persons_folder_are_stated_not_hidden():
+    def longest_root(name):
+        for root in range(MAX_ROOT, 0, -1):
+            kind, relative = next(row[1:] for row in update_stage(cli_project(root, 'workspace')) if row[0] == name)
+            if fits(kind, relative, root):
+                return root
+
+    measured = {name: longest_root(name) for name, kind, relative in update_stage() if name not in STAGE_NEVER_WRITTEN}
+    assert {name: root for name, root in measured.items() if root < MAX_ROOT} == CHAT_SETUP_IN_DEFAULT_WORKSPACE_LONGEST_ROOT
+    profiles = (ROOT / 'amplifier_web/runtime_profiles.py').read_text(encoding='utf-8')
+    assert 'stage = receipt_directory(home, selected)' in profiles and 'workspace = config.workspace' in profiles
+    assert '"AMPLIFIER_HOME": str(shared)' in profiles and 'shared = stage / "shared-config"' in profiles
+
+
+def test_the_model_reproduces_the_measured_update_stage_failure():
+    # Clean-room Run B, update from 0.98.4 to 0.98.5: installation folder path 51, long paths off.
+    assert (length(STAGE, 51), length(CHECK_FOLDER, 51), length(f'{STAGE}\\shared-config\\projects', 51)) == (
+        105, 129, 128)                                                       # measured in the guest
+    project = cli_project(51, CHECK_FOLDER)
+    assert len(project) == 129
+    assert length(f'{STAGE}\\shared-config\\projects\\{project}', 51) == 258 > FOLDER_LIMIT   # refused: ENOENT
+    assert length(f'{STAGE}\\shared-config\\projects\\{project}\\sessions', 51) == 267
+
+    def session_folder(root):
+        return length(f'{STAGE}\\shared-config\\projects\\{cli_project(root, CHECK_FOLDER)}\\sessions\\{ROOT_ID}', root)
+
+    # The CLI name repeats the installation path below the stage. No consumer
+    # installation held a probe session under it: not the shortest folder path
+    # (33 characters plus an account name of one letter), not the longest.
+    assert session_folder(34) == 270 > FOLDER_LIMIT and session_folder(MAX_ROOT) == 320
+    assert max(root for root in range(1, 99) if session_folder(root) <= FOLDER_LIMIT) == 22
+
+
+def test_a_first_installation_has_receipts_and_no_stage():
+    from amplifier_web import installation_runtime
+    assert length(f'{BASELINE}\\runtime-install-overrides.txt') == 118      # its longest path
+    baseline = inspect.getsource(installation_runtime._prepare_baseline)
+    assert 'validate(' not in baseline and 'shared-config' not in baseline and 'qualification-workspace' not in baseline
+    # With a saved connection, setup makes a stage and runs the same probe as an update.
+    configured = inspect.getsource(installation_runtime.prepare)
+    assert 'stage = receipt_directory(home, generation)' in configured
+    assert 'await UpdateManager.validate(owner, stage, generation)' in configured
+
+
 # Source store (Amplifier Foundation owns the layout; Unified supplies the root).
 # On Windows the locked Foundation names a new object or build folder with the
 # first SOURCE_NAME digits of its 64-digit name. The store reaches a staged
@@ -321,6 +442,42 @@ def test_store_folders_are_the_ones_the_app_really_uses(tmp_path, monkeypatch):
         assert f'"{setting}": "{folder}"' in consumer
 
 
+def test_stage_names_are_the_ones_the_updater_uses(tmp_path, monkeypatch):
+    from amplifier_web import runtime_environment, session_files
+    from amplifier_web.host.storage import SessionStore
+
+    def below(path):
+        return '\\'.join(Path(path).relative_to(tmp_path.resolve()).parts)
+
+    app = tmp_path.resolve() / 'app'
+    stage = runtime_environment.receipt_directory(app, HEX32)
+    assert below(stage) == STAGE and below(runtime_environment.receipt_directory(app)) == BASELINE
+    updates = (ROOT / 'amplifier_web/updates.py').read_text(encoding='utf-8')
+    assert "stage=self.directory/'releases'/release" in updates and 'release=uuid.uuid4().hex' in updates
+    assert "workspace = stage / 'qualification-workspace'" in updates
+    assert "'AMPLIFIER_WEB_HOME':str(stage),'AMPLIFIER_HOME':str(stage/'shared-config')" in updates
+    assert "shared_stage=stage/'shared-config'" in updates
+    # The probe's own session store, with the settings that the updater gives the probe.
+    workspace = stage / 'qualification-workspace'
+    workspace.mkdir(parents=True)
+    assert below(workspace) == CHECK_FOLDER
+    monkeypatch.setattr(session_files, '_SHORT_CHAT_PROJECTS', True)
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(stage))
+    monkeypatch.setenv('AMPLIFIER_HOME', str(stage / 'shared-config'))
+    monkeypatch.setenv('AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH', str(tmp_path / 'capture'))
+    project = 'update-' + HEX32[:12]
+    rows = {name: relative for name, kind, relative in update_stage(project)}
+    assert session_files.project_slug(workspace) == project and len(project) == len(UPDATE_PROJECT)
+    store = SessionStore.for_app(stage, workspace)
+    assert below(store.directory(ROOT_ID)) == rows['probe session folder']
+    assert below(session_files.capture_dir(workspace, ROOT_ID)) == rows['probe capture folder']
+    # Names that the probe writes in its stage; the session rows are Foundation's and loop-live's.
+    session = (ROOT / 'amplifier_web/host/session.py').read_text(encoding='utf-8')
+    assert 'JobStore(store.base_dir / runtime.session_id / "live-jobs")' in session
+    for name in ('runtime-policy-reconciliation.json', 'module-load-failures.json', 'runtime-reports'):
+        assert any(name in path.read_text(encoding='utf-8') for path in (ROOT / 'amplifier_web').rglob('*.py')), name
+
+
 def test_source_store_folder_names_are_the_ones_setup_and_the_launcher_use():
     from amplifier_web import windows_consumer
     assert (windows_consumer.SOURCE_STORE, windows_consumer.EARLIER_SOURCE_STORE) == (
@@ -379,6 +536,11 @@ def table():
     lines += [f'  {name:34} {size:3}' for name, size in sorted(LONGEST_SESSION_ID.items(), key=lambda item: item[1])]
     lines += ['', 'Chat in the default workspace folder (CLI name): longest installation folder path that fits:']
     lines += [f'  {name:34} {size:3}' for name, size in DEFAULT_WORKSPACE_LONGEST_ROOT.items()]
+    lines += ['', 'Update stage and the one session of its compatibility probe. Path length, longest first',
+              '("never written": the shape does not fit, and a probe does not write it):']
+    for name, kind, relative in sorted(update_stage(), key=lambda row: -length(row[2])):
+        note = '   never written' if name in STAGE_NEVER_WRITTEN else ''
+        lines.append(f'  {name:38} {kind:6} +{len(relative) + 1:3} = {length(relative):3}{note}')
     for title, folder in ((f'Source store "{SOURCE_FOLDER}" (new installation)', SOURCE_FOLDER),
                           (f'Source store "{EARLIER_SOURCE_FOLDER}" (installation made by an earlier setup file)',
                            EARLIER_SOURCE_FOLDER)):

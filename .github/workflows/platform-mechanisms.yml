@@ -30,6 +30,7 @@ on:
       - amplifier_web/host/storage.py
       - amplifier_web/auth.py
       - amplifier_web/browser_entry.py
+      - amplifier_web/application_generations.py
       - amplifier_web/server.py
       - amplifier_web/static/browser-entry.js
       - amplifier_web/static/windows-login.html
@@ -101,6 +102,7 @@ on:
       - tests/test_windows_installation.py
       - tests/test_windows_ports.py
       - tests/test_windows_consumer.py
+      - tests/test_windows_first_open.py
       - tests/test_windows_consumer_shell.py
       - tests/test_installation_runtime.py
       - tests/test_installation_health.py
@@ -276,6 +278,18 @@ jobs:
         run: |
           .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -p no:cacheprovider tests/test_update_health_setup_record.py
           if ($LASTEXITCODE -ne 0) { throw 'Setup-record update health checks failed.' }
+      # First start with an update: the real `open` command, handed over with
+      # os.execv as an app generation is, against this installation's host
+      # while that host restarts as another package version. Real private
+      # files, pinned HTTPS and grant store, in a folder with a space in its
+      # name. A recorder stands in for the browser; Task Scheduler, the update
+      # and the Windows certificate question are not part of this check.
+      - name: Check that the first start's open step waits for a restarting host and opens the browser once
+        shell: pwsh
+        run: |
+          .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -s -p no:cacheprovider tests/test_windows_first_open.py | Tee-Object -Variable report
+          if ($LASTEXITCODE -ne 0) { throw 'Windows first-start open checks failed.' }
+          if ($report -match 'skipped') { throw 'A native first-start open case was skipped; on this lane it must run.' }
       - name: Check sign-out of all browsers and remote sign-in by code (real private store, real HTTPS)
         shell: pwsh
         run: |
