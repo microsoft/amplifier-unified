@@ -78,7 +78,6 @@
       "id": "web",
       "kind": "external",
       "label": "Amplifier Web Client",
-      "link": false,
       "repository": "microsoft/amplifier-client-web"
     },
     {

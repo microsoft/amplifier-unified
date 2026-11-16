@@ -24,7 +24,7 @@ than optimizing one control in isolation.
 
 Author browser source, client tests and client build tools in
 [`amplifier-client-web`](https://github.com/microsoft/amplifier-client-web), the
-sole client authoring owner. It remains private; do not change its visibility.
+sole client authoring owner.
 Until an approved repository-delivery cutover, every client change intended for
 Unified must also reach the committed `components/web-client` delivery copy.
 Follow [component ownership and assembly](components/README.md#refresh-and-retire-the-copy):
