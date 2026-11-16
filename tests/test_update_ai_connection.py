@@ -117,13 +117,20 @@ async def test_the_probe_names_why_a_selected_profile_is_refused(tmp_path, monke
 
 # ---- The page state: a pure projection.
 
+APPLICATION = {'id': 'application', 'kind': 'app', 'status': 'current'}
+
+
 def checked(**changes):
     """The Updates state of a new installation after a check found four missing included components."""
     tier = {'status': 'available', 'available': 4, 'missing': 4, 'protected': 0, 'issues': 0}
     waiting = {'status': 'waiting', 'available': 0, 'missing': 0, 'protected': 0, 'issues': 0}
+    rows = [{'id': 'included:' + name, 'kind': 'included source', 'updateTier': 'included', 'status': 'update',
+             'missing': True, 'current': None, 'latest': 'b' * 40}
+            for name in ('imagegen', 'computer-use', 'context-intelligence', 'routing-matrix')]
     return {'phase': 'available', 'error': None, 'available': 4, 'appAvailable': False,
             'sequence': {'stage': 'included', 'install': False, 'included': tier, 'other': waiting},
-            'application': {'status': 'current'}, 'items': [], 'diagnostics': {'events': []}, **changes}
+            'application': {'status': 'current'}, 'items': rows + [APPLICATION],
+            'diagnostics': {'events': []}, **changes}
 
 
 def test_page_says_that_the_update_waits_for_a_connection():
@@ -135,6 +142,12 @@ def test_page_says_that_the_update_waits_for_a_connection():
         assert health.current(state, {}, connection=known)['title'] == 'Updates available'
     # A new application release is the next step; it does not wait for a connection.
     assert health.current(checked(appAvailable=True), {}, connection=NEEDED)['title'] == 'Updates available'
+    # Neither does a Smart Tool update.
+    tool = {'id': 'tool', 'kind': 'smart tool', 'updateTier': 'other', 'status': 'update'}
+    other = {'status': 'available', 'available': 1, 'missing': 0, 'protected': 0, 'issues': 0}
+    tools_only = checked(available=1, items=[tool, APPLICATION],
+                         sequence={'stage': 'other', 'install': False, 'included': {'status': 'current'}, 'other': other})
+    assert health.current(tools_only, {}, connection=NEEDED)['title'] == 'Updates available'
     # A check is in progress.
     assert health.current(checked(phase='checking'), {}, connection=NEEDED)['status'] == 'working'
 
@@ -257,10 +270,12 @@ async def manager(tmp_path, monkeypatch):
     async def application():
         return {'id': 'application', 'kind': 'app', 'status': 'current'}
 
+    manager.installed = 'a' * 40
+
     async def inventory(**kw):
         return [{'id': 'included', 'kind': 'runtime dependency', 'package': 'amplifier-foundation',
                  'updateTier': 'included', 'label': 'included', 'url': 'https://example.invalid/included',
-                 'ref': 'main', 'current': 'a' * 40, 'status': 'not_checked', 'eligible': True,
+                 'ref': 'main', 'current': manager.installed, 'status': 'not_checked', 'eligible': True,
                  'appSelection': update_sequence.app_selection(manager.home)['witness']}]
 
     async def remote(*args, **kw):
@@ -346,6 +361,50 @@ async def test_update_starts_by_itself_after_the_first_connection(manager):
     manager.save({})
     await manager.check()
     assert manager.service.state['updates']['currentStatus']['title'] == COULD_NOT_FINISH
+
+
+async def test_after_the_first_connection_only_a_newly_checked_selection_is_installed(manager):
+    await manager.tick()
+    no_attempt(manager)
+    manager.save(providers(PROVIDER))
+    manager.installed = 'b' * 40  # The new check finds nothing to install.
+    await manager.tick()
+    assert manager.stages == []
+    state = manager.service.state['updates']
+    assert (state['phase'], state['available'], state['error']) == ('checked', 0, None)
+    assert not [event for event in manager.diagnostics.state['events'] if event['status'] == 'failed']
+
+
+async def test_an_installation_with_the_old_record_is_plain_after_its_next_check(manager, monkeypatch):
+    """The state that v0.98.7 left: the failed stage's phase and text, its record and its retry witness."""
+    monkeypatch.setattr(health, 'setup_evidence', lambda m: dict(SETUP_RECORD))  # The installed runtime is a fixture.
+    text = 'Ecosystem update failed during ecosystem source policy. Current sources remain active; no conversation work was replayed.'
+    state = manager.service.state['updates']
+    diagnostics = manager.diagnostics.state
+    diagnostics.update(attemptId=RECORDED['attemptId'], kind='ecosystem', revision=RECORDED['revision'],
+                       lastFailure=copy.deepcopy(RECORDED),
+                       batch={'attemptId': RECORDED['attemptId'], 'kind': 'ecosystem',
+                              'retry': {'inputKey': 'recorded-inputs', 'mode': 'changed-inputs'}})
+    manager.diagnostics._track_failure(copy.deepcopy(RECORDED))
+    await manager.publish(phase='error', error=text)
+    assert (state['currentStatus']['title'], state['currentStatus']['detail']) == (COULD_NOT_FINISH, text)
+    history = copy.deepcopy(diagnostics['activeFailures'])
+    assert len(history) == 1 and next(iter(history.values()))['displayError'] == text
+    # v0.98.7's failed stage left its sources installed, so the next check finds nothing newer.
+    manager.installed = 'b' * 40
+    await manager.check()
+    assert state['currentStatus']['status'] == 'current' and state['currentStatus']['title'] == 'You\u2019re up to date'
+    assert not snapshot(manager.service.state)['items']
+    # History is kept as it was.
+    assert diagnostics['lastFailure'] == RECORDED and diagnostics['activeFailures'] == history
+    # A later component update still waits for a connection, and then runs.
+    manager.installed = 'a' * 40
+    await manager.check()
+    await manager.tick()
+    assert state['currentStatus'] == WAITING and manager.stages == []
+    manager.save(providers(PROVIDER))
+    await manager.tick()
+    assert len(manager.stages) == 1
 
 
 async def test_a_selection_with_its_own_providers_is_qualified_and_its_refusal_is_reported(manager):

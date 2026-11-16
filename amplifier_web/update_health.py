@@ -579,9 +579,11 @@ def current(state, evidence=None, *, manual_verified=None, explicit_retry=False,
                       'Their current versions remain installed. Review the failed tool to retry or keep its current version.',
                       action='tools')
     if (connection.get('needed') and not state.get('appAvailable') and not seq.get('nextStage')
-            and any((seq.get(tier) or {}).get('available') for tier in ('included', 'other'))):
+            and any(row.get('status') == 'update' and row.get('kind') not in {'app', 'smart tool'}
+                    and row.get('id') != 'application' for row in state.get('items', []))):
         # Not a failure and not an attempt: a component update qualifies the
-        # selected conversation profile, which has no provider yet.
+        # selected conversation profile, which has no provider yet. Application
+        # and Smart Tool updates do not wait.
         return result('waiting', 'Components update after you set up an AI connection',
                       'Nothing failed. Amplifier checks new components together with an AI connection, and none is set up yet. Set up an AI connection in Settings. The update can then start.',
                       action='connect')

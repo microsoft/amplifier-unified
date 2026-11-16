@@ -1766,12 +1766,14 @@ class UpdateManager:
                              fresh=True, automatic=True)
         elif settings.get('autoCheck',True) and time.time()-max(state.get('lastCheck') or 0,state.get('lastAttempt') or 0)>=settings.get('intervalHours',DEFAULT_CHECK_INTERVAL_HOURS)*3600:
             await self.check(fresh=False, automatic=True)
-        state=self.service.state['updates']
-        managed_preview=state.get('appAvailable') and state.get('application',{}).get('canInstall') is False
-        sequence = state.get('sequence', {})
-        install_intent = (sequence.get('install') if sequence.get('manualHandoff')
-                          else settings.get('autoInstall', True) or sequence.get('install'))
-        if not managed_preview and install_intent and state.get('available',0) and state.get('phase') == 'available':
+        def admitted():
+            state=self.service.state['updates']
+            managed_preview=state.get('appAvailable') and state.get('application',{}).get('canInstall') is False
+            sequence = state.get('sequence', {})
+            install_intent = (sequence.get('install') if sequence.get('manualHandoff')
+                              else settings.get('autoInstall', True) or sequence.get('install'))
+            return not managed_preview and install_intent and state.get('available',0) and state.get('phase') == 'available'
+        if admitted():
             # A newly checked desired graph still goes through install's input
             # admission. Elapsed time never replays a settled failed preparation.
             from .update_sequence import StaleAppSelection
@@ -1780,12 +1782,13 @@ class UpdateManager:
             except StaleAppSelection:
                 # The settings changed after this check: for example a first AI
                 # connection, for which the update waited. Nothing was prepared.
-                # Check once more and install only that checked selection.
+                # Check once more, and install that checked selection by the
+                # same admission. A second refusal is reported as before.
                 await self.check(fresh=False, automatic=True)
-                state = self.service.state['updates']
-                if state.get('available',0) and state.get('phase') == 'available':
+                if admitted():
                     await self.install(automatic=True)
             return
+        state=self.service.state['updates']
         if self.independent_tool_results(state) and (state.get('phase') not in {'error', 'interrupted'} or any(
                 row.get('runnerUpdate') and not row.get('failure') for row in state['pendingSmartTools'])):
             await self.activateSmartTools()

@@ -307,6 +307,35 @@ Shared remote/ref lookups join across application and worker checks, with bounde
 
 Installation stages changed source bindings and prepares the **currently offered app profiles** with the enabled app behaviors. Saved chats and historical workspace/bundle combinations do not expand this qualification set. A single dependency batch collects selected modules and bundle-root packages, resolves their union once in an isolated environment, freezes the graph, and mounts each offered profile in a fresh process. These checks deny approval requests, verify required host capabilities and absence of CLI libraries, and never execute a model turn. Module initialization hooks still run.
 
+A component update qualifies the selected conversation profile, and a profile
+with no provider cannot qualify. While the app's own profile is selected and no
+AI connection is set up, the update owner starts no component candidate and
+records no attempt. Settings says that components update after an AI connection
+is set up, and that nothing failed. This holds for the automatic update of a new
+installation and for a person's own Update request, on every platform. The
+update starts after the first connection: a connection changes the checked
+configuration, so the owner checks once more and installs that checked
+selection. An installation that never gets a connection never updates its
+components; it also cannot hold a conversation. Application updates and Smart
+Tool updates do not wait.
+
+The rule (`profile_catalog.connection`) reads the same global settings as the
+stage and drops a provider row by the same function as composition
+(`host.config.provider_dropped`). It makes a claim only for the app's own
+profiles from their own source with the app's own behaviors, which declare no
+provider. A profile from another source, a bundle source override or another
+app behavior can declare a provider itself: there the stage runs and the probe
+decides. Its refusal of an incomplete selected profile carries a reason,
+`ai-connection-needed` when only a provider is missing and
+`incomplete-conversation-profile` otherwise.
+
+Update health treats a recorded refusal for a missing connection on the app's
+own profile as history, not as a failed update: the stage stopped before it
+qualified anything. This includes the unnamed record that releases before this
+rule wrote for an update that the app started by itself. The record stays in
+diagnostics. The failed stage's own text stays until the next check, and every
+other failure keeps its priority.
+
 A proven catalog-data-only change reuses an already qualified runtime. This requires an exact tree comparison, an allowlisted data contract and unchanged app-profile inputs. Unknown files, code, dependency or profile changes take the qualification path. Failed qualification leaves the active pointer unchanged.
 
 Qualified component generations use per-worker activation. Promotion atomically changes the generation selected by new starts. Running workers retain their source generation, environment and native writer, including while idle. The existing retirement handshake saves, rechecks pending work/resources and exits before releasing ownership. The next explicit work starts a fresh worker on the current generation and resumes native history. Active voice protects its worker. The updater does not interrupt a turn, automatically replay an operation, or add another checkpoint format. Application replacements, incompatible worker protocols and legacy generations retain the coordinated restart boundary.

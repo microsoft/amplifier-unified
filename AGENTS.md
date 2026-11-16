@@ -228,6 +228,12 @@ built per request (`update_checks.registry_trust`). Never turn verification off.
 A new installation has no component generation until its first component
 update; update health then verifies setup's record (`update_health.setup_evidence`),
 which is weaker than a qualified generation and never authorizes preparation.
+On every platform a component update waits for the first AI connection
+(`profile_catalog.connection`): the update owner starts no candidate and records
+no attempt, because a profile with no provider cannot qualify. The rule and
+bundle composition share `host.config.provider_dropped`; keep them on one rule.
+It makes a claim only for the app's own profiles. A connection changes the
+checked selection, so the owner checks again before it installs.
 The installed-package reader runs Git for a package from a local checkout, so
 a caller without the installation's Git folder on PATH reads "not prepared".
 A folder below the installation folder that the app itself uses as a session
