@@ -1622,6 +1622,15 @@ class AppService:
                 self.projections.invalidate(state=self._state, session_ids={identity})
             raise
 
+    def approval_request_hash(self, session, approval):
+        """Bind an asynchronous human choice to the exact displayed request."""
+        if approval['id'].startswith('capability:'):
+            return self.configuration_authority.request_view(session, approval['id'])['requestHash']
+        value = {'approval': approval, 'workspace': session['workspace'],
+                 'interruptionRevision': session.get('interruptionRevision', 0),
+                 'executionRevision': session.get('executionRevision', 0)}
+        return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
     def _session(self, sid=None, *, hydrate=True):
         sid = sid or self.state["selectedSessionId"]
         from .session_identity import resolve
@@ -3615,6 +3624,9 @@ class AppService:
                     raise AppError("This permission request is no longer pending.", 409)
                 if origin not in {"ui", "user"}:
                     raise AppError("This tool requested user approval. It must be answered by the user.", 403)
+                if (args.get('expectedRequestHash')
+                        and args['expectedRequestHash'] != self.approval_request_hash(session, approval)):
+                    raise AppError('The request changed. Review it before deciding.', 409)
                 decision = "allow" if args["decision"] in {"allow", "approve"} else "deny"
                 offered = approval.get("options") or ["allow", "deny"]
                 selected = next((value for value in offered
@@ -5250,7 +5262,20 @@ class AppService:
                 activity = self._activity(session, "retrying" if retrying else "workers", "A worker is retrying a model request" if retrying else "Delegated work is reporting progress")
                 activity["lastEvent"] = {"worker": payload.get("name", "Worker"), "status": payload.get("status"), "at": time.time()}
             elif kind == "approval.requested":
-                session["approvals"].append({**payload, "status": "pending"})
+                identity = payload.get('id', '')
+                if identity.startswith('capability:'):
+                    # The host already owns this card and its scope. A worker
+                    # notification cannot replace it or mint another grant.
+                    self.configuration_authority.reconcile(session)
+                    approval = next((a for a in session['approvals'] if a['id'] == identity), None)
+                    if not approval or approval.get('status') != 'pending':
+                        return
+                else:
+                    approval = next((a for a in session['approvals'] if a['id'] == identity), None)
+                    if approval is not None:
+                        return
+                    approval = {**payload, "status": "pending"}
+                    session["approvals"].append(approval)
                 from .input_status import human_wait
                 human_wait(session, payload)
                 self._activity(session, "approval", "Waiting for your approval")

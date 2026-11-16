@@ -453,6 +453,8 @@ async def test_native_configuration_request_waits_for_human_without_replaying_ef
         row = app.configuration_authority.rows(root['id'])[0]
         assert row['nativeWait']
         if decision != 'immediate':
+            await until(lambda: any(event.get('type') == 'approval.requested' for event in events))
+            assert [event['id'] for event in events if event.get('type') == 'approval.requested'] == [row['id']]
             assert not task.done() and row['id'] in worker.approvals
             if decision == 'cancel':
                 task.cancel()

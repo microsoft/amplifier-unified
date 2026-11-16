@@ -463,6 +463,9 @@ class Worker:
                     result = await self.bridge(operation, {**args, 'id': command, '_configurationWait': True})
                     grant = result.get('result', {})
                     if grant.get('status') == 'pending':
+                        # The host already saved the canonical card. Announce
+                        # that exact wait to attached approval clients as well.
+                        publish({'type': 'approval.requested', 'id': identity})
                         expiry = grant.get('expiresAt')
                         try:
                             if expiry is None:

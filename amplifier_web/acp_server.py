@@ -18,7 +18,7 @@ from acp.schema import (AgentCapabilities, AgentMessageChunk, InitializeResponse
                         McpCapabilities, NewSessionResponse, PromptResponse,
                         ResumeSessionResponse, SessionCapabilities,
                         SessionResumeCapabilities, TextContentBlock,
-                        ToolCallProgress, ToolCallStart)
+                        ToolCallProgress, ToolCallStart, ToolCallUpdate, PermissionOption)
 from aiohttp import WSMsgType, web
 
 from .execution_owner import ExecutionOwner, ensure_observers
@@ -130,8 +130,23 @@ class HostAgent:
 
     def on_connect(self, connection):
         self.client = connection
+        self.owner.request_permission = self.request_permission
         self.owner.retirement_hint = lambda identity: connection.ext_notification(
             'amplifier/retirementRequested', {'sessionId': identity})
+
+    async def request_permission(self, identity, approval):
+        details = approval.get('details', {})
+        text = str(approval.get('prompt') or approval.get('title') or 'Allow this request?')
+        if details:
+            text += '\n\n' + json.dumps(details, ensure_ascii=False, indent=2)
+        options = [PermissionOption(option_id='allow', name='Allow this request', kind='allow_once')]
+        options.append(PermissionOption(option_id='deny', name='Deny', kind='reject_once'))
+        response = await self.client.request_permission(session_id=identity,
+            tool_call=ToolCallUpdate(tool_call_id=approval['id'], title=approval.get('title') or 'Permission needed',
+                status='pending', kind='other', raw_input=details,
+                content=[{'type': 'content', 'content': {'type': 'text', 'text': text}}]), options=options)
+        outcome = response.outcome
+        return outcome.option_id if outcome.outcome == 'selected' else 'deny'
 
     def require_initialized(self):
         if not self.initialized:

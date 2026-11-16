@@ -50,6 +50,7 @@ class Peer:
         self.socket = socket
         self.serial = 0
         self.updates = []
+        self.permission = None
 
     async def call(self, method, **params):
         self.serial += 1
@@ -59,6 +60,10 @@ class Peer:
         async with asyncio.timeout(5):
             while True:
                 row = await self.socket.receive_json()
+                if row.get('method') == 'session/request_permission' and self.permission is not None:
+                    outcome = await self.permission(row['params'])
+                    await self.socket.send_json({'jsonrpc': '2.0', 'id': row['id'], 'result': {'outcome': outcome}})
+                    continue
                 if row.get('id') == identity:
                     return row
                 self.updates.append(row)

@@ -114,9 +114,27 @@ leaves the outcome uncertain to the client; inspect the retained chat before
 deciding on new input.
 
 Attachment does not change access mode. Existing Full authority continues without
-a human approval loop. Decisions this text adapter cannot present stay with the
-host; it never invents consent. Use Unified's existing Access control or `access`
-command to set standing access.
+a human approval loop. The authenticated attachment presents tool and native
+configuration waits through standard ACP `session/request_permission`. The host
+commits the exact current choice; a client response is not itself a grant. Stop,
+expiry, revocation and a competing decision invalidate stale replies. Connection
+loss preserves the pending record and never grants authority or replays work.
+
+`allow_once` decides the displayed request. For configuration requests the card
+discloses the named effects/scopes and existing lifetime through Stop, revocation
+or expiry; it does not mean one configuration write. This adapter offers only
+the current-request allow/deny choices; it does not create a second durable
+approval-policy store. For Instance-hosted agents, agent-wide matching rules
+and no-prompt mode belong to the Instance's declared policy integration, not
+to a separate per-chat cache in this adapter. Unsupported reusable-scope
+descriptors must not be inferred from model-authored prompt text or tool titles.
+Use Unified's existing **Access & approvals** or `access` command to explicitly
+select or revoke broader standing Full access. No attachment or availability
+recovery enables it automatically; native budgets and OS limits remain in force.
+Full access also changes supported filesystem access ceilings. It is not an
+alias for suppressing approval prompts. Revoking a remembered policy must not
+claim to undo an effect or revoke an already accepted configuration grant unless
+the serving owner explicitly performs that grant revocation.
 
 Disconnect releases observation and future use of the attachment's transient HTTP
 MCP settings. Admitted work retains its mounted tools and can finish. Reattachment
