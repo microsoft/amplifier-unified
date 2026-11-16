@@ -87,10 +87,11 @@ maintenance releases:
    the effect and what the person should do. Ordinary fixes need an entry, not
    an attention badge; `notices: []` is valid. Preserve existing notice IDs and
    acknowledgments. Substantive wording corrections may require review again.
-3. Check that skipped releases remain represented and that a person can tell
+3. Check that skipped releases' high-impact guidance remains represented and that a person can tell
    what they are installing. Backfill omissions under the version that actually
    shipped the behavior, using verified source/release evidence. Deliver those
    corrections in the next package; never rewrite published tags or assets.
+   The full older ordinary changelog remains archived in Git and GitHub releases.
 4. In the prepared PR, state the version rationale and whether high-impact
    guidance is included (or why none is needed). Use the existing release-notes
    tests, Fast release checks and package validation; no extra broad gate.
@@ -102,14 +103,28 @@ consumes the bounded history budget. Formatting changes must preserve all parsed
 values, including notice IDs, wording, aliases and release order.
 
 The same data supplies installed/offline history and GitHub release text.
-The validator already requires the current entry and a nonempty changes list,
-and rejects invalid, duplicate or future versions; it cannot judge whether the
-words cover the shipped behavior. Keep within `release_notes.py`'s bounded
-history limits (512 entries and 512,000 UTF-8 bytes); plan retention deliberately
-before either bound is reached rather than silently dropping notes. The entry
-limit accommodates the authored backfill; the byte budget preserves the complete
-history as it grows. Cached entries are validated in compact UTF-8 form, so JSON
-spacing and ASCII escaping do not discard otherwise valid saved notes.
+The validator requires the current entry and a nonempty changes list, and
+rejects invalid, duplicate or future versions; it cannot judge whether the words
+cover the shipped behavior. One shared `release_notes.retain` policy serves
+normal preparation and runtime merged/cached history: protect every complete
+notice-bearing record, regardless of age, and keep the newest 256 ordinary
+records. Remove the oldest ordinary records further if necessary to fit the
+unchanged hard limits of 512 entries and 512,000 UTF-8 bytes, including the exact
+package-format overhead. Preserve retained values, notice IDs, wording and
+`previousTitles` aliases; never rewrite acknowledgement records.
+
+Validate all input rows before selection. Protected guidance that cannot fit
+fails explicitly, never silently drops notices or returns empty-success history.
+A newly prepared current entry must fit beside that guidance; otherwise preparation
+fails before any metadata write. Identical repeated preparation is a no-op.
+Malformed history still fails validation; oversized saved/package input reports
+a capacity error instead of hiding protected loss as the damaged-app fallback.
+Cached input is checked in compact UTF-8 form; valid JSON spacing/escaping does
+not age out rows. Installed entries retain whole-version precedence over cached
+conflicts, including notice corrections and aliases, before runtime retention.
+The bounded package/cache is displayed history, not the full archive: Git and
+immutable GitHub releases preserve older ordinary entries. Do not edit published
+assets, session history or live notice acknowledgements to compact this view.
 
 Write one entry JSON file outside the source checkout, replacing the sample values:
 
