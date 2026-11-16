@@ -414,6 +414,69 @@ of 0.94.1 that updated itself to 0.95.0 at first start, the earlier two-answer
 check showed the "this PC still does not trust the connection" message two
 seconds after Yes, although the root was in the store.)
 
+The browser step waits for the same restart. After trust is established, the
+launcher runs `amplifier-unified open` once. Windows hands that command to the
+active app generation, which after an update at first start is the new version,
+while the earlier host can still serve for some seconds and is then away. `open`
+accepts only a host of its own package version. So `open` waits up to 60
+seconds for that host (`browser_entry.HOST_WAIT`): it repeats only the health
+request, sends one grant request to the first host that matches, and starts the
+browser once. A refused or unconfirmed grant request ends the command; it is
+never sent again. After the first round of health requests, none starts at or
+after the end of the wait; one that started can take 5 seconds and the grant
+request 5 more. The typed-code command for another device
+(`amplifier-unified browsers code`) uses the same owner request without a
+wait: it asks each local address once.
+
+The launcher learns the result from one line of the command's output
+(`browser_entry.OPENED`), not from its exit status. On Windows a command that
+a generation takes over ends with exit status 0 for its caller, whatever it
+did: `os.execv` starts a new process there and ends the calling one. The
+launcher allows the command 120 seconds: the wait, 10 seconds for the last two
+requests, and 50 for the start of the command and the browser call (the check
+of the generation that takes the command over has its own limit of 30
+seconds). Without the confirmation line the launcher knows only that
+the browser was not confirmed: after its limit, a command that a generation
+took over still runs and can open the browser. So its one message says that
+Amplifier may not have opened in the browser, to look for an Amplifier tab
+first, and otherwise to open it from the Start menu: Amplifier Unified. When
+the Start-menu entry does not exist, the message names the setup file instead,
+by the same two facts as the launcher's failure message. The message does not
+say that Amplifier is running; the launcher made no new check of that.
+The launcher is the code that setup
+installed and an in-app update does not change it, so the line's text is fixed.
+For the same reason the wait is in `open`: a launcher from an earlier setup file
+gets it from the new generation. Such a launcher allows the command 30 seconds
+and reads the exit status; if the restart takes longer, it shows its earlier
+message. `open` goes on to the end of its own wait, so the browser can still
+open after that message: when the new host answers within the wait and gives
+the grant.
+
+The hand-over also keeps each argument whole. The Windows C runtime joins an
+`os.execv` list with spaces and quotes nothing, so the installation folder of a
+person whose user name has a space would reach the app as two arguments.
+`application_generations.exec_arguments` quotes each argument on Windows.
+
+**Limit, not repaired here:** the hand-over is made by the launcher, and an
+installation keeps the launcher of its setup file. An installation that a
+setup file before this change made, in a folder with a space, keeps the plain
+list. From its first app update, the `amplifier-unified` commands that are
+handed to the app generation do not reach the app. Read from source, for the
+two places where a person meets it: the Start-menu entry gets no status from
+its `service status` command and shows "Amplifier could not start", and a
+first start that updates the app opens no browser. The task that starts the
+background app does not use this hand-over (also read from source). Such an
+installation needs its launcher replaced
+(`windows_launcher_refresh`); nothing does that automatically. Measured on a
+Windows runner: a plain list splits an argument with a space, and with an
+interpreter under a folder with a space the command does not arrive. Not run:
+a real installation of an earlier setup file under such a user name.
+
+(In a clean-room run of 0.98.1 that updated itself to 0.98.4 at first start,
+`open` ran in 0.98.4 three seconds before the host restarted, found the 0.98.1
+host, and ended after 0.7 seconds with no browser. The launcher received exit
+status 0 and showed nothing.)
+
 Outcomes: **No** keeps the app running, says so in one plain message, and the
 next open (always started by the person) explains and asks again. A refusal by
 Windows, device policy that disables user roots (read first, so no pointless
@@ -2476,17 +2539,24 @@ record before and after the attempt and found the same record.
 A look at the record can fail for another reason than a missing record. Such
 a look is never taken for "no record" and never for "unchanged". The host
 then opens no session for a ticket or code. The watcher applies nothing, keeps
-nothing, and says so once in the host log. The command does not report a
-finished sign-out.
+nothing, and says so once in the host log. The command never takes such a
+look as proof of a finished sign-out or of an unchanged record. Without that
+proof it says that it could not confirm the sign-out, unless a later save of
+the same run gives the proof.
 
 This holds while the PC clock does not go backward. One case is left open: the
 host looks every two seconds, and it misses a change when two or more saves
 between two looks end in a file with the same time, size and identity as the
 file that the host saw last. That needs a file time that does not change
 between saves and a reused identity. It is not measured on any file system.
-Two facts make it narrower. The Windows private store accepts only a local
-fixed NTFS volume. Tickets and codes exist on a Windows host only, so on the
-other systems a missed change can only delay the end of open streams.
+
+When the host misses a change, that sign-out is not applied: sessions from
+before it are not refused, and their open streams are not ended. Such a
+session stays valid for every request until it expires, until the record
+changes again, or until the host starts again. This is so on every system.
+Two facts make the case narrower. The Windows private store accepts only a
+local fixed NTFS volume. Tickets and codes exist on a Windows host only, so on
+the other systems no ticket or code is part of the case.
 
 A ticket or code that is made after a sign-out and before the host has applied
 it is dropped as well. The owner waits a few seconds after the command.

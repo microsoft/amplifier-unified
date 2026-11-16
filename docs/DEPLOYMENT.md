@@ -310,29 +310,63 @@ The obsolete Edge root-store policy is not a workaround.
 
 A Windows host has no password sign-in. On the PC, the launcher opens the
 browser. A browser on another device signs in with a one-use code that you make
-at the PC. These steps use Tailscale. Unified stays bound to `127.0.0.1`.
+at the PC. Remote access is off until you do the steps below, and you can turn
+it off again. Local use on the PC needs none of this.
 
-Replace `<pc>.<tailnet>.ts.net` with the Tailscale name of the PC, and `<port>`
-with the port that Unified uses (`amplifier-unified config get port`). Pass the
-same `--data-dir` value to every command if Unified uses a non-default data
-directory.
+The steps use Tailscale. Amplifier listens only on this PC's own address,
+`127.0.0.1`, and a Tailscale forwarding rule sends connections from your other
+device to it. For a LAN address without Tailscale, see
+[LAN without Tailscale](#lan-without-tailscale).
 
-On a PC that was set up with the Windows setup file, `amplifier-unified` is not
-on the PATH. Use the full program path and the data folder of that installation
-in every command below:
+### Before you start on a Windows host
 
-```
-"%LOCALAPPDATA%\Amplifier\tools\amplifier-unified\Scripts\amplifier-unified.exe" --data-dir "%LOCALAPPDATA%\Amplifier\app" <command>
-```
+- Use **Command Prompt** (`cmd.exe`) for every command in this section. The
+  commands are written for it, and it saves the certificate file as plain
+  text. Windows PowerShell 5.1 saves that file as UTF-16, and another device
+  may not accept it.
+- If Amplifier was set up with the Windows setup file, `amplifier-unified` is
+  not on the PATH. Use this full command in place of `amplifier-unified` in
+  every Amplifier command of this section, also in the two checks below:
 
-Stop and start Amplifier there with **Stop Amplifier** and **Amplifier Unified**
-in the Start menu.
+  ```
+  "%LOCALAPPDATA%\Amplifier\tools\amplifier-unified\Scripts\amplifier-unified.exe" --data-dir "%LOCALAPPDATA%\Amplifier\app" <command>
+  ```
+
+  Stop and start Amplifier there with **Stop Amplifier** and **Amplifier
+  Unified** in the Start menu.
+- With another kind of installation, pass the same `--data-dir` value to every
+  Amplifier command if Amplifier uses a non-default data directory.
+- Sign-in with a code needs a version after 0.98.7.
+  `amplifier-unified --version` shows the version.
+- `<port>` is the port that Amplifier uses. `amplifier-unified config get port`
+  shows it. Type the number in place of `<port>`, without the angle brackets.
+  Do the same for every other `<...>` in the commands.
+- Type each list in square brackets exactly as shown, with no space inside it.
+- Tailscale is installed on the PC and on the other device, and both are
+  connected to the same private Tailscale network (tailnet).
+- `<pc>.<tailnet>.ts.net` is the Tailscale name of the PC.
+  `tailscale status --json --peers=false` shows it as `DNSName`, with a dot at
+  the end that you leave out. The other device finds the PC by this name
+  through MagicDNS. If the name does not open on the other device, check that
+  MagicDNS is on for the tailnet
+  ([Tailscale: MagicDNS](https://tailscale.com/docs/features/magicdns)).
+
+### Turn remote access on
+
+Do steps 1 to 4 one after the other. After step 1, Amplifier cannot start
+again until step 3 is done: its certificate does not name the new address yet.
+If Amplifier does not start in between, do step 3 and start it again. To go
+back instead, set the lists back and then start Amplifier. With Tailscale, run
+the command of step 2 of [Turn remote access off](#turn-remote-access-off).
+With a LAN address, run the command of step 3 of
+[LAN without Tailscale](#lan-without-tailscale): it sets both lists back.
 
 1. Add the Tailscale address **after** the local address. The first address in
-   the list is the main one: sign-in callbacks for connected services use it.
+   the list is the main one: when a connected service sends you back to
+   Amplifier after its sign-in, Amplifier uses the first address by default.
 
    ```
-   amplifier-unified config set public_origins "[https://127.0.0.1:<port>, https://<pc>.<tailnet>.ts.net:<port>]"
+   amplifier-unified config set public_origins "[https://127.0.0.1:<port>,https://<pc>.<tailnet>.ts.net:<port>]"
    ```
 
 2. Stop Amplifier.
@@ -342,58 +376,144 @@ in the Start menu.
    amplifier-unified setup-tls force
    ```
 
-4. Start Amplifier and open it on the PC. Windows asks one question about the
-   new certificate. Select **Yes**.
-5. Forward the Tailscale address to Unified.
+4. Start Amplifier and open it on the PC. If Amplifier was set up with the
+   Windows setup file, Amplifier shows a message about the new certificate,
+   and Windows then asks one question about it. Select **Yes**. With another
+   kind of installation no question shows: the certificate authority stays
+   the same. Do not continue past a certificate warning in the browser.
+5. Add the Tailscale forwarding rule.
 
    ```
    tailscale serve --bg --tcp=<port> tcp://127.0.0.1:<port>
    ```
 
-6. Export the certificate. Move the file to the other device and trust it there
-   (see [Trust the CA on each client](#trust-the-ca-on-each-client)).
+6. Save the certificate in a file. Command Prompt saves the file in the folder
+   that its prompt shows, usually `C:\Users\<your name>`.
 
    ```
-   cmd /c "amplifier-unified setup-tls export > amplifier-unified-ca.crt"
+   amplifier-unified setup-tls export > amplifier-unified-ca.crt
    ```
 
-   `cmd /c` keeps the file as plain text. Windows PowerShell 5.1 saves
-   redirected output as UTF-16, and another device may not accept that file.
+7. Move the file to the other device and trust it there (see
+   [Trust the CA on each client](#trust-the-ca-on-each-client)).
 
-7. On the PC, make a code.
+### Sign in from the other device
+
+1. On the PC, make a code.
 
    ```
    amplifier-unified browsers code
    ```
 
-8. On the other device, open `https://<pc>.<tailnet>.ts.net:<port>` and type the
-   code within two minutes. The code works once.
+   The command shows the address to open and a code such as `ABCDE-FGHJK`.
+2. On the other device, open `https://<pc>.<tailnet>.ts.net:<port>`.
+3. Type the code within two minutes. Select **Sign in**.
+
+The code works once. A typing mistake does not use it up: check the code and
+type it again. After two minutes, or after one use, make a new code.
 
 If more than one address for other devices is configured, name the one that the
 other device opens: `amplifier-unified browsers code --origin https://<address>`.
-`amplifier-unified browsers sign-out` signs out every browser, on the PC and on
-other devices, and drops every code that is not used yet.
-`tailscale serve --tcp=<port> off` turns the forward off.
+
+### Sign out all browsers from the PC
+
+1. On the PC, sign out every browser, on the PC and on other devices.
+
+   ```
+   amplifier-unified browsers sign-out
+   ```
+
+2. Wait a few seconds. Until then, a new sign-in on the PC or a new code
+   opens nothing.
+3. To use Amplifier again, open it on the PC. For another device, make a new
+   code.
+
+If the command says that it could not confirm the sign-out, run it again.
+The command also drops every code that is not used yet. There is no sign-out
+for one device. More: [Sign out all browsers](#sign-out-all-browsers).
+
+### Turn remote access off
+
+1. Remove the Tailscale forwarding rule. From this moment no device reaches
+   Amplifier through Tailscale.
+
+   ```
+   tailscale serve --tcp=<port> off
+   ```
+
+2. Remove the Tailscale address.
+
+   ```
+   amplifier-unified config set public_origins "[https://127.0.0.1:<port>]"
+   ```
+
+3. Stop Amplifier. Then start it again. Amplifier now refuses the Tailscale
+   address, and no code can be made.
+4. Sign out all browsers, so that no sign-in from another device stays valid
+   if you turn remote access on again later. This also signs out the browser
+   on this PC.
+
+   ```
+   amplifier-unified browsers sign-out
+   ```
+
+5. Wait a few seconds. Then open Amplifier again on the PC.
+
+The certificate still names the Tailscale address. That gives nothing to
+anyone: Amplifier refuses the address. For a certificate without it, stop
+Amplifier, run `amplifier-unified setup-tls force` and start Amplifier. On a PC
+that was set up with the Windows setup file, Windows then asks its one question
+again.
+
+### LAN without Tailscale
+
+These steps are not measured on a Windows host. They differ from the steps
+above in three places.
+
+1. In step 1 of "Turn remote access on", use the LAN address of the PC, and
+   add it to `bind` in the same command. Keep `127.0.0.1` first in both lists:
+   the PC itself uses it.
+
+   ```
+   amplifier-unified config set public_origins "[https://127.0.0.1:<port>,https://<LAN address>:<port>]" bind "[127.0.0.1,<LAN address>]"
+   ```
+
+   Use a LAN address that does not change. If the PC gets another address,
+   Amplifier does not start; do these steps again with the new address.
+2. In place of step 5, an administrator adds a Windows Firewall rule that lets
+   TCP port `<port>` in, for private networks only. Amplifier does not add
+   this rule and does not ask for administrator rights.
+3. To turn remote access off, do these four things in this order. The
+   administrator removes the firewall rule. Set both lists back with the
+   command below. Stop Amplifier and start it again. Sign out all browsers
+   with `amplifier-unified browsers sign-out`, wait a few seconds, and open
+   Amplifier again on the PC.
+
+   ```
+   amplifier-unified config set public_origins "[https://127.0.0.1:<port>]" bind "[127.0.0.1]"
+   ```
+
+On the other device, open `https://<LAN address>:<port>`.
+
+### What is measured, and limits
 
 Measured on Windows 11 with Tailscale 1.104.5 from an ordinary account: the
-forward in step 5 needs no administrator and no firewall rule, and the other
-device receives Unified's own certificate. Not measured: these steps from start
-to end on a PC that was set up with the Windows setup file, a real phone, and a
-Windows restart with the forward in place.
+forwarding rule needs no administrator and no firewall rule, the other device
+receives Amplifier's own certificate, and the same account removes the rule
+again.
 
-Limits, stated plainly:
+Not measured: these steps from start to end on a PC that was set up with the
+Windows setup file; a real phone; a Windows restart with the forwarding rule in
+place; a tailnet with MagicDNS off; the LAN steps.
 
 - Never use Tailscale Funnel. It puts the address on the public internet.
 - `tailscale cert` is not used. It publishes the name of the PC in a public
   certificate log for good.
-- A LAN address without Tailscale needs two more things. The first is the LAN
-  address of the PC in `bind`, next to `127.0.0.1` (see
-  [Configure the host](#configure-the-host)). The second is a Windows Firewall
-  rule for the port. An administrator must add that rule; Unified does not add
-  it. This path is not measured on a Windows host.
 - Each code is for one address, lasts two minutes and works once. Wrong codes
   do not lock anyone out; see the
   [design](design/native-windows-installation.md#remote-browser-sign-in-on-a-windows-host).
+- The code command has no Start-menu entry and no button in the app. It needs
+  a terminal.
 - Linux, macOS and WSL hosts do not use codes. Sign in there with the host
   account password on the sign-in page.
 

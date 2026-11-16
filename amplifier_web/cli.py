@@ -337,12 +337,19 @@ def _serve_unlocked(args, data_dir: Path, *, task_runner=None) -> None:
             timer.cancel()
 
 
-def _open_browser(args, data_dir, config):
+def _say_waiting():
+    try:
+        print("Amplifier is not ready yet. Waiting up to a minute for it.", file=sys.stderr, flush=True)
+    except OSError:
+        pass  # Nobody reads this output any more. The wait itself goes on.
+
+
+def _open_browser(args, data_dir, config, *, wait=0.0):
     if args.no_open:
         print("Browser opening disabled; no browser grant was issued.")
         return
     if browser_entry.is_windows():
-        url = asyncio.run(browser_entry.owner_browser_url(data_dir, config))
+        url = asyncio.run(browser_entry.owner_browser_url(data_dir, config, wait=wait, waiting=_say_waiting))
     else:
         from types import SimpleNamespace
         from .update_readiness import probe_targets
@@ -624,11 +631,16 @@ def main():
         # Explicit foreground-owner entry only. Default Windows launch and
         # Scheduler/installer activation remain independently gated above.
         try:
-            return _open_browser(args, data_dir, config)
+            # The host can be away for some seconds: it restarts to finish an
+            # update. Wait for it, then open the browser once.
+            _open_browser(args, data_dir, config, wait=browser_entry.HOST_WAIT)
         except (OSError, ValueError):
             raise SystemExit("Cannot open the owned host. " + browser_entry.REOPEN) from None
         except browser_entry.BrowserEntryUnavailable as exc:
             raise SystemExit(str(exc)) from None
+        if not args.no_open:
+            print(browser_entry.OPENED, flush=True)
+        return
     if args.command in {"run", "continue", "tool", "access"}:
         os.environ["AMPLIFIER_WEB_HOME"] = str(data_dir)
         from .settings_migration import migrate_settings
