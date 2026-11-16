@@ -1078,7 +1078,7 @@ interruption: only setup writes its completion record, an update and the
 launcher refresh do not change it (read in their source), and uninstall
 keeps it until the step after exit.
 
-A removal reads the record once, under the lock and with the folder pinned,
+A removal decides this once, under the lock and with the folder pinned,
 before it deletes anything, and its last step gets that answer handed on. So
 a record that changes during a removal does not change what that removal
 deletes.
@@ -1349,10 +1349,11 @@ turn the flat folder or the installation folder into a link in place (error
 145); the same call
 works on an empty folder that nobody holds. A folder with an open file in it,
 and the folder above it, can be neither turned into a link nor renamed. The
-delete choice runs once on an installation that a setup file of release
-0.98.5 made (store `s`) and once on one that an earlier setup file made
-(store `source-store`), and the keep choice leaves either store with every
-other entry. An earlier installation that also holds a folder `s` keeps that
+delete choice runs once on a folder whose setup record names release 0.98.5
+and whose store is `s`, and once on a folder whose record names 0.98.4 and
+whose store is `source-store` (the test writes the record and the store; no
+setup file runs there). The keep choice leaves either store with every other
+entry. The second kind of folder, when it also holds a folder `s`, keeps that
 folder with its file, and then the installation folder stays. A
 link under the kept file's name is refused and nothing is created at its
 target (the same create by a path does create the target). After the

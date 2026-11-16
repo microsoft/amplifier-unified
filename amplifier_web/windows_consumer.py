@@ -286,7 +286,9 @@ _UNFINISHED.update({
 def entry_notice(purpose, entry, retry, *, listed=True):
     """The person's text when Amplifier did not confirm its start-at-sign-in entry.
 
-    `purpose` is `start`, `status`, `stop` or `uninstall`; `entry` is the task's
+    `purpose` is `start`, `status`, `stop`, `uninstall` or `removal` (an
+    uninstall that goes on with a removal that began earlier: data is already
+    deleted then); `entry` is the task's
     name in Task Scheduler. The check cannot say why the entry differs (a
     changed setting, another installation, a renamed Windows account), so the
     text does not say that someone changed it. With `retry`, Windows gave no
@@ -297,11 +299,14 @@ def entry_notice(purpose, entry, retry, *, listed=True):
     opening = {"start": "Amplifier could not start.",
                "status": "Amplifier could not read its status.",
                "stop": "Amplifier did not stop its background app.",
-               "uninstall": "Amplifier was not uninstalled, and nothing was changed."}[purpose]
+               "uninstall": "Amplifier was not uninstalled, and nothing was changed.",
+               "removal": "Amplifier could not finish its removal from this PC. "
+                          "Until it has finished, Amplifier does not open."}[purpose]
     opens = ("Open Amplifier from the Start menu: Amplifier Unified." if listed else
              "Run the Amplifier setup file again.")
     again = {"start": opens, "status": opens, "stop": "Select Stop Amplifier again.",
-             "uninstall": "Uninstall Amplifier again."}[purpose]
+             "uninstall": "Uninstall Amplifier again.", "removal": "Uninstall Amplifier again."}[purpose]
+    removes = purpose in ("uninstall", "removal")
     cause = ("Windows could not check the account of Amplifier's start-at-sign-in entry, so "
              "Amplifier could not confirm that the entry belongs to this installation." if retry else
              "Amplifier could not confirm that its start-at-sign-in entry in Windows belongs to "
@@ -319,13 +324,13 @@ def entry_notice(purpose, entry, retry, *, listed=True):
             "Amplifier installation for this Windows account, the entry can belong to it. Then do "
             "not delete the entry: use that installation, or uninstall it first.\n\n"
             "Otherwise delete the entry. Amplifier then no longer starts when you sign in"
-            + (".\n" if purpose == "uninstall" else ", until it makes a new entry in step 5.\n") +
+            + (".\n" if removes else ", until it makes a new entry in step 5.\n") +
             "1. Open the Start menu, type Task Scheduler and open it.\n"
             "2. Select Task Scheduler Library.\n"
             f"3. Select the task named {entry}, press the Delete key and confirm.\n"
             "4. Restart this PC.\n"
             "5. " + again
-            + ("" if purpose == "uninstall" else " It makes a new entry. Your chats and settings stay."))
+            + ("" if removes else " It makes a new entry. Your chats and settings stay."))
 
 
 class Unfinished(RuntimeError):
@@ -348,7 +353,9 @@ class Unfinished(RuntimeError):
         code = getattr(self.error, "winerror", None)
         if isinstance(self.error, TaskNotConfirmed):
             # The step's own text would name a wrong cause and a wrong next step.
-            text = entry_notice({"status": "status", "stop-app": "stop"}.get(self.step, "uninstall"),
+            # After a removal began, "nothing was changed" would not be true.
+            text = entry_notice("removal" if self.text == "removal" else
+                                {"status": "status", "stop-app": "stop"}.get(self.step, "uninstall"),
                                 self.error.entry, self.error.retry)
         else:
             text = _UNFINISHED.get(self.text, "Amplifier could not finish this.\n\nRestart this PC, then try again.")

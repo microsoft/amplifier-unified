@@ -493,6 +493,46 @@ def test_start_entry_that_is_not_confirmed_stops_the_delete_choice_before_anythi
     assert not (root / plan.JOURNAL).exists() and state["registry"] == registration and state["task"] == "running"
 
 
+@pytest.mark.parametrize("retry", [False, True])
+def test_start_entry_that_is_not_confirmed_in_a_second_uninstall_does_not_say_that_nothing_changed(
+        deleter, monkeypatch, retry):
+    """The first uninstall deleted data and stopped. The second one stops before it deletes more."""
+    from amplifier_web import windows_service
+    state, root, consumer = deleter.state, deleter.root, deleter.consumer
+    entry = "AmplifierUnified-S-1-5-21-1-2-3-1001"
+    state.update(choices=["yes", "yes"], commit_conflict=True)
+    with pytest.raises(consumer.Unfinished):
+        deleter.run()
+    assert not (root / "shared").exists() and plan.pending(root)["choice"] == "delete"
+
+    def refuse(home, *, progress):
+        progress("task-read")
+        raise windows_service.TaskNotConfirmed(entry, retry=retry)
+    monkeypatch.setattr(windows_service, "uninstall", refuse)
+    state.update(commit_conflict=False, choices=["yes", "yes"])
+    state["calls"].clear()
+    before = snapshot(root)
+    with pytest.raises(consumer.Unfinished) as stopped:
+        deleter.run()
+    assert stopped.value.step == "task-read" and not deletes(state) and state["after"] is None
+    notice = stopped.value.notice
+    assert notice.startswith("Amplifier could not finish its removal from this PC. "
+                             "Until it has finished, Amplifier does not open.\n\n")
+    assert "nothing was changed" not in notice and "You can keep using it" not in notice
+    assert notice.endswith("Uninstall Amplifier again.\n\nReference: task-read, TaskNotConfirmed")
+    # The cause and the way out are main's, as for a first uninstall.
+    if retry:
+        assert "Windows could not check the account" in notice and "2. Restart this PC.\n3. Uninstall" in notice
+        assert entry not in notice and "delete" not in notice.lower()
+    else:
+        assert "could not confirm that its start-at-sign-in entry" in notice and notice.count(entry) == 2
+        assert "Amplifier then no longer starts when you sign in.\n1. " in notice and "makes a new entry" not in notice
+    # The journal stays, so Amplifier does not open; the folder is as the first uninstall left it.
+    after = snapshot(root)
+    assert json.loads(after.pop(consumer.RECORD))["step"] == "task-read" and before.pop(consumer.RECORD)
+    assert after == before and plan.unfinished(root)
+
+
 def test_data_that_stays_keeps_the_entries_and_the_journal_and_a_second_uninstall_finishes(deleter, monkeypatch):
     state, root, consumer = deleter.state, deleter.root, deleter.consumer
     state["choices"], state["held"] = ["yes", "yes"], {"app/chats/one/message.txt"}
@@ -897,6 +937,23 @@ def test_a_folder_s_in_an_earlier_installation_is_never_deleted(deleter, monkeyp
     assert {path.name for path in root.iterdir()} == {"s"} | kept_names(deleter)
     confirmation = state["notices"][-1][0]
     assert "The folder itself stays" in confirmation and "\ns\n" in confirmation and "you can delete it" not in confirmation
+
+
+def test_second_uninstall_of_a_new_installation_finishes_and_deletes_its_store(deleter):
+    """The first removal stopped before the program files. Setup's record still says that `s` is the store."""
+    state, root, consumer = deleter.state, deleter.root, deleter.consumer
+    _only_store(root, "s")
+    state.update(choices=["yes", "yes"], held={"app/chats/one/message.txt"})
+    with pytest.raises(consumer.Unfinished) as stopped:
+        deleter.run()
+    assert stopped.value.step == "data" and "s" not in deletes(state)
+    assert (root / "s" / "objects" / "s").read_text() == "s" and plan.short_store(root)
+    state.update(held=set(), choices=["yes", "yes"])
+    result = deleter.run()
+    assert result == {"ok": True, "operation": "uninstall", "userDataRetained": False, "certificate": "none",
+                      "kept": [], "programLeft": [], "afterExit": True}
+    assert "s" in deletes(state) and "s" in state["after"]["folders"] and not os.path.lexists(root / "s")
+    assert {path.name for path in root.iterdir()} == kept_names(deleter)
 
 
 def test_second_uninstall_of_an_earlier_installation_still_keeps_a_folder_s(deleter):

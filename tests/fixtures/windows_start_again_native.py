@@ -268,9 +268,12 @@ def uninstall(root, notices):
 def kept_folder_question(notices):
     """Exactly the one question of an uninstall, answered with the choice that keeps the folder.
 
-    The question has three buttons, and it says what No does. Another
-    question, a message, or one more of either is another case: it must fail
-    here and not pass with a changed meaning.
+    Required: one question and no message; three buttons; the first line of
+    the uninstall question; the sentence that says what No does; the sentence
+    that says what Cancel does. A message, a second question, a question
+    with two buttons, or a question without those sentences is another case:
+    it fails here. The whole text is not compared: Windows can add a
+    sentence about the certificate.
     """
     return (len(notices) == 1 and notices[0]["kind"] == "question" and notices[0]["cancel"] is True
             and notices[0]["answer"] == "no"
