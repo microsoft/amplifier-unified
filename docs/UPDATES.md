@@ -532,9 +532,11 @@ words that name setup's record and do not call those components qualified.
 Packages are compared by name, version and source; packages that a conversation
 added after setup are not part of the record and are not compared. This record
 has no activation time: it cannot supersede a recorded failure and cannot
-authorize preparation. It never describes a selected generation, including the
-moment between an activation and its refreshed proof. A missing or changed
-record, and an installation that went back from its first generation, keep the
+authorize preparation. It never describes a selected generation: a held setup
+proof is checked against the generation pointer each time it is shown or
+reported, so it ends when an activation writes the pointer, also when the
+promotion after that write fails. A missing or changed record, and an
+installation that went back from its first generation, keep the
 incomplete-verification report.
 An ordinary Check offers an included runtime qualification when app-level source
 declarations differ, even if every Git branch is unchanged. Install still uses

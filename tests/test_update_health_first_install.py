@@ -12,6 +12,7 @@ import pytest
 import amplifier_web
 from amplifier_web import runtime_environment as environments
 from amplifier_web import runtime_registry_updates as registry
+from amplifier_web import update_health as health
 from amplifier_web import update_report
 from amplifier_web.updates import active_release
 from test_update_core_lookup_failure import certificate_failure, checked_install
@@ -71,23 +72,35 @@ async def test_each_check_reads_the_record_again_and_preparation_never_uses_it(s
         assert await health_proof(c.manager) == 'none'
 
 
-async def test_the_first_activation_never_shows_setups_proof_for_the_new_generation(setup_record, monkeypatch):  # noqa: F811
-    """The real activation: every publication after the pointer names a generation is inspected.
+TARGET = 'd' * 32
 
-    The candidate is a staged, validated folder; the worker promotion is a
-    stand-in. This is not a qualified generation, so the settled report is the
-    incomplete one. The question here is only what is shown while it is selected.
+
+async def first_candidate(c, install, promote):
+    """A staged, validated first candidate. `promote` stands in for the worker promotion.
+
+    This is not a qualified generation. The questions here are what is shown,
+    and which proof is held, from the moment the pointer names it.
     """
+    await c.manager.check()
+    assert c.state['currentStatus']['detail'] == UP_TO_DATE and await health_proof(c.manager) == 'setup-record'
+    stage = c.manager.directory / 'releases' / TARGET
+    stage.mkdir(parents=True)
+    (stage / 'validated.json').write_text(json.dumps(
+        {'generationSchema': 1, 'workerProtocol': 1, 'createdAt': 1, 'hostVersion': amplifier_web.__version__}))
+    c.service.runtime.promote_generation = promote
+    await c.manager.publish(pendingRelease=TARGET)
+
+
+async def test_the_first_activation_never_shows_setups_proof_for_the_new_generation(setup_record, monkeypatch):  # noqa: F811
+    """The real activation: every publication after the pointer names a generation is inspected."""
     async with checked_install(setup_record.home, core_row(setup_record), monkeypatch) as c:
-        await c.manager.check()
-        assert c.state['currentStatus']['detail'] == UP_TO_DATE and await health_proof(c.manager) == 'setup-record'
-        target = 'd' * 32
-        stage = c.manager.directory / 'releases' / target
-        stage.mkdir(parents=True)
-        (stage / 'validated.json').write_text(json.dumps(
-            {'generationSchema': 1, 'workerProtocol': 1, 'createdAt': 1, 'hostVersion': amplifier_web.__version__}))
-        c.service.runtime.promote_generation = lambda generation, protected=None: None
-        await c.manager.publish(pendingRelease=target)
+        during = []
+
+        def promote(generation, protected=None):
+            # The pointer is written; the installed state is not published yet.
+            during.append((active_release(setup_record.home).get('current'), c.state.get('release'),
+                           health.cached_evidence(c.manager)))
+        await first_candidate(c, setup_record, promote)
 
         seen = []
         publish = c.service._publish_changes
@@ -98,10 +111,28 @@ async def test_the_first_activation_never_shows_setups_proof_for_the_new_generat
         monkeypatch.setattr(c.service, '_publish_changes', observe)
         await c.manager.activate()
 
-        assert active_release(setup_record.home)['current'] == target and c.state['phase'] == 'installed'
-        selected = [status for generation, status in seen if generation == target]
+        assert during == [(TARGET, None, {})]  # During the promotion: selected, not published, no setup proof.
+        assert active_release(setup_record.home)['current'] == TARGET and c.state['phase'] == 'installed'
+        selected = [status for generation, status in seen if generation == TARGET]
         assert len(selected) >= 2  # The installed state, and the state after the refreshed proof.
         for status in selected:
             assert status.get('detail') != UP_TO_DATE, status
         assert c.state['currentStatus']['title'] == 'Component verification is incomplete'
         assert await health_proof(c.manager) == 'none'
+
+
+async def test_a_first_promotion_that_fails_after_the_pointer_write_leaves_no_setup_proof(setup_record, monkeypatch):  # noqa: F811
+    async with checked_install(setup_record.home, core_row(setup_record), monkeypatch) as c:
+        def promote(generation, protected=None):
+            raise RuntimeError('SECRET promotion detail')
+        await first_candidate(c, setup_record, promote)
+        await c.manager.activate()
+
+        assert active_release(setup_record.home)['current'] == TARGET  # Written before the promotion.
+        assert c.state['phase'] == 'error' and not c.state.get('release')  # No selection was published.
+        status = c.state['currentStatus']
+        assert status['actionRequired'] is True and status['status'] != 'current'
+        assert status.get('detail') != UP_TO_DATE
+        assert health.cached_evidence(c.manager) == {}
+        assert await health_proof(c.manager) == 'none'  # Saved diagnostics claim no setup proof.
+        assert 'SECRET' not in json.dumps(c.state)

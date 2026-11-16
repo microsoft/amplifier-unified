@@ -214,30 +214,65 @@ def test_an_installation_that_went_back_from_its_first_generation_keeps_the_earl
     assert reported(setup_record)['title'] == 'Component verification is incomplete'
 
 
-def cached(install, proof, release):
-    """A manager whose last health refresh found `proof`; `release` is the generation selected now."""
+def cached(install, proof, release=None):
+    """A manager whose last health refresh found `proof`; `release` is the published copy of the selection."""
     state = {**CHECKED, 'release': release}
     return SimpleNamespace(home=install.home, _active_update_evidence=proof,
                            service=SimpleNamespace(state={'updates': state}))
 
 
-def test_a_cached_setup_proof_does_not_describe_a_generation_that_was_selected_since(setup_record):
+POINTERS = {
+    'selected': json.dumps({'current': 'b' * 32, 'previous': None, 'at': 1}),   # An activation wrote the pointer.
+    'went-back': json.dumps({'current': None, 'previous': 'b' * 32, 'at': 2}),  # A rollback to setup's components.
+    'unreadable': 'not a pointer',
+}
+
+
+@pytest.mark.parametrize('pointer', sorted(POINTERS))
+def test_a_cached_setup_proof_applies_only_while_the_pointer_names_no_generation(setup_record, pointer):
     proof = evidence(setup_record)
     assert proof['setupRecord'] is True
-    manager = cached(setup_record, proof, None)
+    manager = cached(setup_record, proof)
+    assert health.cached_evidence(manager) == proof
     health.publish(manager)
     assert manager.service.state['updates']['currentStatus']['detail'] == UP_TO_DATE
-    # An activation publishes its installed state before the next refresh of the proof.
-    manager = cached(setup_record, proof, 'b' * 32)
+    # The pointer changes after that refresh. The published copy `release` is still empty: an
+    # activation publishes it only after the promotion, and a failed promotion never publishes it.
+    # A refresh that started before the change and ends after it stores the same earlier proof.
+    (setup_record.home / 'updates' / 'active.json').write_text(POINTERS[pointer])
+    assert not manager.service.state['updates']['release']
+    assert health.cached_evidence(manager) == {}
     health.publish(manager)
     status = manager.service.state['updates']['currentStatus']
     assert (status['status'], status['title']) == ('unverified', 'Component verification is incomplete')
-    # A generation's own proof is not touched by this rule.
+
+
+def test_the_cached_proof_of_a_generation_is_not_touched_and_costs_no_pointer_read(setup_record, monkeypatch):
+    from amplifier_web import updates
     generation = {'generation': 'b' * 32, 'startedAt': 8, 'verifiedAt': 9, 'attemptId': 'x',
                   'configuration': 'c' * 64, 'packages': set(), 'components': set()}
     manager = cached(setup_record, generation, 'b' * 32)
+    monkeypatch.setattr(updates, 'active_release', lambda home: pytest.fail('Only a setup proof reads the pointer'))
+    assert health.cached_evidence(manager) == generation
     health.publish(manager)
     assert manager.service.state['updates']['currentStatus']['detail'] == QUALIFIED
+    assert health.cached_evidence(cached(setup_record, {})) == {}
+
+
+def test_a_record_that_is_replaced_for_the_comparison_and_restored_gives_no_proof(setup_record, monkeypatch):
+    record = setup_record.receipt / 'runtime-installed.json'
+    original = record.read_bytes()
+    replace_package(setup_record, 'PyYAML', '6.0.3', '6.0.4')  # Not what setup recorded.
+    matching = json.dumps(qualification.installed_graph(setup_record.project))
+    real = installation_runtime.status
+
+    def status(home):
+        record.write_text(matching)    # The reader compares the packages with this list ...
+        observed = real(home)
+        record.write_bytes(original)   # ... and setup's own record is back when it returns.
+        return observed
+    monkeypatch.setattr(installation_runtime, 'status', status)
+    assert evidence(setup_record) == {}
 
 
 TOOL_FAULTS = {

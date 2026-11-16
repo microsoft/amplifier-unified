@@ -75,7 +75,9 @@ def active_evidence(manager, *, explain_configuration=False):
         project = project_path(manager.home, generation)
         if (project / 'uv.lock').read_bytes() != (stage / 'runtime.lock').read_bytes():
             return {}
-        verify_recorded(project, stage)
+        # Compare with the record that was read and validated above: a record
+        # that disappears after that read must not skip the comparison.
+        verify_recorded(project, stage, expected=graph)
         # An observation that raced a new pointer/configuration is not evidence
         # for whichever installation won that race.
         if active_release(manager.home) != pointer:
@@ -105,6 +107,11 @@ def active_evidence(manager, *, explain_configuration=False):
         return {}  # Unknown evidence is not a healthy installed graph.
 
 
+def _never_selected(pointer):
+    """True while the pointer has never named a component generation."""
+    return not pointer.get('current') and not pointer.get('previous')
+
+
 def setup_evidence(manager):
     """Verify setup's own record on an installation that never selected a generation.
 
@@ -126,7 +133,7 @@ def setup_evidence(manager):
     from .updates import active_release
     try:
         pointer = active_release(manager.home)
-        if pointer.get('current') or pointer.get('previous'):
+        if not _never_selected(pointer):
             # A selected generation is verified by its own receipts only. An
             # installation that went back from a generation keeps its report.
             return {}
@@ -136,7 +143,9 @@ def setup_evidence(manager):
         if (observed.get('ok') is not True or observed.get('prepared') is not True
                 or observed.get('generation') is not None
                 or type(observed.get('packageCount')) is not int or observed['packageCount'] < 1
-                or record.read_bytes() != recorded  # The record changed during the read.
+                # The packages were compared with exactly the record read above ...
+                or observed.get('recordSha256') != hashlib.sha256(recorded).hexdigest()
+                or record.read_bytes() != recorded  # ... and it did not change since.
                 or active_release(manager.home) != pointer):
             return {}
         return {'setupRecord': True, 'packageCount': observed['packageCount']}
@@ -147,14 +156,23 @@ def setup_evidence(manager):
 def cached_evidence(manager):
     """The proof of the last refresh, as far as it still applies.
 
-    Setup's record is a proof only while no generation is selected. An
-    activation publishes its installed state before it refreshes the proof;
-    the earlier setup proof must not describe the generation selected since.
+    Setup's record is a proof only while the pointer has never named a
+    generation. An activation writes the pointer, then promotes the workers,
+    and publishes and refreshes only after that; a failed promotion publishes
+    no selection at all. So the published copy is not enough: a held setup
+    proof is checked against the pointer itself, one small file read for each
+    use. The proof of a generation is returned as it is.
     """
     evidence = getattr(manager, '_active_update_evidence', None) or {}
-    if evidence.get('setupRecord') and manager.service.state['updates'].get('release'):
+    if not evidence.get('setupRecord'):
+        return evidence
+    if manager.service.state['updates'].get('release'):
         return {}
-    return evidence
+    from .updates import active_release
+    try:
+        return evidence if _never_selected(active_release(manager.home)) else {}
+    except (OSError, ValueError, TypeError, AttributeError):
+        return {}  # An unreadable pointer is not "no generation".
 
 
 def preparation_key(manager, rows):

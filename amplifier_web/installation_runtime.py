@@ -119,7 +119,8 @@ def _baseline_status(home):
                 or (project / "uv.lock").read_bytes() != lock
                 or (project / "pyproject.toml").read_bytes() != (receipt / "runtime.toml").read_bytes()):
             raise ValueError("Initial dependency receipt changed.")
-        graph = json.loads((receipt / "runtime-installed.json").read_text())
+        record = (receipt / "runtime-installed.json").read_bytes()
+        graph = json.loads(record)
         if (not isinstance(graph, list) or not graph
                 or any(not isinstance(row, dict) or not isinstance(row.get("name"), str)
                        or not isinstance(row.get("version"), str) for row in graph)):
@@ -128,6 +129,8 @@ def _baseline_status(home):
         verify_install_overrides(project, receipt / "runtime-install-overrides.txt")
         return {"ok": True, "prepared": True, "generation": None,
                 "packageCount": len(graph), "profileCount": 0,
+                # The exact record that the packages were compared with.
+                "recordSha256": hashlib.sha256(record).hexdigest(),
                 "lockSha256": value["lockSha256"], "connectionRequired": True,
                 "workerReady": False, "modelRequestSent": False}
     except FileNotFoundError:
