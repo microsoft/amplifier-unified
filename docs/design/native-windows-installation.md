@@ -657,8 +657,9 @@ table with `python tests/test_windows_path_budget.py`.
   shapes do not fit in a stage (the saved view, 261, and a background-job
   record, 286); a probe writes neither. The native case checks the complete
   list of what the real probe leaves with its test profile (one offline
-  profile, no default behaviors); the profiles of a real installation are
-  checked by a whole in-app update in the clean room. A first installation without an
+  profile, no default behaviors). The profiles of a real installation are not
+  checked there; a whole in-app update on a clean PC is the check for them.
+  A first installation without an
   AI connection has no stage: `<folder>\app\updates\baseline-runtime` holds
   receipts only (longest path 118).
   **Not covered:** a chat with its own setup (dependency overrides of its
@@ -722,7 +723,8 @@ store through the real private-folder checks. Its update-stage cases make a
 stage with the updater's layout, at folder paths of 51 and 59 (through the
 app's private-folder creator, as setup does; the updater itself uses an
 ordinary `mkdir`, which the probe's private-folder check refused on the
-runner). They require that the
+runner and accepted on a clean PC, where the probe of release 0.98.5 passed
+that check and failed later, at the session store). They require that the
 session store's folder is refused under the CLI name and that the app's real
 compatibility probe then ends with the record that the Updates page showed.
 They require that the same probe, unchanged, completes under the short name,
