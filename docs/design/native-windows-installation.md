@@ -2128,10 +2128,11 @@ offline PCs are not measured. The launcher runs this check before any app
 version starts, and an in-app update does not replace the launcher: an
 installation whose launcher predates this rule still refuses its task after a
 computer rename, with the earlier messages, until its launcher is replaced.
-Only `amplifier_web.windows_launcher_refresh` replaces the launcher of an
-existing installation. A second setup run does not: on an installed PC setup
-adds missing Start-menu and Apps-list entries and opens the app, and it does
-not install the program files again. Nothing runs the refresh by itself. The
+For an installation that the setup file made, only
+`amplifier_web.windows_launcher_refresh` replaces the launcher. A second setup
+run does not: on an installed PC setup adds missing Start-menu and Apps-list
+entries and opens the app, and it does not install the program files again.
+Nothing in the app or in setup runs the refresh; a person runs it. The
 refresh reads the task with the active app version's code, so by that code it
 works before the rename, and after the rename only when the active app version
 already has this rule (not measured). An installation that is renamed while
