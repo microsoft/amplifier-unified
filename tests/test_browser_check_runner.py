@@ -1394,7 +1394,8 @@ def test_agent_navigation_journeys_use_current_host_harness_not_client_or_legacy
     assert identities <= {row['id'] for row in host['scenarios']}
     assert identities <= set(host['scenarioOrder'])
     selection = json.loads((ROOT / 'components/web-client.source.json').read_text())
-    client = ROOT / selection['delivery']['path']
+    client = ROOT / (selection['delivery']['path'] if selection['delivery']['type'] == 'directory'
+                     else '.build/web-client')
     client_ids = {row['id'] for row in json.loads((client / 'tests/browser-checks.json').read_text())['scenarios']}
     assert not identities & client_ids
     for identity in identities:
@@ -1654,7 +1655,9 @@ def test_captured_message_delivery_workflow_is_manual_fixed_and_retains_failures
     assert any(step.get('if') == 'always()' and 'upload-artifact@' in step.get('uses', '') for step in steps)
     source = next(step for step in steps if step.get('name') == 'Bind captured delivery source before setup')
     assert 'HEAD^{tree}' in source['run'] and 'selected-client.json' in source['run']
-    assert steps.index(source) < next(i for i, step in enumerate(steps) if 'setup-python@' in step.get('uses', ''))
+    initialize = next(i for i, step in enumerate(steps) if '--initialize' in step.get('run', ''))
+    install = next(i for i, step in enumerate(steps) if 'uv sync --locked' in step.get('run', ''))
+    assert initialize < steps.index(source) < install
     capture = next(step for step in steps if step.get('name') == 'Capture verified captured-delivery build output')
     assert 'mv output/browser-checks "$RUNNER_TEMP/captured-delivery-evidence"' in capture['run']
     assert 'trap ' in capture['run'] and '--destination "$RUNNER_TEMP/captured-frontend-build"' in capture['run']

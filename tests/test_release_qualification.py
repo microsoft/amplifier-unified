@@ -1669,7 +1669,8 @@ def test_browser_retains_only_the_successfully_built_public_web_payload():
     # The artifact includes the builder's metadata and is retained before later
     # scenario failure; an unrun/failed build cannot upload the old tracked tree.
     selection = json.loads((ROOT / 'components/web-client.source.json').read_text())
-    source = ROOT / selection['delivery']['path']
+    source = ROOT / (selection['delivery']['path'] if selection['delivery']['type'] == 'directory'
+                     else '.build/web-client')
     vite = (source / 'vite.config.js').read_text()
     assert 'emptyOutDir:true' in vite and 'dist/build.json' in vite
     assembler = (ROOT / 'scripts/web_client_build.py').read_text()
@@ -1875,8 +1876,11 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     assert commands[1].replace(flag, '').replace(attachment_flag, '').replace(captured_flag, '').strip() == (
         'uv run --no-sync python scripts/browser_check_runner.py '
         '--plan tests/web/browser-checks.json --output output/browser-checks --budget-seconds 1500')
-    assert next(i for i, s in enumerate(steps) if '--initialize' in s.get('run', '')) < next(
-        i for i, s in enumerate(steps) if s.get('uses') == 'actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065')
+    prepare = next(i for i, step in enumerate(steps)
+                   if step.get('name') == 'Prepare selected client source for host checks')
+    initialize = next(i for i, step in enumerate(steps) if '--initialize' in step.get('run', ''))
+    install = next(i for i, step in enumerate(steps) if 'uv sync --locked' in step.get('run', ''))
+    assert prepare < initialize < install
     contracts = [s for s in steps if s.get('name') == 'Verify fixed APP004 qualification contracts']
     assert len(contracts) == 1
     contract = contracts[0]
