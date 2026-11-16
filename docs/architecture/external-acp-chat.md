@@ -181,10 +181,33 @@ from an experience remains a separate capability.
 The maintained `agent-client-protocol` SDK owns JSON-RPC framing, stream dispatch
 and local subprocess cleanup. Unified initializes without advertising client file
 or terminal callbacks. Backend-owned tools remain the agent's responsibility.
-The saved host Full choice can select an offered ACP allow option. Other access
-modes return cancellation rather than inventing consent; this pilot does not add
-a permission dialog. Changing access preserves the existing revision and authority
-checks, without scheduling a native-runtime remount for this external chat.
+Pending ACP permission requests appear in the conversation with their agent,
+current tool request and exact offered choices. A choice is bound to the request,
+participant, remote session, active turn and durable Stop revision. A replaced,
+withdrawn, completed or restarted request cannot receive a late decision. Reading
+or reconnecting the browser does not create or replay a request.
+The host saves a selected decision before waking its callback; that delivery is
+owned by the host, so browser disconnection or display notification failure does
+not strand it. Stop invalidates choices immediately and sends cancellation rather
+than waking the agent with an ordinary permission refusal. A terminal turn
+retires any outstanding permission RPC while preserving the reusable connection.
+
+The saved host Full choice selects only an offered **Allow once** option. It never
+creates a remembered rule in another agent. A person can explicitly select an
+offered **Always allow** option; its scope and revocation belong to that agent's
+policy owner. Unified retains the decision receipt, not a second rule store.
+Constellation Instance provides matching-request rules and its explicit Automatic
+setting. Its supported scope descriptor is displayed without deriving authority
+from model-authored prose. Generic ACP agents retain their own offered meanings.
+OS permissions, execution limits and tool validation remain enforced by their
+owners regardless of an approval choice.
+
+The named external Instance connection uses that shared agent policy. Direct
+native operator chats keep their existing native access settings and histories;
+they are not silently routed through an Instance or migrated. Changing host access
+preserves revision and authority checks without scheduling a native remount for
+an external chat. Optional notes are not offered for ACP choices because that
+protocol decision has no faithful note-delivery field.
 
 The host saves the remote session identity before sending its first prompt. The
 initial receipt means the host accepted the message and delivery is `sending`;

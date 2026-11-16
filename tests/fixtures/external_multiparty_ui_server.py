@@ -52,6 +52,7 @@ async def serve(home):
         async with service.lock:
             return web.json_response({'nativeStarts': runtime.started, 'nativeSends': runtime.sent,
                 'sessions': [{'id': row['id'], 'messages': row['messages'],
+                              'approvals': row.get('approvals', []),
                               'status': row.get('status'),
                               'externalAgent': row.get('externalAgent'),
                               'externalStreams': row.get('externalStreams', {}),
@@ -71,6 +72,18 @@ async def serve(home):
 
     app.router.add_get('/fixture/participants', observe)
     app.router.add_post('/fixture/release-beta', release)
+    async def withdraw(request):
+        if request.headers.get('Authorization') != 'Bearer fixture-browser-control-token':
+            raise web.HTTPForbidden()
+        (home / 'legacy-alpha/peer/withdraw').touch()
+        return web.json_response({'withdrawn': True})
+    app.router.add_post('/fixture/withdraw-legacy-alpha', withdraw)
+    async def release_legacy(request):
+        if request.headers.get('Authorization') != 'Bearer fixture-browser-control-token':
+            raise web.HTTPForbidden()
+        (home / 'legacy-alpha/peer/release').touch()
+        return web.json_response({'released': True})
+    app.router.add_post('/fixture/release-legacy-alpha', release_legacy)
     runner = web.AppRunner(app)
     await runner.setup()
     stopped = asyncio.Event()

@@ -159,11 +159,20 @@ async def test_each_participant_uses_existing_full_without_private_decision_outp
         access = (await app.dispatch('access.get', {'sessionId': session['id']}))['result']
         await app.dispatch('access.set', {'sessionId': session['id'], 'scope': 'session', 'mode': 'full', 'expectedRevision': access['revision']})
     await send(app, session['id'], 'permission', 'permission-input')
+    if not full:
+        await until(lambda: len([a for a in session['approvals'] if a['status'] == 'pending']) == 2)
+        assert {a['agentId'] for a in session['approvals']} == {'alpha', 'beta'}
+        for card in list(session['approvals']):
+            await app.dispatch('approval.respond', {'sessionId': session['id'], 'id': card['id'],
+                'decision': 'allow' if card['agentId'] == 'alpha' else 'deny',
+                'optionId': 'allow-this' if card['agentId'] == 'alpha' else 'deny-this',
+                'expectedRequestHash': card['requestHash']})
     await idle(app, session['id'])
     for identity in ('alpha', 'beta'):
         observed = [row for row in operations(tmp_path / identity) if row['kind'] == 'permission']
         assert len(observed) == 1
-        assert observed[0]['outcome']['outcome'] == ('selected' if full else 'cancelled')
+        assert observed[0]['outcome'] == {'outcome': 'selected',
+            'optionId': 'allow-this' if full or identity == 'alpha' else 'deny-this'}
     assert not session.get('fileAccessPending') and not session.get('configurationPending')
 
 
