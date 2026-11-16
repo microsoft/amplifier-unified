@@ -28,7 +28,7 @@ def challenge(verifier):
 async def permits_companion(request):
     """Fail closed before dispatch; never grant a generic action capability."""
     if request.method == 'GET':
-        if request.path in {'/api/companion', '/api/activity', '/api/attention'}:
+        if request.path in {'/api/activity', '/api/attention'}:
             return True
         if request.path == '/api/sessions':
             return request.query.getall('view', []) == ['observation']

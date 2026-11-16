@@ -42,11 +42,13 @@ canonical count meaning. Old leased pages retain their original receipt view.
 Public display hints are bounded plain text from host-owned projections, not raw
 tool input/output or an entire transcript. Device-specific truncation stays local.
 
-Cutover: grant and qualify generic reads first; qualify both native clients with
-these shared semantics; coordinate service/client adoption; then remove the
-companion route, permission branch and documentation. Until adoption, a temporary
-old-client route is a cutover hold, not another supported feed. The final removal
-requires a checked consumer inventory and actual no-adapter acceptance.
+Cutover order: qualify and adopt the generic service and both native clients,
+then adopt the adapter-removal successor. This successor deletes the adapter
+module, route and authorization branch; native isolation and authority checks now
+use generic resources. Retained historical qualification receipts describe their
+original source and are not relabeled as current feed evidence. No compatibility
+fallback is retained. Merge/publication of the removal successor must wait for
+client adoption evidence; source removal alone is not completed rollout.
 
 
 Avatar selection, palette, size, placement, notification visibility/hover mode,
