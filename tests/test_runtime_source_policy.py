@@ -157,6 +157,7 @@ def app_generated(prepared, monkeypatch):
     (receipt / 'runtime.lock').write_bytes((project / 'uv.lock').read_bytes())
     (receipt / 'runtime-installed.json').write_text(json.dumps(graph))
     (receipt / 'runtime-sources.json').write_text(json.dumps(saved))
+    monkeypatch.setattr(environments, 'project_path', lambda *args, **kwargs: project)
     rows = [{'kind': 'runtime dependency', 'package': 'fixture-component',
              'current': REVISION, 'eligible': False, 'status': 'pinned', **saved['fixture-component']}]
     monkeypatch.setattr('amplifier_web.runtime_qualification.installed_graph', lambda _: graph)

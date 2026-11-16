@@ -279,7 +279,7 @@ async def test_real_worker_lock_keeps_app_memory_source_with_pinned_module(tmp_p
     hook.joinpath('pyproject.toml').write_text('[project]\nname="' + MEMORY_HOOK + '"\nversion="1.0"\n'
         'dependencies=[' + json.dumps(dependency) + ']\n[build-system]\nrequires=[]\n'
         'build-backend="backend"\nbackend-path=["."]\n')
-    hook.joinpath('backend.py').write_text(BACKEND.replace('fixture_component', 'memory_hook').replace(
+    hook.joinpath('backend.py').write_text(BACKEND.replace('fixture_component', MEMORY_HOOK.replace('-', '_')).replace(
         'fixture-component', MEMORY_HOOK).replace('Version: 1.0\\n',
         'Version: 1.0\\nRequires-Dist: ' + dependency + '\\n'))
     git(repo, 'add', '.'); git(repo, 'commit', '-m', 'memory hook')
