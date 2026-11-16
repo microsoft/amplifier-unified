@@ -439,7 +439,26 @@ class SetupManager:
         snapshot=self.probe_snapshot(action,args,workspace)
         module,raw,config,env=(snapshot[name] for name in ('module','raw','config','env'))
         credential_generation=snapshot['credentialGeneration']
-        command=self.probe_command or RuntimeManager()._command()[:-1]+[str(Path(__file__).with_name('provider_probe.py'))]
+        if action == 'suggestion.complete' and self.probe_command is None:
+            from .updates import active_release
+            from .runtime_environment import project_path, receipt_directory
+            from .provider_catalog import generation_identity, _qualified_provider_sources
+            generation_id = active_release(self.home).get('current')
+            receipts = receipt_directory(self.home, generation_id)
+            if not (receipts / 'runtime-project.json').is_file():
+                return {'status': 'unsupported', 'suggestion': None, 'usage': None, 'cost': None}
+            project = project_path(self.home, generation_id)
+            executable = project / '.venv' / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
+            installed_sources = _qualified_provider_sources(str(self.home), generation_identity(self.home))
+            if (not executable.is_file() or snapshot['source']
+                    and installed_sources.get(module) != snapshot['source']):
+                return {'status': 'unsupported', 'suggestion': None, 'usage': None, 'cost': None}
+            # Already qualified interpreter and matching installed source only:
+            # unlike the setup command, this cannot run uv sync or prepare files.
+            command = [str(executable), str(Path(__file__).with_name('provider_probe.py'))]
+            snapshot['source'] = None
+        else:
+            command=self.probe_command or RuntimeManager()._command()[:-1]+[str(Path(__file__).with_name('provider_probe.py'))]
         probe_workspace=Path(workspace)
         while not probe_workspace.is_dir() and probe_workspace.parent!=probe_workspace:
             probe_workspace=probe_workspace.parent
@@ -449,7 +468,26 @@ class SetupManager:
         stderr_task=asyncio.create_task(stderr_tail(process.stderr))
         try:
             try:
-                output,stderr=await asyncio.wait_for(asyncio.gather(communicate(process,json.dumps({'action':action,'model':args.get('model'),**({'prompt':args['prompt']} if action=='naming.complete' else {}),'module':module,'config':config,'source':snapshot['source'],'fallbackSource':KNOWN_PROVIDER_SOURCES.get(module),'registryHome':snapshot['registryHome']}).encode()),stderr_task),90)
+                if action == 'suggestion.complete' and not args['_admit']():
+                    raise ValueError('Suggestion source changed before provider preparation.')
+                payload = json.dumps({'action':action,'model':args.get('model'),**({'prompt':args['prompt']} if action=='naming.complete' else {}),**({'transcript':args['transcript']} if action=='suggestion.complete' else {}),'module':module,'config':config,'source':snapshot['source'],'fallbackSource':KNOWN_PROVIDER_SOURCES.get(module),'registryHome':snapshot['registryHome']}).encode()
+                if action == 'suggestion.complete':
+                    # Keep stdin open for the final currentness handshake. No
+                    # provider call is authorized by the preparation payload.
+                    process.stdin.write(payload + b'\n')
+                    await process.stdin.drain()
+                    ready = await process.stdout.readline()
+                    if ready == b'{"suggestionReady":true}\n':
+                        output, stderr = await asyncio.gather(
+                            communicate(process, json.dumps({'admitted': bool(args['_admit']())}).encode() + b'\n'),
+                            stderr_task)
+                    else:
+                        # Unsupported setup can finish without requesting a
+                        # transport grant. Preserve its terminal typed result.
+                        remainder, stderr = await asyncio.gather(communicate(process, b''), stderr_task)
+                        output = ready + remainder
+                else:
+                    output,stderr=await asyncio.wait_for(asyncio.gather(communicate(process,payload),stderr_task),90)
             except TimeoutError:
                 raise HostProbeFailure('timeout') from None
             try:result=json.loads(output)
@@ -466,6 +504,8 @@ class SetupManager:
                 error.diagnostic = result.get('diagnostic', {'stage':'probe','category':'ProviderError'})
                 raise error
             if process.returncode:raise ProbeProcessFailure(process.returncode, stderr)
+            if action=='suggestion.complete':
+                return result['suggestion']
             if action=='naming.complete':
                 if result.get('naming',{}).get('error'):raise ValueError(result['naming']['error'])
                 return {'text':result.get('naming',{}).get('text','')}
@@ -748,6 +788,12 @@ class SetupManager:
             return {'decisionModels': describe(effective.settings, effective.providers), 'decisionModelsError': None}
         if action=='providers.configureDecisions':
             from .decision_settings import configure
+            return configure(self, args, workspace, scope)
+        if action=='providers.suggestionModels':
+            from .suggestion_settings import describe
+            return {'suggestionModels': describe(self, workspace), 'providers': self.provider_rows(workspace)}
+        if action=='providers.configureSuggestions':
+            from .suggestion_settings import configure
             return configure(self, args, workspace, scope)
         if action=='providers.list':
             return {'providers':self.provider_rows(workspace),'providersWorkspace':str(workspace),'providersLoadedAt':time.time()}

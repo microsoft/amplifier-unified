@@ -26,6 +26,14 @@ async def client_context(request, handler):
         record = service.clients.records.get(identity)
         if record is None or record.get('deviceOwner') != request['companion_device']:
             raise AppError("Attach a client owned by this device.", 403)
+    from .prompt_suggestions import BROWSER
+    from .auth import SESSION_COOKIE, valid_session
+    from .suggestion_settings import digest
+    cookie = request.cookies.get(SESSION_COOKIE)
+    browser = (not request.headers.get('Authorization') and cookie
+               and valid_session(request.app, cookie))
+    token = BROWSER.set({'principal': digest(cookie),
+                         'valid': lambda: valid_session(request.app, cookie)} if browser else None)
     with service.clients.bind(identity):
         try:
             return await handler(request)
@@ -33,6 +41,8 @@ async def client_context(request, handler):
             if identity and exc.code == "session_busy" and not request.get("companion_device"):
                 exc.client_state = service.browser_state()
             raise
+        finally:
+            BROWSER.reset(token)
 
 
 def setup_routes(app, streams):

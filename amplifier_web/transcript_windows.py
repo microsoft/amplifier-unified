@@ -35,7 +35,7 @@ def _visible(value):
             and bool(text_content(value)))
 
 
-def _native_page(reader, source, before, limit):
+def _native_page(reader, source, before, limit, *, public_only=False):
     from collections import Counter
     from .automatic_history import directory, native_input_id
     from .shared_state_probe import text_content
@@ -64,7 +64,19 @@ def _native_page(reader, source, before, limit):
     for item in result['rows']:
         value = item['value']
         at = message_time(value)
-        text = text_content(value)
+        if public_only:
+            from .native_message_projection import _public_blocks
+            metadata = value.get('metadata') or {}
+            # Host-service recovery and peer inputs are not the current human.
+            provenance = metadata.get('amplifier_input') or {}
+            if (provenance.get('kind') == 'service' or metadata.get('live_recovery_job')
+                    or metadata.get('private') or value.get('private') or value.get('partial')):
+                continue
+            text = text_content({'content': _public_blocks(value, text_only=True)['blocks']})
+            if not text:
+                continue
+        else:
+            text = text_content(value)
         exact_input = native_input_id(value)
         items.append({'id': item['displayId'], 'role': value['role'],
             **({'nativeInputId': exact_input} if exact_input else {}),
@@ -228,7 +240,7 @@ class TranscriptWindows:
                 'coverage': {'kind': 'saved-web', 'historyComplete': False}, 'unavailableRanges': gaps,
                 '_savedComplete': start == 0 and end == len(rows) and not gaps}
 
-    async def read(self, session_id, *, before=None, limit=100, native=False):
+    async def read(self, session_id, *, before=None, limit=100, native=False, public_only=False):
         if self.closed:
             raise ValueError('Saved message readers are closed.')
         if type(limit) is not int or not 1 <= limit <= 100:
@@ -246,7 +258,8 @@ class TranscriptWindows:
             if self.closed or len(self.jobs) >= 8:
                 raise ValueError('Saved message readers are busy. Try again.')
             if use_native:
-                work = asyncio.to_thread(_native_page, self.reader, source, before, limit)
+                work = asyncio.to_thread(_native_page, self.reader, source, before, limit,
+                                         **({'public_only': True} if public_only else {}))
             else:
                 from .saved_message_window import read_saved_window
                 work = asyncio.to_thread(read_saved_window, cold, self.reader, session_id=session_id,

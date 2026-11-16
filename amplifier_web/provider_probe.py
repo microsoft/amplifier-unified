@@ -104,9 +104,21 @@ async def query(request):
 
 async def _query(request, progress):
     source=request.get('source')
+    if request['action'] == 'suggestion.complete':
+        # Utility requests use installed runtime providers only. Never clone,
+        # install or resolve a different source merely because a viewer polls.
+        if source and source != request.get('fallbackSource'):
+            return {'suggestion': {'status': 'unsupported', 'suggestion': None,
+                                   'usage': None, 'cost': None,
+                                   'reason': 'custom_source_not_prepared'}}
+        source = None
     if not source:
         try:provider_class(request['module'])
-        except ImportError:source=request.get('fallbackSource')
+        except ImportError:
+            if request['action'] == 'suggestion.complete':
+                return {'suggestion': {'status': 'unsupported', 'suggestion': None,
+                                       'usage': None, 'cost': None}}
+            source=request.get('fallbackSource')
     if source:
         progress['stage'] = 'preparation'
         from amplifier_foundation import Bundle
@@ -133,6 +145,9 @@ async def _query(request, progress):
         return {'info':public(info),'configSchema':public(schema),'imageGeneration':public(image_info)}
     progress['stage'] = 'configuration'
     config=materialize_provider_config(request.get('config',{}),schema)
+    if request['action'] == 'suggestion.complete':
+        config = {**config, 'max_retries': 0, 'fallback_on_overload': False,
+                  'refusal_fallback_enabled': False, 'fallback_retry_count': 0}
     if request['module']=='provider-github-copilot' and config.get('github_token'):
         os.environ['COPILOT_AGENT_TOKEN']=config['github_token']
     progress['stage'] = 'construction'
@@ -144,6 +159,14 @@ async def _query(request, progress):
         progress['stage'] = 'metadata'
         info=public(await invoke('get_info'))
         result={'info':info,'configSchema':public(schema),'imageGeneration':public(image_info)}
+        if request['action'] == 'suggestion.complete':
+            from amplifier_web.suggestion_provider import complete
+            # The host rechecks private client/source/config authority after all
+            # construction awaits and before this one completion dispatch.
+            if not callable(request.get('_admit')) or not await request['_admit']():
+                return {'suggestion': {'status': 'stale', 'suggestion': None, 'usage': None, 'cost': None}}
+            return {'suggestion': await complete(provider, config, request.get('model'),
+                                                 request['transcript'], info)}
         if request['action'] == 'providers.imageModels':
             supported = callable(getattr(provider, 'list_image_models', None)) and isinstance(image_info, dict)
             result['imageModelsSupported'] = supported
@@ -172,7 +195,14 @@ def main():
     output=os.fdopen(os.dup(sys.stdout.fileno()),'w')
     os.dup2(sys.stderr.fileno(),sys.stdout.fileno());sys.stdout=sys.stderr
     try:
-        request=json.loads(sys.stdin.read())
+        request=json.loads(sys.stdin.readline())
+        if request.get('action') == 'suggestion.complete':
+            async def admit():
+                output.write('{"suggestionReady":true}\n')
+                output.flush()
+                raw = await asyncio.to_thread(sys.stdin.readline, 1024)
+                return json.loads(raw) == {'admitted': True}
+            request['_admit'] = admit
         from amplifier_web.probe_git import query as owned_query
         result=asyncio.run(owned_query(query(request)))
     except Exception as exc:
