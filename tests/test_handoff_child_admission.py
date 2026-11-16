@@ -1,4 +1,4 @@
-"""Preparation and nested execution retain exact admitted runs across a move."""
+"""Shared configuration drains retain admitted native preparation and jobs."""
 import asyncio
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -10,10 +10,30 @@ from amplifier_core import AmplifierSession
 from amplifier_module_loop_live.runtime import Runtime
 from amplifier_module_loop_live.scope import JOB_CALL
 from amplifier_web.handoff_boundary import inspect
-from amplifier_web.handoff_drain import begin, native_child
+from amplifier_web.handoff_drain import native_child
 from amplifier_web.host.children import Children
 from amplifier_web.host.storage import SessionStore
 from amplifier_web.runtime_worker import Worker
+
+
+async def begin(value, identity):
+    """Exercise the still-owned configuration arm, not removed checkout code."""
+    await inspect(value, identity, configuration=True, arm_only=True)
+    return value._handoff_boundary['drain']['snapshot']
+
+
+async def legacy_reply(value, receipt):
+    """Model an already-running old worker's saved binding in legacy tests."""
+    marker = getattr(value, '_handoff_boundary', None)
+    if not marker and receipt and receipt.get('phase') == 'pending':
+        await inspect(value, receipt['id'], arm_only=True)
+        marker = value._handoff_boundary
+        receipt['finishingTurn']['nativeDrain'] = marker['drain']['snapshot']
+    if marker and receipt and receipt.get('id') == marker['id']:
+        if receipt.get('phase') == 'pending':
+            marker['drain']['binding'] = receipt.get('finishingTurn')
+        elif receipt.get('phase') in {'rejected', 'applied'}:
+            await inspect(value, marker['id'], cancel=True)
 
 
 @pytest.fixture

@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from test_handoff_refusal import checkout
-from test_worktrees import fixture, settle
+from test_worktrees import legacy_fixture as fixture, settle
 
 from amplifier_web.service import AppError, AppService
 

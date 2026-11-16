@@ -39,8 +39,8 @@ def delayed_dispatch(host, monkeypatch, action, args, command):
     original = host.app.history.ensure_loaded
     task = None
 
-    async def paused_history(sid):
-        result = await original(sid)
+    async def paused_history(sid, **kwargs):
+        result = await original(sid, **kwargs)
         if asyncio.current_task() is task:
             assert sid == host.sid
             entered.set()

@@ -30,12 +30,29 @@ async def main(home):
             'ready': turn_finished.is_set(),
             'waitingFor': [] if turn_finished.is_set() else ['generation']}
     runtime.handoff_boundary = boundary
+    async def deferred(session, commit):
+        await turn_finished.wait()
+        return await commit({'quiesced': True, 'retired': False, 'inputsReplayed': False})
+    runtime.deferred_placement = AsyncMock(side_effect=deferred)
+    original_changed = service.worktrees.changed
+    publication_failure = False
+    def changed(*args):
+        nonlocal publication_failure
+        if publication_failure and any(row.get('step') == 'committing'
+                                       for row in service.worktrees.receipts(session['id'])):
+            publication_failure = False
+            raise OSError('Fixture could not confirm the placement transaction')
+        return original_changed(*args)
+    service.worktrees.changed = changed
     await service.dispatch('view.update', {'patch': {'panel':'chat-work','runtimeDraft':{'tab':'direction'},'draft':'Keep my worktree draft'}})
     async def fail_next(request):
-        runtime.quiesce_for_handoff.side_effect = RuntimeError('Fixture lost release confirmation')
+        nonlocal publication_failure
+        publication_failure = True
         return web.json_response({'ok':True})
     async def restore(request):
-        runtime.quiesce_for_handoff.side_effect = None
+        nonlocal publication_failure
+        publication_failure = False
+        runtime.deferred_placement.side_effect = deferred
         return web.json_response({'ok':True})
     async def change_source(request):
         (repositories[0] / 'file.txt').write_text('Contributor refinement\n')
@@ -48,6 +65,7 @@ async def main(home):
         return web.json_response({'ok': True})
     async def observe(request):
         return web.json_response({'releaseCalls': runtime.quiesce_for_handoff.await_count,
+            'retirementCalls': runtime.deferred_placement.await_count,
             'executionRevision': session.get('executionRevision', 0),
             'executionDirectory': session.get('workingDirectory') or session['workspace'],
             'messages': len(session['messages']),

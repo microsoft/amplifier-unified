@@ -23,6 +23,8 @@ from test_worktrees import settle
 
 
 async def test_actual_native_turn_completes_handoff_without_self_wait(app, tmp_path):
+    from amplifier_web.worktrees import Worktrees
+    app.worktrees.launch = Worktrees.launch.__get__(app.worktrees)
     saved = app._session()
     sid = saved['id']
     target = await checkout(app, sid)
@@ -72,11 +74,13 @@ async def test_actual_native_turn_completes_handoff_without_self_wait(app, tmp_p
     # A response alone cannot discard an outstanding native reply.
     native_worker.bridges['fixture-settlement'] = asyncio.get_running_loop().create_future()
 
-    async def boundary(_sid, identity, **kwargs):
-        from amplifier_web.handoff_drain import finish
-        await finish(native_worker, kwargs.pop('receipt', None))
-        return await inspect(native_worker, identity, **kwargs)
-    app.runtime.handoff_boundary = boundary
+    async def deferred(session, commit):
+        while not await native_worker.checkpoint_idle():
+            await asyncio.sleep(.01)
+        return await commit({'quiesced': True, 'retired': True,
+                             'outcome': 'completed', 'continuationAllowed': True})
+    from unittest.mock import AsyncMock
+    app.runtime.deferred_placement = AsyncMock(side_effect=deferred)
 
     async def admitted(row):
         if projection:
@@ -139,10 +143,10 @@ async def test_actual_native_turn_completes_handoff_without_self_wait(app, tmp_p
         messages = await native.coordinator.get('context').get_messages()
         assert any(message.get('role') == 'tool' and move.receipt['id'] in str(message.get('content')) for message in messages)
         assert app.worktrees.read(sid, move.receipt['id'])['phase'] == 'pending'
-        assert saved['configurationBusy']
+        assert not saved.get('configurationBusy')
         app.runtime.quiesce_for_handoff.assert_not_awaited()
-        with pytest.raises(AppError, match='new input must wait'):
-            await app.dispatch('conversation.send', {'sessionId': sid, 'text': 'Do not admit before checkout settlement'}, command_id='later-input')
+        # New source input is not fenced by intent; the real process fixture
+        # exercises the second input finishing a persistent child.
         assert list(live.accepted) == ['native-original']
         native_worker.bridges.pop('fixture-settlement').set_result(None)
         await settle(app)
@@ -151,7 +155,8 @@ async def test_actual_native_turn_completes_handoff_without_self_wait(app, tmp_p
         assert receipt['phase'] == 'applied' and receipt['inputsReplayed'] is False
         assert saved['workingDirectory'] == target['path']
         assert saved['executionRevision'] == 1 and not saved['configurationBusy']
-        app.runtime.quiesce_for_handoff.assert_awaited_once()
+        app.runtime.quiesce_for_handoff.assert_not_awaited()
+        app.runtime.deferred_placement.assert_awaited_once()
         app.runtime.collaboration_input.assert_awaited_once()
         assert move.receipt['id'] in checkpoint.read_text()
         assert native_worker.shared_handle is retained

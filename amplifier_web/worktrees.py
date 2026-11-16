@@ -37,7 +37,7 @@ def definitions(schema, string):
         'worktree.archive': ('Retire an unused app-created checkout while retaining every file and its Git registration. Moves the whole checkout to private archive storage; does not reclaim disk space or create an immutable snapshot. Active or ambiguous ownership is refused.', schema({**identity, **revision})),
         'worktree.restore': ('Restore an archived checkout without sending input or moving conversation execution. Keeps dirty, ignored and unknown files. Refuses a destination collision.', schema({**identity, **revision})),
         'worktree.remove': ('Remove an app-created checkout only when it has no changed/untracked/ignored files and no task is executing there. Preserves branch, source, history and manifests.', schema({**identity, **revision})),
-        'worktree.handoff': ('Move this task’s (or your idle commissioned member’s) execution folder to an associated checkout or back to its canonical home (id null). Returns a durable pending receipt. Finish the current turn; the host waits for tools and children, saves and releases the runtime, then continues active work in the destination. For a manager-directed move, the host instead notifies the manager automatically; inspect the completed placement before sending the member a new brief. Do not poll or ask the user to continue. Stop or changed task authority suppresses continuation. No input or uncertain effect is replayed. History, settings, drafts, voice and artifact identities remain unchanged.', schema({**sid, 'id': {'type': ['string', 'null']}, 'expectedExecutionRevision': {'type': 'integer', 'minimum': 0}}, ['sessionId', 'id', 'expectedExecutionRevision'])),
+        'worktree.handoff': ('Choose the next execution folder: associated checkout id, or canonical home (id null). Saves intent and returns immediately. Current work and authorized new input may finish in the current folder. One native retirement saves and exits at a settled turn boundary; exclusive ownership commits the next folder automatically. No polling, Check or cancellation acknowledgement is needed. Placement is separate from its guarded continuation or manager notification. Stop, terminal/replaced objective or revoked authority suppresses unperformed placement; routine new messages do not. History, budgets, drafts and prior effects remain intact; no input is replayed.', schema({**sid, 'id': {'type': ['string', 'null']}, 'expectedExecutionRevision': {'type': 'integer', 'minimum': 0}}, ['sessionId', 'id', 'expectedExecutionRevision'])),
         'worktree.reconcile': ('After inspecting an unknown handoff, deliberately choose its source or target. Requires current receipt revision and user evidence, confirms writer release again, and never replays model input. Agents must cite the actual user finding.', schema({**identity, **revision, 'destination': {'enum': ['source', 'target']}, 'evidence': {**string(4000), 'minLength': 1}, 'sourceMessageId': string(200)}, ['sessionId', 'id', 'expectedRevision', 'destination', 'evidence'])),
     }
 
@@ -49,6 +49,8 @@ class Worktrees:
         self.receipt_dir = service.data_dir / 'worktree-handoffs'
         self.receipt_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.jobs = set()
+        self.placement_jobs = {}
+        self._closed = False
         self.mutations = asyncio.Lock()
         self._creation_paths = {}
         self._moving_paths = ()
@@ -68,6 +70,31 @@ class Worktrees:
             source_retained = (session.get('executionRevision', 0) == record['executionRevision']
                 and session.get('workspace') == record['historyHome']
                 and (session.get('workingDirectory') or session.get('workspace')) == record['source'])
+            if record.get('placementMode') == 'deferred-retirement' and record['phase'] == 'pending':
+                if committed:
+                    record.update(phase='applied', step='applied', revision=record['revision'] + 1,
+                                  continuation={'status': 'suppressed',
+                                      'detail': 'The folder commit is saved. Restart did not replay a continuation.'})
+                    self.save(record)
+                    continue
+                if record.get('step') == 'retiring' and source_retained:
+                    # A retiring projection precedes the placement callback.
+                    # A new host may apply only after its next exclusive native
+                    # acquisition; it never reconstructs the old retire command
+                    # or replays the interrupted model continuation.
+                    record.update(step='desired', revision=record['revision'] + 1,
+                                  runtimeOutcome='unconfirmed', placementUnperformed=True,
+                                  continuation={'status': 'suppressed'},
+                                  detail='The current folder is still saved. Next folder waits for exclusive native ownership; no input will be replayed.')
+                    self.save(record)
+                if record.get('step') != 'desired' or not source_retained:
+                    record.update(phase='unknown', revision=record['revision'] + 1,
+                                  detail='The host restarted before its runtime save or placement commit was confirmed.',
+                                  continuation={'status': 'suppressed'})
+                    self.save(record)
+                    continue
+                self.recoverable.append(record['id'])
+                continue
             notification_pending = record.get('resumeRequested') and record.get('continuation', {}).get('status') in {None, 'waiting', 'backpressured'}
             reconciliation_pending = (record.get('reconciles')
                 and self.read(record['sessionId'], record['reconciles'])['phase'] == 'unknown')
@@ -205,15 +232,42 @@ class Worktrees:
         session = self.app._session(sid, hydrate=False)
         host = session.get('executionHost')
         host_matches = not host or (host.get('scope') == 'local' and host.get('id') == local_host_identity()['id'])
+        deferred_unknown = any(row.get('phase') == 'unknown' and row.get('placementMode') == 'deferred-retirement'
+                               for row in session.get('worktreeHandoffs', []))
         return {'hostMatches': host_matches, 'executionHost': copy.deepcopy(host), 'directory': session.get('workingDirectory') or session['workspace'],
+                'recoveryInstruction': ('The saved folder transaction or native writer is unconfirmed. Its original owner must inspect recovery; no move or input will be repeated.'
+                                        if deferred_unknown else None),
                 'revision': session.get('executionRevision', 0),
                 'interruptionRevision': session.get('interruptionRevision', 0),
-                'fenced': any(row['phase'] in {'pending', 'unknown'} for row in session.get('worktreeHandoffs', [])) or
+                'fenced': any(self.fences(row) for row in session.get('worktreeHandoffs', [])) or
                     bool(getattr(self.app, 'portability', None) and self.app.portability.fenced(sid))}
 
     def bind_runtime(self):
         binding = getattr(self.app.runtime, 'bind_execution_state', None)
         if callable(binding): binding(self.execution_state)
+        from .runtime import RuntimeManager
+        if isinstance(self.app.runtime, RuntimeManager):
+            self.app.runtime._placement_closing = self.placement_closing
+
+    def placement_closing(self, sid, worker):
+        record = self.desired(sid)
+        if record is None or self._closed:
+            return
+        identity = record['id']
+        async def project():
+            async with self.app.lock:
+                record = self.desired(sid)
+                if (self._closed or self.app.runtime.workers.get(sid) is not worker
+                        or record is None or record['id'] != identity or record.get('step') != 'desired'):
+                    return
+                record.update(step='retiring', revision=record['revision'] + 1,
+                              detail='Saving the current worker and applying the next folder.')
+                self.save(record)
+                self.changed({sid})
+        job = asyncio.create_task(project())
+        self.jobs.add(job)
+        job.add_done_callback(self.jobs.discard)
+        job.add_done_callback(lambda done: None if done.cancelled() else done.exception())
 
     def start(self):
         # Production creates its runtime after AppService hydration. Install
@@ -240,9 +294,27 @@ class Worktrees:
         self.recoverable.clear()
 
     def launch(self, record, session):
-        job = asyncio.create_task(self.finish(record, session))
+        if record.get('placementMode') == 'deferred-retirement':
+            sid = record['sessionId']
+            if sid in self.placement_jobs:
+                return
+            job = asyncio.create_task(self.finish_desired(sid))
+            self.placement_jobs[sid] = job
+            job.add_done_callback(lambda done: self.placement_jobs.pop(sid, None))
+        else:
+            job = asyncio.create_task(self.finish(record, session))
         self.jobs.add(job)
         job.add_done_callback(self.jobs.discard)
+
+    @staticmethod
+    def fences(record):
+        return (record['phase'] == 'unknown' or record['phase'] == 'pending' and
+                (record.get('placementMode') != 'deferred-retirement' or record.get('step') == 'committing'))
+
+    def desired(self, sid):
+        return max((row for row in self.receipts(sid) if row['phase'] == 'pending'
+                    and row.get('placementMode') == 'deferred-retirement'),
+                   key=lambda row: (row['createdAt'], row['id']), default=None)
 
     def operation_records(self, sid):
         return [self.operation_shape(row) for row in self.receipts(sid)]
@@ -258,7 +330,7 @@ class Worktrees:
     def display(self, record):
         state = {'applied': 'moved', 'reconciled': 'needs_recovery',
                  'rejected': 'not_moved', 'unknown': 'needs_recovery'}.get(
-                     record['phase'], 'moving' if record.get('step') in {'releasing', 'released'} else 'waiting')
+                     record['phase'], 'moving' if record.get('step') in {'releasing', 'released', 'retiring', 'committing'} else 'waiting')
         detail = record.get('detail', '')
         if record['phase'] == 'reconciled' and record.get('reconciliation'):
             # Original target and uncertain effect evidence stay intact. A
@@ -399,7 +471,7 @@ class Worktrees:
             binding = record[side + 'Binding']
             path = Path(record[side])
             if not path.is_dir() or path.resolve(strict=True) != path:
-                raise ValueError(f'The {side} folder is unavailable or no longer its recorded canonical path')
+                raise HandoffRepositoryChanged(f'The {side} folder is unavailable or no longer its recorded canonical path')
             if binding.get('repository'):
                 if binding['kind'] == 'inherited':
                     checkout = self.git.get(binding['checkoutId'])
@@ -527,7 +599,7 @@ class Worktrees:
             receipt = self.display(receipt)
             sid = receipt['sessionId']
             by_handoff.setdefault(sid, []).append(receipt)
-            if receipt['phase'] in {'pending', 'unknown'}:
+            if self.fences(receipt):
                 unresolved.add(sid)
         groups = (('worktrees', by_session), ('worktreeHandoffs', by_handoff))
         index = self.app.projections.sessions(self.app.state)
@@ -680,8 +752,9 @@ class Worktrees:
                 record = self.read(sid, identity)
                 if record['signature'] != signature: raise ValueError('This handoff command already has different contents')
                 return {**record, 'duplicate': True}
-            if any(row['phase'] == 'pending' for row in self.receipts(sid)):
-                raise ValueError('A handoff is already pending; inspect its receipt before another request')
+            pending = [row for row in self.receipts(sid) if row['phase'] == 'pending']
+            if any(row.get('placementMode') != 'deferred-retirement' or row.get('step') == 'committing' for row in pending):
+                raise ValueError('A handoff is committing or has a legacy owner; inspect its current receipt.')
             previous = None
             if action == 'worktree.reconcile':
                 previous = self.read(sid, args['id'])
@@ -711,6 +784,18 @@ class Worktrees:
             record['humanMessageId'] = self.latest_human(session)
             task = session.get('task') or self.app.coordination.task(sid)
             record['taskBinding'] = {key: task.get(key) for key in ('id', 'revision')}
+            if action == 'worktree.handoff':
+                principal = self.app._session(manager['sourceSessionId']) if manager else session
+                access = self.app.access_mode.snapshot(principal)
+                record.update(placementMode='deferred-retirement', step='desired',
+                    taskObjective={'id': task.get('id'), 'objective': task.get('objective')},
+                    placementAccess={'sessionId': principal['id'], 'revision': access['revision']},
+                    detail='Next folder saved. Current work and authorized input may finish in the current folder.')
+                for prior in pending:
+                    prior.update(phase='rejected', revision=prior['revision'] + 1, supersededBy=identity,
+                                 detail='A newer next-folder choice replaced this unperformed placement.',
+                                 continuation={'status': 'suppressed'})
+                    self.save(prior)
             active = session.get('collaborationGeneration') or {}
             record['resumeRequested'] = bool(active.get('id') and not active.get('terminal')
                 and session.get('status') not in {'stopped', 'stopping', 'interrupted', 'error'})
@@ -725,18 +810,6 @@ class Worktrees:
                 # A UI placement choice does not elevate the running task's
                 # peer inputs or reset their retained causal chain.
                 record['causalDepth'] = self.app.collaboration.causal_depth(session, lineage, 'agent')
-            if record['resumeRequested'] and not manager and not previous:
-                from .handoff_admission import worker_instance
-                instance = worker_instance(self.app, sid)
-                if instance:
-                    record['finishingTurn'] = {'workerInstance': instance,
-                        'generationId': active['id'], 'inputIds': copy.deepcopy(active.get('inputIds', [])),
-                        'configurationRevision': session.get('configurationPendingRevision', 0)}
-                    from .collaboration import BINDING, PRINCIPAL
-                    native_snapshot = (BINDING.get() or {}).get('_handoffSnapshot')
-                    if (origin == 'agent' and PRINCIPAL.get() == (session.get('runtimeSessionId') or sid)
-                            and isinstance(native_snapshot, dict)):
-                        record['finishingTurn']['nativeDrain'] = copy.deepcopy(native_snapshot)
             if manager:
                 source = self.app._session(manager['sourceSessionId'])
                 self.app.collaboration.require_inbox_slot(source['id'])
@@ -749,7 +822,8 @@ class Worktrees:
             self.save(record)
             if manager:
                 self.continuation_request(record)
-            session['configurationBusy'] = True
+            if record.get('placementMode') != 'deferred-retirement':
+                session['configurationBusy'] = True
             self.changed()
             self.launch(record, copy.deepcopy(session))
             return record
@@ -765,6 +839,16 @@ class Worktrees:
         session = self.app._session(record['sessionId'])
         if session.get('interruptionRevision', 0) != record.get('interruptionRevision', 0):
             return 'The user stopped this conversation after requesting the move.'
+        if record.get('placementMode') == 'deferred-retirement':
+            access = record.get('placementAccess')
+            if (access and self.app.access_mode.snapshot(self.app._session(access['sessionId']))['revision']
+                    != access['revision']):
+                return 'The permission boundary changed after the next folder was chosen.'
+            task = session.get('task') or self.app.coordination.task(session['id'])
+            if ({key: task.get(key) for key in ('id', 'objective')} != record.get('taskObjective')
+                    or task.get('status') in {'paused', 'blocked', 'completed'}):
+                return 'The placement objective changed or is no longer active.'
+            return None
         if self.latest_human(session) != record.get('humanMessageId'):
             return 'New user input superseded the requested continuation.'
         task = session.get('task') or self.app.coordination.task(session['id'])
@@ -1041,6 +1125,158 @@ class Worktrees:
                 async with self.app.lock:
                     self.enqueue_continuation(record)
 
+    async def finish_desired(self, sid):
+        """One conversation-owned desired association, not a dispatcher waiter."""
+        record = self.desired(sid)
+        if record is None:
+            return
+        accepting = True
+        placement_attempted = False
+        try:
+            async def commit(proof):
+                nonlocal record, placement_attempted
+                if not accepting or self._closed:
+                    raise HandoffSuperseded('The placement owner closed before committing its folder.')
+                while candidate := self.desired(sid):
+                    if not accepting or self._closed:
+                        raise HandoffSuperseded('The placement owner closed before committing its folder.')
+                    session = self.app._session(sid)
+                    async with self.app.lock:
+                        latest = self.desired(sid)
+                        if latest is None:
+                            return
+                        if latest['id'] != candidate['id']:
+                            continue
+                        # Retain the real saved teardown even if Stop or a
+                        # later Git/authority check prevents folder placement.
+                        candidate.update(release=proof, revision=candidate['revision'] + 1)
+                        self.save(candidate)
+                        record = candidate
+                    # Git may wait, but neither the short service lock nor the
+                    # native command lock is held. Runtime admission and the
+                    # exclusive writer lease protect the actual commit.
+                    await asyncio.to_thread(self.preflight, candidate, session)
+                    async with self.app.lock:
+                        if not accepting or self._closed:
+                            raise HandoffSuperseded('The placement owner closed before committing its folder.')
+                        latest = self.desired(sid)
+                        if latest is None:
+                            return
+                        if latest['id'] != candidate['id']:
+                            continue
+                        record = latest
+                        if reason := self.authority_changed(record):
+                            raise HandoffSuperseded(reason)
+                        self.check_host(record)
+                        self.check_binding(record, session)
+                        if (session.get('executionRevision', 0) != record['executionRevision']
+                                or (session.get('workingDirectory') or session['workspace']) != record['source']):
+                            raise HandoffSuperseded('The applied execution folder changed before placement.')
+                        from .management import Management
+                        if (session.get('configurationBusy') or session.get('configurationPending')
+                                or session.get('fileAccessPending') or Management.unresolved_configuration(session)):
+                            raise HandoffSuperseded('Another configuration owner must finish before folder placement.')
+                        record.update(step='committing', release=proof, revision=record['revision'] + 1)
+                        self.save(record)
+                        placement_attempted = True
+                        session.update(workingDirectory=record['target'],
+                                       executionRevision=record['executionRevision'] + 1,
+                                       executionHost=copy.deepcopy(record['executionHost']),
+                                       executionHandoffId=record['id'])
+                        self.changed({sid})
+                        if not self.placement_committed(record, self.saved_owner(sid, durable=True)):
+                            raise RuntimeError('The saved placement transaction could not be confirmed.')
+                        record.update(phase='applied', step='applied', revision=record['revision'] + 1,
+                                      detail='Next folder is now the current folder. No input was replayed.')
+                        session['configurationBusy'] = False  # Only our synchronous committing fence.
+                        if not record.get('managerPlacement') and (
+                                not proof.get('retired') or proof.get('outcome') != 'completed'
+                                or not proof.get('continuationAllowed')):
+                            record.update(resumeRequested=False, continuation={'status': 'suppressed',
+                                'detail': 'No successfully saved active turn authorized an automatic continuation.'})
+                        self.save(record)
+                        self.changed({sid})
+                        return record
+            runtime = self.app.runtime
+            place = getattr(runtime, 'deferred_placement', None)
+            if not callable(place):
+                raise ValueError('This runtime does not support deferred folder placement.')
+            await asyncio.to_thread(self.preflight, record, self.app._session(sid))
+            async with self.app.lock:
+                if reason := self.authority_changed(self.desired(sid) or record):
+                    raise HandoffSuperseded(reason)
+            # RuntimeManager retains the effect owner through a detached
+            # caller; Worktrees must not invent a second task around adapters.
+            await place({**copy.deepcopy(self.app._session(sid)), 'placementRequestId': record['id']}, commit)
+            async with self.app.lock:
+                if record['phase'] == 'applied':
+                    self.enqueue_continuation(record)
+                    self.changed({sid})
+        except BaseException as exc:
+            # A detached runtime retirement may finish after this owner closes.
+            # Its callback cannot commit after this terminal uncertainty record.
+            accepting = False
+            async with self.app.lock:
+                record = self.desired(sid) or record
+                try:
+                    saved = self.saved_owner(sid, durable=True)
+                except (ValueError, OSError, sqlite3.Error):
+                    saved = None
+                session = self.app._session(sid)
+                source_confirmed = bool(saved is not None and not placement_attempted
+                    and saved.get('workspace') == record['historyHome']
+                    and (saved.get('workingDirectory') or saved['workspace']) == record['source']
+                    and saved.get('executionRevision', 0) == record['executionRevision'])
+                if self.placement_committed(record, saved):
+                    record.update(phase='applied', step='applied',
+                                  continuation={'status': 'suppressed',
+                                      'detail': 'Placement is saved; a failed observer did not authorize new input.'})
+                elif source_confirmed:
+                    # This exact owner invalidated the only commit callback
+                    # before inspecting its durable source. Runtime save/crash
+                    # uncertainty is not uncertainty about an unattempted folder
+                    # transaction, nor permission to replay a model input.
+                    shutdown = isinstance(exc, asyncio.CancelledError) and self._closed
+                    reason = self.authority_changed(record)
+                    record.update(phase='pending' if shutdown and not reason else 'rejected',
+                                  step='desired', placementUnperformed=True,
+                                  failureType=type(exc).__name__,
+                                  continuation={'status': 'suppressed'},
+                                  runtimeOutcome='unconfirmed' if not record.get('release') else 'retired',
+                                  detail=('Folder choice is saved for the next native owner. The current folder is unchanged; no input will be replayed.'
+                                          if shutdown and not reason else
+                                          (str(exc) + '. ' if isinstance(exc, (HandoffRepositoryChanged, HandoffSuperseded)) else '') +
+                                          'The next folder was not applied. The saved current folder is unchanged; no input was replayed.'))
+                elif isinstance(exc, HandoffSuperseded) and not placement_attempted and saved is not None:
+                    record.update(phase='rejected', detail='The next-folder choice was superseded. No folder change or input was repeated.',
+                                  continuation={'status': 'suppressed'})
+                elif isinstance(exc, ValueError) and not placement_attempted and saved is not None:
+                    record.update(phase='rejected', detail=(
+                        str(exc) + '. ' if isinstance(exc, HandoffRepositoryChanged) else '') +
+                        'The next folder could not be applied. The current folder is unchanged.',
+                                  failureType=type(exc).__name__)
+                else:
+                    # Storage, failed save and interrupted retirement remain
+                    # truthful. This is not artificial marker uncertainty.
+                    record.update(phase='unknown', detail='The runtime save or folder commit could not be confirmed. Work was not replayed.',
+                                  failureType=type(exc).__name__)
+                    if not record.get('managerPlacement'):
+                        record['continuation'] = {'status': 'suppressed'}
+                if record['phase'] != 'applied' and saved is not None:
+                    self.restore_placement(session, saved)
+                record['revision'] += 1
+                self.save(record)
+                if saved is None:
+                    self._unverified_placements.add(sid)
+                    self.sync()
+                else:
+                    self.changed({sid})
+                if record.get('managerPlacement'):
+                    self.enqueue_continuation(record)
+            if isinstance(exc, asyncio.CancelledError):
+                raise
+
     async def close(self):
+        self._closed = True
         for job in list(self.jobs): job.cancel()
         if self.jobs: await asyncio.gather(*self.jobs, return_exceptions=True)

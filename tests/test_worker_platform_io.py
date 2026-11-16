@@ -493,7 +493,8 @@ class ControlInputDispatchTests(unittest.IsolatedAsyncioTestCase):
                 reader.readline = readline
                 received = []
                 async def command(data): received.append(data)
-                worker = SimpleNamespace(command=command, tasks=set(), shutdown=asyncio.Event())
+                worker = SimpleNamespace(command=command, tasks=set(), shutdown=asyncio.Event(),
+                                         command_tasks=set(), retirement_changed=asyncio.Event())
                 with patch.object(runtime_worker, "sys", SimpleNamespace(platform="win32", stdin=object())), \
                      patch.object(ThreadedPipeReader, "for_worker", return_value=reader) as factory:
                     if cancel:

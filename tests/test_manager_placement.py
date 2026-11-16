@@ -1,4 +1,9 @@
-"""Manager placement uses commissioned membership and the native handoff owner."""
+"""Retained legacy manager receipts preserve their original authority contract.
+
+New deferred-placement liveness/authority is exercised in
+test_deferred_placement.py. These cases intentionally seed the old receipt
+shape; a production request has no switch to create that legacy shape.
+"""
 import asyncio
 import copy
 from pathlib import Path
@@ -9,7 +14,7 @@ import pytest
 from amplifier_web.service import AppError, AppService
 from test_collaborative_workspaces import app, agent_action, finish, generation
 from test_peer_creation_operation import plan, commission, initial_accepted
-from test_worktrees import repository, settle
+from test_worktrees import repository, settle, retained_legacy
 
 
 async def prepared(app, tmp_path):
@@ -38,6 +43,9 @@ async def checkout(app, source, target, root):
 
 
 async def move(app, source, target, record, identity='move'):
+    if not getattr(app.worktrees, '_legacy_fixture', False):
+        retained_legacy(app)
+        app.worktrees._legacy_fixture = True
     return (await agent_action(app, source, 'worktree.handoff', {
         'sessionId': target['id'], 'id': record['id'], 'expectedExecutionRevision': 0},
         identity))['result']

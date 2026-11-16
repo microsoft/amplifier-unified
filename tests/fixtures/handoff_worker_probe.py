@@ -19,13 +19,15 @@ sys.path.insert(0, str(SOURCE))
 
 
 async def main():
-    child_work = '--child-work' in sys.argv[2:]
+    persistent_child = '--persistent-child' in sys.argv[2:]
+    child_work = '--child-work' in sys.argv[2:] or persistent_child
     with_child = '--child' in sys.argv[2:] or child_work
     canonical = '--canonical' in sys.argv[2:]
     cap_one = '--goal-cap-one' in sys.argv[2:]
     with_goal = '--goal' in sys.argv[2:] or cap_one
     launcher = '--launcher' in sys.argv[2:]
     command_lock = '--command-lock' in sys.argv[2:]
+    stop_during_save = '--stop-during-save' in sys.argv[2:]
     goal_cap = 1 if cap_one else 3 if with_child else 2
     root = Path(sys.argv[1]).resolve()
     root.mkdir(parents=True, exist_ok=False)
@@ -75,13 +77,20 @@ class FixtureProvider:
             assert os.getcwd()==values['target'], (os.getcwd(), values['target'])
             assert 'original-request' in text
             return ChatResponse(content=[TextBlock(text='continued-in-requested-checkout')])
+        if values['persistentChild'] and 'finish-persistent-child' in text:
+            if any(m.role=='tool' and m.tool_call_id=='finish-child' for m in request.messages):
+                return ChatResponse(content=[TextBlock(text='persistent-child-finished-at-source')])
+            child=next(iter(self.coordinator.get_capability('live.children').rows))
+            return ChatResponse(content=[], tool_calls=[ToolCall(id='finish-child', name='live_worker',
+                arguments={'action':'finish','session_id':child})])
         if any(m.role=='tool' and m.tool_call_id=='move-tool' for m in request.messages):
             result=next(m for m in request.messages if m.role=='tool' and m.tool_call_id=='move-tool')
             assert 'pending' in str(result.content), result
             return ChatResponse(content=[TextBlock(text='move-pending-turn-finished')])
         if values['withChild']:
             if not any(m.role=='tool' and m.tool_call_id=='child-tool' for m in request.messages):
-                return ChatResponse(content=[], tool_calls=[ToolCall(id='child-tool', name='delegate', arguments={'async':True})])
+                return ChatResponse(content=[], tool_calls=[ToolCall(id='child-tool', name='delegate',
+                    arguments={'async':True,'persistent':values['persistentChild']})])
             async with asyncio.timeout(20):
                 while not Path(values['childStarted']).exists():
                     await asyncio.sleep(.01)
@@ -117,8 +126,13 @@ class FixtureWait:
         while not Path(values['commandRelease']).exists():
             await asyncio.sleep(.01)
         checkpoint = self.coordinator.get_capability('live.checkpoint')
+        saves = 0
         async def delayed(status='completed'):
-            if status == 'cancelled':
+            nonlocal saves
+            saves += 1
+            # tool.invoke itself checkpoints before its control reply. Delay
+            # the next ordinary retirement save, not that tool's own save.
+            if saves == 2:
                 Path(values['checkpointStarted']).write_text('ready')
                 while not Path(values['checkpointRelease']).exists():
                     await asyncio.sleep(.01)
@@ -160,13 +174,31 @@ providers:
         os.environ['VIRTUAL_ENV'] = sys.prefix
     runtime = RuntimeManager(command=command, startup_timeout=90)
     source_identities = []
-    quiesce = runtime.quiesce_for_handoff
-    async def observed_quiesce(session, request_id, **kwargs):
-        row = runtime.workers.get(session['id'])
-        if row:
+    soft_sent = asyncio.Event()
+    stop_sent = asyncio.Event()
+    retirements, operations, source_processes = [], [], []
+    request = runtime._request_unlocked
+    async def observed_request(sid, op, **kwargs):
+        if op == 'retire' and kwargs.get('whenSettled'):
+            row = runtime.workers[sid]
             source_identities.append((row['process'].pid, row.get('native_worker_pid')))
-        return await quiesce(session, request_id, **kwargs)
-    runtime.quiesce_for_handoff = observed_quiesce
+            source_processes.append(row['process'])
+            soft_sent.set()
+            result = await request(sid, op, **kwargs)
+            retirements.append(result)
+            return result
+        return await request(sid, op, **kwargs)
+    runtime._request_unlocked = observed_request
+    write = runtime._write
+    async def observed_write(row, data):
+        operations.append(data['op'])
+        if data['op'] == 'stop':
+            stop_sent.set()
+        return await write(row, data)
+    runtime._write = observed_write
+    async def forbidden_release(*args, **kwargs):
+        raise AssertionError('Checkout must not use a second Foundation release')
+    runtime.quiesce_for_handoff = forbidden_release
     app = AppService(root / 'app', runtime, workspace=workspace)
     from amplifier_web.management import Management
     app.management = Management(app)
@@ -184,7 +216,8 @@ providers:
             'sourceRevision': inspected['repository']['sourceRevision']}, command_id='native-checkout'))['result']
         scenario.write_text(json.dumps({'sid': sid, 'checkout': checkout['id'], 'target': checkout['path'],
                                       'calls': str(root / 'calls.jsonl'), 'withChild': with_child, 'childStarted': str(root / 'child-started'),
-                                      'childWork': child_work, 'childRead': str(root / 'child-read'),
+                                      'childWork': child_work, 'persistentChild': persistent_child,
+                                      'childRead': str(root / 'child-read'),
                                       **{key: str(root / key) for key in
                                          ('commandStarted', 'commandRelease', 'checkpointStarted', 'checkpointRelease')}}))
         if command_lock:
@@ -195,16 +228,20 @@ providers:
                     while not (root / name).exists():
                         await asyncio.sleep(.01)
             await wait_file('commandStarted')
+            print(json.dumps({'checkpoint': 'command-started'}), flush=True)
             receipt = (await app.dispatch('worktree.handoff', {'sessionId': sid,
                 'id': checkout['id'], 'expectedExecutionRevision': 0}, command_id='held-command-move'))['result']
-            async with asyncio.timeout(10):
-                while 'command' not in app.worktrees.read(sid, receipt['id']).get('waitingFor', []):
-                    await asyncio.sleep(.01)
-            assert not source_identities
+            await asyncio.wait_for(soft_sent.wait(), 10)
+            print(json.dumps({'checkpoint': 'soft-intent-sent'}), flush=True)
+            assert app.worktrees.read(sid, receipt['id'])['step'] == 'desired'
+            assert not runtime.workers[sid].get('closing')
+            assert not runtime.workers[sid].get('retirement_task')
             (root / 'commandRelease').write_text('release')
-            await control
+            await asyncio.wait_for(control, 15)
+            print(json.dumps({'checkpoint': 'command-finished'}), flush=True)
             await wait_file('checkpointStarted')
-            assert app.worktrees.read(sid, receipt['id'])['step'] == 'releasing'
+            print(json.dumps({'checkpoint': 'save-held'}), flush=True)
+            assert app.worktrees.read(sid, receipt['id'])['step'] == 'desired'
             assert session.get('workingDirectory', str(workspace)) == str(workspace)
             from amplifier_foundation.session import SharedSessionStore, SessionBusyError
             try:
@@ -214,13 +251,36 @@ providers:
             else:
                 proof.release()
                 raise AssertionError('The delayed saved boundary released its writer early')
+            if stop_during_save:
+                stopping = asyncio.create_task(app.dispatch('conversation.stop', {'sessionId': sid},
+                                                            command_id='actual-stop-during-save'))
+                await asyncio.wait_for(stop_sent.wait(), 10)
+                (root / 'checkpointRelease').write_text('release after real Stop')
+                await asyncio.wait_for(stopping, 20)
+                await asyncio.wait_for(asyncio.gather(*list(app.worktrees.jobs)), 20)
+                record = app.worktrees.read(sid, receipt['id'])
+                assert record['phase'] == 'rejected' and record['placementUnperformed'], record
+                assert not app.worktrees.execution_state(sid)['fenced'] and not record['inputsReplayed']
+                assert session.get('workingDirectory', str(workspace)) == str(workspace)
+                assert session.get('executionRevision', 0) == 0 and session['status'] == 'stopped'
+                assert sid not in runtime._retired and not (root / 'calls.jsonl').exists()
+                assert source_processes[0].returncode is not None and 'handoff.boundary' not in operations
+                assert not any(row.get('retired') for row in retirements)
+                proof = SharedSessionStore(workspace, session.get('runtimeSessionId') or sid).acquire(app='fixture-after-stop')
+                proof.release()
+                print(json.dumps({'phase': record['phase'], 'actualStopWonDuringSave': True,
+                    'sourceUnchanged': True, 'retiredRestartAbsent': True, 'providerCalls': 0,
+                    'leaseAvailableAfterStop': True, 'inputsReplayed': False}))
+                return
             (root / 'checkpointRelease').write_text('release')
-            await asyncio.gather(*list(app.worktrees.jobs))
+            await asyncio.wait_for(asyncio.gather(*list(app.worktrees.jobs)), 45)
             record = app.worktrees.read(sid, receipt['id'])
             assert record['phase'] == 'applied' and session['workingDirectory'] == checkout['path']
             assert len(app.worktrees.receipts(sid)) == 1 and not record['inputsReplayed']
             assert not (root / 'calls.jsonl').exists()
             assert source_identities[0][0] != source_identities[0][1]
+            assert len(retirements) == 1 and operations.count('retire') == 1
+            assert 'handoff.boundary' not in operations and source_processes[0].returncode is not None
             print(json.dumps({'phase': record['phase'], 'commandProbeNonblocking': True,
                 'delayedAuthoritativeSaveRetainedWriter': True, 'originalMoveCount': 1,
                 'providerCalls': 0, 'inputsReplayed': False, 'launcherNativePidDistinct': True}))
@@ -231,6 +291,20 @@ providers:
         await app.dispatch('view.update', {'patch': {'draft': 'preserve-unsent-draft'}})
         await app.dispatch('conversation.send', {'sessionId': sid, 'text': 'original-request: Move and continue this work.',
             'preserveDraft': True}, command_id='native-original', include_state=False)
+        if persistent_child:
+            async with asyncio.timeout(45):
+                while not any(row.get('persistent') and row.get('status') == 'idle'
+                              for row in session.get('workers', [])):
+                    if session.get('error'):
+                        raise AssertionError(session['error'])
+                    await asyncio.sleep(.02)
+            record = app.worktrees.receipts(sid)[0]
+            assert record['phase'] == 'pending' and record['step'] == 'desired', record
+            assert session.get('workingDirectory', str(workspace)) == str(workspace)
+            assert not session.get('configurationBusy') and not runtime.workers[sid].get('closing')
+            assert source_processes[0].returncode is None
+            await app.dispatch('conversation.send', {'sessionId': sid, 'text': 'finish-persistent-child',
+                'preserveDraft': True}, command_id='finish-persistent-input', include_state=False)
         async with asyncio.timeout(90):
             while not any('continued-in-requested-checkout' in m.get('text', '') for m in session['messages']):
                 if session.get('error'):
@@ -242,9 +316,11 @@ providers:
         record = app.worktrees.receipts(sid)[0]
         assert record['phase'] == 'applied', record
         assert record['release']['quiesced'] and not record['inputsReplayed']
+        assert record['placementMode'] == 'deferred-retirement'
+        assert len(retirements) == 1 and operations.count('retire') == 1
+        assert 'handoff.boundary' not in operations and source_processes[0].returncode is not None
         if launcher:
             launcher_pid, native_pid = source_identities[0]
-            assert native_pid == record['release']['releasedOwner']['pid']
             assert launcher_pid != native_pid, source_identities
         assert record['origin'] == 'agent' and record['sourceInputIds'] == ['native-original']
         if not cap_one:
@@ -263,9 +339,14 @@ providers:
         assert len(originals) == 1, messages
         assert any(m.get('tool_call_id') == 'move-tool' for m in messages), messages
         if with_child:
-            assert record['finishingTurn']['nativeDrain']['jobs'], record
             assert any('child-result-retained' in str(m.get('content')) for m in messages), messages
+        if persistent_child:
+            assert len([m for m in messages if (m.get('metadata') or {}).get('amplifier_input', {}).get('id')
+                        == 'finish-persistent-input']) == 1, messages
+            assert any(m.get('tool_call_id') == 'finish-child' for m in messages), messages
+            assert session.get('workers') and all(row.get('status') == 'completed' for row in session['workers'])
         calls = [json.loads(line) for line in (root / 'calls.jsonl').read_text().splitlines()]
+        assert calls[0]['pid'] == source_identities[0][1]
         if child_work:
             assert (root / 'child-read').read_text() == 'preserved original\n'
             assert len([row for row in calls if row['child']]) == 2, calls
@@ -275,7 +356,9 @@ providers:
             assert calls[-1]['cwd'] == checkout['path']
         if with_goal and not cap_one:
             resumed = next(row for row in calls if row['cwd'] == checkout['path'])['goal']
-            assert resumed['cap'] == goal_cap and resumed['turns_used'] == (2 if with_child else 1), resumed
+            source_budget = max(row['goal']['turns_used'] for row in calls
+                                if row['goal'] and row['cwd'] == str(workspace))
+            assert resumed['cap'] == goal_cap and resumed['turns_used'] >= source_budget, resumed
             assert max(row['goal']['turns_used'] for row in calls if row['goal']) == goal_cap, calls
         if cap_one:
             assert record['continuation']['status'] == 'suppressed', record
@@ -285,9 +368,17 @@ providers:
             'toolResultPersisted': True, 'continuationAccepted': not cap_one, 'draftPreserved': True,
             'historyHomePreserved': True, 'goalBudgetPreserved': with_goal,
             'childResultRetained': with_child, 'childToolAndSecondModelAfterParent': child_work,
+            'persistentChildFinishedByNewSourceInput': persistent_child,
             'launcherNativePidDistinct': launcher, 'canonicalAlias': canonical, 'provider': 'scripted-offline'}))
     finally:
-        await app.close()
+        for name in ('commandRelease', 'checkpointRelease'):
+            (root / name).write_text('fixture cleanup')
+        print(json.dumps({'checkpoint': 'fixture-cleanup',
+            'moves': [{'phase': row['phase'], 'step': row.get('step'), 'detail': row.get('detail')}
+                      for row in app.worktrees.receipts(None)],
+            'workers': [{'id': key, 'closing': row.get('closing'), 'inflight': len(row.get('inflight', [])),
+                         'exit': row['process'].returncode} for key, row in runtime.workers.items()]}), flush=True)
+        await asyncio.wait_for(app.close(), 30)
 
 
 asyncio.run(main())

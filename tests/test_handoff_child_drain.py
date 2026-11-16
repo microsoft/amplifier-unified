@@ -24,6 +24,12 @@ from test_task_continuity import controls
 
 @pytest.mark.parametrize('child_phase', ['admitted-result', 'late-admission', 'already-waiting', 'in-transit', 'root-waiter'])
 async def test_native_child_and_return_observation_settle_before_move(app, child_phase, tmp_path, monkeypatch):
+    from amplifier_web.worktrees import Worktrees
+    from unittest.mock import AsyncMock
+    app.worktrees.launch = Worktrees.launch.__get__(app.worktrees)
+    async def deferred(session, commit):
+        await asyncio.Future()  # Keep source work visible; no fake release.
+    app.runtime.deferred_placement = AsyncMock(side_effect=deferred)
     saved = app._session()
     sid = saved['id']
     target = await checkout(app, sid)
@@ -90,18 +96,27 @@ async def test_native_child_and_return_observation_settle_before_move(app, child
             replies.append(asyncio.create_task(reply(message)))
     monkeypatch.setattr('amplifier_web.runtime_worker.publish', publish)
 
-    async def boundary(_sid, identity, **kwargs):
-        from amplifier_web.handoff_drain import finish
-        await finish(worker, kwargs.pop('receipt', None))
-        return await inspect(worker, identity, **kwargs)
-    app.runtime.handoff_boundary = boundary
-
     async def admitted(row):
         if projection:
             await projection
+        child = row['sessionId'] != sid
+        # This in-process provider stub does not mount a child coordinator.
+        # Supply the same private native run envelope as Worker.admit_model;
+        # actual child production is separately qualified by the uv fixture.
+        origin = None
+        if child:
+            from amplifier_web.host.children import _CHILD_ADMISSION
+            _, entry = _CHILD_ADMISSION.get()
+            row['runId'] = entry['runId']
+            app.runtime.workers[sid]['runtimeOwnerId'] = 'fixture-owner'
+            origin = {'rootSessionId': sid, 'runtimeSessionId': row['sessionId'],
+                'runId': entry['runId'], 'generationId': 'child-generation',
+                'inputIds': ['original-input'], 'interruptionRevision': 0,
+                'executionRevision': 0, 'configurationPendingRevision': 0}
         answer = await worker.bridge('capacity.admit', {
-            'call': row, '_nativeChild': native_child(worker, row), '_handoffDrain': witness(worker, row), '_generationId': (live.generation or {}).get('id'),
-            '_runtimeSessionId': sid, 'waitForCapacity': True})
+            'call': row, '_generationId': 'child-generation' if child else (live.generation or {}).get('id'),
+            '_runtimeSessionId': sid, '_runtimeOwnerId': 'fixture-owner', 'waitForCapacity': True,
+            **({'_childOrigin': origin} if origin else {})})
         admissions.append({'sessionId': row['sessionId'], 'answer': answer})
         return answer
     control.capacity.admit = admitted

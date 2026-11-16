@@ -535,6 +535,10 @@ async def test_actual_handoff_return_retains_original_configuration_authority(ap
     source, peer = app.state['sessions']
     await grant(app, ['file_access'], ['local'])
     app.runtime.quiesce_for_handoff = AsyncMock(return_value={'quiesced': True, 'inputsReplayed': False})
+    async def deferred(session, commit):
+        return await commit({'quiesced': True, 'retired': True, 'outcome': 'completed',
+                             'continuationAllowed': True, 'inputsReplayed': False})
+    app.runtime.deferred_placement = AsyncMock(side_effect=deferred)
     app.runtime.collaboration_input = AsyncMock(return_value={'accepted': True})
     source['status'] = 'working'
     if ancestry == 'unprivileged-peer':

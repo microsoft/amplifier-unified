@@ -14,7 +14,7 @@ import pytest
 
 from amplifier_web.service import AppError, AppService
 from amplifier_worktrees.git import MAX_FILES, git
-from test_worktrees import repository, settle
+from test_worktrees import repository, settle, retained_legacy
 
 
 @pytest.fixture
@@ -28,6 +28,9 @@ async def multi(tmp_path, monkeypatch):
         root = repository(parent)
         repos.append(root)
     runtime = SimpleNamespace(close=AsyncMock(), quiesce_for_handoff=AsyncMock(return_value={'quiesced': True, 'inputsReplayed': False}))
+    async def deferred(session, commit):
+        return await commit({'quiesced': True, 'retired': False, 'inputsReplayed': False})
+    runtime.deferred_placement = AsyncMock(side_effect=deferred)
     app = AppService(tmp_path / 'app', runtime, workspace=workspace)
     await app.dispatch('session.create', {'title': 'Two repositories'})
     sid = app._session()['id']
@@ -112,7 +115,8 @@ async def test_non_git_home_moves_between_selected_repositories_and_back_without
         assert app._session(sid)['messages'] == retained['messages']
         assert receipt['inputsReplayed'] is False
     assert not (workspace / '.git').exists()
-    assert app.runtime.quiesce_for_handoff.await_count == 3
+    assert app.runtime.deferred_placement.await_count == 3
+    app.runtime.quiesce_for_handoff.assert_not_awaited()
     assert [app.worktrees.git.inspect(root)['sourceRevision'] for root in repos] == before
     assert app.worktrees.git.inspect(carried_path)['sourceRevision'] == carried_before
     assert git(carried_path, 'show', ':a.txt') == b'staged\n'
@@ -145,15 +149,15 @@ async def test_handoff_keeps_large_retained_history_without_building_a_manifest(
     session['messages'] = [{'id': 'retained-message', 'role': 'user', 'text': 'Keep this evidence'}]
     messages = copy.deepcopy(session['messages'])
 
-    # Exercise the supported action through the real idle-runtime release and
+    # Exercise the supported action through the real idle placement lease and
     # Foundation ownership store, not a mocked successful release response.
     monkeypatch.setenv('AMPLIFIER_SESSION_STATE_HOME', str(workspace / 'session-state'))
     app.runtime = RuntimeManager()
     app.worktrees.bind_runtime()
     receipt = await move(app, sid, target, 'leave-history-source', agent=True)
     assert receipt['phase'] == 'applied', receipt
-    assert receipt['release']['quiesced'] and receipt['release']['releaseOwner']['acquisition_id']
-    assert receipt['release']['releasedOwner'] is None  # No active model writer in this synthetic smoke.
+    assert receipt['release']['quiesced'] and receipt['release']['ownershipAcquisitionId']
+    assert not receipt['release']['retired']  # No active writer in this store smoke.
     assert not receipt['inputsReplayed'] and not app.runtime.workers
     assert session['workingDirectory'] == target['path'] and session['executionRevision'] == 2
     assert session['workspace'] == str(workspace) and session['messages'] == messages
@@ -173,6 +177,7 @@ async def test_non_git_home_unknown_handoff_reconciles_exact_home_or_checkout(mu
     if returning:
         assert (await move(app, sid, checkout, 'outbound'))['phase'] == 'applied'
     app.runtime.quiesce_for_handoff.side_effect = RuntimeError('lost release acknowledgment')
+    retained_legacy(app)
     unknown = await move(app, sid, None if returning else checkout, 'uncertain-move')
     assert unknown['phase'] == 'unknown'
     assert app._session(sid)['configurationBusy']
@@ -206,6 +211,7 @@ async def test_non_git_handoff_restart_preserves_bindings_and_agent_reconciliati
     runtime = SimpleNamespace(close=AsyncMock(), quiesce_for_handoff=AsyncMock(
         return_value={'quiesced': True, 'inputsReplayed': False}, side_effect=RuntimeError('lost release acknowledgment')))
     app = AppService(tmp_path / 'app', runtime, workspace=workspace)
+    retained_legacy(app)
     try:
         await app.dispatch('session.create', {})
         sid = app._session()['id']
@@ -244,11 +250,11 @@ async def test_selected_checkout_replaced_by_unrelated_git_repository_rejects_be
     try:
         marker.write_text(f'gitdir: {repos[1] / ".git"}\n')
         receipt = await move(app, sid, checkout, 'wrong-repository')
-        assert receipt['phase'] == 'rejected' and receipt['step'] == 'preflight'
+        assert receipt['phase'] == 'rejected' and receipt['step'] == 'desired'
         assert 'recorded repository' in receipt['detail']
         assert not app.runtime.quiesce_for_handoff.called
         assert (app._session(sid).get('workingDirectory') or app._session(sid)['workspace']) == str(workspace)
-        assert not app._session(sid)['configurationBusy']
+        assert not app._session(sid).get('configurationBusy')
     finally:
         marker.write_bytes(original)
 
@@ -259,17 +265,26 @@ async def test_source_checkout_repository_changed_after_receipt_rejects_before_r
     assert (await move(app, sid, checkout, 'outbound'))['phase'] == 'applied'
     app.runtime.quiesce_for_handoff.reset_mock()
     before = copy.deepcopy(app._session(sid))
+    entered, resume = asyncio.Event(), asyncio.Event()
+    async def hold(session, commit):
+        entered.set()
+        await resume.wait()
+        return await commit({'quiesced': True, 'retired': True, 'outcome': 'completed'})
+    app.runtime.deferred_placement.side_effect = hold
     pending = (await app.dispatch('worktree.handoff', {
         'sessionId': sid, 'id': None, 'expectedExecutionRevision': 1,
     }, command_id='return-after-source-replacement'))['result']
     marker = Path(checkout['path']) / '.git'
     original = marker.read_bytes()
     try:
-        # The receipt exists, but its background preflight has not run yet.
+        await entered.wait()
+        # The initial preflight passed. Replace the source while retirement
+        # owns the wait, before the held lease/commit path rechecks Git.
         marker.write_text(f'gitdir: {repos[1] / ".git"}\n')
+        resume.set()
         await settle(app)
         receipt = app.worktrees.read(sid, pending['id'])
-        assert receipt['phase'] == 'rejected' and receipt['step'] == 'preflight'
+        assert receipt['phase'] == 'rejected' and receipt['step'] == 'desired'
         assert 'source' in receipt['detail'] and 'recorded repository' in receipt['detail']
         assert not app.runtime.quiesce_for_handoff.called
         current = app._session(sid)
@@ -278,6 +293,7 @@ async def test_source_checkout_repository_changed_after_receipt_rejects_before_r
         assert not current['configurationBusy']
         assert not receipt['inputsReplayed']
     finally:
+        resume.set()
         marker.write_bytes(original)
 
 
@@ -285,6 +301,7 @@ async def test_legacy_reconciliation_cannot_choose_an_unassociated_repository(mu
     app, sid, _, repos = multi
     checkout = await create(app, sid, repos[0], 'selected-copy')
     app.runtime.quiesce_for_handoff.side_effect = RuntimeError('lost release acknowledgment')
+    retained_legacy(app)
     unknown = await move(app, sid, checkout, 'uncertain-move')
     unknown.pop('sourceBinding'); unknown.pop('targetBinding')
     unknown['target'] = str(repos[1])
@@ -308,7 +325,7 @@ async def test_return_home_refuses_replaced_canonical_path_before_release(multi,
     workspace.symlink_to(substitute, target_is_directory=True)
     try:
         receipt = await move(app, sid, None, 'return-home')
-        assert receipt['phase'] == 'rejected' and receipt['step'] == 'preflight'
+        assert receipt['phase'] == 'rejected' and receipt['step'] == 'desired'
         assert 'recorded canonical path' in receipt['detail']
         assert app._session(sid)['workingDirectory'] == checkout['path']
         assert app._session(sid)['executionRevision'] == 1
@@ -420,11 +437,12 @@ async def test_agent_root_and_associated_checkout_selection(multi):
 
 @pytest.mark.parametrize('side', ['source', 'target'])
 @pytest.mark.parametrize('stage', ['waiting', 'releasing'])
-async def test_repository_replaced_during_handoff_await_never_applies(multi, side, stage):
+async def test_legacy_repository_replaced_during_handoff_await_never_applies(multi, side, stage):
     app, sid, workspace, repos = multi
     source = await create(app, sid, repos[0], 'source-await-copy')
     target = await create(app, sid, repos[0], 'target-await-copy')
     assert (await move(app, sid, source, 'enter-source'))['phase'] == 'applied'
+    retained_legacy(app)
     runtime = app.runtime
     runtime.quiesce_for_handoff.reset_mock()
     runtime.collaboration_input = AsyncMock()

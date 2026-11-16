@@ -3,9 +3,9 @@
 This codebase is yours: what it's for and how it's built are your call, and you'll keep building on it.
 
 Read [README](README.md) for the current HTTP/SSE boundary, pinned upstream
-vision/contracts and build/test scopes. The repository is private; preserve its
-visibility. Unified selects a client revision and qualifies its packaged pairing;
-source work here does not publish or adopt a new default automatically.
+vision/contracts and build/test scopes. This repository owns the canonical
+web-client source. Unified selects a client revision and qualifies its packaged
+pairing; source work here does not publish or adopt a new default automatically.
 
 Author browser behavior in `src/`, standalone pages in `public/`, client checks in
 `tests/`, and build/preparation tools in `scripts/`. `dist/`, `.build-inputs/`,
@@ -30,7 +30,7 @@ without losing authority, feedback or recovery.
 
 ## Temporary dual-repository maintenance
 
-While private, maintain both this canonical source and Unified's committed
+Maintain both this canonical source and Unified's committed
 `components/web-client` snapshot and source record. Canonical-only or copy-only
 changes are not release-ready. Author here, then mechanically refresh the whole
 snapshot from the exact reviewed, accepted commit, or make a named integration
@@ -45,3 +45,16 @@ Keep one explicit paired server revision in artifact evidence. Do not add a
 compatibility registry, runtime asset override or automatic fallback. Follow the
 workspace's owned-DTU rules for builds/browser work and remove obsolete owned
 copies when their review purpose ends; preserve useful finite evidence.
+
+## Ecosystem maps
+
+Keep this repository's README and product-page maps aligned with the
+[Constellation map guide](https://github.com/microsoft/amplifier-constellation/blob/main/docs/ecosystem-maps.md)
+and its canonical registry; start with this repository's
+`docs/ecosystem-map.json`. When creating, renaming, splitting, retiring, or
+changing a role, interface, parent, or dependency, inspect incoming and outgoing
+relationships and update every affected parent/consumer map and link, including
+the centralized product pages. Regenerate from source data and synchronize local
+records/images rather than hand-editing generated images. Describe actual
+boundaries and optional choices; a role highlight is not a compatibility claim.
+Documentation work does not authorize deployment or resume paused product work.

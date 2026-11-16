@@ -1354,6 +1354,7 @@
     "test-environments",
     "assignment-adoption",
     "worktree-move",
+    "deferred-placement",
     "access-mode",
     "storage-cleanup-settings",
     "model-capacity-settings",
