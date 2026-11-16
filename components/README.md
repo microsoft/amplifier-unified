@@ -152,11 +152,10 @@ npm run package:artifact -- /tmp/my-web-package PAIRED_SERVER_COMMIT \
   --source-record /tmp/my-web-client/.client-source.json
 ```
 
-Choose a new task-owned directory. Preparation verifies selected source and
-carries `.client-source.json`. In a Git-free source export, this standalone command
-copies only the bounded production manifest; use normal root `prepare` or the
-canonical client checkout for client tests. No Git metadata, dependencies or local
-state is copied. `prepare:inputs` retrieves
+Choose a new task-owned directory. Preparation fetches and verifies the selected
+public source and carries `.client-source.json`, including when Unified itself is
+a Git-free source export. No Git metadata, dependencies or local state is copied.
+`prepare:inputs` retrieves
 only the exact public files pinned by the client; its README also documents
 offline input preparation. A paired-server declaration is not a compatibility
 claim. The selection record is not independent authentication if both source and
@@ -195,17 +194,11 @@ rather than duplicating a port or build campaign.
 Shared catalogs, SDK and normative contracts retain their existing owners. No
 wrapper package, lock or duplicate client tests are generated in Unified.
 
-Public visibility alone does not retire this obligation. Only an approved
-repository-delivery cutover may change delivery to `{"type":"repository"}`;
-remove the copied tree and update this guide and agent guidance in the same review.
-Preparation then fetches the exact commit through Unified's repository-access
-policy. Client verification, artifact format and runtime do not change with
-delivery mode.
+Preparation uses Unified's existing repository-access policy. Client verification,
+artifact format and runtime do not change with delivery mode. Inspect source in
+the canonical repository or its exact prepared selection; the visible source
+record connects that selection to the shipped artifact.
 
-The copied tree is opt-in source-review context and excluded from Unified's
-Python source distribution. Inspect selected source with
-`python scripts/source_context.py --all --format paths --under components/web-client`.
-Ordinary searches do not apply those attributes. Retire obsolete owned prepared
-copies and dependencies after review, retaining useful finite evidence and
-recoverable commits. Refreshing the copy changes the full-tree release identity;
-historical evidence is never relabelled or exempted.
+Retire obsolete owned prepared copies and dependencies after review, retaining
+useful finite evidence and recoverable commits. Historical evidence keeps its
+original source and delivery identity.
