@@ -113,6 +113,7 @@ def test_the_windows_step_own_script_passes_only_when_every_case_passed(windows_
     assert step['shell'] == 'pwsh'
     script = windows_step_folder / 'step.ps1'
     # GitHub puts these two lines around the script of a "shell: pwsh" step and runs: pwsh -command ". '{0}'"
+    # -NoProfile and -NonInteractive below are this test's own: a profile of this PC must not change the result.
     script.write_text("$ErrorActionPreference = 'stop'\n" + step['run']
                       + "\nif ((Test-Path -LiteralPath variable:\\LASTEXITCODE)) { exit $LASTEXITCODE }\n",
                       encoding='utf-8')

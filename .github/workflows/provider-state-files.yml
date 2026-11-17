@@ -87,7 +87,7 @@ jobs:
           AMPLIFIER_REQUIRE_PROVIDER_STATE_FILES: '1'
         run: |
           .\.venv\Scripts\python.exe -B -m pytest -q -rA -p no:cacheprovider "tests/test_provider_state_files_workflow.py::test_the_windows_step_own_script_passes_only_when_every_case_passed" | Tee-Object -Variable report
-          if ($LASTEXITCODE -ne 0) { throw 'The step that requires the state-file cases accepts a wrong result.' }
+          if ($LASTEXITCODE -ne 0) { throw 'The step that requires the state-file cases accepts a wrong result, or this check of it did not run. Read the pytest output above.' }
           $summary = [string]($report | Where-Object { $_ } | Select-Object -Last 1)
           if ($summary -notmatch '^\d+ passed(, \d+ warnings?)? in ') { throw "The cases of the step's own script did not all run: $summary" }
   linux:
