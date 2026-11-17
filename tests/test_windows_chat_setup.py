@@ -25,16 +25,17 @@ with a controlled command and open process handles what a stop ends.
 The app's decision-catalog helper is the first program that imports the
 provider packages in a new worker environment. It finds no bytecode there, and
 the app gives one start of it a time limit (``decision_accounts._catalog_snapshot``).
-On a busy runner that first start passed the limit, and the preparation then
-failed by chance (pull request 2270, run 44143862317, two attempts). So this
-case starts the helper itself, with the app's own command and settings,
-directly before the app's first probe command in each new environment: twice,
-and it measures both starts and counts the bytecode files that the first one
-wrote. The app's own start then finds bytecode. This case therefore does not
-show that a first start is inside the app's limit. It prints how long each
-first start took, and the CI job keeps those times on the run's page and warns
-when one passed the limit. The times of the two probe phases that the case
-prints include its two starts of the helper.
+On a hosted runner that first start takes 2 to 6 seconds of the 10 that the
+app allows. Twice it took longer, and the preparation then failed by timing
+(pull request 2270, run 44143862317, two attempts). So this case starts the
+helper itself, with the app's own command and settings, directly before the
+app's first probe command in each new environment: twice, and it measures
+both starts and counts the bytecode files that the first one wrote. The app's
+own start then finds bytecode. This case therefore does not show that a first
+start is inside the app's limit. It prints how long each first start took, and
+the CI job keeps those times on the run's page and warns when one passed the
+limit. The times of the two probe phases that the case prints include its two
+starts of the helper.
 
 It then lists every path below the installation folder. That is the measured
 answer to "which paths pass the Windows limit, and does the app need them":
