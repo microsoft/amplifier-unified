@@ -246,7 +246,11 @@ def configured_sources(service):
     return sources, incomplete
 
 
-async def process(*args, cwd=None, env=None, timeout=90, raw=False):
+async def process(*args, cwd=None, env=None, timeout=90, raw=False, _redaction_env=None):
+    from .update_command_details import Capture, STDOUT_LIMIT, STDERR_LIMIT, local_excerpt
+    from .update_diagnostics import CommandFailure, CommandTimeout, CommandOutput, CommandBytes, command_facts
+    redaction_env = dict(_redaction_env or {})
+    redaction_env.update(env if env is not None else os.environ)
     if (env if env is not None else os.environ).get('AMPLIFIER_GITHUB_ACCESS') == 'anonymous':
         from .reset import repository_environment
         env = repository_environment(env)
@@ -262,43 +266,95 @@ async def process(*args, cwd=None, env=None, timeout=90, raw=False):
     proc = await asyncio.create_subprocess_exec(*map(str,args), cwd=cwd, env=env,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         start_new_session=os.name != 'nt', **native)
+    out, err = Capture(STDOUT_LIMIT), Capture(STDERR_LIMIT)
+    readers = asyncio.gather(out.drain(proc.stdout), err.drain(proc.stderr), proc.wait())
+    def receipt():
+        facts = command_facts(bytes(out.data), bytes(err.data), proc.returncode, time.monotonic()-started)
+        facts.update(stdoutBytes=out.total, stderrBytes=err.total,
+                     stdoutTruncated=out.truncated, stderrTruncated=err.truncated)
+        return facts
+    def detail(facts):
+        return {**facts, **local_excerpt(err, redaction_env)}
     try:
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout)
+        await asyncio.wait_for(asyncio.shield(readers), timeout)
     except BaseException as error:
-        if proc.returncode is None:
+        def terminate(force=False):
+            # The parent may already have exited while descendants hold pipes.
             try:
                 if os.name != 'nt':
                     import signal
-                    os.killpg(proc.pid, signal.SIGTERM)
-                else: proc.terminate()
+                    os.killpg(proc.pid, signal.SIGKILL if force else signal.SIGTERM)
+                elif proc.returncode is None:
+                    proc.kill() if force else proc.terminate()
             except ProcessLookupError:
                 pass
-            try: await asyncio.wait_for(proc.wait(), 5)
+        terminate()
+        try:
+            await asyncio.wait_for(asyncio.shield(readers), 5)
+        except TimeoutError:
+            terminate(force=True)
+            try:
+                await asyncio.wait_for(asyncio.shield(readers), 5)
             except TimeoutError:
-                try:
-                    if os.name != 'nt': os.killpg(proc.pid, signal.SIGKILL)
-                    else: proc.kill()
-                except ProcessLookupError:
-                    pass
-                await proc.wait()
-        if isinstance(error,TimeoutError):
-            from .update_diagnostics import CommandTimeout
-            raise CommandTimeout(time.monotonic()-started) from None
+                pass  # Bound descendants that escaped the existing process group.
+        readers.cancel()
+        await asyncio.gather(readers, return_exceptions=True)
+        failure = CommandTimeout(time.monotonic()-started) if isinstance(error, TimeoutError) else error
+        failure.diagnostic_facts = {**getattr(failure, 'diagnostic_facts', {}), **receipt()}
+        if isinstance(error, TimeoutError):
+            failure.diagnostic_facts.update(errorType='TimeoutError', timedOut=True)
+        failure.diagnostic_facts['commandAttempts'] = [dict(failure.diagnostic_facts)]
+        failure.local_command_details = [detail(failure.diagnostic_facts['commandAttempts'][0])]
+        if failure is not error:
+            raise failure from None
         raise
+    stdout, stderr = bytes(out.data), bytes(err.data)
+    facts = receipt()
+    facts['commandAttempts'] = [dict(facts)]
+    if out.truncated:
+        facts['outputLimitExceeded'] = True
+        facts['commandAttempts'][0]['outputLimitExceeded'] = True
     if proc.returncode:
         from .reset import anonymous_retry_environment
-        retry = anonymous_retry_environment(args, env, stdout, stderr)
+        evidence = ((b'github.com ' if out.github or err.github else b'') +
+                    (b'Authentication failed' if out.auth_failure or err.auth_failure else b'') +
+                    (b'\nAMPLIFIER_UPDATE_PROBE={"ok":false,"repositoryAccessFailure":true}\n'
+                     if out.access_probe or err.access_probe else b''))
+        retry = anonymous_retry_environment(args, env, stdout, stderr + evidence)
         remaining = timeout - (time.monotonic() - started)
         if retry is not None and remaining > 0:
-            result = await process(*args, cwd=cwd, env=retry, timeout=remaining, raw=raw)
-            if hasattr(result, 'diagnostic_facts'):
-                result.diagnostic_facts['anonymousRetry'] = True
+            def combine(value):
+                later = value.diagnostic_facts
+                local_later = getattr(value, 'local_command_details', None) or [
+                    {**{key: val for key, val in later.items() if key != 'commandAttempts'}, 'stderr': ''}]
+                later['anonymousRetry'] = True
+                later['commandAttempts'] = facts['commandAttempts'] + later.get('commandAttempts', [
+                    {key: val for key, val in later.items() if key != 'commandAttempts'}])
+                value.local_command_details = [detail(facts['commandAttempts'][0])] + local_later
+            try:
+                result = await process(*args, cwd=cwd, env=retry, timeout=remaining, raw=raw,
+                                       _redaction_env=redaction_env)
+            except BaseException as failure:
+                # Cancellation/spawn failure of the retry must not erase the
+                # first failure, and must never itself trigger another retry.
+                if not hasattr(failure, 'diagnostic_facts'):
+                    from .update_diagnostics import exception_facts
+                    failure.diagnostic_facts = exception_facts(failure)
+                combine(failure)
+                raise
+            combine(result)
             return result
-        from .update_diagnostics import CommandFailure,command_facts
-        raise CommandFailure(command_facts(stdout,stderr,proc.returncode,time.monotonic()-started))
-    if raw:return stdout
-    from .update_diagnostics import CommandOutput,command_facts
-    return CommandOutput(stdout.decode(errors='replace').strip(),command_facts(stdout,stderr,proc.returncode,time.monotonic()-started))
+        failure = CommandFailure(facts)
+        failure.local_command_details = [detail(facts['commandAttempts'][0])]
+        raise failure
+    if out.truncated:
+        # Successful JSON/binary consumers must never receive a partial result.
+        failure = CommandFailure(facts)
+        failure.local_command_details = [detail(facts['commandAttempts'][0])]
+        raise failure
+    result = CommandBytes(stdout, facts) if raw else CommandOutput(stdout.decode(errors='replace').strip(), facts)
+    # No success output is retained locally; a retry still carries the first failure.
+    return result
 
 
 # Content identity of the reviewed wiki-weaver hook, NOT a dependency/revision pin.
