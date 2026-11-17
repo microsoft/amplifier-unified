@@ -1318,6 +1318,7 @@
     "settings-draft-focus",
     "delivery-warning",
     "legacy-outbox-notice",
+    "changelog-days",
     "delivery-reconciliation",
     "delivery-new-chat",
     "canvas-media",
