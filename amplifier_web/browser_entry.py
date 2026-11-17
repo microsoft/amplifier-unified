@@ -27,16 +27,24 @@ CODE_REDEEM_PATH = "/api/browser-entry/code/redeem"
 CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"  # 32 symbols: no 0, 1, I or O.
 CODE_LENGTH = 10
 _CODE = re.compile(f"[{CODE_ALPHABET}]{{{CODE_LENGTH}}}")
-# What a person does when the browser on this computer is not signed in, or
-# did not open. A PC that was set up with the Windows setup file has no
-# `amplifier-unified` on its PATH; its Start-menu entry opens the browser. This
-# code cannot tell which kind of installation it serves, so the Windows text
-# names both ways. macOS and Linux have no such entry.
-_REOPEN = {
-    True: ("Open Amplifier from the Start menu: Amplifier Unified. "
-           "If the Start menu has no such entry, run this: amplifier-unified open."),
-    False: "To open Amplifier, run this: amplifier-unified open.",
-}
+# What a person does when the browser on this computer is not signed in
+# (`next_step`). A text says only what this host knows. On Windows no text names
+# a command: `amplifier-unified` is on the PATH only of an installation by hand,
+# and the command also needs that installation's data folder. A full command
+# with both paths would put the Windows user name on a page that needs no
+# sign-in; that was decided against. macOS and Linux have no Start-menu entry.
+START_MENU = ("Open Amplifier from the Start menu: Amplifier Unified. "
+              "Amplifier then opens in your browser.")
+ON_THE_PC = "Open Amplifier again on the Windows PC that runs it."
+RUN_OPEN = "To open Amplifier, run this: amplifier-unified open."
+# What `amplifier-unified open` says on Windows when it gets no ticket. It never
+# names itself or the Start menu: its reader ran this command, or the launcher
+# ran it and shows its own message.
+NO_ANSWER = ("No Amplifier of this version and this data folder answered on this PC. "
+             "Make sure that Amplifier is running. If it is updating, wait one minute. Then try again.")
+REFUSED = "Amplifier refused the request. Try again."
+UNCONFIRMED = "Amplifier's answer was not confirmed. The request was not repeated. Try again."
+BUSY = "Amplifier has too many browser openings in progress. Wait one minute. Then try again."
 # The line that `amplifier-unified open` prints after the browser accepted the
 # address. The Windows launcher reads it, because the exit status says nothing
 # to a launcher from a setup file before pull request 2270: there a command
@@ -64,9 +72,80 @@ def is_windows() -> bool:
     return sys.platform == "win32"
 
 
-def reopen() -> str:
-    """The next step when the browser on this computer is not signed in or did not open."""
-    return _REOPEN[bool(is_windows())]
+def _local_sockets(request) -> bool:
+    """Both real socket ends are this computer's own addresses."""
+    if request.transport is None:
+        return False
+    for name in ("peername", "sockname"):
+        address = request.transport.get_extra_info(name)
+        if not address or not loopback_host(address[0]) or address[0] == "localhost":
+            return False
+    return True
+
+
+def _on_this_computer(request) -> bool:
+    """The socket ends and the name in use are this computer's own.
+
+    The name is read as the host boundary reads it. A forward that the owner
+    made connects from this computer too, and this check cannot tell it apart.
+    """
+    from .deployment import canonical_host, is_loopback
+    try:
+        return _local_sockets(request) and is_loopback(
+            canonical_host(urlsplit("//" + request.host).hostname or ""))
+    except ValueError:
+        return False
+
+
+def _start_menu_opens(app) -> bool:
+    """This installation's Start-menu entry exists, and it opens this host.
+
+    Setup's entry starts the launcher of `<root>\\tools\\amplifier-unified` with
+    `--root <root>`. That launcher opens the browser for the data folder
+    `<root>\\app`, and only when the start-at-sign-in task of that launcher and
+    of the workspace `<root>\\workspace` runs (`prepare_background`).
+
+    This host knows the task that started it: it compared that definition with
+    the Task Scheduler's before it served (`windows_service._serve_host`), and
+    it serves that task's data folder. A host that a person started has none.
+    The host does not ask the Task Scheduler again, because that starts a
+    program. So it does not see a task that was changed, stopped or removed
+    while it runs; the entry then shows its own message.
+
+    `listed` reads that the entry's file is there, not what it starts. The
+    launcher's own messages use the same test.
+    """
+    task = app.get("owner_task")
+    if task is None:
+        return False
+    try:
+        home = Path(app["service"].data_dir)
+        root = home.parent
+        if (home != root / "app" or Path(task.python).parent != root / "tools/amplifier-unified/Scripts"
+                or Path(task.workspace) != root / "workspace"):
+            return False
+        from .windows_consumer_shell import listed
+        return listed(root)
+    except (OSError, ValueError, RuntimeError):
+        return False
+
+
+def next_step(request) -> str:
+    """The next step for a browser on this computer that is not signed in.
+
+    Windows: the Start menu, when this host can give a ticket, the request is
+    from this computer, and this installation's entry opens this host. A host
+    without a ticket store answers the entry's `open` with a refusal, so it
+    does not name the entry. Else one sentence that names no way, because this
+    host knows none that works. The tests read only this host's memory and one
+    small private record; a request that is not from this computer reads no
+    file.
+    """
+    if not is_windows():
+        return RUN_OPEN
+    app = request.app
+    return START_MENU if (app.get("browser_entry") is not None and _on_this_computer(request)
+                          and _start_menu_opens(app)) else ON_THE_PC
 
 
 def current_owner_sid() -> str:
@@ -144,7 +223,7 @@ def _control_token(data_dir: Path, owner_sid: str) -> str:
             raise ValueError("Malformed credential")
         return token
     except (OSError, ValueError):
-        raise BrowserEntryUnavailable("Cannot read the verified private owner credential. " + reopen()) from None
+        raise BrowserEntryUnavailable("Cannot read the verified private owner credential.") from None
 
 
 def _package_identity(identity):
@@ -190,7 +269,7 @@ class GrantStore:
             now = self.clock()
             self._grants = {key: record for key, record in self._grants.items() if record[0] > now}
             if len(self._grants) >= self.capacity:
-                raise BrowserEntryUnavailable("Browser entry is busy. Wait 60 seconds. " + reopen())
+                raise BrowserEntryUnavailable(BUSY)
             ticket = secrets.token_urlsafe(32)
             self._grants[hashlib.sha256(ticket.encode("ascii")).digest()] = (
                 now + self.ttl, binding, validate_next_path(next_path))
@@ -289,12 +368,8 @@ def local_origin(request) -> str | None:
     """Require HTTPS, both real socket ends local, and the explicit exact Origin."""
     from .auth import allowed_origin
     from .deployment import validate_origin
-    if not request.secure or request.transport is None:
+    if not request.secure or not _local_sockets(request):
         return None
-    for name in ("peername", "sockname"):
-        address = request.transport.get_extra_info(name)
-        if not address or not loopback_host(address[0]) or address[0] == "localhost":
-            return None
     try:
         origin = validate_origin(request.headers.get("Origin", ""))
         if (origin != f"{request.scheme}://{request.host}" or not allowed_origin(request)
@@ -350,18 +425,22 @@ def _binding(request, origin):
     service = request.app["service"]
     sid = current_owner_sid()
     if not hmac.compare_digest(_control_token(service.data_dir, sid).encode(), request.app["control_token"].encode()):
-        raise BrowserEntryUnavailable("The owner control credential changed. " + reopen())
+        raise BrowserEntryUnavailable("The owner control credential changed.")
     try:
         identity = data_identity(service.data_dir)
     except (OSError, ValueError):
-        raise BrowserEntryUnavailable("The private owner data identity is unavailable. " + reopen()) from None
+        raise BrowserEntryUnavailable("The private owner data identity is unavailable.") from None
     return Binding(service.update_manager.running_identity["instanceId"], identity, origin, sid)
 
 
 async def _owner_issue(request, name, extra, mint, again=None):
-    """The one owner-only local check that a ticket and a typed code share."""
+    """The one owner-only local check that a ticket and a typed code share.
+
+    `again` is the next step of the typed-code command. A ticket has none here:
+    `open` prints these answers, and it never names itself.
+    """
     from aiohttp import web
-    again = again or reopen()
+    again = " " + again if again else ""
     authorization = request.headers.get("Authorization", "")
     if not (authorization.startswith("Bearer ") and
             hmac.compare_digest(authorization[7:].encode(), request.app["control_token"].encode())):
@@ -371,7 +450,7 @@ async def _owner_issue(request, name, extra, mint, again=None):
         return web.json_response({"error": "Use the exact HTTPS local owner origin."}, status=403)
     store = request.app[name]
     if not is_windows() or store is None:
-        return web.json_response({"error": "Windows owner browser entry is not available. " + again}, status=503)
+        return web.json_response({"error": "Windows owner browser entry is not available." + again}, status=503)
     try:
         if request.content_type != "application/json":
             return web.json_response({"error": "Use a JSON owner entry request."}, status=400)
@@ -389,12 +468,12 @@ async def _owner_issue(request, name, extra, mint, again=None):
                 or any(body.get(key) != value for key, value in {
                     "instanceId": binding.instance_id, "dataIdentity": binding.data_identity,
                     "ownerSid": binding.owner_sid}.items())):
-            return web.json_response({"error": "The owner host identity changed. " + again}, status=409)
+            return web.json_response({"error": "The owner host identity changed." + again}, status=409)
         result = mint(store, binding, body.get(extra))
     except BrowserEntryUnavailable as exc:
         return web.json_response({"error": str(exc)}, status=503)
     except (ValueError, TypeError):
-        return web.json_response({"error": "Invalid owner entry request. " + again}, status=400)
+        return web.json_response({"error": "Invalid owner entry request." + again}, status=400)
     return web.json_response({**result, "expiresIn": store.ttl},
                              headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
 
@@ -439,10 +518,10 @@ async def redeem(request):
     origin = local_origin(request)
     store = request.app["browser_entry"]
     if not origin or not is_windows() or store is None or request.content_type != "application/x-www-form-urlencoded":
-        return web.Response(text=reopen(), status=403)
+        return web.Response(text=next_step(request), status=403)
     ticket = await _signed_form(request, "ticket")
     if ticket is None:
-        return web.Response(text=reopen(), status=403)
+        return web.Response(text=next_step(request), status=403)
     try:
         target = store.consume(ticket, _binding(request, origin))
     except BrowserEntryUnavailable:
@@ -450,7 +529,7 @@ async def redeem(request):
     # A ticket from before a sign-out that this host has not applied yet opens nothing.
     session = None if target is None else sign_in(request.app)
     if session is None:
-        return web.Response(text=reopen(), status=403)
+        return web.Response(text=next_step(request), status=403)
     response = web.HTTPSeeOther(target)
     response.set_cookie(SESSION_COOKIE, session,
                         max_age=request.app["server_config"]["session_ttl_seconds"],
@@ -579,6 +658,21 @@ async def owner_browser_code(data_dir: Path, config: dict, origin: str) -> str:
     return code
 
 
+async def _refusal(response) -> str:
+    """The host's own reason for a refused owner request, or "" when it gave none.
+
+    The reply came over the pinned connection from a host of this package
+    version, so the reason is one of the host's own fixed sentences.
+    """
+    import aiohttp
+    try:
+        value = await response.json()
+    except (aiohttp.ClientError, OSError, TimeoutError, ValueError):
+        return ""
+    reason = value.get("error") if isinstance(value, dict) else None
+    return reason if isinstance(reason, str) and 0 < len(reason) <= 300 and reason.isprintable() else ""
+
+
 async def _owner_post(data_dir: Path, config: dict, path: str, extra: dict, field: str, pattern: str, again=None,
                       *, invalid=None, wait=0.0, pause=1.0, waiting=None):
     """Pin the privately read leaf before reading or sending the control bearer.
@@ -591,9 +685,12 @@ async def _owner_post(data_dir: Path, config: dict, path: str, extra: dict, fiel
     `wait`, `pause` and `waiting` are the wait of owner_browser_url for a host
     that is restarting. Only the health request is repeated, never the POST.
     Without a wait, every local address is asked once, with no pause.
+
+    `again` is the next step of the typed-code command, and its texts stay as
+    they are. Without it the caller is `open`: it prints the host's own reason
+    for a refusal, and it never names itself or the Start menu.
     """
     import aiohttp
-    again = again or reopen()
     from .auth import data_identity
     from .update_readiness import running_identity
     urls, pin = _owner_probe_targets(data_dir, config)
@@ -638,15 +735,19 @@ async def _owner_post(data_dir: Path, config: dict, path: str, extra: dict, fiel
                                                "version": version, "revision": revision, "ownerSid": sid,
                                                **extra}) as response:
                         if response.status != 200:
-                            raise BrowserEntryUnavailable(
-                                invalid if invalid and response.status == 400
-                                else "The owner host refused browser entry. " + again)
+                            if invalid and response.status == 400:
+                                raise BrowserEntryUnavailable(invalid)
+                            if again:
+                                raise BrowserEntryUnavailable("The owner host refused browser entry. " + again)
+                            raise BrowserEntryUnavailable(await _refusal(response) or REFUSED)
                         result = await response.json()
                     value = result.get(field) if isinstance(result, dict) else None
                     if not isinstance(value, str) or not re.fullmatch(pattern, value):
                         raise ValueError("Invalid reply")
                 except (aiohttp.ClientError, OSError, TimeoutError, ValueError):
-                    raise BrowserEntryUnavailable("Browser entry response was not confirmed; no retry was made. " + again) from None
+                    raise BrowserEntryUnavailable(
+                        "Browser entry response was not confirmed; no retry was made. " + again
+                        if again else UNCONFIRMED) from None
                 return origin, value
             repeated = True
             remaining = deadline - time.monotonic()
@@ -656,4 +757,5 @@ async def _owner_post(data_dir: Path, config: dict, path: str, extra: dict, fiel
                 waiting()
                 waiting = None
             await asyncio.sleep(min(pause, remaining))
-    raise BrowserEntryUnavailable("The owned local host is not reachable or its identity does not match. " + again)
+    raise BrowserEntryUnavailable(
+        "The owned local host is not reachable or its identity does not match. " + again if again else NO_ANSWER)

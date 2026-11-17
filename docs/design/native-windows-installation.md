@@ -3492,6 +3492,55 @@ device. Linux, macOS and WSL hosts keep the password form and refuse both code
 endpoints. The steps for the owner are in the
 [deployment guide](../DEPLOYMENT.md#windows-host-reach-unified-from-another-device).
 
+#### The next step for a browser on the PC that is not signed in
+
+A browser on the PC that is not signed in gets the sign-in page, or a refusal
+of its ticket. Both name one next step (`browser_entry.next_step`). The step is
+a text of the host, and a text says only what this host knows.
+
+- **The Start menu.** "Open Amplifier from the Start menu: Amplifier Unified.
+  Amplifier then opens in your browser." Only when all of these hold. This
+  host can give a ticket (it has its ticket store); without one it would
+  refuse the entry's `open`. The
+  request is from this computer: both socket ends and the name in use. The
+  Windows task of this installation started this host. The data folder is
+  `<root>\app`. That task's Python is in
+  `<root>\tools\amplifier-unified\Scripts`, and its workspace is
+  `<root>\workspace`; the entry itself tests these two values before it opens
+  the browser (`prepare_background`). This installation's Start-menu entry
+  exists (`windows_consumer_shell.listed`).
+- **Every other Windows case.** "Open Amplifier again on the Windows PC that
+  runs it." It names no way. The command `amplifier-unified open` works as
+  written only on an installation by hand with the launcher on the PATH and
+  the default data folder. A full command with both paths was decided against:
+  it would put the Windows user name on a page that needs no sign-in.
+- macOS and Linux keep "To open Amplifier, run this: amplifier-unified open."
+
+Limits. The host keeps the task definition that it compared with the Task
+Scheduler's at its start, and it does not ask the Task Scheduler again: that
+starts a program, and a page without a sign-in must not start one. So the host
+does not see a task that was changed, stopped or removed while it runs; the
+entry then shows its own message. `listed` reads that the entry's file is
+there, not what it starts. The host does not test that `open` will reach it,
+for example after a change of the saved port or certificate while it runs. A
+request that is not from this computer reads no file. A forward that the owner
+made connects from this computer too; a device behind it that also sends this
+computer's name can get the Start-menu sentence, which holds no path and no
+secret.
+
+The sign-in page belongs to the web client. The host puts the step into the
+page's mark `__REOPEN__`, HTML-escaped, before any value of the request. A
+page without the mark is not changed: until the client's page has the mark, it
+keeps the client's own sentence, and the step is in the refusal texts only.
+
+`amplifier-unified open` is the step, so on Windows its own failure messages
+never name it or the Start menu. Their reader ran the command, or the launcher
+ran it and shows its own message. `open` prints the host's reason for a
+refused request; that reply came over the pinned connection from a host of the
+same package version. It prints one fixed sentence for a reply without a
+reason, for an unconfirmed reply, and when no host answered. The typed-code
+command keeps its texts and its own next step.
+
 ### Background lifetime
 
 Implementation choice for the accepted lifetime: an interactive-token Scheduled Task under the owner SID,
