@@ -1,4 +1,4 @@
-"""CI-only native check: the release gate reads a plan that the real producer made on Windows.
+"""Native check for a Windows runner of CI: the release gate reads a plan that the real producer made there.
 
 One installation of a published release wheel, made as the release job
 `windows-consumer` makes it: `uv pip install <wheel>` with no pins. The real
@@ -74,6 +74,10 @@ def left(limit):
     return min(limit, remaining)
 
 
+def span(seconds):
+    return f"{seconds} second" if seconds == 1 else f"{seconds} seconds"
+
+
 def started(name, arguments, limit, **options):
     """Run one command with a time limit and give its result.
 
@@ -85,9 +89,9 @@ def started(name, arguments, limit, **options):
                               errors="replace", timeout=seconds, **options)
     except subprocess.TimeoutExpired:
         if seconds == limit:
-            raise RuntimeError(f"{name} did not end in {limit} seconds.") from None
+            raise RuntimeError(f"{name} did not end in {span(limit)}.") from None
         raise RuntimeError(f"{name} did not end in what was left of the check's {LIMIT // 60} minutes "
-                           f"(at most {math.ceil(seconds)} seconds).") from None
+                           f"(at most {span(math.ceil(seconds))}).") from None
 
 
 def command(tool, *arguments):
@@ -207,8 +211,12 @@ def wheel(work):
 
 def prepare(work):
     """One installation, as the release job makes it, and the real producer's plan of it."""
-    # A real installation and a compiler run: only on a runner of CI. The producer requires Windows.
-    assert os.environ.get("GITHUB_ACTIONS") == "true"
+    # A real installation and a compiler run. A guard against accidental use: GitHub Actions sets
+    # GITHUB_ACTIONS to "true" in a workflow run. The line does not prove that the machine is a runner
+    # of CI. The producer requires Windows.
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        raise RuntimeError('GITHUB_ACTIONS is not "true". This check installs a wheel and runs a compiler; '
+                           "it starts only with that setting.")
     release = wheel(work)
     uv = shutil.which("uv")
     if not uv:
@@ -233,9 +241,12 @@ def main():
         plan_path, records = prepare(work)
         raw = plan_path.read_bytes()
         plan = json.loads(raw)
-        assert plan["version"] == RELEASE["version"] and plan["source"] == RELEASE["revision"]
+        if (plan.get("version"), plan.get("source")) != (RELEASE["version"], RELEASE["revision"]):
+            raise RuntimeError(f"The plan is for version {plan.get('version')} at {plan.get('source')}. "
+                               f"This check's release is {RELEASE['version']} at {RELEASE['revision']}.")
         # The control must cover a component that is in a subdirectory of its repository.
-        assert any(row.get("subdirectory") for row in plan["graph"])
+        if not any(row.get("subdirectory") for row in plan["graph"]):
+            raise RuntimeError("The plan has no component in a subdirectory of its repository.")
         folder.mkdir(parents=True, exist_ok=True)
         (folder / plan_path.name).write_bytes(raw)
         report.update(stage="cases", planSha256=hashlib.sha256(raw).hexdigest(), packages=len(plan["graph"]))

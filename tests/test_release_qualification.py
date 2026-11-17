@@ -2804,9 +2804,14 @@ def test_windows_plan_native_check_passes_only_with_one_acceptance_and_two_refus
     path.write_text(json.dumps({'schema': 1, 'graph': [APP_ROW, *component_rows(fixture.OTHER)]}))
     with pytest.raises(RuntimeError, match='Change OTHER'):
         fixture.cases(tmp_path / 'same-commit', path, records)
+    # No sentence covers an installation whose record is at the other commit already. The check then fails:
+    # the control is refused, because that record differs from the plan.
+    path.write_text(json.dumps({'schema': 1, 'graph': [APP_ROW, *rows]}))
+    result = fixture.cases(tmp_path / 'record-at-other', path, [install_record(row) for row in component_rows(fixture.OTHER)])
+    assert result['ok'] is False and result['cases'][0]['passed'] is False and result['cases'][0]['returncode'] != 0
 
 
-def test_windows_plan_native_check_keeps_only_the_published_wheel_and_installs_only_on_a_ci_runner(tmp_path, monkeypatch):
+def test_windows_plan_native_check_keeps_no_download_with_another_digest_and_does_not_start_without_the_ci_setting(tmp_path, monkeypatch):
     fixture = native_plan_check()
     requested = []
 
@@ -2827,11 +2832,56 @@ def test_windows_plan_native_check_keeps_only_the_published_wheel_and_installs_o
     assert requested == [f'https://github.com/microsoft/amplifier-unified/releases/download/v{version}/'
                          f'amplifier_unified-{version}-py3-none-any.whl']
     assert list(tmp_path.iterdir()) == []
-    # The installation and the compiler run start only on a runner of CI, before any download.
+    # Without the setting GITHUB_ACTIONS=true, the preparation ends with a sentence before any download.
+    # That guards against accidental use. It does not prove that the machine is a runner of CI.
+    refusal = '^GITHUB_ACTIONS is not "true"\\. This check installs a wheel and runs a compiler; it starts only with that setting\\.$'
     monkeypatch.delenv('GITHUB_ACTIONS', raising=False)
-    with pytest.raises(AssertionError):
+    with pytest.raises(RuntimeError, match=refusal):
+        fixture.prepare(tmp_path)
+    monkeypatch.setenv('GITHUB_ACTIONS', 'false')
+    with pytest.raises(RuntimeError, match=refusal):
         fixture.prepare(tmp_path)
     assert len(requested) == 1
+
+
+def test_windows_plan_native_check_requires_the_plan_of_its_release_with_a_component_in_a_subdirectory(tmp_path, monkeypatch):
+    fixture = native_plan_check()
+    rows = component_rows()
+    records = [install_record(row) for row in rows]
+    version, revision = fixture.RELEASE['version'], fixture.RELEASE['revision']
+    release = {'schema': 1, 'version': version, 'source': revision}
+    ours = f" This check's release is {version} at {revision}."
+    for name, plan, error in (
+            ('control', {**release, 'graph': [APP_ROW, *rows]}, None),
+            ('version', {**release, 'version': '0.0.1', 'graph': [APP_ROW, *rows]},
+             f'The plan is for version 0.0.1 at {revision}.' + ours),
+            ('source', {**release, 'source': 'b' * 40, 'graph': [APP_ROW, *rows]},
+             f"The plan is for version {version} at {'b' * 40}." + ours),
+            ('neither', {'schema': 1, 'graph': [APP_ROW, *rows]}, 'The plan is for version None at None.' + ours),
+            ('flat', {**release, 'graph': [APP_ROW, *rows[:2]]},
+             'The plan has no component in a subdirectory of its repository.')):
+        temporary = tmp_path / name
+        temporary.mkdir()
+        path = temporary / 'windows-consumer-plan.json'
+        path.write_text(json.dumps(plan))
+        monkeypatch.setenv('RUNNER_TEMP', str(temporary))
+        monkeypatch.setattr(fixture, 'prepare', lambda work, path=path: (path, records))
+        copy = temporary / 'consumer-plan-evidence/windows-consumer-plan.json'
+        result_file = temporary / 'consumer-plan-evidence/result.json'
+        if error is None:
+            # The control: with the plan of the check's release, the whole check passes and keeps the plan.
+            assert fixture.main() == 0
+            result = json.loads(result_file.read_text())
+            assert result['ok'] is True and result['stage'] == 'complete' and 'error' not in result
+            assert copy.read_bytes() == path.read_bytes()
+        else:
+            # Each requirement has its own sentence in result.json. The first one names the version and the
+            # source that the plan has, and those of the check's release. The plan is not kept.
+            assert fixture.main() == 1
+            result = json.loads(result_file.read_text())
+            assert result['ok'] is False and result['stage'] == 'installation'
+            assert result['error'] == 'RuntimeError: ' + error
+            assert not copy.exists()
 
 
 def test_windows_plan_native_check_gives_its_commands_less_time_than_the_step_and_records_a_timeout(tmp_path, monkeypatch):
@@ -2842,60 +2892,87 @@ def test_windows_plan_native_check_gives_its_commands_less_time_than_the_step_an
     # The step's limit is not raised. The time for the check's commands is two minutes or more below it.
     assert step['timeout-minutes'] == '15' and job['timeout-minutes'] == '20'
     assert fixture.LIMIT <= (int(step['timeout-minutes']) - 2) * 60
+
+    # From here the case sets the fixture's clock: the seconds since the check's start. So which sentence
+    # a command gets does not depend on the speed of this machine.
+    class Clock:
+        now = 0.0
+
+        @classmethod
+        def monotonic(cls):
+            return cls.now
+
+    monkeypatch.setattr(fixture, 'time', Clock)
+    monkeypatch.setattr(fixture, 'STARTED', 0.0)
     # One command gets its own limit, and at most what is left of the check's 12 minutes.
     assert fixture.left(30) == 30
-    monkeypatch.setattr(fixture, 'STARTED', fixture.time.monotonic() - fixture.LIMIT + 20)
-    assert 0 < fixture.left(300) <= 20
-    # A command that passes its own limit is ended: the call returns long before the command's 60 seconds.
-    # The error is a sentence, not a traceback of the timeout.
-    sleeps = (sys.executable, '-c', 'import time; time.sleep(60)')
-    monkeypatch.setattr(fixture, 'STARTED', fixture.time.monotonic())
-    begun = fixture.time.monotonic()
-    with pytest.raises(RuntimeError, match=r'^python[\w.]* -c did not end in 1 seconds\.$'):
+    Clock.now = fixture.LIMIT - 20.0
+    assert fixture.left(300) == 20 and fixture.left(5) == 5
+    Clock.now = float(fixture.LIMIT)
+    with pytest.raises(RuntimeError, match=r'^The check did not end in 12 minutes\.$'):
+        fixture.left(300)
+
+    # The case keeps each process that the fixture starts, to read its exit status.
+    made = []
+
+    class Recorded(fixture.subprocess.Popen):
+        def __init__(self, *arguments, **options):
+            super().__init__(*arguments, **options)
+            made.append(self)
+
+    monkeypatch.setattr(fixture.subprocess, 'Popen', Recorded)
+    # A command that passes its own limit. The error is a sentence, not a traceback of the timeout. The
+    # command would sleep 10 minutes: its process has an exit status, and not the 0 of a sleep that ended.
+    sleeps = (sys.executable, '-c', 'import time; time.sleep(600)')
+    Clock.now = 0.0
+    with pytest.raises(RuntimeError, match=r'^python[\w.]* -c did not end in 1 second\.$'):
         fixture.run(*sleeps, limit=1)
-    assert fixture.time.monotonic() - begun < 30
-    # The gate's command line has a sentence too. When the rest of the check's time is shorter than the
+    assert len(made) == 1 and made[0].returncode not in (None, 0)
+    # The gate's command line has a sentence too. When what is left of the check's time is less than the
     # command's own limit, the sentence says that, and not the command's own limit.
     slow = tmp_path / 'slow.py'
-    slow.write_text('import time\ntime.sleep(60)\n')
-    cut = r" did not end in what was left of the check's 12 minutes \(at most [12] seconds\)\."
-    monkeypatch.setattr(fixture, 'STARTED', fixture.time.monotonic() - fixture.LIMIT + 2)
-    with pytest.raises(RuntimeError, match=r'^slow\.py verify-consumer' + cut + '$'):
+    slow.write_text('import time\ntime.sleep(600)\n')
+    Clock.now = fixture.LIMIT - 1.5
+    with pytest.raises(RuntimeError, match=r"^slow\.py verify-consumer did not end in what was left of the "
+                                           r"check's 12 minutes \(at most 2 seconds\)\.$"):
         fixture.command(slow, 'verify-consumer')
     # A rest of less than one second is not reported as 0 seconds.
-    with monkeypatch.context() as patch:
-        patch.setattr(fixture, 'left', lambda limit: 0.4)
-        with pytest.raises(RuntimeError, match=r"^python[\w.]* -c did not end in what was left of the check's "
-                                               r"12 minutes \(at most 1 seconds\)\.$"):
-            fixture.run(*sleeps, limit=300)
-    # When the time is used up before a command starts, the check returns 1 and result.json has the reason.
+    cut = r"python[\w.]* -c did not end in what was left of the check's 12 minutes \(at most 1 second\)\."
+    Clock.now = fixture.LIMIT - 0.5
+    with pytest.raises(RuntimeError, match='^' + cut + '$'):
+        fixture.run(*sleeps, limit=300)
+    assert len(made) == 3 and all(process.returncode not in (None, 0) for process in made)
+    # When the time is used up before a command starts, the check starts no command, returns 1, and
+    # result.json has the reason.
     (tmp_path / 'used-up').mkdir()
     monkeypatch.setenv('RUNNER_TEMP', str(tmp_path / 'used-up'))
     monkeypatch.setenv('GITHUB_ACTIONS', 'true')
     monkeypatch.setattr(fixture, 'wheel', lambda work: work / 'app.whl')
     monkeypatch.setattr(fixture.shutil, 'which', lambda name: '/tools/' + name)
-    monkeypatch.setattr(fixture, 'STARTED', fixture.time.monotonic() - fixture.LIMIT)
+    Clock.now = float(fixture.LIMIT)
     assert fixture.main() == 1
     result = json.loads((tmp_path / 'used-up/consumer-plan-evidence/result.json').read_text())
     assert result['ok'] is False and result['stage'] == 'installation'
     assert result['error'] == 'RuntimeError: The check did not end in 12 minutes.'
-    # On a runner without uv, the preparation ends with a sentence.
-    monkeypatch.setattr(fixture, 'STARTED', fixture.time.monotonic())
+    assert len(made) == 3
+    # Without uv, the preparation ends with a sentence.
+    Clock.now = 0.0
     monkeypatch.setattr(fixture.shutil, 'which', lambda name: None)
     with pytest.raises(RuntimeError, match='^uv is not on this runner\\.$'):
         fixture.prepare(tmp_path / 'no-uv')
-    # In the check itself, a command that passes its time is ended, and result.json has the reason.
+    # In the check itself: a command passes its time, the check returns 1, and result.json has the reason.
     (tmp_path / 'timeout').mkdir()
     monkeypatch.setenv('RUNNER_TEMP', str(tmp_path / 'timeout'))
     monkeypatch.setattr(fixture, 'prepare', lambda work: fixture.run(*sleeps, limit=300))
-    monkeypatch.setattr(fixture, 'STARTED', fixture.time.monotonic() - fixture.LIMIT + 2)
+    Clock.now = fixture.LIMIT - 0.5
     assert fixture.main() == 1
     result = json.loads((tmp_path / 'timeout/consumer-plan-evidence/result.json').read_text())
     assert result['ok'] is False and result['stage'] == 'installation'
-    assert re.fullmatch(r'RuntimeError: python[\w.]* -c' + cut, result['error'])
+    assert re.fullmatch('RuntimeError: ' + cut, result['error'])
+    assert len(made) == 4 and made[3].returncode not in (None, 0)
 
 
-def test_windows_plan_native_check_runs_for_changes_of_the_gate_and_cannot_be_skipped():
+def test_windows_plan_native_workflow_covers_the_gate_paths_and_does_not_ignore_a_failed_check():
     workflows = ROOT / '.github/workflows'
     workflow = yaml.load((workflows / 'windows-consumer-plan.yml').read_text(), Loader=yaml.BaseLoader)
     assert set(workflow['on']) == {'workflow_dispatch', 'pull_request'}
