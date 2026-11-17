@@ -88,7 +88,7 @@ def pytest_runtest_teardown():
 
 
 # 3. The product's own folders. Without these variables the product uses its
-# default folders, and an installed Amplifier Unified keeps its data there. So
+# default folders, and an installed Amplifier Unified can keep its data there. So
 # each variable holds a folder of this run from here on. Each test then gets
 # new folders of its own (the fixture below).
 # A real path: no link and no short name in it. On Windows the temporary folder

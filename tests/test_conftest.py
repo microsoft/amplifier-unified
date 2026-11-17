@@ -3,7 +3,7 @@
 A shell that a running Amplifier Unified starts (a chat's shell tool, a worker)
 inherits environment variables from that service. A person's shell can hold
 environment variables with provider credentials. An installed Amplifier
-Unified keeps its data in the product's default folders. The product also
+Unified can keep its data in the product's default folders. The product also
 finds some folders through a lookup of the account by ID. ``conftest.py``
 removes the variables in its two lists, gives the product folders of the run,
 and changes that lookup. It does so when pytest loads it, and again around

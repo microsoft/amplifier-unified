@@ -26,9 +26,10 @@ runs client units; `npm test --prefix tests/web` runs Unified's integration/prod
 units. Built-asset checks use `npm run test:artifact-assets --prefix .build/web-client`.
 See [host browser checks](tests/web/README.md) for affected real-server journeys.
 
-You can run the Python tests on a machine that has an Amplifier Unified, also from
-a shell that a running one started; a chat's shell tool is such a shell. When pytest
-loads `tests/conftest.py`, that file does three things for the pytest process:
+A running Amplifier Unified gives environment variables to the shells that it
+starts; a chat's shell tool is such a shell. An installed one can keep its data in
+the product's default folders. When pytest loads `tests/conftest.py`, that file does
+three things for the pytest process:
 
 - It removes the environment variables in its two lists. The first list holds
   variables that such a shell inherits from the service. The second list holds the
