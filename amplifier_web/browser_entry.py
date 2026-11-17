@@ -27,7 +27,16 @@ CODE_REDEEM_PATH = "/api/browser-entry/code/redeem"
 CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"  # 32 symbols: no 0, 1, I or O.
 CODE_LENGTH = 10
 _CODE = re.compile(f"[{CODE_ALPHABET}]{{{CODE_LENGTH}}}")
-REOPEN = "Open from the owner launcher again: amplifier-unified open."
+# What a person does when the browser on this computer is not signed in, or
+# did not open. A PC that was set up with the Windows setup file has no
+# `amplifier-unified` on its PATH; its Start-menu entry opens the browser. This
+# code cannot tell which kind of installation it serves, so the Windows text
+# names both ways. macOS and Linux have no such entry.
+_REOPEN = {
+    True: ("Open Amplifier from the Start menu: Amplifier Unified. "
+           "If the Start menu has no such entry, run this: amplifier-unified open."),
+    False: "To open Amplifier, run this: amplifier-unified open.",
+}
 # The line that `amplifier-unified open` prints after the browser accepted the
 # address. The Windows launcher reads it, because the exit status says nothing
 # to a launcher from a setup file before pull request 2270: there a command
@@ -53,6 +62,11 @@ class BrowserEntryUnavailable(RuntimeError):
 
 def is_windows() -> bool:
     return sys.platform == "win32"
+
+
+def reopen() -> str:
+    """The next step when the browser on this computer is not signed in or did not open."""
+    return _REOPEN[bool(is_windows())]
 
 
 def current_owner_sid() -> str:
@@ -130,7 +144,7 @@ def _control_token(data_dir: Path, owner_sid: str) -> str:
             raise ValueError("Malformed credential")
         return token
     except (OSError, ValueError):
-        raise BrowserEntryUnavailable("Cannot read the verified private owner credential. " + REOPEN) from None
+        raise BrowserEntryUnavailable("Cannot read the verified private owner credential. " + reopen()) from None
 
 
 def _package_identity(identity):
@@ -176,7 +190,7 @@ class GrantStore:
             now = self.clock()
             self._grants = {key: record for key, record in self._grants.items() if record[0] > now}
             if len(self._grants) >= self.capacity:
-                raise BrowserEntryUnavailable("Browser entry is busy. Wait 60 seconds. " + REOPEN)
+                raise BrowserEntryUnavailable("Browser entry is busy. Wait 60 seconds. " + reopen())
             ticket = secrets.token_urlsafe(32)
             self._grants[hashlib.sha256(ticket.encode("ascii")).digest()] = (
                 now + self.ttl, binding, validate_next_path(next_path))
@@ -336,17 +350,18 @@ def _binding(request, origin):
     service = request.app["service"]
     sid = current_owner_sid()
     if not hmac.compare_digest(_control_token(service.data_dir, sid).encode(), request.app["control_token"].encode()):
-        raise BrowserEntryUnavailable("The owner control credential changed. " + REOPEN)
+        raise BrowserEntryUnavailable("The owner control credential changed. " + reopen())
     try:
         identity = data_identity(service.data_dir)
     except (OSError, ValueError):
-        raise BrowserEntryUnavailable("The private owner data identity is unavailable. " + REOPEN) from None
+        raise BrowserEntryUnavailable("The private owner data identity is unavailable. " + reopen()) from None
     return Binding(service.update_manager.running_identity["instanceId"], identity, origin, sid)
 
 
-async def _owner_issue(request, name, extra, mint, again=REOPEN):
+async def _owner_issue(request, name, extra, mint, again=None):
     """The one owner-only local check that a ticket and a typed code share."""
     from aiohttp import web
+    again = again or reopen()
     authorization = request.headers.get("Authorization", "")
     if not (authorization.startswith("Bearer ") and
             hmac.compare_digest(authorization[7:].encode(), request.app["control_token"].encode())):
@@ -424,10 +439,10 @@ async def redeem(request):
     origin = local_origin(request)
     store = request.app["browser_entry"]
     if not origin or not is_windows() or store is None or request.content_type != "application/x-www-form-urlencoded":
-        return web.Response(text=REOPEN, status=403)
+        return web.Response(text=reopen(), status=403)
     ticket = await _signed_form(request, "ticket")
     if ticket is None:
-        return web.Response(text=REOPEN, status=403)
+        return web.Response(text=reopen(), status=403)
     try:
         target = store.consume(ticket, _binding(request, origin))
     except BrowserEntryUnavailable:
@@ -435,7 +450,7 @@ async def redeem(request):
     # A ticket from before a sign-out that this host has not applied yet opens nothing.
     session = None if target is None else sign_in(request.app)
     if session is None:
-        return web.Response(text=REOPEN, status=403)
+        return web.Response(text=reopen(), status=403)
     response = web.HTTPSeeOther(target)
     response.set_cookie(SESSION_COOKIE, session,
                         max_age=request.app["server_config"]["session_ttl_seconds"],
@@ -493,16 +508,16 @@ _CODE_PAGE = f"""<!doctype html>
 </head><body><main>
 <h1>Sign in to Amplifier</h1>
 <p class="error" role="alert">__ERROR__</p>
-<p>1. On the Windows PC that runs Amplifier, run: <code>amplifier-unified browsers code</code></p>
-<p>If Windows does not find that command, use the full command from the
-<a href="{GUIDE}" target="_blank" rel="noopener noreferrer">Windows steps of the deployment guide</a>.</p>
-<p>2. Type the code here within two minutes.</p>
 <form method="post" action="{CODE_REDEEM_PATH}">
 <input type="hidden" name="csrf" value="__CSRF__">
 <label for="code">Code</label>
-<input id="code" name="code" autocomplete="one-time-code" autocapitalize="characters" autocorrect="off" spellcheck="false" autofocus required>
+<input id="code" name="code" autocomplete="one-time-code" autocapitalize="characters" autocorrect="off" spellcheck="false" aria-describedby="code-help" autofocus required>
 <button type="submit">Sign in</button>
 </form>
+<p id="code-help">To get a code, run this on the Windows PC that runs Amplifier: <code>amplifier-unified browsers code</code>.
+Type the code here within two minutes.</p>
+<p>If Windows does not find that command, use the full command from the
+<a href="{GUIDE}" target="_blank" rel="noopener noreferrer">Windows steps of the deployment guide</a>.</p>
 </main></body></html>
 """
 
@@ -564,7 +579,7 @@ async def owner_browser_code(data_dir: Path, config: dict, origin: str) -> str:
     return code
 
 
-async def _owner_post(data_dir: Path, config: dict, path: str, extra: dict, field: str, pattern: str, again=REOPEN,
+async def _owner_post(data_dir: Path, config: dict, path: str, extra: dict, field: str, pattern: str, again=None,
                       *, invalid=None, wait=0.0, pause=1.0, waiting=None):
     """Pin the privately read leaf before reading or sending the control bearer.
 
@@ -578,6 +593,7 @@ async def _owner_post(data_dir: Path, config: dict, path: str, extra: dict, fiel
     Without a wait, every local address is asked once, with no pause.
     """
     import aiohttp
+    again = again or reopen()
     from .auth import data_identity
     from .update_readiness import running_identity
     urls, pin = _owner_probe_targets(data_dir, config)

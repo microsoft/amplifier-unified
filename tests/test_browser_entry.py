@@ -799,7 +799,7 @@ def test_explicit_cli_open_confirms_nothing_when_the_browser_did_not_open(tmp_pa
     opened = []
     async def grant(*a, **kw):
         if failure == "host":
-            raise entry.BrowserEntryUnavailable("The owned local host is not reachable. " + entry.REOPEN)
+            raise entry.BrowserEntryUnavailable("The owned local host is not reachable. " + entry.reopen())
         return ORIGIN + "/login#ticket=" + "a" * 43
     def browser(value):
         opened.append(value)

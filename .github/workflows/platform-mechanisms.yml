@@ -253,6 +253,16 @@ jobs:
         run: |
           .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -p no:cacheprovider tests/test_deployment.py tests/test_windows_tls.py tests/test_windows_service.py tests/test_windows_task_runtime.py -k "not native_synthetic_task_create_run_stop_remove and not stop_reads_the_receipt_while_the_host_writes_its_phases"
           if ($LASTEXITCODE -ne 0) { throw 'Windows configuration, TLS or service policy checks failed.' }
+      # setup-tls force records the root that it replaces, and a full record
+      # stops it with nothing changed: the real private file store, and the
+      # real read-only question to this account's root store. A skipped
+      # native case would hide the answer; on this lane it fails.
+      - name: Require the native replaced-root record cases with no skip
+        shell: pwsh
+        run: |
+          .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -p no:cacheprovider tests/test_windows_tls.py -k "test_native_keyless_identity_has_no_signing_key_file_and_serves_tls or test_native_full_record_asks_the_real_store_read_only_and_a_stop_changes_nothing" | Tee-Object -Variable report
+          if ($LASTEXITCODE -ne 0) { throw 'A native replaced-root record case failed.' }
+          if (-not ($report -match '^2 passed') -or ($report -match 'skipped')) { throw 'A native replaced-root record case did not run; on this lane it must run.' }
       # Stop Amplifier reads task-runtime.json while the app writes its phases:
       # the real stop request and reader against a real host process that
       # replaces the file without a pause. No task and no app. A skipped
@@ -325,6 +335,15 @@ jobs:
         run: |
           .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -s -p no:cacheprovider tests/test_windows_trust.py
           if ($LASTEXITCODE -ne 0) { throw 'Windows local-root trust checks failed.' }
+      # Which replaced roots count, and their removal: the real crypt32 calls
+      # on a private throwaway store (no trust change, no Windows question).
+      # A skipped native case would hide the answer; on this lane it fails.
+      - name: Require the native replaced-root store case with no skip
+        shell: pwsh
+        run: |
+          .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -p no:cacheprovider "tests/test_windows_trust.py::test_native_replaced_roots_are_found_and_removed_in_a_private_throwaway_store" | Tee-Object -Variable report
+          if ($LASTEXITCODE -ne 0) { throw 'The native replaced-root store case failed.' }
+          if (-not ($report -match '^1 passed') -or ($report -match 'skipped')) { throw 'The native replaced-root store case did not run; on this lane it must run.' }
       # The update check's registry lookup: real TLS against a local server
       # with a private root. On this lane the root also goes into the runner's
       # MACHINE store and is removed again, to show that a root in the Windows

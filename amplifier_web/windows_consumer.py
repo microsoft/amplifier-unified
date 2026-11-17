@@ -491,37 +491,52 @@ def _record(root, operation, step, error, *, services=True):
 
 
 def _trusted_root(root):
-    """This installation's own certificate (DER) if Windows trusts it for this person, else None.
+    """This installation's own certificates (DER) that Windows trusts for this person, else None.
 
-    Only a key-less identity qualifies: setup added that root with the person's
-    Yes. An earlier setup's identity added nothing and is never touched here.
+    A list: the current certificate first, then each one that `setup-tls
+    force` replaced and Windows still holds. Only a key-less identity
+    qualifies: setup added that root with the person's Yes. An earlier
+    setup's identity added nothing and is never touched here.
     """
-    from . import windows_tls, windows_trust
+    from . import windows_trust
     try:
-        identity = windows_tls.keyless_identity(root / "app")
-        if identity is not None and windows_trust.contains(identity[0]):
-            return identity[0]
+        return windows_trust.held_roots(root / "app") or None
     except (OSError, ValueError, RuntimeError):
-        pass
-    return None
+        return None
 
 
 def _forget_root(certificate):
-    """Ask Windows once to delete this installation's certificate. Never raises.
+    """Ask Windows to delete this installation's certificates. Never raises.
 
-    Returns `none` (nothing of this installation is trusted), `removed`,
-    `absent`, `declined` or `blocked`. Windows itself asks the person; its
-    default answer is No. Every outcome is a finished uninstall: a root that
-    stays has no signing key anywhere and names only this PC. One attempt, no
-    elevation, never the Local Machine store.
+    `certificate` is what _trusted_root returned. Windows asks once for each
+    certificate in it. Returns `none` (nothing of this installation is
+    trusted), `removed`, `absent`, `declined` or `blocked`; `declined` or
+    `blocked` when Windows kept at least one. Windows itself asks the person;
+    its default answer is No. Every outcome is a finished uninstall: a root
+    that stays has no signing key anywhere and names only this PC. One
+    attempt for each, no elevation, never the Local Machine store.
     """
     from . import windows_trust
     if certificate is None:
         return "none"
     try:
-        return windows_trust.remove_root(certificate)
+        return windows_trust.forget_roots(certificate)
     except (OSError, ValueError, RuntimeError):
         return "blocked"
+
+
+def _certificate_sentence(certificate, *, at_the_end):
+    """The uninstall question's sentence on what Windows asks: once for each certificate that it holds."""
+    from .windows_trust import ROOT_NAME
+    if not certificate:
+        return ""
+    when = "At the end" if at_the_end else "During the uninstall"
+    if len(certificate) == 1:
+        return (f'\n\n{when}, Windows asks whether to delete the certificate "{ROOT_NAME}". '
+                + ("Select Yes there to remove it." if at_the_end else "That is a separate question."))
+    return (f'\n\n{when}, Windows asks {len(certificate)} times whether to delete a certificate named '
+            f'"{ROOT_NAME}". Windows holds {len(certificate)} of them. '
+            + ("Select Yes each time to remove them." if at_the_end else "Those are separate questions."))
 
 
 async def _uninstall(root):
@@ -572,8 +587,7 @@ async def _uninstall(root):
             "Select Yes to delete them, together with the program files. Amplifier asks you once more "
             "before it deletes anything.\n\n"
             "Select Cancel to keep Amplifier installed."
-            + (f'\n\nDuring the uninstall, Windows asks whether to delete the certificate "{ROOT_NAME}". '
-               "That is a separate question." if certificate else ""),
+            + _certificate_sentence(certificate, at_the_end=False),
             cancel=True)
         if answer == "cancel":
             return unchanged
@@ -583,8 +597,7 @@ async def _uninstall(root):
             "Amplifier will stop and will no longer start when you sign in. Its entries in the "
             "Start menu and the Apps list will be removed.\n\n"
             "Your chats, settings, accounts and the program files stay in this folder:\n" + str(root)
-            + (f'\n\nAt the end, Windows asks whether to delete the certificate "{ROOT_NAME}". '
-               "Select Yes there to remove it." if certificate else ""),
+            + _certificate_sentence(certificate, at_the_end=True),
             confirm=True):
         return unchanged
     if chosen:

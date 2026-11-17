@@ -222,6 +222,17 @@ step works with paths. Its paths are safe only because it inherits two open
 files that the uninstall program created through handles; do not give it a
 tree walk, a file that it creates or opens by a path, or a rule that rests on
 its current folder.
+`setup-tls force` on a key-less identity makes a new root, and Windows can
+still hold the earlier one for the person. The command records each root that
+it replaces in `config\tls\replaced-roots.pem`; only that command writes the
+file. The launcher (after the person's Yes to the new root) and uninstall ask
+Windows to delete a recorded root only when it has the fixed shape of the
+product's root and the store holds exactly that certificate
+(`windows_trust.replaced`). Never find a root to delete by its name, in code
+or in a guide: another installation's root has the same name. The record
+never loses a root that Windows may still hold; a full or unreadable record
+stops `force` with nothing changed. Windows asks the person once for each
+deletion, and no code answers it; say the number of questions before them.
 Windows has no exec: `os.execv` starts a new process there and ends the
 caller at once with exit status 0, before the command's output is complete.
 The launcher hands a command to the active app generation with
