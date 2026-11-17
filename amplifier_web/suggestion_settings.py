@@ -3,6 +3,8 @@ import hashlib
 import json
 import uuid
 
+from .suggestion_provider import INSTRUCTION, OUTPUT_CONTRACT, MAX_PROMPT_BYTES, validate_options
+
 
 def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False,
@@ -14,8 +16,10 @@ def _values(manager, workspace):
     saved = effective.settings.get('prompt_suggestions') or {}
     value = {key: saved.get(key, default) for key, default in {
         'enabled': False, 'provider': None, 'model': None,
+        'effort': None, 'prompt': INSTRUCTION,
         'transcriptMode': 'last_n', 'humanTurns': 6}.items()}
-    value.update(revision=digest(saved), takesEffect='next_request')
+    value.update(revision=digest([saved, value, INSTRUCTION, OUTPUT_CONTRACT]),
+                 defaultPrompt=INSTRUCTION, takesEffect='next_request')
     return value
 
 
@@ -40,6 +44,9 @@ def configure(manager, args, workspace, scope):
     value = {key: args.get(key, default) for key, default in {
         'enabled': False, 'provider': None, 'model': None,
         'transcriptMode': 'last_n', 'humanTurns': 6}.items()}
+    previous = _values(manager, workspace)
+    value.update({key: args.get(key, previous[key]) for key in ('effort', 'prompt')})
+    validate_options(value['effort'], value['prompt'])
     if value['transcriptMode'] not in {'full', 'last_n'} or type(value['humanTurns']) is not int or not 1 <= value['humanTurns'] <= 20:
         raise ValueError('Choose full transcript or 1 to 20 recent human turns.')
     if value['enabled']:
@@ -47,6 +54,15 @@ def configure(manager, args, workspace, scope):
             raise ValueError('Choose an enabled saved connection for prompt suggestions.')
         if not isinstance(value['model'], str) or not value['model'].strip() or len(value['model']) > 200:
             raise ValueError('Choose an explicit suggestion model.')
+        if value['effort'] is not None:
+            # Reuse ordinary model/effort capability validation without
+            # discovering models or making a request merely to save Settings.
+            from .provider_catalog import model_key
+            from .next_message_configuration import validate_selection
+            entry = manager.catalog.peek(model_key(manager.catalog_key({'id': value['provider']}, workspace))) or {}
+            validate_selection({'instance': value['provider'], 'model': value['model'], 'effort': value['effort']}, {
+                'providers': [{'id': value['provider'], 'sharedCatalogKey': 'selected'}],
+                'catalogs': {'selected': {'metadata': entry.get('providerMetadata')}}})
     value['_revision'] = uuid.uuid4().hex  # A→B→A is not the original selection.
     manager.store.update(workspace, scope, lambda settings: settings.update(prompt_suggestions=value))
     return {'suggestionModels': describe(manager, workspace),
@@ -64,6 +80,8 @@ def definitions(schema, string):
             'Sends only bounded display transcript on a later interested-client request; never drafts or native model context.',
             schema({**owner, 'enabled': {'type': 'boolean'}, 'provider': string(100),
                     'model': string(200), 'transcriptMode': {'enum': ['full', 'last_n']},
+                    'effort': {'type': ['string', 'null'], 'pattern': r'^[A-Za-z0-9_-]{1,100}$'},
+                    'prompt': {**string(MAX_PROMPT_BYTES), 'minLength': 1},
                     'humanTurns': {'type': 'integer', 'minimum': 1, 'maximum': 20},
                     'scope': {'const': 'global'}}, ['enabled', 'transcriptMode', 'humanTurns', 'scope'])),
     }

@@ -481,7 +481,7 @@ class SetupManager:
             try:
                 if action == 'suggestion.complete' and not args['_admit']():
                     raise ValueError('Suggestion source changed before provider preparation.')
-                payload = json.dumps({'action':action,'model':args.get('model'),**({'prompt':args['prompt']} if action=='naming.complete' else {}),**({'transcript':args['transcript']} if action=='suggestion.complete' else {}),'module':module,'config':config,'source':snapshot['source'],'fallbackSource':KNOWN_PROVIDER_SOURCES.get(module),'registryHome':snapshot['registryHome']}).encode()
+                payload = json.dumps({'action':action,'model':args.get('model'),**({'prompt':args['prompt']} if action=='naming.complete' else {}),**({'transcript':args['transcript'], 'effort':args.get('effort'), **({'prompt':args['prompt']} if 'prompt' in args else {})} if action=='suggestion.complete' else {}),'module':module,'config':config,'source':snapshot['source'],'fallbackSource':KNOWN_PROVIDER_SOURCES.get(module),'registryHome':snapshot['registryHome']}).encode()
                 if action == 'suggestion.complete':
                     # Keep stdin open for the final currentness handshake. No
                     # provider call is authorized by the preparation payload.

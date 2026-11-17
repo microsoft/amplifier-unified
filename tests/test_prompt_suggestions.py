@@ -14,7 +14,7 @@ import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
 from amplifier_web.prompt_suggestions import PromptSuggestions, BROWSER
-from amplifier_web.suggestion_provider import complete, parse, qualified_source_matches
+from amplifier_web.suggestion_provider import complete, parse, qualified_source_matches, INSTRUCTION, OUTPUT_CONTRACT
 from amplifier_web.suggestion_settings import describe, configure
 from amplifier_web.suggestion_source import public_rows, select, Unavailable, witness
 from amplifier_web.transcript_windows import TranscriptWindows, _native_page
@@ -510,6 +510,20 @@ class Requests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('PRIVATE', repr(result))
         host._manager.probe.assert_awaited_once()
 
+    async def test_request_owner_passes_saved_effort_and_prompt_to_isolated_probe(self):
+        del self.host.complete
+        self.config.update(effort='high', prompt='Saved literal {instruction}.')
+        manager = SimpleNamespace(probe=AsyncMock(return_value={
+            'status': 'empty', 'suggestion': None, 'usage': None, 'cost': None}), close=AsyncMock())
+        self.host._manager = manager
+        result = await self.terminal_request('saved-options')
+        self.assertEqual(result['status'], 'empty')
+        payload = manager.probe.call_args.args[1]
+        self.assertEqual(payload['effort'], 'high')
+        self.assertEqual(payload['prompt'], 'Saved literal {instruction}.')
+        self.assertEqual(payload['model'], 'cheap-model')
+        manager.probe.assert_awaited_once()
+
     async def test_invisible_terminal_metadata_and_generic_save_do_not_stale_resident_capture(self):
         windows = self.app.history.windows
         original = windows.read
@@ -823,7 +837,101 @@ class Provider(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(request.tools)
         self.assertEqual(request.timeout, 15)
         self.assertEqual(provider.complete.call_args.kwargs['model'], 'explicit')
-        self.assertFalse(provider.complete.call_args.kwargs['extended_thinking'])
+        self.assertIsNone(provider.complete.call_args.kwargs['reasoning_effort'])
+        self.assertIsNone(request.reasoning_effort)
+        self.assertNotIn('extended_thinking', provider.complete.call_args.kwargs)
+        self.assertEqual(request.messages[0].content, INSTRUCTION + '\n\n' + OUTPUT_CONTRACT)
+
+    async def test_saved_prompt_is_literal_fixed_contract_separate_and_effort_uses_portable_options(self):
+        prompt = 'Experiment with {transcript} and ${ENV}: prefer one concrete question.\nKeep this literal.'
+        for effort in ('low', 'high', None):
+            provider = SimpleNamespace(complete=AsyncMock(return_value=SimpleNamespace(
+                content=[SimpleNamespace(type='text', text='{"suggestion":null}')], usage=None)))
+            result = await complete(provider, {'reasoning_effort': 'chat-default'}, 'explicit', [],
+                                    {}, effort=effort, prompt=prompt)
+            self.assertEqual(result['status'], 'empty')
+            request = provider.complete.call_args.args[0]
+            self.assertEqual(request.reasoning_effort, effort)
+            self.assertEqual(provider.complete.call_args.kwargs, {'model': 'explicit', 'reasoning_effort': effort})
+            self.assertEqual(request.messages[0].content, prompt + '\n\n' + OUTPUT_CONTRACT)
+            self.assertEqual(request.max_output_tokens, 512)
+            self.assertEqual(request.timeout, 15)
+            self.assertFalse(request.tools)
+            provider.complete.assert_awaited_once()
+
+    async def test_query_constructs_both_adapter_shapes_with_utility_effort_not_saved_chat_defaults(self):
+        from amplifier_web.provider_probe import query
+        seen = []
+        class OrdinaryAdapter:
+            def __init__(self, config=None):
+                self.config = config or {}
+            def get_info(self):
+                return {'defaults': {'model': self.config.get('default_model')}}
+            def get_config_schema(self):
+                return {'fields': []}
+            async def complete(self, request, **kwargs):
+                seen.append((copy.deepcopy(self.config), request, kwargs))
+                return SimpleNamespace(content=[SimpleNamespace(type='text', text='{"suggestion":null}')])
+        class KeywordOptionsAdapter(OrdinaryAdapter):
+            async def complete(self, request, *, request_options=None, **kwargs):
+                self.assertion = request_options
+                return await super().complete(request, **kwargs)
+        saved = {'api_key': 'synthetic-key', 'default_model': 'foreground-model',
+                 'reasoning_effort': 'foreground-effort', 'effort': 'legacy-effort',
+                 'reasoning': {'effort': 'legacy-reasoning'}, 'extended_thinking': False,
+                 'thinking_type': 'enabled', 'thinking_budget_tokens': 9999}
+        before = copy.deepcopy(saved)
+        for cls in (OrdinaryAdapter, KeywordOptionsAdapter):
+            for effort in ('low', 'high', None):
+                with patch('amplifier_web.provider_probe.provider_class', return_value=cls):
+                    result = await query({'action': 'suggestion.complete', 'module': 'fixture',
+                        'config': saved, 'model': 'explicit-selected', 'effort': effort,
+                        'prompt': 'Experiment prompt.', 'transcript': [], '_admit': AsyncMock(return_value=True)})
+                self.assertEqual(result['suggestion']['status'], 'empty')
+                isolated, request, options = seen[-1]
+                self.assertEqual(isolated['reasoning_effort'], effort)
+                self.assertEqual(isolated['default_model'], 'explicit-selected')
+                self.assertEqual(isolated['model'], 'explicit-selected')
+                self.assertEqual(request.reasoning_effort, effort)
+                self.assertEqual(options, {'model': 'explicit-selected', 'reasoning_effort': effort})
+                for key in ('effort', 'reasoning', 'extended_thinking', 'thinking_type', 'thinking_budget_tokens'):
+                    self.assertNotIn(key, isolated)
+                self.assertEqual(isolated['max_retries'], 0)
+                self.assertFalse(isolated['fallback_on_overload'])
+        self.assertEqual(saved, before)
+        self.assertEqual(len(seen), 6)  # One completion per requested attempt, never a repair.
+
+    async def test_invalid_instruction_options_refuse_before_any_provider_call(self):
+        provider = SimpleNamespace(complete=AsyncMock())
+        for effort, prompt in ((None, ''), (None, ' \n'), (None, 'é' * 8193),
+                              (None, None), (None, 'NUL\0control'), (None, '\ud800'),
+                              ('bad effort', INSTRUCTION), ('x' * 101, INSTRUCTION)):
+            with self.subTest(effort=effort), self.assertRaises(ValueError):
+                await complete(provider, {}, 'explicit', [], {}, effort=effort, prompt=prompt)
+        provider.complete.assert_not_called()
+
+    async def test_known_reasoning_blocks_are_never_read_or_projected_but_tools_still_refuse(self):
+        class PrivateReasoning:
+            def __init__(self, kind):
+                self.type = kind
+            @property
+            def text(self):
+                raise AssertionError('Private reasoning must never be read')
+        text = SimpleNamespace(type='text', text='{"suggestion":"One public question?"}')
+        for effort in ('low', 'high', None):
+            reasoning = [PrivateReasoning(kind) for kind in ('thinking', 'redacted_thinking', 'reasoning')]
+            provider = SimpleNamespace(complete=AsyncMock(return_value=SimpleNamespace(
+                content=[*reasoning, text], usage={'input_tokens': 10, 'output_tokens': 12})))
+            result = await complete(provider, {}, 'explicit', [], {}, effort=effort)
+            self.assertEqual(result['suggestion'], 'One public question?')
+            self.assertNotIn('PrivateReasoning', repr(result))
+            provider.complete.assert_awaited_once()
+        for blocks in ([PrivateReasoning('thinking')], [text, SimpleNamespace(type='tool_call')],
+                       [text, SimpleNamespace(type='unknown_action')]):
+            provider = SimpleNamespace(complete=AsyncMock(return_value=SimpleNamespace(content=blocks)))
+            with self.assertRaises(ValueError):
+                await complete(provider, {}, 'explicit', [], {}, effort='high')
+            provider.complete.assert_awaited_once()
 
     async def test_provider_call_options_cannot_silently_select_connection_default_model(self):
         class OptionsProvider:
@@ -1040,7 +1148,8 @@ class UtilitySourcePolicy(unittest.IsolatedAsyncioTestCase):
                 patch('amplifier_foundation.Bundle.prepare', AsyncMock(side_effect=AssertionError('prepare'))), \
                 patch('amplifier_web.runtime_qualification.installed_graph', side_effect=AssertionError('Git scan')):
             result = await self.manager.probe('suggestion.complete', {
-                'id': 'saved-account', 'model': 'cheap-explicit', 'transcript': [], '_admit': lambda: True},
+                'id': 'saved-account', 'model': 'cheap-explicit', 'effort': 'low',
+                'prompt': 'Saved {prompt}.', 'transcript': [], '_admit': lambda: True},
                 str(self.root))
         self.assertEqual(result['status'], 'empty')
         self.assertEqual(spawn.call_args.args[0], str(self.executable))
@@ -1048,6 +1157,8 @@ class UtilitySourcePolicy(unittest.IsolatedAsyncioTestCase):
         payload = json.loads(process.stdin.write.call_args.args[0])
         self.assertIsNone(payload['source'])  # Never install the authored branch per request.
         self.assertEqual(payload['model'], 'cheap-explicit')
+        self.assertEqual(payload['effort'], 'low')
+        self.assertEqual(payload['prompt'], 'Saved {prompt}.')
         self.assertEqual(self.authored, 'git+' + self.url + '@main')  # No settings rewrite to SHA.
         self.assertEqual({name: (self.receipts / name).read_bytes() for name in before}, before)
         spawn.assert_awaited_once()
@@ -1379,6 +1490,9 @@ class Integration(unittest.IsolatedAsyncioTestCase):
         current = self.app.state.get('configurationRevision', 0)
         before = await self.app.dispatch('providers.suggestionModels', {}, include_state=False)
         self.assertFalse(before['result']['suggestionModels']['enabled'])
+        self.assertIsNone(before['result']['suggestionModels']['effort'])
+        self.assertEqual(before['result']['suggestionModels']['prompt'], INSTRUCTION)
+        self.assertEqual(before['result']['suggestionModels']['defaultPrompt'], INSTRUCTION)
         result = await self.app.dispatch('providers.configureSuggestions', {
             'enabled': False, 'transcriptMode': 'last_n', 'humanTurns': 6,
             'scope': 'global', 'configurationTarget': {'kind': 'global'}}, include_state=False)
@@ -1394,6 +1508,110 @@ class Integration(unittest.IsolatedAsyncioTestCase):
             await self.app.dispatch('providers.configureSuggestions', {
                 'enabled': False, 'transcriptMode': 'last_n', 'humanTurns': 6, 'scope': 'global'},
                 origin='agent', caller_session_id=None, include_state=False)
+
+    async def test_prompt_effort_save_reset_validation_and_revision_fence_existing_private_request(self):
+        manager = self.app.prompt_suggestions.manager
+        manager.store.update(self.root, 'global', lambda value: value.update(config={'providers': [{
+            'id': 'saved', 'module': 'provider-openai', 'config': {
+                'api_key': 'synthetic-key', 'default_model': 'foreground', 'reasoning_effort': 'foreground-effort'}}]}))
+        fields = {'enabled': True, 'provider': 'saved', 'model': 'utility-model',
+                  'transcriptMode': 'last_n', 'humanTurns': 6,
+                  'scope': 'global', 'configurationTarget': {'kind': 'global'}}
+        async def save(**values):
+            return (await self.app.dispatch('providers.configureSuggestions', {**fields, **values},
+                                           include_state=False))['result']
+        result = await save(effort='low', prompt='Custom {transcript} prompt.')
+        self.assertEqual(result['suggestionModels']['effort'], 'low')
+        self.assertEqual(result['suggestionModels']['prompt'], 'Custom {transcript} prompt.')
+        first = result['suggestionModels']['revision']
+        preserved = await save()
+        self.assertEqual(preserved['suggestionModels']['effort'], 'low')
+        self.assertEqual(preserved['suggestionModels']['prompt'], 'Custom {transcript} prompt.')
+        self.assertNotEqual(first, preserved['suggestionModels']['revision'])
+        before = describe(manager, self.root)
+        for invalid in ({'prompt': ''}, {'prompt': ' \n'}, {'prompt': 'é' * 8193},
+                        {'prompt': 'NUL\0control'}, {'effort': ''}, {'effort': 'bad effort'}, {'effort': 'x' * 101}):
+            with self.subTest(invalid=list(invalid)), self.assertRaises(Exception):
+                await save(**invalid)
+            self.assertEqual(describe(manager, self.root), before)
+        reset = await save(effort=None, prompt=before['defaultPrompt'])
+        self.assertIsNone(reset['suggestionModels']['effort'])
+        self.assertEqual(reset['suggestionModels']['prompt'], INSTRUCTION)
+        original_connection = copy.deepcopy(manager.config(self.root).providers[0])
+        await self.app.dispatch('session.create', {}, include_state=False)
+        session = self.app._session()
+        sid = session['id']
+        session.update(status='idle', messages=[
+            {'id': 'human', 'role': 'user', 'text': 'A request', 'inputOrigin': 'ui'},
+            {'id': 'assistant', 'role': 'assistant', 'text': 'A completed reply'}])
+        host = self.app.prompt_suggestions
+        entered, release = asyncio.Event(), asyncio.Event()
+        async def respond(record, config, rows):
+            entered.set()
+            await release.wait()
+            return {'status': 'ready', 'suggestion': 'A private candidate.', 'usage': None, 'cost': None}
+        host.complete = AsyncMock(side_effect=respond)
+        self.app.clients.attach('browser', kind='web')
+        self.app.clients.records['browser']['selectedSessionId'] = sid
+        token = BROWSER.set({'principal': 'cookie', 'valid': lambda: True})
+        try:
+            with self.app.clients.bind('browser'):
+                await host.dispatch('session.suggestion.request', {
+                    'sessionId': sid, 'requestId': 'pending-old', 'expectedLastMessageId': 'assistant'}, 'ui')
+                await entered.wait()
+                claims = list(self.app.db.execute('SELECT * FROM suggestion_requests'))
+                changed = await save(effort='high', prompt='New useful instruction.')
+                self.assertNotEqual(reset['suggestionModels']['revision'], changed['suggestionModels']['revision'])
+                release.set()
+                await asyncio.gather(*tuple(host.jobs))
+                status = await host.dispatch('session.suggestion.status', {
+                    'sessionId': sid, 'requestId': 'pending-old'}, 'ui')
+                self.assertEqual(status['status'], 'stale')
+                host.complete = AsyncMock(return_value={'status': 'ready', 'suggestion': 'New private candidate.',
+                                                       'usage': None, 'cost': None})
+                await host.dispatch('session.suggestion.request', {
+                    'sessionId': sid, 'requestId': 'new-config', 'expectedLastMessageId': 'assistant'}, 'ui')
+                await asyncio.gather(*tuple(host.jobs))
+                status = await host.dispatch('session.suggestion.status', {
+                    'sessionId': sid, 'requestId': 'new-config'}, 'ui')
+                self.assertEqual(status['status'], 'ready')  # Same source + new exact config is new intent.
+                await save(effort='high', prompt='A later prompt edit.')
+                status = await host.dispatch('session.suggestion.status', {
+                    'sessionId': sid, 'requestId': 'new-config'}, 'ui')
+                self.assertEqual(status['status'], 'stale')
+                self.assertEqual(self.app.db.execute('SELECT * FROM suggestion_requests WHERE identity=?',
+                                                     (claims[0][0],)).fetchone(), claims[0])
+                self.assertEqual(manager.config(self.root).providers[0], original_connection)
+        finally:
+            release.set()
+            BROWSER.reset(token)
+        self.runtime.start.assert_not_called()
+        self.runtime.send.assert_not_called()
+
+    async def test_saved_effort_uses_existing_model_schema_validation_without_discovery(self):
+        manager = self.app.prompt_suggestions.manager
+        manager.store.update(self.root, 'global', lambda value: value.update(config={'providers': [{
+            'id': 'saved', 'module': 'provider-openai', 'config': {'api_key': 'synthetic-key'}}]}))
+        args = {'enabled': True, 'provider': 'saved', 'model': 'utility',
+                'transcriptMode': 'last_n', 'humanTurns': 6}
+        with patch.object(manager.catalog, 'peek', return_value={'providerMetadata': {
+                'configSchema': {'fields': [{'id': 'reasoning_effort', 'choices': ['low', 'high']}]}}}), \
+                patch.object(manager, 'probe', AsyncMock(side_effect=AssertionError('save must not probe'))) as probe:
+            configure(manager, {**args, 'effort': 'low'}, self.root, 'global')
+            with self.assertRaisesRegex(ValueError, 'reasoning effort is unavailable'):
+                configure(manager, {**args, 'effort': 'unadvertised'}, self.root, 'global')
+            configure(manager, {**args, 'effort': None}, self.root, 'global')
+        probe.assert_not_called()
+
+    async def test_effective_prompt_constants_change_revision_even_with_custom_saved_prompt(self):
+        manager = self.app.prompt_suggestions.manager
+        configure(manager, {'enabled': False, 'transcriptMode': 'last_n', 'humanTurns': 6,
+                            'prompt': 'Custom experiment.', 'effort': None}, self.root, 'global')
+        before = describe(manager, self.root)
+        with patch('amplifier_web.suggestion_settings.INSTRUCTION', INSTRUCTION + ' Updated default.'):
+            self.assertNotEqual(describe(manager, self.root)['revision'], before['revision'])
+        with patch('amplifier_web.suggestion_settings.OUTPUT_CONTRACT', OUTPUT_CONTRACT + ' Updated contract.'):
+            self.assertNotEqual(describe(manager, self.root)['revision'], before['revision'])
 
     async def test_service_request_is_ui_private_and_bypasses_shared_action_receipt(self):
         await self.app.dispatch('session.create', {}, include_state=False)

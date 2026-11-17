@@ -5,12 +5,21 @@ from every conversation participant and execution runtime.
 
 ## Behavior
 
-- App-global Settings selects an enabled saved connection and explicit model.
+- App-global Settings selects an enabled saved connection, explicit model and
+  optional reasoning effort, with an editable prompt under Advanced and an
+  explicit Reset to default. Effort `null` means the provider's own default:
+  neither a chat selection nor saved connection reasoning/thinking overrides
+  are silently inherited. Explicit effort uses the portable `reasoning_effort`
+  request field and ordinary provider call option, not a host model-name map.
   No selection, ambient credential, chat model, routing role or provider failure
   authorizes a fallback. Saving does not start a conversation or make a model call.
 - An interested browser may request after a new completed assistant display tail
-  becomes idle, including external and shared multi-agent conversations. Focus,
-  reconnect and status reads never retry generation. Ordinary composing remains
+  becomes idle, or when visiting/refocusing an eligible displayed chat with an
+  empty composer, including external and shared multi-agent conversations.
+  Client interest/visibility owns those triggers; the host proves cookie-backed
+  selected-chat authority, not the document's physical visibility. Reconnect and
+  status reads never start inference. Request/source deduplication still forbids
+  replay of a prior attempt merely because a chat is revisited. Ordinary composing remains
   available when the utility is disabled, busy, unsupported or unsuccessful.
 - The host obtains its own authorized display transcript. It never accepts
   transcript text, native model context, private files, system/developer blocks,
@@ -52,19 +61,38 @@ from every conversation participant and execution runtime.
 - Model output is exactly `{"suggestion": string|null}`. A string is nonempty,
   single-line, at most 240 Unicode code points, without controls or surrounding
   whitespace. Additional/duplicate fields, Markdown wrappers, malformed JSON and
-  nontext/tool blocks are rejected, not repaired.
+  tool/action/unknown blocks are rejected, not repaired. Known private
+  thinking/redacted-thinking/reasoning blocks are ignored without reading or
+  projecting their payload; strict parsing still applies to the public text,
+  and reasoning-only responses are unavailable output, not invented text.
+- The saved prompt is literal instruction text (no format substitutions), defaults
+  to the original suggestion instruction, and must be nonblank and at most 16 KiB
+  of UTF-8, allowing newlines/tabs but not other control characters or invalid
+  Unicode surrogates. A separate fixed output/privacy/no-tools contract follows it in the
+  system message. Editing instructions grants no tools, hidden context, recipient
+  change or send authority; strict parsing, 512 output tokens and the 15-second
+  deadline remain enforced. Higher effort can consume that output budget; no
+  cap increase, repair call or fallback is implied.
 
 ## Wire
 
 `providers.suggestionModels {}` returns
-`{suggestionModels:{enabled,provider,model,transcriptMode,humanTurns,revision,
+`{suggestionModels:{enabled,provider,model,effort,prompt,defaultPrompt,transcriptMode,humanTurns,revision,
 takesEffect:"next_request"},providers:[existing nonsecret connection rows]}`.
 
-`providers.configureSuggestions {enabled,provider?,model?,transcriptMode,
+`providers.configureSuggestions {enabled,provider?,model?,effort?,prompt?,transcriptMode,
 humanTurns,scope:"global",configurationTarget:{kind:"global"}}` saves the same
 selection and returns `suggestionModels`, `configurationChanged:true`,
 `takesEffect:"next_request"` and the updated `configurationRevision`.
 Existing configuration authority applies. No setting changes a chat's model.
+`effort` is null or the ordinary provider effort identifier; existing model catalog
+metadata supplies choices. Cached choices, when available, use the same validation
+as ordinary model selection without a save-time discovery or model call. Omitted
+`effort`/`prompt` preserve the saved values (or their defaults for old settings).
+`defaultPrompt` is read-only metadata; Reset sends its exact value as `prompt`.
+Effort/prompt edits change the settings/configuration witness and invalidate pending
+or ready candidates like other app configuration edits; no existing paid claim is
+rewritten or retried.
 
 `session.suggestion.request {sessionId,requestId,expectedLastMessageId}` returns
 promptly with `pending` or a typed terminal result.

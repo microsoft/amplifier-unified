@@ -148,10 +148,11 @@ async def _query(request, progress):
     if request['action']=='providers.schema':
         return {'info':public(info),'configSchema':public(schema),'imageGeneration':public(image_info)}
     progress['stage'] = 'configuration'
-    config=materialize_provider_config(request.get('config',{}),schema)
+    config = request.get('config', {})
     if request['action'] == 'suggestion.complete':
-        config = {**config, 'max_retries': 0, 'fallback_on_overload': False,
-                  'refusal_fallback_enabled': False, 'fallback_retry_count': 0}
+        from amplifier_web.suggestion_provider import utility_config
+        config = utility_config(config, request.get('model'), request.get('effort'))
+    config=materialize_provider_config(config,schema)
     if request['module']=='provider-github-copilot' and config.get('github_token'):
         os.environ['COPILOT_AGENT_TOKEN']=config['github_token']
     progress['stage'] = 'construction'
@@ -170,7 +171,9 @@ async def _query(request, progress):
             if not callable(request.get('_admit')) or not await request['_admit']():
                 return {'suggestion': {'status': 'stale', 'suggestion': None, 'usage': None, 'cost': None}}
             return {'suggestion': await complete(provider, config, request.get('model'),
-                                                 request['transcript'], info, progress=progress)}
+                                                 request['transcript'], info, progress=progress,
+                                                 effort=request.get('effort'),
+                                                 **({'prompt': request['prompt']} if 'prompt' in request else {}))}
         if request['action'] == 'providers.imageModels':
             supported = callable(getattr(provider, 'list_image_models', None)) and isinstance(image_info, dict)
             result['imageModelsSupported'] = supported

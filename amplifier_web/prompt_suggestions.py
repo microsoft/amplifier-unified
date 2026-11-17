@@ -249,6 +249,8 @@ class PromptSuggestions:
     async def complete(self, record, config, transcript):
         return await self.manager.probe('suggestion.complete', {
             'id': config['provider'], 'model': config['model'], 'transcript': transcript,
+            'effort': config.get('effort'),
+            **({'prompt': config['prompt']} if 'prompt' in config else {}),
             # Revalidate after subprocess creation, immediately before writing
             # its private request pipe; a changed source never reaches transport.
             '_admit': lambda: self.current(record) and record['status'] == 'pending'},
