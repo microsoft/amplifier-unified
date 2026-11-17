@@ -302,6 +302,16 @@ async def test_a_retry_that_starts_an_update_of_another_kind_does_not_say_not_st
     assert NOT_STARTED not in state['currentStatus']['detail'] and RETRIED not in state['currentStatus']['detail']
 
 
+async def test_a_new_check_takes_back_the_refusal_text_of_a_rollback(manager):
+    """A rollback that changed nothing leaves only its text. No pass of the owner tries a rollback again."""
+    manager.save(providers(PROVIDER))
+    state = manager.service.state['updates']
+    state['error'] = health.STALE_STAGE_KEYS
+    assert health.current(state)['detail'] == health.STALE_STAGE_KEYS
+    await manager.check()
+    assert state.get('error') is None and state['currentStatus']['detail'] != health.STALE_STAGE_KEYS
+
+
 async def test_a_retry_that_leaves_no_attempt_record_does_not_say_that_another_update_started(manager, monkeypatch):
     await failed_component(manager)
     check_spy(manager, monkeypatch)
