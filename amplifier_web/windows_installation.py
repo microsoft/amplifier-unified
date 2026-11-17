@@ -433,8 +433,8 @@ async def prepare_background(root, launcher, environment, *, port=None, identity
                           "public_origins", f"[https://127.0.0.1:{port}]")
         step("task")
         # Registers the task and asks Windows to start it. It does not wait for
-        # the host, so its failure is a failed registration and never a taken
-        # address: it ends the start here.
+        # the host, so a taken address cannot make it fail. Its failure ends
+        # the start here.
         await command("service", "install")
 
     step("ready")

@@ -257,16 +257,16 @@ def test_a_status_command_that_ends_with_a_failure_status_names_a_taken_address_
     assert calls == [("service", "start"), ("service", "status", "--wait", "60", "--json")]
 
 
-def test_a_registration_that_fails_ends_the_first_start_and_asks_nothing_about_the_address(installation, monkeypatch):
-    """`service install` registers the task and does not wait for the host.
+def test_an_install_command_that_fails_ends_the_first_start_and_asks_nothing_about_the_address(installation, monkeypatch):
+    """`service install` registers the task, asks Windows to start it, and does not wait for the host.
 
-    Its failure is a failed registration. No status step follows, and the
-    question about a taken address is not asked: the address had no part.
+    Its failure ends the start. No status step follows, and the question
+    about a taken address is not asked: the host's address had no part.
     """
     from amplifier_web.update_diagnostics import CommandFailure
     _, value, calls, run = installation  # No task yet: the first start of an installation.
     value["failing"] = {("service", "install")}
-    monkeypatch.setattr(setup, "_conflict", lambda home: pytest.fail("A failed registration is not a taken address."))
+    monkeypatch.setattr(setup, "_conflict", lambda home: pytest.fail("A failed install command is not a taken address."))
     with pytest.raises(CommandFailure):
         run()
     assert calls[-1] == ("service", "install")

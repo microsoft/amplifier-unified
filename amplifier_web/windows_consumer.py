@@ -211,8 +211,9 @@ async def launch(root, *, open_browser=True, progress=None):
     screen says that Amplifier is starting (windows_start.sign). One such
     start runs at a time (windows_start.only): a second one while the first
     runs does nothing and shows nothing, so no second browser tab opens. The
-    sign and the lock end before this function's own last message, which
-    sends the person back to the Start menu. A message of the start step or
+    sign and the lock end before this function's own last message: it sends
+    the person back to the Start menu, or says that a removal of the folder
+    began. A message of the start step or
     of the certificate step is shown while the start still runs: the lock
     ends when the person has answered it.
     """

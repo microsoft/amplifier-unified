@@ -166,9 +166,13 @@ def _stays_visible(user, window, what, seconds=1.0):
 
 
 def _message_of_another_program(user):
-    """Another process with a visible window of the message-box class. Returns the process."""
-    import ctypes as C
-    title = "Another program " + uuid.uuid4().hex
+    """Another process with a visible window of the message-box class. Returns the process.
+
+    The window has the title of an Amplifier message, as a message of a
+    second Amplifier installation has. So the title cannot be what tells it
+    from a message of this program: only the process can.
+    """
+    title = "Amplifier Unified"
     program = ("import ctypes as C, sys, time\n"
                "user = C.WinDLL('user32')\n"
                "user.CreateWindowExW.restype = C.c_void_p\n"
@@ -176,15 +180,13 @@ def _message_of_another_program(user):
                "                                 C.c_int, C.c_int, C.c_void_p, C.c_void_p, C.c_void_p, C.c_void_p]\n"
                "window = user.CreateWindowExW(0, '#32770', sys.argv[1], 0x80000000 | 0x10000000, 0, 0, 240, 120,\n"
                "                              None, None, None, None)\n"
-               "print('made' if window else 'failed', flush=True)\n"
+               "print(int(window or 0), flush=True)\n"
                "time.sleep(120)\n")
     other = subprocess.Popen([sys.executable, "-I", "-c", program, title], stdout=subprocess.PIPE, text=True)
     try:
-        assert other.stdout.readline().strip() == "made"
-        user.FindWindowW.restype = C.c_void_p
-        user.FindWindowW.argtypes = [C.c_wchar_p, C.c_wchar_p]
-        found = user.FindWindowW("#32770", title)
+        found = int(other.stdout.readline().strip() or 0)  # A window handle is the same number in every process.
         assert found and user.IsWindowVisible(found), "The other program's message is not on this desktop."
+        assert user.text(found) == "Amplifier Unified"
     except BaseException:
         other.kill()
         raise

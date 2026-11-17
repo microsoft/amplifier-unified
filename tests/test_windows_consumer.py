@@ -594,12 +594,16 @@ def test_browser_message_while_a_removal_runs_says_that_and_names_neither_setup_
     a folder whose removal began.
     """
     from amplifier_web.update_diagnostics import CommandOutput
-    result, events = opening_launch(tmp_path, monkeypatch, CommandOutput(""), listed=listed, during="removing")
+    events = []
+    recorded_start(monkeypatch, events)
+    result, _ = opening_launch(tmp_path, monkeypatch, CommandOutput(""), listed=listed, during="removing",
+                               events=events)
     assert result["browser"] == {"opened": False, "reason": "not-confirmed"}
-    assert [event[0] for event in events] == ["trust", "command", "notice"]  # One message.
-    assert events[2][1] == consumer._UNFINISHED["removing"]
+    # One message, and it comes after the sign and the lock of this start have ended.
+    assert [event[0] for event in events] == ["lock", "sign", "trust", "command", "sign gone", "unlock", "notice"]
+    assert events[-1][1] == consumer._UNFINISHED["removing"]
     for wrong in ("setup file", "keeps your chats", "open Amplifier from the Start menu", "may not have opened"):
-        assert wrong not in events[2][1]
+        assert wrong not in events[-1][1]
 
 
 @pytest.mark.parametrize("missing", ["record", "journal", "app"])
