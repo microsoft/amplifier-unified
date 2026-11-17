@@ -1535,6 +1535,194 @@ def test_uninstall_that_cannot_check_its_installation_does_not_say_that_amplifie
     assert "keep using" not in stopped.value.notice and "open" not in stopped.value.notice
 
 
+def shown_by_the_product(deleter, monkeypatch):
+    """Every question and message that the README item speaks about, as the public uninstall shows it.
+
+    One installation, in the order of a person's journey: the questions with answers that change nothing,
+    a delete that stops three times, a second uninstall, and the delete that finishes.
+    """
+    state, root, consumer = deleter.state, deleter.root, deleter.consumer
+    monkeypatch.setattr(consumer.sys, "stdout", None)
+    shown = {}
+
+    def run(*choices, answers=()):
+        state.update(choices=list(choices), answers=list(answers), questions=[], notices=[])
+        try:
+            deleter.run()
+        except consumer.Unfinished as stopped:
+            return stopped.notice
+        return None
+
+    # A folder that setup did not complete as an installation: the earlier question, with two buttons.
+    record = (root / plan.COMPLETE).read_text()
+    (root / plan.COMPLETE).unlink()
+    assert run(answers=[False]) is None and not state["questions"]
+    (shown["earlier question"], confirm), = state["notices"]
+    assert confirm
+    (root / plan.COMPLETE).write_text(record)
+    # A whole installation, a trusted certificate, one working chat. No to the last question changes nothing.
+    state.update(certificate=b"this installation's root", working=1)
+    before = snapshot(root)
+    assert run("yes", "yes", answers=[False]) is None
+    (shown["first question"], cancel), (shown["second question"], plain) = state["questions"]
+    (shown["working question"], confirm), = state["notices"]
+    assert cancel and not plain and confirm and snapshot(root) == before and not state["calls"]
+    state["working"] = None
+    # A delete that stops when it writes its journal.
+    state["refuse_write"] = lambda path: path.name == plan.JOURNAL
+    shown["stop at the journal"] = run("yes", "yes")
+    state.update(refuse_write=None, certificate=None)
+    # A delete that stops at the person's data: a program uses one file.
+    state["held"] = {"app/chats/one/message.txt"}
+    shown["stop at the data"] = run("yes", "yes")
+    # The next uninstall: another first question, and then the same second question. No changes nothing.
+    assert run("yes", "no") is None
+    (shown["first question of the next uninstall"], plain), (again, _) = state["questions"]
+    assert not plain and again.replace("Select No to change nothing now.", "") == shown["second question"].replace(
+        "Select No to change nothing. Amplifier stays installed.", "")
+    # The next uninstall stops when it writes its new journal.
+    state["refuse_write"] = lambda path: path.name == plan.JOURNAL
+    shown["next uninstall stops at the journal"] = run("yes", "yes")
+    state["refuse_write"] = None
+    # The file is free. The delete stops later, at the Apps-list entry.
+    state["held"].clear()
+    state["commit_conflict"] = True
+    shown["stop after the data"] = run("yes", "yes")
+    state["commit_conflict"] = False
+    # The delete finishes. One entry in the folder is not Amplifier's.
+    (root / "mine.txt").write_text("not Amplifier's")
+    assert run("yes", "yes") is None
+    (shown["confirmation of a delete"], confirm), = state["notices"]
+    assert not confirm and all(isinstance(text, str) and text for text in shown.values())
+    return {name: " ".join(text.split()) for name, text in shown.items()}
+
+
+# The README item "Uninstall", complete: every paragraph, every list entry, every sentence, in its order.
+# Beside each sentence: the texts that the product shows (the case, and the words in it) on which the
+# sentence rests. A sentence that rests on no text of the product says why. A sentence that is not in this
+# table cannot be in the README, and a sentence of the product counts only in the case that shows it.
+WINDOWS, ABOUT = "Windows' own screens", "about the sentences of this item"
+README_UNINSTALL = [
+    [  # The first paragraph and the three buttons of the first question.
+        [("open **Settings > Apps > Installed apps**, find **Amplifier Unified (unsigned preview)**, select "
+          "**More options (…)**, then **Uninstall**, then **Uninstall** again.", WINDOWS),
+         ('Amplifier first asks: "Do you also want to delete your chats, settings and saved accounts?"',
+          [("first question", "Do you also want to delete your chats, settings and saved accounts?")])],
+        [("**No** uninstalls Amplifier and keeps the folder.",
+          [("first question", "Select No to keep them. They stay in this folder, together with the program files:")]),
+         ("Your chats, settings and accounts stay there, together with the program files (1.4 GB to 1.9 GB in "
+          "our tests).",
+          [("first question", "Select No to keep them. They stay in this folder, together with the program files:")])],
+        [('**Yes** leads to a second question: "Delete everything that Amplifier keeps in this folder?"',
+          [("first question", "Select Yes to delete them, together with the program files. Amplifier asks you once "
+                              "more before it deletes anything."),
+           ("second question", "Delete everything that Amplifier keeps in this folder?")]),
+         ("**Yes** there uninstalls Amplifier and deletes your chats, settings, saved accounts and stored keys, the "
+          "files that Amplifier or you saved in its workspace folder, and the program files.",
+          [("second question", "This deletes all your Amplifier chats, your settings, your saved accounts and your "
+                               "stored keys. It also deletes the files that Amplifier or you saved in its workspace "
+                               "folder there."),
+           ("second question", "Select Yes to delete all of that and uninstall Amplifier."),
+           ("first question", "Select Yes to delete them, together with the program files.")]),
+         ("This cannot be undone.", [("second question", "This cannot be undone.")]),
+         ("**No** there changes nothing.",
+          [("second question", "Select No to change nothing. Amplifier stays installed.")])],
+        [("**Cancel** changes nothing.", [("first question", "Select Cancel to keep Amplifier installed.")]),
+         ("Amplifier stays installed.", [("first question", "Select Cancel to keep Amplifier installed.")])],
+    ],
+    [[("These are the results of an uninstall that finishes.", ABOUT),
+      ("If Amplifier is working on a chat, it asks before it stops that work.",
+       [("working question", "Amplifier is working on a chat right now."),
+        ("working question", "Select Yes to stop that work and uninstall now.")]),
+      ("An uninstall stops Amplifier and removes it from the Start menu and the Apps list.",
+       [("first question", "Amplifier will stop and will no longer start when you sign in. Its entries in the "
+                           "Start menu and the Apps list will be removed.")]),
+      # Windows asks only when it trusts the certificate.
+      ("If Windows asks whether to delete the certificate, select **Yes**.",
+       [("first question", "During the uninstall, Windows asks whether to delete the certificate")])]],
+    [[('After a delete, Amplifier says "Amplifier is uninstalled."',
+       [("confirmation of a delete", "Amplifier is uninstalled. It no longer runs, and it no longer starts when "
+                                     "you sign in.")]),
+      ("When you close that message, it starts to remove its last program files and then the folder.",
+       [("confirmation of a delete", "When you close this message, Amplifier starts to remove its last program "
+                                     "files.")]),
+      ("A file or folder directly in the Amplifier folder whose name Amplifier does not use stays, and then the "
+       "folder stays too.",
+       [("confirmation of a delete", "The folder itself stays, because it holds entries that are not Amplifier's. "
+                                     "They were not changed: mine.txt")])]],
+    [[("An uninstall can stop before its end.", ABOUT),
+      ("Amplifier then says what happened and what to do next.",
+       [("stop at the journal", "Wait a minute or restart this PC, then uninstall again."),
+        ("stop at the data", "Close other programs or restart this PC. Then uninstall Amplifier again to finish."),
+        ("stop after the data", "Close other programs or restart this PC. Then uninstall Amplifier again to finish."),
+        ("next uninstall stops at the journal",
+         "Close other programs or restart this PC. Then uninstall Amplifier again to finish.")]),
+      ('If it says that it "could not begin to delete its folder", nothing in the folder was deleted.',
+       [("stop at the journal", "it could not begin to delete its folder. Nothing in the folder was deleted.")]),
+      ('If it says that it "could not finish its removal from this PC", or that some of your chats, settings or '
+       'saved accounts "could not be deleted", a part of the folder can already be deleted: do not open Amplifier '
+       "until you have uninstalled again.",
+       [("stop after the data", "Amplifier could not finish its removal from this PC."),
+        ("stop after the data", "Then uninstall Amplifier again to finish. Until then Amplifier does not open."),
+        ("stop at the data", "some of your chats, settings or saved accounts could not be deleted."),
+        ("stop at the data", "Then uninstall Amplifier again to finish. Until then Amplifier does not open."),
+        ("next uninstall stops at the journal", "Amplifier could not finish its removal from this PC."),
+        ("next uninstall stops at the journal",
+         "Do not open Amplifier before that: its folder can be partly deleted.")]),
+      ('At that next uninstall, the first question can be another one: "The removal of Amplifier from this PC did '
+       'not finish."',
+       [("first question of the next uninstall", "The removal of Amplifier from this PC did not finish.")]),
+      ("**Yes** there leads to the second question above, and **No** changes nothing.",
+       [("first question of the next uninstall", "Select Yes to finish it now."),
+        ("first question of the next uninstall", "Amplifier asks you once more before it deletes anything."),
+        ("first question of the next uninstall", "Select No to change nothing now.")])]],
+    [[('Amplifier can also ask only "Uninstall Amplifier?" with **Yes** and **No**, for example in an '
+       "installation from an earlier setup file.",
+       [("earlier question", "Uninstall Amplifier?")]),
+      ("There, **Yes** uninstalls and leaves the folder, and **No** changes nothing.",
+       [("earlier question", "Your chats, settings, accounts and the program files stay in this folder:")])]],
+]
+
+
+def readme_uninstall_item():
+    """The item as the README has it: paragraphs, and in each its first part and its list entries."""
+    readme = (REPOSITORY / "README.md").read_text(encoding="utf-8")
+    section = readme.split("\n### Windows 11 (preview)\n", 1)[1].split("\n## ", 1)[0]
+    (item,) = re.findall(r"\n- \*\*Uninstall:\*\* (.*?)\n\nThe \[native Windows design", section, re.S)
+    return [[" ".join(part.split()) for part in paragraph.split("\n  - ")] for paragraph in item.split("\n\n")]
+
+
+def test_readme_uninstall_item_is_sentence_for_sentence_what_the_product_shows(deleter, monkeypatch):
+    shown = shown_by_the_product(deleter, monkeypatch)
+    # 1. The README item is exactly the sentences of the table. A second list entry for a button, a sentence
+    #    that someone adds, a sentence that is gone or changed: each one fails here.
+    assert readme_uninstall_item() == [[" ".join(sentence for sentence, _ in part) for part in paragraph]
+                                       for paragraph in README_UNINSTALL]
+    # 2. Each sentence rests on words that the product shows in the named case, not on words anywhere.
+    used = set()
+    for paragraph in README_UNINSTALL:
+        for part in paragraph:
+            for sentence, rests_on in part:
+                if isinstance(rests_on, str):
+                    assert rests_on in (WINDOWS, ABOUT), sentence
+                    continue
+                assert rests_on, sentence
+                for case, words in rests_on:
+                    assert words in shown[case], (sentence, case, words)
+                    used.add(case)
+    assert used == set(shown)
+    # 3. The three buttons of the first question, each once and in the order of the question.
+    assert [part.split("**")[1] for part in readme_uninstall_item()[0][1:]] == ["No", "Yes", "Cancel"]
+    # 4. What the README says about a stop is true in the cases that it names.
+    #    "nothing in the folder was deleted" is said only of the stop at the journal of a first uninstall.
+    assert "Nothing in the folder was deleted" in shown["stop at the journal"]
+    for case in ("stop at the data", "stop after the data", "next uninstall stops at the journal"):
+        assert "Nothing in the folder was deleted" not in shown[case]
+    #    The README does not say whether Amplifier opens after a stop: the product does not always know it.
+    stops = " ".join(sentence for sentence, _ in README_UNINSTALL[3][0])
+    assert "does not open" not in stops and "Start menu" not in stops
+
+
 def test_the_lock_is_this_persons_own_and_has_one_name_for_every_sign_in_session(monkeypatch, tmp_path):
     from types import SimpleNamespace
     from amplifier_web import windows_files
