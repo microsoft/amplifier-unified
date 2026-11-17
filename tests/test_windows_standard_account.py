@@ -278,6 +278,79 @@ def test_any_other_set_of_questions_is_not_the_delete_choice(case, notices):
     assert not case.delete_questions(notices, ROOT_FOLDER)
 
 
+def program(machine=b"\x64\x86", manifest=b'<requestedExecutionLevel level="asInvoker" uiAccess="false"/>'):
+    """The bytes of a program file: the two headers that Windows reads first, then a manifest."""
+    return b"MZ" + bytes(0x3A) + (0x80).to_bytes(4, "little") + bytes(0x40) + b"PE\0\0" + machine + bytes(64) + manifest
+
+
+def test_a_64_bit_program_that_asks_for_the_persons_own_rights_is_read_as_such(case, tmp_path):
+    (tmp_path / "setup.exe").write_bytes(program())
+    assert case.execution_level(tmp_path / "setup.exe") == (True, ["asInvoker"])
+
+
+@pytest.mark.parametrize("change, expected", [
+    # A 32-bit program: Windows can guess from a file name like "setup" and ask for an administrator.
+    ({"machine": b"\x4c\x01"}, (False, ["asInvoker"])),
+    # A program that asks for an administrator: a standard user gets a question for a name and a password.
+    ({"manifest": b'<requestedExecutionLevel level="requireAdministrator" uiAccess="false"/>'},
+     (True, ["requireAdministrator"])),
+    ({"manifest": b'<requestedExecutionLevel  level="highestAvailable"/>'}, (True, ["highestAvailable"])),
+    # No level at all, and two levels: neither is the one answer that the case accepts.
+    ({"manifest": b""}, (True, [])),
+    ({"manifest": b'<requestedExecutionLevel level="asInvoker"/><requestedExecutionLevel level="asInvoker"/>'},
+     (True, ["asInvoker", "asInvoker"])),
+])
+def test_every_other_program_file_is_not_read_as_such(case, tmp_path, change, expected):
+    (tmp_path / "setup.exe").write_bytes(program(**change))
+    assert case.execution_level(tmp_path / "setup.exe") == expected != (True, ["asInvoker"])
+
+
+def test_the_case_requires_that_setups_compiled_program_asks_for_no_administrator():
+    source = FIXTURE.read_text(encoding="utf-8")
+    first = source[source.index("def first(stage, exchange, account, token):"):source.index("def product(stage, root):")]
+    assert ('asks = execution_level(stage / "native-setup-tests.exe")\n'
+            '        need(asks == (True, ["asInvoker"]),') in first
+    # Setup and its checks are compiled for x64 with the compiler's own manifest: no option replaces or removes it.
+    for name in ("scripts/windows_bootstrap_native.py", "scripts/windows_consumer_release.py",
+                 "tests/fixtures/windows_setup_native.py"):
+        assert "win32manifest" not in (ROOT / name).read_text(encoding="utf-8").casefold(), name
+    assert '"/platform:x64", "/optimize+"],' in (ROOT / "scripts/windows_bootstrap_native.py").read_text(encoding="utf-8")
+
+
+def section(text, start, end):
+    return " ".join(text[text.index(start):text.index(end)].split())
+
+
+def test_the_design_document_says_what_the_case_shows_and_what_it_does_not(case):
+    said = section(DESIGN, "### A standard Windows account", "## Process-local Proactor cleanup backport")
+    assert "`.github/workflows/windows-standard-account.yml`" in said
+    assert "`tests/fixtures/windows_standard_account_native.py`" in said
+    # The number of steps, and each part that the result names as not shown.
+    assert f"the case has {len(case.FIRST + case.SECOND + case.THIRD)} steps" in said
+    for name, _ in case.NOT_SHOWN:
+        assert name in said, name
+    # The document does not say any more that no case shows these.
+    assert "The Windows confirmation, and Edge" not in " ".join(DESIGN.split())
+    for claim in ("Its user is a member of Administrators", "Windows does not trust the connection",
+                  "The test selects Yes with a window message", "the task's own trigger starts a new host",
+                  "no installation folder, no sign-in task, no Start-menu entry and no Apps-list entry"):
+        assert claim in said, claim
+
+
+def test_the_workflow_and_the_fixture_name_the_same_parts_as_not_shown(case):
+    heading = WORKFLOW.read_text(encoding="utf-8").split("\non:\n")[0]
+    workflow = " ".join(line.removeprefix("#").strip() for line in heading[heading.index("# Not shown:"):].splitlines())
+    fixture = " ".join(FIXTURE.read_text(encoding="utf-8").split('"""')[1].split("Not shown: see NOT_SHOWN below.")[1]
+                       .split("The delete choice removes")[0].split())
+    for text in (workflow, fixture):
+        # The case runs the delete choice and the certificate step. Only a person's own answer is not shown.
+        assert "delete choice" not in text and "the certificate question" not in text, text
+        for part in ("the setup file itself", "a person's own answer to the Windows certificate question",
+                     "the browser", "a click on a Start-menu entry", "a chat", "Windows 11",
+                     "a sign-in at the PC's own screen"):
+            assert part in text, part
+
+
 def test_the_delete_choice_runs_only_as_the_user_that_the_run_created():
     source = FIXTURE.read_text(encoding="utf-8")
     # One call, in the phase after the second sign-in. `standard` starts every phase and refuses other accounts.

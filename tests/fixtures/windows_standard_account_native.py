@@ -16,16 +16,19 @@ From there everything runs as the standard user, in the user's own profile:
   candidate; setup's check of it; the Start-menu and Apps-list entries;
 - the first start: the task registration, the launcher, the host that Task
   Scheduler starts; status; "Stop Amplifier"; a second start;
+- the launcher's certificate step: Amplifier's message, the Windows question
+  about the certificate (the test records its text and selects Yes), then
+  Windows trusts the connection;
 - a sign-out and a new sign-in: the task's own trigger starts the host;
 - uninstall with the choice that keeps the folder; the entries and a start
   again; uninstall with the choice that deletes the folder; then nothing of
   the installation is left.
 
 Not shown: see NOT_SHOWN below. In short: the setup file itself (setup refuses
-Windows Server, and every hosted x64 runner is Windows Server), the
-certificate question, the browser, a click on a Start-menu entry and the
-messages of the windowless launcher, a chat, Windows 11, and a sign-in at the
-PC's own screen.
+Windows Server, and every hosted x64 runner is Windows Server), a person's own
+answer to the Windows certificate question, the browser, a click on a
+Start-menu entry and the messages of the windowless launcher, a chat,
+Windows 11, and a sign-in at the PC's own screen.
 
 The delete choice removes the folder %LOCALAPPDATA%\\Amplifier of the account
 that runs it. Here that is only the user that this run created: `standard`
@@ -54,6 +57,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import shutil
 import string
@@ -109,7 +113,8 @@ NOT_SHOWN = (
     ("The setup file: its windows and its question, its Windows 11 check with the answer yes, and its "
      "downloads of uv, Python and Git",
      "the setup file refuses Windows Server, and every GitHub-hosted x64 runner is Windows Server. The "
-     "fixture makes setup's layout with setup's uv commands for Python, the candidate wheel and the "
+     "fixture makes setup's layout itself: setup's two uv commands for a private Python, `uv tool "
+     "install` of the candidate wheel (without the component list of a release), and a copy of the "
      "runner's Git."),
     ("A person's own answer to the Windows certificate question, and that the question is in front of "
      "other windows",
@@ -189,6 +194,23 @@ def need(condition, text, detail=None):
 
 def system(name):
     return Path(os.environ["SystemRoot"]) / "System32" / name
+
+
+def execution_level(program):
+    """What a program file asks Windows for at its start: (a 64-bit x64 program, the levels in its manifest).
+
+    Windows asks for an administrator when a program's manifest says so. For a
+    program without a level in a manifest, Windows guesses from a file name
+    like "setup", but only for a 32-bit program. So a 64-bit program whose one
+    level is `asInvoker` starts with the rights of the person who starts it,
+    and a standard user gets no administrator question. This reads the file's
+    bytes. The program does not run.
+    """
+    data = Path(program).read_bytes()
+    header = int.from_bytes(data[0x3C:0x40], "little")
+    x64 = data[:2] == b"MZ" and data[header:header + 6] == b"PE\0\0\x64\x86"
+    levels = re.findall(rb"<requestedExecutionLevel\s+level=\"([A-Za-z]+)\"", data)
+    return x64, [level.decode("ascii") for level in levels]
 
 
 def powershell(script, value):
@@ -1013,7 +1035,14 @@ def first(stage, exchange, account, token):
         need(before.get("elevation") == "none" and before.get("folder") == "absent"
              and before.get("signInTask") == "absent" and before["folderLength"] <= before["folderLimit"],
              "Setup's own code did not read a new account that it can install for", before)
-        steps.passed(FIRST[1], checks=actual, account=before)
+        # The program of these checks is made by setup's compiler with setup's
+        # options, and it just ran here. Its file asks Windows for the rights
+        # of the person who starts it, so Windows asked this user for no
+        # administrator. (The setup file itself is not compiled in this case.)
+        asks = execution_level(stage / "native-setup-tests.exe")
+        need(asks == (True, ["asInvoker"]),
+             "The program compiled from setup's sources does not ask for the rights of the person who starts it", asks)
+        steps.passed(FIRST[1], checks=actual, account=before, programAsksFor=asks[1][0])
 
         steps.begin(FIRST[2])
         files = load("standard_account_files", stage / "amplifier_web/windows_files.py")
