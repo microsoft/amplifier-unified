@@ -1116,7 +1116,12 @@ one prepares the setup, and the other waits and uses it. One preparation is
 cancelled while its first command runs. That is what a stop of the chat does:
 `RuntimeManager.stop` cancels the preparation's task. The
 job requires that the attempt is recorded as cancelled, that nothing admits
-it, and that its copy of the keys file is still private. The job starts the
+it, and that its copy of the keys file is gone after the last process of the
+stopped preparation. The stop removes the copy. When the copy is still there
+after the stop, the job makes the same removal itself after that last process
+and requires that it works; it prints which of the two it saw. The job does
+not show why a copy was still there (Windows refuses the removal while a
+program has the file open). The job starts the
 chat again directly after the stop. The second start gets a new stage and
 ends well. Whether a program of the stopped command still ran at that moment
 is not required; the job prints what it saw. It reads the list of processes
@@ -1125,7 +1130,8 @@ list is a sample: a program whose parent started and ended between two
 readings is not in it. In the runs of November 17, 2026, the list held
 programs of the stopped command (Python and Git) directly after the stop and
 none some seconds later. The stopped stage and its project stay on the disk;
-this change adds nothing that removes them.
+nothing removes them. Only the stage's copy of the keys file goes: at the stop,
+or at a later idle pass when the stop could not remove it (`docs/UPDATES.md`).
 
 What a stop ends is checked with a command that the test controls
 (`tests/test_windows_stopped_command.py`, in the same job). The command
@@ -1147,7 +1153,7 @@ Job ends it with the app at the latest. That the installed launcher makes
 the call is read from the code; these cases run the call, not the installed
 launcher. The first two cases run without the launcher's Job, as the big
 preparation case does. The
-job reads each stage's copy of the keys file through the app's private-file
+job reads each prepared stage's copy of the keys file through the app's private-file
 reader, which refuses another owner and a wider access list. It then lists
 every path below the installation
 folder (the list is an artifact of the run) and requires that no path which
