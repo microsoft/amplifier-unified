@@ -238,8 +238,10 @@ def chat_folder_too_long(workspace, identity):
     conversation worker is a new process and gets the setting of that moment.
     The app itself keeps the setting that it started with. So after long paths
     are turned on, the app's own writes for such a chat still fail until the
-    app starts again; this answer is then not given. Arithmetic on names; no
-    file below the folder is read.
+    app starts again; this answer is then not given. After they are turned
+    off, the answer is given for a folder that the running app could still
+    write; a new worker could not. Arithmetic on names; no file below the
+    folder is read.
     """
     if not workspace or not windows_refuses_long_paths():
         return None

@@ -18,7 +18,9 @@ name: Windows path length
 # same folder. Two chats with the same setup start together, and one
 # preparation is stopped while it runs and started again. It then lists every
 # path of that tree and requires that no path which the app or a chat needs
-# passes the limit. The list is an artifact.
+# passes the limit. The list is an artifact. Before that, the job shows with
+# a controlled command what a stop and a time limit end, and that the
+# launcher's kill-on-close Job ends the rest with the app.
 #
 # This is the only native job that installs the locked Amplifier Foundation.
 # So it also holds a real Foundation session ownership, as a live conversation
@@ -48,6 +50,9 @@ on:
       - amplifier_web/runtime_qualification.py
       - amplifier_web/runtime_deps/**
       - tests/test_windows_chat_setup.py
+      # What a stop or a time limit of a preparation command ends, and what the launcher's Job ends.
+      - amplifier_web/windows_jobs.py
+      - tests/test_windows_stopped_command.py
       - scripts/windows_bootstrap_native.cs
       - docs/design/native-windows-installation.md
       - tests/test_chat_project_names.py
@@ -171,6 +176,16 @@ jobs:
           $ErrorActionPreference = 'Stop'
           uv sync --locked --group dev --no-install-project --python (Get-Command python).Source
           if ($LASTEXITCODE -ne 0) { throw 'Locked dependency installation failed.' }
+      # A controlled command, open process handles, no download: a stop and a time limit end the command
+      # that the app started; a program that the command started runs on; the launcher's kill-on-close Job
+      # ends it with the app, and without that Job it outlives the app. Four cases must pass: a skipped
+      # case ends with exit code 0.
+      - name: Stop a preparation command, let one reach its time limit, and end the app in the launcher's Job
+        shell: pwsh
+        run: |
+          .\.venv\Scripts\python.exe -B -m pytest -q -rA -p no:cacheprovider tests/test_windows_stopped_command.py | Tee-Object -Variable lines
+          if ($LASTEXITCODE -ne 0) { throw 'A stop or a time limit did not end the command, or the Job did not end what the command started.' }
+          if (-not ($lines -match '(^|\s)4 passed')) { throw 'Not all four cases ran.' }
       - name: Turn Windows long paths off for new processes
         id: long_paths
         shell: pwsh

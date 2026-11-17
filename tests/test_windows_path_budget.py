@@ -629,7 +629,8 @@ MEASURED_DEPTHS = {
 # longer than the frozen one, so every file in it is this much deeper.
 PREPARATION_PROJECT_EXTRA = len('prepare-' + HEX32) - len('q-' + HEX32)
 PREPARATION_PROJECT_DEPTH = MEASURED_DEPTHS['frozen worker environment'] + PREPARATION_PROJECT_EXTRA
-FROZEN_ENVIRONMENT_SOURCE_DEPTH = 180   # the deepest file of the frozen environment that is not bytecode (measured)
+# The deepest file of the frozen environment that is not bytecode (measured; the native tree case holds it).
+FROZEN_ENVIRONMENT_SOURCE_DEPTH = 180
 # The parts that the native tree case builds itself, and where each one is below the installation folder.
 BUILT_BY_THE_TREE_CASE = {
     'frozen worker environment': r'app\\runtime\\q-[0-9a-f]{32}\\',

@@ -719,7 +719,8 @@ table with `python tests/test_windows_path_budget.py`.
   conversation worker is a new process and gets the setting of that moment.
   The app itself keeps the setting that it started with. After long paths are
   turned on, the app's own writes for such a chat can still fail until the app
-  starts again.
+  starts again. After long paths are turned off, the app answers for a folder
+  that it could still write itself; a new worker could not.
   Two kinds of files have less room than a kept chat: background-job records
   (112 in place of 137) and request diagnostics (94). The default workspace
   folder (`<folder>\workspace`) is the folder path plus 10 characters. A chat
@@ -829,7 +830,8 @@ table with `python tests/test_windows_path_budget.py`.
   is in the build view of the module and is 42 characters shorter (226). The
   deepest files that count as needed are two documents below `docs\lanes`,
   one of them in the skills repository (depth 127): 255 at 59, with 4
-  characters to spare. No chat opens them. The
+  characters to spare. They count as needed because nothing shows that no
+  chat opens them. The
   native job lists each path over the limit. It fails when one is anywhere
   else than in the Git data or the tests of a staged repository, in the tests
   of one of its modules, or in bytecode (`NOT_NEEDED` in the budget test). A
@@ -898,19 +900,36 @@ that the installed launcher gives the app, for the default workspace folder
 and for a person's folder. Each of the two folders declares a dependency
 override of its own. Two chats with the same setup start at the same time:
 one prepares the setup, and the other waits and uses it. One preparation is
-stopped while its first command runs, as when a person stops the chat. The
+cancelled while its first command runs. That is what a stop of the chat does:
+`RuntimeManager.stop` cancels the preparation's task. The
 job requires that the attempt is recorded as cancelled, that nothing admits
-it, and that its copy of the keys file is still private. On Windows the app
-ends only the command that it started; a program that this command started
-can run on. The job starts the chat again directly after the stop, and it
-lists those programs until none is left. It prints how many there were and
-after how long none was left. In the run of November 17, 2026, programs of
-the stopped command (Python and Git) ran on for some seconds. On an installed
-PC those programs are in the launcher's kill-on-close Job
-(`contain_current_host` in `amplifier_web/windows_jobs.py`), so they end with
-the app at the latest; that is read from the code and not run in this job. The second
-start gets a new stage and ends well. The stopped stage and its project stay
-on the disk; this change adds nothing that removes them. The
+it, and that its copy of the keys file is still private. The job starts the
+chat again directly after the stop. The second start gets a new stage and
+ends well. Whether a program of the stopped command still ran at that moment
+is not required; the job prints what it saw. It reads the list of processes
+every two seconds until it finds no process of the stopped preparation. That
+list is a sample: a program whose parent started and ended between two
+readings is not in it. In the run of November 17, 2026, the list held
+programs of the stopped command (Python and Git) directly after the stop and
+none 12 seconds later. The stopped stage and its project stay on the disk;
+this change adds nothing that removes them.
+
+What a stop ends is checked with a command that the test controls
+(`tests/test_windows_stopped_command.py`, in the same job). The command
+starts a program through a parent that ends at once, so the program has no
+living parent. The test holds an open handle of that program, and Windows
+signals the handle when the program ends; no list of processes is used. A
+stop and a time limit both go through `updates.process`. Each ends the
+command that the app started, and the app waits for that. The program that
+the command started runs on. Nothing in the app ends it. On an installed PC
+the launcher puts the app into a kill-on-close Job before it starts any
+child (`contain_current_host` in `amplifier_web/windows_jobs.py`). The third
+case runs that same call and the same stop in a process of its own, and then
+lets that process end: Windows ends the program with it. The fourth case is
+the control: the same process without that call ends, and the program still
+runs 10 seconds later. So a program of a stopped preparation can run on while
+the app runs, and it ends with the app at the latest. The first two cases
+run without a Job, as the big preparation case does. The
 job reads each stage's copy of the keys file through the app's private-file
 reader, which refuses another owner and a wider access list. It then lists
 every path below the installation

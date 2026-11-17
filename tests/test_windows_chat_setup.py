@@ -15,9 +15,12 @@ a person chose somewhere else. Each of the two folders declares a dependency
 override. No model is called and no conversation worker starts.
 
 Two chats with the same setup start at the same time: one prepares it and the
-other waits for it. One preparation is stopped while its first command runs,
-as when a person stops the chat, and the chat is then started again. The case
-lists the processes of the stopped preparation until none is left.
+other waits for it. One preparation is cancelled while its first command runs,
+as ``RuntimeManager.stop`` cancels it when a person stops the chat, and the
+chat is then started again. The case reads the list of processes until it
+finds none of the stopped preparation. That list is a sample, and the case
+prints it as a measurement. ``tests/test_windows_stopped_command.py`` shows
+with a controlled command and open process handles what a stop ends.
 
 It then lists every path below the installation folder. That is the measured
 answer to "which paths pass the Windows limit, and does the app need them":
@@ -204,7 +207,7 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
         return first
 
     async def stopped_and_started_again(label, folder):
-        """A person stops the chat while the first command of its preparation runs, and then sends again."""
+        """The preparation is cancelled while its first command runs (a stop of the chat), then started again."""
         before = {path.name for path in releases.iterdir()}
         steps[label] = []
         session, progress = chat(folder), reporter(steps[label])
@@ -233,13 +236,14 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
                             for path in index.glob('*.json')))
 
         assert not_admitted()
-        # The app ends the command that it started. What that command started can run on.
+        # The app ends the command that it started. What that command started can run on
+        # (tests/test_windows_stopped_command.py). This list is a sample of it, printed and not required.
         left = of_attempt(await asyncio.to_thread(processes), stage.name, known)
         after = dict(left)
-        # The person sends again at once, while those programs can still run: the lock is free, the stopped stage
-        # is not used, and a new one is prepared beside it.
+        # The person sends again at once: the lock is free, the stopped stage is not used, and a new one is
+        # prepared beside it. Whether a program of the stopped command still runs then is not required.
         again = asyncio.create_task(runtime_profiles.ensure(home, generation, session, progress=progress))
-        while left:   # list them until none is left
+        while left:   # read the list until it holds none
             assert time.monotonic() - at < 900, f'Processes of the stopped preparation still run: {left}'
             await asyncio.sleep(2)
             left = of_attempt(await asyncio.to_thread(processes), stage.name, known)
@@ -255,7 +259,8 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
         print(f'MEASURED a stop during the preparation ({label}): {len(running)} processes of it ran at the stop '
               f'({", ".join(sorted(set(running.values())))}); {len(after)} were listed directly after the stop '
               f'({", ".join(sorted(set(after.values()))) or "none"}); the chat was started again directly after that '
-              f'list; no process of the stopped preparation was listed {ended:.0f} s after the stop. The attempt is '
+              f'list; the list (a sample) held no process of the stopped preparation {ended:.0f} s after the stop. '
+              f'The attempt is '
               f'recorded as cancelled, nothing admits it, and its copy of the keys file is private. The second '
               f'start prepared the setup in a new stage.')
         return new
@@ -354,6 +359,13 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
         print(f'MEASURED deepest file of the {name}: {deepest} characters below the installation folder '
               f'(the budget states {budget.MEASURED_DEPTHS[name]})')
         assert deepest <= budget.MEASURED_DEPTHS[name], name
+    # The deepest file of the frozen worker environment that is not bytecode, which the document states too.
+    source = max(size for size, kind, relative in files
+                 if re.match(budget.BUILT_BY_THE_TREE_CASE['frozen worker environment'], relative, re.I)
+                 and '__pycache__' not in relative.lower().split('\\')) - len(str(root))
+    print(f'MEASURED deepest file of the frozen worker environment that is not bytecode: {source} characters below '
+          f'the installation folder (the budget states {budget.FROZEN_ENVIRONMENT_SOURCE_DEPTH})')
+    assert source <= budget.FROZEN_ENVIRONMENT_SOURCE_DEPTH
     # The stopped preparation left its project, under the longer name that a preparation has until its freeze.
     left_project = re.compile(r'app\\runtime\\prepare-' + stopped['folder that a person chose'] + r'\\', re.I)
     deepest = max(size for size, kind, relative in files if left_project.match(relative)) - len(str(root))
