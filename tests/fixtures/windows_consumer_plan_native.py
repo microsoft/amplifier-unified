@@ -38,10 +38,11 @@ SOURCE = "https://github.com/microsoft/amplifier-unified"
 # release when this wheel no longer installs or the producer no longer reads it.
 RELEASE = {"version": "0.106.0", "sha256": "5d89c247b7ba19aa0264516036d17a26e314a17ea05de05d9683a2f84e97b94c",
            "revision": "89de72c3a635f9e000cbb049c6bca3d525ade6e6"}
-FOUNDATION = "https://github.com/microsoft/amplifier-foundation"
+NAME = "amplifier-foundation"
 # Any commit other than the installed one. Nothing installs it; the gate compares text.
 OTHER = "e37a946b64854eb39c09a3857ce2bc366ff297e0"
-STOP = " This run stops before it publishes. If a branch moved during this run, run all jobs again."
+# The last line of a refusal, after one line for each difference.
+STOP = "\nThis run stops before it publishes. If a branch moved during this run, run all jobs again."
 
 
 def load(path):
@@ -81,19 +82,14 @@ def receipts(tool, folder, candidate, graph):
 
 
 def moved(rows):
-    """The same rows with each Amplifier Foundation row at the other commit, in either row form."""
+    """The same rows with the one row of Amplifier Foundation at the other commit, in either row form."""
     result = json.loads(json.dumps(rows))
-    count = 0
     for row in result:
-        direct = row.get("direct") or {}
-        if row.get("url") == FOUNDATION:
-            row["revision"] = OTHER
-            count += 1
-        elif direct.get("url") == FOUNDATION and "vcs_info" in direct:
-            direct["vcs_info"]["commit_id"] = OTHER
-            count += 1
-    if not count:
-        raise RuntimeError("The rows have no Amplifier Foundation row from Git.")
+        if row["name"] == NAME:
+            if "direct" in row:
+                row["direct"]["vcs_info"]["commit_id"] = OTHER
+            else:
+                row["revision"] = OTHER
     return result
 
 
@@ -103,17 +99,14 @@ def cases(work, plan_path, records, tool=TOOL):
     host = [{key: value for key, value in row.items() if key != "delivery"}
             for row in plan["graph"] if row["name"] != "amplifier-unified"]
     installed = {row["name"]: row["revision"] for row in host if row.get("url")}
-    name = "amplifier-foundation"
-    if name not in installed:
-        raise RuntimeError("The plan has no amplifier-foundation row from Git.")
-    if installed[name] == OTHER:
+    if installed[NAME] == OTHER:
         raise RuntimeError("The installed Amplifier Foundation commit is the fixture's other commit. Change OTHER.")
     same = evidence(tool, work / "host-same", host)
     other = evidence(tool, work / "host-other", moved(host))
     receipts(tool, work / "runtime-same", same, records)
     receipts(tool, work / "runtime-same-for-other-host", other, records)
     receipts(tool, work / "runtime-other", same, moved(records))
-    first = f"The Windows setup file has {name} at {installed[name]}. "
+    first = f"The Windows setup file has {NAME} at {installed[NAME]}. "
     wanted = [
         ("control: the evidence has the installation's commits", "host-same", same, "runtime-same", None),
         ("the host resolution has Amplifier Foundation at another commit", "host-other", other,
@@ -148,25 +141,30 @@ def run(*arguments, **options):
                            + (result.stdout + result.stderr)[-3000:])
 
 
-def prepare(work):
-    """One installation, as the release job makes it, and the real producer's plan of it."""
-    assert sys.platform == "win32" and os.environ.get("GITHUB_ACTIONS") == "true"
-    assert sys.version_info[:2] == (3, 13) and sys.maxsize > 2 ** 32
-    uv = shutil.which("uv")
-    assert uv
-    wheel = work / f"amplifier_unified-{RELEASE['version']}-py3-none-any.whl"
-    with urllib.request.urlopen(f"{SOURCE}/releases/download/v{RELEASE['version']}/{wheel.name}",
+def wheel(work):
+    """The publisher's release file. Only the bytes with the published digest are kept."""
+    path = work / f"amplifier_unified-{RELEASE['version']}-py3-none-any.whl"
+    with urllib.request.urlopen(f"{SOURCE}/releases/download/v{RELEASE['version']}/{path.name}",
                                 timeout=120) as response:
         raw = response.read(64 * 1024 * 1024)
     if hashlib.sha256(raw).hexdigest() != RELEASE["sha256"]:
         raise RuntimeError("The downloaded wheel is not the published release file.")
-    wheel.write_bytes(raw)
+    path.write_bytes(raw)
+    return path
+
+
+def prepare(work):
+    """One installation, as the release job makes it, and the real producer's plan of it."""
+    # A real installation and a compiler run: only on a runner of CI. The producer requires Windows.
+    assert os.environ.get("GITHUB_ACTIONS") == "true"
+    release = wheel(work)
+    uv = shutil.which("uv")
     environment = work / "windows-consumer-app"
     python = environment / "Scripts/python.exe"
     run(uv, "venv", "--python", "3.13", environment, timeout=300)
-    run(uv, "pip", "install", "--python", python, wheel, timeout=900)
+    run(uv, "pip", "install", "--python", python, release, timeout=900)
     run(uv, "pip", "check", "--python", python, timeout=120)
-    run(sys.executable, ROOT / "scripts/windows_consumer_release.py", "build", "--wheel", wheel,
+    run(sys.executable, ROOT / "scripts/windows_consumer_release.py", "build", "--wheel", release,
         "--python", python, "--revision", RELEASE["revision"], "--output", work / "windows-consumer",
         cwd=ROOT, timeout=600)
     return work / "windows-consumer/windows-consumer-plan.json", load(TOOL).graph(python)

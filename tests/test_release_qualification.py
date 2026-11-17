@@ -2443,7 +2443,8 @@ NAMING = 'amplifier-module-hooks-session-naming'
 QUALIFIED, MOVED = '1' * 40, '2' * 40
 APP_ROW = {'name': 'amplifier-unified', 'version': '1.2.3', 'revision': 'a' * 40,
            'url': 'https://github.com/microsoft/amplifier-unified'}
-STOP = ' This run stops before it publishes.'
+# The last line of a refusal, after one line for each difference.
+STOP = '\nThis run stops before it publishes.'
 # Each text names the one graph that it is about. A graph is not the whole release run.
 HOST_HAS, HOST_LACKS = "This run's host resolution has it", "This run's host resolution does not have"
 TESTS_HAVE = "The environment of this run's runtime tests has it"
@@ -2536,8 +2537,15 @@ def test_windows_plan_with_the_commits_of_its_release_run_is_accepted(consumer, 
 
 
 @pytest.mark.parametrize(('plan', 'resolved', 'message'), [
+    # Every difference is reported, one line each, in the plan's order.
     (component_rows(MOVED), component_rows(),
-     f'The Windows setup file has amplifier-foundation at {MOVED}. {HOST_HAS} at {QUALIFIED}.' + STOP + AGAIN),
+     f'The Windows setup file has amplifier-foundation at {MOVED}. {HOST_HAS} at {QUALIFIED}.\n'
+     f'The Windows setup file has {NAMING} at {MOVED}. {HOST_HAS} at {QUALIFIED}.' + STOP + AGAIN),
+    # One moved commit and one component that the host resolution does not have: the remedy is still printed.
+    (component_rows(MOVED), [row for row in component_rows() if row['name'] != NAMING],
+     f'The Windows setup file has amplifier-foundation at {MOVED}. {HOST_HAS} at {QUALIFIED}.\n'
+     f'The Windows setup file has {NAMING} at {MOVED} from {FOUNDATION}#subdirectory=modules/hooks-session-naming. '
+     f'{HOST_LACKS} {NAMING}.' + STOP + AGAIN),
     # The runtime graph of this case has the component. So the text must name the host resolution alone.
     (component_rows(), [row for row in component_rows() if row['name'] != 'amplifier-foundation'],
      f'The Windows setup file has amplifier-foundation at {QUALIFIED} from {FOUNDATION}. '
@@ -2551,16 +2559,19 @@ def test_windows_plan_with_the_commits_of_its_release_run_is_accepted(consumer, 
     (component_rows(), changed(component_rows(), NAMING, subdirectory='modules/other'),
      f'The Windows setup file has {NAMING} at {QUALIFIED} from {FOUNDATION}#subdirectory=modules/hooks-session-naming. '
      f'{HOST_HAS} at {QUALIFIED} from {FOUNDATION}#subdirectory=modules/other.' + STOP),
+    # The runtime graph of this case also has it from a source that is not Git. That is no second difference.
     (changed(component_rows(), 'amplifier-foundation', url=None, revision=None), component_rows(),
      'The Windows setup file has amplifier-foundation from a source that is not Git. '
      f'{HOST_HAS} at {QUALIFIED} from {FOUNDATION}.' + STOP),
     # A Git origin without a recorded commit is never equal, also to another one without a commit.
+    # The runtime graph of this case has no commit either: one line for each graph.
     (changed(component_rows(), 'amplifier-foundation', revision=None),
      changed(component_rows(), 'amplifier-foundation', revision=None),
-     f'The Windows setup file has amplifier-foundation with no recorded commit. {HOST_HAS} with no recorded commit.' + STOP),
+     f'The Windows setup file has amplifier-foundation with no recorded commit. {HOST_HAS} with no recorded commit.\n'
+     f'The Windows setup file has amplifier-foundation with no recorded commit. {TESTS_HAVE} with no recorded commit.' + STOP),
     (component_rows(), changed(component_rows(), 'amplifier-foundation', revision=None),
      f'The Windows setup file has amplifier-foundation at {QUALIFIED}. {HOST_HAS} with no recorded commit.' + STOP),
-], ids=['commit', 'absent', 'registry-in-run', 'repository', 'subdirectory', 'registry-in-plan',
+], ids=['commit', 'commit-and-absent', 'absent', 'registry-in-run', 'repository', 'subdirectory', 'registry-in-plan',
         'no-commit-in-both', 'no-commit-in-run'])
 def test_windows_plan_that_differs_from_the_host_resolution_stops_the_release(consumer, plan, resolved, message):
     root, evidence, expected, path, receipts = consumer(resolved, plan)
@@ -2591,6 +2602,16 @@ def test_windows_plan_that_differs_from_the_runtime_tests_stops_the_release(cons
     with pytest.raises(ValueError) as refusal:
         qualification.verify_consumer(root, evidence, expected, path, receipts)
     assert str(refusal.value) == message
+
+
+def test_windows_plan_that_differs_from_both_graphs_names_both(consumer):
+    root, evidence, expected, path, receipts = consumer(
+        component_rows(), changed(component_rows(), NAMING, revision=MOVED), [install_record(row) for row in component_rows()])
+    first = f'The Windows setup file has {NAMING} at {MOVED}. '
+    with pytest.raises(ValueError) as refusal:
+        qualification.verify_consumer(root, evidence, expected, path, receipts)
+    assert str(refusal.value) == (first + f'{HOST_HAS} at {QUALIFIED}.\n' + first + f'{TESTS_HAVE} at {QUALIFIED}.'
+                                  + STOP + AGAIN)
 
 
 def test_windows_plan_with_one_component_twice_is_refused(consumer):
@@ -2693,11 +2714,15 @@ def test_windows_plan_native_check_passes_only_with_one_acceptance_and_two_refus
         'accepted',
         f'refused: The Windows setup file has amplifier-foundation at {QUALIFIED}. {HOST_HAS} at {fixture.OTHER}.' + STOP + AGAIN,
         f'refused: The Windows setup file has amplifier-foundation at {QUALIFIED}. {TESTS_HAVE} at {fixture.OTHER}.' + STOP + AGAIN]
+    # Each refusal changes the one row of Amplifier Foundation: one difference, and the other component is equal.
+    for case in result['cases'][1:]:
+        assert len([line for line in case['output'].splitlines() if 'The Windows setup file has' in line]) == 1
+        assert f"{NAMING} {QUALIFIED}: the same commit" in case['output']
     tool = (ROOT / 'scripts/release_qualification.py').read_text()
     # A gate that accepts every plan must fail the check: both refusals are required.
     accepts = tmp_path / 'accepts.py'
-    assert tool.count('            if problem:\n') == 1
-    accepts.write_text(tool.replace('            if problem:\n', '            if False:\n'))
+    assert tool.count('    if problems:\n') == 1
+    accepts.write_text(tool.replace('    if problems:\n', '    if False:\n'))
     result = fixture.cases(tmp_path / 'accepts', path, records, tool=accepts)
     assert result['ok'] is False and [case['passed'] for case in result['cases']] == [True, False, False]
     # A gate that refuses every plan must fail the check: the acceptance is required.
@@ -2706,8 +2731,15 @@ def test_windows_plan_native_check_passes_only_with_one_acceptance_and_two_refus
     assert tool.count(equal) == 1
     refuses.write_text(tool.replace(equal, '    if False:\n'))
     result = fixture.cases(tmp_path / 'refuses', path, records, tool=refuses)
-    # Its third refusal names the host resolution, not the runtime graph: the exact text is required.
-    assert result['ok'] is False and [case['passed'] for case in result['cases']] == [False, True, False]
+    # Its refusals have more lines than the one difference that each case made: the exact text is required.
+    assert result['ok'] is False and [case['passed'] for case in result['cases']] == [False, False, False]
+    # A gate that refuses and names the wrong graph must fail the check: the exact text is required.
+    wrong = tmp_path / 'wrong.py'
+    assert tool.count('name in tested, TESTS)') == 1
+    wrong.write_text(tool.replace('name in tested, TESTS)', 'name in tested, HOST)'))
+    result = fixture.cases(tmp_path / 'wrong', path, records, tool=wrong)
+    assert result['ok'] is False and [case['passed'] for case in result['cases']] == [True, True, False]
+    assert result['cases'][2]['returncode'] != 0
     # A gate that prints the acceptance and then ends with an error must fail the control.
     fails = tmp_path / 'fails.py'
     assert tool.count('    return checked\n') == 1
@@ -2719,6 +2751,34 @@ def test_windows_plan_native_check_passes_only_with_one_acceptance_and_two_refus
     path.write_text(json.dumps({'schema': 1, 'graph': [APP_ROW, *component_rows(fixture.OTHER)]}))
     with pytest.raises(RuntimeError, match='Change OTHER'):
         fixture.cases(tmp_path / 'same-commit', path, records)
+
+
+def test_windows_plan_native_check_keeps_only_the_published_wheel_and_installs_only_on_a_ci_runner(tmp_path, monkeypatch):
+    fixture = native_plan_check()
+    requested = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *details):
+            return False
+
+        def read(self, limit):
+            return b'another file'
+
+    monkeypatch.setattr(fixture.urllib.request, 'urlopen', lambda url, timeout: requested.append(url) or Response())
+    with pytest.raises(RuntimeError, match='The downloaded wheel is not the published release file'):
+        fixture.wheel(tmp_path)
+    version = fixture.RELEASE['version']
+    assert requested == [f'https://github.com/microsoft/amplifier-unified/releases/download/v{version}/'
+                         f'amplifier_unified-{version}-py3-none-any.whl']
+    assert list(tmp_path.iterdir()) == []
+    # The installation and the compiler run start only on a runner of CI, before any download.
+    monkeypatch.delenv('GITHUB_ACTIONS', raising=False)
+    with pytest.raises(AssertionError):
+        fixture.prepare(tmp_path)
+    assert len(requested) == 1
 
 
 def test_windows_plan_native_check_runs_for_changes_of_the_gate_and_cannot_be_skipped():

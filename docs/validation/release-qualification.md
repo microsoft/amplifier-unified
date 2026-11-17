@@ -656,17 +656,18 @@ that the setup file carries. Before publication, `release_qualification.py
 verify-consumer` compares each row of the plan except the app. When the plan or
 the host graph has the component from Git, it must be the same commit of the same
 repository and subdirectory in the plan, in the host graph and in the runtime
-graph. On a difference the run stops before it publishes. The message names the
-component and each commit that the tool knows.
+graph. On a difference the run stops before it publishes. The message has one
+line for each difference. A line names the component, the graph that differs
+and each commit that the tool knows.
 
 When a branch moved during the run, run all jobs again. A new run resolves all
-three again; a re-run of only the failed job reads the same files. A new run does
-not help in three cases. The wheel requires an exact commit that the run's checks
+three again. A re-run of only the failed jobs does not run the jobs that
+succeeded, so it resolves nothing again. A new run does not help in three cases. The wheel requires an exact commit that the run's checks
 did not use. The Windows installation has a Git component that the host graph
 does not have. The runtime project does not install a Git component of the wheel
 from Git. Each of these needs a change of what a release run qualifies. Registry
-versions are not compared, and no step of a release run starts the Windows
-installation.
+versions are not compared. No step of a release run starts the app that the
+`windows-consumer` job installed.
 
 The frontend lane may reuse an immutable artifact from successful **Fast release
 checks** for the same-repository PR whose merge commit is this publishing main

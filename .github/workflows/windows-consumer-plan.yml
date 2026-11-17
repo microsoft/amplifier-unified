@@ -1,9 +1,9 @@
 name: Windows consumer plan check
 # The release gate `release_qualification.py verify-consumer` against a plan that
 # the real producer made on a Windows runner, from one installation of a
-# published release wheel. Required: the gate accepts the plan with evidence
-# that has the installation's commits, and refuses it when the host resolution
-# or the runtime graph has Amplifier Foundation at another commit.
+# published release wheel. The check passes only when the gate accepts the plan
+# with evidence that has the installation's commits, and refuses it when the
+# host resolution or the runtime graph has Amplifier Foundation at another commit.
 #
 # The evidence is made from this one installation. It is not a release run:
 # no artifact download, no publication, and not the release job's step

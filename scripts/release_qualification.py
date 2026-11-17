@@ -200,7 +200,7 @@ def sources(rows):
     """The origin of every row by its normalized package name."""
     result = {}
     for row in rows:
-        name = re.sub(r'[-_.]+', '-', str(row['name']).lower())
+        name = re.sub(r'[-_.]+', '-', row['name'].lower())
         if name in result:
             raise ValueError(f'{name} is recorded twice')
         result[name] = source(row)
@@ -209,12 +209,12 @@ def sources(rows):
 
 def place(origin):
     """Repository and subdirectory. An ending '.git' or '/' does not count."""
-    url = str(origin['url']).rstrip('/')
+    url = origin['url'].rstrip('/')
     return url[:-4] if url.endswith('.git') else url, origin['subdirectory']
 
 
 def address(origin):
-    return f"{origin['url']}" + ('#subdirectory=' + origin['subdirectory'] if origin['subdirectory'] else '')
+    return origin['url'] + ('#subdirectory=' + origin['subdirectory'] if origin['subdirectory'] else '')
 
 
 def at(origin):
@@ -222,10 +222,14 @@ def at(origin):
 
 
 def difference(name, shipped, other, known, words):
-    """None when both are the same Git commit of the same place; else what is known.
+    """None when both are the same Git commit of the same place.
 
+    Else what is known, and whether both are known commits of the same place.
     A Git origin without a recorded commit is never equal to another one.
+    Two sources that are not Git have no commit to compare.
     """
+    if not shipped and not other:
+        return None
     same_place = bool(shipped and other and place(shipped) == place(other))
     if same_place and shipped['revision'] and shipped['revision'] == other['revision']:
         return None
@@ -243,11 +247,8 @@ def difference(name, shipped, other, known, words):
         second = f'{words[0]} {at(other)} from {address(other)}.'
     else:
         second = f'{words[0]} from a source that is not Git.'
-    # Two commits of one place: a branch can have moved between two resolutions
-    # of this run. The tool does not know the cause, so the remedy has its condition.
-    again = (' If a branch moved during this run, run all jobs again.'
-             if same_place and shipped['revision'] and other['revision'] else '')
-    return f'The Windows setup file has {name} {first}. {second} This run stops before it publishes.{again}'
+    return (f'The Windows setup file has {name} {first}. {second}',
+            bool(same_place and shipped['revision'] and other['revision']))
 
 
 def qualified_sources(evidence):
@@ -273,18 +274,28 @@ def verify_consumer(root, evidence, expected, plan, receipts):
     if receipt.get('candidate') != expected or receipt.get('runtime') != digest(runtime):
         raise ValueError('The runtime graph is not the one that this candidate was tested with')
     tested = sources(runtime['graph'])
-    checked = []
-    for name, shipped in sorted(sources(json.loads(plan.read_text())['graph']).items()):
+    checked, problems = [], []
+    for name, shipped in sources(json.loads(plan.read_text())['graph']).items():
         if name == APP or (shipped is None and qualified.get(name) is None):
             continue
-        for other, known, words in ((qualified.get(name), name in qualified, HOST),
-                                    (tested.get(name), name in tested, TESTS)):
-            problem = difference(name, shipped, other, known, words)
-            if problem:
-                raise ValueError(problem)
+        found = [problem for problem in (
+            difference(name, shipped, qualified.get(name), name in qualified, HOST),
+            difference(name, shipped, tested.get(name), name in tested, TESTS)) if problem]
+        if found:
+            problems += found
+            continue
         print(f"{name} {shipped['revision']}: the same commit in this run's host resolution "
               "and in the environment of its runtime tests.")
         checked.append(name)
+    # Every difference in one error, one line each: a new run does not repair
+    # some of them, so the person must see all of them at once.
+    if problems:
+        # Two commits of one place: a branch can have moved between two resolutions
+        # of this run. The tool does not know the cause, so the remedy has its condition.
+        again = (' If a branch moved during this run, run all jobs again.'
+                 if any(moved for line, moved in problems) else '')
+        raise ValueError('\n'.join([*(line for line, moved in problems),
+                                    'This run stops before it publishes.' + again]))
     print(f"{len(checked)} Git components of the Windows setup file were compared. None differs.")
     return checked
 
