@@ -4,6 +4,7 @@ This module uses only the standard library so release.py can load it without
 importing the application or installing its runtime dependencies.
 """
 import copy
+from datetime import date
 import json
 from functools import lru_cache
 from pathlib import Path
@@ -57,6 +58,11 @@ def _validate(entries, expected=None):
         if number in seen:
             raise ValueError('Duplicate release version')
         seen.add(number)
+        if 'date' in entry:
+            value = entry['date']
+            if not isinstance(value, str) or not re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}', value):
+                raise ValueError('Release date must be YYYY-MM-DD')
+            date.fromisoformat(value)  # Reject impossible calendar dates too.
         changes, notices = entry.get('changes'), entry.get('notices', [])
         if not isinstance(changes, list) or not 1 <= len(changes) <= 30 or not isinstance(notices, list) or len(notices) > 5:
             raise ValueError('Invalid release changes or notices')

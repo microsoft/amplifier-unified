@@ -103,6 +103,12 @@ consumes the bounded history budget. Formatting changes must preserve all parsed
 values, including notice IDs, wording, aliases and release order.
 
 The same data supplies installed/offline history and GitHub release text.
+Entries may include a calendar `date` (`YYYY-MM-DD`) for daily changelog grouping;
+unknown historical dates stay absent. Preparation stamps a new entry with the
+current UTC cut day unless an explicit date was authored, and preserves it on
+retries. This is the preparation day, which may differ from actual publication
+if the release crosses UTC midnight. Historical backfills use stable GitHub
+releases' actual `published_at` UTC days, never commit dates or version inference.
 The validator requires the current entry and a nonempty changes list, and
 rejects invalid, duplicate or future versions; it cannot judge whether the words
 cover the shipped behavior. One shared `release_notes.retain` policy serves
