@@ -1,0 +1,504 @@
+"""Remove bytecode that an earlier app version wrote into an object of the source store.
+
+On Windows a helper of 0.106.5 or earlier wrote ``__pycache__\\*.pyc`` into an
+object of the installation's shared source store. Foundation refuses such an
+object from then on ("Shared source contents changed"): no chat with that
+connection starts, a component update fails, and the Updates page keeps a
+source that could not be checked. 0.106.6 stops new bytecode
+(``source_imports.prepare``). This step makes an object that already has such
+files equal to its commit again.
+
+It deletes a file only when all of these hold:
+
+- it is a plain file directly in a folder named ``__pycache__``, and its name
+  ends with ``.pyc``;
+- it is below an object of this installation's own store;
+- Git lists it as untracked in that object;
+- the object has no changed tracked file and no other untracked entry. One
+  exception, the one that Foundation makes: ``.amplifier_cache_meta.json`` at
+  the object's top. Foundation writes it into every object and leaves it out
+  of its own check (``sources.shared.clean_checkout``). This step never
+  deletes it.
+
+Then it deletes that ``__pycache__`` folder when this run took a file from it
+and it is empty. It deletes nothing else, anywhere. Any doubt leaves the
+object exactly as it is: a link of any kind in the object or below its
+``.git`` (Git does not run then), a Git error, a name that Git gives and the
+listing did not have.
+
+Every listing and every deletion uses the native steps of
+``windows_removal``: a name comes from the listing of an open handle, and an
+entry is opened relative to its parent's handle, as itself. No path is
+resolved twice, and no link is followed. Git gets a path; the folders of that
+path are held open meanwhile, and Git only decides. What is deleted is
+checked again on handles.
+
+It runs only on Windows, only in the host that the start-at-sign-in task
+started, only on the store of the installation that this host belongs to, and
+only while it holds the data folder's host lock exclusively: no other host of
+this data folder is inside its serving part, and this host has started
+nothing yet. Three cases are not excluded; each needs a host that a person
+started by hand (docs/design/native-windows-installation.md, "Repair of a
+source store object"). A process of an app version before 0.106.6 in them
+can write new bytecode; that object is then refused again until the next app
+version. Nothing outside the rule above is deleted in any of them.
+
+The record ``<data>\\updates\\source-store-repair.json`` holds the app version,
+whether the pass is complete, a change number, and for each object that was
+left its number of tries. After a complete pass a start of the same app
+version reads the record and does nothing more. Every run that finds a file
+to delete raises the change number and writes the record before its first
+deletion; when that write fails, the run deletes nothing. The number is an
+input of the update check's scan signature (``update_inventory_index``), so
+the check after a repair asks Foundation again.
+
+``at_host_start`` never raises.
+"""
+from __future__ import annotations
+
+from contextlib import ExitStack, contextmanager
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import time
+
+RECORD = "source-store-repair.json"
+CACHE, META, GIT = "__pycache__", ".amplifier_cache_meta.json", ".git"
+# The names that Foundation gives a source folder and an object (sources.shared).
+SOURCE, COMMIT = re.compile(r"[0-9a-f]{16}|[0-9a-f]{64}"), re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+# For one run. A bound reached: the run stops, and a later start goes on.
+LISTINGS, ENTRIES, DEPTH = 20_000, 400_000, 100
+SEARCH_SECONDS, GIT_SECONDS, TOTAL_SECONDS = 3.0, 5.0, 8.0
+# For one app version: tries for one object, and runs that do not complete.
+TRIES, RUNS = 3, 10
+_DIRECTORY, _LINK = 0x10, 0x400  # FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT
+# Foundation's two commands (sources.shared.clean_checkout), word for word.
+STATUS = ("status", "--porcelain", "--untracked-files=no")
+OTHERS = ("ls-files", "--others", "-z")
+
+
+class _Bound(Exception):
+    """A bound of the run is reached."""
+
+
+class _Leave(Exception):
+    """The object stays as it is and is not tried again in this app version."""
+
+
+class _Later(Exception):
+    """The object stays as it is for a reason that can pass (a file in use, a Git failure)."""
+
+
+class _Stop(Exception):
+    """The record cannot be written. This run deletes nothing more."""
+
+
+def _windows():
+    return os.name == "nt"
+
+
+def _steps():
+    from .windows_removal import _Native
+    return _Native()
+
+
+@contextmanager
+def _held(api, path):
+    """The store folder, proven on its handle and held open. Every folder above it is checked first."""
+    from .windows_files import address, directory
+    path = address(path)
+    with directory(path, owned_root=path):
+        handle = api.root(path)
+    try:
+        yield handle
+    finally:
+        api.close(handle)
+
+
+@contextmanager
+def _entry(api, parent, name, *, delete=False):
+    """One folder of an open folder, opened as itself for listing."""
+    handle = api.open(parent, name, enter=True, delete=delete)
+    try:
+        yield handle
+    finally:
+        api.close(handle)
+
+
+def _path(data_dir):
+    return Path(data_dir) / "updates" / RECORD
+
+
+def _new():
+    return {"schema": 1, "version": None, "complete": False, "change": 0, "runs": 0, "tries": {}, "next": None}
+
+
+def read(data_dir):
+    """The saved record. An absent record, or one that cannot be read, is an empty record."""
+    try:
+        with _path(data_dir).open("rb") as stream:
+            value = json.loads(stream.read(1_000_001))
+        if (not isinstance(value, dict) or value.get("schema") != 1
+                or not isinstance(value.get("version"), str) or type(value.get("complete")) is not bool
+                or type(value.get("change")) is not int or value["change"] < 0
+                or type(value.get("runs")) is not int or value["runs"] < 0
+                or not isinstance(value.get("tries"), dict)
+                or any(not isinstance(key, str) or type(count) is not int for key, count in value["tries"].items())
+                or not (value.get("next") is None or isinstance(value["next"], str))):
+            return _new()
+        return {name: value[name] for name in _new()}
+    except (OSError, ValueError):
+        return _new()
+
+
+def change_number(data_dir):
+    """The number that a run raises before its first deletion. 0 when there is no record."""
+    return read(data_dir)["change"]
+
+
+def _save(data_dir, record):
+    from .host.config import write_private
+    write_private(_path(data_dir), json.dumps(record, sort_keys=True), owned_root=Path(data_dir))
+
+
+class _Budget:
+    """The bounds of one run. Time in Git and in deletions does not count as search."""
+
+    def __init__(self, clock):
+        self.clock, self.start = clock, clock()
+        self.listings = self.entries = self.git = 0
+        self.apart = 0.0
+
+    def elapsed(self):
+        return self.clock() - self.start
+
+    def children(self, api, handle):
+        if self.elapsed() >= TOTAL_SECONDS:
+            raise _Bound()
+        rows = api.children(handle)
+        self.listings += 1
+        self.entries += len(rows)
+        elapsed = self.elapsed()
+        if (self.listings > LISTINGS or self.entries > ENTRIES
+                or elapsed - self.apart > SEARCH_SECONDS or elapsed > TOTAL_SECONDS):
+            raise _Bound()
+        return rows
+
+    @contextmanager
+    def aside(self):
+        begin = self.clock()
+        try:
+            yield
+        finally:
+            self.apart += self.clock() - begin
+
+    def for_git(self):
+        left = TOTAL_SECONDS - self.elapsed()
+        if left <= 0:
+            raise _Bound()
+        return min(GIT_SECONDS, left)
+
+
+def _walk(api, handle, budget, *, top=True, trail=()):
+    """Every folder below an open folder, listed from handles; a link is never entered.
+
+    Returns the plain files directly in each folder named ``__pycache__``,
+    whether a link of any kind is anywhere, and the names of the real folders
+    at the top. ``.git`` at an object's top is not entered here.
+    """
+    if len(trail) > DEPTH:
+        raise _Leave()
+    rows = budget.children(api, handle)
+    caches, link, folders = {}, False, []
+    if trail and trail[-1] == CACHE:
+        caches[trail] = {name for name, attributes in rows if not attributes & (_DIRECTORY | _LINK)}
+    for name, attributes in rows:
+        if attributes & _LINK:
+            link = True
+            continue
+        if not attributes & _DIRECTORY:
+            continue
+        folders.append(name)
+        if top and name == GIT:
+            continue
+        with _entry(api, handle, name) as child:
+            if api.kind(child) != "folder":  # It changed after the listing.
+                link = True
+                continue
+            below, linked, _ = _walk(api, child, budget, top=False, trail=(*trail, name))
+        caches.update(below)
+        link = link or linked
+    return caches, link, folders
+
+
+def _program():
+    """Git of the first PATH folder that has it. Never one from the current folder.
+
+    The task's host has the installation's saved tool path as its PATH, and a
+    worker inherits it. So this is the program that Foundation's own check
+    starts by its name in a worker.
+    """
+    for folder in os.environ.get("PATH", "").split(os.pathsep):
+        candidate = Path(folder) / ("git.exe" if os.name == "nt" else "git")
+        if folder and candidate.is_absolute() and candidate.is_file():
+            return str(candidate)
+    raise _Later()
+
+
+def _git(program, folder, budget, *words):
+    """One of Foundation's two commands, with the paths fixed so that Git discovers nothing."""
+    environment = {name: value for name, value in os.environ.items() if not name.upper().startswith("GIT_")}
+    command = [program, "-c", "core.longpaths=true", "-c", "core.fsmonitor=false", "--no-optional-locks",
+               "--git-dir", os.path.join(folder, GIT), "--work-tree", folder, *words]
+    with budget.aside():
+        limit = budget.for_git()
+        budget.git += 1
+        try:
+            process = subprocess.Popen(command, cwd=folder, env=environment, stdin=subprocess.DEVNULL,
+                                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                       creationflags=0x08000000 if os.name == "nt" else 0)  # CREATE_NO_WINDOW
+        except OSError as error:
+            raise _Later() from error
+        try:
+            output, _ = process.communicate(timeout=limit)
+        except subprocess.TimeoutExpired:
+            # The limit ends Git. A program that Git started can still hold the
+            # pipe; this step does not wait for it. Git only reads here.
+            process.kill()
+            for last in (process.communicate, process.wait):
+                try:
+                    last(timeout=1)
+                except (subprocess.TimeoutExpired, OSError, ValueError):
+                    pass
+            raise _Later() from None
+    if process.returncode:
+        raise _Later()
+    return output
+
+
+def _decide(others, caches):
+    """The files to delete, each as the parts of its name in the object. Any other finding leaves the object."""
+    try:
+        names = [name.decode("utf-8") for name in others.split(b"\0") if name]
+    except UnicodeDecodeError:
+        raise _Leave() from None
+    files = []
+    for name in names:
+        if name == META:
+            continue  # Foundation's own file. It never enters this list.
+        parts = tuple(name.split("/"))
+        if (len(parts) < 2 or parts[-2] != CACHE or not parts[-1].endswith(".pyc")
+                or parts[-1] not in caches.get(parts[:-1], ())):
+            raise _Leave()  # Another untracked entry, or a name that the listing did not have.
+        files.append(parts)
+    return sorted(files)
+
+
+def _remove(api, handle, files, count):
+    """Delete each file through its handle, then a folder that this run emptied. True when no file stayed."""
+    folders, whole = {}, True
+    for parts in files:
+        folders.setdefault(parts[:-1], []).append(parts[-1])
+    for trail, names in sorted(folders.items()):
+        opened, deletable = [], True
+        try:
+            parent = handle
+            for position, part in enumerate(trail):
+                last = position == len(trail) - 1
+                try:
+                    child = api.open(parent, part, enter=True, delete=last)
+                except OSError:
+                    if not last:
+                        raise
+                    # Another program holds the folder. Its files can still go; the folder stays.
+                    child, deletable = api.open(parent, part, enter=True, delete=False), False
+                opened.append(child)
+                if api.kind(child) != "folder":
+                    raise OSError(22, "not a folder")
+                parent = child
+            removed = 0
+            for name in names:
+                try:
+                    file = api.open(parent, name, enter=False)
+                    try:
+                        if api.kind(file) != "file":
+                            raise OSError(22, "not a plain file")
+                        api.delete(file)
+                    finally:
+                        api.close(file)
+                    removed += 1
+                except OSError:
+                    whole = False  # In use, or changed. It stays.
+            count["files"] += removed
+            if removed and deletable and not api.children(parent):
+                try:
+                    api.delete(parent)
+                    count["folders"] += 1
+                except OSError:
+                    pass
+        except OSError:
+            whole = False
+        finally:
+            for child in reversed(opened):
+                api.close(child)
+    return whole
+
+
+def _object(api, parent, name, folder, budget, before_delete, count):
+    """One object of the store. Returns when it needs nothing more; else raises why it stays."""
+    with _entry(api, parent, name) as handle:
+        if api.kind(handle) != "folder":
+            raise _Leave()
+        caches, link, folders = _walk(api, handle, budget)
+        if not caches:
+            return
+        count["with_cache"] += 1
+        if link or GIT not in folders:
+            raise _Leave()  # Git does not run.
+        with _entry(api, handle, GIT) as git:
+            if api.kind(git) != "folder":
+                raise _Leave()
+            if _walk(api, git, budget, top=False)[1]:
+                raise _Leave()  # A link below .git. Git does not run.
+            program = _program()
+            if _git(program, folder, budget, *STATUS).strip():
+                raise _Leave()  # A tracked file is changed.
+            files = _decide(_git(program, folder, budget, *OTHERS), caches)
+            if not files:
+                return
+            before_delete()
+            with budget.aside():
+                if not _remove(api, handle, files, count):
+                    raise _Later()
+    count["repaired"] += 1
+
+
+def _run(api, store, data_dir, record, clock, log):
+    budget = _Budget(clock)
+    count = dict.fromkeys(("objects", "with_cache", "repaired", "files", "folders", "left", "later"), 0)
+    tries, announced = record["tries"], []
+    record["runs"] += 1
+
+    def before_delete():
+        if announced:
+            return
+        record["change"] += 1
+        try:
+            _save(data_dir, record)
+        except Exception as error:
+            record["change"] -= 1
+            raise _Stop() from error
+        announced.append(True)
+
+    reason = ""
+    try:
+        with ExitStack() as stack:
+            top = stack.enter_context(_held(api, store))
+            try:
+                objects = stack.enter_context(_entry(api, top, "objects"))
+            except FileNotFoundError:
+                objects = None  # A store with no object yet.
+            if objects is not None and api.kind(objects) != "folder":
+                raise OSError(20, "objects is not a folder")
+            ids = []
+            if objects is not None:
+                for source, attributes in budget.children(api, objects):
+                    if not SOURCE.fullmatch(source) or attributes & _LINK or not attributes & _DIRECTORY:
+                        continue
+                    with _entry(api, objects, source) as folder:
+                        if api.kind(folder) == "folder":
+                            ids += [source + "/" + commit for commit, attributes in budget.children(api, folder)
+                                    if COMMIT.fullmatch(commit) and attributes & _DIRECTORY and not attributes & _LINK]
+            ids.sort()
+            count["objects"] = len(ids)
+            for key in set(tries) - set(ids):
+                del tries[key]
+            first = True
+            for position, key in enumerate(ids):
+                if (record["next"] is not None and key < record["next"]) or tries.get(key, 0) >= TRIES:
+                    continue
+                source, commit = key.split("/")
+                try:
+                    with _entry(api, objects, source) as folder:
+                        if api.kind(folder) != "folder":
+                            raise _Leave()
+                        _object(api, folder, commit, os.path.join(store, "objects", source, commit),
+                                budget, before_delete, count)
+                    tries.pop(key, None)
+                except _Bound:
+                    if first:  # This object alone reached a bound: one try, and the next run starts after it.
+                        tries[key] = tries.get(key, 0) + 1
+                        record["next"] = ids[position + 1] if position + 1 < len(ids) else None
+                    else:
+                        record["next"] = key
+                    raise
+                except _Leave:
+                    tries[key] = TRIES
+                    count["left"] += 1
+                except (_Later, OSError):
+                    tries[key] = tries.get(key, 0) + 1
+                    count["later"] += 1
+                first = False
+            record["next"] = None
+            record["complete"] = all(value >= TRIES for value in tries.values())
+    except _Bound:
+        reason = " A bound was reached."
+    except _Stop:
+        reason = " The record could not be written, so nothing was deleted."
+    except Exception as error:
+        # A store folder that is refused, or anything else. It still counts as a run.
+        reason = " Stopped (" + type(error).__name__ + "); nothing more was changed."
+    if record["runs"] >= RUNS:
+        record["complete"] = True  # The last run for this app version.
+    try:
+        _save(data_dir, record)
+    except Exception as error:
+        reason += " The record was not saved (" + type(error).__name__ + ")."
+    log("Source store repair: complete=" + str(record["complete"]).lower()
+        + "".join(f" {name}={value}" for name, value in count.items())
+        + f" listings={budget.listings} entries={budget.entries} git={budget.git}"
+        + f" ms={int(budget.elapsed() * 1000)}." + reason)
+    return {**count, "complete": record["complete"], "change": record["change"],
+            "listings": budget.listings, "git": budget.git}
+
+
+def _at_host_start(data_dir, clock, log):
+    store = os.environ.get("AMPLIFIER_SOURCE_STORE")
+    if not _windows() or not store:
+        return None
+    from . import __version__
+    record = read(data_dir)
+    if record["version"] == __version__ and record["complete"]:
+        return None  # Every start after a complete pass: one small file was read.
+    from .windows_consumer import EARLIER_SOURCE_STORE, RECEIPT, SOURCE_STORE
+    root = data_dir.parent
+
+    def same(path):
+        return os.path.normcase(os.path.abspath(path))
+    if (not (root / RECEIPT).is_file()
+            or same(store) not in {same(root / SOURCE_STORE), same(root / EARLIER_SOURCE_STORE)}):
+        return None  # Not an installation from the setup file, or a store elsewhere: never touched.
+    if record["version"] != __version__:
+        record.update(version=__version__, complete=False, runs=0, tries={}, next=None)
+    from .reset import repair_lock
+    with ExitStack() as stack:
+        try:
+            # Every host holds this lock shared while it serves. Taken without a wait.
+            stack.enter_context(repair_lock(data_dir))
+        except (RuntimeError, ValueError, OSError):
+            return None  # Another host or a reset uses this data folder.
+        return _run(_steps(), os.path.abspath(store), data_dir, record, clock, log)
+
+
+def at_host_start(data_dir, *, clock=time.monotonic, log=print):
+    """For the host that the start-at-sign-in task started, before it takes its own lock. Never raises."""
+    try:
+        return _at_host_start(Path(data_dir), clock, log)
+    except Exception as error:
+        try:
+            log("Source store repair: stopped (" + type(error).__name__ + "); the host starts as usual.")
+        except Exception:
+            pass
+        return None

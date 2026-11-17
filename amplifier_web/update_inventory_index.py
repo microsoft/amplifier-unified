@@ -18,6 +18,7 @@ RECONCILE_SECONDS = 4 * 3600
 def signature(manager):
     from . import __version__
     from .session_files import amplifier_home
+    from .source_store_repair import change_number
     from .updates import active_release, foundation_home
     from .update_sequence import app_selection
 
@@ -54,6 +55,10 @@ def signature(manager):
                 selection.get("bundle"),
                 selection.get("workspace"),
                 selection.get("revision"),
+                # A repair of a store object changes no file that is stamped
+                # above. Its record's number goes up before a run deletes its
+                # first file, so the next check asks Foundation again.
+                change_number(home),
             ],
             sort_keys=True,
         ).encode()

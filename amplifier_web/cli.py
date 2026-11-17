@@ -292,6 +292,12 @@ def _windows_roots(data_dir: Path, configured: bool) -> None:
 
 def _serve(args, data_dir: Path, *, task_runner=None) -> None:
     from .reset import repair_lock
+    if task_runner is not None:
+        # The host that the Windows start-at-sign-in task started. It has started
+        # nothing yet and does not hold its own lock yet: the one moment for a
+        # step that needs the data folder to itself. It never raises.
+        from .source_store_repair import at_host_start
+        at_host_start(data_dir)
     with repair_lock(data_dir, shared=True):
         if task_runner is None:
             _serve_unlocked(args, data_dir)

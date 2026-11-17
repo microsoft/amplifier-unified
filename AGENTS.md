@@ -365,10 +365,10 @@ that writes bytecode puts `__pycache__` into the object, and Foundation refuses
 the object from then on ("Shared source contents changed"). In 0.106.3 the
 connection check of an "OpenAI Compatible API" connection did that; no chat
 with the connection started and the next component update failed. A helper
-prepares a source only through `source_imports.prepare`, which turns bytecode
-writing off for the rest of that process and for a Python process that it
-starts with its environment (a child started with `-E` or `-I` ignores the
-setting). Call it only in a helper process that ends after its one task, never
+prepares a source only through `source_imports.prepare`. After it an import
+writes no bytecode, for the rest of that process and in a Python process that
+it starts with its environment (a child started with `-E` or `-I` ignores the
+setting; code that calls `py_compile` or `compileall` still writes). Call it only in a helper process that ends after its one task, never
 in the host. Do not give the setting to every child of the host instead.
 Workers write no bytecode (`update_sources.store_environment`), and no
 installation step was found that compiles the worker environment. A helper
@@ -376,6 +376,22 @@ leaves the bytecode of what it imported from that environment before that call
 for the next process; with a host-wide setting it would leave none.
 `tests/test_source_store_bytecode.py` runs the real connection check against
 Foundation's store on a hosted runner.
+A PC that connected such a service on 0.106.5 or earlier already has the
+bytecode in a store object. `source_store_repair.at_host_start` removes it at
+the first start of an app version: only untracked `*.pyc` directly in a
+`__pycache__` of an object that has nothing else changed, then the emptied
+folder. Never widen that rule, and keep "any doubt leaves the object": a link
+anywhere in the object or below its `.git` means that Git does not run. It
+runs only in the host that the Windows task started, before that host takes
+its own lock, with that lock held alone; do not call it later in the start or
+from another process. Its limits are stated in the setup design ("Repair of a
+source store object that holds bytecode"). It imports `_Native` from
+`windows_removal` and does not copy it: a change of those steps must keep
+`tests/test_source_store_repair_native.py`. The record's change number is an
+input of `update_inventory_index.signature`; it goes up before the first
+deletion of a run, and a record that cannot be written means no deletion.
+A hosted runner cannot make the state through the product, so the cases plant
+it with a real import.
 
 ## Keep agent context and coordination useful
 
