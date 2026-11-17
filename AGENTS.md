@@ -270,9 +270,12 @@ declared source is no update there (`update_sequence.classify`). An update
 must add it in two other states: with a selected generation, which is
 immutable, and with no worker environment, where the first update prepares
 everything. The first real component update then makes the first generation.
-A chat-installed module that is behind its branch at that moment gets the
-existing moved-reference record (`runtime_source_policy.qualify_cache_policies`),
-and one "Refresh included components" update follows and settles it.
+A chat-installed module of the other tier that is behind its branch at that
+moment gets the existing moved-reference record
+(`runtime_source_policy.qualify_cache_policies`). The sequence's next check, of
+the other tier, lists its source as an update, and that second stage moves the
+module and records its branch again: two stages where one was enough before.
+A full check between them lists the record as "Refresh included components".
 `UpdateManager.check_due` is the one rule for a check that time causes: the
 timed check, and one check at a host start when the last check or attempt was
 at least 1 hour old. A one-time reason must end by a fact that the owner keeps

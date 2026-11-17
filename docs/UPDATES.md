@@ -382,12 +382,20 @@ the commit stays a fixed version as before.
 The first real component update of such an installation makes its first
 generation. Qualification asks the branch of each chat-installed module again
 (`runtime_source_policy.qualify_cache_policies`). A module at the head of its
-branch is recorded with that branch. A module that is behind its branch, and
-that this update does not move, is recorded as a moved reference by the
-existing rule. The next check then offers "Refresh included components" once,
-and that update moves the module to its branch. It starts by itself when
-**Keep Amplifier up to date** is on. Before this rule a new installation ran
-that update after its first chat, also when no module was behind.
+branch is recorded with that branch. The sequence installs included components
+first and checks the other components after that. So a chat-installed module of
+the other components that is behind its branch is still behind when an update
+of included components makes the first generation, and the existing rule
+records it as a moved reference. The check of the other components follows as
+the continuation of the same sequence. It lists the module's source as an
+update, and that second update moves the module to its branch and records the
+branch again. Such an installation therefore runs two component updates, one
+after the other, where one was enough before this rule. Settings says "Updates
+available" between them, not "You're up to date". A full check between the two
+lists the moved reference as "Refresh included components"; that update settles
+it in the same way. Before this rule a new installation ran one component
+update after its first chat, also when no module was behind and nothing
+changed. With this rule it runs none there.
 
 A new installation with no AI connection waits for a connection only when a
 check found a component update. When the check found none, Settings says that
