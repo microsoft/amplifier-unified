@@ -365,6 +365,25 @@ async def test_retire_storage_scrubs_even_when_code_cleanup_disabled(app, monkey
     assert_preserved(stage)
 
 
+async def test_a_failed_key_scrub_does_not_defer_the_other_maintenance(app, monkeypatch):
+    from amplifier_web import storage_cleanup
+    manager = app.update_manager
+    ran = []
+    async def no_delay(seconds):
+        pass
+    async def broken(owner):
+        raise RuntimeError('synthetic scrub failure')
+    async def cleanup(*args, **kwargs):
+        ran.append('storage')
+        return {'status': 'disabled', 'removedFileBytes': 0}
+    monkeypatch.setattr(asyncio, 'sleep', no_delay)
+    monkeypatch.setattr(storage, 'scrub_stage_keys', broken)
+    monkeypatch.setattr(storage_cleanup, 'run', cleanup)
+    await manager.retire_storage()
+    assert ran == ['storage']
+    assert app.state['updates']['storage']['status'] == 'disabled'
+
+
 async def test_scrub_rechecks_activity_after_lifecycle_admission(app, monkeypatch):
     from contextlib import asynccontextmanager
     manager = app.update_manager

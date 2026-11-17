@@ -1923,6 +1923,9 @@ class UpdateManager:
         try:
             from .update_storage import scrub_stage_keys
             await scrub_stage_keys(self)
+        except Exception:
+            pass  # A later pass tries again. It never defers the maintenance below.
+        try:
             # Tool result retention is its own existing promise, independent of
             # whether unused-code cleanup is enabled in Settings.
             smart_tools = getattr(self.service, 'smart_tools', None)
