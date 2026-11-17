@@ -111,6 +111,19 @@ storage, integrity and retention. This transfers no user data and does not extra
 the broader resource/media lifecycle. Publication and app selection stay separate;
 historical receipts and saved-body formats retain their existing meaning.
 
+## Current Recall storage delivery
+
+[amplifier-platform-recall](https://github.com/bkrabach/amplifier-platform-recall)
+owns conversation search, versioned-memory storage and direct SQLite tests. The
+package keeps its `amplifier-recall` distribution and `amplifier_recall` import.
+Unified selects its published artifact as the sole installed owner and retains
+source access, scope, authorization, opt-ins, context assembly, model execution
+and Stop. Durable notes, versions, settings, command receipts and suppression
+records retain their existing formats and recovery behavior. This handoff moves
+no user data and does not replace native history or Foundation's separate optional
+Recall API. Publication and app selection remain separate; historical receipts
+and newer user state survive ordinary app rollback.
+
 ## Not in v1
 
 Mandatory microservices or a new central runtime framework; promote only when a

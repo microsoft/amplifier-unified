@@ -71,8 +71,6 @@ exclude = [
 exclude = [
     "/components/status/build/**", "/components/status/dist/**",
     "/components/status/.venv/**", "/components/status/*.egg-info/**",
-    "/components/recall/build/**", "/components/recall/dist/**",
-    "/components/recall/.venv/**", "/components/recall/*.egg-info/**",
     "/components/kernels/build/**", "/components/kernels/dist/**",
     "/components/kernels/.venv/**", "/components/kernels/*.egg-info/**",
     "/.ci/**",
