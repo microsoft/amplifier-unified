@@ -1,5 +1,12 @@
 # Component projects
 
+[amplifier-platform-operations](https://github.com/bkrabach/amplifier-platform-operations)
+owns operation observations, delivery cursors and their direct tests. Unified
+selects its published artifact into generated `amplifier_operations/`, preserving
+editable and isolated-worker imports. The host retains admission, permissions,
+Stop, cancellation and execution policy. Publication does not change the app's
+selected default; follow the [artifact selection instructions](#select-an-operations-artifact).
+
 [`status/`](status/README.md) authors the dependency-free local status publisher,
 reader and optional hook. Unified selects the published artifact into generated
 `amplifier_web/status_protocol`, bound by `status-emitter.source.json`. Its private
@@ -78,6 +85,37 @@ Unified consumes the explicitly selected published wheel through the generated
 Author changes and component publication do not change that app default. The app
 remains the sole installed distribution owner; this is artifact assembly, not a
 separately updatable pip dependency. Do not restore a second author copy here.
+
+## Select an Operations artifact
+
+Unified selects Operations 0.1.0 from the public repository's
+[`operations-v0.1.0` release](https://github.com/bkrabach/amplifier-platform-operations/releases/tag/operations-v0.1.0).
+`operations.source.json` binds its original receipt and artifact hashes. The
+public repository owns source, standalone tests and publication; do not restore
+an author copy or publication workflow here. Historical receipts retain their
+original source identities.
+
+Download the wheel, source archive, `operations-source.json` and `SHA256SUMS`
+into a private directory. Verify the original receipt's SHA256 against the
+reviewed publication, then run:
+
+```sh
+python scripts/scheduling_delivery.py select --component operations \
+  --dist /path/to/release-assets --revision FULL_PUBLISHED_SOURCE_SHA \
+  --receipt-sha256 REVIEWED_RECEIPT_SHA256
+python scripts/scheduling_delivery.py verify --component operations
+```
+
+The selector verifies the artifact bytes and refuses a locally changed delivery
+copy. Normal wheel, source archive and editable builds verify the selected
+snapshot offline without a producer checkout. Unified remains the sole installed
+owner and includes the original provenance and license under
+`amplifier_web/component_delivery/`. Do not edit generated files or coinstall the
+standalone distribution with Unified.
+
+This selection preserves operation receipts, retry identities and delivery
+cursors. Ordinary app rollback restores code while preserving newer caller-owned
+state; it never authorizes replay of effects.
 
 ## Select a workspace metadata artifact
 

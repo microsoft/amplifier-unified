@@ -286,6 +286,17 @@ belongs to the Administrators group and the private-folder check refuses it. A
 native test that runs product code with such folders sets its process's default
 owner to the account (`token_user_default_owner` in
 `tests/fixtures/manual_app_handoff_native.py`), as a person's PC has it.
+A module can build a file path from the person's home folder and ignore
+`AMPLIFIER_HOME`. On an installation from the setup file that file is outside
+the installation folder, and uninstall leaves it (the Anthropic provider's
+`rate-limit-state.json`, seen in `%USERPROFILE%\.amplifier`).
+`provider_state_files` gives such a module paths in the shared Amplifier home
+when Core loads it, and in the probes that construct a provider for a model
+call. Never write such a path into a mount plan: a plan is saved, hashed,
+compared and exported, so a schedule or a queued change of an earlier version
+would then be refused. Add a module to `STATE_FILES` only after reading its
+source; `tests/test_provider_state_files.py` runs the real module and fails
+when a later version adds a file or changes a name.
 
 ## Keep agent context and coordination useful
 

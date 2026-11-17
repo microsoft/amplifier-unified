@@ -278,15 +278,29 @@ def test_portability_dependency_receipt_is_bound_to_published_source(selected_pa
         delivery.verify(root, component="portability")
 
 
-@pytest.fixture(params=["operations", "kernels"])
+@pytest.fixture(params=[
+    ("operations", "amplifier_operations"),
+    ("operations", "components/operations"),
+    ("operations", "."),
+    ("kernels", "amplifier_kernels"),
+])
 def flat_selection(tmp_path, request):
-    component = request.param
+    component, subdirectory = request.param
     root, revision, dist, _ = make_candidate(tmp_path, component)
     with zipfile.ZipFile(next(dist.glob("*.whl")), "a") as archive:
         archive.writestr(f"amplifier_{component}-0.1.0.dist-info/licenses/LICENSE", "MIT\n")
     (dist / f"{component}-source.json").unlink(); (dist / "SHA256SUMS").unlink()
     release.seal(root, revision, dist, component=component)
-    # Selection consumes the published historical project without cloning it.
+    receipt_path = dist / f"{component}-source.json"
+    receipt = json.loads(receipt_path.read_bytes())
+    receipt["subdirectory"] = subdirectory
+    if subdirectory == ".":
+        receipt.update(repository="bkrabach/amplifier-platform-operations", component=component)
+    receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
+    (dist / "SHA256SUMS").write_text("".join(
+        f"{release.sha((dist / name).read_bytes())}  {name}\n"
+        for name in (*release.artifact_names(receipt), receipt_path.name)))
+    # All source layouts select the same flat runtime, without a producer clone.
     plain = tmp_path / "consumer"; (plain / "components").mkdir(parents=True)
     (plain / "pyproject.toml").write_text(
         '[project]\nname="amplifier-unified"\nversion="1.0.0"\ndependencies=[]\n'
@@ -297,12 +311,12 @@ def flat_selection(tmp_path, request):
 
 
 def test_flat_selection_does_not_shadow_independent_author(flat_selection):
-    root, _, _, _, component = flat_selection
+    root, _, dist, _, component = flat_selection
     before = delivery.verify(root, component=component)
     author = root / f"components/{component}"; author.mkdir()
     (author / "__init__.py").write_text('raise RuntimeError("unpublished author change")\n')
     assert delivery.verify(root, component=component) == before
-    assert before["source"]["subdirectory"] == f"amplifier_{component}"
+    assert before["source"] == json.loads((dist / f"{component}-source.json").read_bytes())
     assert set(before["files"]) == {"__init__.py", "LICENSE"} | ({"node_runner.cjs"} if component == "kernels" else set())
     if component == "kernels":
         assert (root / "amplifier_kernels/node_runner.cjs").read_bytes() == b"const selected = true;\n"
@@ -311,6 +325,17 @@ def test_flat_selection_does_not_shadow_independent_author(flat_selection):
     result = subprocess.check_output([sys.executable, "-c",
         f'import amplifier_{component} as p; print(p.value); print(p.__file__)'], cwd=root, text=True)
     assert result.splitlines() == ["selected", str(root / f"amplifier_{component}/__init__.py")]
+
+
+def test_flat_selection_can_restore_original_artifact(flat_selection):
+    root, revision, dist, _, component = flat_selection
+    producer = root.parent / "repo"
+    (dist / f"{component}-source.json").unlink()
+    (dist / "SHA256SUMS").unlink()
+    historical = release.seal(producer, revision, dist, component=component)
+    checksum = delivery.sha((dist / f"{component}-source.json").read_bytes())
+    delivery.select(root, dist, revision, checksum, component=component)
+    assert delivery.verify(root, component=component)["source"] == historical
 
 
 def test_flat_selection_refuses_author_packaging(flat_selection):
