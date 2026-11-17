@@ -918,5 +918,168 @@ with w.directory(root / "config/auth", owned_root=root) as p:
         self.assertIn(results[0][0].decode().strip(), values)
 
 
+_REPLACING_WRITER = r"""
+import importlib.util, pathlib, sys, time
+s = importlib.util.spec_from_file_location("wf", sys.argv[1])
+w = importlib.util.module_from_spec(s); s.loader.exec_module(w)
+root, name, mode = pathlib.Path(sys.argv[2]), sys.argv[3], sys.argv[4]
+with w.directory(root / "config/auth", owned_root=root) as p:
+    print("ready", flush=True)
+    if mode == "step":
+        for line in sys.stdin:
+            p.publish_private(name, line.strip().encode(), replace=True)
+            print("done", flush=True)
+    else:
+        values, count, deadline = [b"a" * 70000, b"b" * 300], 0, time.monotonic() + 60
+        while not (root / "stop").exists() and time.monotonic() < deadline:
+            p.publish_private(name, values[count % 2], replace=True)
+            count += 1
+        print(count, flush=True)
+"""
+
+
+@unittest.skipUnless(os.name == "nt", "requires native Windows local NTFS and profile ACLs")
+class ReplacedWhileReadNativeTests(unittest.TestCase):
+    """The real reader against another process that replaces the same file.
+
+    This is the stop command reading task-runtime.json while the host writes
+    its next phase. The forced cases place one replacement at an exact point of
+    the reader; the unforced case lets the two processes run freely.
+    """
+
+    NAME = "task-runtime.json"
+    setUp, cleanup = NativeTests.setUp, NativeTests.cleanup
+
+    def writer(self, mode):
+        process = subprocess.Popen(
+            [sys.executable, "-I", "-S", "-B", "-c", _REPLACING_WRITER,
+             str(SOURCE), str(self.root), self.NAME, mode],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+        def settle():
+            if process.poll() is None:
+                process.kill()
+            process.communicate(timeout=10)
+        self.addCleanup(settle)
+        if process.stdout.readline().strip() != "ready":
+            self.fail("replacing writer did not start: " + process.communicate(timeout=10)[1])
+        return process
+
+    def replace(self, process, content):
+        """Another process renames one complete file over the name, now."""
+        process.stdin.write(content + "\n")
+        process.stdin.flush()
+        if process.stdout.readline().strip() != "done":
+            self.fail("replacing writer failed: " + process.communicate(timeout=10)[1])
+
+    def forced(self, pinned, point, replacements):
+        """Run each replacement when the reader reaches `point` with the file open."""
+        api, target, opened = pinned._api, str(self.path / self.NAME), set()
+        create, acl, final = api.CreateFileW, api.validate_acl, api.GetFinalPathNameByHandleW
+
+        def fire():
+            if replacements:
+                replacements.pop(0)()
+
+        def create_file(path, *rest):
+            handle = create(path, *rest)
+            if path == target and handle != wf._INVALID:
+                opened.add(handle)
+                if point == "after-open":
+                    fire()
+            return handle
+
+        def validate_acl(handle, *, private):
+            if point == "between-checks" and handle in opened:
+                fire()
+            return acl(handle, private=private)
+
+        def final_path(handle, *rest):
+            if point == "before-final-path" and handle in opened:
+                fire()
+            return final(handle, *rest)
+
+        api.CreateFileW, api.validate_acl, api.GetFinalPathNameByHandleW = create_file, validate_acl, final_path
+
+    def test_facts_of_an_object_that_was_replaced_while_open(self):
+        api = wf._API()
+        target = self.path / self.NAME
+        with wf.directory(self.path, owned_root=self.root) as pinned:
+            pinned.publish_private(self.NAME, b"old")
+            handle = api.open(target)
+            try:
+                pinned.publish_private(self.NAME, b"new", replace=True)
+                info = wf.FILE_INFO()
+                api.ok(api.GetFileInformationByHandle(handle, C.byref(info)))
+                buffer = C.create_unicode_buffer(32768)
+                length = api.GetFinalPathNameByHandleW(handle, buffer, len(buffer), 0)
+                error = C.get_last_error()
+                print(f"FACT replaced-open-object links={info.links} attributes={info.attributes:#x} "
+                      f"final_path_length={length} final_path_error={error} "
+                      f"final_path_tail={buffer.value[-60:]!r}")
+                try:
+                    api.validate_acl(handle, private=True)
+                    print("FACT replaced-open-object validate_acl=passes")
+                except OSError as refused:
+                    print(f"FACT replaced-open-object validate_acl={type(refused).__name__}: {refused}")
+                print(f"FACT replaced-open-object read={api.read(handle, limit=64)!r}")
+                self.assertEqual(info.links, 0)
+            finally:
+                api.close(handle)
+            self.assertEqual(pinned.read_private(self.NAME, limit=64), b"new")
+
+    def test_replacement_between_the_two_checks_reads_the_new_file(self):
+        # The exact place of the clean-room record: _existing's second info().
+        writer = self.writer("step")
+        with wf.directory(self.path, owned_root=self.root) as pinned:
+            pinned.publish_private(self.NAME, b"old")
+            self.forced(pinned, "between-checks", [lambda: self.replace(writer, "new")])
+            self.assertEqual(pinned.read_private(self.NAME, limit=64), b"new")
+
+    def test_replacement_right_after_the_open_reads_the_new_file(self):
+        writer = self.writer("step")
+        with wf.directory(self.path, owned_root=self.root) as pinned:
+            pinned.publish_private(self.NAME, b"old")
+            self.forced(pinned, "after-open", [lambda: self.replace(writer, "new")])
+            self.assertEqual(pinned.read_private(self.NAME, limit=64), b"new")
+
+    def test_replacement_before_the_final_path_query_reads_a_complete_file(self):
+        writer = self.writer("step")
+        with wf.directory(self.path, owned_root=self.root) as pinned:
+            pinned.publish_private(self.NAME, b"old")
+            self.forced(pinned, "before-final-path", [lambda: self.replace(writer, "new")])
+            self.assertIn(pinned.read_private(self.NAME, limit=64), {b"old", b"new"})
+
+    def test_free_running_reads_against_a_replacing_process_never_fail(self):
+        import time
+        values = {b"a" * 70000, b"b" * 300}
+        with wf.directory(self.path, owned_root=self.root) as pinned:
+            pinned.publish_private(self.NAME, b"b" * 300)
+            opens, real = [0], pinned._api.open
+
+            def counted(path, **options):
+                opens[0] += path.name == self.NAME
+                return real(path, **options)
+            pinned._api.open = counted
+            writer = self.writer("spin")
+            reads, failures, deadline = 0, [], time.monotonic() + 6
+            try:
+                while reads < 3000 and time.monotonic() < deadline:
+                    try:
+                        content = pinned.read_private(self.NAME, limit=100000)
+                    except OSError as failed:
+                        failures.append(f"{type(failed).__name__}: {failed}")
+                    else:
+                        self.assertIn(content, values, "a read returned a mix or a partial file")
+                    reads += 1
+            finally:
+                (self.root / "stop").write_text("stop")
+            output, error = writer.communicate(timeout=30)
+            print(f"FACT free-running reads={reads} opens={opens[0]} "
+                  f"replacements={output.strip()} failures={len(failures)}")
+            self.assertEqual(writer.returncode, 0, error)
+            self.assertEqual(failures[:3], [])
+
+
 if __name__ == "__main__":
     unittest.main()
