@@ -66,21 +66,20 @@ Amplifier shows "Preparing chat…" during that time.
 
 To open Amplifier later, use the Start menu: **Amplifier Unified**.
 
-Three cases stop you before Amplifier opens. Each one shows a message that says
-what to do:
+Setup or the first start can stop with a message. The message says what
+happened and what to do. Three cases:
 
-- **Your sign-in runs every program as administrator.** Setup stops and says:
-  "This Windows sign-in runs every program as administrator." Sign in to
-  Windows with a standard account, or turn User Account Control on. Then run
-  setup again.
-- **The folder path is too long.** Setup stops and says that the path of the
-  Amplifier folder "is too long for Windows". The limit is 59 characters. Use a
-  Windows account with a shorter name.
-- **This PC's security settings stop the certificate step.** In step 4,
-  Amplifier says that "this PC's security settings do not let it finish setting
-  up its private connection to your browser". The message names a certificate
-  file. If your organization manages this PC, ask its IT support to trust this
-  certificate for your account.
+- **Administrator sign-in.** Setup says: "This Windows sign-in runs every
+  program as administrator." Sign in to Windows with a standard account, or
+  turn User Account Control on. Then run setup again.
+- **Long folder path.** Setup says that the path of the Amplifier folder "is
+  too long for Windows". The limit is 59 characters. Use a Windows account
+  with a shorter name.
+- **Certificate step.** In step 4, Amplifier says that "this PC's security
+  settings do not let it finish setting up its private connection to your
+  browser". The message names a certificate file. If your organization
+  manages this PC, ask its IT support to trust this certificate for your
+  account.
 
 Limits of this preview:
 

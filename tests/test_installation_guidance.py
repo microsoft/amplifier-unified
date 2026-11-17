@@ -90,17 +90,18 @@ class InstallationGuidanceTests(unittest.TestCase):
             'usually your Downloads folder. Do not use "Run as administrator".'), steps["3"])
         # Below the steps: three stops. The quoted words and the next step are the product's own.
         after = section.split("\n5. ", 1)[1].split("\nLimits of this preview:\n", 1)[0]
-        self.assertIn("Three cases stop you before Amplifier opens. Each one shows a message that says what to do:",
-                      plain(after))
+        self.assertIn("Setup or the first start can stop with a message. "
+                      "The message says what happened and what to do. Three cases:", plain(after))
+        # Setup's message has these two headings; the first start's message has no headings.
         setup = source("scripts/windows_bootstrap_native.cs")
+        self.assertIn('"Setup did not finish.\\n\\nWhat happened:\\n"+text[0]+"\\n\\nWhat to do:\\n"+text[1]+', setup)
         limit = re.search(r"internal const int MaxRootLength=(\d+);", setup).group(1)
         self.assertEqual([plain(text) for text in re.findall(r"^- (.*(?:\n  .*)*)", after, re.M)], [
-            "**Your sign-in runs every program as administrator.** Setup stops and says: "
-            '"This Windows sign-in runs every program as administrator." Sign in to Windows with a standard '
-            "account, or turn User Account Control on. Then run setup again.",
-            "**The folder path is too long.** Setup stops and says that the path of the Amplifier folder "
-            f'"is too long for Windows". The limit is {limit} characters. Use a Windows account with a shorter name.',
-            "**This PC's security settings stop the certificate step.** In step 4, Amplifier says that "
+            '**Administrator sign-in.** Setup says: "This Windows sign-in runs every program as administrator." '
+            "Sign in to Windows with a standard account, or turn User Account Control on. Then run setup again.",
+            '**Long folder path.** Setup says that the path of the Amplifier folder "is too long for Windows". '
+            f"The limit is {limit} characters. Use a Windows account with a shorter name.",
+            "**Certificate step.** In step 4, Amplifier says that "
             "\"this PC's security settings do not let it finish setting up its private connection to your "
             'browser". The message names a certificate file. If your organization manages this PC, ask its IT '
             "support to trust this certificate for your account."])
