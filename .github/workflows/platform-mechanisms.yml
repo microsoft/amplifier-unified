@@ -200,6 +200,21 @@ jobs:
           'test_windows_installer.py'));
           result = unittest.TextTestRunner(verbosity=2).run(suite);
           sys.exit(not result.wasSuccessful())"
+      # A read of a private file while another process replaces it: Stop
+      # Amplifier read task-runtime.json while the app wrote its next phase.
+      # A skipped native case would hide the answer; on this lane it fails.
+      # The step above ran these cases too; this second run (about 10
+      # seconds) is the one that refuses a skip.
+      - name: Require the native replaced-while-read cases with no skip
+        if: runner.os == 'Windows'
+        run: >
+          python -I -S -B -c
+          "import sys, unittest; sys.path.insert(0, 'tests'); import test_windows_files as cases;
+          suite = unittest.defaultTestLoader.loadTestsFromTestCase(cases.ReplacedWhileReadNativeTests);
+          count = suite.countTestCases();
+          result = unittest.TextTestRunner(verbosity=2).run(suite);
+          print('native replaced-while-read cases:', count, 'run:', result.testsRun, 'skipped:', len(result.skipped));
+          sys.exit(not (result.wasSuccessful() and count and count == result.testsRun and not result.skipped))"
   windows-private-config-tls:
     if: ${{ !inputs.bootstrap_only && !inputs.foreground_only && !inputs.storage_only }}
     runs-on: windows-latest
@@ -230,8 +245,18 @@ jobs:
       - name: Check private configuration, TLS and service policy without task registration
         shell: pwsh
         run: |
-          .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -p no:cacheprovider tests/test_deployment.py tests/test_windows_tls.py tests/test_windows_service.py tests/test_windows_task_runtime.py -k "not native_synthetic_task_create_run_stop_remove"
+          .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -p no:cacheprovider tests/test_deployment.py tests/test_windows_tls.py tests/test_windows_service.py tests/test_windows_task_runtime.py -k "not native_synthetic_task_create_run_stop_remove and not stop_reads_the_receipt_while_the_host_writes_its_phases"
           if ($LASTEXITCODE -ne 0) { throw 'Windows configuration, TLS or service policy checks failed.' }
+      # Stop Amplifier reads task-runtime.json while the app writes its phases:
+      # the real stop request and reader against a real host process that
+      # replaces the file without a pause. No task and no app. A skipped
+      # native case would hide the answer; on this lane it fails.
+      - name: Require the stop command's reads against a writing host with no skip
+        shell: pwsh
+        run: |
+          .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -s -p no:cacheprovider "tests/test_windows_task_runtime.py::test_stop_reads_the_receipt_while_the_host_writes_its_phases" | Tee-Object -Variable report
+          if ($LASTEXITCODE -ne 0) { throw 'A stop-command read failed while the host replaced its receipt.' }
+          if (-not ($report -match '1 passed') -or ($report -match 'skipped')) { throw 'The native stop-reader case did not run; on this lane it must run.' }
       - name: Check native Proactor socket cleanup backport without app state
         shell: pwsh
         run: |

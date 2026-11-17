@@ -869,6 +869,66 @@ can change, a link in place of the folder, removal, the held installation, the
 named folder above, elevation detection and the stop text. It shows no setup
 window and installs nothing.
 
+### A private file is read while another process replaces it
+
+Amplifier's processes replace a private state file with a rename of a complete
+temporary file over its name (`publish_private(replace=True)` in
+`amplifier_web/windows_files.py`: `FileRenameInfoEx`, replace with POSIX
+semantics). A reader that opened the earlier file keeps a valid handle, but
+that object has no name any more. Measured on a Windows runner for such an
+object: Windows reports 0 links, and its final path is a name below
+`C:\$Extend\$Deleted`. Its ACL and its complete earlier content stay.
+
+The reader's validation read both answers as a refusal of the named file:
+"reparse point, hardlink, or wrong type" for 0 links, and "alternate
+namespace/case alias" for the other path. "Stop Amplifier" reads
+`task-runtime.json` every 0.1 seconds while the app writes its phases
+`stopping` and `stopped`. So a person could see "Amplifier could not stop its
+background app ... Reference: stop-app, PermissionError" although the app
+stopped (clean room, November 16, 2026). On a hosted runner 99 of 3000 reads
+failed against 302 replacements by another process.
+
+The rule:
+
+- An object that has no name when it is validated is `PrivateFileUnlinked`. It
+  is not a hardlink, not an alias, and it is never accepted. The reader closes
+  it, checks the pinned folders again, opens the name again and validates
+  everything again. The limits are 8 attempts for one name, and no further
+  attempt begins after 2 seconds. The time limit is tested as the last step
+  before each further attempt, after the wait and the pin check. It decides
+  only whether an attempt begins: the first attempt has no time test, and the
+  time of the Windows calls of an attempt is not limited. The reader asks for
+  waits of at most 0.162 seconds in total; the system can make a wait longer.
+- A file that another process replaces during each of those attempts gives
+  `PrivateFileUnsettled`. Its text says that the file did not settle.
+- A read returns the complete earlier file (validated before the replacement)
+  or the complete new file, never a mix.
+- Every other refusal stays and is not tried again: 2 or more links, a reparse
+  point, a wrong type, another path or spelling of an object that still has a
+  name, foreign ownership, a DACL that grants foreign access, another volume.
+  File sharing is unchanged.
+- A publication whose object loses its name after the successful rename (a
+  later publication or a removal) is not reported as a failed publication.
+  Only the name check is left out for that object; its ACL check stays.
+  Nothing is known or accepted there about a file that has the name now.
+
+A reader that meets a removal (not a replacement) finds no file. While another
+handle still keeps the removed file, Windows can refuse the new open with
+"Access is denied" until that handle closes (measured on a Windows runner).
+Windows gives that answer to each open of such a name, with or without this
+change. The reopening meets it once and does not try again. The native case
+`test_file_removed_while_a_third_handle_keeps_it` prints which answer a runner
+gives. The reopening blocks its thread for the waits and for
+one pin check per further attempt.
+
+Both new errors are `PermissionError` subclasses, so each earlier handler of a
+refusal still catches them. A handle that passed validation can lose its name
+later; it still holds the complete file that was validated. So the reset
+reader (`_read_reset_configuration` in `amplifier_web/recovery.py`) takes the
+size from that validation and does not query the name a third time. Nobody but
+the file's owner, SYSTEM and administrators can replace or remove a private
+file: its ACL and its folder's ACL grant no other account any access.
+
 ### Uninstall stops the app before it removes an entry
 
 Uninstall runs from the Apps list or from "Uninstall Amplifier" in the Start
