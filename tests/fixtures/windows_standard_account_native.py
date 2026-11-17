@@ -628,8 +628,20 @@ def find_session(listing, name):
     return None
 
 
-def session_of(name):
-    return find_session(execute([system("qwinsta.exe")])["stdout"], name)
+def session_of(name, tries=3):
+    """(number, state) of the user's desktop session; None when the list of Windows has none.
+
+    A list that Windows does not give is an error here, never "no session".
+    Windows is asked again before that, at most `tries` times in all.
+    """
+    listing = ""
+    for attempt in range(tries):
+        listing = execute([system("qwinsta.exe")])["stdout"]
+        if "USERNAME" in listing and "STATE" in listing:
+            return find_session(listing, name)
+        if attempt + 1 < tries:
+            time.sleep(2)
+    raise AssertionError("Windows did not list the desktop sessions: " + json.dumps(listing[-500:]))
 
 
 def sign_in(name, password):
@@ -1034,8 +1046,9 @@ def run():
         report["stage"] = "the end of a recorded process"
         # How the cleanup step ends a recorded viewer, shown on Windows before the user exists.
         report["recordedProcess"] = recorded_process_check()
-        need(report["recordedProcess"] == {"withAnotherCreationTime": "absent", "thenItStillRuns": True,
-                                           "withItsOwnRecord": "ended", "thenItHasEnded": True},
+        need(report["recordedProcess"] == {"createdAtItsStart": True, "withAnotherCreationTime": "absent",
+                                           "thenItStillRuns": True, "withItsOwnRecord": "ended",
+                                           "thenItHasEnded": True},
              "A recorded process is not ended by its own record only", report["recordedProcess"])
         report["stage"] = "the account"
         name = "amp-std-" + uuid.uuid4().hex[:6]
@@ -1271,36 +1284,49 @@ def end_viewers(records, seconds=20):
     return "ended" if not left else "left: " + json.dumps(left)
 
 
-def recorded_process_check():
+def filetime_now():
+    """Now, in the units of a Windows creation time: 100 nanoseconds since the year 1601."""
+    return int((time.time() + 11644473600) * 10 ** 7)
+
+
+def recorded_process_check(windows=None, start=None):
     """Show on Windows, with a program of this test, how `end_recorded` decides.
 
-    The same number with another creation time is another process: nothing
-    is ended, and the program still runs. The program's own record ends it.
+    The recorded creation time is the time of the program's start (within
+    two seconds): it is the program's own, and no constant. The same number
+    with another creation time is another process: nothing is ended, and the
+    program still runs. The program's own record ends it.
     """
-    program = subprocess.Popen([sys.executable, "-I", "-c", "import time; time.sleep(600)"])
+    before = filetime_now()
+    program = (start or subprocess.Popen)([sys.executable, "-I", "-c", "import time; time.sleep(600)"])
     try:
-        record = process_record(program.pid)
-        other = end_recorded({**record, "created": record["created"] + 1}, 5)
+        record = process_record(program.pid, windows)
+        at_start = before - 2 * 10 ** 7 <= record["created"] <= filetime_now() + 2 * 10 ** 7
+        other = end_recorded({**record, "created": record["created"] + 1}, 5, windows)
         kept = program.poll() is None
-        own = end_recorded(record, 20)
+        own = end_recorded(record, 20, windows)
         try:
             program.wait(20)
         except subprocess.TimeoutExpired:
             pass
-        return {"withAnotherCreationTime": other, "thenItStillRuns": kept, "withItsOwnRecord": own,
-                "thenItHasEnded": program.poll() is not None}
+        return {"createdAtItsStart": at_start, "withAnotherCreationTime": other, "thenItStillRuns": kept,
+                "withItsOwnRecord": own, "thenItHasEnded": program.poll() is not None}
     finally:
         if program.poll() is None:
             program.kill()
 
 
 def ask_to_end_programs(name):
-    """Ask Windows once to end the programs that run under this user's name.
+    """Try once to ask Windows to end the programs that run under this user's name.
 
-    A request only. Nothing here reads whether a program of the user is
-    left, and the answer does not decide whether the cleanup passes.
+    A request only. When it cannot be sent, the answer says so. Nothing here
+    reads whether a program of the user is left, and the answer does not
+    decide whether the cleanup passes.
     """
-    asked = execute([system("taskkill.exe"), "/F", "/FI", f"USERNAME eq {name}"])
+    try:
+        asked = execute([system("taskkill.exe"), "/F", "/FI", f"USERNAME eq {name}"])
+    except Exception as error:
+        return f"not asked: {type(error).__name__}: {str(error)[-200:]}. No read of what is left."
     return f"asked: taskkill ended with {asked['exitCode']}. No read of what is left."
 
 
@@ -1323,14 +1349,14 @@ def restore_setting(earlier, registry):
 
 
 # The run records the account's SID directly after Windows created the account, and it signs the
-# user in only after that record. So with no SID record and no account of the recorded name, the
-# user never signed in: no Amplifier task and no profile of the account was made.
-NEVER = "none: the run recorded no SID for the account, so it never signed the user in"
+# user in only after that record. Windows names the user's Amplifier task and its profile by that
+# SID. Without a SID the cleanup cannot read them: it counts them as left. It concludes nothing
+# from an account that is absent.
 # What each part of the cleanup must report. With an account record: also the account's parts.
 # The request to end the user's programs is not here: nothing reads what it left.
 CLEAN = {"credential": ("absent",), "viewers": ("ended",), "viewerSetting": ("restored", "unchanged")}
-OWNED_CLEAN = {"signedOut": (True,), "helperTask": ("absent",), "amplifierTask": ("absent", NEVER),
-               "profile": ("absent", NEVER), "account": ("absent",)}
+OWNED_CLEAN = {"signedOut": (True,), "helperTask": ("absent",), "amplifierTask": ("absent",),
+               "profile": ("absent",), "account": ("absent",)}
 
 
 def cleaned(result, owned):
@@ -1347,8 +1373,9 @@ def cleanup():
     name belongs to another account, or Windows does not answer, nothing of
     that account is touched and the step fails. Apart from that, a part that
     fails does not stop the parts after it, and each failure is kept. The step
-    passes only when `cleaned` accepts the result. Windows is also asked to
-    end the user's programs; nothing reads whether one is left, and `cleaned`
+    passes only when `cleaned` accepts the result. The step also tries to ask
+    Windows to end the user's programs. A request that cannot be sent is kept
+    in the result. Nothing reads whether a program is left, and `cleaned`
     does not name that request.
     """
     result, owned = {}, saved("ownership.json")
@@ -1388,7 +1415,7 @@ def cleanup():
         else:
             # The record is written before the account, so the account can be absent.
             part("accountBefore", lambda: whose(name, mark))
-            state, unread = result["accountBefore"], None
+            state, unread = result["accountBefore"], "left: not read: the run recorded no SID for the account"
             if state == "this run's" and sid is None:
                 # Windows created the account, and the line that records its SID did not run.
                 try:
@@ -1400,9 +1427,10 @@ def cleanup():
                 """A part that Windows names by the account's SID: its Amplifier task, its profile.
 
                 With a SID the part is done and read, also when the account is
-                absent. A SID that was not read: the part counts as left.
+                absent. Without a SID nothing can be read: the part counts as
+                left. Nothing is concluded from an account that is absent.
                 """
-                return unread or (action(sid) if sid else NEVER)
+                return action(sid) if sid else unread
 
             if state in ("this run's", "absent"):
                 part("signedOut", lambda: sign_out(name, None))

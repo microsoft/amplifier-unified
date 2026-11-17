@@ -1861,47 +1861,57 @@ change the file or its folder. A person without administrator rights cannot
 make such a record.
 
 The job's cleanup step (the step before the one that keeps the results) runs
-in every case, also after a failure. In every case it ends the Remote Desktop
-viewers that the run recorded, removes the saved sign-in and restores the one
-setting that the job changed. For the run's account it signs the user out,
-asks Windows to end the programs of the user, and removes the user's tasks,
-its profile and the account.
+in every case, also after a failure. It has these parts. In every case: end
+the Remote Desktop viewers that the run recorded, delete the saved sign-in,
+restore the one setting that the job changed. For the run's account: sign the
+user out, try to ask Windows to end the programs of the user, remove the
+user's tasks, its profile and the account. A part can fail. The next
+paragraphs say what the step does then, and which parts it leaves out.
 
 The job records the account's name before Windows creates the account, with a
 mark that Windows keeps as the account's comment. It records the account's
-SID before it signs the user in. Before the cleanup step removes anything of
-the account, it reads whether the account with that name has that mark. When
-the name belongs to another account, or Windows does not answer, the step
-removes nothing of that account and fails. When the job did not record the
-SID of the run's account and Windows does not give it, the step cannot name
-the Amplifier task and the profile of the account: it counts them as left,
-does the other parts, and fails. When the job recorded no SID and Windows has
-no account with the recorded name, the run stopped before it signed the user
-in: the step reads no Amplifier task and no profile, and its result says so.
-Apart from these cases, a part that fails does not stop the parts after it,
-and the step fails when one of these parts is not done: the recorded viewers,
-the saved sign-in, the setting, the user's session, the tasks, the profile,
-the account.
+SID before it signs the user in. When the job recorded no account, the step
+has only the three parts of every case. A record without a name or without a
+mark fails the step, and the step touches no account. Before the cleanup step
+removes anything of the account, it reads whether the account with that name
+has that mark. When the name belongs to another account, or Windows does not
+answer, the step removes nothing of that account and fails. When Windows has
+no account with the recorded name, the step sends no request to end programs
+and deletes no account; it does the other parts with the recorded name and
+the recorded SID. Windows names the user's Amplifier task and its profile by
+the account's SID. When the step has no SID (the job did not record it, and
+Windows does not give it or has no account with the recorded name), it counts
+the task and the profile as not read, does the other parts, and fails. It
+concludes nothing from an account that is absent. Apart from these cases, a
+part that fails does not stop the parts after it, and the step fails when one
+of these parts is not done: the recorded viewers, the saved sign-in, the
+setting, the user's session, the tasks, the profile, the account.
 
 The step decides that from Windows. A recorded viewer is one process: its
 number and the time at which Windows created it. The step opens the process
-that has that number once. When its creation time is the recorded one, the
-step ends it and waits for its end through that same open process. When no
-process has the number, or a later process has it, the viewer is gone, and
-the step ends nothing. A viewer that the run started and did not record is
-not ended by this step. Before the job creates the user, it requires on the
-runner that this way ends a program of the test by its own record, and that
-it leaves the same program alone under another creation time. For the user's
-session, the tasks, the profile, the account and the setting, the step reads
-what Windows lists after the part. For the saved sign-in it takes Windows'
-answer to the deletion.
+that has that number once. When its creation time is the recorded one and the
+process still runs, the step asks Windows to end it and waits up to 20
+seconds for its end, through that same open process. A viewer that still runs
+then counts as left. When no process has the number, or the process with the
+number has another creation time, the viewer is gone, and the step ends
+nothing. A viewer that the run started and did not record is not ended by
+this step. Before the job creates the user, it requires three things on the
+runner, with a program of the test: the recorded creation time is the time of
+the program's start (within two seconds); under another creation time the
+program is left alone; and its own record ends it. For the user's session,
+the tasks, the profile, the account and the setting, the step reads what
+Windows lists after the part. A list that Windows does not give is a failed
+part. For the saved sign-in the step takes Windows' answer to the deletion.
 
-The step asks Windows once to end the programs that run under the user's name
-(`taskkill`). It does not read whether a program of the user is left, and
-that does not decide whether the step passes. The step does not delete this
-case's folders in the runner's temporary folder; no file there holds the
-password. If GitHub ends the job at its time limit, the step may not finish.
-A hosted runner is deleted after its job.
+For the run's account, the step tries once to ask Windows to end the programs
+that run under the user's name (`taskkill`). When the request cannot be sent,
+the result says so, and the step does not fail for that. The step does not
+read whether a program of the user is left, and that does not decide whether
+the step passes. The step also copies the user's reports to the results and
+saves its own result; neither decides whether the step passes. The step does
+not delete this case's folders in the runner's temporary folder; no file
+there holds the password. If GitHub ends the job at its time limit, the step
+may not finish. A hosted runner is deleted after its job.
 
 The sign-in is needed. A program that another account starts with the user's
 name and password (`CreateProcessWithLogonW`) can register the user's task,

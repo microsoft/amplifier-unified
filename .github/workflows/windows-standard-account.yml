@@ -95,7 +95,7 @@ jobs:
         shell: pwsh
         run: |
           python -I -B tests/fixtures/windows_standard_account_native.py cleanup
-          if ($LASTEXITCODE -ne 0) { throw 'A part of this run was not removed; read cleanup.json.' }
+          if ($LASTEXITCODE -ne 0) { throw 'A part of the cleanup is not done; read cleanup.json.' }
       - name: Retain the bounded results
         if: always()
         timeout-minutes: 2
