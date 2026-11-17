@@ -154,10 +154,6 @@ def _badge(size, color, mark):
     return canvas.resize((size, size), Image.Resampling.LANCZOS)
 
 
-class StaleIconRevision(ValueError):
-    """A versioned URL cannot name pixels from another listener revision."""
-
-
 def _png(image):
     output = io.BytesIO()
     image.save(output, format='PNG')
@@ -299,28 +295,35 @@ class InstanceBranding:
         suffix = f'&accent={accent}' if accent and snapshot['colorMode'] == 'appearance' and not snapshot['customIcon'] else ''
         return f'/instance-icon/{size}.png?v={snapshot["revision"]}{suffix}'
 
-    def icon(self, size, accent=None, *, revision=None):
-        from PIL import Image, ImageOps
+    def _icon_lookup(self, size, accent):
         if size not in SIZES:
             raise ValueError('Choose an app icon size of 32, 180, 192 or 512.')
         with self._icon_lock:
             current = self._current
             record, snapshot = current
-            if revision is not None and revision != snapshot['revision']:
-                raise StaleIconRevision('This app icon URL is no longer current.')
             accent = _accent(accent) if snapshot['colorMode'] == 'appearance' and not record['image'] else None
             color = '#' + accent if accent else snapshot['color']
             key = (snapshot['revision'], size, color if not record['image'] else None)
             cached = self._icons.get(key)
             if cached is not None:
                 self._icons.move_to_end(key)
+            return current, key, cached
+
+    def cached_icon(self, size, accent=None):
+        """Return a current cached PNG without entering the render queue."""
+        return self._icon_lookup(size, accent)[2]
+
+    def icon(self, size, accent=None):
+        from PIL import Image, ImageOps
+        current, key, cached = self._icon_lookup(size, accent)
         if cached is None:
+            record, _ = current
             if record['image']:
                 with Image.open(io.BytesIO(base64.b64decode(record['image']))) as source:
                     image = ImageOps.pad(source.convert('RGBA'), (size, size),
                                          method=Image.Resampling.LANCZOS, color=(0, 0, 0, 0))
             else:
-                image = _badge(size, color, self._mark)
+                image = _badge(size, key[2], self._mark)
             cached = _png(image)
             with self._icon_lock:
                 # Object identity also rejects A -> B -> A while encoding.

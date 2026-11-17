@@ -143,7 +143,7 @@ def test_uncached_default_reads_never_reopen_configuration_or_packaged_art(tmp_p
     assert not store.path.exists()
 
 
-def test_old_version_fails_and_old_encoding_cannot_repopulate_after_aba(tmp_path, monkeypatch):
+def test_old_encoding_cannot_repopulate_after_aba(tmp_path, monkeypatch):
     store = owner(tmp_path)
     original = store.snapshot()
     began, resume = threading.Event(), threading.Event()
@@ -158,7 +158,7 @@ def test_old_version_fails_and_old_encoding_cannot_repopulate_after_aba(tmp_path
 
     def worker():
         try:
-            result.append(store.icon(32, '123456', revision=original['revision']))
+            result.append(store.icon(32, '123456'))
         except Exception as exc:
             errors.append(exc)
 
@@ -169,8 +169,7 @@ def test_old_version_fails_and_old_encoding_cannot_repopulate_after_aba(tmp_path
         try:
             assert began.wait(10)
             changed = store.update(store.prepare({'color': '#abcdef'}))
-            with pytest.raises(branding.StaleIconRevision):
-                store.icon(32, revision=original['revision'])
+            assert store.cached_icon(32, '123456') is None
             assert changed['revision'] != original['revision']
             store.update(store.prepare({'color': ''}))
             assert store.snapshot()['revision'] == original['revision']

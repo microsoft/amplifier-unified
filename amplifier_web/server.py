@@ -834,7 +834,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     static = Path(__file__).parent / "static"
     manifest_path = static / 'manifest.webmanifest'
     manifest_template = json.loads(manifest_path.read_text(encoding='utf-8')) if manifest_path.exists() else None
-    icon_encodes = 0
+    icon_encodes = asyncio.Semaphore(4)
 
     async def instance_manifest(request):
         if manifest_template is None:
@@ -845,43 +845,43 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
                                  content_type='application/manifest+json')
 
     async def instance_icon(request):
-        nonlocal icon_encodes
         from functools import partial
-        from .instance_branding import SIZES, StaleIconRevision
+        from .instance_branding import SIZES
         size = int(request.match_info['size'])
         if size not in SIZES:
             raise web.HTTPNotFound()
         accents = request.query.getall('accent', [])
-        revisions = request.query.getall('v', [])
-        if len(revisions) > 1:
-            raise web.HTTPGone()
-        # Public arbitrary variants must not build an unbounded executor queue.
-        # Hold the slot until the actual thread finishes, even if the request
-        # is cancelled, rather than releasing it when its waiter disappears.
-        if icon_encodes >= 4:
-            raise web.HTTPServiceUnavailable(headers={'Retry-After': '1'})
-        icon_encodes += 1
+        accent = accents[0] if len(accents) == 1 else None
+        # v is a cache buster, not an immutable version: installed clients can
+        # retain old URLs. Cache hits need neither an executor nor a render slot.
+        content = service.instance_branding.cached_icon(size, accent)
+        if content is not None:
+            return web.Response(body=content, content_type='image/png')
+        # Wait asynchronously rather than rejecting ordinary multi-tab loads or
+        # submitting an unbounded number of renders to the shared executor.
+        await icon_encodes.acquire()
         try:
-            future = asyncio.get_running_loop().run_in_executor(
-                None, partial(service.instance_branding.icon, size,
-                              accents[0] if len(accents) == 1 else None,
-                              revision=revisions[0] if revisions else None))
+            content = service.instance_branding.cached_icon(size, accent)
+            if content is None:
+                future = asyncio.get_running_loop().run_in_executor(
+                    None, partial(service.instance_branding.icon, size, accent))
         except BaseException:
-            icon_encodes -= 1
+            icon_encodes.release()
             raise
+        if content is not None:
+            icon_encodes.release()
+            return web.Response(body=content, content_type='image/png')
 
         def finished(future):
-            nonlocal icon_encodes
-            icon_encodes -= 1
+            # Keep the slot until the thread actually finishes even if its
+            # HTTP waiter was cancelled; a waiting request can then proceed.
+            icon_encodes.release()
             # Retrieve any exception if the original HTTP waiter was cancelled.
             if not future.cancelled():
                 future.exception()
 
         future.add_done_callback(finished)
-        try:
-            content = await asyncio.shield(future)
-        except StaleIconRevision:
-            raise web.HTTPGone() from None
+        content = await asyncio.shield(future)
         return web.Response(body=content, content_type='image/png')
 
     app.router.add_get('/manifest.webmanifest', instance_manifest)

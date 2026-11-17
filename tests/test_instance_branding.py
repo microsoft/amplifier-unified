@@ -238,7 +238,9 @@ async def test_public_branding_caches_login_metadata_and_mutation_auth(server_ap
         else:
             manifest = json.loads(await response.text())
             assert manifest['name'] == name and manifest['id'] == '/'
-    assert (await client.get('/instance-icon/32.png?v=old')).status == 410
+    old = await client.get('/instance-icon/32.png?v=old')
+    assert old.status == 200 and old.headers['Cache-Control'] == 'no-store'
+    assert await old.read() == store.icon(32)
     for path in ('/login', '/', '/index.html'):
         response = await client.get(path, headers=headers if path != '/login' else {})
         assert response.status == 200
@@ -295,8 +297,12 @@ async def test_browser_accents_manifest_icons_and_clear_action(server_app, aioht
     assert changed.status == 200
     custom = (await changed.json())['result']
     assert custom['colorMode'] == 'custom' and custom['revision'] != before['revision']
-    assert (await client.get(manifests[0]['icons'][0]['src'])).status == 410
-    assert (await client.get('/instance-icon/32.png?v=one&v=two')).status == 410
+    old = await client.get(manifests[0]['icons'][0]['src'])
+    assert old.status == 200 and old.headers['Cache-Control'] == 'no-store'
+    assert await old.read() == store.icon(192)
+    multiple_versions = await client.get('/instance-icon/32.png?v=one&v=two')
+    assert multiple_versions.status == 200
+    assert await multiple_versions.read() == store.icon(32)
     custom_manifest = await (await client.get('/manifest.webmanifest?accent=abcdef')).json()
     assert all('accent=' not in icon['src'] for icon in custom_manifest['icons'])
     assert await (await client.get('/instance-icon/32.png?accent=abcdef')).read() == store.icon(32)
@@ -317,11 +323,52 @@ async def test_browser_accents_manifest_icons_and_clear_action(server_app, aioht
         await (await client.get('/manifest.webmanifest?accent=abcdef')).json())['icons'])
 
 
+async def test_old_public_icon_urls_follow_current_branding(server_app, aiohttp_client):
+    client = await aiohttp_client(server_app)
+    store = server_app['service'].instance_branding
+    headers = {'Authorization': 'Bearer ' + server_app['control_token']}
+    default_url = store.icon_url(192)
+    browser_url = store.icon_url(192, 'abcdef')
+    original = await (await client.get(default_url)).read()
+
+    async def change(patch):
+        response = await client.post('/api/actions', headers=headers, json={
+            'action': 'instanceBranding.update', 'args': {'patch': patch}})
+        assert response.status == 200
+
+    async def current(url, accent=None):
+        response = await client.get(url, allow_redirects=False)
+        assert response.status == 200
+        assert response.headers['Cache-Control'] == 'no-store'
+        assert response.content_type == 'image/png' and 'Set-Cookie' not in response.headers
+        result = await response.read()
+        assert result == store.icon(192, accent)
+        return result
+
+    await change({'color': '#bada55'})
+    custom_url = store.icon_url(192)
+    custom = await current(default_url)
+    assert custom != original
+    assert await current(browser_url, 'abcdef') == custom
+    await change({'color': '#123456'})
+    assert await current(custom_url) != custom
+    await change({'image': raster()})
+    upload_url = store.icon_url(192)
+    upload = await current(default_url)
+    assert await current(browser_url, 'abcdef') == upload
+    await change({'image': '', 'color': ''})
+    assert await current(upload_url) == original
+    assert await current(browser_url, 'abcdef') == store.icon(192, 'abcdef')
+
+
 async def test_public_icon_work_is_bounded_even_when_client_disconnects(server_app, aiohttp_client, monkeypatch):
     cancelled = asyncio.Event()
+    arrived = asyncio.Event()
 
     @web.middleware
     async def observe_cancel(request, handler):
+        if request.path == '/instance-icon/32.png' and request.query.get('accent') == 'abcdef':
+            arrived.set()
         try:
             return await handler(request)
         except asyncio.CancelledError:
@@ -330,17 +377,24 @@ async def test_public_icon_work_is_bounded_even_when_client_disconnects(server_a
 
     server_app.middlewares.insert(0, observe_cancel)
     client = await aiohttp_client(server_app)
+    store = server_app['service'].instance_branding
+    cached = await (await client.get('/instance-icon/32.png?accent=987654')).read()
     original = branding._badge
     lock = threading.Lock()
     started = threading.Event()
     release = threading.Event()
     idle = threading.Event()
     running = 0
+    maximum = 0
+    fifth_started = threading.Event()
 
     def blocked(size, color, mark):
-        nonlocal running
+        nonlocal running, maximum
         with lock:
             running += 1
+            maximum = max(maximum, running)
+            if color == '#abcdef':
+                fifth_started.set()
             idle.clear()
             if running == 4:
                 started.set()
@@ -355,24 +409,44 @@ async def test_public_icon_work_is_bounded_even_when_client_disconnects(server_a
 
     monkeypatch.setattr(branding, '_badge', blocked)
     tasks = [asyncio.ensure_future(client.get(f'/instance-icon/32.png?accent={n:06x}')) for n in range(4)]
+    waiting = None
+    cancelled_waiter = None
     try:
         assert await asyncio.to_thread(started.wait, 10)
-        busy = await client.get('/instance-icon/32.png?accent=abcdef')
-        assert busy.status == 503 and busy.headers['Retry-After'] == '1'
-        assert busy.headers['Cache-Control'] == 'no-store'
+        waiting = asyncio.ensure_future(client.get('/instance-icon/32.png?accent=abcdef&v=old'))
+        await asyncio.wait_for(arrived.wait(), 10)
+        cached_response = await asyncio.wait_for(
+            client.get('/instance-icon/32.png?accent=987654&v=old'), 2)
+        assert cached_response.status == 200 and cached_response.headers['Cache-Control'] == 'no-store'
+        assert await cached_response.read() == cached
+        head = await asyncio.wait_for(
+            client.head('/instance-icon/32.png?accent=987654&v=old'), 2)
+        assert head.status == 200 and head.headers['Cache-Control'] == 'no-store'
+        assert await head.read() == b''
+        cancelled_waiter = asyncio.ensure_future(client.get('/instance-icon/32.png?accent=999999'))
+        await asyncio.sleep(.05)
+        assert not cancelled_waiter.done()
+        cancelled_waiter.cancel()
+        await asyncio.gather(cancelled_waiter, return_exceptions=True)
         tasks[0].cancel()
         await asyncio.gather(tasks[0], return_exceptions=True)
         await asyncio.wait_for(cancelled.wait(), 10)
-        still_busy = await client.get('/instance-icon/32.png?accent=123456')
-        assert still_busy.status == 503
+        await asyncio.sleep(.05)
+        assert not fifth_started.is_set(), 'A cancelled request cannot free its running thread slot'
+        assert not waiting.done()
     finally:
         release.set()
         responses = await asyncio.gather(*tasks, return_exceptions=True)
         for response in responses:
             if not isinstance(response, BaseException):
                 await response.read()
+        if waiting is not None:
+            waited = await asyncio.wait_for(waiting, 10)
+            assert waited.status == 200 and waited.headers['Cache-Control'] == 'no-store'
+            assert await waited.read() == store.icon(32, 'abcdef')
     assert all(isinstance(response, BaseException) or response.status == 200 for response in responses)
     assert await asyncio.to_thread(idle.wait, 10)
+    assert maximum == 4
     # All four slots, not just one, are reusable after the original work ends.
     await asyncio.sleep(0)
     started.clear()
@@ -381,7 +455,8 @@ async def test_public_icon_work_is_bounded_even_when_client_disconnects(server_a
              for n in range(4)]
     try:
         assert await asyncio.to_thread(started.wait, 10)
-        assert (await client.get('/instance-icon/32.png?accent=abcdef')).status == 503
+        cached_response = await asyncio.wait_for(client.get('/instance-icon/32.png?accent=abcdef'), 2)
+        assert cached_response.status == 200
     finally:
         release.set()
         responses = await asyncio.gather(*tasks, return_exceptions=True)
