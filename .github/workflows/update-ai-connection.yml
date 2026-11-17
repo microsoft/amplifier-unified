@@ -6,10 +6,18 @@ on:
       - 'amplifier_web/update_health.py'
       - 'amplifier_web/update_diagnostics.py'
       - 'amplifier_web/updates.py'
+      - 'amplifier_web/update_sequence.py'
+      - 'amplifier_web/runtime_environment.py'
       - 'amplifier_web/host/config.py'
       - 'amplifier_web/host/session.py'
       - 'tests/test_update_ai_connection.py'
       - 'tests/test_profile_catalog.py'
+      - 'tests/test_update_check_timing.py'
+      - 'tests/test_update_new_installation.py'
+      - 'tests/test_pending_app_updates.py'
+      - 'tests/test_update_health_setup_record.py'
+      - 'tests/test_updates.py'
+      - 'tests/test_update_sequence.py'
       - '.github/workflows/update-ai-connection.yml'
   workflow_dispatch:
 permissions:
@@ -27,3 +35,9 @@ jobs:
       - run: uv sync --locked --group dev
       - name: Decision, page state and the update owner's real check, install and pass
         run: uv run --no-sync pytest -q -ra --tb=short tests/test_update_ai_connection.py tests/test_profile_catalog.py
+      # The timed check and the check at a host start, with the real update
+      # owner; then what a new installation's check lists before its first
+      # component update. The last two files hold the earlier schedule and
+      # classification cases that these changes must keep.
+      - name: The check at a host start, the timed check, and what a new installation's check lists
+        run: uv run --no-sync pytest -q -ra --tb=short tests/test_update_check_timing.py tests/test_update_new_installation.py tests/test_updates.py tests/test_update_sequence.py
