@@ -366,10 +366,12 @@ the object from then on ("Shared source contents changed"). In 0.106.3 the
 connection check of an "OpenAI Compatible API" connection did that; no chat
 with the connection started and the next component update failed. A helper
 prepares a source only through `source_imports.prepare`, which turns bytecode
-writing off for the rest of that process. Do not give the setting to every
-child of the host instead: workers write no bytecode
-(`update_sources.store_environment`), so the helpers are the only processes
-that keep bytecode for the worker environment's own packages.
+writing off for the rest of that process and for the Python processes that it
+starts. Do not give the setting to every child of the host instead. Workers
+write no bytecode (`update_sources.store_environment`), and no installation
+step was found that compiles the worker environment. A helper then leaves the
+bytecode of what it imports from that environment for the next process; with
+the setting it would leave none.
 `tests/test_source_store_bytecode.py` runs the real connection check against
 Foundation's store on a hosted runner.
 

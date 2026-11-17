@@ -15,7 +15,8 @@ the write permission from every folder of an object, and a read-only attribute
 on a Windows folder does not stop a new entry in it.
 
 The rule is ``amplifier_web.source_imports.prepare``: a helper that prepares a
-module from a source writes no bytecode from that call on. Three helpers
+module from a source writes no bytecode from that call on, and a Python
+process that it starts writes none. Three helpers
 prepare a module from a source with the host's environment: the connection
 check, the readiness check of a transfer, and the module validation.
 
@@ -44,18 +45,25 @@ HELPER = Path(__file__).resolve().parents[1] / 'amplifier_web' / 'provider_probe
 MODULE, PACKAGE, CONNECTION = 'provider-store-case', 'amplifier_module_provider_store_case', 'store-case-one'
 
 # A provider module with two files, as a real one has. It says where Python
-# loaded it from and whether that process writes bytecode.
+# loaded it from, whether that process writes bytecode, and whether a Python
+# process that it starts writes bytecode.
 FILES = {
     # The marker of a Python module for Foundation. There is no pyproject.toml,
     # so the helper installs nothing into the environment of these tests.
     'setup.cfg': '[metadata]\nname = amplifier-module-provider-store-case\n',
     '.gitattributes': '* -text\n',
     PACKAGE + '/_listing.py': (
-        'def models(loaded_from, writes_bytecode):\n'
-        "    return [{'id': 'store-case-model', 'loadedFrom': loaded_from, 'writesBytecode': writes_bytecode}]\n"),
+        'def models(loaded_from, writes_bytecode, child_writes_bytecode):\n'
+        "    return [{'id': 'store-case-model', 'loadedFrom': loaded_from, 'writesBytecode': writes_bytecode,\n"
+        "             'childWritesBytecode': child_writes_bytecode}]\n"),
     PACKAGE + '/__init__.py': (
+        'from pathlib import Path\n'
+        'import subprocess\n'
         'import sys\n'
-        'from ._listing import models\n\n\n'
+        'from ._listing import models\n\n'
+        '# A Python process that this process starts, and that imports this package from the same folder.\n'
+        "CHILD = ('import sys; sys.path.insert(0, sys.argv[1]); '\n"
+        "         'import amplifier_module_provider_store_case._listing; print(not sys.dont_write_bytecode)')\n\n\n"
         'class StoreCaseProvider:\n'
         '    def __init__(self, *, config=None):\n'
         '        self.config = config or {}\n\n'
@@ -64,7 +72,9 @@ FILES = {
         '    def get_model_list_info(self):\n'
         "        return {'version': 1, 'source': 'static'}\n\n"
         '    async def list_models(self):\n'
-        '        return models(__file__, not sys.dont_write_bytecode)\n'),
+        '        child = subprocess.run([sys.executable, "-c", CHILD, str(Path(__file__).parent.parent)],\n'
+        '                               capture_output=True, text=True, check=True)\n'
+        '        return models(__file__, not sys.dont_write_bytecode, child.stdout.strip() == "True")\n'),
 }
 
 
@@ -141,8 +151,9 @@ async def test_the_connection_check_leaves_the_store_object_as_foundation_publis
     except ValueError as error:
         verified = f'refused: {error}'
 
-    # What a conversation worker does next: it prepares the same module from
-    # the same source, with the host's rule for a provider that fails.
+    # The next preparation of the same module from the same source, with the
+    # worker's rule for a provider that fails. A conversation worker does this
+    # in its own process; this case does it here.
     monkeypatch.setattr(sys, 'path', list(sys.path))
     isolation = ProviderIsolation()
     provider = {'module': MODULE, 'source': connection.source, 'config': {}}
@@ -154,6 +165,7 @@ async def test_the_connection_check_leaves_the_store_object_as_foundation_publis
     assert {
         'the helper loaded the module from the store object': Path(model['loadedFrom']).parent.parent == published,
         'the helper writes bytecode': model['writesBytecode'],
+        'a Python process that the helper starts writes bytecode': model['childWritesBytecode'],
         'bytecode in the object': bytecode(published),
         'Foundation, asked for the object again': verified,
         "the worker's record for the connection": failure and {
@@ -161,6 +173,7 @@ async def test_the_connection_check_leaves_the_store_object_as_foundation_publis
     } == {
         'the helper loaded the module from the store object': True,
         'the helper writes bytecode': False,
+        'a Python process that the helper starts writes bytecode': False,
         'bytecode in the object': [],
         'Foundation, asked for the object again': 'accepted',
         "the worker's record for the connection": None,
@@ -176,11 +189,13 @@ async def test_on_a_host_without_a_store_the_connection_check_leaves_the_checkou
         'the helper loaded the module from a checkout in the cache':
             checkout.resolve().parent == connection.cache.resolve(),
         'the helper writes bytecode': model['writesBytecode'],
+        'a Python process that the helper starts writes bytecode': model['childWritesBytecode'],
         'bytecode in the checkout': bytecode(checkout),
         'Foundation finds the checkout clean': clean_checkout(checkout),
     } == {
         'the helper loaded the module from a checkout in the cache': True,
         'the helper writes bytecode': False,
+        'a Python process that the helper starts writes bytecode': False,
         'bytecode in the checkout': [],
         'Foundation finds the checkout clean': True,
     }
@@ -198,13 +213,16 @@ def preparation(monkeypatch):
             return Source()
 
         async def prepare(self, **options):
-            seen.append({'writes bytecode': not sys.dont_write_bytecode})
+            seen.append({'writes bytecode': not sys.dont_write_bytecode,
+                         'its Python children write bytecode': os.environ.get('PYTHONDONTWRITEBYTECODE') != '1'})
             raise RuntimeError('The case ends here: what the helper does with the module is not its subject.')
 
-    saved = dict(os.environ)   # Each helper writes AMPLIFIER_HOME for its preparation.
+    saved = dict(os.environ)   # Each helper writes names for its preparation.
     monkeypatch.setattr(amplifier_foundation, 'Bundle', Source)
-    # pytest itself can run with -B. The helper must turn bytecode writing off itself.
+    # pytest itself can run with -B, and a job or a shell can have the
+    # setting. The helper must turn bytecode writing off itself.
     monkeypatch.setattr(sys, 'dont_write_bytecode', False)
+    os.environ.pop('PYTHONDONTWRITEBYTECODE', None)
     yield seen
     os.environ.clear()
     os.environ.update(saved)
@@ -242,15 +260,18 @@ async def module_validation(tmp_path, monkeypatch):
 async def test_each_helper_that_prepares_a_module_from_a_source_writes_no_bytecode_from_then_on(
         helper, preparation, tmp_path, monkeypatch, capsys):
     await helper(tmp_path, monkeypatch)
-    assert preparation == [{'writes bytecode': False}]
-    assert sys.dont_write_bytecode is True   # Also for the imports that follow the preparation.
+    assert preparation == [{'writes bytecode': False, 'its Python children write bytecode': False}]
+    # Also for the imports and the child processes that follow the preparation.
+    assert sys.dont_write_bytecode is True and os.environ['PYTHONDONTWRITEBYTECODE'] == '1'
 
 
 def test_a_helper_starts_the_preparation_of_a_bundle_only_through_the_rule():
     """A reminder for the next helper, not a proof.
 
     It finds the call by the two names that this code gives a Foundation
-    bundle. ``host/components.py`` prepares for conversation workers and update
+    bundle, and the call on the result of another call
+    (``Bundle.from_dict(...).prepare(``). Another name passes unseen.
+    ``host/components.py`` prepares for conversation workers and update
     stages; their environment turns bytecode writing off
     (``update_sources.store_environment``).
     """
@@ -258,7 +279,7 @@ def test_a_helper_starts_the_preparation_of_a_bundle_only_through_the_rule():
     callers = sorted(
         path.relative_to(package).as_posix() for path in package.rglob('*.py')
         if 'static' not in path.relative_to(package).parts
-        and re.search(r'\b(?:bundle|projected)\.prepare\(', path.read_text(encoding='utf-8')))
+        and re.search(r'(?:\b(?:bundle|projected)|\))\s*\.prepare\(', path.read_text(encoding='utf-8')))
     assert callers == ['host/components.py', 'source_imports.py'], (
         'A helper that prepares a module from a source calls amplifier_web.source_imports.prepare, '
         'not the bundle. Else it writes __pycache__ into the source, and Foundation then refuses a store object.')

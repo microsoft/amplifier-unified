@@ -10,9 +10,9 @@ name: Source store bytecode
 #
 # Both jobs run the real helper file through the product's own start of it,
 # against Foundation's real code and a Git repository on the runner: once on a
-# host that names the store, where the same module is then prepared again as a
-# conversation worker does, and once on a host that names none. Nothing goes to
-# a network after the dependencies are installed. A case that fails, has an
+# host that names the store, where the same module is then prepared again with
+# the worker's rule for a provider that fails, and once on a host that names
+# none. Nothing goes to a network after the dependencies are installed. A case that fails, has an
 # error, is skipped, is deselected or is expected to fail fails the job, and so
 # does a run with no case: each step checks the exit status of pytest and its
 # summary line. -vv prints every fact of the case when one differs.
@@ -25,9 +25,10 @@ on:
     paths:
       - .github/workflows/source-store-bytecode.yml
       - amplifier_web/source_imports.py
-      - amplifier_web/provider_probe.py
-      - amplifier_web/portability_probe.py
-      - amplifier_web/module_validate.py
+      # Every helper file with one of these names, also a new one: the last
+      # case names a helper that prepares a bundle itself.
+      - amplifier_web/*_probe.py
+      - amplifier_web/*_validate.py
       - amplifier_web/setup.py
       - amplifier_web/registry.py
       - amplifier_web/portability.py
