@@ -13,6 +13,11 @@ and accepted-work interface; connected experiences retain their source conversat
 The adapter's advertised capabilities below describe its scope, not complete
 ecosystem conformance.
 
+See the [supported ACP pilot composition](../validation/acp-supported-composition.md)
+for the recorded November 16 combinations, lifecycle and context-read evidence,
+and preserved harness failures. That acceptance is version-specific; the current
+setup and approval-policy guidance below has its own implementation history.
+
 ## Setup
 
 Install and start Unified normally, connect its model account, and choose its

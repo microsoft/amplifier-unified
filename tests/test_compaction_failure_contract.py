@@ -18,6 +18,7 @@ from amplifier_web.session_health import generation_failure
     'authoritative_measurement_unavailable', 'summary_output_limit', 'summary_empty',
     'previous_failure', 'summary_failed', 'native_failed',
     'native_recovery_required_context_oversized', 'checkpoint_persist_failed',
+    'summary_work_paused', 'summary_progress_incompatible',
 ])
 def test_real_compaction_error_reaches_app_without_private_payload(code):
     errors = pytest.importorskip('amplifier_module_context_managed.errors')
@@ -31,7 +32,41 @@ def test_real_compaction_error_reaches_app_without_private_payload(code):
     assert visible['category'] == 'context_compaction'
     assert visible['stage'] == 'context_preparation'
     assert visible['replayed'] is False
+    if code in {'summary_work_paused', 'summary_progress_incompatible'}:
+        assert isinstance(error, RuntimeError)
+        assert event['retryable'] is payload['retryable'] is visible['retryable'] is False
     assert 'PRIVATE' not in json.dumps([event, payload, visible])
+
+
+@pytest.mark.parametrize('code,summary,guidance', [
+    ('summary_work_paused',
+     'Conversation preparation reached its local call allowance.',
+     'Completed summary progress is saved. Further preparation requires separate admission; '
+     'it was not automatically retried. Original history and the checkpoint are preserved.'),
+    ('summary_progress_incompatible',
+     'Saved summary progress cannot be used with the current source or policy.',
+     'No replacement summary work was started. Original history and the checkpoint are preserved. '
+     'Review the source and policy mismatch before deciding how to proceed.'),
+])
+@pytest.mark.parametrize('private', ['PRIVATE source, policy and history', {'PRIVATE': ['provider payload']}])
+def test_work_pause_failure_projection_preserves_safe_cause_without_retry(code, summary, guidance, private):
+    event = {'type': 'generation.failed', 'generation_id': 'generation', 'input_ids': ['input'],
+             'error_type': 'CompactionError', 'error_category': 'context_compaction',
+             'error_code': code, 'error_stage': 'context_preparation', 'retryable': False,
+             'error_message': private, 'source': private, 'policy': private, 'history': private,
+             'checkpoint': private, 'effects': 'PRIVATE', 'replayed': True}
+    before = deepcopy(event)
+    kind, payload = normalize_event(event, 'chat')
+    assert event == before
+    assert kind == 'runtime.generation' and payload['event'] == 'generation.failed'
+    assert payload['generation_id'] == 'generation' and payload['input_ids'] == ['input']
+    assert payload['sessionId'] == payload['rootSessionId'] == 'chat'
+    expected = {'code': code, 'category': 'context_compaction', 'errorType': 'CompactionError',
+                'stage': 'context_preparation', 'summary': summary, 'guidance': guidance,
+                'effects': 'not_rolled_back', 'replayed': False, 'retryable': False}
+    assert generation_failure(payload) == generation_failure(event) == expected
+    assert 'PRIVATE' not in json.dumps([payload, expected])
+    assert not any(text in guidance for text in ('Try Continue', 'Retry', 'Increase', 'recovery copy'))
 
 
 @pytest.fixture(params=['root', 'child'])

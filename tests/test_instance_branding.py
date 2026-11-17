@@ -8,7 +8,9 @@ import io
 import json
 import os
 from pathlib import Path
+import threading
 
+from aiohttp import web
 from PIL import Image, PngImagePlugin
 import pytest
 
@@ -111,11 +113,12 @@ def test_upload_is_reencoded_to_bounded_metadata_free_png(tmp_path, format):
 @pytest.mark.parametrize('size', [(4097, 1), (1, 4097), (4097, 4097)])
 def test_oversized_dimensions_are_rejected_before_decode(tmp_path, size, monkeypatch):
     encoded = raster(size)
+    store = owner(tmp_path)
     def unexpected_decode(self, *args, **kwargs):
         raise AssertionError('Oversized image must not be decoded')
     monkeypatch.setattr(Image.Image, 'load', unexpected_decode)
     with pytest.raises(ValueError, match='4096'):
-        owner(tmp_path).prepare({'image': encoded})
+        store.prepare({'image': encoded})
 
 
 def test_badge_is_raster_deterministic_and_recolored(tmp_path):
@@ -180,6 +183,8 @@ def test_manifest_changes_presentation_not_identity_or_other_properties(tmp_path
         for original, icon in zip(template['icons'], result['icons']):
             assert icon == {**original, 'src': store.icon_url(int(icon['sizes'].split('x')[0]))}
     assert template['name'] == 'Amplifier'
+    maskable = {'src': '/other-maskable.png', 'sizes': '192x192', 'purpose': 'maskable'}
+    assert store.manifest({**template, 'icons': [maskable]}, 'abcdef')['icons'] == [maskable]
 
 
 class Head(HTMLParser):
@@ -222,7 +227,7 @@ async def test_public_branding_caches_login_metadata_and_mutation_auth(server_ap
         response = await client.get('/manifest.webmanifest', headers={
             'Host': host, 'X-Forwarded-Host': 'attacker.example:9999'})
         assert json.loads(await response.text())['name'] == name
-    for path in ['/manifest.webmanifest', *(f'/instance-icon/{size}.png?v=old' for size in branding.SIZES)]:
+    for path in ['/manifest.webmanifest', *(store.icon_url(size) for size in branding.SIZES)]:
         response = await client.get(path, headers={'If-None-Match': '*'}, allow_redirects=False)
         assert response.status == 200 and response.headers['Cache-Control'] == 'no-store'
         assert 'Set-Cookie' not in response.headers
@@ -233,6 +238,9 @@ async def test_public_branding_caches_login_metadata_and_mutation_auth(server_ap
         else:
             manifest = json.loads(await response.text())
             assert manifest['name'] == name and manifest['id'] == '/'
+    old = await client.get('/instance-icon/32.png?v=old')
+    assert old.status == 200 and old.headers['Cache-Control'] == 'no-store'
+    assert await old.read() == store.icon(32)
     for path in ('/login', '/', '/index.html'):
         response = await client.get(path, headers=headers if path != '/login' else {})
         assert response.status == 200
@@ -252,6 +260,309 @@ async def test_public_branding_caches_login_metadata_and_mutation_auth(server_ap
     assert (await client.get('/instance-icon/4096.png', allow_redirects=False)).status == 307
     assert (await client.get('/api/state', allow_redirects=False)).status == 401
     assert (await client.get('/', allow_redirects=False)).status == 307
+
+
+async def test_browser_accents_manifest_icons_and_clear_action(server_app, aiohttp_client):
+    client = await aiohttp_client(server_app)
+    store = server_app['service'].instance_branding
+    before = store.snapshot()
+    assert before['colorMode'] == 'appearance'
+    manifests = []
+    icons = []
+    for accent in ('ABCDEF', '123456'):
+        response = await client.get('/manifest.webmanifest?accent=' + accent)
+        assert response.status == 200 and response.headers['Cache-Control'] == 'no-store'
+        manifest = await response.json()
+        manifests.append(manifest)
+        assert manifest['id'] == manifest['start_url'] == manifest['scope'] == '/'
+        assert all('accent=' + accent.lower() in item['src'] for item in manifest['icons'])
+        response = await client.get(manifest['icons'][0]['src'])
+        assert response.status == 200 and response.headers['Cache-Control'] == 'no-store'
+        assert response.content_type == 'image/png'
+        icons.append(await response.read())
+    assert icons[0] != icons[1]
+    head = await client.head('/instance-icon/32.png?accent=abcdef')
+    assert head.status == 200 and head.headers['Cache-Control'] == 'no-store'
+    assert head.content_type == 'image/png' and not await head.read()
+    assert store.snapshot() == before and not store.path.exists()
+    # Invalid and duplicated variants never become markup or cache keys.
+    for query in ('accent=%23123456', 'accent=12345g', 'accent=123456&accent=abcdef'):
+        manifest = await (await client.get('/manifest.webmanifest?' + query)).json()
+        assert all('accent=' not in icon['src'] for icon in manifest['icons'])
+        response = await client.get('/instance-icon/32.png?' + query)
+        assert await response.read() == store.icon(32)
+    headers = {'Authorization': 'Bearer ' + server_app['control_token']}
+    changed = await client.post('/api/actions', headers=headers, json={
+        'action': 'instanceBranding.update', 'args': {'patch': {'name': 'Kept', 'color': before['color']}}})
+    assert changed.status == 200
+    custom = (await changed.json())['result']
+    assert custom['colorMode'] == 'custom' and custom['revision'] != before['revision']
+    old = await client.get(manifests[0]['icons'][0]['src'])
+    assert old.status == 200 and old.headers['Cache-Control'] == 'no-store'
+    assert await old.read() == store.icon(192)
+    multiple_versions = await client.get('/instance-icon/32.png?v=one&v=two')
+    assert multiple_versions.status == 200
+    assert await multiple_versions.read() == store.icon(32)
+    custom_manifest = await (await client.get('/manifest.webmanifest?accent=abcdef')).json()
+    assert all('accent=' not in icon['src'] for icon in custom_manifest['icons'])
+    assert await (await client.get('/instance-icon/32.png?accent=abcdef')).read() == store.icon(32)
+    cleared = await client.post('/api/actions', headers=headers, json={
+        'action': 'instanceBranding.update', 'args': {'patch': {'color': ''}}})
+    assert cleared.status == 200
+    after = (await cleared.json())['result']
+    assert after['colorMode'] == 'appearance' and after['name'] == 'Kept'
+    assert branding.InstanceBranding(store.root, server_app['server_config']).snapshot() == after
+    upload = await client.post('/api/actions', headers=headers, json={
+        'action': 'instanceBranding.update', 'args': {'patch': {'image': raster()}}})
+    assert upload.status == 200
+    assert (await upload.json())['result']['customIcon']
+    images = [await (await client.get('/instance-icon/192.png?accent=' + accent)).read()
+              for accent in ('abcdef', '123456')]
+    assert images[0] == images[1] == store.icon(192)
+    assert all('accent=' not in icon['src'] for icon in (
+        await (await client.get('/manifest.webmanifest?accent=abcdef')).json())['icons'])
+
+
+async def test_old_public_icon_urls_follow_current_branding(server_app, aiohttp_client):
+    client = await aiohttp_client(server_app)
+    store = server_app['service'].instance_branding
+    headers = {'Authorization': 'Bearer ' + server_app['control_token']}
+    default_url = store.icon_url(192)
+    browser_url = store.icon_url(192, 'abcdef')
+    original = await (await client.get(default_url)).read()
+
+    async def change(patch):
+        response = await client.post('/api/actions', headers=headers, json={
+            'action': 'instanceBranding.update', 'args': {'patch': patch}})
+        assert response.status == 200
+
+    async def current(url, accent=None):
+        response = await client.get(url, allow_redirects=False)
+        assert response.status == 200
+        assert response.headers['Cache-Control'] == 'no-store'
+        assert response.content_type == 'image/png' and 'Set-Cookie' not in response.headers
+        result = await response.read()
+        assert result == store.icon(192, accent)
+        return result
+
+    await change({'color': '#bada55'})
+    custom_url = store.icon_url(192)
+    custom = await current(default_url)
+    assert custom != original
+    assert await current(browser_url, 'abcdef') == custom
+    await change({'color': '#123456'})
+    assert await current(custom_url) != custom
+    await change({'image': raster()})
+    upload_url = store.icon_url(192)
+    upload = await current(default_url)
+    assert await current(browser_url, 'abcdef') == upload
+    await change({'image': '', 'color': ''})
+    assert await current(upload_url) == original
+    assert await current(browser_url, 'abcdef') == store.icon(192, 'abcdef')
+
+
+async def test_public_icon_work_is_bounded_even_when_client_disconnects(server_app, aiohttp_client, monkeypatch):
+    cancelled = asyncio.Event()
+    queued_arrived = asyncio.Event()
+    queued_cancelled = asyncio.Event()
+    arrived = asyncio.Event()
+
+    @web.middleware
+    async def observe_cancel(request, handler):
+        if request.path == '/instance-icon/32.png' and request.query.get('accent') == 'abcdef':
+            arrived.set()
+        if request.path == '/instance-icon/32.png' and request.query.get('accent') == '999999':
+            queued_arrived.set()
+        try:
+            return await handler(request)
+        except asyncio.CancelledError:
+            if request.query.get('accent') == '999999':
+                queued_cancelled.set()
+            cancelled.set()
+            raise
+
+    server_app.middlewares.insert(0, observe_cancel)
+    client = await aiohttp_client(server_app)
+    store = server_app['service'].instance_branding
+    cached = await (await client.get('/instance-icon/32.png?accent=987654')).read()
+    original = branding._badge
+    lock = threading.Lock()
+    started = threading.Event()
+    release = threading.Event()
+    idle = threading.Event()
+    running = 0
+    maximum = 0
+    fifth_started = threading.Event()
+
+    def blocked(size, color, mark):
+        nonlocal running, maximum
+        with lock:
+            running += 1
+            maximum = max(maximum, running)
+            if color == '#abcdef':
+                fifth_started.set()
+            idle.clear()
+            if running == 4:
+                started.set()
+        try:
+            assert release.wait(10)
+            return original(size, color, mark)
+        finally:
+            with lock:
+                running -= 1
+                if running == 0:
+                    idle.set()
+
+    monkeypatch.setattr(branding, '_badge', blocked)
+    tasks = [asyncio.ensure_future(client.get(f'/instance-icon/32.png?accent={n:06x}')) for n in range(4)]
+    waiting = None
+    cancelled_waiter = None
+    try:
+        assert await asyncio.to_thread(started.wait, 10)
+        waiting = asyncio.ensure_future(client.get('/instance-icon/32.png?accent=abcdef&v=old'))
+        await asyncio.wait_for(arrived.wait(), 10)
+        cached_response = await asyncio.wait_for(
+            client.get('/instance-icon/32.png?accent=987654&v=old'), 2)
+        assert cached_response.status == 200 and cached_response.headers['Cache-Control'] == 'no-store'
+        assert await cached_response.read() == cached
+        head = await asyncio.wait_for(
+            client.head('/instance-icon/32.png?accent=987654&v=old'), 2)
+        assert head.status == 200 and head.headers['Cache-Control'] == 'no-store'
+        assert await head.read() == b''
+        cancelled_waiter = asyncio.ensure_future(client.get('/instance-icon/32.png?accent=999999'))
+        await asyncio.wait_for(queued_arrived.wait(), 10)
+        assert not cancelled_waiter.done()
+        cancelled_waiter.cancel()
+        await asyncio.gather(cancelled_waiter, return_exceptions=True)
+        await asyncio.wait_for(queued_cancelled.wait(), 10)
+        cancelled.clear()
+        tasks[0].cancel()
+        await asyncio.gather(tasks[0], return_exceptions=True)
+        await asyncio.wait_for(cancelled.wait(), 10)
+        await asyncio.sleep(.05)
+        assert not fifth_started.is_set(), 'A cancelled request cannot free its running thread slot'
+        assert not waiting.done()
+    finally:
+        release.set()
+        responses = await asyncio.gather(*tasks, return_exceptions=True)
+        for response in responses:
+            if not isinstance(response, BaseException):
+                await response.read()
+        if waiting is not None:
+            waited = await asyncio.wait_for(waiting, 10)
+            assert waited.status == 200 and waited.headers['Cache-Control'] == 'no-store'
+            assert await waited.read() == store.icon(32, 'abcdef')
+    assert all(isinstance(response, BaseException) or response.status == 200 for response in responses)
+    assert await asyncio.to_thread(idle.wait, 10)
+    assert maximum == 4
+    # All four slots, not just one, are reusable after the original work ends.
+    await asyncio.sleep(0)
+    started.clear()
+    release.clear()
+    tasks = [asyncio.ensure_future(client.get(f'/instance-icon/32.png?accent={n + 100:06x}'))
+             for n in range(4)]
+    try:
+        assert await asyncio.to_thread(started.wait, 10)
+        cached_response = await asyncio.wait_for(client.get('/instance-icon/32.png?accent=abcdef'), 2)
+        assert cached_response.status == 200
+    finally:
+        release.set()
+        responses = await asyncio.gather(*tasks, return_exceptions=True)
+        for response in responses:
+            if not isinstance(response, BaseException):
+                await response.read()
+    assert all(not isinstance(response, BaseException) and response.status == 200 for response in responses)
+
+
+async def test_public_icon_encode_failure_releases_admission(server_app, aiohttp_client, monkeypatch):
+    client = await aiohttp_client(server_app)
+    original = branding._badge
+
+    def failure(*args):
+        raise RuntimeError('synthetic icon encoder failure')
+
+    monkeypatch.setattr(branding, '_badge', failure)
+    for _ in range(5):
+        assert (await client.get('/instance-icon/32.png?accent=987654')).status == 500
+    monkeypatch.setattr(branding, '_badge', original)
+    assert (await client.get('/instance-icon/32.png?accent=987654')).status == 200
+
+
+async def test_icon_pending_queue_is_bounded_without_blocking_cached_reads(tmp_path, aiohttp_client, monkeypatch):
+    from amplifier_web import server
+    monkeypatch.setattr(server, '_ICON_RENDER_LIMIT', 1)
+    monkeypatch.setattr(server, '_ICON_PENDING_LIMIT', 2)
+    # Semaphore capacity is set when the app is created, not when a request arrives.
+    root = tmp_path / 'queue-test'
+    root.mkdir()
+    application = await create_app(root, workspace=root, runtime=Runtime(), voice=False,
+                                   background_updates=False, preload_providers=False, background_work=False)
+    arrived = asyncio.Event()
+    seen = set()
+
+    @web.middleware
+    async def observed(request, handler):
+        accent = request.query.get('accent')
+        if accent in {'000002', '000003'}:
+            seen.add(accent)
+            if len(seen) == 2:
+                arrived.set()
+        return await handler(request)
+
+    application.middlewares.insert(0, observed)
+    store = application['service'].instance_branding
+    began, release = threading.Event(), threading.Event()
+    original = branding._badge
+
+    def blocked(size, color, mark):
+        began.set()
+        assert release.wait(10)
+        return original(size, color, mark)
+
+    tasks = []
+    client = None
+    try:
+        client = await aiohttp_client(application)
+        cached = await (await client.get('/instance-icon/32.png?accent=abcdef')).read()
+        monkeypatch.setattr(branding, '_badge', blocked)
+        tasks.append(asyncio.ensure_future(client.get('/instance-icon/32.png?accent=000001')))
+        assert await asyncio.to_thread(began.wait, 10)
+        tasks.extend(asyncio.ensure_future(client.get('/instance-icon/32.png?accent=' + accent))
+                     for accent in ('000002', '000003'))
+        await asyncio.wait_for(arrived.wait(), 10)
+        assert all(not task.done() for task in tasks)
+        busy = await client.get('/instance-icon/32.png?accent=000004')
+        assert busy.status == 503 and busy.headers['Retry-After'] == '1'
+        assert busy.headers['Cache-Control'] == 'no-store'
+        hit = await client.get('/instance-icon/32.png?accent=abcdef&v=old')
+        assert hit.status == 200 and await hit.read() == cached
+    finally:
+        release.set()
+        responses = await asyncio.gather(*tasks, return_exceptions=True)
+        for response in responses:
+            if not isinstance(response, BaseException):
+                await response.read()
+        if client is not None:
+            await client.close()
+        await application['service'].close()
+    assert all(not isinstance(response, BaseException) and response.status == 200 for response in responses)
+    assert len(store._icons) <= branding._ICON_CACHE_LIMIT
+
+
+async def test_icon_executor_submission_failure_releases_admission(server_app, aiohttp_client, monkeypatch):
+    client = await aiohttp_client(server_app)
+    loop = asyncio.get_running_loop()
+    original = loop.run_in_executor
+
+    def refused(executor, func, *args):
+        raise RuntimeError('synthetic executor submission failure')
+
+    with monkeypatch.context() as patch:
+        patch.setattr(loop, 'run_in_executor', refused)
+        for _ in range(5):
+            assert (await client.get('/instance-icon/32.png?accent=987654')).status == 500
+    assert loop.run_in_executor == original
+    assert (await client.get('/instance-icon/32.png?accent=987654')).status == 200
 
 
 async def test_final_serialized_record_overflow_is_input_error_and_keeps_saved_state(server_app, aiohttp_client, monkeypatch):

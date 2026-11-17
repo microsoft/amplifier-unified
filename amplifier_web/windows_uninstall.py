@@ -403,7 +403,8 @@ def remove(root, *, stop, certificate, progress, choice="delete", data=remove_da
        the private-file boundary; then the folder's own handle. An entry
        whose name differs from this installation's own only by case refuses.
     2. Check and pin the Windows entries. `stop()` stops the app and removes
-       its sign-in task. `certificate()` lets Windows ask once.
+       its sign-in task. `certificate()` lets Windows ask, once for each
+       certificate of this installation that it holds.
        Up to here nothing in the folder has changed.
     3. The journal. Nothing in the folder is deleted before it exists. From
        here Amplifier does not start from this folder.
