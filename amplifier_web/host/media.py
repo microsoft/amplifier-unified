@@ -116,6 +116,7 @@ def seal_hook_graph(coordinator):
         return False
     report = cap.report("unified-host", event="readiness", outcome="inspect")
     loop_ready = any(row.get("role") == "loop" and type(row.get("contract")) is int and row["contract"] == 1
+                     and row.get("ready") is True
                      for row in report.get("consumers", {}).values())
     cap.enabled = bool(bridge.validate_receipt(receipt) and loop_ready
                        and callable(coordinator.get_capability("session.durable_checkpoint")))

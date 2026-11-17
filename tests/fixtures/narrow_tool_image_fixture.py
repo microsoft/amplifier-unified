@@ -67,8 +67,10 @@ class RecordingProvider:
 
 class FixtureLoader:
     """Public Core mount API, real live/context/filesystem implementations."""
-    def __init__(self, provider, post=None):
+    def __init__(self, provider, post=None, *,
+                 consumer_readiness={"role": "loop", "contract": 1, "ready": True}):
         self.provider, self.post = provider, post
+        self.consumer_readiness = consumer_readiness
         self.queue = []
 
     async def load(self, module_id, config, *, source_hint=None, coordinator=None):
@@ -79,10 +81,13 @@ class FixtureLoader:
         async def mount(current):
             if module_id == "loop-live":
                 await live.mount(current, config)
-                # The narrow loop owner supplies this same readiness report.
-                # It is not source selection or a construction receipt.
-                current.get_capability(NAMESPACE).report("loop-live", event="consumer-ready",
-                    outcome="ready", details={"role": "loop", "contract": 1})
+                # Explicit SYNTHETIC fixture availability, not evidence that the
+                # actual loop mount/Worker initializes consumer readiness.
+                # Source/bridge/checkpoint qualification stays independent.
+                if self.consumer_readiness is not None:
+                    current.get_capability(NAMESPACE).report("loop-live", event="consumer-ready",
+                        outcome="ready" if self.consumer_readiness.get("ready") is True else "unavailable",
+                        details=dict(self.consumer_readiness))
             elif module_id == "context-simple":
                 await context.mount(current, config)
             elif module_id == "tool-filesystem":

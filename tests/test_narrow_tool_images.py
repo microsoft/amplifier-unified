@@ -33,7 +33,9 @@ def picture(tmp_path, format="PNG"):
     return path, output.getvalue()
 
 
-async def root(tmp_path, *, store=None, post=None):
+async def root(tmp_path, *, store=None, post=None,
+               consumer_readiness={"role": "loop", "contract": 1, "ready": True},
+               expected_enabled=True):
     provider = RecordingProvider()
     plan = {"session": {"orchestrator": {"module": "loop-live", "config": {"configured_bundle": True}},
                         "context": {"module": "context-simple"}},
@@ -41,7 +43,7 @@ async def root(tmp_path, *, store=None, post=None):
             "tools": [{"module": "tool-filesystem", "config": {
                 "working_dir": str(tmp_path), "allowed_read_paths": [str(tmp_path)]}}]}
     session = AmplifierSession(plan, session_id="root-media")
-    session.coordinator.loader = FixtureLoader(provider)
+    session.coordinator.loader = FixtureLoader(provider, consumer_readiness=consumer_readiness)
     # Synthetic source selection, separate from the pending production manifest.
     files = [*source_files(), Path(__file__).resolve()]
     selected = ReviewedRootRecipe(session.config, {
@@ -59,10 +61,64 @@ async def root(tmp_path, *, store=None, post=None):
         return canonical
     coordinator.register_capability("session.durable_checkpoint", checkpoint)
     provider.capability = coordinator.get_capability(media.NAMESPACE)
-    assert media.seal_hook_graph(coordinator)
+    assert media.seal_hook_graph(coordinator) is expected_enabled
     wrapper = SurfaceProvider(provider, MediaOnlyDelivery(), coordinator=coordinator)
     return SimpleNamespace(session=session, coordinator=coordinator, store=store, provider=provider,
                            wrapper=wrapper, checkpoint=checkpoint)
+
+
+@pytest.mark.parametrize("facts", [
+    None,
+    {"role": "loop", "contract": 1},
+    {"role": "loop", "contract": 1, "ready": False},
+    {"role": "loop", "contract": 1, "ready": None},
+    {"role": "loop", "contract": 1, "ready": 0},
+    {"role": "loop", "contract": 1, "ready": 1},
+    {"role": "loop", "contract": 1, "ready": "true"},
+    {"role": "loop", "contract": 1, "ready": True},
+], ids=["absent-consumer", "missing-ready", "false", "null", "zero", "truthy-int", "truthy-string", "true"])
+async def test_loop_readiness_requires_literal_true_on_actual_construction(tmp_path, facts):
+    expected = facts is not None and facts.get("ready") is True
+    current = await root(tmp_path, consumer_readiness=facts, expected_enabled=expected)
+    try:
+        bridge, _, _ = current.coordinator.get_capability("web.media.construction")
+        assert bridge.validate_receipt(bridge.graph_receipt)
+        assert callable(current.coordinator.get_capability("session.durable_checkpoint"))
+        assert current.provider.capability.enabled is expected
+    finally:
+        await current.session.cleanup()
+
+
+async def test_loop_readiness_withdrawal_is_not_resurrected_by_role_and_contract(tmp_path):
+    current = await root(tmp_path)
+    try:
+        cap = current.provider.capability
+        cap.report("loop-live", event="consumer-ready", outcome="unavailable",
+                   details={"role": "loop", "contract": 1, "ready": False})
+        assert media.seal_hook_graph(current.coordinator) is False
+        assert cap.enabled is False
+        cap.report("loop-live", event="consumer-ready", outcome="ready",
+                   details={"role": "loop", "contract": 1, "ready": True})
+        assert media.seal_hook_graph(current.coordinator) is True
+    finally:
+        await current.session.cleanup()
+
+
+async def test_true_loop_readiness_does_not_replace_checkpoint_or_bridge_receipt(tmp_path):
+    current = await root(tmp_path)
+    try:
+        coordinator = current.coordinator
+        coordinator.register_capability("session.durable_checkpoint", None)
+        assert media.seal_hook_graph(coordinator) is False
+        coordinator.register_capability("session.durable_checkpoint", current.checkpoint)
+        assert media.seal_hook_graph(coordinator) is True
+        async def unowned(event, data):
+            return HookResult()
+        coordinator.hooks.register("tool:post", unowned, name="unowned-late-readiness")
+        assert media.seal_hook_graph(coordinator) is False
+        assert current.provider.capability.enabled is False
+    finally:
+        await current.session.cleanup()
 
 
 async def read(root, path, call_id="call-image", **arguments):
