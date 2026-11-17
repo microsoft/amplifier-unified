@@ -26,6 +26,35 @@ runs client units; `npm test --prefix tests/web` runs Unified's integration/prod
 units. Built-asset checks use `npm run test:artifact-assets --prefix .build/web-client`.
 See [host browser checks](tests/web/README.md) for affected real-server journeys.
 
+A running Amplifier Unified gives environment variables to the shells that it
+starts; a chat's shell tool is such a shell. An installed one can keep its data in
+folders below your home folder. When pytest loads `tests/conftest.py`, that file
+does three things for the pytest process:
+
+- It removes the environment variables in its two lists. The first list holds
+  variables that such a shell can inherit from the service. The second list holds
+  the product's default variables for provider credentials (`setup.PROVIDER_ENV`).
+- It sets four of the product's folder variables (`AMPLIFIER_WEB_HOME`,
+  `AMPLIFIER_HOME`, `AMPLIFIER_SESSION_STATE_HOME`, `AMPLIFIER_TERMINAL_HOME`) to
+  folders of the test run.
+- Where Python has the `pwd` module, a lookup of your own account by ID
+  (`pwd.getpwuid`) gives a home folder of the test run. The account database does
+  not change.
+
+It does not do these things:
+
+- It does not change `HOME` (`USERPROFILE` on Windows). The product still reads a
+  file or a folder that it finds through that variable and not through one of these
+  four, for example a ChatGPT sign-in file below `~/.amplifier`. Tools such as Git
+  and uv keep their own files below your home folder.
+- It removes no variable outside its two lists, also not one that a connection
+  names for its credential.
+- A program that a test starts gets your real home folder from the account database.
+- The first list comes from a shell of an installation on Linux. An installation on
+  macOS or Windows sets more variables for its service; the file does not remove them.
+- The file does not act in a pytest run with `--noconftest`, or when you start
+  product code yourself.
+
 These are development setup commands, not a per-release checklist. For releases,
 use the [Fast Release Guide](docs/validation/release-qualification.md): reuse the
 prepared environment and run `release.py prepare --build` once instead of adding

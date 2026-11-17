@@ -116,8 +116,9 @@ async def _query(request, progress):
         progress['stage'] = 'preparation'
         from amplifier_foundation import Bundle
         os.environ['AMPLIFIER_HOME']=request['registryHome']
+        from amplifier_web.source_imports import prepare
         bundle=Bundle.from_dict({'bundle':{'name':'provider-setup'},'providers':[{'module':request['module'],'source':source}]})
-        await bundle.prepare(strict=True)
+        await prepare(bundle,strict=True)
     progress['stage'] = 'import'
     cls=provider_class(request['module'])
     # Metadata gets no credentials/config, except the saved endpoint when the
