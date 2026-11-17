@@ -140,7 +140,7 @@ class TestInsideARun:
         outside_a_test(between_two_tests, session_home)  # Not what the test before left.
         assert os.environ.get(LEFT) is None  # Not what the fixture left after it looked.
 
-    def test_the_rest_of_the_account_entry_is_the_real_one(self):
+    def test_the_rest_of_the_account_entry_is_the_real_one(self, session_home, tmp_path):
         pwd = pytest.importorskip('pwd')  # Python has no pwd module on Windows.
         try:
             entry = pwd.getpwuid(os.getuid())
@@ -153,7 +153,9 @@ class TestInsideARun:
             other = pwd.getpwuid(0 if os.getuid() else 1)
         except KeyError:  # This machine has no second account to look at.
             return
-        assert other == pwd.getpwnam(other.pw_name)  # Another account keeps its whole entry.
+        # Another account keeps its home folder. Its entry is not compared with the
+        # lookup by name: on macOS the two lookups give root different entries.
+        assert not below(other.pw_dir, session_home) and not below(other.pw_dir, tmp_path)
 
 
 def test_the_cases_above_pass_in_a_run_that_inherits_the_outside_variables(tmp_path, monkeypatch):
