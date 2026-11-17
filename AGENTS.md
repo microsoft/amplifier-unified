@@ -222,6 +222,17 @@ step works with paths. Its paths are safe only because it inherits two open
 files that the uninstall program created through handles; do not give it a
 tree walk, a file that it creates or opens by a path, or a rule that rests on
 its current folder.
+`setup-tls force` on a key-less identity makes a new root, and Windows can
+still hold the earlier one for the person. The command records each root that
+it replaces in `config\tls\replaced-roots.pem`; only that command writes the
+file. The launcher (after the person's Yes to the new root) and uninstall ask
+Windows to delete a recorded root only when it has the fixed shape of the
+product's root and the store holds exactly that certificate
+(`windows_trust.replaced`). Never find a root to delete by its name, in code
+or in a guide: another installation's root has the same name. The record
+never loses a root that Windows may still hold; a full or unreadable record
+stops `force` with nothing changed. Windows asks the person once for each
+deletion, and no code answers it; say the number of questions before them.
 Task Scheduler expands percent-bearing executable/working-directory paths.
 Reject those paths rather than recording a literal identity that launches a
 different program. Task registration/state is not authenticated host health.
@@ -270,7 +281,22 @@ session paths pass the Windows limit with long paths off (the first chat of
 short project name in `session_files.project_slug`, add its rows to
 `tests/test_windows_path_budget.py`, and run its real writer in
 `tests/test_windows_long_paths_off.py`. A folder that a person chose keeps its
-name.
+name, with one exception: in a process that runs with an update stage as its
+app home and that stage's `shared-config` as its shared home, every folder has
+the stage's name (`session_files.stage_project_name`).
+The session of such a check is not a saved conversation. A chat's own setup is
+checked there with the chat's folder, and `tests/test_windows_chat_setup.py`
+runs that whole preparation on a hosted runner and lists every path that it
+writes. A path may pass the limit only in the places of `NOT_NEEDED` in the
+budget test. When the path of a person's folder is
+too long for the chat's files, `session_files.chat_folder_too_long` gives the
+answer; do not give that folder another project name without a change of the
+[history contract](docs/workspaces/contracts/history.v1.md).
+A hosted runner's account is elevated, so a folder from an ordinary `mkdir`
+belongs to the Administrators group and the private-folder check refuses it. A
+native test that runs product code with such folders sets its process's default
+owner to the account (`token_user_default_owner` in
+`tests/fixtures/manual_app_handoff_native.py`), as a person's PC has it.
 A module can build a file path from the person's home folder and ignore
 `AMPLIFIER_HOME`. On an installation from the setup file that file is outside
 the installation folder, and uninstall leaves it (the Anthropic provider's

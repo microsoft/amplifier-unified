@@ -17,7 +17,7 @@ the probe's paths and not acceptance of an in-app update:
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import importlib.util
 import json
 import os
@@ -196,6 +196,16 @@ def run(stage, *, capture_root, source_store, state_home, timeout=300, before_th
                   completed.stdout, completed.stderr)
 
 
+def for_chat(stage, folder):
+    """The same stage as the setup check of a chat uses it: the probe's workspace is the chat's folder.
+
+    ``runtime_profiles.ensure`` gives the probe the stage settings of the
+    updater and the folder of the chat. The stage keeps its own check folder
+    here, unused.
+    """
+    return replace(stage, workspace=Path(folder))
+
+
 def created(root):
     """Every entry below ``root``, relative, with '/' as the separator and after each folder."""
     root = Path(root)
@@ -209,7 +219,7 @@ def cli_name(path):
 
 
 def expected_project(stage):
-    """The project name of the stage's check folder on this platform."""
+    """The project name of the probe's workspace on this platform."""
     return 'update-' + stage.stage.name[:12] if os.name == 'nt' else cli_name(stage.workspace)
 
 

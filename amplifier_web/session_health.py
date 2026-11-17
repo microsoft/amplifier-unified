@@ -163,7 +163,13 @@ def failure_details(error, error_type=None):
     kind = error_type or (type(error).__name__ if isinstance(error, BaseException) else 'Error')
     kind = kind if isinstance(kind, str) and re.fullmatch(r'[A-Za-z][A-Za-z0-9_.]{0,99}', kind) else 'Error'
     category, summary, guidance = 'unknown', 'Something interrupted this chat.', 'Your conversation is saved, but Amplifier could not identify the cause. If this happens again, copy the diagnostics and share them with support.'
-    if 'app bridge response timed out' in text:
+    if "this chat's folder has a path that is too long for windows" in text:
+        # The app's own sentence (session_files.chat_folder_too_long). It holds the folder's
+        # path, so it is tested first: no word of a folder name may select another cause.
+        # The category stays the one of a start that did not happen.
+        category, summary = 'worker_startup', 'The path of this chat’s folder is too long for Windows.'
+        guidance = 'Move the folder to a shorter path, or start a chat in another folder. Your saved message is kept; this attempt did not send it.'
+    elif 'app bridge response timed out' in text:
         category, summary = 'app_bridge_timeout', 'Amplifier timed out waiting for an internal operation.'
         guidance = 'The operation may still have completed. Inspect its recorded outcome before retrying; this error does not establish a model provider timeout.'
     elif kind == 'WorkerExitedError':

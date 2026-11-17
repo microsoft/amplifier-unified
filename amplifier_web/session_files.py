@@ -32,7 +32,7 @@ def amplifier_home():
 
 
 # On Windows the app's own folders get a short project name (see project_slug):
-# a chat folder, and the folder in which an update checks its candidate.
+# a chat folder, and every folder in a check that runs in an update stage.
 # A separate name lets tests exercise that rule on any platform.
 _SHORT_CHAT_PROJECTS = _WINDOWS
 _CHAT_ID = re.compile(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}')
@@ -59,29 +59,42 @@ def chat_project_name(path):
     return 'chat-' + identity.replace('-', '')[:16]
 
 
-def update_check_project_name(path):
-    """Short project name for the check folder of the update stage this process runs in, else None.
+def stage_project_name():
+    """Short project name for every folder, when this process runs in an update stage, else None.
 
-    An update checks its candidate in ``<stage>/qualification-workspace``. The
-    stage is ``<app home>/updates/releases/<32 hex>``, and the check runs with
-    that stage as its own app home (``AMPLIFIER_WEB_HOME``). The CLI name of the
-    folder repeats the installation path below the stage, so no session path
-    fits under the Windows path limit. The name comes from the stage ID. It
-    starts with neither '-' nor 'chat-', so it never equals a CLI name or a
-    chat name. Each stage has its own shared home, so the session folders of
-    two stages never meet, whatever their names are.
+    A stage is ``<app home>/updates/releases/<32 hex>``. The app checks new
+    components there, and the setup of a chat that has its own (dependency
+    overrides). The check is a child process with the stage as its app home
+    (``AMPLIFIER_WEB_HOME``) and ``<stage>/shared-config`` as its shared home.
+    Its workspace is the update's ``<stage>/qualification-workspace``, or the
+    folder of the chat: an app chat folder, or a folder that a person chose.
 
-    Every other folder keeps its name, also a folder of the same shape: the
-    app and a person's own tools never run with a stage as their app home.
+    The session of a check is not a saved conversation. Its history is in the
+    stage's own shared home, where no chat and no person has history to keep.
+    A CLI name there repeats the path of the workspace below the stage, so the
+    session paths pass the Windows path limit. So every folder gets one name
+    in such a process. The name comes from the stage ID in the app home
+    setting; no file is read. It starts with neither '-' nor 'chat-', so
+    it never equals a CLI name or a chat name. Each stage has its own shared
+    home, so the session folders of two stages never meet.
+
+    The shared home must be that stage's own ``shared-config`` too. So the
+    name is never used where a person's history is: a process with a stage as
+    its app home and another shared home keeps every name.
+
+    In every other process each folder keeps its name: the app and a person's
+    own tools never run with a stage as their app home.
     """
-    path = Path(path)
-    stage = path.parent
+    home, shared = os.environ.get('AMPLIFIER_WEB_HOME'), os.environ.get('AMPLIFIER_HOME')
+    if not home or not shared:
+        return None
+    stage = Path(home)
     identity = stage.name.lower()
-    if (path.name.lower() != 'qualification-workspace' or not _STAGE_ID.fullmatch(identity)
-            or stage.parent.name.lower() != 'releases' or stage.parent.parent.name.lower() != 'updates'):
-        return None  # A string test only, as for every folder a person chose.
-    home = os.environ.get('AMPLIFIER_WEB_HOME')
-    if not home or os.path.normcase(str(Path(home).expanduser().resolve())) != os.path.normcase(str(stage)):
+    if (not _STAGE_ID.fullmatch(identity) or stage.parent.name.lower() != 'releases'
+            or stage.parent.parent.name.lower() != 'updates'):
+        return None
+    # Names only: both settings come from the code that made the stage.
+    if os.path.normcase(os.path.abspath(shared)) != os.path.normcase(os.path.abspath(stage / 'shared-config')):
         return None
     return 'update-' + identity[:12]
 
@@ -154,11 +167,16 @@ def project_slug(workspace):
     slug = slug if slug.startswith('-') else '-' + slug
     # Other platforms keep the CLI name for every folder: Foundation writes its
     # transfer fence under that name there. On Windows it only reads it.
-    short = chat_project_name(resolved) if _SHORT_CHAT_PROJECTS else None
+    if not _SHORT_CHAT_PROJECTS:
+        return slug
+    # A check in an update stage has no history to keep: each check is a new
+    # session in the stage's own shared home, whatever its workspace is.
+    staged = stage_project_name()
+    if staged is not None:
+        return staged
+    short = chat_project_name(resolved)
     if short is None:
-        # The update's own check folder has no history to keep: each check is a new session.
-        # Every folder a person chose: no file access beyond resolve().
-        return (update_check_project_name(resolved) if _SHORT_CHAT_PROJECTS else None) or slug
+        return slug  # Every folder a person chose: no file access beyond resolve().
     # A folder shaped like the app's own chat folder. Its CLI name repeats the
     # installation path inside every session path, which then exceeds the
     # Windows path limit.
@@ -174,6 +192,74 @@ def project_slug(workspace):
     if _has_history(projects / short):
         return short
     return slug if _has_history(projects / slug) else short
+
+
+# What the app must be able to write to keep a chat, after the session ID: the
+# longest name below the session folder (the temporary file of the saved view)
+# and below the capture folder (the capture hook's temporary file).
+# tests/test_windows_path_budget.py holds both against the rows of the budget.
+_FILE_LIMIT = 259
+_SESSION_TAIL = len('\\unified\\.presentation-' + 'f' * 32 + '.tmp')
+_CAPTURE_TAIL = len('\\context-intelligence\\metadata.json.' + '9' * 10 + '.tmp')
+
+
+def windows_refuses_long_paths():
+    """True when this PC has Windows long paths off, which is the Windows default. False when it is not known."""
+    if not _WINDOWS:
+        return False
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r'SYSTEM\CurrentControlSet\Control\FileSystem') as key:
+            return winreg.QueryValueEx(key, 'LongPathsEnabled')[0] != 1
+    except FileNotFoundError:
+        return True   # The value is absent: the Windows default.
+    except OSError:
+        return False  # Not known. Windows decides at the write, as before.
+
+
+def chat_files_identity(session):
+    """The ID under which the files of this chat are saved: the one that its conversation worker runs with."""
+    return session.get('runtimeSessionId') or session.get('nativeIdentity') or session['id']
+
+
+def chat_folder_too_long(workspace, identity):
+    """Why Windows cannot keep a chat for a folder that a person chose, in plain words, else None.
+
+    Such a folder keeps the CLI project name, which is as long as the folder's
+    own path, so a long path puts the chat's saved files over the Windows path
+    limit. Without this answer the app cannot create the chat ("unexpected
+    response (500)"), or the conversation worker stops at its first write.
+
+    The measure is what keeping a chat needs: its history, its saved view and
+    its capture. A background-job record and the request diagnostics have
+    longer names; a folder that fits here can still lose those (the design
+    document states the numbers). An app chat folder has a short name and is
+    never refused. The Windows setting is read when this is asked, because a
+    conversation worker is a new process and gets the setting of that moment.
+    The app itself keeps the setting that it started with. So after long paths
+    are turned on, the app's own writes for such a chat still fail until the
+    app starts again; this answer is then not given. After they are turned
+    off, the answer is given for a folder that the running app could still
+    write; a new worker could not. Arithmetic on names; no file below the
+    folder is read.
+    """
+    if not workspace or not windows_refuses_long_paths():
+        return None
+    try:
+        folder = Path(workspace).expanduser().resolve()
+        if chat_project_name(folder) is not None or stage_project_name() is not None:
+            return None
+        size = 1 + len(validate_id(identity))
+        over = max(len(str(sessions_dir(folder))) + size + _SESSION_TAIL,
+                   len(str(capture_sessions_dir(folder))) + size + _CAPTURE_TAIL) - _FILE_LIMIT
+    except (OSError, ValueError, RuntimeError):
+        return None  # Not a path or an ID that this can measure. The ordinary checks answer, as before.
+    if over <= 0:
+        return None
+    fits = len(str(folder)) - over
+    room = f'{len(str(folder))} characters; at most {fits} fit here' if fits > 3 else f'{len(str(folder))} characters'
+    return (f"This chat's folder has a path that is too long for Windows: {folder} ({room}). "
+            'Move the folder to a shorter path, or start a chat in another folder.')
 
 
 def validate_id(identity):

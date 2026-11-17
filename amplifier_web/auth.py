@@ -626,7 +626,7 @@ async def login_page(request: web.Request) -> web.Response:
 
 async def post_login(request: web.Request) -> web.Response:
     if browser_entry.is_windows():
-        return web.Response(text=browser_entry.REOPEN, status=403)
+        return web.Response(text=browser_entry.reopen(), status=403)
     form = await request.post()
     username, password = str(form.get("username", "")), str(form.get("password", ""))
     bridge = request.app["server_config"].get("host_pam")
