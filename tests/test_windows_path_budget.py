@@ -664,6 +664,20 @@ def test_measured_application_depths_fit_under_the_longest_root():
         assert re.search(rf'\b{number}\b', design), number
 
 
+def state_file_rows():
+    """A provider module's own state files under their temporary names: the shared home, then an update stage's.
+
+    The app names the files (``amplifier_web/provider_state_files.py``). The module writes ``<name>.tmp`` and
+    renames it; ``tests/test_provider_state_files.py`` reads that name from the module and requires that every
+    path fits.
+    """
+    from amplifier_web.provider_state_files import STATE_FILES
+    # The document's row names the Anthropic component and its two files. Revise that row with a new entry.
+    assert {module: len(files) for module, files in STATE_FILES.items()} == {'provider-anthropic': 2}
+    names = [name + '.tmp' for files in STATE_FILES.values() for name in files.values()]
+    return [[(name, FILE, f'{home}\\{name}') for name in names] for home in ('shared', f'{STAGE}\\shared-config')]
+
+
 def test_the_design_document_states_the_numbers_of_this_budget():
     """Each number in the document's budget section is the number that this file computes.
 
@@ -703,6 +717,8 @@ def test_the_design_document_states_the_numbers_of_this_budget():
     chosen_folder = int(re.search(r'^CHOSEN_FOLDER = (\d+)', native, re.M).group(1))
     earlier_longest = EARLIER_SOURCE_STORE_LONGEST_ROOT[SOURCE_OBJECT]
     account = ROOT_FOR_20_CHARACTER_ACCOUNT - 20     # the earlier folder path without the account's folder name
+    state_file, staged_state_file = (max(length(relative) for name, kind, relative in rows)
+                                     for rows in state_file_rows())
     sentences = [
         f'Those fit at {MAX_ROOT} today: the longest is {MAX_ROOT + max(MEASURED_DEPTHS.values())} characters',
         f'every row of that budget fits at {MAX_ROOT};',
@@ -777,6 +793,10 @@ def test_the_design_document_states_the_numbers_of_this_budget():
         f'only up to a folder path of {before["probe history temporary"]}.',
         f'at most {without_the_stage_name(MAX_ROOT)} characters at {MAX_ROOT}, {without_the_stage_name(51)} at 51 and '
         f'{without_the_stage_name(34)} at 34.',
+        # A provider's own state files.
+        f'The longest of those paths is the folder path plus {state_file - MAX_ROOT} ({state_file} at {MAX_ROOT}); in '
+        f'the shared home of an update stage it is the folder path plus {staged_state_file - MAX_ROOT} '
+        f'({staged_state_file} at {MAX_ROOT}).',
         # The source store.
         f'path + {object_prefix} (`\\s\\objects\\<16>\\<40>\\`)',
         f'is {MODULE_DEPTH} characters (measured), so the path is folder path + {object_prefix + MODULE_DEPTH}: '
@@ -942,6 +962,10 @@ def table():
     for name, kind, relative in sorted(update_stage(), key=lambda row: -length(row[2])):
         note = '   never written' if name in STAGE_NEVER_WRITTEN else ''
         lines.append(f'  {name:38} {kind:6} +{len(relative) + 1:3} = {length(relative):3}{note}')
+    lines += ['', "A provider module's own state files under their temporary names: the shared home, then the",
+              "shared home of an update stage:"]
+    for name, kind, relative in sum(state_file_rows(), []):
+        lines.append(f'  {name:38} {kind:6} +{len(relative) + 1:3} = {length(relative):3}')
     for title, folder in ((f'Source store "{SOURCE_FOLDER}" (new installation)', SOURCE_FOLDER),
                           (f'Source store "{EARLIER_SOURCE_FOLDER}" (installation made by an earlier setup file)',
                            EARLIER_SOURCE_FOLDER)):

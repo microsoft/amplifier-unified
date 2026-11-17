@@ -892,6 +892,11 @@ table with `python tests/test_windows_path_budget.py`.
   check ended with "FileNotFoundError" (ENOENT). Earlier versions refused every chat with
   its own setup on Windows before they made a stage, and the chat page showed
   only "The conversation worker could not start."
+- **A provider's own state files:** the Anthropic component keeps two small
+  files in the shared home, and it writes each one under a temporary name
+  first (`amplifier_web/provider_state_files.py`). The longest of those paths
+  is the folder path plus 41 (100 at 59); in the shared home of an update
+  stage it is the folder path plus 102 (161 at 59).
 - **Source store:** Amplifier Foundation owns its layout; the app supplies the
   folder: `<folder>\s` in a new installation, `<folder>\source-store` in an
   installation that an earlier setup file made. A Foundation revision before `7526bb55`
