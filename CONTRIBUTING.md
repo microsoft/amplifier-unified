@@ -26,11 +26,16 @@ runs client units; `npm test --prefix tests/web` runs Unified's integration/prod
 units. Built-asset checks use `npm run test:artifact-assets --prefix .build/web-client`.
 See [host browser checks](tests/web/README.md) for affected real-server journeys.
 
-The Python tests do not use an Amplifier Unified of your machine. `tests/conftest.py`
-removes the names that a shell inherits from a running one, such as a chat's shell
-tool, and gives the product folders of the test run in place of the folders below
-your home folder. This holds under pytest only. Product code that you start by hand
-still reads those names and uses those folders.
+When pytest loads `tests/conftest.py`, the Python tests do not use an Amplifier
+Unified of your machine. A running Amplifier Unified gives environment variables to
+the shells that it starts; a chat's shell tool is such a shell. That file removes
+them, and your provider credentials. It gives the product folders of the test run
+in place of its default folders, and it gives your account a home folder of the
+test run in the account database.
+It does not cover a run with `--noconftest`, a program that a test starts (it asks
+the real account database), or tools such as Git and uv, which keep their own files
+below your home folder. Product code that you start by hand reads those variables
+and uses the default folders.
 
 These are development setup commands, not a per-release checklist. For releases,
 use the [Fast Release Guide](docs/validation/release-qualification.md): reuse the
