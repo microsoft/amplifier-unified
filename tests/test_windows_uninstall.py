@@ -1890,6 +1890,37 @@ def test_last_message_that_windows_does_not_show_is_never_the_text_of_an_uninsta
         assert json.loads((root / consumer.RECORD).read_text())["step"] == "message"
 
 
+@pytest.mark.parametrize("stop", ["step", "question"])
+def test_text_of_a_stop_that_windows_does_not_show_gets_one_attempt(deleter, monkeypatch, stop):
+    """A step fails, or Windows does not show a question. Windows does not show the text of that stop either."""
+    from amplifier_web import windows_installation
+    state, root, consumer = deleter.state, deleter.root, deleter.consumer
+    monkeypatch.setattr(consumer.sys, "stdout", None)
+    state["choices"] = ["yes", "yes"]
+    if stop == "step":
+        state["refuse_write"] = lambda path: path.name == plan.JOURNAL
+        expected = consumer._UNFINISHED["journal"] + "\n\nReference: journal, "
+    else:
+        state["working"] = 1  # The question about a working chat: a two-button question.
+        expected = consumer._UNFINISHED["questions"] + "\n\nReference: questions, OSError"
+    tried = []
+
+    def notice(text, confirm=False):
+        tried.append(text)
+        raise OSError("The installation dialog could not be displayed.")
+    monkeypatch.setattr(windows_installation, "owner_notice", notice)
+    # The program ends as an error: there is no second attempt and no other text.
+    with pytest.raises(OSError, match="could not be displayed"):
+        consumer.main(["--root", str(root), "--uninstall"])
+    text = tried[-1]
+    assert text.startswith(expected) and len(tried) == (1 if stop == "step" else 2)
+    if stop == "question":
+        assert tried[0].startswith("Amplifier is working on a chat right now.")
+    assert not state["notices"]
+    assert json.loads((root / "app/config/services" / consumer.RECORD).read_text())["step"] == (
+        "journal" if stop == "step" else "questions")
+
+
 def test_further_message_names_the_windows_error_of_the_message_that_was_not_shown():
     """The reference of the further message, with and without an error number of Windows."""
     from amplifier_web import windows_consumer as consumer
@@ -2199,8 +2230,8 @@ def test_design_entry_on_the_journal_names_what_the_cases_above_show():
             "that changed nothing.",
             "the further message is that last message again",
             "When Windows does not show the further message either, the person sees no message of that uninstall.",
-            "An uninstall that keeps the folder looks again under the lock and refuses (step 1 of the order). When "
-            "one of its steps fails, it looks too.",
+            "An uninstall that keeps the folder looks again under the lock, and refuses when that look finds a "
+            "journal (step 1 of the order). When one of its steps fails, it looks too.",
             "It looks for the journal's name at two moments: when a step before the write of its own journal "
             "fails, and directly before that write. If the first look finds a journal, the failed step shows a "
             "text of a removal that did not finish, not the text of an uninstall that changed nothing. If the "
@@ -2215,7 +2246,14 @@ def test_design_entry_on_the_journal_names_what_the_cases_above_show():
             "launcher's own refusal is not changed: it says that Amplifier does not open until the removal has "
             "finished, and the program that shows it has just found the journal.",
             "The first question of a second uninstall is not changed either: its last sentence says the same, and "
-            "the program that asks it has just read the journal."):
+            "the program that asks it has just read the journal.",
+            # What "shows" means: `test_text_of_a_stop_that_windows_does_not_show_gets_one_attempt`, and the
+            # cases of a last message that Windows does not show.
+            "Where this section says that an uninstall shows a text or a message, or what such a text says, the "
+            "uninstall program asks Windows to show that text. Windows can fail to show it. Step 9 says what the "
+            "program does then for a last message. The text of a step that failed, and the text after a question "
+            "that Windows did not show, get one attempt. When Windows does not show that text, the person sees no "
+            "text of that stop."):
         assert stated in design, stated
     # Exactly that. Of the texts of a stop, only the launcher's refusal says that Amplifier does not open. Of
     # the questions, only the first question of a second uninstall says it. No last message says it.

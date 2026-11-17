@@ -1674,8 +1674,9 @@ keep the folder.
 
 A journal can appear after an uninstall asked its questions: another window
 began a removal while a question waited. An uninstall that keeps the folder
-looks again under the lock and refuses (step 1 of the order). When one of
-its steps fails, it looks too. An uninstall with the delete choice goes on,
+looks again under the lock, and refuses when that look finds a journal (step
+1 of the order). When one of its steps fails, it looks too. An uninstall
+with the delete choice goes on,
 as a second uninstall does. It looks for the journal's name at two moments:
 when a step before the write of its own journal fails, and directly before
 that write. If the first look finds a journal, the failed step shows a text
@@ -1696,6 +1697,13 @@ open until the removal has finished, and the program that shows it has just
 found the journal. The first question of a second uninstall is not changed
 either: its last sentence says the same, and the program that asks it has
 just read the journal.
+
+Where this section says that an uninstall shows a text or a message, or what
+such a text says, the uninstall program asks Windows to show that text.
+Windows can fail to show it. Step 9 says what the program does then for a
+last message. The text of a step that failed, and the text after a question
+that Windows did not show, get one attempt. When Windows does not show that
+text, the person sees no text of that stop.
 
 **No link is followed.** In the process, every entry is opened relative to
 its parent's handle as the entry itself, judged on its own handle and deleted
