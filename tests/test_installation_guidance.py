@@ -100,8 +100,9 @@ class InstallationGuidanceTests(unittest.TestCase):
                 "we have not tested this.")
         # The item is these sentences and nothing else: it must not say that nothing is outside the folder.
         self.assertEqual(folder.split(" depends on the AI connection: ", 1)[1], " ".join(statements))
-        # A tripwire for the broad claim, also when it is added to the pinned text above. A true sentence
-        # with these words needs evidence that covers every file, and then a change of this line.
+        # A tripwire for the broad claim, also when it is added to the pinned text above. It refuses these
+        # words in every sentence, also in a true one that limits or denies the claim. Read the wording and
+        # its evidence before you change this line.
         self.assertNotIn("no file outside", folder)
         # "Amplifier writes that file inside the folder" is the host's rule, with that file name. The statement
         # names three versions: the last release without the rule, the first release with it, and the release
