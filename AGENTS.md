@@ -206,7 +206,10 @@ whose hold it read under the refresh lock; a host reopens only with that lock
 and with no stop record for its run; a journal of another task registration is
 renamed and never used. No clock decides safety there, and the helper never
 shows a message box (a waiting box blocks the timed trigger that repairs an
-ended helper). The refresh starts only when a file of
+ended helper). Every app generation's `Scripts` folder holds a `uv.exe` of a
+package, and that folder is the helper's working folder: keep
+`NoDefaultCurrentDirectoryInExePath` in the refresh command's environment, or
+Windows runs that program before setup's. The refresh starts only when a file of
 `windows_launcher_files.FILES` or a distribution of `PACKAGES` differs, so a
 launcher-side fix reaches an installed PC only through that list. A change
 that makes the launcher load another file fails

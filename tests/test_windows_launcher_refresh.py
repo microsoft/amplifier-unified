@@ -6,6 +6,7 @@ import base64
 from contextlib import contextmanager
 import hashlib
 import json
+import os
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -556,6 +557,12 @@ def test_refusals_change_nothing_and_say_why(installed, monkeypatch):
     (installed.folder / "components.txt").write_text("changed==1.0\n")
     assert "did not pass its own checks" in refused(installed, service)
     (installed.folder / "components.txt").write_text(components.requirements(installed.validated["componentGraph"]))
+    # Windows tries the current folder first and then gives a path that is not
+    # absolute. Such a program is never used: only the task's own path counts.
+    with monkeypatch.context() as lookup:
+        for current_folder in (os.path.join(os.curdir, "uv.EXE"), "uv.exe"):
+            lookup.setattr(refresher.shutil, "which", lambda *args, **kwargs: current_folder)
+            assert "setup helper (uv)" in refused(installed, service)
     (installed.root / "uv/uv").unlink()
     monkeypatch.setenv("PATH", str(installed.root / "empty"))
     assert "setup helper (uv)" in refused(installed, service)
@@ -1575,3 +1582,29 @@ def test_native_fixture_stand_in_has_every_name_that_the_manual_command_reads(tm
     stand_in = fixture.Service(tmp_path, [])
     assert sorted(name for name in read if not hasattr(stand_in, name)) == []
     assert fixture.Service(tmp_path, [], registration="f" * 32).registration != stand_in.registration
+
+
+@pytest.mark.parametrize("already", [None, "set by the caller"])
+def test_task_environment_keeps_the_current_folder_out_of_program_lookup(monkeypatch, already):
+    # Found on a Windows runner (run 44158304642): the helper's folder is the app
+    # generation's Scripts folder, which has a uv.exe of its own. Windows tries the
+    # current folder before PATH, so the helper ran that program and not setup's.
+    name = "NoDefaultCurrentDirectoryInExePath"
+    names = (name, "AMPLIFIER_WEB_HOME", "AMPLIFIER_SESSION_STATE_HOME", "AMPLIFIER_GITHUB_ACCESS", "UV_CACHE_DIR")
+    for item in names:
+        monkeypatch.setenv(item, "before")  # Recorded, so that the test's end restores it.
+    if already is None:
+        os.environ.pop(name)
+    else:
+        os.environ[name] = already
+    service = SimpleNamespace(spec=SimpleNamespace(state_home="state"), github_access="anonymous",
+                              launch_roots={"UV_CACHE_DIR": "cache"})
+    refresher._task_environment(service, Path("home"))
+    assert os.environ[name] == (already or "1")
+    assert [os.environ[item] for item in names[1:]] == ["home", "state", "anonymous", "cache"]
+    # Both ways into the command set it before the first lookup of a program.
+    source = Path(refresher.__file__).read_text(encoding="utf-8")
+    main = source[source.index("def main(argv=None):"):source.index("def _task_environment(")]
+    automatic, manual = main.split("if args.data_dir is None:")
+    assert automatic.index("_task_environment(service, home)") < automatic.index("asyncio.run(automatic(")
+    assert manual.index("_task_environment(service, args.data_dir)") < manual.index("asyncio.run(refresh(")

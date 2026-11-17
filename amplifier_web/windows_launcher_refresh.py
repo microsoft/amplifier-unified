@@ -213,7 +213,9 @@ def plan(service, home):
     except (OSError, ValueError, KeyError, TypeError) as error:
         raise Refused("The active app version did not pass its own checks, so it cannot become the launcher.") from error
     uv = shutil.which("uv", path=os.pathsep.join([service.tool_path, os.environ.get("PATH", "")]))
-    if not uv:
+    # A path that is not absolute is a program in the current folder, which
+    # Windows tries first. Only a folder of the task's own path may give uv.
+    if not uv or not os.path.isabs(uv):
         raise Refused("Amplifier's setup helper (uv) was not found.")
     entries = _entry_points(prefix)
     bin_dir = service.launch_roots.get("UV_TOOL_BIN_DIR") or (str(entries[0].parent) if entries else None)
@@ -1087,6 +1089,12 @@ def main(argv=None):
 def _task_environment(service, home):
     os.environ.update(AMPLIFIER_WEB_HOME=str(home), AMPLIFIER_SESSION_STATE_HOME=service.spec.state_home,
                       AMPLIFIER_GITHUB_ACCESS=service.github_access, **service.launch_roots)
+    # As in the host: Windows program lookup must not try the current folder
+    # before the task's own path. The helper task's folder is the app
+    # generation's Scripts folder, which holds a uv.exe of its own (a package
+    # that the app depends on); on a Windows runner the helper ran that one
+    # and not setup's. A person's terminal can be in any folder.
+    os.environ.setdefault("NoDefaultCurrentDirectoryInExePath", "1")
 
 
 if __name__ == "__main__":

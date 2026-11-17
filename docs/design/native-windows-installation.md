@@ -354,6 +354,15 @@ day. The host removes the task when the request is settled; the helper removes
 it when the account has no owned main task for this data folder any more; the
 uninstall of a launcher with this change removes it too.
 
+The helper's working folder is the app generation's `Scripts` folder. That
+folder holds a `uv.exe` of its own, because the app depends on a package that
+brings one. Windows program lookup tries the current folder before the path,
+and on a Windows runner the helper ran that program and not setup's. The
+refresh command now turns that lookup off for its process, as the host does
+(`NoDefaultCurrentDirectoryInExePath`), and refuses a uv whose path is not
+absolute. So the task's own path decides, in the helper and in a person's
+terminal.
+
 **Records**, private, in `config\services`: `launcher-refresh-request.json`
 (hosts write it: the request, the main task's registration, the launcher's
 identity, the target generation, `open` or `closed`, and the hold),
