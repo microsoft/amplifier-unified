@@ -1462,6 +1462,9 @@ class Steps:
         self.path, self.names, self.lock = Path(path), names, threading.Lock()
         self.report = {"finished": False, **facts,
                        "steps": [{"name": name, "status": "FAIL", "reason": "Not reached"} for name in names]}
+        # For the record only (`observed`, `keep_after_failure`): the reads that were not as required, and the
+        # installation's app folder while a read of it for the record is safe.
+        self.again, self.evidence = [], None
         self.save()
 
     def save(self):
@@ -1493,6 +1496,222 @@ class Steps:
         return all(step["status"] == "PASS" for step in self.report["steps"])
 
 
+def attempt(read):
+    """The answer of a read, or what kept it from an answer. A read for the record never fails a step."""
+    try:
+        return read()
+    except Exception as error:
+        return {"errorType": type(error).__name__, "error": str(error)[-300:]}
+
+
+def host_record(home):
+    """What the installation's own record says about its host: its run, its process and its phase.
+
+    Read with the product's reader for its private files. The host replaces
+    this file while it runs, and that reader opens the file so that Windows
+    permits the replacement meanwhile. Python's ordinary open does not ask
+    Windows for that.
+    """
+    from amplifier_web.windows_files import address, directory
+    from amplifier_web.windows_task_runtime import LIMIT, RECEIPT
+    root = address(home)
+    with directory(root / "config/services", owned_root=root, create=False) as pinned:
+        value = json.loads(pinned.read_private(RECEIPT, limit=LIMIT))
+    return {name: value.get(name) for name in ("run", "pid", "created", "phase")}
+
+
+def host_output(home):
+    """The end of the host's own log: its last 60 lines, at most 8000 characters. Read as `host_record` reads."""
+    from amplifier_web.windows_files import address, directory
+    from amplifier_web.windows_task_runtime import LOG, LOG_LIMIT
+    root = address(home)
+    with directory(root / "config/services", owned_root=root, create=False) as pinned:
+        text = pinned.read_private(LOG, limit=LOG_LIMIT).decode("utf-8", errors="replace")
+    return "\n".join(text.splitlines()[-60:])[-8000:]
+
+
+UPDATE_FACTS = ("phase", "lastCheck", "lastAttempt", "checkTiming", "recentChecks", "available", "appAvailable",
+                "initialPreparation")
+
+
+def update_record(home):
+    """The installation's saved update state: when the app checked for updates, and what waits.
+
+    Read only, from the app's database, where the app saves it. Only the
+    fields that say when a check ran, in which stage the update work is,
+    whether an update waits, and whether the host prepares to restart for one.
+    """
+    import sqlite3
+    connection = sqlite3.connect((Path(home) / "app.sqlite3").as_uri() + "?mode=ro", uri=True, timeout=2)
+    try:
+        row = connection.execute("SELECT value FROM state_records WHERE kind='global' AND id='updates'").fetchone()
+    finally:
+        connection.close()
+    need(row is not None, "The app's database has no update state")
+    state = json.loads(row[0])["value"]
+    application, sequence = state.get("application") or {}, state.get("sequence") or {}
+    latest = (state.get("diagnostics") or {}).get("latest") or {}
+    return {**{name: state.get(name) for name in UPDATE_FACTS},
+            "restartPhase": (state.get("drain") or {}).get("phase"),
+            "latestEvent": {name: latest.get(name) for name in ("kind", "phase", "status", "at")},
+            "waiting": sorted(name for name in ("pendingApp", "pendingRelease", "pendingRestart", "pendingSmartTools")
+                              if state.get(name)),
+            "sequence": {name: sequence.get(name) for name in ("stage", "nextStage", "install")},
+            "application": {**{name: application.get(name) for name in ("status", "latest", "checkStage", "checkReason")},
+                            "componentUpdates": len(application.get("componentUpdates") or [])}}
+
+
+def seconds_since(created, at):
+    """Seconds from a Windows creation time (100 nanoseconds since the year 1601, as text) to a time of `time.time()`."""
+    return round(at - (int(created) / 10 ** 7 - 11644473600), 3)
+
+
+def brief(answer):
+    """The part of an answer that this case's conditions read, short enough for the record of a read."""
+    if not isinstance(answer, dict):
+        plain = answer is None or isinstance(answer, (bool, int, str)) and len(str(answer)) <= 120
+        return answer if plain else repr(answer)[:120]
+    if "exitCode" not in answer:  # Task Scheduler's answer, or what kept a read from an answer.
+        return {name: str(answer[name])[-300:] if name == "error" else answer[name]
+                for name in ("managed", "state", "instances", "lastResult", "errorType", "error") if name in answer}
+    said = answer.get("json")
+    return {"exitCode": answer.get("exitCode"), "seconds": answer.get("seconds"),
+            **({name: said[name] for name in ("ok", "processVerified", "responding", "background", "pid", "created")
+                if name in said} if isinstance(said, dict) else {"json": repr(said)[:60]})}
+
+
+def observed(steps, home, name, read, good, later=None):
+    """Make one read of the app for a step, and keep when it was made and which host the installation recorded.
+
+    The answer goes back to the step as it is. The step decides with its own
+    condition. `good` is that condition for this one answer. It only marks
+    the entry of the record. After a step has failed, a read that was not as
+    required is made once more (`later`, or the same read), in
+    `keep_after_failure`. An error of the read itself goes on to the step.
+    """
+    entry = {"read": name, "at": round(time.time(), 3), "hostBefore": attempt(lambda: host_record(home))}
+    steps.report.setdefault("reads", []).append(entry)
+    started = time.monotonic()
+    try:
+        answer = read()
+    except BaseException as error:
+        entry.update(seconds=round(time.monotonic() - started, 3), failed=type(error).__name__)
+        raise
+    entry.update(seconds=round(time.monotonic() - started, 3), hostAfter=attempt(lambda: host_record(home)),
+                 secondsSinceHostStart=attempt(lambda: seconds_since(entry["hostBefore"]["created"], entry["at"])),
+                 answer=attempt(lambda: brief(answer)), asRequired=attempt(lambda: good(answer)) is True)
+    if not entry["asRequired"]:
+        steps.again.append((entry, later or read, good))
+    return answer
+
+
+class ListenerWatch:
+    """Asks the app's listener for an answer again and again, beside the steps of the case.
+
+    The next question follows half a second after an answer. A question that
+    gets no answer can take some seconds itself. With each question the watch
+    reads which processes own the listener's port. It keeps each change of
+    the answer or of the owners, with the time at which that question began.
+    So the report says, to about the time between two questions, for how long
+    the listener gave no answer after a host start, whether a process owned
+    the port in that time, and whether another process owned it afterwards.
+    The watch opens no file of the installation, it asks without a
+    credential, and it decides no step. A watch without a question (`probe`)
+    never starts; `reason` then says why.
+    """
+
+    def __init__(self, probe=None, owner=None, *, every=0.5, limit=400, clock=time.time):
+        self.probe, self.owner, self.every, self.limit, self.clock = probe, owner, every, limit, clock
+        self.changes, self.questions, self.reason = [], 0, None
+        self._halt, self._thread, self._last = threading.Event(), None, self
+
+    def look(self):
+        """One question to the listener. A change is kept; an error of the question is an answer too."""
+        at = round(self.clock(), 3)
+        now = (attempt(self.probe), attempt(self.owner) if self.owner else None)
+        self.questions += 1
+        if now != self._last and len(self.changes) < self.limit:
+            self.changes.append({"at": at, "answer": now[0], "owner": now[1]})
+        self._last = now
+
+    def start(self):
+        def run():
+            while not self._halt.is_set():
+                self.look()
+                self._halt.wait(self.every)
+        if self.probe is not None and self._thread is None:
+            self._thread = threading.Thread(target=run, name="listener-watch", daemon=True)
+            self._thread.start()
+        return self
+
+    def mark(self, text):
+        """What the case does now, in the same list as the changes."""
+        self.changes.append({"at": round(self.clock(), 3), "mark": text})
+
+    def stop(self, wait=10):
+        """End the watch and give what it kept. `ended` is false when its thread still runs after `wait` seconds."""
+        self._halt.set()
+        if self._thread is not None:
+            self._thread.join(wait)
+        return {"started": self._thread is not None, "ended": self._thread is None or not self._thread.is_alive(),
+                "questions": self.questions, "changes": list(self.changes),
+                **({"notStarted": self.reason} if self.reason else {})}
+
+
+def watch_listener(home):
+    """Start the watch of this installation's listener. Its addresses are read once, here, not by the watch.
+
+    A watch that cannot start fails no step: the watch that comes back then never starts and holds the reason.
+    """
+    def start():
+        from amplifier_web import windows_installation, windows_task_runtime
+        urls, pin = trust_targets(home)
+        port = windows_installation.saved_port(home)
+        return ListenerWatch(lambda: windows_installation.trust_state(urls, pin),
+                             lambda: sorted(windows_task_runtime.listener_owners("127.0.0.1", port))).start()
+    watch = attempt(start)
+    if not isinstance(watch, ListenerWatch):
+        watch, reason = ListenerWatch(), watch
+        watch.reason = reason
+    return watch
+
+
+def note_updates(steps, home, when):
+    """Keep the installation's update record and its host record at this moment of the case. For the record only."""
+    steps.report.setdefault("updateRecords", []).append(
+        {"when": when, "at": round(time.time(), 3), "host": attempt(lambda: host_record(home)),
+         "updates": attempt(lambda: update_record(home))})
+    attempt(steps.save)
+
+
+def keep_after_failure(steps, watch, *, wait=time.sleep, seconds=20):
+    """After a step has failed: what the installation recorded then and 20 seconds later, and the end of the host's log.
+
+    The failed step has its text already, and the report is saved with it.
+    Nothing here changes that text, and nothing here can make a step pass.
+    The watch of the listener goes on in those seconds. Then each read that
+    was not as its step requires is made once more, and that answer is kept
+    beside the first. Without an app folder that is safe to read
+    (`steps.evidence`), this does nothing.
+    """
+    home = steps.evidence
+    if home is None:
+        return
+    kept = steps.report["afterFailure"] = {"at": round(time.time(), 3), "host": attempt(lambda: host_record(home)),
+                                           "updates": attempt(lambda: update_record(home))}
+    attempt(steps.save)
+    attempt(lambda: watch.mark("a step failed"))
+    attempt(lambda: wait(seconds))
+    for entry, read, good in steps.again:
+        answer = attempt(read)
+        entry["later"] = {"at": round(time.time(), 3), "answer": attempt(lambda: brief(answer)),
+                          "asRequired": attempt(lambda: good(answer)) is True,
+                          "host": attempt(lambda: host_record(home))}
+    kept.update(hostLater=attempt(lambda: host_record(home)), updatesLater=attempt(lambda: update_record(home)),
+                hostOutput=attempt(lambda: host_output(home)))
+    attempt(steps.save)
+
+
 def accept_start(steps, key, again, home, root, started, state, status, text, *, wait=time.sleep):
     """Require one start of the launcher, and say which answer was not as required.
 
@@ -1511,8 +1730,9 @@ def accept_start(steps, key, again, home, root, started, state, status, text, *,
     The report holds the three answers as the case got them.
 
     The read five seconds later never makes the step pass. It, the read of the
-    task's output and the second save of the report can each fail. The step
-    then keeps its text, and the text or the report holds that error.
+    host's log (`host_output`) and the second save of the report can each
+    fail. The step then keeps its text, and the text or the report holds that
+    error.
 
     One run of this case failed at a start with only the launcher's answer in
     its text, and the launcher had said that the start worked (run 44149453625,
@@ -1520,12 +1740,6 @@ def accept_start(steps, key, again, home, root, started, state, status, text, *,
     """
     record = steps.report[key] = {"launcher": started, "task": state, "serviceStatus": status}
     steps.save()
-
-    def attempt(read):
-        try:
-            return read()
-        except Exception as error:
-            return {"errorType": type(error).__name__, "error": str(error)[-300:]}
 
     rules = {"the launcher": lambda: started["exitCode"] == 0 and (started["json"] or {}).get("background") is True,
              "Task Scheduler": lambda: again.running(state),
@@ -1562,14 +1776,9 @@ def accept_start(steps, key, again, home, root, started, state, status, text, *,
         record["fiveSecondsLater"] = pair
         return {"Task Scheduler": again.running(pair["task"]), "the app's status": again.healthy(pair["serviceStatus"])}
 
-    def output():
-        log = home / "config/services/task-output.log"
-        return ("\n".join(log.read_text(encoding="utf-8", errors="replace").splitlines()[-40:])[-6000:]
-                if log.exists() else None)
-
     then = attempt(later)
     record.setdefault("fiveSecondsLater", then)
-    record["taskOutput"] = attempt(output)
+    record["taskOutput"] = attempt(lambda: host_output(home))
     unsaved = attempt(steps.save)
     detail = {**{name: attempt(lambda: values(name)) for name in wrong}, "fiveSecondsLater": then,
               **({"notSavedInTheReport": unsaved} if unsaved else {}),
@@ -1724,11 +1933,12 @@ def stop(again, root, notices):
 
 def journey(stage, exchange, account, token):
     """Setup's last steps and the starts, with the installation's own Python."""
-    steps = Steps(exchange / "journey.json", JOURNEY)
+    steps, watch = Steps(exchange / "journey.json", JOURNEY), ListenerWatch()
     try:
         prepared = json.loads((stage / "prepared.json").read_text(encoding="utf-8"))
         root = installation_folder()
         home, again = product(stage, root)
+        steps.evidence = home
         from amplifier_web import app_component_graph as components
         from amplifier_web import windows_consumer as consumer
         from amplifier_web import windows_consumer_shell as shell, windows_installation, windows_service
@@ -1770,12 +1980,15 @@ def journey(stage, exchange, account, token):
         for name in JOURNEY[2:5]:
             steps.begin(name)
         started = again.launcher(root, "--no-open", timeout=1500)
-        state, status = again.task_facts(home), again.cli(root, "service", "status", "--json")
+        state = observed(steps, home, "Task Scheduler after the first start", lambda: again.task_facts(home),
+                         again.running)
+        status = observed(steps, home, "the app's status after the first start",
+                          lambda: again.cli(root, "service", "status", "--json"), again.healthy)
+        # After the two reads: the start of the watch reads the saved addresses, and that takes a moment.
+        watch = watch_listener(home)
         steps.report["firstStart"] = {"launcher": started, "task": state, "serviceStatus": status}
         if started["exitCode"] or not again.running(state) or not again.healthy(status):
-            log = home / "config/services/task-output.log"
-            steps.report["firstStart"]["taskOutput"] = "\n".join(
-                log.read_text(encoding="utf-8", errors="replace").splitlines()[-40:])[-6000:] if log.exists() else None
+            steps.report["firstStart"]["taskOutput"] = attempt(lambda: host_output(home))
         steps.save()
         need(state.get("managed") is True, "The task was not registered. The launcher said", started["json"] or started)
         steps.passed(JOURNEY[2], task=state.get("taskPath"))
@@ -1787,15 +2000,18 @@ def journey(stage, exchange, account, token):
         port = windows_installation.saved_port(home)
         need(isinstance(port, int), "No port was saved")
         steps.passed(JOURNEY[4], task=state, port=port, host=again.process_identity(started["json"]["health"]))
+        note_updates(steps, home, "after the first start")
 
         steps.begin(JOURNEY[5])
-        shown = again.launcher(root, "--status")
+        shown = observed(steps, home, "the launcher's status", lambda: again.launcher(root, "--status"),
+                         lambda value: value["exitCode"] == 0 and (value["json"] or {}).get("ok") is True)
         need(shown["exitCode"] == 0 and (shown["json"] or {}).get("ok") is True,
              "Status did not report a working app", shown["json"] or shown)
         steps.passed(JOURNEY[5], message=shown["json"].get("message"))
 
         steps.begin(JOURNEY[6])
         notices = []
+        watch.mark("Stop Amplifier")
         stopped = stop(again, root, notices)
         need(notices == [{"confirm": True, "message": "Stop Amplifier's background app?"}],
              "Stop asked something else than its one question", notices)
@@ -1807,8 +2023,12 @@ def journey(stage, exchange, account, token):
         steps.passed(JOURNEY[6], result=stopped, task=state)
 
         steps.begin(JOURNEY[7])
+        watch.mark("the second start")
         again_started = again.launcher(root, "--no-open")
-        state, status = again.task_facts(home), again.cli(root, "service", "status", "--json")
+        state = observed(steps, home, "Task Scheduler after the second start", lambda: again.task_facts(home),
+                         again.running)
+        status = observed(steps, home, "the app's status after the second start",
+                          lambda: again.cli(root, "service", "status", "--json"), again.healthy)
         accept_start(steps, "secondStart", again, home, root, again_started, state, status, "The second start failed")
         need(again.process_identity(status["json"]) != again.process_identity(started["json"]["health"])
              and windows_installation.saved_port(home) == port,
@@ -1819,6 +2039,7 @@ def journey(stage, exchange, account, token):
         steps.begin(CERTIFICATE)
         # In a program of its own, with a time limit: a Windows question that
         # nothing answers would wait without end.
+        watch.mark("the certificate step")
         try:
             ran = again.execute([sys.executable, "-I", "-B", Path(__file__), "standard", "--stage", stage,
                                  "--exchange", exchange, "--phase", "certificate"], cwd=exchange, timeout=240)
@@ -1838,8 +2059,11 @@ def journey(stage, exchange, account, token):
              and reads.get("taskProgramExists") is True,
              "Setup's own code does not read this installation and its sign-in task", reads)
         steps.passed(JOURNEY[9], account=reads)
+        note_updates(steps, home, "at the end of the steps after the first sign-in")
     except BaseException as error:
         steps.failed(error)
+        attempt(lambda: keep_after_failure(steps, watch))
+    steps.report.setdefault("listener", attempt(watch.stop))
     return steps.finish()
 
 
@@ -1861,7 +2085,8 @@ def certificate(stage, exchange, account, token):
         os.environ.update(consumer.environment(root, consumer.installation(root)[1]))
         steps.begin(CERTIFICATE)
         urls, pin = trust_targets(home)
-        before = windows_installation.trust_state(urls, pin)
+        before = observed(steps, home, "trust before the Windows question",
+                          lambda: windows_installation.trust_state(urls, pin), lambda value: value == "untrusted")
         need(before == "untrusted", "Before the question Windows must not trust the connection yet. It read", before)
         need(windows_trust.user_roots_disabled() is False, "This computer's policy disables a person's own certificates")
         marks = certificate_marks(home)
@@ -1888,7 +2113,8 @@ def certificate(stage, exchange, account, token):
         # Amplifier tells the person which thumbprint the Windows message shows.
         need(marks[1] in asked[0]["text"],
              "The Windows question does not show the thumbprint as Amplifier's message shows it", asked)
-        after = windows_installation.trust_state(urls, pin)
+        after = observed(steps, home, "trust after Yes", lambda: windows_installation.trust_state(urls, pin),
+                         lambda value: value == "trusted")
         need(accepted is True and after == "trusted",
              "After Yes, Windows does not trust the connection", {"accepted": accepted, "state": after})
         need(windows_root_has(marks[1]) is True,
@@ -1902,19 +2128,24 @@ def certificate(stage, exchange, account, token):
 
 def second(stage, exchange, account, token):
     """After the sign-out and the new sign-in. No launcher command runs before the first check."""
-    steps = Steps(exchange / "second.json", SECOND, token=token)
+    steps, watch = Steps(exchange / "second.json", SECOND, token=token), ListenerWatch()
     try:
         before = json.loads((exchange / "journey.json").read_text(encoding="utf-8"))
         root = installation_folder()
         home, again = product(stage, root)
+        steps.evidence = home
         from amplifier_web import windows_consumer as consumer
         from amplifier_web import windows_consumer_shell as shell, windows_installation, windows_uninstall
         os.environ.update(consumer.environment(root, consumer.installation(root)[1]))
 
         steps.begin(SECOND[0])
         need(standard_token(token, account), "This is not a standard user in a desktop session of its own sign-in", token)
-        status = again.cli(root, "service", "status", "--wait", "120", "--json", timeout=180)
-        state = again.task_facts(home)
+        # From before the first read: the sign-in started the host, and the watch sees when its listener answers.
+        watch = watch_listener(home)
+        status = observed(steps, home, "the app's status after the sign-in",
+                          lambda: again.cli(root, "service", "status", "--wait", "120", "--json", timeout=180),
+                          again.healthy, later=lambda: again.cli(root, "service", "status", "--json"))
+        state = observed(steps, home, "Task Scheduler after the sign-in", lambda: again.task_facts(home), again.running)
         need(again.running(state) and again.healthy(status),
              "After the sign-in the task did not start a host that answers", {"task": state, "status": status["json"]})
         # The sign-out ended the earlier host. This one is new, and only the sign-in started it.
@@ -1923,15 +2154,18 @@ def second(stage, exchange, account, token):
              "The host after the sign-in is not a new host on the same port")
         urls, pin = trust_targets(home)
         marks = certificate_marks(home)
-        trusted = windows_installation.trust_state(urls, pin)
+        trusted = observed(steps, home, "trust after the sign-in", lambda: windows_installation.trust_state(urls, pin),
+                           lambda value: value == "trusted")
         need(trusted == "trusted", "After the new sign-in Windows does not trust the connection. It read", trusted)
         need(windows_root_has(marks[1]) is True,
              "After the new sign-in Windows does not list the certificate among this user's root certificates")
         steps.report["thumbprint"] = marks[1]  # For the check after the delete choice.
         steps.passed(SECOND[0], task=state, host=again.process_identity(status["json"]), port=before["port"],
                      trust=trusted)
+        note_updates(steps, home, "after the sign-in")
 
         steps.begin(SECOND[1])
+        watch.mark("the uninstall that keeps the folder")
         notices, asked = [], []
         with answering(steps, asked, "delete", "no", marks):
             removed = again.uninstall(root, notices)
@@ -1959,17 +2193,25 @@ def second(stage, exchange, account, token):
         # As setup's second run: the entries come back, then the start.
         entries = again.launcher(root, "--integrate")
         need(entries["exitCode"] == 0 and shell.listed(root), "The entries were not added again", entries)
+        watch.mark("the start after the uninstall")
         started = again.launcher(root, "--no-open")
-        state, status = again.task_facts(home), again.cli(root, "service", "status", "--json")
+        state = observed(steps, home, "Task Scheduler after the start that follows the uninstall",
+                         lambda: again.task_facts(home), again.running)
+        status = observed(steps, home, "the app's status after the start that follows the uninstall",
+                          lambda: again.cli(root, "service", "status", "--json"), again.healthy)
         accept_start(steps, "startAfterUninstall", again, home, root, started, state, status,
                      "The start after the uninstall failed")
         need(windows_installation.saved_port(home) == before["port"], "The start after the uninstall changed the port")
         # The certificate stayed (No). The connection needs no new question.
-        trusted = windows_installation.trust_state(urls, pin)
+        trusted = observed(steps, home, "trust after the start that follows the uninstall",
+                           lambda: windows_installation.trust_state(urls, pin), lambda value: value == "trusted")
         need(trusted == "trusted", "After the start Windows does not trust the connection. It read", trusted)
         steps.passed(SECOND[2], seconds=started["seconds"], task=state, port=before["port"], trust=trusted)
+        note_updates(steps, home, "after the start that follows the uninstall")
 
         steps.begin(SECOND[3])
+        # The watch ends here, and from here nothing reads the installation for the record: its folder goes.
+        steps.report["listener"], steps.evidence = attempt(watch.stop), None
         notices, asked = [], []
         with answering(steps, asked, "delete", "yes", marks):
             removed = delete_everything(again, root, notices)
@@ -1984,6 +2226,8 @@ def second(stage, exchange, account, token):
         steps.passed(SECOND[3], result=removed, notices=notices, windowsQuestion=asked[0])
     except BaseException as error:
         steps.failed(error)
+        attempt(lambda: keep_after_failure(steps, watch))
+    steps.report.setdefault("listener", attempt(watch.stop))
     return steps.finish()
 
 
