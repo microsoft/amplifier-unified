@@ -22,23 +22,34 @@ finds none of the stopped preparation. That list is a sample, and the case
 prints it as a measurement. ``tests/test_windows_stopped_command.py`` shows
 with a controlled command and open process handles what a stop ends.
 
-The app's decision-catalog helper is the first program that imports the
-provider packages in a new worker environment. It finds no bytecode there, and
-the app gives one start of it a time limit (``decision_accounts._catalog_snapshot``).
-On a hosted runner that first start takes 2 to 6 seconds of the 10 that the
-app allows. Twice it took longer, and the preparation then failed by timing
-(pull request 2270, run 44143862317, two attempts). So this case starts the
-helper itself, with the app's own command and settings, directly before the
-app's first probe command in each new environment: twice, and it measures
-both starts and counts the bytecode files that the first one wrote. The app's
-own start then finds bytecode and has less to compile. It still has the app's
-limit. This case therefore does not show that a first start is inside the
-app's limit. It prints how long each first start took, the creation of the
-process included, and the CI job keeps those times on the run's page and
-warns when one was longer than the limit. The stop of a preparation comes
-after the case's own starts of the helper: a stop while the helper compiles
-is not shown. The times of the two probe phases that the case prints include
-the case's two starts of the helper.
+In a new worker environment the app's decision-catalog helper finds no
+bytecode of the provider packages (measured: 0 bytecode files before its first
+start). The helper imports those packages, and the app gives one start of it a
+time limit (``decision_accounts._catalog_snapshot``). On a hosted runner that
+first start takes 2 to 6 seconds of the app's 10. Twice it took longer, and
+the preparation then failed by timing (pull request 2270, run 44143862317, two
+attempts). So this case starts the helper itself, with the app's own command,
+directly before the app's first probe command in each new environment: twice.
+It measures both starts and counts the bytecode files before and after the
+first one. The app's own start then finds bytecode and has less to compile.
+It still has the app's limit.
+
+What this case therefore does not show:
+
+- That a first start of the helper is inside the app's limit. The case prints
+  how long its own first start took, the creation of the process included.
+  The CI job keeps those times on the run's page and warns when one was longer
+  than the limit.
+- A probe command of the app in an environment without that bytecode. The
+  times of the two probe phases that the case prints include the case's two
+  starts of the helper.
+- A stop while the helper compiles. The stop of a preparation comes after the
+  case's own starts, so the processes that it lists hold no such helper.
+
+The case requires that its first start added bytecode files. If a preparation
+starts to write bytecode itself, or the helper stops writing it, the case
+fails there, for a reason that is not a path limit. Then remove the case's own
+starts of the helper.
 
 It then lists every path below the installation folder. That is the measured
 answer to "which paths pass the Windows limit, and does the app need them":
@@ -263,9 +274,11 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
         running, made, known, deadline = {}, set(), set(), time.monotonic() + 900
         while not running:
             assert not task.done() and time.monotonic() < deadline, f'The preparation ended before the stop: {task}'
-            await asyncio.sleep(1)
+            await asyncio.sleep(0.2)
             made = {path.name for path in releases.iterdir()} - before
-            # The stop is for the app's own command, not for the case's starts of the helper before it.
+            # The stop is for the app's own command, not for the case's starts of the helper before it. That
+            # command has less to do now, so the list of processes is read as soon as the command is started,
+            # and again without a pause until it holds the command.
             if (len(made) == 1 and steps[label][-1:] == ['Checking this chat’s tools…']
                     and 'prepare-' + next(iter(made)) in app_commands):
                 running = of_attempt(await asyncio.to_thread(processes), next(iter(made)), known)
@@ -341,10 +354,7 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
         raise
     finally:
         for name, (first, second, before, after) in helper_times.items():
-            print(f'MEASURED the decision-catalog helper in the new worker environment {name}: first start '
-                  f'{first:.1f} s, and it wrote {after - before} bytecode files ({before} were there before it); '
-                  f'second start {second:.1f} s; the app\'s time limit for one start is {helper_limit} s'
-                  + ('; LONGER THAN THE APP\'S TIME LIMIT' if first > helper_limit else ''))
+            print(native.update_stage_probe.catalog_helper_line(name, first, second, before, after, helper_limit))
 
     assert len({generation, *selected.values()}) == 3   # each folder's setup is its own
     # The case started the helper in every environment in which the app then ran a probe command, and in no

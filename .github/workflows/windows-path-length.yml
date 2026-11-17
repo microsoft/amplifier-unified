@@ -26,7 +26,10 @@ name: Windows path length
 # helper itself, before the app does, and measures that first start. The run's
 # page keeps the times. A first start that took longer than the app's time
 # limit is a warning there, not a failure: the app's own start then finds
-# bytecode and has less to compile.
+# bytecode and has less to compile. The case requires that its first start
+# added bytecode files. If a preparation starts to write bytecode itself, the
+# case fails there, for a reason that is not a path limit: then remove the
+# case's own starts of the helper.
 #
 # This is the only native job that installs the locked Amplifier Foundation.
 # So it also holds a real Foundation session ownership, as a live conversation
@@ -227,19 +230,24 @@ jobs:
           # The first start of the app's decision-catalog helper in each new worker environment, as the case
           # measured it, the creation of the process included. A start that took longer than the app's time
           # limit is a warning: it shows the runner's speed against that limit, and it does not fail the case.
-          $measured = @($lines | Where-Object { "$_" -match 'MEASURED the decision-catalog helper' })
+          # A line of the case begins with these words. pytest's report of a failure shows source lines, indented.
+          $measured = @($lines | Where-Object { "$_" -match '^MEASURED the decision-catalog helper' })
+          Write-Host "This step found $($measured.Count) measured first starts of the decision-catalog helper."
           if ($measured.Count -gt 0) {
-            $summary = @('### First start of the decision-catalog helper in a new worker environment', '',
+            $summary = @('### The first start of the decision-catalog helper in each new worker environment', '',
                          "Windows Defender on this runner: $scan", '') + ($measured | ForEach-Object { "- $_" })
-            $summary -join "`n" >> $env:GITHUB_STEP_SUMMARY
+            # The lines are in this log too. A page that cannot be written must not fail a case that passed.
+            try { $summary -join "`n" >> $env:GITHUB_STEP_SUMMARY } catch { Write-Host "The run's page did not get the times: $_" }
           }
-          Write-Host "The run's page keeps $($measured.Count) measured first starts of the decision-catalog helper."
-          foreach ($line in ($measured | Where-Object { "$_" -match 'LONGER THAN THE APP' })) {
-            Write-Host "::warning title=A first start of the decision-catalog helper took longer than the time limit of the app::$line"
+          foreach ($line in ($measured | Where-Object { "$_" -match 'LONGER THAN THE TIME LIMIT OF THE APP' })) {
+            Write-Host "::warning title=The test's first start of the decision-catalog helper took longer than the app's time limit::$line"
           }
           if ($status -ne 0) { throw 'The setup of a chat was not prepared and checked with long paths off, or a needed path passes the limit.' }
           # A skipped case ends with exit code 0. The case writes the list only after every preparation.
           if (-not (Test-Path -LiteralPath $env:AMPLIFIER_CHAT_SETUP_TREE)) { throw 'The case did not run: it wrote no list of paths.' }
+          # A case that passed printed one line for each new worker environment. With none found, this step
+          # no longer reads them, and a first start over the app's limit would get no warning.
+          if ($measured.Count -eq 0) { throw 'The case passed, and this step found no measured first start of the decision-catalog helper.' }
       - name: Keep the list of every path
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

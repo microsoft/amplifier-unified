@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 import re
 import subprocess
 import sys
@@ -99,26 +100,68 @@ def test_the_decision_catalog_helper_is_read_from_the_app_and_started_as_the_app
     assert decision_accounts.subprocess is subprocess and subprocess.run is run
     assert decision_accounts._catalog_snapshot.cache_info() == saved
     script = probe.ROOT / 'amplifier_web' / 'decision_account_catalog.py'
-    assert command == [sys.executable, '-I', str(script)] and script.is_file()
+    assert command[:2] == [sys.executable, '-I'] and len(command) == 3 and Path(command[2]).samefile(script)
     # The app's limit for one start, and the few settings that the helper gets. No setting stops bytecode.
     assert settings['timeout'] > 0 and settings['check'] is True
     assert set(settings['env']) <= {'PATH', 'SYSTEMROOT', 'WINDIR', 'LANG', 'LC_ALL', 'TZ', 'TMPDIR', 'TEMP', 'TMP'}
     # The same call with another time limit: each start prints the catalog.
     times = probe.catalog_helper_times((command, settings), sys.executable)
     assert len(times) == 2 and all(0 < seconds < 300 for seconds in times), times
-    # The interpreter and the limit are the caller's, everything else is the app's call, and a start that
-    # reaches the limit is not hidden. A recorder shows it: a real start with a very small limit would
-    # depend on the speed of this machine.
+    # The interpreter and the limit are the caller's, the helper's error output is kept, and everything else
+    # is the app's call. A start that fails is named as the test's own start, with that output. A recorder
+    # shows it: a real start with a very small limit would depend on the speed of this machine.
     started = []
 
     def reaches_the_limit(arguments, **given):
         started.append((arguments, given))
-        raise subprocess.TimeoutExpired(arguments, given['timeout'])
+        raise subprocess.TimeoutExpired(arguments, given['timeout'], stderr=b'the helper wrote this')
 
-    with monkeypatch.context() as patch, pytest.raises(subprocess.TimeoutExpired):
+    with monkeypatch.context() as patch, pytest.raises(AssertionError) as failure:
         patch.setattr(subprocess, 'run', reaches_the_limit)
         probe.catalog_helper_times((command, settings), 'another-python', starts=2, limit=7)
-    assert started == [(['another-python', *command[1:]], {**settings, 'timeout': 7})]
+    assert started == [(['another-python', *command[1:]], {**settings, 'timeout': 7, 'stderr': subprocess.PIPE})]
+    assert isinstance(failure.value.__cause__, subprocess.TimeoutExpired)
+    assert str(failure.value).startswith("The test's own start of the decision-catalog helper with another-python "
+                                         'failed (TimeoutExpired: ')
+    assert str(failure.value).endswith('It is not a command of the app. Error output of the helper: '
+                                       'the helper wrote this')
+    # A start that ends well and prints no catalog is named the same way.
+    with monkeypatch.context() as patch, pytest.raises(AssertionError, match="The test's own start .* printed no catalog"):
+        patch.setattr(subprocess, 'run', lambda arguments, **given: subprocess.CompletedProcess(
+            arguments, 0, stdout=b'not a catalog', stderr=b''))
+        probe.catalog_helper_times((command, settings), 'another-python', starts=1)
+
+
+def test_the_ci_job_finds_the_lines_that_the_chat_setup_case_prints_for_the_helper():
+    """The line of a measured start, and the two places of the workflow that read it.
+
+    PowerShell's ``-match`` takes a regular expression and ignores case. The job keeps a line that begins
+    with ``HELPER_LINE`` and warns for one that holds ``HELPER_LONGER``.
+    """
+    inside = probe.catalog_helper_line('prepare-' + 'a' * 32, 3.44, 0.92, 0, 674, 10)
+    longer = probe.catalog_helper_line('q-' + 'b' * 32, 10.04, 1.0, 12, 755, 10)
+    assert inside == (
+        'MEASURED the decision-catalog helper in the new worker environment prepare-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: '
+        "the test's first start took 3.4 s; 674 more bytecode files were there after it (0 before it); "
+        "the test's second start took 0.9 s; the app's time limit for one start is 10 s")
+    assert longer == (
+        'MEASURED the decision-catalog helper in the new worker environment q-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb: '
+        "the test's first start took 10.0 s; 743 more bytecode files were there after it (12 before it); "
+        "the test's second start took 1.0 s; the app's time limit for one start is 10 s; "
+        'LONGER THAN THE TIME LIMIT OF THE APP')
+    # A start of exactly the limit is not longer than it.
+    assert probe.HELPER_LONGER not in probe.catalog_helper_line('q-' + 'c' * 32, 10, 1.0, 0, 743, 10)
+    workflow = (probe.ROOT / '.github' / 'workflows' / 'windows-path-length.yml').read_text(encoding='utf-8')
+    patterns = re.findall(r"-match '([^']+)'", workflow)
+    keeps, warns = '^' + probe.HELPER_LINE, probe.HELPER_LONGER
+    assert patterns.count(keeps) == 1 and patterns.count(warns) == 1, patterns
+    # Both texts are plain text for a regular expression: no character of them has a meaning there.
+    assert not set(probe.HELPER_LINE + probe.HELPER_LONGER) & set('.^$*+?{}[]()|\\')
+    for line, warned in ((inside, False), (longer, True)):
+        assert re.search(keeps, line, re.IGNORECASE) and bool(re.search(warns, line, re.IGNORECASE)) is warned
+    # pytest's report of a failure shows source lines, indented. The job takes none of them for a measurement.
+    assert not re.search(keeps, '        print(update_stage_probe.' + inside, re.IGNORECASE)
+    assert not re.search(keeps, 'E   ' + inside, re.IGNORECASE)
 
 
 @pytest.mark.skipif(os.name == 'nt', reason='On Windows the switch is the subject: tests/test_windows_long_paths_off.py')
