@@ -1208,12 +1208,12 @@ does.
 9. One message. It says only what was observed: the data is deleted; the last
    program files go when the message is closed; anything that is not
    Amplifier's is named and stays. If Windows does not show that message, the
-   uninstall stops there, before its last step, as it did before the texts
-   were corrected: `python`, `tools` and both records stay. One further
-   message then says that the data is deleted and that the last program files
-   were not removed. It is never the message of an uninstall that changed
-   nothing. The same holds for the last message of an uninstall that keeps
-   the folder: the further message is that last message again.
+   uninstall stops there, before its last step: `python`, `tools` and both
+   records stay. One further message then says that the data is deleted and
+   that the last program files were not removed. It is never the message of
+   an uninstall that changed nothing. The same holds for the last message of
+   an uninstall that keeps the folder: the further message is that last
+   message again.
 10. The last step (`windows_uninstall.finish`), under the lock and with the
     folder proven and pinned again: create the flat folder
     `unified-uninstall-last` and two kept files, one in the installation

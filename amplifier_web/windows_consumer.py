@@ -265,16 +265,17 @@ async def launch(root, *, open_browser=True, progress=None):
 
 
 # What an uninstall knows before its first change: it changed nothing. It does not say what the folder
-# holds (another window can have begun a removal) or that the person can keep using Amplifier (with a
-# journal in the folder the launcher refuses, and Open can need what failed here).
-_UNCHANGED = "Amplifier was not uninstalled. This uninstall changed nothing.\n\n"
+# holds or whether Amplifier is installed (another window can have begun or finished a removal), and not
+# that the person can keep using Amplifier (with a journal in the folder the launcher refuses, and Open
+# can need what failed here).
+_UNCHANGED = "This uninstall stopped before it changed anything.\n\n"
 _STOPPED = "To keep using Amplifier, open it from the Start menu."
 _UNFINISHED = {
     # Before the first step: nothing was asked yet, or the question itself failed.
     "preparation": _UNCHANGED + "Amplifier could not check its own installation files. "
                    "Restart this PC, then uninstall again.",
     # The installation is checked. A question could not be asked: Windows did not show it.
-    "questions": _UNCHANGED + "Amplifier could not ask its questions. Restart this PC, then uninstall again.",
+    "questions": _UNCHANGED + "Amplifier could not show one of its questions. Restart this PC, then uninstall again.",
     "stop-app": "Amplifier could not stop its background app.\n\n"
                 "Wait a few minutes or restart this PC, then select Stop Amplifier again.",
     "status": "Amplifier could not read its status.\n\nRestart this PC, then select Amplifier status again.",
@@ -344,8 +345,8 @@ def entry_notice(purpose, entry, retry, *, listed=True):
     changed setting, another installation, a renamed Windows account), so the
     text does not say that someone changed it. The cause sentence makes no
     claim about what Amplifier changed: a start can make an entry and then
-    not confirm it. (Only the uninstall opening says that this uninstall
-    changed nothing; it reads the entry before it changes anything.) With `retry`,
+    not confirm it. (Only the uninstall opening says that it changed nothing:
+    an uninstall reads the entry before it changes anything.) With `retry`,
     Windows gave no answer about the entry's account: that can pass, and
     nothing is deleted.
     `listed` is False when Amplifier is not in the Start menu: the setup file
@@ -354,7 +355,7 @@ def entry_notice(purpose, entry, retry, *, listed=True):
     opening = {"start": "Amplifier could not start.",
                "status": "Amplifier could not read its status.",
                "stop": "Amplifier did not stop its background app.",
-               "uninstall": "Amplifier was not uninstalled. This uninstall changed nothing.",
+               "uninstall": "This uninstall stopped before it changed anything.",
                "removal": "Amplifier could not finish its removal from this PC. "
                           "Until it has finished, Amplifier does not open."}[purpose]
     opens = ("Open Amplifier from the Start menu: Amplifier Unified." if listed else
@@ -408,7 +409,7 @@ class Unfinished(RuntimeError):
         code = getattr(self.error, "winerror", None)
         if isinstance(self.error, TaskNotConfirmed):
             # The step's own text would name a wrong cause and a wrong next step.
-            # After a removal began, "changed nothing" would say too little.
+            # After a removal began, "before it changed anything" would say too little.
             text = entry_notice("removal" if self.text == "removal" else
                                 {"status": "status", "stop-app": "stop"}.get(self.step, "uninstall"),
                                 self.error.entry, self.error.retry)
@@ -432,7 +433,7 @@ class NotShown(Unfinished):
     """The uninstall did its work, and Windows did not show the message that ends it.
 
     `notice` is what the person must still be told, for one more attempt to show it. It is never the
-    text of a failed preparation: that text says that this uninstall changed nothing.
+    text of a failed preparation: that text says that the uninstall stopped before it changed anything.
     """
 
     def __init__(self, message, error):
@@ -656,7 +657,7 @@ async def _uninstall(root):
                 # A journal is in the folder: it was there at the start and proves no delete choice, or
                 # another window began a removal after the question (seen now; the look under the lock
                 # above did not run when the lock itself failed). The launcher then refuses to open
-                # Amplifier, and a step's own text can say that it opens or that nothing was changed.
+                # Amplifier, and a step's own text can say that it opens.
                 earlier[0] = earlier[0] or windows_uninstall.unfinished(root)
                 raise Unfinished(at[0], error, "removal" if earlier[0] else None) from error
             result.setdefault("receiptError", error)  # Everything was removed; only tidying failed.
