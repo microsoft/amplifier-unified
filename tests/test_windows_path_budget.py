@@ -194,6 +194,61 @@ def test_default_workspace_folder_limits_are_stated_not_hidden():
     assert {name: root for name, root in measured.items() if root < MAX_ROOT} == DEFAULT_WORKSPACE_LONGEST_ROOT
 
 
+# Stated limit, not fixed here: a folder that a person chose anywhere keeps the
+# CLI name, which is as long as the folder's own path. Each number is the room
+# of one row: the installation folder path plus the path of the person's folder
+# may be at most that many characters for a root session. The rows of
+# KEPT_CHAT are what keeping a chat needs; when one of them does not fit, the
+# app answers with a plain sentence before it makes anything
+# (``session_files.chat_folder_too_long``). So at the longest installation
+# folder path a person's folder may have a path of 78 characters, and 103 at
+# the shortest. The four rows with less room are lost first, in that order.
+PERSONS_FOLDER_ROOM = {
+    'request observation': 94,
+    'oversized-request copy': 95,
+    'background-job record': 112,
+    'request observation temporary': 118,
+    'view temporary': 137,
+    'history temporary': 150,
+    'hook metadata temporary': 154,
+    'pending transcript append': 164,
+    'event log': 170,
+    'capture folder': 171,
+    'transcript backup': 172,
+    'metadata lock beside the folder': 181,
+    'session folder': 184,
+}
+KEPT_CHAT = ('view temporary', 'history temporary', 'hook metadata temporary', 'pending transcript append', 'event log',
+             'capture folder', 'transcript backup', 'metadata lock beside the folder', 'session folder')
+KEPT_CHAT_ROOM = 137
+
+
+def test_a_persons_folder_limits_are_stated_not_hidden():
+    def room(name, root):
+        def fitting(size):
+            project = '-' + 'p' * (size - 1)   # the CLI name of a folder path of this length
+            kind, relative = next(row[1:] for row in session_store(project, ROOT_ID) + capture_store(project, ROOT_ID)
+                                  if row[0] == name)
+            return fits(kind, relative, root)
+        return root + max(size for size in range(1, 250) if fitting(size))
+
+    names = [row[0] for row in session_store('p', ROOT_ID) + capture_store('p', ROOT_ID)]
+    for root in (34, 51, MAX_ROOT):
+        assert {name: room(name, root) for name in names} == PERSONS_FOLDER_ROOM
+    assert min(PERSONS_FOLDER_ROOM[name] for name in KEPT_CHAT) == KEPT_CHAT_ROOM
+    assert (KEPT_CHAT_ROOM - MAX_ROOT, KEPT_CHAT_ROOM - 34) == (78, 103)
+    # The app's answer measures exactly these rows.
+    from amplifier_web import session_files
+    assert session_files._FILE_LIMIT == FILE_LIMIT
+    assert FILE_LIMIT - len('\\shared\\projects\\\\sessions\\' + ROOT_ID) - session_files._SESSION_TAIL == KEPT_CHAT_ROOM
+    assert FILE_LIMIT - len('\\capture\\\\sessions\\' + ROOT_ID) - session_files._CAPTURE_TAIL == \
+        PERSONS_FOLDER_ROOM['hook metadata temporary']
+    # The default workspace folder is the installation folder path plus 10: the same limits as above.
+    for name, longest in DEFAULT_WORKSPACE_LONGEST_ROOT.items():
+        assert (PERSONS_FOLDER_ROOM[name] - len('\\workspace')) // 2 == longest
+    assert 2 * MAX_ROOT + len('\\workspace') <= KEPT_CHAT_ROOM   # and a chat there is always kept
+
+
 # Update stage. An in-app component update, and a setup run on a PC that
 # already has an AI connection, prepare the components in the stage folder
 # ``<root>\app\updates\releases\<32 hex>``. The compatibility probe then runs
@@ -474,11 +529,46 @@ def test_source_store_names_are_the_ones_foundation_writes():
     assert 'sys.path.insert(0, path_str)' in inspect.getsource(activator)
 
 
+# The deepest file of a default repository that is not in ``.git`` or in a
+# ``tests`` folder (measured): a document of the skills repository. Nothing
+# opens it in a chat; it is the longest store path that is counted as needed.
+STORE_DEPTH = 127
+# The deepest file of a default repository at all (measured): a test fixture of
+# the context-intelligence repository. It passes the limit from an installation
+# folder path of 51. NOT_NEEDED_FOLDERS says why that is accepted.
+STORE_TEST_DEPTH = 140
+# What setup and the app install below the installation folder: the deepest
+# file of each part, in characters below the folder. Measured in a clean-room
+# installation (release 0.105.0, after an in-app update and a chat). The
+# design document states the same numbers. The native tree case fails when a
+# part that it builds is deeper than its number here.
+MEASURED_DEPTHS = {
+    'frozen worker environment': 194,   # app\runtime\q-<32 hex>\.venv\...: bytecode; the source file is 180
+    'uv cache': 189,                    # cache\git-v1\checkouts\...: a copy of the fixture above
+    'first worker environment': 187,    # app\runtime\<16 hex>\.venv\...: bytecode; the source file is 162
+    'app generation': 171,              # app\updates\a\<32 hex>\tools\...
+    'private Python': 142,
+    'tools': 124,
+    'private Git': 90,                  # the full Git for Windows
+}
+
+
 def test_measured_application_depths_fit_under_the_longest_root():
     design = (ROOT / 'docs/design/native-windows-installation.md').read_text(encoding='utf-8')
     sentence = re.search(r'Worst\s+observed depths below the folder:(.*?)\.', design, re.S).group(1)
-    depths = [int(value) for value in re.findall(r'\b(\d+)\b', sentence)]
-    assert len(depths) == 5 and all(MAX_ROOT + depth <= FILE_LIMIT for depth in depths)
+    stated = {' '.join(name.split()): int(depth)
+              for name, depth in re.findall(r'([a-zA-Z][a-zA-Z \n]*?)\s+(\d+)(?:\s+characters)?(?:,|$)', sentence.strip())}
+    assert stated == MEASURED_DEPTHS
+    assert all(MAX_ROOT + depth <= FILE_LIMIT for depth in MEASURED_DEPTHS.values())
+    # The deepest part leaves this many characters at the longest folder path, as the document says.
+    assert FILE_LIMIT - MAX_ROOT - max(MEASURED_DEPTHS.values()) == 6
+    assert re.search(r'longest\s+is\s+253\s+characters,\s+with\s+6\s+to\s+spare', design)
+    # The source store: module source, and the deepest file that is counted as needed.
+    assert (length('s\\objects\\' + 'f' * SOURCE_NAME + '\\' + HEX40 + '\\' + 'm' * STORE_DEPTH),
+            length('s\\objects\\' + 'f' * SOURCE_NAME + '\\' + HEX40 + '\\' + 'm' * STORE_TEST_DEPTH)) == (255, 268)
+    assert MODULE_DEPTH <= STORE_DEPTH < STORE_TEST_DEPTH
+    for number in ('255', '268', '267', '254'):
+        assert re.search(rf'\b{number}\b', design), number
 
 
 # The table above is only as true as the names in the code. Each check below
