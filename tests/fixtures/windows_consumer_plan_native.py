@@ -16,10 +16,11 @@ installation. The host rows are the plan's rows. The runtime graph is the
 tool's own reading of the install records.
 
 Not shown here: a release run, the artifact downloads of its job `release`, and
-that job's step condition. The plan's components and their sources come from the
-published wheel, so a change of the app's component graph reaches this check
-only with a newer RELEASE. For a component that the wheel requires at a branch,
-the plan has the commit of that branch at the moment of the installation.
+that job's step condition. The installation is of the published wheel, so a
+change of the app's own requirements reaches this check only with a newer
+RELEASE. The installation resolves those requirements at its moment: for a
+component that the wheel requires at a branch, the plan has the branch's commit
+of that moment.
 """
 from __future__ import annotations
 
