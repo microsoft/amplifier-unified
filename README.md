@@ -86,19 +86,19 @@ Limits of this preview:
 - **Folder:** Amplifier installs into `%LOCALAPPDATA%\Amplifier` and keeps your
   chats, settings and accounts there. What a chat writes outside that folder
   depends on the AI connection:
-  - **OpenAI API** and **Anthropic API:** in our tests, a chat wrote no file
-    outside the folder.
+  - **OpenAI API:** in our test on a PC, a chat wrote no file outside the
+    folder.
+  - **Anthropic API:** in our test on a PC, a chat wrote one small file
+    outside the folder: `%USERPROFILE%\.amplifier\rate-limit-state.json`.
+    Amplifier now keeps that file in the folder. A file that an earlier
+    version of this preview wrote is still there. Amplifier does not use it
+    any more, and uninstall does not remove it. You can delete it.
   - **GitHub Copilot Subscription:** its component makes two folders,
     `%USERPROFILE%\.amplifier-provider-github-copilot` and
     `%LOCALAPPDATA%\amplifier-provider-github-copilot`. We read this in its
     source code. We have not tested it on a PC.
   - **ChatGPT Subscription**, **Google Gemini API** and
     **OpenAI Compatible API:** we have not tested this.
-
-  Earlier versions of this preview wrote one small file with an Anthropic
-  connection: `%USERPROFILE%\.amplifier\rate-limit-state.json`. Amplifier
-  does not use that file any more. Uninstall does not remove it. You can
-  delete it.
 - **Uninstall:** open **Settings > Apps > Installed apps**, find
   **Amplifier Unified (unsigned preview)**, select **More options (…)**, then
   **Uninstall**, then **Uninstall** again. Amplifier first asks: "Do you also

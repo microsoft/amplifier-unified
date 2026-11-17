@@ -69,23 +69,26 @@ class InstallationGuidanceTests(unittest.TestCase):
         import json
         offered = [row["name"] for row in json.loads(source("amplifier_web/ai_services.json"))]
         self.assertEqual(sorted(re.findall(r"\*\*([^*]+?):?\*\*", folder)), sorted(offered))
-        for statement in (
-                "- **OpenAI API** and **Anthropic API:** in our tests, a chat wrote no file outside the folder.",
+        statements = (
+                "- **OpenAI API:** in our test on a PC, a chat wrote no file outside the folder.",
+                # Seen on a PC with an earlier version. An installation that ran one can hold this file,
+                # and nothing deletes it.
+                "- **Anthropic API:** in our test on a PC, a chat wrote one small file outside the folder: "
+                "`%USERPROFILE%\\.amplifier\\rate-limit-state.json`. Amplifier now keeps that file in the folder. "
+                "A file that an earlier version of this preview wrote is still there. "
+                "Amplifier does not use it any more, and uninstall does not remove it. You can delete it.",
                 "- **GitHub Copilot Subscription:** its component makes two folders, "
                 "`%USERPROFILE%\\.amplifier-provider-github-copilot` and "
                 "`%LOCALAPPDATA%\\amplifier-provider-github-copilot`. We read this in its source code. "
                 "We have not tested it on a PC.",
                 "- **ChatGPT Subscription**, **Google Gemini API** and **OpenAI Compatible API:** "
-                "we have not tested this.",
-                # An installation that ran an earlier version can hold this file. Nothing deletes it.
-                "Earlier versions of this preview wrote one small file with an Anthropic connection: "
-                "`%USERPROFILE%\\.amplifier\\rate-limit-state.json`. Amplifier does not use that file any more. "
-                "Uninstall does not remove it. You can delete it."):
-            with self.subTest(statement=statement):
-                self.assertIn(statement, folder)
-        # The file name is the one that the host now puts into the installation folder.
+                "we have not tested this.")
+        # The item is these sentences and nothing else: it must not say that nothing is outside the folder.
+        self.assertEqual(folder.split(" depends on the AI connection: ", 1)[1], " ".join(statements))
+        # "Amplifier now keeps that file in the folder" is the host's rule, with that file name.
         from amplifier_web.provider_state_files import STATE_FILES
         self.assertEqual(STATE_FILES["provider-anthropic"]["rate_limit_state_path"], "rate-limit-state.json")
+        self.assertIn('"AMPLIFIER_HOME": "shared"', source("amplifier_web/windows_consumer.py"))
         # Uninstall: the questions and the three buttons are the product's own, and each answer has its result.
         # A sentence of the product can continue in the next string of its source.
         consumer = re.sub(r'"\s*\n\s*"', "", source("amplifier_web/windows_consumer.py"))
