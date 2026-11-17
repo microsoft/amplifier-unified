@@ -7,6 +7,7 @@ It is not a remotely authenticated service or an independent native runtime.
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import uuid
 from pathlib import Path
@@ -117,6 +118,8 @@ class ExecutionOwner:
         self._retiring = False
         self._retired = None
         self.retirement_hint = None
+        self.request_permission = None
+        self.approval_policy = False
         self._retirement_hint_task = None
         self._observers = ensure_observers(service)
         self._observers.attachments.add(self)
@@ -300,10 +303,36 @@ class ExecutionOwner:
                 task = self.service._task(self.service.access_mode.settle(identity, wait=True))
                 await asyncio.shield(task)
                 session = self.service._session(identity, hydrate=False)
-                if any(item.get("id") in identities and item.get("status") == "pending"
-                       for item in session.get("approvals", [])):
-                    row["delivery"].fail("Interactive approval is unavailable on this attachment. The owner retains the pending request; inspect it before retrying. No decision or work was replayed.")
-                    return
+                for approval in list(session.get('approvals', [])):
+                    if approval.get('id') not in identities or approval.get('status') != 'pending':
+                        continue
+                    if self.request_permission is None:
+                        row["delivery"].fail("Interactive approval is unavailable on this attachment. The owner retains the pending request; inspect it before retrying. No decision or work was replayed.")
+                        return
+                    captured = self.service.approval_request_hash(session, approval)
+                    stop = session.get('interruptionRevision', 0)
+                    offered = copy.deepcopy(approval)
+                    offered.pop('policyScope', None)  # Worker prose/metadata is not policy authority.
+                    scope = None
+                    if self.approval_policy:
+                        from .approval_policy import descriptor
+                        scope = descriptor(self.service, session, approval)
+                        if scope:
+                            offered['policyScope'] = scope
+                    choice = await self.request_permission(identity, offered)
+                    # The transport returns a choice, never an authority object.
+                    # Canonical policy rechecks the captured request at commit.
+                    if (self.pending.get(identity) is not row or self._disconnected
+                            or identity not in self.attached or session.get('interruptionRevision', 0) != stop):
+                        continue
+                    if approval.get('status') != 'pending':
+                        continue  # Another genuine owner decision already won.
+                    if choice not in {'allow', 'deny'}:
+                        raise ValueError('The approval client returned a choice that was not offered.')
+                    await self.service.dispatch('approval.respond', {'sessionId': identity, 'id': approval['id'],
+                        'decision': choice, 'expectedRequestHash': captured,
+                        **({'expectedApprovalScope': scope['key']} if scope else {})},
+                        origin=self.origin, command_id=str(uuid.uuid4()), include_state=False)
         except Exception:
             row["delivery"].fail("Approval settlement is unresolved; inspect retained owner state before retrying.")
         finally:

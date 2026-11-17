@@ -62,12 +62,14 @@ anonymous retries and authenticated mutations across component boundaries.
 
 ## Current scheduling delivery
 
-Scheduling currently uses artifact assembly: its independently published wheel
-selects a generated runtime snapshot in Unified, while the temporary
-`components/scheduling` project remains the sole authoring owner. Unified is the
+Scheduling uses artifact assembly: its selected published wheel supplies a
+generated runtime snapshot in Unified. The public
+[amplifier-platform-scheduling](https://github.com/bkrabach/amplifier-platform-scheduling)
+repository owns the policy/store source and standalone tests. Unified is the
 sole installed distribution owner and carries the selected artifact provenance,
 license and runtime requirements. Component source/test changes can proceed without
-changing the app default. This does not claim independent pip replacement; returning
+changing the app default; source handoff does not rewrite historical selected
+receipts. This does not claim independent pip replacement; returning
 to a prior app uses ordinary app rollback and preserves newer scheduling state.
 
 ## Not in v1

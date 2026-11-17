@@ -24,6 +24,99 @@ def choices(app, revision=0, **patch):
     return {'sessionId': app._session()['id'], 'expectedRevision': revision, **patch}
 
 
+@pytest.mark.parametrize('fork', [False, True])
+async def test_bound_preparation_copies_startup_inputs_without_retained_history(app, monkeypatch, fork):
+    from amplifier_web import draft_defaults
+    from amplifier_web.next_message_configuration import bind
+    from amplifier_web.runtime import RuntimeManager
+
+    class UnrelatedHistory:
+        def __deepcopy__(self, memo):
+            raise AssertionError('Unrelated retained history copied during startup preparation')
+
+    async def catalog(*args, **kwargs):
+        return {'providers': [{'id': 'one', 'config': {}}]}
+    monkeypatch.setattr(draft_defaults, 'resolve_defaults', catalog)
+    runtime = RuntimeManager()
+    bind(app, runtime)
+    captured = deepcopy(app._session())
+    selected = {'instance': 'one', 'model': 'chosen'}
+    message = {'role': 'user', 'content': [{'text': 'captured fork context'}]}
+    captured.update(selection=selected, pendingModelSelection=selected,
+                    execution=UnrelatedHistory(), workers=UnrelatedHistory(), forkContext=fork,
+                    messages=[message, message] if fork else UnrelatedHistory())
+    try:
+        prepared, guard = await runtime._input_configuration(captured)
+        guard()
+        assert 'execution' not in prepared and 'workers' not in prepared
+        assert prepared['selection'] is prepared['pendingModelSelection']
+        assert prepared['selection'] is not selected
+        selected['model'] = 'later edit'
+        assert prepared['selection']['model'] == 'chosen'
+        if fork:
+            assert prepared['messages'][0] is prepared['messages'][1]
+            assert prepared['messages'][0] is not message
+            message['content'][0]['text'] = 'later fork edit'
+            assert prepared['messages'][0]['content'][0]['text'] == 'captured fork context'
+        else:
+            assert 'messages' not in prepared
+    finally:
+        await runtime.close()
+
+
+async def test_direct_preparation_keeps_complete_custom_snapshot_contract(app):
+    from amplifier_web.next_message_configuration import prepare
+    copies = []
+    class Snapshot(dict):
+        def __deepcopy__(self, memo):
+            copies.append(True)
+            return deepcopy(dict(self), memo)
+    captured = Snapshot(deepcopy(app._session()))
+    captured['opaqueCallerField'] = {'nested': ['retained']}
+    prepared, guard = await prepare(app, captured, frozen=True)
+    guard()
+    assert copies == [True]
+    assert prepared['opaqueCallerField'] == captured['opaqueCallerField']
+    captured['opaqueCallerField']['nested'].append('later edit')
+    assert prepared['opaqueCallerField']['nested'] == ['retained']
+
+
+@pytest.mark.parametrize('failure', ['projection', 'copy'])
+async def test_bound_startup_input_failure_keeps_preparation_owner(app, monkeypatch, failure):
+    from amplifier_web.next_message_configuration import bind
+    from amplifier_web.runtime import RuntimeManager, RuntimeStartupError
+    runtime = RuntimeManager()
+    bind(app, runtime)
+    sid = app._session()['id']
+    observed = []
+    def fail():
+        owner = runtime._preparations[sid]
+        assert owner['task'] is asyncio.current_task()
+        observed.append(owner['runtimeOwnerId'])
+        raise ValueError('Synthetic startup input failure')
+    class Projection(dict):
+        def __getitem__(self, key):
+            if failure == 'projection' and key == 'selection':
+                fail()
+            return super().__getitem__(key)
+    class Selection:
+        def __deepcopy__(self, memo):
+            fail()
+    captured = Projection(id=sid, workspace=app._session()['workspace'],
+                          nextMessageRevision=1, selection=Selection())
+    start = AsyncMock()
+    monkeypatch.setattr(runtime, 'start', start)
+    try:
+        with pytest.raises(RuntimeStartupError) as caught:
+            await runtime._start_for_input(captured, AsyncMock())
+        assert len(observed) == 1 and caught.value.startupAttemptId == observed[0]
+        assert caught.value.startupFailureFacts['errors'][0]['class'] == 'ValueError'
+        assert not runtime._preparations and not runtime.workers
+        start.assert_not_awaited()
+    finally:
+        await runtime.close()
+
+
 def retired_configuration(app, monkeypatch):
     """Retire real durable bodies, not a hot dict with hydration mocked."""
     from amplifier_web.cold_display import ColdRecord

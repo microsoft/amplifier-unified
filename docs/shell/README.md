@@ -37,8 +37,8 @@ chat list shows All chats, without discarding the manager's view state.
 | Package manifests, immutable digests, host validation receipts | `amplifier_web/shell_modules.py` | Digest, stale-host, compatibility and capability tests |
 | Client compositions, revisions, prepared changes, instance UI state | Shell records in the existing app database | Isolation, persistence, compare-and-set, idempotency and revert tests |
 | Bounded navigation queries | Adapters over the existing workspace/chat projections | Existing 206-chat browser fixture; no additional conversation store |
-| Loading, subscriptions, component errors and browser status | `components/web-client/src/shell/runtime.jsx` | Production browser proof and validation harness |
-| Workspace and chat controls | `components/web-client/src/shell/navigation-components.jsx` | Existing component tests run against public host fixtures |
+| Loading, subscriptions, component errors and browser status | [src/shell/runtime.jsx](https://github.com/microsoft/amplifier-client-web/blob/main/src/shell/runtime.jsx) | Production browser proof and validation harness |
+| Workspace and chat controls | [src/shell/navigation-components.jsx](https://github.com/microsoft/amplifier-client-web/blob/main/src/shell/navigation-components.jsx) | Existing component tests run against public host fixtures |
 | Public authoring API | `packages/shell-sdk` | External navigator in `examples/shell-navigator` |
 | Theme tokens and layout presentation | Host root and existing panel layout | Live preview, CSS reordering, revert and stable iframe checks |
 | Artifact card, disclosure, viewer and saved-output controls | [Artifact controls and reuse](../canvas.md#artifact-controls-and-reuse) | Exact-version presentation, control parity, dirty-state and narrow-layout checks |

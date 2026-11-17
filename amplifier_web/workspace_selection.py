@@ -49,6 +49,28 @@ def initialize(state):
     state["canvas"].setdefault("id", uuid.uuid4().hex)
 
 
+def restoration_ids(workspace):
+    """Hidden registrations revealed by selecting this existing workspace."""
+    restored = {workspace['id']}
+    if workspace.get('nativeProject'):
+        restored.add(uuid.uuid5(uuid.NAMESPACE_URL, 'amplifier-project:' + workspace['nativeProject']).hex)
+    return restored
+
+
+def registration_for_session(state, session):
+    """Resolve the registration the shared selection path would reveal."""
+    row = next((w for w in state['workspaces'] if w['id'] == session.get('workspaceId')), None)
+    if row is None:
+        if session.get('workspace'):
+            row = _registration(session['workspace'])
+        elif session.get('nativeProject') and session.get('workspaceId'):
+            row = {'id': session['workspaceId'], 'name': session['nativeProject'], 'path': None,
+                   'nativeProject': session['nativeProject'], 'available': False}
+        else:
+            _error('This chat has no workspace registration.')
+    return row
+
+
 def select_session_workspace(state, session):
     """Keep a conversation reachable in navigation without changing its folder."""
     initialize(state)
@@ -60,19 +82,9 @@ def select_session_workspace(state, session):
         return
     if state['view'].get('navLocationFilter') == 'managed':
         state['view']['navLocationFilter'] = 'all'
-    row = next((w for w in state['workspaces'] if w['id'] == session.get('workspaceId')), None)
-    if row is None:
-        if session.get('workspace'):
-            row = _registration(session['workspace'])
-        elif session.get('nativeProject') and session.get('workspaceId'):
-            row = {'id': session['workspaceId'], 'name': session['nativeProject'], 'path': None,
-                   'nativeProject': session['nativeProject'], 'available': False}
-        else:
-            _error('This chat has no workspace registration.')
+    row = registration_for_session(state, session)
     hidden = state.get('hiddenNativeWorkspaces', [])
-    restored = {row['id']}
-    if row.get('nativeProject'):
-        restored.add(uuid.uuid5(uuid.NAMESPACE_URL, 'amplifier-project:' + row['nativeProject']).hex)
+    restored = restoration_ids(row)
     hidden[:] = [identity for identity in hidden if identity not in restored]
     if not any(item["id"] == row["id"] for item in state["workspaces"]):
         state["workspaces"].append(row)

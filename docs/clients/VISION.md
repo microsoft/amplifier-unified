@@ -57,7 +57,11 @@ oversized controls or smaller text used to compensate for a poor layout.
 ### 3. Independent attention, shared work
 A person's selection, unfinished input and reading position persist locally in
 that client with no routine backend synchronization. Shared drafting or agent
-inspection is explicit. Accepted work is shared; AHP owns its replication and
+inspection is explicit. Explicit dismissal of an update is shared with the owning account on that service;
+a new update or activity incarnation remains eligible to appear. Avatar, density,
+placement, grouping and visibility are device preferences. Dismissal does not read,
+answer, approve or stop work. Independent services do not imply account federation.
+Accepted work is shared; AHP owns its replication and
 recovery while the host continues unattended work and preserves its results.
 
 ### 4. Feedback makes the next action clear

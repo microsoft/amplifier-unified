@@ -99,7 +99,7 @@ def apply_activity(session, activity, *, append=False):
         # A changed native revision often contains only activity already shown
         # by the web owner. The exact merge policy then admits no nodes/turns;
         # only its final aggregation and diagnostics need to be applied.
-        original = owner.snapshot()
+        original = owner._native_activity_input()
         selected, allowed = _selection(session, original, activity)
         if not allowed and not any(row.get('nativeHistory') for kind in ('nodes', 'turns') for row in original[kind]):
             _finish_activity(session, original, selected)

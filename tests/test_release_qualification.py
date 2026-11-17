@@ -845,12 +845,12 @@ def test_manual_python_selection_is_fixed_and_preserves_full_and_core_modes():
     workflow = yaml.load((ROOT / '.github/workflows/python-checks.yml').read_text(), Loader=yaml.BaseLoader)
     selection = workflow['on']['workflow_dispatch']['inputs']['suite']
     assert selection['type'] == 'choice' and selection['default'] == 'full'
-    assert selection['options'] == ['full', 'inline-chat-card', 'queued-configuration', 'security-redaction', 'patch-placement-recovery', 'patch-placement-native', 'managed-removal-recovery', 'fresh-cleanup-native', 'shared-work-continuity', 'manager-exception-boundary', 'remote-test-origins', 'shared-work-native', 'cold-control-restore', 'goal-peer-publisher-0410', 'updater-omitted-ref', 'updater-public-selected-source', 'updater-synthetic-acquisition', 'updater-expanded-lock', 'native-child-fixtures', 'question-answer-resume', 'question-answer-installed', 'live-first-send', 'live-first-accepted-graph']
+    assert selection['options'] == ['full', 'inline-chat-card', 'queued-configuration', 'security-redaction', 'patch-placement-recovery', 'patch-placement-native', 'managed-removal-recovery', 'fresh-cleanup-native', 'prepared-runtime-native', 'shared-work-continuity', 'manager-exception-boundary', 'remote-test-origins', 'shared-work-native', 'cold-control-restore', 'goal-peer-publisher-0410', 'updater-omitted-ref', 'updater-public-selected-source', 'updater-synthetic-acquisition', 'updater-expanded-lock', 'native-child-fixtures', 'question-answer-resume', 'question-answer-installed', 'live-first-send', 'live-first-accepted-graph']
     assert workflow['on']['workflow_call']['inputs'] == {'revision': {'type': 'string', 'required': 'true'}}
     assert workflow['on']['workflow_call']['secrets'] == {'LOOP_LIVE_CI_READ_KEY': {'required': 'true'}}
     assert workflow['permissions'] == {'contents': 'read'}
     jobs = workflow['jobs']
-    assert jobs['python']['if'] == "${{ !inputs.core_wheels && inputs.suite != 'remote-test-origins' && inputs.suite != 'cold-control-restore' && inputs.suite != 'goal-peer-publisher-0410' && inputs.suite != 'updater-omitted-ref' && inputs.suite != 'updater-public-selected-source' && inputs.suite != 'updater-synthetic-acquisition' && inputs.suite != 'updater-expanded-lock' && inputs.suite != 'fresh-cleanup-native' }}"
+    assert jobs['python']['if'] == "${{ !inputs.core_wheels && inputs.suite != 'remote-test-origins' && inputs.suite != 'cold-control-restore' && inputs.suite != 'goal-peer-publisher-0410' && inputs.suite != 'updater-omitted-ref' && inputs.suite != 'updater-public-selected-source' && inputs.suite != 'updater-synthetic-acquisition' && inputs.suite != 'updater-expanded-lock' && inputs.suite != 'fresh-cleanup-native' && inputs.suite != 'prepared-runtime-native' }}"
     assert jobs['python']['env']['CHECK_SUITE'] == "${{ inputs.suite || 'full' }}"
     assert jobs['core-wheels']['if'] == "${{ inputs.core_wheels && (!inputs.suite || inputs.suite == 'full') }}"
     remote = jobs['remote-test-origins']
@@ -1078,13 +1078,13 @@ def test_goal_peer_publisher_installed_graph_must_match_locked_export(publisher_
 def test_cold_control_restore_is_exclusive_manual_locked_and_bounded():
     workflow = yaml.load((ROOT / '.github/workflows/python-checks.yml').read_text(), Loader=yaml.BaseLoader)
     assert set(workflow['on']) == {'workflow_dispatch', 'workflow_call'}
-    assert set(workflow['on']['workflow_dispatch']['inputs']) == {'suite', 'core_wheels'}
+    assert set(workflow['on']['workflow_dispatch']['inputs']) == {'suite', 'core_wheels', 'candidate_ref'}
     assert workflow['on']['workflow_dispatch']['inputs']['suite']['default'] == 'full'
     assert workflow['on']['workflow_call']['inputs'] == {'revision': {'type': 'string', 'required': 'true'}}
     assert workflow['permissions'] == {'contents': 'read'}
     jobs = workflow['jobs']
     assert set(jobs) == {'python', 'core-wheels', 'remote-test-origins', 'incompatible-selection',
-                         'cold-control-restore', 'goal-peer-publisher-0410', 'fresh-cleanup-native',
+                         'cold-control-restore', 'goal-peer-publisher-0410', 'fresh-cleanup-native', 'prepared-runtime-native',
                          'updater-omitted-ref', 'updater-public-selected-source',
                          'updater-synthetic-acquisition', 'updater-expanded-lock'}
     job = jobs['cold-control-restore']
@@ -1669,7 +1669,8 @@ def test_browser_retains_only_the_successfully_built_public_web_payload():
     # The artifact includes the builder's metadata and is retained before later
     # scenario failure; an unrun/failed build cannot upload the old tracked tree.
     selection = json.loads((ROOT / 'components/web-client.source.json').read_text())
-    source = ROOT / selection['delivery']['path']
+    source = ROOT / (selection['delivery']['path'] if selection['delivery']['type'] == 'directory'
+                     else '.build/web-client')
     vite = (source / 'vite.config.js').read_text()
     assert 'emptyOutDir:true' in vite and 'dist/build.json' in vite
     assembler = (ROOT / 'scripts/web_client_build.py').read_text()
@@ -1875,8 +1876,11 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     assert commands[1].replace(flag, '').replace(attachment_flag, '').replace(captured_flag, '').strip() == (
         'uv run --no-sync python scripts/browser_check_runner.py '
         '--plan tests/web/browser-checks.json --output output/browser-checks --budget-seconds 1500')
-    assert next(i for i, s in enumerate(steps) if '--initialize' in s.get('run', '')) < next(
-        i for i, s in enumerate(steps) if s.get('uses') == 'actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065')
+    prepare = next(i for i, step in enumerate(steps)
+                   if step.get('name') == 'Prepare selected client source for host checks')
+    initialize = next(i for i, step in enumerate(steps) if '--initialize' in step.get('run', ''))
+    install = next(i for i, step in enumerate(steps) if 'uv sync --locked' in step.get('run', ''))
+    assert prepare < initialize < install
     contracts = [s for s in steps if s.get('name') == 'Verify fixed APP004 qualification contracts']
     assert len(contracts) == 1
     contract = contracts[0]

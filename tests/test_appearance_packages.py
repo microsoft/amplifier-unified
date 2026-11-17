@@ -9,6 +9,8 @@ import os
 from pathlib import Path
 import stat
 import struct
+import subprocess
+import sys
 import zipfile
 import zlib
 
@@ -60,6 +62,39 @@ def raw_zip(files=None, *, compression=zipfile.ZIP_STORED, comment=b''):
 
 def encoded(raw=None):
     return base64.b64encode(raw_zip() if raw is None else raw).decode()
+
+
+def test_package_compiler_and_validator_do_not_import_app_service():
+    result = subprocess.run([sys.executable, '-c', '''
+import base64
+import importlib.abc
+import sys
+
+class NoAppService(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == 'amplifier_web.service' or fullname.startswith('amplifier_web.service.'):
+            raise AssertionError('Appearance compilation must not import AppService')
+
+sys.meta_path.insert(0, NoAppService())
+from amplifier_web import appearance_packages as packages
+from amplifier_web.errors import AppError
+
+package = packages.load(base64.b64decode(sys.stdin.read()))
+assert 'data:image/png;base64,' in package.css
+assert 'data:font/woff;base64,' in package.css
+packages.validate_theme(package.css)
+plain = packages.from_css('#amp-one{color:#123456}', 'Portable')
+assert packages.load(packages.encode(plain.files)).css == plain.css
+try:
+    packages.validate_theme('#amp-one{background:url(https://example.com/art.png)}')
+except AppError as exc:
+    assert str(exc) == 'Embed images and fonts in the skin instead of loading external URLs.'
+else:
+    raise AssertionError('Network artwork must still be rejected')
+assert 'amplifier_web.service' not in sys.modules
+'''], input=encoded(), capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert validate_theme is packages.validate_theme
 
 
 def manifest_files(patch):

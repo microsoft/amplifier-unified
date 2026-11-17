@@ -13,12 +13,23 @@
 /.github/** source-context=tooling
 /tests/** source-context=tests
 /tests/web/** source-context=tests
+/amplifier_web/status_protocol/** source-context=generated linguist-vendored=true linguist-generated=true -text
+/components/status/*.py source-context=source
+/components/status/tests/** source-context=tests
+/components/status/README.md source-context=documentation
+/components/status/LICENSE source-context=documentation
+/components/status/MANIFEST.in source-context=configuration
+/components/status/pyproject.toml source-context=configuration
+/components/status/.gitignore source-context=configuration
+/components/status-emitter.source.json source-context=configuration
 /scripts/**/tests/** source-context=tests
-/components/scheduling/amplifier_scheduling/** source-context=source
-/components/scheduling/tests/** source-context=tests
-/components/scheduling/MANIFEST.in source-context=configuration
-/components/scheduling/.gitignore source-context=configuration
-/components/scheduling/LICENSE source-context=documentation
+/components/recall/amplifier_recall/** source-context=source
+/components/recall/tests/** source-context=tests
+/components/recall/MANIFEST.in source-context=configuration
+/components/recall/.gitignore source-context=configuration
+/components/recall/LICENSE source-context=documentation
+/components/recall.source.json source-context=configuration
+/components/recall-delivery/** source-context=generated linguist-vendored=true linguist-generated=true -text
 /components/scheduling.source.json source-context=configuration
 /components/scheduling-delivery/** source-context=generated linguist-vendored=true linguist-generated=true -text
 /components/publishing/amplifier_publishing/** source-context=source
@@ -110,16 +121,14 @@ package-lock.json source-context=locks
 # Preserve committed bytes and existing source/build/installed parity checks.
 /amplifier_web/static/** source-context=generated linguist-generated=true -text
 
-# Mechanically refreshed upstream client source; ownership stays discoverable.
+# Public client source selection; ownership stays discoverable.
 /components/README.md source-context=documentation
 /components/AGENTS.md source-context=guidance
 /components/web-client.source.json source-context=configuration
-/components/web-client/** source-context=generated linguist-vendored=true linguist-generated=true
 
 # Dependency entrypoints are generated from the selected client plus host commands.
 
 # The selected component and locked shared inputs have platform-independent bytes.
-/components/web-client/** -text
 /amplifier_web/ai_services.json text eol=lf
 /amplifier_web/provider_sources.json text eol=lf
 /amplifier_web/voice_options.json text eol=lf

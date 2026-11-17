@@ -4,7 +4,6 @@ on:
     paths:
       - 'components/web-client.source.json'
       - 'scripts/web_client_*.py'
-      - 'components/web-client/commands.json'
       - 'amplifier_web/capacity.py'
       - 'amplifier_web/execution*.py'
       - 'amplifier_web/resource_files.py'
@@ -26,8 +25,6 @@ on:
       - 'amplifier_web/worktrees.py'
       - 'amplifier_web/native_activity.py'
       - 'amplifier_web/service.py'
-      - 'components/web-client/src/capacity.jsx'
-      - 'components/web-client/src/runtime-settings.jsx'
       - 'tests/test_capacity.py'
       - 'tests/test_execution*.py'
       - 'tests/test_native_activity_working_set.py'

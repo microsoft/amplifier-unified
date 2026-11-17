@@ -97,8 +97,9 @@ def prepare(root, version, notes_file, build=False):
         raise ValueError('Different notes already exist for this version; review them explicitly')
     if existing is None:
         history['releases'].insert(0, entry)
-        updated[names[3]] = '{\n  "schemaVersion": 1,\n  "releases": [\n    ' + ',\n    '.join(
-            json.dumps(item, ensure_ascii=False, separators=(',', ':')) for item in history['releases']) + '\n  ]\n}\n'
+    retained = validator.retain(history['releases'], expected=version)
+    if existing is None or retained != history['releases']:
+        updated[names[3]] = validator.serialize(retained)
     validator.parse(updated[names[3]], version)
 
     from historical_web_layout import build_command

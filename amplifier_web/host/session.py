@@ -10,7 +10,7 @@ import json
 import os
 from pathlib import Path
 
-from .config import HostConfig, expand_environment, load_config, merge, write_private, provider_mount_sources
+from .config import HostConfig, expand_environment, load_config, merge, write_private, provider_mount_sources, provider_dropped
 from .components import HostComponents, ComponentResolver, compose_bundles, imagegen_defaults, capability_defaults, explicit_context_forwarding, installed_package_source
 from .components import declarations, git_source
 from ..provider_environment import iter_provider_rows, materialize_bundle_providers
@@ -378,7 +378,7 @@ def _apply_settings(bundle, config):
             if kind == "providers" and not override_id:
                 override_id = row["module"].removeprefix("provider-")
             override = merge(overrides.get(row.get("module"), {}), overrides.get(override_id, {}))
-            if override.get("enabled") is False or (kind == "providers" and (row.get("id") or row.get("instance_id") or row["module"].removeprefix("provider-")) in settings.get("configurator", {}).get("disabled", {}).get("providers", [])):
+            if provider_dropped(row, settings) if kind == "providers" else override.get("enabled") is False:
                 if kind == "providers":
                     # Removing a connection must not erase its old image intent
                     # and silently authorize another account through routing.
@@ -1018,7 +1018,8 @@ async def prepare_dependencies(workspace, *, bundle=None, install_overrides=None
             if (bundle or config.active_bundle) == config.active_bundle:
                 if facts['hasLoop'] and not facts['supportedLoop']:
                     live_plan(loaded.to_mount_plan())  # Explain the unsupported choice.
-                raise ValueError('The selected conversation profile is incomplete: ' + ', '.join(facts['missing']))
+                from ..profile_catalog import incomplete
+                raise incomplete(facts)
             return None
     adapted, _ = live_plan(loaded.to_mount_plan())
     components = getattr(loaded, '_host_components', None) or required_components()
@@ -1108,7 +1109,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
     # a stale or corrupt checkpoint cannot prevent opening valid native history.
     native_guard = NativeTranscriptGuard(store.directory(runtime.session_id) / "transcript.jsonl")
     with startup_timing.phase('manager.history.load'):
-        saved = store.load(runtime.session_id) if resume else None
+        saved = store.load(runtime.session_id, prepare_index=True) if resume else None
         history_source = "native" if saved is not None else "new"
         if resume and saved is None:
             if shared_snapshot is None and shared_handle is not None:
@@ -1126,7 +1127,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                 # Migration intentionally writes once; take its stamp before the
                 # read so a concurrent older CLI write cannot become our baseline.
                 native_guard.saved()
-                saved = store.load(runtime.session_id)
+                saved = store.load(runtime.session_id, prepare_index=True)
                 if saved is None and shared_handle is None:
                     saved = store.import_cli(runtime.session_id, workspace=config.workspace)
                 if saved is not None:
@@ -1238,8 +1239,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
             messages, recovered = jobs.recover(messages or [])
         if messages is not None:
             messages = repair_interrupted_receipts(messages)
-    approvals = Approvals(runtime, ask)
     session = None
+    approvals = Approvals(runtime, ask, coordinator=lambda: session.coordinator if session else None)
     from ..provider_catalog import mounted_catalog_keys
     catalog_sources={row.get('instance_id') or row.get('id') or row['module'].removeprefix('provider-'):
         module_source(config,snapshot,row['module'],row.get('source'),components)

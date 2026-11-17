@@ -230,7 +230,7 @@ def _legacy_expansion_xml(field):
 
 @pytest.mark.parametrize("field", ["python", "workspace"])
 def test_scheduler_expansion_definition_rejected_at_adoption(field):
-    with pytest.raises(service.WindowsServiceError, match="unmanaged"):
+    with pytest.raises(service.TaskNotConfirmed, match="could not confirm"):
         service.owned_spec(_legacy_expansion_xml(field), SID)
 
 
@@ -239,7 +239,7 @@ def test_scheduler_expansion_definition_rejected_at_adoption(field):
 def test_scheduler_expansion_existing_task_refused_before_mutation(backend, field, operation):
     backend["xml"] = _legacy_expansion_xml(field)
     original = backend["xml"]
-    with pytest.raises(service.WindowsServiceError, match="unmanaged"):
+    with pytest.raises(service.TaskNotConfirmed, match="could not confirm"):
         if operation in {"install", "replace"}:
             service.install(spec().data_dir, replace=operation == "replace")
         elif operation == "uninstall":
@@ -300,7 +300,7 @@ def test_scheduler_expansion_literal_percent_preserved_in_encoded_roots(backend)
 def test_full_definition_tampering_is_not_owned(before, after):
     xml = service.task_xml(spec())
     assert before in xml
-    with pytest.raises(service.WindowsServiceError, match="unmanaged"):
+    with pytest.raises(service.TaskNotConfirmed, match="could not confirm"):
         service.owned_spec(xml.replace(before, after), SID)
 
 
@@ -331,12 +331,345 @@ def test_scheduler_native_omitted_defaults_and_account_spelling_are_equivalent(m
             if node.tag.split("}")[-1] in omitted:
                 parent.remove(node)
     calls = []
-    monkeypatch.setattr(service, "_account_sid", lambda name: calls.append(name) or SID)
+    monkeypatch.setattr(service, "_lookup", lambda name: calls.append(name) or (SID, 1))
     assert service.owned_spec(ET.tostring(tree, encoding="unicode"), SID) == spec()
     assert calls == ["SYNTHETIC\\Owner"]
-    monkeypatch.setattr(service, "_account_sid", lambda name: SID + "1")
-    with pytest.raises(service.WindowsServiceError):
-        service.owned_spec(ET.tostring(tree, encoding="unicode"), SID)
+    # A name that Windows maps is never the renamed-computer case: no second lookup.
+    for other in ((SID + "1", 1), (SID, 4), (SID, 3)):
+        calls.clear()
+        monkeypatch.setattr(service, "_lookup", lambda name, other=other: calls.append(name) or other)
+        with pytest.raises(service.TaskNotConfirmed) as refused:
+            service.owned_spec(ET.tostring(tree, encoding="unicode"), SID)
+        assert calls == ["SYNTHETIC\\Owner"] and refused.value.retry is False
+
+
+OTHER = "S-1-5-21-100-200-300-1002"
+AUTHORITY = "S-1-5-21-100-200-300"
+
+
+def _trigger_xml(text, change=None):
+    """The generated definition with Task Scheduler's stored trigger user text."""
+    tree = ET.fromstring(service.task_xml(spec()))
+    tree.find(f"{service._q('Triggers')}/{service._q('LogonTrigger')}/{service._q('UserId')}").text = text
+    if change:
+        change(tree)
+    return ET.tostring(tree, encoding="unicode")
+
+
+def _windows_names(monkeypatch, table):
+    """Windows' answers by name: (SID, type), None for "maps to nothing", or an error."""
+    calls = []
+
+    def lookup(name):
+        calls.append(name)
+        # Not a KeyError: the ownership check would turn that into a refusal.
+        assert name in table, f"the rule must not look up {name!r}"
+        answer = table[name]
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+    monkeypatch.setattr(service, "_lookup", lookup)
+    return calls
+
+
+def test_trigger_under_a_computer_name_that_no_longer_exists_is_the_same_account(monkeypatch):
+    # Measured: after the computer's name changes, Task Scheduler still holds
+    # OLDPC\Owner. Windows maps neither that name nor OLDPC, and maps Owner.
+    calls = _windows_names(monkeypatch, {"OLDPC\\Owner": None, "OLDPC": None, "Owner": (SID, 1)})
+    xml = _trigger_xml("OLDPC\\Owner")
+    assert service.owned_spec(xml, SID) == spec()
+    assert calls == ["OLDPC\\Owner", "OLDPC", "Owner"]
+    # The same task is still another owner's task and another data folder's task.
+    for sid, root in ((OTHER, None), (SID, r"C:\Other")):
+        with pytest.raises(service.TaskNotConfirmed):
+            service.owned_spec(xml, sid, root)
+
+
+@pytest.mark.parametrize("text,table", [
+    # Another account of that computer.
+    ("OLDPC\\Other", {"OLDPC\\Other": None, "OLDPC": None, "Other": (OTHER, 1)}),
+    # The authority still exists: its account was deleted or renamed. Not a computer rename.
+    ("PC\\Former", {"PC\\Former": None, "PC": (AUTHORITY, 3)}),
+    ("CORP\\Owner", {"CORP\\Owner": None, "CORP": ("S-1-5-21-9-9-9", 3)}),
+    # The authority text names some other account or group today.
+    ("Owner\\Owner", {"Owner\\Owner": None, "Owner": (SID, 1)}),
+    ("Users\\Owner", {"Users\\Owner": None, "Users": ("S-1-5-32-545", 4)}),
+    # The account part names nothing, a group, or this SID as a non-user type.
+    ("OLDPC\\Gone", {"OLDPC\\Gone": None, "OLDPC": None, "Gone": None}),
+    ("OLDPC\\Admins", {"OLDPC\\Admins": None, "OLDPC": None, "Admins": ("S-1-5-32-544", 4)}),
+    ("OLDPC\\Owner", {"OLDPC\\Owner": None, "OLDPC": None, "Owner": (SID, 4)}),
+    # Not `authority\account`.
+    ("Owner", {"Owner": None}),
+    ("\\Owner", {"\\Owner": None}),
+    ("OLDPC\\", {"OLDPC\\": None}),
+    ("A\\B\\Owner", {"A\\B\\Owner": None}),
+    ("OLDPC\\Owner@corp", {"OLDPC\\Owner@corp": None}),
+    ("OLD/PC\\Owner", {"OLD/PC\\Owner": None}),
+    # SID text is compared as text and never looked up.
+    (OTHER, {}), ("S-1-5-18", {}), ("S-1-x", {}),
+    (None, {}), ("x" * 1025, {}),
+])
+def test_unmapped_trigger_name_is_accepted_for_nothing_but_a_vanished_authority(monkeypatch, text, table):
+    calls = _windows_names(monkeypatch, table)
+    with pytest.raises(service.TaskNotConfirmed, match="could not confirm") as refused:
+        service.owned_spec(_trigger_xml(text), SID)
+    assert refused.value.retry is False and refused.value.entry == service.task_name(SID)
+    assert calls == list(table)  # Exactly these lookups, in this order.
+    # The sentence can reach the owner's status text: no SID, name or path in it.
+    assert SID not in str(refused.value) and str(refused.value) == str(service.TaskNotConfirmed("other"))
+
+
+@pytest.mark.parametrize("table", [
+    {"OLDPC\\Owner": service._LookupFailed("1789")},
+    {"OLDPC\\Owner": None, "OLDPC": service._LookupFailed("1722")},
+    {"OLDPC\\Owner": None, "OLDPC": None, "Owner": service._LookupFailed("1355")},
+])
+def test_a_lookup_that_windows_did_not_answer_is_neither_accepted_nor_called_a_changed_task(monkeypatch, table):
+    calls = _windows_names(monkeypatch, table)
+    with pytest.raises(service.TaskNotConfirmed, match="could not check the account") as refused:
+        service.owned_spec(_trigger_xml("OLDPC\\Owner"), SID)
+    assert refused.value.retry is True and refused.value.entry == service.task_name(SID)
+    assert calls == list(table)
+    assert isinstance(refused.value, service.WindowsServiceError)  # Existing callers still refuse.
+    assert str(refused.value) == str(service.TaskNotConfirmed("other", retry=True))
+
+
+def _child(tree, path):
+    return tree.find("/".join(service._q(part) for part in path.split("/")))
+
+
+@pytest.mark.parametrize("change", [
+    lambda tree: setattr(_child(tree, "Actions/Exec/Command"), "text", r"C:\evil.exe"),
+    lambda tree: setattr(_child(tree, "Actions/Exec/Arguments"), "text", "-c pass"),
+    lambda tree: setattr(_child(tree, "Actions/Exec/WorkingDirectory"), "text", r"C:\Elsewhere"),
+    lambda tree: ET.SubElement(ET.SubElement(_child(tree, "Actions"), service._q("Exec")),
+                               service._q("Command")).__setattr__("text", r"C:\evil.exe"),
+    lambda tree: setattr(_child(tree, "Principals/Principal/UserId"), "text", OTHER),
+    lambda tree: setattr(_child(tree, "Principals/Principal/UserId"), "text", "OLDPC\\Owner"),
+    lambda tree: setattr(_child(tree, "Principals/Principal/RunLevel"), "text", "HighestAvailable"),
+    lambda tree: setattr(_child(tree, "Principals/Principal/LogonType"), "text", "S4U"),
+    lambda tree: setattr(_child(tree, "RegistrationInfo/Author"), "text", "OLDPC\\Owner"),
+    lambda tree: setattr(_child(tree, "RegistrationInfo/URI"), "text", "\\AmplifierUnified-" + OTHER),
+    lambda tree: setattr(_child(tree, "Settings/ExecutionTimeLimit"), "text", "PT72H"),
+    lambda tree: ET.SubElement(_child(tree, "Triggers"), service._q("BootTrigger")),
+    lambda tree: ET.SubElement(_child(tree, "Triggers/LogonTrigger"), service._q("Delay")).__setattr__("text", "PT5M"),
+], ids=["command", "arguments", "working-folder", "second-action", "principal-sid", "principal-name",
+        "run-level", "logon-type", "author", "task-name", "setting", "second-trigger", "trigger-delay"])
+def test_renamed_computer_changes_nothing_else_in_the_ownership_check(monkeypatch, change):
+    _windows_names(monkeypatch, {"OLDPC\\Owner": None, "OLDPC": None, "Owner": (SID, 1)})
+    assert service.owned_spec(_trigger_xml("OLDPC\\Owner"), SID) == spec()
+    with pytest.raises(service.TaskNotConfirmed) as refused:
+        service.owned_spec(_trigger_xml("OLDPC\\Owner", change), SID)
+    assert refused.value.retry is False
+
+
+@pytest.mark.parametrize("operation", ["install", "start", "stop", "restart", "uninstall"])
+def test_every_operation_uses_its_own_task_after_the_computer_was_renamed(backend, monkeypatch, operation):
+    _windows_names(monkeypatch, {"OLDPC\\Owner": None, "OLDPC": None, "Owner": (SID, 1)})
+    backend["xml"] = original = _trigger_xml("OLDPC\\Owner")
+    if operation == "install":
+        # The definition is current: no new registration, the stored name stays.
+        assert service.install(spec().data_dir)["status"] == "current"
+        assert backend["calls"] == ["query", "start"] and backend["xml"] == original
+    elif operation == "uninstall":
+        service.uninstall(spec().data_dir)
+        assert backend["calls"] == ["query", "remove"] and backend["xml"] is None
+    else:
+        service.command(operation, spec().data_dir)
+        assert backend["calls"][0] == "query" and backend["xml"] == original
+    assert not backend["backups"]
+
+
+def _fake_lookup_api(monkeypatch, answers, convert=None):
+    """Stand in for advapi32!LookupAccountNameW: one scripted result for each call."""
+    import ctypes
+    from amplifier_web import windows_files
+    state = {"error": 0, "calls": 0}
+
+    def lookup(system, name, sid, size, domain, domain_size, use):
+        state["calls"] += 1
+        if state["calls"] > len(answers):
+            # Counted, not raised: the lookup turns every exception into a failed lookup.
+            state["error"] = 5
+            return 0
+        result, error, sid_size, kind, *rest = answers[state["calls"] - 1]
+        state["error"] = error
+        size._obj.value, domain_size._obj.value, use._obj.value = sid_size, (rest[0] if rest else 16), kind
+        return result
+
+    def sid_text(pointer):
+        if convert is not None:
+            raise convert
+        return SID
+    monkeypatch.setattr(service, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(ctypes, "WinDLL", lambda *a, **k: SimpleNamespace(LookupAccountNameW=lookup), raising=False)
+    monkeypatch.setattr(ctypes, "set_last_error", lambda value: state.update(error=value), raising=False)
+    monkeypatch.setattr(ctypes, "get_last_error", lambda: state["error"], raising=False)
+    monkeypatch.setattr(windows_files, "_API", lambda: SimpleNamespace(sid_text=sid_text))
+    return state
+
+
+@pytest.mark.parametrize("answers,expected", [
+    ([(0, 1332, 0, 0)], None),                               # Windows: the name maps to nothing.
+    ([(0, 122, 28, 0), (1, 0, 28, 1)], (SID, 1)),             # A user account.
+    ([(0, 122, 28, 0), (1, 0, 28, 3)], (SID, 3)),             # A domain: mapped, and not a user.
+    ([(0, 122, 28, 0), (0, 1332, 28, 0)], "failed"),          # Vanished between the two calls.
+    ([(0, 122, 28, 0), (0, 5, 28, 0)], "failed"),
+    ([(0, 1789, 0, 0)], "failed"), ([(0, 1722, 0, 0)], "failed"), ([(0, 0, 0, 0)], "failed"),
+    ([(1, 1332, 0, 0)], "failed"), ([(1, 0, 28, 1)], "failed"),  # No buffers, yet "success".
+    ([(0, 122, 0, 0)], "failed"), ([(0, 122, 70000, 0)], "failed"),
+    ([(0, 122, 28, 0, 40000)], "failed"),                    # An oversized authority name.
+])
+def test_lookup_reports_no_such_name_only_for_windows_own_answer(monkeypatch, answers, expected):
+    state = _fake_lookup_api(monkeypatch, answers)
+    if expected == "failed":
+        with pytest.raises(service._LookupFailed):
+            service._lookup("OLDPC\\Owner")
+    else:
+        assert service._lookup("OLDPC\\Owner") == expected
+    assert state["calls"] == len(answers)
+
+
+@pytest.mark.parametrize("problem", [OSError("invalid SID"), RuntimeError("not native Win64"),
+                                     ValueError("bad SID text"), TypeError("bad pointer")])
+def test_lookup_with_a_sid_that_windows_cannot_convert_is_a_failed_lookup(monkeypatch, problem):
+    state = _fake_lookup_api(monkeypatch, [(0, 122, 28, 0), (1, 0, 28, 1)], convert=problem)
+    with pytest.raises(service._LookupFailed):
+        service._lookup("OLDPC\\Owner")
+    assert state["calls"] == 2
+    # The person is asked to try again, not to delete the entry.
+    state["calls"] = 0
+    with pytest.raises(service.TaskNotConfirmed) as refused:
+        service.owned_spec(_trigger_xml("OLDPC\\Owner"), SID)
+    assert refused.value.retry is True
+    # For this reason: the same two calls and the same conversion, not a call beyond the script.
+    assert state["calls"] == 2
+    assert isinstance(refused.value.__cause__, service._LookupFailed)
+    assert refused.value.__cause__.__cause__ is problem
+
+
+def test_the_tasks_own_action_refuses_a_task_that_is_not_confirmed_before_any_effect(monkeypatch):
+    # The launcher: Task Scheduler started this action, and the task is not the app's own.
+    value = spec(supervised=True)
+    before = dict(os.environ)
+    monkeypatch.setattr(service, "_require_python", lambda: None)
+    monkeypatch.setattr(service, "_owner", lambda: SID)
+    # The registered definition is this launch's own, except for the trigger's user.
+    tree = ET.fromstring(service.task_xml(value))
+    tree.find(f"{service._q('Triggers')}/{service._q('LogonTrigger')}/{service._q('UserId')}").text = "PC\\Other"
+    registered = ET.tostring(tree, encoding="unicode")
+    operations = []
+
+    def scheduler(op, sid, **kw):
+        operations.append(op)
+        return {"exists": True, "xml": registered, "state": 4, "lastResult": 0, "instances": 1}
+    monkeypatch.setattr(service, "_scheduler", scheduler)
+    calls = _windows_names(monkeypatch, {"PC\\Other": (OTHER, 1)})
+    monkeypatch.setattr(os, "chdir", lambda path: pytest.fail("no effect before the task is confirmed"))
+    with pytest.raises(service.TaskNotConfirmed) as refused:
+        service._run(value.encoded())
+    assert refused.value.entry == service.task_name(SID) and dict(os.environ) == before
+    # The task was read once and nothing was asked of Task Scheduler after that.
+    assert operations == ["query"]
+    # Refused for the trigger's user, and for nothing else in the definition.
+    assert calls == ["PC\\Other"] and refused.value.retry is False
+    assert str(refused.value.__cause__) == "Task trigger belongs to another user."
+
+
+def test_lookup_without_the_windows_library_is_a_failed_lookup(monkeypatch):
+    import ctypes
+
+    problem, loads = OSError("advapi32 did not load"), []
+
+    def missing(*args, **kwargs):
+        loads.append(args)
+        raise problem
+    monkeypatch.setattr(service, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(ctypes, "WinDLL", missing, raising=False)
+    with pytest.raises(service._LookupFailed) as failed:
+        service._lookup("OLDPC\\Owner")
+    # The stand-in ran, and it is the reason.
+    assert loads == [("advapi32",)] and failed.value.__cause__ is problem
+    with pytest.raises(service.TaskNotConfirmed) as refused:
+        service.owned_spec(_trigger_xml("OLDPC\\Owner"), SID)
+    assert refused.value.retry is True and len(loads) == 2
+    assert refused.value.__cause__.__cause__ is problem
+
+
+@pytest.mark.parametrize("sid", ["", "x", "S-1-5-18", None, "OLDPC\\Owner"])
+def test_an_owner_that_is_no_user_sid_is_refused_before_the_task_is_read(monkeypatch, sid):
+    monkeypatch.setattr(service, "_lookup", lambda name: pytest.fail("no lookup for an invalid owner"))
+    with pytest.raises(service.WindowsServiceError, match="owner user SID") as refused:
+        service.owned_spec(_trigger_xml("OLDPC\\Owner"), sid)
+    assert not isinstance(refused.value, service.TaskNotConfirmed)  # No task name exists for this owner.
+
+
+@pytest.mark.parametrize("answer,retry", [
+    ({"PC\\Owner": service._LookupFailed("1789")}, True), ({"PC\\Owner": (OTHER, 1)}, False)])
+def test_a_task_that_is_not_confirmed_after_its_registration_is_not_started(backend, monkeypatch, answer, retry):
+    # `install` registers first and checks the stored definition after that.
+    _windows_names(monkeypatch, answer)
+    scheduler = service._scheduler
+
+    def stores_a_name(op, sid, *, previous=None, xml=None):
+        result = scheduler(op, sid, previous=previous, xml=xml)
+        if op == "create":
+            backend["xml"] = result["xml"] = _trigger_xml("PC\\Owner")
+        return result
+    monkeypatch.setattr(service, "_scheduler", stores_a_name)
+    with pytest.raises(service.TaskNotConfirmed) as refused:
+        service.install(spec().data_dir)
+    assert backend["calls"] == ["query", "create"] and refused.value.retry is retry
+    # The task WAS changed here: the sentence must not say otherwise.
+    for claim in ("did not use or change", "nothing was changed", "not changed"):
+        assert claim not in str(refused.value)
+
+
+def test_lookup_off_windows_is_a_failed_lookup_not_an_unknown_name(monkeypatch):
+    monkeypatch.setattr(service, "sys", SimpleNamespace(platform="linux"))
+    with pytest.raises(service._LookupFailed):
+        service._lookup("OLDPC\\Owner")
+    with pytest.raises(service.TaskNotConfirmed) as refused:
+        service.owned_spec(_trigger_xml("OLDPC\\Owner"), SID)
+    assert refused.value.retry is True
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Read-only native Windows account lookups required")
+def test_native_lookup_answers_for_this_account_an_authority_and_unknown_names():
+    import ctypes
+    from ctypes import wintypes
+    sid = service._owner()
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    advapi = ctypes.WinDLL("advapi32", use_last_error=True)
+    advapi.ConvertStringSidToSidW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_void_p)]
+    advapi.LookupAccountSidW.argtypes = [wintypes.LPCWSTR, ctypes.c_void_p, wintypes.LPWSTR,
+                                        ctypes.POINTER(wintypes.DWORD), wintypes.LPWSTR,
+                                        ctypes.POINTER(wintypes.DWORD), ctypes.POINTER(wintypes.DWORD)]
+    kernel.LocalFree.argtypes = [ctypes.c_void_p]
+    pointer = ctypes.c_void_p()
+    assert advapi.ConvertStringSidToSidW(sid, ctypes.byref(pointer))
+    try:
+        name, authority = ctypes.create_unicode_buffer(512), ctypes.create_unicode_buffer(512)
+        sizes = wintypes.DWORD(512), wintypes.DWORD(512)
+        assert advapi.LookupAccountSidW(None, pointer, name, ctypes.byref(sizes[0]), authority,
+                                        ctypes.byref(sizes[1]), ctypes.byref(wintypes.DWORD()))
+    finally:
+        kernel.LocalFree(pointer)
+    qualified = authority.value + "\\" + name.value
+    missing = "nosuch" + uuid.uuid4().hex[:12]
+    # The text that Task Scheduler stores, and the same account in another case.
+    assert service._lookup(qualified) == (sid, 1) == service._lookup(qualified.swapcase())
+    # An authority alone maps, and not to a user: rule 3 then refuses.
+    mapped = service._lookup(authority.value)
+    assert mapped is not None and mapped[1] != 1 and sid.startswith(mapped[0] + "-")
+    assert service._lookup("BUILTIN\\Administrators") == ("S-1-5-32-544", 4)
+    # Windows' own "maps to nothing": an unknown authority, with and without an account.
+    for unknown in (missing, missing + "\\" + name.value, authority.value + "\\" + missing):
+        assert service._lookup(unknown) is None
+    service._same_account(qualified, sid)
+    for refused in (missing + "\\" + missing, authority.value + "\\" + missing, "BUILTIN\\Administrators"):
+        with pytest.raises(ValueError):
+            service._same_account(refused, sid)
 
 
 def test_scheduler_default_normalization_does_not_accept_unsafe_or_unknown_settings():
@@ -381,7 +714,7 @@ def test_owned_changed_roots_require_replace_and_private_backup_first(backend):
 @pytest.mark.parametrize("operation", ["install", "replace", "start", "stop", "restart", "uninstall"])
 def test_foreign_or_tampered_task_is_never_stopped_or_overwritten(backend, operation):
     backend["xml"] = service.task_xml(spec()).replace("InteractiveToken", "Password")
-    with pytest.raises(service.WindowsServiceError, match="unmanaged"):
+    with pytest.raises(service.TaskNotConfirmed, match="could not confirm"):
         if operation in {"install", "replace"}:
             service.install(spec().data_dir, replace=operation == "replace")
         elif operation == "uninstall":

@@ -534,6 +534,10 @@ async def test_real_freeze_mismatch_reaches_install_error_and_sanitized_report(n
     from test_runtime_ref_identity import ROW
 
     fixture_manager, _, _, graph = normalized_runtime
+    from amplifier_web.host.config import amplifier_home, write_private
+    write_private(amplifier_home() / 'settings.yaml', json.dumps({
+        'config': {'providers': [{'module': 'provider-anthropic',
+                                 'config': {'default_model': 'fixture-model'}}]}}))
     runtime = Runtime()
     service = AppService(fixture_manager.home, runtime, workspace=fixture_manager.home.parent)
     manager = UpdateManager(service)

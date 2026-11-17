@@ -84,6 +84,16 @@ The owner verifies the dependency, then deliberately calls `task.resume` within
 its standing scope. No current `humanInput` or fresh human approval is needed.
 Do not hunt for a human message ID merely because work is dependency-blocked.
 
+If your plan no longer depends on an existing peer request, deliberately use
+`coordination.unsubscribe` for that exact request. This withdraws only your
+saved wait, including a cancelled or uncertain wait; it neither cancels recipient
+execution nor resolves UNKNOWN. Inspect its receipt: queued returns are
+suppressed, but already submitting, admitted or unknown input may still arrive.
+Withdrawal is sticky across cancel, review and exact subscribe/send retries.
+Retained results stay readable. Separately resume your own agent dependency
+block only when your revised plan is justified; never replay uncertain writes
+or clear an actual Stop or human pause by withdrawing a wait.
+
 Use the human-backed `resume` recipe in the reference only for an actual stopped,
 paused or failed commissioned member. Unknown block provenance, unresolved user
 questions and uncertain effects do not become resolved dependencies. Preserve

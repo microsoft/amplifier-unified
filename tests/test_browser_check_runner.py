@@ -44,6 +44,8 @@ def coverage_plan():
     appearance_ids = appearance_lifecycle_browser_addition(plan['scenarios'])
     responsive_ids = sidebar_responsive_browser_addition(plan['scenarios'])
     notices_ids = shared_notices_motion_browser_addition(plan['scenarios'])
+    preview_ids = attachment_preview_browser_addition(plan['scenarios'])
+    approval_ids = external_approval_browser_addition(plan['scenarios'])
     multiparty_ids = external_multiparty_browser_addition(plan['scenarios'])
     shared_room_ids = shared_room_browser_addition(plan['scenarios'])
     repair_ids = installation_repair_browser_addition(plan['scenarios'])
@@ -51,7 +53,7 @@ def coverage_plan():
     pass2_ids = layout_pass2_browser_additions(plan['scenarios'])
     rows = []
     for row in plan['scenarios']:
-        if row['id'] in retained_ids | appearance_ids | responsive_ids | notices_ids | multiparty_ids | shared_room_ids | repair_ids | layout_ids | pass2_ids:
+        if row['id'] in retained_ids | appearance_ids | responsive_ids | notices_ids | preview_ids | approval_ids | multiparty_ids | shared_room_ids | repair_ids | layout_ids | pass2_ids:
             continue
         row = {**row, 'command': [coverage_paths(part) for part in row['command']]}
         row.pop('cwd', None)
@@ -72,9 +74,27 @@ def source_test(path):
         return host
     selection = json.loads((ROOT / 'components/web-client.source.json').read_text())
     client = ROOT / '.build/web-client'
-    if not client.exists():
+    if not client.exists() and selection['delivery']['type'] == 'directory':
         client = ROOT / selection['delivery']['path']
     return client / 'tests' / name
+
+
+def test_repository_registry_is_prepared_before_coverage_and_dependency_installs():
+    workflow = yaml.safe_load((ROOT / '.github/workflows/browser-checks.yml').read_text())
+    steps = workflow['jobs']['browser']['steps']
+    prepare = next(i for i, step in enumerate(steps)
+                   if step.get('name') == 'Prepare selected client source for host checks')
+    initialize = next(i for i, step in enumerate(steps)
+                      if step.get('name') == 'Record intended coverage before dependency setup')
+    node = next(i for i, step in enumerate(steps)
+                if step.get('uses', '').startswith('actions/setup-node@'))
+    python = next(i for i, step in enumerate(steps)
+                  if step.get('uses', '').startswith('actions/setup-python@'))
+    installs = [i for i, step in enumerate(steps)
+                if 'uv sync --locked' in step.get('run', '') or 'npm ci --prefix' in step.get('run', '')]
+    assert python < node < prepare < initialize < min(installs)
+    assert 'python scripts/web_client_build.py prepare' in steps[prepare]['run']
+    assert '--plan tests/web/browser-checks.json' in steps[initialize]['run']
 
 
 def execute(tmp_path, rows, **kwargs):
@@ -1072,7 +1092,7 @@ def test_shared_room_is_composed_once_from_selected_client_owner():
     assert host['scenarioOrder'].count(name) == 1
     plan, proof = runner.load_plan(ROOT, host_path)
     pass2_ids = layout_pass2_browser_additions(plan['scenarios'])
-    preceding_order = [identity for identity in host['scenarioOrder'] if identity not in pass2_ids]
+    preceding_order = [identity for identity in host['scenarioOrder'] if identity not in pass2_ids | {'external-approval', 'attachment-preview'}]
     assert preceding_order[-2:] == ['external-multiparty', name]
     assert shared_room_browser_addition(plan['scenarios']) == {name}
     assert [row['id'] for row in plan['scenarios']] == host['scenarioOrder']
@@ -1376,7 +1396,8 @@ def test_agent_navigation_journeys_use_current_host_harness_not_client_or_legacy
     assert identities <= {row['id'] for row in host['scenarios']}
     assert identities <= set(host['scenarioOrder'])
     selection = json.loads((ROOT / 'components/web-client.source.json').read_text())
-    client = ROOT / selection['delivery']['path']
+    client = ROOT / (selection['delivery']['path'] if selection['delivery']['type'] == 'directory'
+                     else '.build/web-client')
     client_ids = {row['id'] for row in json.loads((client / 'tests/browser-checks.json').read_text())['scenarios']}
     assert not identities & client_ids
     for identity in identities:
@@ -1401,6 +1422,8 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     appearance_lifecycle_browser_addition(current_plan()['scenarios'], readiness_scripts)
     sidebar_responsive_browser_addition(current_plan()['scenarios'], readiness_scripts)
     shared_notices_motion_browser_addition(current_plan()['scenarios'], readiness_scripts)
+    attachment_preview_browser_addition(current_plan()['scenarios'], readiness_scripts)
+    external_approval_browser_addition(current_plan()['scenarios'], readiness_scripts)
     external_multiparty_browser_addition(current_plan()['scenarios'], readiness_scripts)
     shared_room_browser_addition(current_plan()['scenarios'], readiness_scripts)
     installation_repair_browser_addition(current_plan()['scenarios'], readiness_scripts)
@@ -1636,7 +1659,9 @@ def test_captured_message_delivery_workflow_is_manual_fixed_and_retains_failures
     assert any(step.get('if') == 'always()' and 'upload-artifact@' in step.get('uses', '') for step in steps)
     source = next(step for step in steps if step.get('name') == 'Bind captured delivery source before setup')
     assert 'HEAD^{tree}' in source['run'] and 'selected-client.json' in source['run']
-    assert steps.index(source) < next(i for i, step in enumerate(steps) if 'setup-python@' in step.get('uses', ''))
+    initialize = next(i for i, step in enumerate(steps) if '--initialize' in step.get('run', ''))
+    install = next(i for i, step in enumerate(steps) if 'uv sync --locked' in step.get('run', ''))
+    assert initialize < steps.index(source) < install
     capture = next(step for step in steps if step.get('name') == 'Capture verified captured-delivery build output')
     assert 'mv output/browser-checks "$RUNNER_TEMP/captured-delivery-evidence"' in capture['run']
     assert 'trap ' in capture['run'] and '--destination "$RUNNER_TEMP/captured-frontend-build"' in capture['run']
@@ -3879,6 +3904,8 @@ def test_current_composed_registry_owns_every_executable_and_both_mixed_suites()
     appearance_ids = appearance_lifecycle_browser_addition(plan['scenarios'])
     responsive_ids = sidebar_responsive_browser_addition(plan['scenarios'])
     notices_ids = shared_notices_motion_browser_addition(plan['scenarios'])
+    preview_ids = attachment_preview_browser_addition(plan['scenarios'])
+    approval_ids = external_approval_browser_addition(plan['scenarios'])
     multiparty_ids = external_multiparty_browser_addition(plan['scenarios'])
     shared_room_ids = shared_room_browser_addition(plan['scenarios'])
     repair_ids = installation_repair_browser_addition(plan['scenarios'])
@@ -3892,12 +3919,12 @@ def test_current_composed_registry_owns_every_executable_and_both_mixed_suites()
     ]
     lifecycle_ids = {row['id'] for row in lifecycle_additions}
     assert [row for row in plan['scenarios'] if row['id'] in lifecycle_ids] == lifecycle_additions
-    preceding = [row for row in plan['scenarios'] if row['id'] not in navigation_ids | client_addition_ids | retained_ids | appearance_ids | responsive_ids | notices_ids | lifecycle_ids | multiparty_ids | shared_room_ids | repair_ids | layout_ids | pass2_ids]
+    preceding = [row for row in plan['scenarios'] if row['id'] not in navigation_ids | client_addition_ids | retained_ids | appearance_ids | responsive_ids | notices_ids | lifecycle_ids | preview_ids | approval_ids | multiparty_ids | shared_room_ids | repair_ids | layout_ids | pass2_ids]
     assert len(preceding) == len({row['id'] for row in preceding}) == 147
-    assert len(plan['scenarios']) == len({row['id'] for row in plan['scenarios']}) == 152 + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(multiparty_ids) + len(shared_room_ids) + len(lifecycle_ids) + len(repair_ids) + len(layout_ids) + len(pass2_ids)
-    assert len(plan['scenarios']) == 147 + len(navigation_ids) + len(client_addition_ids) + len(retained_ids) + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(multiparty_ids) + len(shared_room_ids) + len(lifecycle_ids) + len(repair_ids) + len(layout_ids) + len(pass2_ids)
+    assert len(plan['scenarios']) == len({row['id'] for row in plan['scenarios']}) == 152 + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(preview_ids) + len(approval_ids) + len(multiparty_ids) + len(shared_room_ids) + len(lifecycle_ids) + len(repair_ids) + len(layout_ids) + len(pass2_ids)
+    assert len(plan['scenarios']) == 147 + len(navigation_ids) + len(client_addition_ids) + len(retained_ids) + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(preview_ids) + len(approval_ids) + len(multiparty_ids) + len(shared_room_ids) + len(lifecycle_ids) + len(repair_ids) + len(layout_ids) + len(pass2_ids)
     assert sum(row.get('cwd') == '.build/web-client' for row in preceding) == 14
-    assert sum(row.get('cwd') == '.build/web-client' for row in plan['scenarios']) == 17 + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(shared_room_ids) + len(repair_ids) + len(layout_ids) + len(pass2_ids)
+    assert sum(row.get('cwd') == '.build/web-client' for row in plan['scenarios']) == 17 + len(preview_ids) + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(shared_room_ids) + len(repair_ids) + len(layout_ids) + len(pass2_ids)
     client_path = source_test('tests/input-status-browser.mjs').with_name('browser-checks.json')
     assert proof['registrySha256'] == {'unified': runner.digest(host_path), 'client': runner.digest(client_path)}
     assert proof['clientSelectionSha256'] == runner.digest(ROOT / 'components/web-client.source.json')
@@ -4127,7 +4154,7 @@ def test_layout_pass2_assembly_retains_prior_order_and_binds_all_four_selected_o
         assert (client_path.parent / Path(script).name).is_file()
     assert (ROOT / 'tests/fixtures/appearance-cases.json').is_file()
     # Keep the 25 preceding canonical registry rows in their original order.
-    preceding_client_ids = [row['id'] for row in client['scenarios'] if row['id'] not in identities]
+    preceding_client_ids = [row['id'] for row in client['scenarios'] if row['id'] not in identities | {'attachment-preview'}]
     assert preceding_client_ids == [
         'shared-controls', 'composer-return-mounted', 'composer-return', 'conversation-error',
         'installation-repair', 'shared-room', 'shared-notices-motion', 'input-status',
@@ -4138,7 +4165,7 @@ def test_layout_pass2_assembly_retains_prior_order_and_binds_all_four_selected_o
         'history-refresh', 'appearance-lifecycle',
     ]
     assert len(preceding_client_ids) == 25
-    assert len(client['scenarios']) == 25 + len(identities)
+    assert len(client['scenarios']) == 26 + len(identities)
     # Accepted f544781 host order includes worktree-move after assignment-adoption.
     # The other three guarded owners are additive to these exact 165 identities.
     new_ids = identities - {'worktree-move'}
@@ -4182,15 +4209,15 @@ def test_layout_pass2_assembly_retains_prior_order_and_binds_all_four_selected_o
         voice-work-message external-multiparty shared-room
     '''.split()
     assert len(preceding_order) == len(set(preceding_order)) == 165
-    assert [name for name in host['scenarioOrder'] if name not in new_ids] == preceding_order
+    assert [name for name in host['scenarioOrder'] if name not in new_ids | {'external-approval', 'attachment-preview'}] == preceding_order
     # Preserve the prior spacing/hierarchy placements independently of where the
     # newly validated draft-focus journey is inserted into the host order.
-    before_focus = [name for name in host['scenarioOrder'] if name != 'settings-draft-focus']
+    before_focus = [name for name in host['scenarioOrder'] if name not in {'settings-draft-focus', 'external-approval', 'attachment-preview'}]
     assert before_focus[before_focus.index('shared-controls') + 1:
                         before_focus.index('delivery-warning')] == ['settings-action-spacing']
     assert before_focus[-2:] == ['shared-room', 'work-hierarchy']
     assert [row['id'] for row in plan['scenarios']] == host['scenarioOrder']
-    assert len(plan['scenarios']) == len(host['scenarioOrder']) == 165 + len(new_ids) == 168
+    assert len(plan['scenarios']) == len(host['scenarioOrder']) == 165 + len(new_ids) + 2 == 170
     assert proof['registrySha256'] == {'unified': runner.digest(host_path), 'client': runner.digest(client_path)}
     assert proof['clientSelectionSha256'] == runner.digest(ROOT / 'components/web-client.source.json')
     assert not identities & {row['id'] for row in coverage_plan()['scenarios']}
@@ -4338,3 +4365,38 @@ def test_legacy_outbox_notice_is_composed_once_from_selected_client_owner():
     assert [row['id'] for row in plan['scenarios']] == host['scenarioOrder']
     assert [row for row in plan['scenarios'] if owns(row)] == [{**expected, 'cwd': '.build/web-client'}]
     assert proof['registrySha256'] == {'unified': runner.digest(host_path), 'client': runner.digest(client_path)}
+
+
+def external_approval_browser_addition(rows, readiness_scripts=()):
+    script = 'tests/web/external-approval-browser.mjs'
+    expected = {'id': 'external-approval', 'command': ['node', script],
+                'env': {'AMPLIFIER_TEST_PYTHON': '{root}/.venv/bin/python',
+                        'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/external-approval'}}
+    owners = [row for row in rows if row['id'] == expected['id']
+              or any(Path(part).name == Path(script).name for part in row['command'])]
+    assert owners == [expected], 'external-approval: expected one exact host owner'
+    assert coverage_paths(script) not in readiness_scripts, 'external-approval: duplicate readiness owner'
+    return {expected['id']}
+
+
+def test_external_approval_journey_has_one_host_owner():
+    plan = current_plan()
+    assert external_approval_browser_addition(plan['scenarios']) == {'external-approval'}
+    owner = next(row for row in plan['scenarios'] if row['id'] == 'external-approval')
+    assert (ROOT / owner['command'][1]).is_file()
+    with pytest.raises(AssertionError, match='host owner'):
+        external_approval_browser_addition([{**owner, 'cwd': '.build/web-client'}])
+
+
+def attachment_preview_browser_addition(rows, readiness_scripts=()):
+    # Accepted client #71 is inherited by the current approval-card successor.
+    # Keep its browser coverage in the composed delivery, without copying it.
+    script = 'tests/attachment-preview-browser.mjs'
+    expected = {'id': 'attachment-preview', 'command': ['node', script],
+                'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/attachment-preview'},
+                'cwd': '.build/web-client'}
+    owners = [row for row in rows if row['id'] == expected['id']
+              or any(Path(part).name == Path(script).name for part in row['command'])]
+    assert owners == [expected], 'attachment-preview: expected one exact client owner'
+    assert coverage_paths(script) not in readiness_scripts, 'attachment-preview: duplicate readiness owner'
+    return {expected['id']}

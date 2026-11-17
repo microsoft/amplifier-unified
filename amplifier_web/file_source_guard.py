@@ -183,6 +183,10 @@ class FileSourceGuard:
                 tool = invocation()
                 if targets != self._targets(tool, kind, arguments):
                     raise SourceConflict('file_source_stale', 'The file path changed. Read it again before editing.')
+                # Approval may have waited before this file lock. Recheck the
+                # exact call against current policy after the existing checks.
+                if approval := self.coordinator.get_capability('web.tool_approval.scope'):
+                    approval.check_current(arguments)
                 if kind == 'read':
                     path = next(iter(targets))
                     if path.is_dir():

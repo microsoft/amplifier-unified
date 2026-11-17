@@ -71,14 +71,18 @@ async def acknowledge(owner, source, args, origin, command_id):
                     or service.test_queue.continuation_guard(request)):
                 owner.error('The saved test notification boundary changed.', 409)
         wait = request.get('subscription') or {}
-        task = source.get('task') or service.coordination.task(source['id'])
-        if (wait.get('notificationVersion') != 2
-                or wait.get('status') not in {'waiting', 'claimed', 'backpressured'}
-                or wait.get('interruptionRevision') != source.get('interruptionRevision', 0)
-                or not task_matches(task, wait)
-                or task.get('status') in {'paused', 'blocked', 'completed'}
-                or service.assignments.blocked(source, request.get('assignmentId'))):
-            owner.error('The saved notification task or interruption boundary changed.', 409)
+        if wait.get('notificationVersion') != 2:
+            owner.error('The saved notification protocol is unsupported.', 409)
+        if request.get('commandAction') == 'workspace.tests.submit':
+            # Preserve the separate test-operation lifecycle. Peer review only
+            # needs current owner + exact outcome, not old task execution.
+            task = source.get('task') or service.coordination.task(source['id'])
+            if (wait.get('status') not in {'waiting', 'claimed', 'backpressured'}
+                    or wait.get('interruptionRevision') != source.get('interruptionRevision', 0)
+                    or not task_matches(task, wait)
+                    or task.get('status') in {'paused', 'blocked', 'completed'}
+                    or service.assignments.blocked(source, request.get('assignmentId'))):
+                owner.error('The saved notification task or interruption boundary changed.', 409)
         outcome = continuation_outcome(request)
         if (not outcome or type(args.get('outcomeRevision')) is not int
                 or args['outcomeRevision'] != outcome.get('outcomeRevision')
@@ -103,9 +107,10 @@ async def acknowledge(owner, source, args, origin, command_id):
             # attempt never created its notification. Keeping backpressured or
             # waiting would retain a slot despite open=False. Claimed remains
             # eligible for changed later outcomes, with interim slots retained.
-            wait.update(status='claimed',
-                open=outcome.get('outcome') in {'deferred', 'question', 'conflict'})
-            wait.pop('detail', None)
+            if wait.get('status') in {'waiting', 'claimed', 'backpressured'}:
+                wait.update(status='claimed', open=not wait.get('withdrawal') and
+                            outcome.get('outcome') in {'deferred', 'question', 'conflict'})
+                wait.pop('detail', None)
             retired = notification is not None and notification.get('delivery') == 'queued'
             if retired:
                 notification.update(delivery='suppressed', acknowledgementId=identity,

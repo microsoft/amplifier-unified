@@ -1891,6 +1891,8 @@ CLI_STEPS = frozenset({"installed", "tls_before", "main", "app_create", "setting
 CLI_FUNCTIONS = {
     "cli_main": ("amplifier_web.cli", "main"),
     "cli_serve": ("amplifier_web.cli", "_serve_unlocked"),
+    "cli_listeners": ("amplifier_web.cli", "_listener_sockets.__wrapped__"),
+    "cli_serve_listeners": ("amplifier_web.cli", "_serve_listeners"),
     "app_dispatch": ("amplifier_web.service", "AppService.dispatch"),
     "app_dispatch_action": ("amplifier_web.service", "AppService._dispatch"),
     "app_preferences": ("amplifier_web.service", "AppService._refresh_shared_preferences"),
@@ -1978,11 +1980,12 @@ def cli_arguments(mode, root, port):
 
 
 class CliNetworkGuard(NetworkGuard):
-    """One real asyncio CLI listener, not a loopback/network permission window."""
+    """One real configured CLI listener, not a loopback/network permission window."""
     def __init__(self, log, port, *, serve=False, connect=False):
         super().__init__(log)
         self.port = port if connect else None
         self.target_port, self.serve, self.listener = port, serve, None
+        self.resolved = False
 
     def audit(self, event, args):
         if event not in NETWORK_EVENTS:
@@ -1990,12 +1993,34 @@ class CliNetworkGuard(NetworkGuard):
         # Only loaded public functions get names/fingerprints; resolve at the
         # event because main may import a source after the guard was created.
         self.codes.update(cli_codes())
-        if (event == "socket.bind" and self.serve and self.listener is None
-                and args[1] == ("127.0.0.1", self.target_port)):
+        if self.serve:
             frame = sys._getframe(1)
-            # Actual CPython create_server binds this exact socket; no patched
-            # resolver/binder/run_app and no generic numeric/DNS exemption.
-            if (frame.f_code is asyncio.BaseEventLoop.create_server.__code__
+            cli = sys.modules.get("amplifier_web.cli")
+            function = getattr(getattr(cli, "_listener_sockets", None), "__wrapped__", None)
+            code = getattr(function, "__code__", None)
+            # The new production owner reserves sockets before app construction.
+            # Only this loaded helper may resolve its ONE configured numeric
+            # loopback entry, through the real stdlib wrapper with exact options.
+            # No hostname, DNS/UDP exemption or arbitrary loopback caller.
+            if (event == "socket.getaddrinfo" and not self.resolved
+                    and frame.f_code is socket.getaddrinfo.__code__
+                    and frame.f_back is not None and frame.f_back.f_code is code
+                    and frame.f_back.f_locals.get("binds") == ["127.0.0.1"]
+                    and frame.f_back.f_locals.get("port") == self.target_port
+                    and frame.f_locals.get("host") == "127.0.0.1"
+                    and frame.f_locals.get("port") == self.target_port
+                    and frame.f_locals.get("family") == socket.AF_UNSPEC
+                    and frame.f_locals.get("type") == socket.SOCK_STREAM
+                    and frame.f_locals.get("proto") == 0
+                    and frame.f_locals.get("flags") == socket.AI_PASSIVE
+                    and args == ("127.0.0.1", self.target_port, socket.AF_UNSPEC, socket.SOCK_STREAM, 0)):
+                self.resolved = True
+                return
+            if (event == "socket.bind" and self.resolved and self.listener is None
+                    and frame.f_code is code
+                    and frame.f_locals.get("binds") == ["127.0.0.1"]
+                    and frame.f_locals.get("port") == self.target_port
+                    and args[1] == ("127.0.0.1", self.target_port)
                     and args[0] is frame.f_locals.get("sock")
                     and args[0].family == socket.AF_INET and args[0].type == socket.SOCK_STREAM):
                 self.listener = args[0]

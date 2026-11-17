@@ -4,7 +4,6 @@ on:
     paths:
       - 'components/web-client.source.json'
       - 'scripts/web_client_*.py'
-      - 'components/web-client/commands.json'
       - 'amplifier_web/smart*'
       - 'amplifier_web/mcp_*'
       - 'amplifier_web/auth.py'
@@ -12,7 +11,6 @@ on:
       - 'tests/test_connector_lifecycle.py'
       - 'tests/fixtures/mcp*'
       - 'tests/fixtures/connectors_ui_server.py'
-      - 'components/web-client/src/smart-tools*'
       - 'tests/web/connectors-browser.mjs'
       - '.github/workflows/connectors.yml'
 permissions:

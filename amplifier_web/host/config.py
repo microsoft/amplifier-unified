@@ -93,6 +93,19 @@ def merge(base, overlay):
     return copy.deepcopy(overlay)
 
 
+def provider_dropped(row, settings):
+    """Whether host composition drops this provider row.
+
+    One rule for bundle composition (host.session._apply_settings) and for the
+    update owner's question "does a connection exist" (profile_catalog).
+    """
+    identity = row.get("id") or row.get("instance_id") or row["module"].removeprefix("provider-")
+    overrides = settings.get("overrides", {})
+    override = merge(overrides.get(row.get("module"), {}), overrides.get(identity, {}))
+    return (override.get("enabled") is False
+            or identity in settings.get("configurator", {}).get("disabled", {}).get("providers", []))
+
+
 def _read_keys(path):
     """Read the shared key file with the same private-file/parser boundary."""
     values = {}

@@ -250,12 +250,16 @@ def test_no_browser_launch_composes_existing_background_owner_without_reinstall(
     calls = []
     monkeypatch.setattr(consumer, "installation", lambda root: (root, {}))
     monkeypatch.setattr(consumer, "environment", lambda *a: {})
-    async def prepare(root, launcher, env, *, identity):
+    async def prepare(root, launcher, env, *, identity, progress):
         assert callable(identity)
+        assert progress == steps.append
+        progress("ready")
         calls.append((root, launcher, env))
         return {"background": True, "created": False, "health": {"ok": True}}
     monkeypatch.setattr(windows_installation, "prepare_background", prepare)
-    assert asyncio.run(consumer.launch(tmp_path, open_browser=False))["health"]["ok"]
+    steps = []
+    assert asyncio.run(consumer.launch(tmp_path, open_browser=False, progress=steps.append))["health"]["ok"]
+    assert steps == ["ready"]
     assert calls == [(tmp_path, tmp_path / "tools/amplifier-unified/Scripts/amplifier-unified.exe", {})]
 
 
@@ -266,7 +270,9 @@ def address_launch(tmp_path, monkeypatch, *, answer, kinds=("in-use",)):
     monkeypatch.setattr(consumer, "installation", lambda root: (root, {}))
     monkeypatch.setattr(consumer, "environment", lambda *a: {})
     pending = list(kinds)
-    async def prepare(root, launcher, env, *, identity):
+    async def prepare(root, launcher, env, *, identity, progress):
+        if progress is not None:
+            progress("address" if pending else "ready")
         events.append(("prepare", launcher))
         if pending:
             raise windows_installation.AddressUnavailable(pending.pop(0), 23456)
@@ -300,8 +306,10 @@ def test_confirmed_address_repair_selects_once_then_starts_the_same_installation
     monkeypatch.setattr(deployment, "load_server_config", lambda home: {})
     monkeypatch.setattr(browser_entry, "_owner_probe_targets", lambda *a: (["private-target"], "private-pin"))
     monkeypatch.setattr(windows_installation, "review_browser_trust", lambda *a, **kw: False)
-    result = asyncio.run(consumer.launch(tmp_path))
+    steps = []
+    result = asyncio.run(consumer.launch(tmp_path, progress=steps.append))
     assert result["health"]["ok"] and result["browser"]["opened"] is False
+    assert steps == ["address", "ready"]
     assert [event[0] for event in events] == ["prepare", "notice", "change", "prepare"]
     assert events[2][1] == events[3][1] == launcher
 
@@ -324,7 +332,7 @@ def test_pending_certificate_review_does_not_issue_browser_grant(tmp_path, monke
     from amplifier_web import windows_installation, deployment, browser_entry, updates
     monkeypatch.setattr(consumer, "installation", lambda root: (root, {}))
     monkeypatch.setattr(consumer, "environment", lambda *a: {})
-    async def prepared(*args, identity):
+    async def prepared(*args, identity, progress):
         return {"background": True, "created": False, "health": {"ok": True}}
     monkeypatch.setattr(windows_installation, "prepare_background", prepared)
     monkeypatch.setattr(deployment, "load_server_config", lambda home: {})
@@ -340,6 +348,87 @@ def test_pending_certificate_review_does_not_issue_browser_grant(tmp_path, monke
     assert result["health"]["ok"] and reviews == [(tmp_path, ["private-target"], "private-pin")]
 
 
+def opening_launch(tmp_path, monkeypatch, outcome, *, listed=True):
+    """Launch with trust established, up to the one `open` command; record every effect."""
+    from amplifier_web import windows_installation, windows_consumer_shell, deployment, browser_entry, updates
+    monkeypatch.setattr(consumer, "installation", lambda root: (root, {}))
+    monkeypatch.setattr(consumer, "environment", lambda *a: {"private": "environment"})
+    monkeypatch.setattr(windows_consumer_shell, "listed", lambda root: listed)
+    async def prepared(*args, identity, progress):
+        return {"background": True, "created": False, "health": {"ok": True}}
+    monkeypatch.setattr(windows_installation, "prepare_background", prepared)
+    monkeypatch.setattr(deployment, "load_server_config", lambda home: {})
+    monkeypatch.setattr(browser_entry, "_owner_probe_targets", lambda *a: (["private-target"], "private-pin"))
+    events = []
+    monkeypatch.setattr(windows_installation, "review_browser_trust",
+                        lambda *a, fresh: events.append(("trust",)) or True)
+    async def process(*args, env, timeout):
+        events.append(("command", args, env, timeout))
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+    monkeypatch.setattr(updates, "process", process)
+    monkeypatch.setattr(windows_installation, "owner_notice",
+                        lambda message, **kw: events.append(("notice", message, kw)) or True)
+    return asyncio.run(consumer.launch(tmp_path)), events
+
+
+def test_first_start_reports_the_browser_on_the_open_commands_own_confirmation(tmp_path, monkeypatch):
+    from amplifier_web import browser_entry
+    from amplifier_web.update_diagnostics import CommandOutput
+    result, events = opening_launch(tmp_path, monkeypatch, CommandOutput(
+        "Amplifier is not ready yet.\n" + browser_entry.OPENED))
+    assert result["browser"] == {"opened": True} and result["health"]["ok"]
+    launcher = tmp_path / "tools/amplifier-unified/Scripts/amplifier-unified.exe"
+    # Trust first, then the one command; no message.
+    assert events == [("trust",), ("command", (launcher, "--data-dir", tmp_path / "app", "--workspace",
+                                               tmp_path / "workspace", "open"),
+                                   {"private": "environment"}, 120)]
+    # `open` waits for a restarting host and then needs about 10 seconds for
+    # its last two requests. The launcher adds 50 seconds for the start of the
+    # command (the generation check alone may take 30) and the browser call.
+    assert events[1][3] == browser_entry.HOST_WAIT + 60 > browser_entry.HOST_WAIT + 10 + 30
+
+
+def unconfirmed():
+    from amplifier_web.update_diagnostics import CommandFailure, CommandOutput, CommandTimeout
+    return [
+        # Windows, after a generation took the command over: exit status 0 and
+        # no confirmation. This was the silent first start of November 15.
+        CommandOutput(""),
+        CommandOutput("Browser opening disabled; no browser grant was issued."),
+        CommandFailure({"returncode": 1}), CommandTimeout(120.0), OSError("launcher missing"),
+    ]
+
+
+@pytest.mark.parametrize("outcome", unconfirmed(), ids=lambda value: type(value).__name__)
+def test_browser_that_did_not_open_gives_one_plain_message_and_no_second_attempt(tmp_path, monkeypatch, outcome):
+    result, events = opening_launch(tmp_path, monkeypatch, outcome)
+    assert result["browser"] == {"opened": False, "reason": "not-confirmed"} and result["health"]["ok"]
+    assert [event[0] for event in events] == ["trust", "command", "notice"]  # One command, one message.
+    message, options = events[2][1:]
+    assert options == {}  # A statement, not a question.
+    # Not "did not open" and not "is running": after its limit the launcher
+    # knows neither. A command that a generation took over can still open the
+    # browser, so the person looks for a tab first.
+    assert message == ("Amplifier may not have opened in your browser.\n\n"
+                       "Look for an Amplifier tab in your browser. If there is none, "
+                       "open Amplifier from the Start menu: Amplifier Unified. "
+                       "If this message appears again, restart this PC.")
+
+
+def test_browser_message_names_setup_when_the_start_menu_entry_does_not_exist(tmp_path, monkeypatch):
+    # After an uninstall the folder can run without its Start-menu entry. The
+    # next step must exist: the setup file adds the entry again.
+    from amplifier_web.update_diagnostics import CommandOutput
+    result, events = opening_launch(tmp_path, monkeypatch, CommandOutput(""), listed=False)
+    assert result["browser"] == {"opened": False, "reason": "not-confirmed"}
+    assert [event[0] for event in events] == ["trust", "command", "notice"]
+    assert events[2][1] == ("Amplifier may not have opened in your browser.\n\n"
+                            "Look for an Amplifier tab in your browser. If there is none, "
+                            "run the Amplifier setup file again. It keeps your chats and settings.")
+
+
 @pytest.mark.parametrize("first_setup", [True, False])
 def test_first_setup_creates_the_identity_in_this_process_and_hands_windows_that_root(
         tmp_path, monkeypatch, first_setup):
@@ -352,7 +441,7 @@ def test_first_setup_creates_the_identity_in_this_process_and_hands_windows_that
     fresh = b"root-created-in-this-process"
     monkeypatch.setattr(windows_tls, "create_identity", lambda home, value:
                         created.append((home, value)) or fresh)
-    async def prepare(root, launcher, env, *, identity):
+    async def prepare(root, launcher, env, *, identity, progress):
         if first_setup:
             identity()
             # A repeated call finds the material and creates nothing; the first
@@ -484,25 +573,45 @@ def test_maintenance_on_a_folder_that_fails_the_installation_check_writes_nothin
         assert "nothing was changed" in consumer.Unfinished(step, ValueError()).notice
 
 
-@pytest.mark.parametrize("registered, expected", [
-    (False, "could not finish its first start"), (True, "Amplifier could not start.")])
+@pytest.mark.parametrize("listed", [False, True])
+@pytest.mark.parametrize("step", ["prepare", "ready", None])
+def test_start_failure_message_matrix(tmp_path, monkeypatch, listed, step):
+    from amplifier_web import windows_consumer_shell
+    monkeypatch.setattr(windows_consumer_shell, "listed", lambda root: listed)
+    next_step = ("open Amplifier from the Start menu: Amplifier Unified" if listed else
+                 "run the Amplifier setup file again. It keeps your chats and settings")
+    if step == "prepare":
+        expected = ("Amplifier could not prepare the remaining parts of the app. It downloads them from the internet.\n\n"
+                    "Check that this PC is connected to the internet. Then " + next_step + "." +
+                    (" You do not need to install it again." if listed else ""))
+    else:
+        expected = "Amplifier could not start.\n\nRestart Windows. Then " + next_step + "."
+    assert consumer.start_failure(tmp_path, step) == expected
+    if not listed:
+        assert "Start menu" not in expected
+
+
+@pytest.mark.parametrize("listed", [False, True])
+@pytest.mark.parametrize("steps", [[], ["address", "tls", "prepare"], ["address", "task", "ready"]])
 def test_a_shortcut_that_cannot_start_the_app_says_the_cause_and_the_next_step(
-        tmp_path, monkeypatch, capsys, registered, expected):
-    from amplifier_web import windows_installation, windows_service
+        tmp_path, monkeypatch, capsys, listed, steps):
+    from amplifier_web import windows_installation, windows_consumer_shell
     shown = []
 
-    async def failing(root, *, open_browser=True):
+    async def failing(root, *, open_browser=True, progress):
+        for step in steps:
+            progress(step)
         raise RuntimeError("Runtime dependency preparation did not complete; private detail")
     monkeypatch.setattr(consumer, "launch", failing)
-    monkeypatch.setattr(windows_service, "managed", lambda home: registered)
+    monkeypatch.setattr(windows_consumer_shell, "listed", lambda root: listed)
     monkeypatch.setattr(windows_installation, "owner_notice", lambda message, **kw: shown.append(message))
     with pytest.raises(SystemExit):
         consumer.main(["--root", str(tmp_path)])
     result = json.loads(capsys.readouterr().out)
-    assert result["ok"] is False and expected in result["message"] and "private detail" not in json.dumps(result)
-    assert "Start menu: Amplifier Unified" in result["message"]
-    if not registered:
-        assert "connected to the internet" in result["message"] and "do not need to install it again" in result["message"]
+    assert result["ok"] is False and "private detail" not in json.dumps(result)
+    assert result["message"] == consumer.start_failure(tmp_path, steps[-1] if steps else None)
+    if not listed:
+        assert "Start menu" not in result["message"]
     # Without a console (the shortcut uses pythonw) the same text is shown in a window.
     monkeypatch.setattr(consumer.sys, "stdout", None)
     with pytest.raises(SystemExit):
@@ -517,3 +626,141 @@ def test_other_operations_keep_their_own_failure_text(tmp_path, monkeypatch, cap
     with pytest.raises(SystemExit):
         consumer.main(["--root", str(tmp_path), "--stop"])
     assert json.loads(capsys.readouterr().out) == {"ok": False, "errorType": "RuntimeError"}
+
+
+ENTRY = "AmplifierUnified-S-1-5-21-100-200-300-1001"
+
+
+@pytest.mark.parametrize("listed", [True, False])
+@pytest.mark.parametrize("cause", ["not-confirmed", "not-checked", "unreadable"])
+def test_a_start_that_cannot_use_the_sign_in_entry_names_that_cause_and_not_the_internet(
+        tmp_path, monkeypatch, capsys, cause, listed):
+    # Measured after a computer rename: the entry existed, the earlier check
+    # refused it, and the person was told to check the internet connection.
+    from amplifier_web import windows_consumer_shell, windows_installation, windows_service
+    shown = []
+    problem = {"not-confirmed": windows_service.TaskNotConfirmed(ENTRY),
+               "not-checked": windows_service.TaskNotConfirmed(ENTRY, retry=True),
+               "unreadable": windows_service.WindowsServiceError("Task Scheduler refused; private detail")}[cause]
+
+    async def failing(root, *, open_browser=True, progress):
+        raise problem  # The start reads the task before it names any step.
+    monkeypatch.setattr(consumer, "launch", failing)
+    monkeypatch.setattr(windows_consumer_shell, "listed", lambda root: listed)
+    monkeypatch.setattr(windows_installation, "owner_notice", lambda message, **kw: shown.append(message))
+    with pytest.raises(SystemExit) as stopped:
+        consumer.main(["--root", str(tmp_path)])
+    assert stopped.value.code == 1
+    result = json.loads(capsys.readouterr().out)
+    text = result["message"]
+    assert result["errorType"] == type(problem).__name__ and text.startswith("Amplifier could not start")
+    for wrong in ("internet", "first start", "private detail", "install it again", "changes only"):
+        assert wrong not in text
+    if cause == "not-confirmed":
+        # The cause without a claim that someone changed the entry, the exact
+        # entry, what deleting it does, and the case in which not to delete it.
+        assert ("could not confirm that its start-at-sign-in entry in Windows belongs to this installation. "
+                "It uses only an entry that it can confirm.\n\n") in text
+        assert text.count(ENTRY) == 2 and "Task Scheduler Library" in text and "press the Delete key" in text
+        assert "no longer starts when you sign in, until it makes a new entry" in text
+        assert "another Amplifier installation" in text
+        assert "do not delete the entry: use that installation, or uninstall it first." in text
+        assert ("4. Restart this PC.\n5. " + ("Open Amplifier from the Start menu: Amplifier Unified."
+                                               if listed else "Run the Amplifier setup file again.")
+                + " It makes a new entry. Your chats and settings stay.") in text
+        assert ("Start menu: Amplifier Unified" in text) == listed
+        assert "was changed" not in text and "tamper" not in text.lower()
+    elif cause == "not-checked":
+        # Windows gave no answer about the account. That can pass: nothing is deleted.
+        assert "Windows could not check the account of Amplifier's start-at-sign-in entry" in text
+        assert "2. Restart this PC.\n3. " + ("Open Amplifier from the Start menu: Amplifier Unified." if listed
+                                             else "Run the Amplifier setup file again.") in text
+        assert "delete" not in text.lower() and ENTRY not in text
+    else:
+        # Any other failure keeps the text for a start that named no step.
+        assert text == consumer.start_failure(tmp_path) and "Restart Windows" in text
+        assert "delete" not in text.lower() and ENTRY not in text
+    # Without a console (the shortcut uses pythonw) the same text is shown in a window.
+    monkeypatch.setattr(consumer.sys, "stdout", None)
+    with pytest.raises(SystemExit):
+        consumer.main(["--root", str(tmp_path)])
+    assert shown == [text]
+
+
+@pytest.mark.parametrize("retry", [False, True])
+@pytest.mark.parametrize("operation,step,opening", [
+    ("uninstall", "task-read", "Amplifier was not uninstalled, and nothing was changed."),
+    ("stop", "stop-app", "Amplifier did not stop its background app.")])
+def test_stop_and_uninstall_name_an_entry_that_was_not_confirmed_and_a_next_step_that_fits(
+        tmp_path, monkeypatch, operation, step, opening, retry):
+    from amplifier_web import deployment, installation_health, windows_installation, windows_service
+    notices, written = [], []
+    monkeypatch.setattr(consumer, "installation", lambda root: (root, {}))
+    monkeypatch.setattr(consumer, "environment", lambda *a: {})
+    monkeypatch.setattr(consumer.sys, "stdout", None)
+    monkeypatch.setattr(windows_installation, "owner_notice",
+                        lambda text, confirm=False: notices.append((text, confirm)) or True)
+    monkeypatch.setattr(deployment, "write_private", lambda path, raw, **kw: written.append(json.loads(raw)))
+
+    def refuse(*args, **kwargs):
+        if kwargs.get("progress"):
+            kwargs["progress"]("task-read")
+        raise windows_service.TaskNotConfirmed(ENTRY, retry=retry)
+
+    async def working(home):
+        return None
+    monkeypatch.setattr(windows_service, "command", refuse)
+    monkeypatch.setattr(windows_service, "uninstall", refuse)
+    monkeypatch.setattr(installation_health, "windows_working", working)
+    with pytest.raises(SystemExit) as stopped:
+        consumer.main(["--root", str(tmp_path), "--" + operation])
+    assert stopped.value.code == 1
+    (text,) = [text for text, confirm in notices if not confirm]
+    assert text.startswith(opening + "\n\n") and text.endswith(f"Reference: {step}, TaskNotConfirmed")
+    # The earlier texts for these steps name a wrong cause or a wrong next step.
+    # No claim about changes either: a start can make an entry and then not confirm it.
+    for wrong in ("You can keep using it", "could not read its start-at-sign-in entry",
+                  "could not stop its background app", "Wait a few minutes", "changes only"):
+        assert wrong not in text
+    if operation == "stop":
+        # One next step for both causes: the way to stop the app now.
+        assert ("Windows could not check the account" if retry else
+                "could not confirm that its start-at-sign-in entry") in text
+        assert text.endswith("To stop the app now, sign out of Windows or restart this PC.\n\n"
+                             "Reference: stop-app, TaskNotConfirmed")
+        assert "delete" not in text.lower() and "1. " not in text
+    elif retry:
+        assert "Windows could not check the account" in text and "2. Restart this PC." in text
+        assert "delete" not in text.lower() and "3. Uninstall Amplifier again." in text
+    elif operation == "uninstall":
+        assert "could not confirm that its start-at-sign-in entry" in text and text.count(ENTRY) == 2
+        assert "Amplifier then no longer starts when you sign in.\n1. " in text
+        assert "4. Restart this PC.\n5. Uninstall Amplifier again.\n\nReference" in text
+        assert "makes a new entry" not in text
+    (record,) = written
+    assert (record["operation"], record["step"], record["errorType"]) == (operation, step, "TaskNotConfirmed")
+
+
+@pytest.mark.parametrize("entry", [None, {"name": ENTRY, "retry": False}, {"name": ENTRY, "retry": True}])
+def test_status_window_names_an_entry_that_was_not_confirmed(tmp_path, monkeypatch, entry):
+    from amplifier_web import installation_health, windows_installation
+    shown = []
+    result = {"ok": False, "service": "unavailable", "message": "Health text.", "nextStep": "Health step.",
+              **({"entry": entry} if entry else {})}
+
+    async def status(home):
+        return result
+    monkeypatch.setattr(consumer, "installation", lambda root: (root, {}))
+    monkeypatch.setattr(consumer, "environment", lambda *a: {})
+    monkeypatch.setattr(consumer.sys, "stdout", None)
+    monkeypatch.setattr(installation_health, "status", status)
+    monkeypatch.setattr(windows_installation, "owner_notice", lambda text, **kw: shown.append(text) or True)
+    assert asyncio.run(consumer.maintenance(tmp_path, "status")) == result
+    (text,) = shown
+    if entry is None:
+        assert text == "Health text."
+    else:
+        assert text == consumer.entry_notice("status", ENTRY, entry["retry"])
+        assert text.startswith("Amplifier could not read its status.\n\n")
+        assert ("delete" not in text.lower()) == entry["retry"]
+

@@ -473,14 +473,21 @@ async def test_root_routing_observes_isolated_decision_accounts_before_mount(mou
     h.session.execute.assert_not_called()
 
 
-async def test_native_only_resume_keeps_complete_history_and_repairs_receipt_without_replay(mounted_host):
+async def test_native_only_resume_keeps_complete_history_and_repairs_receipt_without_replay(mounted_host, monkeypatch):
     h = mounted_host
     rows = [{"role": "user", "content": "first"}, {"role": "assistant", "content": "answer"},
             {"role": "user", "content": "second"},
             {"role": "tool", "tool_call_id": "call-1", "content": json.dumps(
                 {"status": "queued", "job_id": "job-1", "call_id": "call-1"})}]
     h.store.save("native-root", rows, {"bundle": "anchors"})
+    original_load = SessionStore.load
+    loads = []
+    def load(store, identity, **kwargs):
+        loads.append((identity, kwargs))
+        return original_load(store, identity, **kwargs)
+    monkeypatch.setattr(SessionStore, 'load', load)
     _, _, report = await h.prepare()
+    assert loads == [('native-root', {'prepare_index': True})]
     assert h.context.messages[:3] == rows[:3]
     receipt = json.loads(h.context.messages[3]["content"])
     assert receipt["status"] == "interrupted" and receipt["effects"] == "not_rolled_back"
@@ -489,6 +496,28 @@ async def test_native_only_resume_keeps_complete_history_and_repairs_receipt_wit
     assert h.store.load("native-root")[0] == h.context.messages
     assert report["resumed"] and report["history_source"] == "native"
     assert h.prepared.create_session.call_args.kwargs["session_id"] == "native-root"
+    h.session.execute.assert_not_called()
+
+
+async def test_resume_prepares_index_after_legacy_migration(mounted_host, monkeypatch):
+    h = mounted_host
+    private = SessionStore(h.home / 'sessions')
+    directory = private.directory('native-root')
+    directory.mkdir()
+    rows = [{'role': 'user', 'content': 'Resume the legacy saved history'}]
+    checkpoint = directory / 'checkpoint.json'
+    checkpoint.write_text(json.dumps({'version': 1, 'messages': rows, 'metadata': {'bundle': 'anchors'}}))
+    original_bytes = checkpoint.read_bytes()
+    original_load = SessionStore.load
+    loads = []
+    def load(store, identity, **kwargs):
+        loads.append((store.shared, kwargs))
+        return original_load(store, identity, **kwargs)
+    monkeypatch.setattr(SessionStore, 'load', load)
+    _, _, report = await h.prepare()
+    assert loads == [(True, {'prepare_index': True}), (False, {}), (True, {'prepare_index': True})]
+    assert h.context.messages == rows and report['resumed']
+    assert checkpoint.read_bytes() == original_bytes
     h.session.execute.assert_not_called()
 
 

@@ -16,7 +16,6 @@ import uuid
 from weakref import WeakValueDictionary
 
 from jsonschema import validate, ValidationError
-import tinycss2
 from .errors import AppError
 from .execution import ensure_turn, ingest as ingest_execution, finish as finish_execution, finish_background, interrupt_unfinished, restore_voice_usage
 from .execution_working_set import current as current_execution, exact as execution_record, turns_for_inputs
@@ -160,7 +159,8 @@ ACTION_DEFINITIONS = {
     "worker.stop": ("Stop one worker lane", schema({"sessionId": string(200), "id": string(100)}, ["id"])),
     "worker.message": ("Send a follow-up to an active persistent worker", schema({"sessionId": string(200), "id": string(100), "text": string(100000)}, ["sessionId", "id", "text"])),
     "worker.steer": ("Send a correction to a worker", schema({"sessionId": string(200), "id": string(100), "text": string(100000)}, ["id", "text"])),
-    "approval.respond": ("Respond to an Amplifier permission request", schema({"sessionId": string(200), "id": string(100), "decision": {"enum": ["allow", "deny", "approve", "reject"]}, "comment": string(4000), "expectedRequestHash": string(64)}, ["id", "decision"])),
+    "approval.respond": ("Respond to an Amplifier permission request", schema({"sessionId": string(200), "id": string(100), "decision": {"enum": ["allow", "deny", "approve", "reject"]}, "optionId": string(200), "comment": string(4000), "expectedRequestHash": string(64), "expectedApprovalScope": string(64)}, ["id", "decision"])),
+    "presentation.dismiss": ("Hide exact observed updates across this owner's clients without reading, answering, approving or stopping work.", schema({"items":{"type":"array","minItems":1,"maxItems":100,"items":schema({"id":string(1024),"fingerprint":string(100)},["id","fingerprint"])}},["items"])),
     "attention.read": ("Mark reviewed attention items as read without resolving the underlying condition. Reviewing the exact conversation error clears its historical navigation marker without changing saved errors, replaying work, or answering questions/approvals. Include fingerprints from /attention/items to avoid acknowledging newer results by mistake.", schema({"ids":{"type":"array","items":string(300),"maxItems":500},"fingerprints":{"type":"object","maxProperties":500,"additionalProperties":string(100)}},["ids"])),
     "view.update": ("Change panels, modality, draft, appearance or layout. Chat controls: panel=runtime, runtimeDraft.tab=overview/direction/limits/tools/computer. runtimeDraft.section reveals a known section (overview, direction, limits, tools, computer, screen-source, desktop-host, capture), opens its tab/panel and increments revealRevision; repeat requests reveal again. For visible agent navigation, choose clientId from canvasContext.connectedClientIds; disconnected saved clients are ineligible. Supply clientId when multiple connected browsers display the calling chat; opening controls never grants capture permission. Optional sessionId binds draft updates to that conversation without changing selection; null saves the attached client's draft before a conversation exists. Agent draft updates are limited to the calling conversation; other saved chats and the new-chat draft remain private. Canvas: canvasWidth and canvasOverviewWidth (300–16384 preferred pixels, separate artifact and overview widths), canvasFocused (full frame), canvasControlsPinned/Expanded (booleans). Navigation: navWidth (216–16384 preferred pixels), navPinned/Expanded (booleans). Workspace explorer: navWorkspacePath browses folders from /workspaceExplorer without selecting a chat, navWorkspaceFilter searches paths or aliases with case-insensitive fnmatch or plain text, navWorkspacePage selects a 1-based page, navWorkspaceAncestorsOpen toggles the ancestor menu. Use view.update workSurface=workspaces/chats/workspace and workWorkspaceId to browse without changing the active chat or its execution folder; workSurface=chat shows the selected conversation. Use session.select with an explicit id to open a particular chat. workWorkspaceTab=chats/work/files/details changes the workspace page tab. Use workspace.select to change the active workspace. Browser fits widths to the available space, preserving a 360px chat.", schema({"patch": {"type": "object"}, "clientId": string(100), "sessionId": {"type": ["string", "null"], "minLength": 1, "maxLength": 200}}, ["patch"])),
     "providers.credentials": ("Check provider credential environment availability without revealing values",schema({"sessionId":string(200),"module":string(200),"envVar":string(200)},["module"])),
@@ -282,42 +282,7 @@ from .access_mode import definitions as access_mode_definitions
 ACTION_DEFINITIONS.update(access_mode_definitions(schema, string))
 
 
-def validate_theme(css):
-    """Reject network-bearing or malformed skins; assets must travel with the file."""
-    if not css.strip():
-        raise AppError("The skin is empty.")
-    if "</style" in css.lower():
-        raise AppError("A skin must contain CSS only.")
-    rules = tinycss2.parse_stylesheet(css, skip_comments=True, skip_whitespace=True)
-    def visit(nodes):
-        for node in nodes:
-            if node.type == "error":
-                raise AppError("The stylesheet contains invalid CSS: " + node.message)
-            if node.type == "at-rule" and node.lower_at_keyword in {"import", "namespace", "document"}:
-                raise AppError("Skins must be self-contained; external imports are unsupported.")
-            if node.type == "url":
-                check_url(node.value)
-            if node.type == "function" and node.lower_name == "url":
-                arguments = [argument for argument in node.arguments if argument.type not in ('comment', 'whitespace')]
-                if len(arguments) != 1 or arguments[0].type != 'string':
-                    raise AppError('Use one literal asset reference in url(), not substitutions.')
-                check_url(arguments[0].value)
-            if node.type == 'function' and node.lower_name in {'image-set', '-webkit-image-set', 'image', 'src'}:
-                # These CSS image forms also accept bare strings as URLs.
-                # Fail closed for nested/unknown substitutions, not just var().
-                from .appearance_packages import literal_image_functions
-                literal_image_functions(node)
-                for argument in node.arguments:
-                    if argument.type == 'string':
-                        check_url(argument.value)
-            for attr in ("prelude", "content", "arguments"):
-                child = getattr(node, attr, None)
-                if child:
-                    visit(child)
-    def check_url(value):
-        if not value.startswith(("data:image/png;base64,", "data:image/jpeg;base64,", "data:image/webp;base64,", "data:font/woff;base64,", "data:font/woff2;base64,")):
-            raise AppError("Embed images and fonts in the skin instead of loading external URLs.")
-    visit(rules)
+from .appearance_packages import validate_theme
 
 
 from .theme_library import definitions as theme_library_definitions
@@ -1380,23 +1345,32 @@ class AppService:
             affected_detail.update(index.by_id[key].get('parentId') for key in session_ids
                                    if key in index.by_id)
             affected_detail.discard(None)
-        for queue in self.queues:
-            key = (self.queue_clients.get(queue), self.queue_sessions.get(queue))
-            if session_ids is not None and key[1] is not None and key[1] not in session_ids:
-                continue
-            if detail_only and session_ids is not None and key[1] is None and key[0] is not None:
-                record = self.clients.records.get(key[0], {})
-                interested = {record.get('selectedSessionId'), self._state.get('voice', {}).get('sessionId'),
-                              (record.get('view', {}).get('subagentHistory') or {}).get('sessionId')}
-                if not interested.intersection(affected_detail):
+        def deliver():
+            for queue in self.queues:
+                key = (self.queue_clients.get(queue), self.queue_sessions.get(queue))
+                if session_ids is not None and key[1] is not None and key[1] not in session_ids:
                     continue
-            if key not in published:
-                with self.clients.bind(key[0]):
-                    published[key] = self.session_state(key[1]) if key[1] is not None else self.browser_state()
-            snapshot = published[key]
-            if queue.full():
-                queue.get_nowait()
-            queue.put_nowait(snapshot)
+                if detail_only and session_ids is not None and key[1] is None and key[0] is not None:
+                    record = self.clients.records.get(key[0], {})
+                    interested = {record.get('selectedSessionId'), self._state.get('voice', {}).get('sessionId'),
+                                  (record.get('view', {}).get('subagentHistory') or {}).get('sessionId')}
+                    if not interested.intersection(affected_detail):
+                        continue
+                if key not in published:
+                    with self.clients.bind(key[0]):
+                        published[key] = self.session_state(key[1]) if key[1] is not None else self.browser_state()
+                snapshot = published[key]
+                if queue.full():
+                    queue.get_nowait()
+                queue.put_nowait(snapshot)
+        # Full/session readers may hydrate mutable owners. Reuse preparation
+        # only across this uninterrupted batch of bound web projections.
+        if all(self.queue_sessions.get(queue) is None
+               and self.clients.records.get(self.queue_clients.get(queue), {}).get('kind') == 'web'
+               for queue in self.queues):
+            self.directory.read_frame(deliver)
+        else:
+            deliver()
         if hasattr(self, "coordination"):
             self.coordination.notify()
         if self.update_manager:
@@ -1648,6 +1622,15 @@ class AppService:
                 self._session_projection_refs.pop(identity, None)
                 self.projections.invalidate(state=self._state, session_ids={identity})
             raise
+
+    def approval_request_hash(self, session, approval):
+        """Bind an asynchronous human choice to the exact displayed request."""
+        if approval['id'].startswith('capability:'):
+            return self.configuration_authority.request_view(session, approval['id'])['requestHash']
+        value = {'approval': approval, 'workspace': session['workspace'],
+                 'interruptionRevision': session.get('interruptionRevision', 0),
+                 'executionRevision': session.get('executionRevision', 0)}
+        return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
     def _session(self, sid=None, *, hydrate=True):
         sid = sid or self.state["selectedSessionId"]
@@ -2093,6 +2076,9 @@ class AppService:
             return {'accepted':True, 'result':await query_history(self,values,reader)}
         if action == "approval.respond" and args["id"].startswith("collaboration:"):
             return await self.collaboration.decide(args, origin)
+        if action == 'approval.respond' and args['id'].startswith('external:'):
+            return await self.external_conversations.approvals.decide(
+                args, origin, command_id, admission_check=admission_check, expected_revision=expected_revision)
         routed = await self.collaboration.route(action, args, origin, command_id, caller_session_id)
         if routed is not None:
             return routed
@@ -3635,6 +3621,8 @@ class AppService:
                 pending.append((method, call_args))
             elif action == "approval.respond":
                 session = self._session(args.get("sessionId"))
+                if 'optionId' in args:
+                    raise AppError('This request does not offer external agent choices.', 409)
                 approval = next((a for a in session["approvals"] if a["id"] == args["id"]), None)
                 if approval and approval.get('resolutionReason') == 'host_restarted':
                     raise AppError('This permission request expired when the app restarted. Review the saved work and ask again if needed; nothing was replayed.', 409)
@@ -3642,6 +3630,14 @@ class AppService:
                     raise AppError("This permission request is no longer pending.", 409)
                 if origin not in {"ui", "user"}:
                     raise AppError("This tool requested user approval. It must be answered by the user.", 403)
+                if (args.get('expectedRequestHash')
+                        and args['expectedRequestHash'] != self.approval_request_hash(session, approval)):
+                    raise AppError('The request changed. Review it before deciding.', 409)
+                if expected_scope := args.get('expectedApprovalScope'):
+                    from .approval_policy import descriptor
+                    current_scope = descriptor(self, session, approval)
+                    if current_scope is None or current_scope['key'] != expected_scope:
+                        raise AppError('The exact approval target changed. Review it before deciding.', 409)
                 decision = "allow" if args["decision"] in {"allow", "approve"} else "deny"
                 offered = approval.get("options") or ["allow", "deny"]
                 selected = next((value for value in offered
@@ -3656,7 +3652,13 @@ class AppService:
                                   approvalId=args['id'], inputOrigin='approval')
                 if self.runtime:
                     values = (session["id"], args["id"], selected) + ((comment,) if comment else ())
+                    if args.get('expectedApprovalScope'):
+                        values = (session["id"], args["id"], selected, comment or None,
+                                  args['expectedApprovalScope'])
                     pending.append((self.runtime.approval, values))
+            elif action == "presentation.dismiss":
+                from .client_presentation import dismiss
+                dismiss(self, args["items"])
             elif action == "attention.read":
                 from .attention import snapshot
                 # Acknowledge current owner facts, including globals changed
@@ -5277,7 +5279,20 @@ class AppService:
                 activity = self._activity(session, "retrying" if retrying else "workers", "A worker is retrying a model request" if retrying else "Delegated work is reporting progress")
                 activity["lastEvent"] = {"worker": payload.get("name", "Worker"), "status": payload.get("status"), "at": time.time()}
             elif kind == "approval.requested":
-                session["approvals"].append({**payload, "status": "pending"})
+                identity = payload.get('id', '')
+                if identity.startswith('capability:'):
+                    # The host already owns this card and its scope. A worker
+                    # notification cannot replace it or mint another grant.
+                    self.configuration_authority.reconcile(session)
+                    approval = next((a for a in session['approvals'] if a['id'] == identity), None)
+                    if not approval or approval.get('status') != 'pending':
+                        return
+                else:
+                    approval = next((a for a in session['approvals'] if a['id'] == identity), None)
+                    if approval is not None:
+                        return
+                    approval = {**payload, "status": "pending"}
+                    session["approvals"].append(approval)
                 from .input_status import human_wait
                 human_wait(session, payload)
                 self._activity(session, "approval", "Waiting for your approval")

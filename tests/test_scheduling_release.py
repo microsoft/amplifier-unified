@@ -17,18 +17,25 @@ SPEC.loader.exec_module(release)
 
 
 def make_candidate(tmp_path, component="scheduling"):
-    package = "amplifier_" + component.replace("-", "_")
+    distribution = "amplifier_" + component.replace("-", "_")
+    package = "amplifier_status" if component == "status-emitter" else distribution
     root = tmp_path / "repo"; root.mkdir()
-    source = root / ("components/workspaces" if component == "workspace-metadata" else
+    source = root / ("amplifier_web/status_protocol" if component == "status-emitter" else
+                     "components/workspaces" if component == "workspace-metadata" else
                      package if component in {"operations", "kernels"} else "components/" + component)
     source.mkdir(parents=True)
-    runtime = "__init__.py" if component in {"operations", "kernels"} else package + "/__init__.py"
+    runtime = "__init__.py" if component in {"operations", "kernels", "status-emitter"} else package + "/__init__.py"
     files = {"pyproject.toml": f'[project]\nname="amplifier-{component}"\nversion="0.1.0"\n',
              runtime: 'value = "selected"\n',
              "README.md": "Scheduling\n", "LICENSE": "MIT\n", "MANIFEST.in": "include README.md\n",
              "tests/test_policy_store.py": "def test_fixture(): assert True\n", ".gitignore": "dist/\n"}
     if component == "kernels":
         files["node_runner.cjs"] = "const selected = true;\n"
+    if component == "status-emitter":
+        files["pyproject.toml"] += ('license="MIT"\n[project.scripts]\n'
+            'amplifier-status="amplifier_status.cli:main"\n'
+            '[project.entry-points."amplifier.modules"]\n'
+            'hooks-status-emitter="amplifier_status.hook:mount"\n')
     for name, text in files.items():
         path = source / name; path.parent.mkdir(exist_ok=True, parents=True); path.write_text(text)
     def git(*args):
@@ -43,11 +50,17 @@ def make_candidate(tmp_path, component="scheduling"):
         archive.writestr(package + "/__init__.py", files[runtime])
         if component == "kernels":
             archive.writestr(package + "/node_runner.cjs", files["node_runner.cjs"])
-        archive.writestr(package + "-0.1.0.dist-info/METADATA", f"Name: amplifier-{component}\nVersion: 0.1.0\n")
+        info = distribution + "-0.1.0.dist-info/"
+        archive.writestr(info + "METADATA", f"Name: amplifier-{component}\nVersion: 0.1.0\n" +
+                        ("License-Expression: MIT\n" if component == "status-emitter" else ""))
+        if component == "status-emitter":
+            archive.writestr(info + "licenses/LICENSE", files["LICENSE"])
+            archive.writestr(info + "entry_points.txt", '[console_scripts]\namplifier-status = amplifier_status.cli:main\n'
+                            '[amplifier.modules]\nhooks-status-emitter = amplifier_status.hook:mount\n')
     with tarfile.open(dist / sdist, "w:gz") as archive:
         for name, text in files.items():
             if name == ".gitignore": continue
-            raw = text.encode(); info = tarfile.TarInfo(package + "-0.1.0/" + name); info.size = len(raw)
+            raw = text.encode(); info = tarfile.TarInfo(distribution + "-0.1.0/" + name); info.size = len(raw)
             archive.addfile(info, io.BytesIO(raw))
     release.seal(root, revision, dist, component=component)
     return root, revision, dist, git
@@ -64,6 +77,63 @@ def test_exact_source_and_built_payload_round_trip(candidate):
     assert result["revision"] == revision and result["tag"] == "scheduling-v0.1.0"
     assert result["sourceFiles"]["tests/test_policy_store.py"]
     assert len(result["artifacts"]) == 2
+
+
+@pytest.mark.parametrize("component", [None, "worktrees", "status-emitter", "unknown"])
+def test_repository_root_requires_explicit_scheduling_identity(component):
+    selected = {"repository": "bkrabach/amplifier-platform-scheduling", "subdirectory": "."}
+    if component is not None:
+        selected["component"] = component
+    with pytest.raises(ValueError, match="Unknown standalone component"):
+        release.component_name(selected)
+
+
+def test_status_keeps_distribution_import_and_bundled_owner_distinct(tmp_path):
+    root, revision, dist, _ = make_candidate(tmp_path, "status-emitter")
+    result = release.verify(root, revision, dist, component="status-emitter")
+    assert result["subdirectory"] == "amplifier_web/status_protocol"
+    assert result["tag"] == "status-emitter-v0.1.0"
+    assert set(result["artifacts"]) == {
+        "amplifier_status_emitter-0.1.0-py3-none-any.whl", "amplifier_status_emitter-0.1.0.tar.gz"}
+    with zipfile.ZipFile(dist / release.artifact_names(result)[0]) as wheel:
+        assert "amplifier_status/__init__.py" in wheel.namelist()
+        assert not any(name.startswith(("amplifier_web/", "amplifier_status_emitter/")) for name in wheel.namelist())
+    assert result["sourceFiles"]["tests/test_policy_store.py"]
+    assert (dist / "status-emitter-source.json").exists()
+
+
+@pytest.mark.parametrize("fault", ["import-name", "metadata-name", "dependency", "license", "cli", "hook"])
+def test_status_wrong_package_contract_never_reaches_publication(tmp_path, monkeypatch, fault):
+    root, revision, dist, _ = make_candidate(tmp_path, "status-emitter")
+    path = next(dist.glob("*.whl"))
+    with zipfile.ZipFile(path) as archive:
+        files = {name: archive.read(name) for name in archive.namelist()}
+    info = "amplifier_status_emitter-0.1.0.dist-info/"
+    if fault == "import-name":
+        files["amplifier_status_emitter/__init__.py"] = files.pop("amplifier_status/__init__.py")
+    elif fault == "metadata-name":
+        files[info + "METADATA"] = files[info + "METADATA"].replace(b"amplifier-status-emitter", b"amplifier-status")
+    elif fault == "dependency":
+        files[info + "METADATA"] += b"Requires-Dist: amplifier-core\n"
+    elif fault == "license":
+        files[info + "licenses/LICENSE"] = b"different license"
+    else:
+        files[info + "entry_points.txt"] = files[info + "entry_points.txt"].replace(
+            b"amplifier_status.cli:main" if fault == "cli" else b"amplifier_status.hook:mount", b"unselected:entry")
+    with zipfile.ZipFile(path, "w") as archive:
+        for name, raw in files.items(): archive.writestr(name, raw)
+    monkeypatch.setattr(release, "api", lambda *a, **k: pytest.fail("Wrong status package reached publication"))
+    with pytest.raises(ValueError):
+        release.publish(root, revision, dist, component="status-emitter")
+
+
+def test_status_release_describes_compatible_coinstallation(tmp_path, monkeypatch):
+    candidate = make_candidate(tmp_path, "status-emitter")
+    remote = Remote(candidate, exists=False)
+    remote.install(monkeypatch)
+    release.publish(*candidate[:3], component="status-emitter")
+    body = next(value for path, args in remote.mutations if path == "releases" for value in args if value.startswith("body="))
+    assert "distinct from Unified's bundled copy" in body and "Do not co-install" not in body
 
 
 def test_unmerged_candidate_can_qualify_but_never_publish(candidate, monkeypatch):
@@ -494,7 +564,7 @@ def test_workspace_metadata_preserves_distribution_import_and_source_identity(tm
         release.selection(root, revision, component="workspaces")
 
 
-@pytest.mark.parametrize("component", ["outputs", "publishing"])
+@pytest.mark.parametrize("component", ["outputs", "publishing", "recall"])
 def test_nested_component_preserves_source_and_artifact_identity(tmp_path, component):
     root, revision, dist, _ = make_candidate(tmp_path, component)
     selected = release.verify(root, revision, dist, component=component)
@@ -509,7 +579,7 @@ def test_nested_component_preserves_source_and_artifact_identity(tmp_path, compo
         release.verify(root, revision, dist)
 
 
-@pytest.mark.parametrize("component", ["workspace-metadata", "outputs", "publishing"])
+@pytest.mark.parametrize("component", ["workspace-metadata", "outputs", "publishing", "recall", "status-emitter"])
 @pytest.mark.parametrize("state", ["new", "partial", "complete"])
 def test_nested_component_uses_existing_exact_publication_recovery(tmp_path, monkeypatch, state, component):
     candidate = make_candidate(tmp_path, component)
@@ -526,7 +596,7 @@ def test_nested_component_uses_existing_exact_publication_recovery(tmp_path, mon
         assert remote.mutations == []
 
 
-@pytest.mark.parametrize("component", ["workspace-metadata", "outputs", "publishing"])
+@pytest.mark.parametrize("component", ["workspace-metadata", "outputs", "publishing", "recall", "status-emitter"])
 def test_nested_component_changed_asset_remains_an_immutable_conflict(tmp_path, monkeypatch, component):
     candidate = make_candidate(tmp_path, component)
     remote = Remote(candidate)
@@ -538,25 +608,27 @@ def test_nested_component_changed_asset_remains_an_immutable_conflict(tmp_path, 
 
 
 
-@pytest.mark.parametrize("component", ["operations", "kernels"])
+@pytest.mark.parametrize("component", ["operations", "kernels", "status-emitter"])
 def test_flat_author_relocation_preserves_original_release_verification(tmp_path, component):
     root, revision, dist, git = make_candidate(tmp_path, component)
     before = (dist / f"{component}-source.json").read_bytes()
     historical = release.verify(root, revision, dist, component=component)
     (root / "components").mkdir()
-    git("mv", f"amplifier_{component}", f"components/{component}")
+    original = historical["subdirectory"]
+    author = release.COMPONENTS[component][0]
+    git("mv", original, author)
     git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "Relocate author only")
     current_revision = git("rev-parse", "HEAD")
     git("update-ref", "refs/remotes/origin/main", current_revision)
     current = release.selection(root, current_revision, component=component)
-    assert current["subdirectory"] == f"components/{component}"
+    assert current["subdirectory"] == author
     assert current["tree"] == historical["tree"]
     assert current["sourceFiles"] == historical["sourceFiles"]
     assert release.verify(root, revision, dist, component=component) == historical
     assert (dist / f"{component}-source.json").read_bytes() == before
     assert release.artifact_names(current) == release.artifact_names(historical)
     # Two simultaneous author projects are ambiguous, never chosen by path order.
-    shutil.copytree(root / f"components/{component}", root / f"amplifier_{component}")
+    shutil.copytree(root / author, root / original)
     git("add", ".")
     git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "Ambiguous author fixture")
     with pytest.raises(ValueError, match=f"one {component} author"):

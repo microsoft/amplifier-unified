@@ -197,7 +197,10 @@ async def test_index_invalidates_on_effective_selection_not_history_size(tmp_pat
 async def test_real_check_includes_selected_source_before_other_tier(tmp_path,monkeypatch):
     from amplifier_web.service import AppService
     from amplifier_web import app_updates,runtime_environment
-    shared=Path(os.environ['AMPLIFIER_HOME']);save_settings(shared,settings([URI]))
+    from amplifier_web.host.config import amplifier_home
+    provider_config = {'providers': [{'module': 'provider-anthropic',
+                                      'config': {'default_model': 'fixture-model'}}]}
+    shared=amplifier_home();save_settings(shared,settings([URI], config=provider_config))
     home=tmp_path/'app';cache=home/'foundation/cache/behavior';cache.mkdir(parents=True)
     def git(*args):return subprocess.check_output(['git',*args],cwd=cache,text=True).strip()
     git('init','-q','-b','main');git('config','user.name','Fixture');git('config','user.email','fixture@example.invalid')
@@ -226,7 +229,7 @@ async def test_real_check_includes_selected_source_before_other_tier(tmp_path,mo
         row, = manager.inventory
         assert row['url']==URL and row['latest']=='b'*40 and row['appSelection']
         assert calls and not app.state['updates'].get('pendingRelease')
-        save_settings(shared,settings())
+        save_settings(shared,settings(config=provider_config))
         with pytest.raises(ValueError,match='selection changed'):
             await manager.install()
         assert not list((home/'updates/releases').glob('*'))

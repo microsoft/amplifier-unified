@@ -20,23 +20,21 @@ sacrificing accessibility, authority, meaningful feedback or recovery. Measure t
 whole journey, including entry, repeated setup and keyboard/focus behavior, rather
 than optimizing one control in isolation.
 
-## Web client: temporary two-repository maintenance
+## Web client: public source selection
 
 Author browser source, client tests and client build tools in
 [`amplifier-client-web`](https://github.com/microsoft/amplifier-client-web), the
-sole client authoring owner. It remains private; do not change its visibility.
-Until an approved repository-delivery cutover, every client change intended for
-Unified must also reach the committed `components/web-client` delivery copy.
-Follow [component ownership and assembly](components/README.md#refresh-and-retire-the-copy):
-port any copied-tree change upstream first, then refresh the whole selected
-snapshot and `web-client.source.json` together, preserving later accepted changes.
+sole client authoring owner. Unified selects an exact accepted public revision
+and source digest in `components/web-client.source.json`; normal preparation
+fetches that selection into ignored `.build/web-client`.
+Follow [component ownership and assembly](components/README.md#select-public-client-source).
+Do not restore a committed source copy or hand-edit built assets.
 
-A client-only PR merge is not a delivered Unified change. Carry both repositories
-through, or name the integration owner and hand off exact client and Unified
-PRs/revisions with remaining work explicitly pending. Coordinate with that owner;
-do not duplicate ports or build campaigns. Report source acceptance, copy selection,
-build/paired qualification and release separately. Public visibility alone does
-not end this obligation: the approved cutover must retire the copy and this guidance.
+A client-only PR merge is not a delivered Unified change. Carry the selected
+source through paired qualification and Unified release, or name the integration
+owner and hand off exact client and Unified revisions with remaining work pending.
+Coordinate with that owner; do not duplicate ports or build campaigns. Report
+source acceptance, selection, build/paired qualification and release separately.
 
 Neither disposable `.build/web-client` nor generated `amplifier_web/static/` is
 another authoring owner. Unified owns the assembler in `scripts/` and
@@ -91,6 +89,14 @@ the demonstrated cost and the affected history, authority and recovery semantics
 Use measured workload budgets; this does not add a full-suite release gate.
 
 ## Keep the development release loop fast
+
+For native runner checks, use the ordinary manual `python-checks.yml` suite
+`prepared-runtime-native` on an explicit source revision; `candidate_ref` can
+select a separate immutable candidate. A standing scoped task includes dispatch,
+inspection, ordinary repairs and corrected runs after known terminal failures,
+without nomination variables or another approval round. Inspect uncertain
+original operations before new effects; preserve Stop, ownership and cleanup
+receipts. Test workflows are convenience shortcuts, not exclusive execution paths.
 
 Follow the [Fast Release Guide](docs/validation/release-qualification.md):
 **one PR → review while required CI runs → merge → automatic publication and
@@ -191,13 +197,61 @@ restore. The stable launcher keeps the code that setup installed; an in-app
 update cannot change it. `amplifier_web.windows_launcher_refresh` is the only
 supported replacement: it runs with the active generation's Python from outside
 the host's Job, and it rolls back fully on failure.
-While a conversation worker is alive, Windows refuses a new or replaced file
-directly in a consumer installation folder (error 32); `app\config\services`
+A live conversation worker holds Foundation's session ownership below
+`<installation folder>\ownership`. A worker whose Foundation is older than
+`e37a946b` makes Windows refuse a rename, a move or a replacement of an entry
+directly in the installation folder (error 32); the private writer publishes
+by a rename, so it fails there too. From `e37a946b` those changes work. Windows
+still refuses a rename of a pinned folder itself (the installation folder,
+each folder above it, and Foundation's own), and a rename or a move into
+`ownership` or a pinned folder below it
+(`tests/test_windows_live_worker_folders.py`). A running worker keeps the
+Foundation that it started with. Maintenance code must still expect the
+refusal from a worker that started before an update; `app\config\services`
 still accepts writes. Launcher maintenance stops the app before such a write
 and removes the person's Start-menu and Apps-list entries last.
 Task Scheduler expands percent-bearing executable/working-directory paths.
 Reject those paths rather than recording a literal identity that launches a
 different program. Task registration/state is not authenticated host health.
+Task Scheduler stores the sign-in trigger's user as a name (`COMPUTER\user`),
+even when registration gave the SID, and never rewrites it; the principal stays
+a SID. After a computer rename Windows still starts the task, and that name
+maps to nothing. `_same_account` in `windows_service.py` is the one identity
+equivalence in the ownership check: keep "Windows says no such name" apart from a lookup
+that failed, and keep every other field an exact comparison. The launcher runs
+that check before any app version does, so a fix to it reaches an installed PC
+only with a new launcher. `windows-task-after-rename.yml` registers the real
+task on a hosted runner and renames that runner's account domain. Its fixture
+changes the machine's security policy: it runs only with the workflow's opt-in
+in a hosted runner's environment. That guard stops accidental use and does not
+prove the machine; never run the fixture on a machine that is kept.
+Python on Windows accepts only root certificates that the Windows store holds
+at that moment, and aiohttp builds its default list once at import. A new PC's
+store lacks many public roots (seen in Windows Sandbox: the package registry's
+root entered only after a Windows program asked for that site). An outbound request
+that must work there verifies against the system store plus the bundled roots,
+built per request (`update_checks.registry_trust`). Never turn verification off.
+A new installation has no component generation until its first component
+update; update health then verifies setup's record (`update_health.setup_evidence`),
+which is weaker than a qualified generation and never authorizes preparation.
+On every platform a component update waits for the first AI connection
+(`profile_catalog.connection`): the update owner starts no candidate and records
+no attempt, because a profile with no provider cannot qualify. The rule and
+bundle composition share `host.config.provider_dropped`; keep them on one rule.
+It makes a claim only for the app's own profiles. A connection changes the
+checked selection, so the owner checks again before it installs. Update health
+never reclassifies an earlier refusal record as waiting: its form does not
+prove that only a connection was missing. A later completed update settles it.
+The installed-package reader runs Git for a package from a local checkout, so
+a caller without the installation's Git folder on PATH reads "not prepared".
+A folder below the installation folder that the app itself uses as a session
+workspace gets a CLI project name that repeats the installation path, so its
+session paths pass the Windows limit with long paths off (the first chat of
+0.94.1, the update stage's compatibility probe of 0.98.5). Give such a folder a
+short project name in `session_files.project_slug`, add its rows to
+`tests/test_windows_path_budget.py`, and run its real writer in
+`tests/test_windows_long_paths_off.py`. A folder that a person chose keeps its
+name.
 
 ## Keep agent context and coordination useful
 

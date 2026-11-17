@@ -114,15 +114,132 @@ leaves the outcome uncertain to the client; inspect the retained chat before
 deciding on new input.
 
 Attachment does not change access mode. Existing Full authority continues without
-a human approval loop. Decisions this text adapter cannot present stay with the
-host; it never invents consent. Use Unified's existing Access control or `access`
-command to set standing access.
+a human approval loop. The authenticated attachment presents tool and native
+configuration waits through standard ACP `session/request_permission`. The host
+commits the exact current choice; a client response is not itself a grant. Stop,
+expiry, revocation and a competing decision invalidate stale replies. Connection
+loss preserves the pending record and never grants authority or replays work.
+
+`allow_once` decides the displayed request. For configuration requests the card
+discloses the named effects/scopes and existing lifetime through Stop, revocation
+or expiry; it does not mean one configuration write. This adapter offers only
+the current-request allow/deny choices; it does not create a second durable
+approval-policy store. For Instance-hosted agents, agent-wide matching rules
+and no-prompt mode belong to the Instance's declared policy integration, not
+to a separate per-chat cache in this adapter. Unsupported reusable-scope
+descriptors must not be inferred from model-authored prompt text or tool titles.
+Use Unified's existing **Access & approvals** or `access` command to explicitly
+select or revoke broader standing Full access. No attachment or availability
+recovery enables it automatically; native budgets and OS limits remain in force.
+Full access also changes supported filesystem access ceilings. It is not an
+alias for suppressing approval prompts. Revoking a remembered policy must not
+claim to undo an effect or revoke an already accepted configuration grant unless
+the serving owner explicitly performs that grant revocation.
+
+### Optional Instance-owned matching policy
+
+An Instance can negotiate `_meta["com.microsoft.amplifier.approval-policy"]`
+at initialization with `{version: 1, owner: "instance", instanceId: "<UUID>"}`.
+Unified returns the same version/owner, producer
+`com.microsoft.amplifier.unified.configuration/v1`, and `reusableRequests: true`.
+An absent or unsupported negotiation leaves ordinary ACP allow/deny unchanged.
+Unified has no remembered-rule store and offers no independent automatic mode.
+
+For a pending native configuration grant, Unified can then add a descriptor to
+`toolCall._meta` under that namespace. Its `key` hashes the canonical effects,
+global/project/local scopes, resolved settings destinations and Unified data
+home. Its `description` states those effects, scopes and grant lifetime;
+global scope explicitly identifies shared Amplifier settings. Descriptions
+must fit the receiver's 512-byte UTF-8 bound and contain no control characters;
+an unrepresentable scope falls back to once/deny without truncation.
+`allowOptionId` names the current `allow_once` choice, and `authorityLifetime`
+is `conversation`. Chat IDs, call IDs, reasons and timestamps are excluded from
+the matching key. Matching spans chats only when the actual targets and effects
+match. The canonical decision rechecks that key before accepting the reply.
+
+The same producer can describe a supported exact native tool call with
+`authorityLifetime: "request"`. Its key has a distinct `tool.invoke` operation
+and binds the actual registered tool, qualified source selection and verified
+package-content identity,
+schema, exact validated JSON arguments, module configuration, working folder,
+current access/mode policy and applicable security limits. File calls also bind
+resolved targets. It matches the same request
+and context across chats, not equivalent commands or paths. Current call, chat,
+generation and Stop identities remain in an ephemeral execution witness.
+The live worker alone supplies the descriptor; saved events cannot create one.
+Approval and the existing Work/file execution boundaries recheck the witness,
+including after file-lock waits. A hook callback error does not approve it.
+
+This requires the optional streaming `tools.dispatch.current_call` capability
+and Unified's existing enforcing wrappers. Guarded reference read/write/edit and
+patch tools and other registered Python tools with verifiable selected module
+ownership are supported. Shell requests bind the exact command and arguments,
+explicit shell/configuration, working folder and current policy. This is
+permission memory, not transitive executable/environment attestation or a claim
+that repeating a command has the same effects. No display-text hashing or argument
+equivalence is used. Modes, existing approvals, observations, file checks, Work,
+budgets and native execution ownership keep their normal order and authority.
+
+Canonical MCP wrappers additionally bind the configured server, transport and
+authorization, exact remote tool name, mounted schema and arguments. This does
+not attest the remote account or promise a freshly queried remote catalog or
+implementation. Reconnecting the same configured client does not change the
+matching key. Replacing that client during a pending approval does invalidate
+the private current-call witness. Authorization values participate only in the
+opaque key; descriptors do not expose credentials. Existing MCP configuration
+provenance, connection and execution checks continue to apply.
+
+Always permits future new matching requests across the agent's chats. It never
+authorizes replay, proves idempotence, or resumes an uncertain prior effect.
+Remembering a request adds no prompt to calls already allowed by normal policy.
+Instance rule revocation affects future decisions; it does not undo an accepted
+effect. Automatic policy remains a separate explicit choice and is not enabled
+by this support.
+
+The worker captures only its already validated runtime selection before and
+after preparation. Normal noneditable file-cache wheel installs remain valid
+representations of that selection; a PEP 610 Git URL is not required. Bounded
+checks bind the complete installed module package to its RECORD inventory,
+and a Foundation source import must match the selected source and installed
+package bytes. Missing, dirty, changed or ambiguous evidence stays once-only.
+Registry/archive wheel imports can instead bind the already qualified installed
+distribution, its exact recorded lock selection and captured package inventory.
+They do not require a Git cache. This is not an independent verification of a
+downloaded archive or publisher; those tools must execute from their installed
+package, while a source import still needs the selected-source equivalence check.
+Installed module entry points bind the actual Python implementation to the
+host's selected module/configuration. Ephemeral install/cache locations are
+checked by the private witness, not included in the cross-chat key when selected
+source and package content are identical. Editable, absent, ambiguous, invalid
+or unverifiable implementations retain once/deny. RECORD alone is not publisher
+authority. No new source store, approval-time
+resolver or whole-environment scan is introduced.
+
+Session-only configuration targets and unstructured tool approvals have no
+reusable descriptor. A model-authored title, reason or metadata cannot mint one.
+These requests retain once/deny choices; the Instance must not manufacture an
+Always rule. An Instance may separately offer its explicitly selected automatic
+policy for supported current requests, without bypassing Unified's remaining
+authority, Stop, budget or operating-system checks.
+
+Instance owns agent-wide rule storage, the owner-authorized connector actors,
+policy controls and revocation. Removing a rule stops future matching approvals.
+An already accepted configuration grant remains until its existing Stop,
+grant-revoke or expiry boundary. Upgrades select neither remembered rules nor
+automatic approval, and this negotiation grants no authority by itself.
 
 Disconnect releases observation and future use of the attachment's transient HTTP
 MCP settings. Admitted work retains its mounted tools and can finish. Reattachment
 can retire a released, settled worker through the existing acknowledged retirement
 path before supplying fresh tools. Connected owners, active/protected work and
 unconfirmed retirement are not replaced. Retry after that work settles.
+
+Non-authentication owner failures, including busy attachments and unresolved
+prompt outcomes, use Unified's implementation-specific error code `-31000` with
+the owner's reason. ACP reserves `-32000` for authentication; an ownership
+refusal does not request sign-in. A request failure does not establish whether
+earlier work ran or authorize automatic retry. Inspect the retained outcome
+before deciding on another input.
 
 Host shutdown remains different from client disconnect and follows existing
 recovery policy. This feature does not promise survival of process/machine loss.

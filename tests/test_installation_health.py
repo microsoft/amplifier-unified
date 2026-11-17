@@ -736,3 +736,32 @@ def test_windows_working_is_unknown_when_no_owned_host_answers(working_chain, mo
         # No request, and no credential read before the private pin is valid.
         assert state["requests"] == []
         assert state["credentialReads"] == 0
+
+
+@pytest.mark.parametrize("retry", [False, True])
+def test_status_names_a_task_that_was_not_confirmed_instead_of_an_unreachable_service_manager(
+        tmp_path, monkeypatch, retry):
+    # Measured after a computer rename: Task Scheduler answered, the app refused
+    # its task, and status said that the service manager could not be reached.
+    from amplifier_web import windows_service
+    entry = "AmplifierUnified-S-1-5-21-100-200-300-1001"
+
+    def state(home):
+        raise windows_service.TaskNotConfirmed(entry, retry=retry)
+    monkeypatch.setattr(health, "service_state", state)
+    result = asyncio.run(health.status(tmp_path, wait=30))  # Returns at once: nothing to wait for.
+    assert result["ok"] is False and result["service"] == "unavailable"
+    assert result["entry"] == {"name": entry, "retry": retry}
+    assert "could not be reached" not in result["message"] and "Sign in" not in result["nextStep"]
+    if retry:
+        assert "could not check the account" in result["message"] and "Restart Windows" in result["nextStep"]
+    else:
+        assert "could not confirm" in result["message"] and entry in result["nextStep"]
+        assert "uses only a task that it can confirm" in result["nextStep"]
+    assert "changes only" not in result["nextStep"] + result["message"]
+    # Any other failure keeps the earlier answer.
+    monkeypatch.setattr(health, "service_state", lambda home: (_ for _ in ()).throw(
+        windows_service.WindowsServiceError("Task Scheduler refused the operation.")))
+    other = asyncio.run(health.status(tmp_path))
+    assert other["message"] == "The background service manager could not be reached." and "entry" not in other
+

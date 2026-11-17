@@ -104,13 +104,8 @@ async def cancel(owner, source, args, origin, command_id):
                 if request.get('subscription'):
                     request['subscription'].update(status='cancelled', open=False,
                         detail='The requester cancelled this request; no new automatic return is admitted.')
-                for (encoded,) in service.db.execute("""SELECT receipt FROM commands
-                    WHERE json_extract(receipt,'$.dependencyRequestId')=?
-                    AND json_extract(receipt,'$.delivery')='queued'""", (request['requestId'],)).fetchall():
-                    pending = json.loads(encoded)
-                    pending.update(delivery='suppressed', detail='The originating request was cancelled before this automatic return was admitted.')
-                    owner.save(pending['requestId'], pending)
-                    retired_returns.append(pending['requestId'])
+                retired_returns = retire_queued_returns(owner, request,
+                    'The originating request was cancelled before this automatic return was admitted.')
                 owner.save(request['requestId'], request)
             # Handling or finishing the peer message does not consume its narrow
             # resume scope. Retain revocation even on the finished/not-running
@@ -135,5 +130,98 @@ async def cancel(owner, source, args, origin, command_id):
             if service.db.in_transaction:
                 service.db.rollback()
                 owner.refresh_reference(original)
+                for pending_id in retired_returns:
+                    owner.refresh_reference(owner.receipt(pending_id))
+            raise
+
+
+def retire_queued_returns(owner, request, detail):
+    """Mutate only positively queued returns, in bounded pages under the lock.
+
+    The caller owns the transaction and cancels expiry only after durable commit.
+    Related in-flight receipts are evidence, not candidates for this transition.
+    """
+    retired = []
+    while rows := owner.service.db.execute("""SELECT id,receipt FROM commands
+            WHERE json_extract(receipt,'$.dependencyRequestId')=?
+            AND json_extract(receipt,'$.delivery')='queued'
+            AND json_extract(receipt,'$.target.sessionId')=?
+            ORDER BY rowid LIMIT 64""", (request['requestId'], request['senderSessionId'])).fetchall():
+        for identity, encoded in rows:
+            pending = json.loads(encoded)
+            pending.update(delivery='suppressed', detail=detail)
+            owner.save(identity, pending)
+            retired.append(identity)
+    return retired
+
+
+def return_summary(owner, request):
+    """Scalar indexed facts only; count overflow instead of imposing a limit."""
+    where = """FROM commands WHERE json_extract(receipt,'$.dependencyRequestId')=?
+        AND json_extract(receipt,'$.target.sessionId')=?
+        AND json_extract(receipt,'$.delivery') IN ('submitting','accepted','applied','unknown')"""
+    parameters = (request['requestId'], request['senderSessionId'])
+    count = owner.service.db.execute('SELECT count(*) ' + where, parameters).fetchone()[0]
+    rows = owner.service.db.execute(
+        "SELECT id,json_extract(receipt,'$.delivery') " + where + ' ORDER BY rowid LIMIT 16',
+        parameters).fetchall()
+    return {'items': [{'requestId': identity, 'delivery': delivery} for identity, delivery in rows],
+            'count': count, 'truncated': count > len(rows)}
+
+
+async def unsubscribe(owner, source, args, origin, command_id):
+    """Withdraw the wait, never cancellation intent or recipient execution."""
+    from .collaboration import PROTOCOL
+    service = owner.service
+    identity = command_id or str(uuid.uuid4())
+    digest = fingerprint(['coordination.unsubscribe', args, origin, source['id']])
+    async with service.lock:
+        duplicate = owner.duplicate(identity, digest)
+        if duplicate:
+            return duplicate
+        lineage = owner.lineage(source, origin)
+        request = owner.receipt(args['requestId'])
+        if (args['sessionId'] != source['id'] or request.get('commandAction') != 'coordination.send'
+                or request.get('senderSessionId') != source['id'] or request.get('protocol') != PROTOCOL
+                or request.get('workspace') != source['workspace']):
+            owner.error('Withdraw only your own request wait in its current workspace.')
+        owner.request_target(source, request, hydrate=False)
+        wait = request.get('subscription')
+        if not wait:
+            owner.error('This request has no saved subscription to withdraw.', 409)
+        original = copy.deepcopy(request)
+        retired = []
+        service.db.commit()
+        try:
+            # Orthogonal and irreversible: cancel/review can change status but
+            # cannot erase withdrawal or turn it into execution cancellation.
+            inputs = lineage.get('sourceInputIds', [])
+            wait.setdefault('withdrawal', {'operationId': identity, 'withdrawnAt': time.time(),
+                'reason': args.get('reason', ''), **lineage,
+                'sourceInputIds': inputs[-16:], 'sourceInputIdsCount': len(inputs)})
+            wait['open'] = False
+            retired = retire_queued_returns(owner, request,
+                'The requester withdrew this wait before its automatic return was admitted.')
+            in_flight = return_summary(owner, request)
+            owner.save(request['requestId'], request)
+            answer = {'accepted': True, 'commandAction': 'coordination.unsubscribe',
+                'senderSessionId': source['id'], 'target': request['target'],
+                'result': {'requestId': request['requestId'], 'withdrawal': copy.deepcopy(wait['withdrawal']),
+                    'originalDelivery': request.get('delivery'), 'cancellation': status(request),
+                    'suppressedReturns': {'requestIds': retired[:16], 'count': len(retired),
+                                          'truncated': len(retired) > 16},
+                    'inFlightReturns': in_flight, 'executionStopped': False,
+                    'detail': 'No longer awaiting this request. Already submitting, admitted or unknown returns may still arrive. No execution was stopped; uncertain effects remain uncertain.'}}
+            owner.insert(identity, digest, answer)
+            owner.publish_receipt(answer)
+            for pending_id in retired:
+                owner.cancel_expiry(pending_id)
+            return copy.deepcopy(answer)
+        except BaseException:
+            if service.db.in_transaction:
+                service.db.rollback()
+                owner.refresh_reference(original)
+                for pending_id in retired:
+                    owner.refresh_reference(owner.receipt(pending_id))
             raise
 

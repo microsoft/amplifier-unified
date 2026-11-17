@@ -173,7 +173,34 @@ def environment(root, value):
     return env
 
 
-async def launch(root, *, open_browser=True):
+async def browser_opened(command, env, *, limit=None):
+    """Run the owner's `open` command once; True only when it confirmed the browser.
+
+    The confirmation is a line of its output, never its exit status. On
+    Windows a command that an app generation takes over ends with status 0 for
+    this caller, whatever it did; a first start that updates the app is such a
+    case. The command is never run a second time.
+
+    `open` itself waits for a host that is restarting, and needs about 10
+    seconds more for its last two requests. The limit here adds 50 seconds
+    for the start of the command (the check of the generation that takes it
+    over has its own limit of 30 seconds) and for the browser call.
+
+    False means "not confirmed", not "not opened": after the limit, a command
+    that a generation took over still runs and can open the browser later.
+    """
+    from . import browser_entry
+    from .updates import process
+    if limit is None:
+        limit = browser_entry.HOST_WAIT + 60
+    try:
+        output = await process(*command, "open", env=env, timeout=limit)
+    except (OSError, ValueError, RuntimeError, TimeoutError):
+        return False
+    return browser_entry.OPENED in str(output).splitlines()
+
+
+async def launch(root, *, open_browser=True, progress=None):
     from .windows_installation import (AddressUnavailable, address_message, change_address,
                                        prepare_background, owner_notice, review_browser_trust)
     root, value = installation(root)
@@ -190,7 +217,7 @@ async def launch(root, *, open_browser=True):
         from .deployment import load_server_config
         created.append(windows_tls.create_identity(root / "app", load_server_config(root / "app")))
     try:
-        result = await prepare_background(root, launcher, env, identity=identity)
+        result = await prepare_background(root, launcher, env, identity=identity, progress=progress)
     except AddressUnavailable as problem:
         # Another owner holds the saved address. Never adopt or stop it; only
         # the person's own Yes moves this installation to a new address.
@@ -199,7 +226,7 @@ async def launch(root, *, open_browser=True):
         if not owner_notice(address_message(problem), confirm=True):
             return {"background": False, "address": {"available": False, "reason": problem.kind}}
         await change_address(root, launcher, env)
-        result = await prepare_background(root, launcher, env, identity=identity)
+        result = await prepare_background(root, launcher, env, identity=identity, progress=progress)
     if open_browser:
         # Never silently import a CA or tell a user to bypass a browser warning.
         from . import browser_entry
@@ -213,14 +240,20 @@ async def launch(root, *, open_browser=True):
             return {**result, "browser": {"opened": False, "reason": "certificate-review-pending"}}
         # The normal owner entry controls browser authentication and trust
         # behavior. Do not print or expose its transient grant in this process.
-        from .updates import process
-        try:
-            await process(str(launcher), "--data-dir", str(root / "app"),
-                          "--workspace", str(root / "workspace"), "open", env=env, timeout=30)
-        except (OSError, ValueError, RuntimeError, TimeoutError):
-            owner_notice("Amplifier is running in the background, but browser entry did not finish. "
-                         "Use the installation's retained status information to inspect the result. "
-                         "No certificate trust or security policy was changed.")
+        if not await browser_opened((launcher, "--data-dir", root / "app",
+                                     "--workspace", root / "workspace"), env):
+            # Say only what is known here: the browser was not confirmed. It
+            # can still open, so the person looks for a tab before a new start.
+            # The same next step as a failed start: the Start menu only when
+            # its entry exists (after an uninstall, setup adds it again).
+            from .windows_consumer_shell import listed
+            owner_notice("Amplifier may not have opened in your browser.\n\n"
+                         "Look for an Amplifier tab in your browser. If there is none, " + (
+                "open Amplifier from the Start menu: Amplifier Unified. "
+                "If this message appears again, restart this PC." if listed(root) else
+                "run the Amplifier setup file again. It keeps your chats and settings."))
+            return {**result, "browser": {"opened": False, "reason": "not-confirmed"}}
+        return {**result, "browser": {"opened": True}}
     return result
 
 
@@ -251,6 +284,55 @@ _UNFINISHED = {
 _UNFINISHED["apps-entry"] = _UNFINISHED["shortcuts"] = _UNFINISHED["entries"]
 
 
+def entry_notice(purpose, entry, retry, *, listed=True):
+    """The person's text when Amplifier did not confirm its start-at-sign-in entry.
+
+    `purpose` is `start`, `status`, `stop` or `uninstall`; `entry` is the task's
+    name in Task Scheduler. The check cannot say why the entry differs (a
+    changed setting, another installation, a renamed Windows account), so the
+    text does not say that someone changed it. The cause sentence makes no
+    claim about what Amplifier changed: a start can make an entry and then
+    not confirm it. (Only the uninstall opening says that nothing was changed;
+    an uninstall reads the entry before it changes anything.) With `retry`,
+    Windows gave no answer about the entry's account: that can pass, and
+    nothing is deleted.
+    `listed` is False when Amplifier is not in the Start menu: the setup file
+    then opens it.
+    """
+    opening = {"start": "Amplifier could not start.",
+               "status": "Amplifier could not read its status.",
+               "stop": "Amplifier did not stop its background app.",
+               "uninstall": "Amplifier was not uninstalled, and nothing was changed."}[purpose]
+    opens = ("Open Amplifier from the Start menu: Amplifier Unified." if listed else
+             "Run the Amplifier setup file again.")
+    again = {"start": opens, "status": opens, "stop": "Select Stop Amplifier again.",
+             "uninstall": "Uninstall Amplifier again."}[purpose]
+    cause = ("Windows could not check the account of Amplifier's start-at-sign-in entry, so "
+             "Amplifier could not confirm that the entry belongs to this installation." if retry else
+             "Amplifier could not confirm that its start-at-sign-in entry in Windows belongs to "
+             "this installation. It uses only an entry that it can confirm.")
+    if purpose == "stop":
+        # The person wants the app to stop. That needs no confirmed entry.
+        return opening + "\n\n" + cause + "\n\nTo stop the app now, sign out of Windows or restart this PC."
+    if retry:
+        return (opening + "\n\n" + cause + "\n\n"
+                "1. If your work or school manages this PC, connect it to that network.\n"
+                "2. Restart this PC.\n"
+                "3. " + again)
+    return (opening + "\n\n" + cause + "\n\n"
+            f"The entry is the task named {entry} in Windows Task Scheduler. If you have another "
+            "Amplifier installation for this Windows account, the entry can belong to it. Then do "
+            "not delete the entry: use that installation, or uninstall it first.\n\n"
+            "Otherwise delete the entry. Amplifier then no longer starts when you sign in"
+            + (".\n" if purpose == "uninstall" else ", until it makes a new entry in step 5.\n") +
+            "1. Open the Start menu, type Task Scheduler and open it.\n"
+            "2. Select Task Scheduler Library.\n"
+            f"3. Select the task named {entry}, press the Delete key and confirm.\n"
+            "4. Restart this PC.\n"
+            "5. " + again
+            + ("" if purpose == "uninstall" else " It makes a new entry. Your chats and settings stay."))
+
+
 class Unfinished(RuntimeError):
     """A Status, Stop or Uninstall step that did not finish; `notice` is the person's text.
 
@@ -265,8 +347,14 @@ class Unfinished(RuntimeError):
 
     @property
     def notice(self):
+        from .windows_service import TaskNotConfirmed
         code = getattr(self.error, "winerror", None)
-        text = _UNFINISHED.get(self.step, "Amplifier could not finish this.\n\nRestart this PC, then try again.")
+        if isinstance(self.error, TaskNotConfirmed):
+            # The step's own text would name a wrong cause and a wrong next step.
+            text = entry_notice({"status": "status", "stop-app": "stop"}.get(self.step, "uninstall"),
+                                self.error.entry, self.error.retry)
+        else:
+            text = _UNFINISHED.get(self.step, "Amplifier could not finish this.\n\nRestart this PC, then try again.")
         return text + f"\n\nReference: {self.step}, {type(self.error).__name__}" + (f" {code}" if code else "")
 
 
@@ -275,7 +363,8 @@ def _record(root, operation, step, error):
 
     Nothing else records why a windowless maintenance step failed. The note
     goes beside the app's other service records. The installation folder is
-    the second choice: while a conversation worker is alive, Windows refuses a
+    the second choice: while a conversation worker is alive, and its Foundation
+    is older than e37a946b, Windows refuses a
     new or replaced file directly in that folder (sharing violation).
     """
     import time
@@ -427,7 +516,9 @@ async def maintenance(root, operation):
         if operation == "status":
             result = await status(checked / "app")
             if sys.stdout is None:
-                owner_notice(result["message"])
+                entry = result.get("entry")
+                owner_notice(entry_notice("status", entry["name"], entry["retry"]) if entry
+                             else result["message"])
             return result
         if operation == "uninstall":
             return await _uninstall(checked)
@@ -453,18 +544,25 @@ def integrate(root):
     return install(root, value["version"])
 
 
-def start_failure(root):
-    """One plain cause and next step when the shortcut could not start the app."""
-    from .windows_service import managed
-    # No start-at-sign-in task yet: this was the first start, which prepares
-    # the app's remaining parts from the internet before it registers the task.
-    if not managed(Path(root) / "app"):
-        return ("Amplifier could not finish its first start. On the first start it downloads "
-                "the remaining parts of the app from the internet.\n\n"
-                "Check that this PC is connected to the internet. Then open Amplifier from the "
-                "Start menu: Amplifier Unified. You do not need to install it again.")
-    return ("Amplifier could not start.\n\n"
-            "Restart Windows. Then open Amplifier from the Start menu: Amplifier Unified.")
+def start_failure(root, step=None, error=None):
+    """One plain cause and next step when the shortcut could not start the app.
+
+    `step` is the last step that the start named; `error` is what ended it.
+    """
+    from .windows_consumer_shell import listed
+    from .windows_service import TaskNotConfirmed
+    has_entries = listed(root)
+    if isinstance(error, TaskNotConfirmed):
+        # The start-at-sign-in entry exists and Amplifier does not use it. This
+        # is not a failed download, and a restart alone does not change it.
+        return entry_notice("start", error.entry, error.retry, listed=has_entries)
+    next_step = ("open Amplifier from the Start menu: Amplifier Unified" if has_entries else
+                 "run the Amplifier setup file again. It keeps your chats and settings")
+    if step == "prepare":
+        return ("Amplifier could not prepare the remaining parts of the app. It downloads them from the internet.\n\n"
+                "Check that this PC is connected to the internet. Then " + next_step + "." +
+                (" You do not need to install it again." if has_entries else ""))
+    return "Amplifier could not start.\n\nRestart Windows. Then " + next_step + "."
 
 
 def main(argv=None):
@@ -478,11 +576,13 @@ def main(argv=None):
     operations.add_argument("--uninstall", action="store_true")
     parser.add_argument("--no-open", action="store_true")
     args = parser.parse_args(argv)
+    steps = []
     try:
         operation = next((name for name in ("status", "stop", "uninstall") if getattr(args, name)), None)
         result = (audit(args.root) if args.audit else integrate(args.root) if args.integrate
                   else asyncio.run(maintenance(args.root, operation))
-                  if operation else asyncio.run(launch(args.root, open_browser=not args.no_open)))
+                  if operation else asyncio.run(launch(args.root, open_browser=not args.no_open,
+                                                      progress=steps.append)))
         if sys.stdout is not None:
             print(json.dumps(result))
     except Unfinished as stopped:
@@ -498,7 +598,7 @@ def main(argv=None):
         message = None
         if starting:
             try:
-                message = start_failure(args.root)
+                message = start_failure(args.root, steps[-1] if steps else None, error)
             except (OSError, ValueError, RuntimeError):
                 pass
         if sys.stdout is None:

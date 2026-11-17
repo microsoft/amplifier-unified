@@ -25,7 +25,8 @@ def test_browser_appearance_cases_match_every_current_public_theme_read():
 
 def test_settings_action_spacing_owns_the_tracked_public_appearance_fixture():
     selection = json.loads((ROOT / 'components/web-client.source.json').read_text())
-    client = ROOT / selection['delivery']['path']
+    client = ROOT / (selection['delivery']['path'] if selection['delivery']['type'] == 'directory'
+                     else '.build/web-client')
     plan = json.loads((client / 'tests/browser-checks.json').read_text())
     owned = [row for row in plan['scenarios'] if row['id'] == 'settings-action-spacing'
              or 'tests/settings-action-spacing-browser.mjs' in row['command']]

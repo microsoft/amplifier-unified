@@ -486,7 +486,11 @@ def test_error_classes_whose_text_reaches_status_are_raised_with_fixed_text():
     import ast
     root = Path(__file__).resolve().parents[1] / "amplifier_web"
     allowed = {"WindowsServiceError(f'Its background process ended unexpectedly (exit code {code}).')",
-               "HiddenConsoleError(_UNSAFE)"}
+               "HiddenConsoleError(_UNSAFE)",
+               # This class writes one of its two fixed sentences itself. Its
+               # arguments, the task's name and a flag, are not in the text
+               # (tests/test_windows_service.py checks that).
+               "TaskNotConfirmed(entry)", "TaskNotConfirmed(entry, retry=True)"}
     found = 0
     for path in sorted(root.rglob("*.py")):
         if "static" in path.parts:

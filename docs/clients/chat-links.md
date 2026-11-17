@@ -18,7 +18,7 @@ Host and Origin protections continue to apply. Do not put credentials or command
 in the link. The parser accepts only a nonempty chat ID up to 200 characters with
 no control characters; the host resolves and validates its actual availability.
 
-Acceptance: `components/web-client/tests/chat-deep-link.test.mjs` and
+Acceptance: [tests/chat-deep-link.test.mjs](https://github.com/microsoft/amplifier-client-web/blob/main/tests/chat-deep-link.test.mjs) and
 `tests/web/companion-browser.mjs` cover parsing, exact target, query cleanup,
 reload, independent windows, missing/deleted targets, sign-in, and no submitted
 turn or ordinary-browser companion polling. Run application/browser tests only

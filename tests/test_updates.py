@@ -24,7 +24,10 @@ async def app(tmp_path,monkeypatch,repo):
     import yaml
     settings = amplifier_home()/'settings.yaml'
     settings.parent.mkdir(parents=True, exist_ok=True)
-    settings.write_text(yaml.safe_dump({'web_bundles':{'excluded':list(DEFAULT_BEHAVIORS)}}))
+    settings.write_text(yaml.safe_dump({
+        'web_bundles': {'excluded': list(DEFAULT_BEHAVIORS)},
+        'config': {'providers': [{'module': 'provider-anthropic',
+                                 'config': {'default_model': 'fixture-model'}}]}}))
     async def check():return {"id":"application","label":"Amplifier Unified","status":"current"}
     monkeypatch.setattr(app_updates,"check",check)
     original=updates.process

@@ -5,9 +5,16 @@ name: Windows path length
 # The native job turns LongPathsEnabled off on its own disposable runner, proves
 # in a new process that a 260-character path is then refused, and runs the app's
 # real session and capture stores under an installation folder of the longest
-# path that setup allows. It restores the runner's value in every case.
+# path that setup allows. It also runs the app's real update compatibility probe
+# in an update stage folder there, with modules from the locked test
+# dependencies and no download. It restores the runner's value in every case.
 #
 # It is not setup-file or clean-account acceptance, and it runs no model turn.
+# It is not a whole in-app update: no component is fetched or installed.
+#
+# This is the only native job that installs the locked Amplifier Foundation.
+# So it also holds a real Foundation session ownership, as a live conversation
+# worker does, and requires that the installation folder stays usable.
 on:
   workflow_dispatch:
   pull_request:
@@ -21,12 +28,22 @@ on:
       - amplifier_web/host/storage.py
       - amplifier_web/windows_files.py
       - amplifier_web/windows_consumer.py
+      # The update stage: where it is, and what its compatibility probe writes.
+      - amplifier_web/updates.py
+      - amplifier_web/update_probe.py
+      - amplifier_web/update_partial.py
+      - amplifier_web/installation_runtime.py
+      - amplifier_web/runtime_environment.py
+      - amplifier_web/host/session.py
       - scripts/windows_bootstrap_native.cs
       - docs/design/native-windows-installation.md
       - tests/test_chat_project_names.py
       - tests/test_chat_project_names_service.py
       - tests/test_windows_path_budget.py
       - tests/test_windows_long_paths_off.py
+      - tests/update_stage_probe.py
+      - tests/test_update_stage_probe.py
+      - tests/test_windows_live_worker_folders.py
       # A dependency change can lengthen a store path (Foundation, loop-live).
       - pyproject.toml
       - uv.lock
@@ -52,19 +69,32 @@ jobs:
           architecture: x64
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
       # Preparation is not the subject. It runs before the setting changes.
-      - name: Install the locked application dependencies (CI setup only)
+      # The test group holds the test runner and the real loop, context and
+      # capture modules that the update probe mounts.
+      - name: Install the locked application and test dependencies (CI setup only)
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          uv sync --locked --no-dev --no-install-project --python (Get-Command python).Source
+          uv sync --locked --group dev --no-install-project --python (Get-Command python).Source
           if ($LASTEXITCODE -ne 0) { throw 'Locked dependency installation failed.' }
-          uv pip install --python .venv\Scripts\python.exe "pytest>=8,<10"
-          if ($LASTEXITCODE -ne 0) { throw 'Test runner installation failed.' }
       - name: Check the chat-folder naming rule on native Windows
         shell: pwsh
         run: |
           .\.venv\Scripts\python.exe -B -m pytest -q -ra -p no:cacheprovider tests/test_chat_project_names.py
           if ($LASTEXITCODE -ne 0) { throw 'The chat-folder naming rule failed on native Windows.' }
+      # A live conversation worker holds Foundation's session ownership below
+      # <installation folder>\ownership. No app or worker starts: the test holds
+      # the ownership with the worker's own call, in setup's folder layout.
+      - name: Hold a real Foundation session ownership and change the folders around it
+        shell: pwsh
+        env:
+          # A skipped case would hide the answer; with this it runs and fails instead.
+          AMPLIFIER_REQUIRE_LIVE_WORKER_FOLDERS: '1'
+        run: |
+          .\.venv\Scripts\python.exe -I -c "import importlib.metadata as m, json; print('Installed Foundation revision:', json.loads(m.distribution('amplifier-foundation').read_text('direct_url.json'))['vcs_info']['commit_id'])"
+          if ($LASTEXITCODE -ne 0) { throw 'The installed Foundation revision could not be read.' }
+          .\.venv\Scripts\python.exe -B -m pytest -q -ra -p no:cacheprovider tests/test_windows_live_worker_folders.py
+          if ($LASTEXITCODE -ne 0) { throw 'A held session ownership blocks the installation folder, or its own folders accept an arrival.' }
       - name: Turn Windows long paths off for new processes
         id: long_paths
         shell: pwsh
@@ -78,12 +108,13 @@ jobs:
           if ((Get-ItemProperty -Path $key -Name LongPathsEnabled).LongPathsEnabled -ne 0) { throw 'LongPathsEnabled was not set to 0.' }
           Write-Host "LongPathsEnabled was $original on this runner and is now 0."
       # A new process. A missing limit fails here; it never skips.
-      - name: Require the 260-character refusal, then run the real stores under the longest supported folder
+      # -rA prints every case by name, and the path lengths that the update-stage cases measured.
+      - name: Require the 260-character refusal, then run the real stores and the real update probe under the longest supported folder
         shell: pwsh
         env:
           AMPLIFIER_REQUIRE_LONG_PATHS_OFF: '1'
         run: |
-          .\.venv\Scripts\python.exe -B -m pytest -q -ra -p no:cacheprovider tests/test_windows_long_paths_off.py
+          .\.venv\Scripts\python.exe -B -m pytest -q -rA -p no:cacheprovider tests/test_windows_long_paths_off.py
           if ($LASTEXITCODE -ne 0) { throw 'Windows path-length checks failed with long paths off.' }
       - name: Restore the runner's long-path setting
         if: ${{ always() && steps.long_paths.outputs.original != '' }}
@@ -118,6 +149,9 @@ jobs:
       # The budget reads names from the locked Foundation, loop-live and capture hook.
       - name: Check the path budget and the naming rule (other platforms keep the shared name)
         run: uv run --no-sync pytest -q -ra tests/test_windows_path_budget.py tests/test_chat_project_names.py
+      # The same probe fixture as the native job, with this platform's project name.
+      - name: Run the real update compatibility probe in a stage folder
+        run: uv run --no-sync pytest -q -ra tests/test_update_stage_probe.py
       # Through the real app service: existing chats stay where they are and still open.
       - name: Check that chats keep their history and still open under the naming rule
         run: uv run --no-sync pytest -q -ra tests/test_chat_project_names_service.py

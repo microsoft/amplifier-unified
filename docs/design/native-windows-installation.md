@@ -210,9 +210,10 @@ Steps, in order:
 4. Copy the generation's verified release file beside the installation.
    Confirm that the app is stopped, then rename the launcher folder aside. It
    is kept. Every change in the installation folder waits up to 30 seconds for
-   a program that is still closing: while the app's worker programs are alive,
-   Windows refuses a rename into that folder, and they end a moment after the
-   task reports that it stopped (measured in the clean room).
+   a program that is still closing: a live worker program whose Foundation is
+   older than `e37a946b` makes Windows refuse a rename into that folder, and
+   the workers end a moment after the task reports that it stopped (measured
+   in the clean room; see "Why the app stops first").
 5. Install the launcher at the same path with the generation's exact package
    list and the launcher's own interpreter. The task, the shortcuts and the
    private Python do not change.
@@ -414,6 +415,69 @@ It never says that the PC does not trust the connection. (In a clean-room run
 of 0.94.1 that updated itself to 0.95.0 at first start, the earlier two-answer
 check showed the "this PC still does not trust the connection" message two
 seconds after Yes, although the root was in the store.)
+
+The browser step waits for the same restart. After trust is established, the
+launcher runs `amplifier-unified open` once. Windows hands that command to the
+active app generation, which after an update at first start is the new version,
+while the earlier host can still serve for some seconds and is then away. `open`
+accepts only a host of its own package version. So `open` waits up to 60
+seconds for that host (`browser_entry.HOST_WAIT`): it repeats only the health
+request, sends one grant request to the first host that matches, and starts the
+browser once. A refused or unconfirmed grant request ends the command; it is
+never sent again. After the first round of health requests, none starts at or
+after the end of the wait; one that started can take 5 seconds and the grant
+request 5 more. The typed-code command for another device
+(`amplifier-unified browsers code`) uses the same owner request without a
+wait: it asks each local address once.
+
+The launcher learns the result from one line of the command's output
+(`browser_entry.OPENED`), not from its exit status. On Windows a command that
+a generation takes over ends with exit status 0 for its caller, whatever it
+did: `os.execv` starts a new process there and ends the calling one. The
+launcher allows the command 120 seconds: the wait, 10 seconds for the last two
+requests, and 50 for the start of the command and the browser call (the check
+of the generation that takes the command over has its own limit of 30
+seconds). Without the confirmation line the launcher knows only that
+the browser was not confirmed: after its limit, a command that a generation
+took over still runs and can open the browser. So its one message says that
+Amplifier may not have opened in the browser, to look for an Amplifier tab
+first, and otherwise to open it from the Start menu: Amplifier Unified. When
+the Start-menu entry does not exist, the message names the setup file instead,
+by the same two facts as the launcher's failure message. The message does not
+say that Amplifier is running; the launcher made no new check of that.
+The launcher is the code that setup
+installed and an in-app update does not change it, so the line's text is fixed.
+For the same reason the wait is in `open`: a launcher from an earlier setup file
+gets it from the new generation. Such a launcher allows the command 30 seconds
+and reads the exit status; if the restart takes longer, it shows its earlier
+message. `open` goes on to the end of its own wait, so the browser can still
+open after that message: when the new host answers within the wait and gives
+the grant.
+
+The hand-over also keeps each argument whole. The Windows C runtime joins an
+`os.execv` list with spaces and quotes nothing, so the installation folder of a
+person whose user name has a space would reach the app as two arguments.
+`application_generations.exec_arguments` quotes each argument on Windows.
+
+**Limit, not repaired here:** the hand-over is made by the launcher, and an
+installation keeps the launcher of its setup file. An installation that a
+setup file before this change made, in a folder with a space, keeps the plain
+list. From its first app update, the `amplifier-unified` commands that are
+handed to the app generation do not reach the app. Read from source, for the
+two places where a person meets it: the Start-menu entry gets no status from
+its `service status` command and shows "Amplifier could not start", and a
+first start that updates the app opens no browser. The task that starts the
+background app does not use this hand-over (also read from source). Such an
+installation needs its launcher replaced
+(`windows_launcher_refresh`); nothing does that automatically. Measured on a
+Windows runner: a plain list splits an argument with a space, and with an
+interpreter under a folder with a space the command does not arrive. Not run:
+a real installation of an earlier setup file under such a user name.
+
+(In a clean-room run of 0.98.1 that updated itself to 0.98.4 at first start,
+`open` ran in 0.98.4 three seconds before the host restarted, found the 0.98.1
+host, and ended after 0.7 seconds with no browser. The launcher received exit
+status 0 and showed nothing.)
 
 Outcomes: **No** keeps the app running, says so in one plain message, and the
 next open (always started by the person) explains and asks again. A refusal by
@@ -635,6 +699,40 @@ table with `python tests/test_windows_path_budget.py`.
   longer than the limit that was written while long paths were on. The app
   finds such history through the extended-length path form and does not start
   a second history for that chat.
+- **Update stage:** an in-app component update, and a setup run on a PC that
+  already has an AI connection, prepare the components in
+  `<folder>\app\updates\releases\<32 hex digits>` (folder path + 54). The
+  compatibility probe runs with that stage as its app home and
+  `<stage>\shared-config` as its shared home, and it mounts a worker in
+  `<stage>\qualification-workspace`. So the stage path is inside every session
+  path of the probe. The CLI name of that folder is the folder path plus 78
+  characters; under it the probe's session store folder is twice the folder
+  path plus 165, which Windows creates only up to a folder path of 41. No
+  consumer installation has one (the shortest is 34, and a session folder
+  below it fits only up to 22). Release 0.98.5 failed the component stage of
+  its first in-app update on this (258 characters at a folder path of 51; the
+  page showed "ENOENT · FileNotFoundError · Probe: prepare"). The folder now
+  has the project name `update-<first 12 hex digits of the stage ID>` (19
+  characters) on Windows, when the process runs with that stage as its app
+  home. At 59 the longest path that a stage and its probe create is 248, with
+  11 characters to spare; the probe's session folder is 202. The probe's
+  capture files go to the installation's capture folder, as before, under the
+  same name (folder 154 at 59). Each stage has its own shared home, so two
+  stages never share a session folder. Two session-store
+  shapes do not fit in a stage (the saved view, 261, and a background-job
+  record, 286); a probe writes neither. The native case checks the complete
+  list of what the real probe leaves with its test profile (one offline
+  profile, no default behaviors). The profiles of a real installation are not
+  checked there; a whole in-app update on a clean PC is the check for them.
+  A first installation without an
+  AI connection has no stage: `<folder>\app\updates\baseline-runtime` holds
+  receipts only (longest path 118).
+  **Not covered:** a chat with its own setup (dependency overrides of its
+  workspace or session) is checked in a stage with the chat's folder. An app
+  chat folder keeps its short name there and fits (250). A folder that a person
+  chose keeps the CLI name there; for the default workspace folder the probe's
+  transcript write fits only up to a folder path of 39. This is arithmetic
+  from the code and has not been run on a PC.
 - **Source store:** Amplifier Foundation owns its layout; the app supplies the
   folder: `<folder>\s` in a new installation, `<folder>\source-store` in an
   installation that an earlier setup file made. A Foundation revision before `7526bb55`
@@ -678,7 +776,7 @@ table with `python tests/test_windows_path_budget.py`.
 `LongPathsEnabled` off on its own runner, proves in a new process that a
 260-character path is refused, runs the real session and capture stores under a
 folder path of exactly 59 characters, and restores the runner's value. It
-installs the locked dependencies, and the lock selects Foundation `7526bb55`.
+installs the locked dependencies, and the lock selects Foundation `e37a946b`.
 Its source-store case stages a repository as deep as the default bundles
 through Foundation's real store. It requires that the store seals, builds and
 cleans up files beyond the limit, and that Windows accepts or refuses each
@@ -686,8 +784,20 @@ ordinary path exactly as the budget table says. In the folder `s` the deepest
 module file opens at a folder path of 59 (253 characters). In the earlier
 folder `source-store` it is refused at 59 (264) and opens at 54 (259). The
 same job requires that an installation with each folder name resolves its own
-store through the real private-folder checks. It is not setup-file or
-clean-account acceptance.
+store through the real private-folder checks. Its update-stage cases make a
+stage with the updater's layout, at folder paths of 51 and 59 (through the
+app's private-folder creator, as setup does; the updater itself uses an
+ordinary `mkdir`, which the probe's private-folder check refused on the
+runner and accepted on a clean PC, where the probe of release 0.98.5 passed
+that check and failed later, at the session store). They require that the
+session store's folder is refused under the CLI name and that the app's real
+compatibility probe then ends with the record that the Updates page showed.
+They require that the same probe, unchanged, completes under the short name,
+with modules from the locked test dependencies and no download, and that what
+it leaves with that test profile is exactly the list in
+`tests/update_stage_probe.py`. That is the
+probe in a stage, not a whole in-app update: no component is fetched or
+installed. It is not setup-file or clean-account acceptance.
 
 Setup checks the PC and the folder before its first question. Each stop names
 one cause and one next step in plain language, and never shows exception text,
@@ -701,7 +811,7 @@ child output or network values:
 | A folder above the installation folder lets other accounts change it | Stop: names that folder. The storage check is unchanged |
 | Less than 4 GB free | Stop |
 | The folder exists and setup did not create it | Stop. Setup never changes it |
-| The folder holds a finished installation | "Amplifier is already installed." Yes opens it. Nothing is installed or changed |
+| The folder holds a finished installation | "Amplifier is already installed." Yes adds missing Start-menu and Apps-list entries again, then opens it. No app files are installed again or removed. The launcher and its code stay the ones that the earlier setup file installed |
 | The folder holds setup's own unfinished attempt, or is empty | Setup removes it and installs |
 | The folder has setup's first marker and app data, but no completion record | Stop. Setup never removes it |
 | Another installation already starts at sign-in for this account | Stop: remove it first. One sign-in task exists per account |
@@ -748,8 +858,8 @@ Not in this change: Repair and Update on a second run, refresh of the launcher
 and private tools, removal of program files at uninstall, removal of a leftover
 sign-in entry, the setup file's icon and version information, and a restart of
 an elevated setup without elevation. A person who removed Amplifier through the
-Apps list keeps the folder; a later setup run says so and starts that
-installation again, and its Start-menu entry returns only with the Repair step.
+Apps list keeps the folder; a later setup run restores its Start-menu and
+Apps-list entries, then starts that installation again.
 An installation in an earlier long folder is not moved or read: setup asks the
 person to remove it and then installs into the short folder. The real setup
 file on a clean ordinary account remains clean-room acceptance. The native
@@ -798,25 +908,143 @@ installation folder when that folder cannot be written.
 
 Why the app stops first. The earlier order removed the entries, rewrote
 setup's entry record `consumer-shell.json` in the installation folder, and
-only then stopped the app. While a conversation worker is alive, Windows
-refuses a new or replaced file directly in the installation folder (sharing
+only then stopped the app. While a conversation worker was alive, Windows
+refused the private write of a new or replaced file directly in the
+installation folder (sharing
 violation, error 32); a worker stays alive after its chat turn ends. So after
 any chat the rewrite failed, the app was never asked to stop, and it kept
 running and starting at sign-in with no entry left. Two clean-room runs showed
 this, and a probe in the second one measured the refusal: it is present with
-live workers and gone after the app's normal stop. Which handle in the worker
-tree causes it is not yet known. `app\config\services` accepts writes in the
-same state.
+live workers and gone after the app's normal stop. `app\config\services`
+accepts writes in the same state.
+
+The cause is Amplifier Foundation's session ownership. A live worker holds it
+below `<folder>\ownership`, and Foundation pins every folder from the drive
+root down to the session's own folder. Before Foundation `e37a946b` no pin
+shared write access. So Windows refused a rename, a move or a replacement of
+an entry directly in each pinned folder, also in the folders above the
+installation folder: `AppData\Local`, `AppData` and the profile folder
+(measured). An ordinary new file was not refused. The app's private writer
+publishes a file by a rename, so it failed. From `e37a946b` a pin on a folder
+above `ownership` shares read and write, and other programs can rename,
+replace and move entries there (measured in the clean room with three live
+workers at `e37a946b`). These refusals remain while a worker lives,
+by intent: a pinned folder itself cannot be renamed, moved or deleted, and
+nothing can be renamed or moved into `ownership` or a pinned folder below it.
+Foundation's history operations hold the folder that they work in (below
+`shared\projects`) in the same way while one operation runs.
+`tests/test_windows_live_worker_folders.py` holds a real ownership in
+setup's layout on a Windows runner and requires both halves; it runs in the
+`windows-path-length.yml` job, which installs the locked Foundation. The
+order above stays. A worker runs the Foundation that its own environment
+selected, not the one in the root `uv.lock`; that revision moves with a
+component update, and a running worker keeps the revision that it started
+with. The app's own directory reads (`windows_read_files`) hold a folder
+without write sharing while a read runs; they are unchanged.
 
 Uninstall can be repeated. An entry that an earlier, interrupted uninstall
 already removed is skipped; a task that is already gone is not an error.
 
 The last step rewrites the entry record with the status `removed`; a later
-setup run reads that status to choose its wording. Worker programs end a
+setup run reads that status to restore the app entries. Worker programs end a
 moment after the task reports that it stopped, so this write waits up to 15
 seconds for them. A write that is still refused does not fail a finished
 uninstall, because every entry is already gone; it is saved as a failed
 `receipt` step.
+
+After an uninstall, a second setup run adds the Start-menu and Apps-list
+entries again (the entry record with the status `removed` permits exactly
+that), then starts the launcher and waits for it. Setup's window with the
+current step stays open during both steps. Chats and settings stay in place.
+If the entries cannot be added, setup says so and still starts the app, as it
+did before this step existed; the next step it names is to run the setup file
+again. While setup adds the entries and starts the launcher, its window does
+not close, as during a first installation. Once the launcher runs, the window
+says that the person can close it; the launcher goes on. Setup's result is 0
+only when the entries exist and setup saw the launcher finish; a window that
+the person closed earlier leaves it at 1. The launcher skips preparation when
+`runtime status` reports a prepared runtime, just as a start at sign-in uses
+that runtime. Without this check, a connected AI account made the start run a
+complete first installation: minutes without a window, a new folder on each
+attempt, and in the observed case a failure. The launcher's failure message
+has two forms: the preparation of the remaining parts failed, or the start
+failed (every other step). A third text replaces both when the start ended
+because the launcher did not confirm its start-at-sign-in task (see "The task
+after a computer rename" below). It names the Start menu as the next step only when
+the entry record says `installed` and the entry that opens Amplifier exists in
+the folder that the record names; setup's second run decides by the same two
+facts. Otherwise the next step is to run the setup file again. The record
+alone is not enough: the last write of an uninstall can be refused after every
+entry is gone. For the same reason the entries can be added again over a
+record that still says `installed`, when the folder that the record names,
+today's Start-menu folder and the Apps-list entry are all absent. The entries
+are added again only when all of them are gone. A partly damaged set (a person
+deleted one shortcut) is refused and nothing is overwritten; setup then says
+that it could not add the entries, and starts the app.
+
+`.github/workflows/windows-start-again.yml` runs this path on a Windows
+runner with the product's own commands in setup's order: entries, first
+start, an AI account configured without a key, the product's uninstall
+function (called in the test's process, with its question answered Yes),
+entries again, second start. Task Scheduler, the host that the task starts and the
+runtime preparation are real there. It requires that `runtime status` reports
+a prepared runtime with the account configured, and that the second start
+succeeds with a new host process on the same port. It also requires that a
+marker file in the app data and the configured account are unchanged, and
+that no folder under `app\updates\releases` was added or replaced: a
+preparation with an account creates such a folder first. That case does not
+use the setup file or a clean
+ordinary account (the runner's account is elevated). The launcher runs there
+with a console Python and `--no-open`, so the certificate question and the
+browser are not part of it. It has no chat, and no sign-out and sign-in: the
+task starts because it was registered, not because a person signed in.
+
+A runner does not show the state after a chat: a chat installs further parts
+into the same runtime. That state was shown once on a real installation
+(clean-room run in Windows Sandbox, setup 0.98.6, long paths off, November 15,
+2026): after setup, a connected account, one chat and an uninstall from
+Settings > Apps, `runtime status` reported a prepared runtime, and the setup
+file's second run brought Amplifier back with its entries, its task, the same
+port, the earlier chat and the account. No folder under
+`app\updates\releases` was added. Not shown anywhere: a start at sign-in
+after this.
+
+`runtime status` reads the installed parts with Git. Without Git on its
+`PATH` it answers "not prepared" for a runtime that is prepared (seen in the
+same clean-room run, from a plain shell). The launcher always runs it with
+the installation's own tool path, which contains the installation's Git. A
+caller with another `PATH` gets the wrong answer, and a start would then
+prepare as before. When the status is negative or cannot be read, the start
+prepares as before.
+
+A second native check runs setup's second-run window and its two steps with a
+stand-in program in place of the installation's Python (exact arguments, the
+wait, the exit codes, a window that closes by itself, and a window that is
+closed on request while the launcher still runs). It does not show the
+question before the window, a message, or the real launcher.
+
+Not changed, each stated as a limit:
+
+- When the runtime is not prepared and an AI account is connected, a start
+  without a task still runs the complete first installation. A failed attempt
+  leaves its folder under `app\updates\releases` (failed candidates are
+  retained by design), and the next start begins again; it does not continue
+  the failed attempt. After an uninstall this path is avoided only when
+  `runtime status` reports a prepared runtime.
+- The limits of a preparation stay as they were: 1800 seconds for the whole
+  preparation and 900 seconds for each of its steps. No shorter limit exists.
+  The failure that was observed was not a time limit. Read from its saved
+  progress record: after about four minutes of other work, four parallel
+  checks started and all four ended as failed within the same second. The
+  saved failure record names a cancellation, which is what the other three
+  record when one of them fails.
+- A start from the Start menu has no window while it prepares. Only a start
+  from the setup file shows setup's window.
+- An installation that an earlier setup file made keeps that setup file's
+  launcher. A second run of a newer setup file starts that launcher and asks
+  it to add the entries; it does not replace it. That launcher refuses to add
+  the entries again and prepares as before. Such an installation gets this
+  change only from a new installation.
 
 The Start-menu commands Stop and Status use the same form of message: what
 did not happen, the next action and the reference. They no longer show the
@@ -1851,10 +2079,120 @@ The owner can end every browser session with `amplifier-unified browsers sign-ou
 (see the deployment guide). All browser session checks go through one function,
 `auth.valid_session`, so that no check can ignore that sign-out.
 
-Remote browsers need an explicit owner-approved browser-pairing design over
-trusted configured HTTPS. Do not silently reuse terminal/companion grants with
-broader authority. Until that path is qualified, report its limitation rather
-than offering the unusable Windows password form.
+The command and the running host are two processes, and the host looks at the
+saved record every two seconds. A ticket or code from before a sign-out must
+not open a session that outlasts it, also in that gap. Two rules give that,
+with no lock between the two processes:
+
+1. The command saves a second that is not earlier than the second in which its
+   record was saved. When a write ends in a later second, it pauses for a
+   moment and saves again with that later second (`auth.sign_out_all`).
+2. For a ticket or code, the host reads the new session's second first and
+   looks at the saved record after that. When the record has changed and the
+   host has not applied it yet, the ticket or code is used up and opens no
+   session (`auth.sign_in`). The host keeps the mark of a record only when it
+   has read that record.
+3. The host drops pending tickets and codes for every changed record, also
+   when its second is the one already applied. A second sign-out in the same
+   second therefore still drops a ticket or code that was made in between
+   (`auth.refresh_sessions`). Open streams end only for a later second: a
+   session that is valid at that point was made after the record's second.
+
+A session that the host returns was therefore made before any record that is
+saved later, so it carries no later second than that record, and the host
+refuses it when it applies that sign-out. A session in the same second as a
+sign-out is refused. The owner signs in again a few seconds later, with a new
+ticket or code.
+
+The host tells a new record from the file's time, size and identity, not from
+its content. Every save puts a new file in place while the record before it
+still exists, so two saves in a row never have the same identity. The command
+checks this for each save: a save that the host could not tell from the record
+before it is made again. After three saves that were too slow or not visible,
+and after a save that is not confirmed although the record may have changed,
+the command says that it could not confirm the sign-out and asks the owner to
+run it again. It says that nothing was changed only when it looked at the
+record before and after the attempt and found the same record.
+
+A look at the record can fail for another reason than a missing record. Such
+a look is never taken for "no record" and never for "unchanged". The host
+then opens no session for a ticket or code. The watcher applies nothing, keeps
+nothing, and says so once in the host log. The command never takes such a
+look as proof of a finished sign-out or of an unchanged record. Without that
+proof it says that it could not confirm the sign-out, unless a later save of
+the same run gives the proof.
+
+This holds while the PC clock does not go backward. One case is left open: the
+host looks every two seconds, and it misses a change when two or more saves
+between two looks end in a file with the same time, size and identity as the
+file that the host saw last. That needs a file time that does not change
+between saves and a reused identity. It is not measured on any file system.
+
+When the host misses a change, that sign-out is not applied: sessions from
+before it are not refused, and their open streams are not ended. Such a
+session stays valid for every request until it expires, until the record
+changes again, or until the host starts again. This is so on every system.
+Two facts make the case narrower. The Windows private store accepts only a
+local fixed NTFS volume. Tickets and codes exist on a Windows host only, so on
+the other systems no ticket or code is part of the case.
+
+A ticket or code that is made after a sign-out and before the host has applied
+it is dropped as well. The owner waits a few seconds after the command.
+
+#### Remote browser sign-in on a Windows host
+
+A browser on another device cannot use the local launcher, and a Windows host
+has no password form. The owner starts that sign-in at the PC:
+`amplifier-unified browsers code` prints a code, and the owner types it on the
+sign-in page that the other device shows. Terminal and companion grants are not
+reused for this; they carry broader authority.
+
+- **The code.** Ten symbols from 32 (no `0`, `1`, `I` or `O`): 50 bits. It
+  lasts 120 seconds and works once. The host keeps only its SHA-256, and at
+  most eight codes at a time. Input is upper-cased, and spaces and hyphens are
+  removed. No other character is changed, so a look-alike is a wrong code.
+- **Who can make one.** The command uses the same request as `open`. It pins
+  the privately read leaf certificate before it reads or sends the control
+  credential, and the host accepts that request from this computer only. The
+  code is bound to the host instance, the data folder, the owner SID and one
+  address: an exact HTTPS entry of `public_origins` that is not this computer.
+- **Where it works.** The redeem endpoint has its own narrow check: HTTPS, an
+  explicit `Origin` equal to the address the browser used, and that address an
+  exact configured remote one. It does **not** look at the peer address. A
+  Tailscale TCP forward connects to the host from `127.0.0.1` (measured), so
+  the socket does not say where the browser is. The local ticket keeps its
+  check that both socket ends are local. With the forward on, that check no
+  longer tells a tailnet device from this computer: a client there can also
+  send the local address as `Host` and `Origin`. It gains nothing by that. The
+  owner endpoints still need the control credential from the owner-only folder,
+  and the local redeem still needs a ticket that only the launcher can get.
+  Loopback was never authority; another Windows account on the PC is in the
+  same position.
+- **Wrong codes.** No lockout and no delay. A lockout would let any device
+  that reaches the address keep the owner out. A delay taken in turn would
+  make the owner wait behind a flood of wrong codes. The numbers carry the
+  guess resistance: at 10,000 guesses each second against eight pending codes,
+  the chance of a hit in one code lifetime is about 1 in 100 million. A wrong
+  code never removes a real one and never reaches the owner's command, which
+  uses another endpoint. The host counts wrong codes and logs only the count.
+- **The page.** Server-rendered, with no script, and it shows nothing from the
+  request. It is sent with `Referrer-Policy: same-origin`, not `no-referrer`:
+  from a `no-referrer` page a browser posts the form with `Origin: null`, and
+  the redeem check refuses that. The redeem reply is `no-store`, `no-referrer`.
+- **The session.** The signed cookie from a code is marked remote
+  (`"via": "remote"`), so that a rule for remote sessions only is possible
+  later. Local cookies do not change. The lifetime is the configured one.
+- **The control.** `amplifier-unified browsers sign-out` signs out every
+  browser and drops every pending ticket and code.
+
+Limits: there is no sign-out for one device. A person on the same network who
+gets the owner to type the code into a look-alike page within 120 seconds can
+use it; the command prints the exact address to open. One host process holds
+the pending codes in memory, so a restart drops them and the owner makes a new
+code. Not measured yet: a phone browser, and the whole journey on a real second
+device. Linux, macOS and WSL hosts keep the password form and refuse both code
+endpoints. The steps for the owner are in the
+[deployment guide](../DEPLOYMENT.md#windows-host-reach-unified-from-another-device).
 
 ### Background lifetime
 
@@ -1867,6 +2205,85 @@ Do not use LocalSystem or S4U to avoid account-password prompts.
 Use absolute executable/data/workspace/shared-state paths and explicit quoting.
 Configure indefinite execution, restart-on-failure and battery behavior
 deliberately. Automatic logon startup must not open a browser.
+
+**The task after a computer rename (measured November 15, 2026).** The app
+registers the task with the owner SID in the principal and in the sign-in
+trigger. Task Scheduler keeps the principal as the SID. It stores the trigger's
+user as a name, `COMPUTER\user`, whatever spelling registration gave, and it
+never rewrites that name: not when the account or the computer is renamed, and
+not when the same definition is registered again. It refuses to register a
+trigger user that does not resolve at that moment. After the computer's name
+changes, Windows still starts the task at sign-in, and `LookupAccountNameW`
+maps the stored name, and the old computer name alone, to nothing (error 1332).
+Measured on Windows Server 2022 and 2025 and on Windows 11 ARM64 runners, and
+in Windows Sandbox, which renames its guest at every boot.
+
+The ownership check compares the whole definition with the one that the app
+generates from the task's own launch record. For the trigger's user text it
+accepts exactly three forms:
+
+1. the owner SID as text;
+2. a name that Windows maps to the owner's user account;
+3. a name `authority\account` that Windows maps to nothing, when the authority
+   alone also maps to nothing and the account part alone maps to the owner's
+   user account.
+
+Form 3 is the renamed computer. It is an equivalence for this one text, not
+proof of who made the task. It also accepts a trigger that someone with the
+owner's or an administrator's rights had set to another account of the same
+account name, once that account's authority no longer exists (and the two
+variants in which an account was also renamed or deleted). In each of them the
+task still runs as the owner, with least privilege and the app's exact action:
+the principal, the task name, the action and every setting stay an exact
+comparison. An authority that still exists is refused, so a deleted or renamed
+account is not accepted. A lookup that Windows did not answer is not "no such
+name": the check then refuses and says that it could not check.
+
+Limits. A renamed Windows account is still refused (the task then needs a new
+registration). On a domain member, a local account with the owner's account
+name makes form 3 refuse a domain owner. Domain-joined, Entra-joined and
+offline PCs are not measured.
+
+An installation whose launcher predates this rule is not covered. The launcher
+runs the check before any app version starts, and an in-app update does not
+replace the launcher. After a computer rename such a launcher still refuses
+the task that holds the old name, with the earlier messages. The refusal
+ends when the stored name maps to the account again (the PC gets its old name
+back), and with one of two repairs: a launcher that has the rule, or a new
+task. None of the three is measured on a PC.
+
+- A launcher that has the rule. For an installation that the setup file made,
+  only `amplifier_web.windows_launcher_refresh` replaces the launcher. A
+  second setup run does not: on an installed PC setup offers to add missing
+  Start-menu and Apps-list entries and to open the app (with a program file
+  missing it offers nothing), and it does not install the program files
+  again. Nothing in the app or in setup runs the refresh; a person runs it,
+  with the Python of the active app version. The refresh has its own
+  conditions (for one, it installs nothing when no newer app version is
+  active). It reads the task with the active app version's ownership check.
+  So after a rename the refresh ends at that read and changes nothing, unless
+  the active app version has this rule.
+- A new task. The person deletes the task in Task Scheduler, restarts the PC
+  and opens Amplifier. A start without a task registers a new one when its
+  own checks pass, and Task Scheduler stores the name of that moment. A
+  launcher older than 0.98.6 can run the long first-start preparation at that
+  start. The launcher is unchanged, so a later computer rename brings the
+  refusal back.
+
+An installation that is renamed while both its launcher and its active app
+version predate the rule cannot update itself, because the app does not run.
+Of the two repairs, only a new task helps there.
+
+When the check does not confirm the task, the launcher says that it could not
+confirm that the entry belongs to this installation, names the entry, and
+gives the steps to delete it; a new start then registers a new entry with the
+saved port and settings. It does not say that the entry was changed, because
+it cannot know that. When Windows gave no answer about the account, it asks
+for a restart and deletes nothing. Start, Status, Stop and Uninstall each have
+this text; before, they named the internet connection, an unreachable service
+manager, or a Task Scheduler that could not be read. A start at sign-in shows
+no window: the task ends with an error, and the person sees the text at the
+next start from the Start menu.
 
 Work survives browser/terminal closure while the owner remains signed in.
 This model does **not** promise execution after sign-out or before sign-in.

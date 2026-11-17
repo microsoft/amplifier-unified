@@ -18,14 +18,17 @@ from acp.schema import (AgentCapabilities, AgentMessageChunk, InitializeResponse
                         McpCapabilities, NewSessionResponse, PromptResponse,
                         ResumeSessionResponse, SessionCapabilities,
                         SessionResumeCapabilities, TextContentBlock,
-                        ToolCallProgress, ToolCallStart)
+                        ToolCallProgress, ToolCallStart, ToolCallUpdate, PermissionOption)
 from aiohttp import WSMsgType, web
 
 from .execution_owner import ExecutionOwner, ensure_observers
 from .errors import AppError
 from .runtime_protocol import MAX_MESSAGE_BYTES
+from . import approval_policy
 
 RETIREMENT = 'com.microsoft.amplifier.retirement'
+# Implementation-specific failure; ACP reserves -32000 for authentication.
+_REQUEST_FAILED = -31000
 
 
 def _http_servers(servers):
@@ -128,8 +131,24 @@ class HostAgent:
 
     def on_connect(self, connection):
         self.client = connection
+        self.owner.request_permission = self.request_permission
         self.owner.retirement_hint = lambda identity: connection.ext_notification(
             'amplifier/retirementRequested', {'sessionId': identity})
+
+    async def request_permission(self, identity, approval):
+        details = approval.get('details', {})
+        text = str(approval.get('prompt') or approval.get('title') or 'Allow this request?')
+        if details:
+            text += '\n\n' + json.dumps(details, ensure_ascii=False, indent=2)
+        options = [PermissionOption(option_id='allow', name='Allow this request', kind='allow_once')]
+        options.append(PermissionOption(option_id='deny', name='Deny', kind='reject_once'))
+        response = await self.client.request_permission(session_id=identity,
+            tool_call=ToolCallUpdate(tool_call_id=approval['id'], title=approval.get('title') or 'Permission needed',
+                status='pending', kind='other', raw_input=details,
+                field_meta={approval_policy.NAMESPACE: approval['policyScope']} if approval.get('policyScope') else None,
+                content=[{'type': 'content', 'content': {'type': 'text', 'text': text}}]), options=options)
+        outcome = response.outcome
+        return outcome.option_id if outcome.outcome == 'selected' else 'deny'
 
     def require_initialized(self):
         if not self.initialized:
@@ -139,11 +158,14 @@ class HostAgent:
         if self.initialized:
             raise RequestError.invalid_request({'details': 'Connection already initialized.'})
         self.initialized = True
+        policy = approval_policy.negotiate(kwargs.get(approval_policy.NAMESPACE))
+        self.owner.approval_policy = policy is not None
         return InitializeResponse(protocol_version=1, agent_capabilities=AgentCapabilities(
             load_session=False, mcp_capabilities=McpCapabilities(http=True, sse=False),
             session_capabilities=SessionCapabilities(resume=SessionResumeCapabilities())),
             field_meta={RETIREMENT: {'version': 1, 'method': '_amplifier/retire',
-                'notification': '_amplifier/retirementRequested'}})
+                'notification': '_amplifier/retirementRequested'},
+                **({approval_policy.NAMESPACE: policy} if policy else {})})
 
     async def new_session(self, cwd, mcp_servers=None, **kwargs):
         self.require_initialized()
@@ -152,7 +174,7 @@ class HostAgent:
                 identity = await self.owner.create(cwd, mcp_servers=_http_servers([
                     row.model_dump(mode='json', by_alias=True) for row in (mcp_servers or [])]))
             except (AppError, ValueError, OSError) as error:
-                raise RequestError(-32000, str(error)) from None
+                raise RequestError(_REQUEST_FAILED, str(error)) from None
         return NewSessionResponse(session_id=identity)
 
     async def resume_session(self, session_id, cwd, mcp_servers=None, **kwargs):
@@ -164,7 +186,7 @@ class HostAgent:
                 identity = await self.owner.attach(session_id, cwd, mcp_servers=_http_servers([
                     row.model_dump(mode='json', by_alias=True) for row in (mcp_servers or [])]))
             except (AppError, ValueError, OSError) as error:
-                raise RequestError(-32000, str(error)) from None
+                raise RequestError(_REQUEST_FAILED, str(error)) from None
             if identity != session_id:
                 raise RequestError.internal_error({'details': 'Owner did not attach the exact saved identity.'})
         return ResumeSessionResponse()
@@ -222,9 +244,9 @@ class HostAgent:
         try:
             result = await self.owner.prompt(session_id, input_id, '\n'.join(block.text for block in prompt), observe)
         except (AppError, ValueError, RuntimeError) as error:
-            raise RequestError(-32000, str(error)) from None
+            raise RequestError(_REQUEST_FAILED, str(error)) from None
         if result.get('outcome') not in {'completed', 'cancelled'}:
-            raise RequestError(-32000, 'Outcome unresolved; inspect retained owner state before retrying.')
+            raise RequestError(_REQUEST_FAILED, 'Outcome unresolved; inspect retained owner state before retrying.')
         if result.get('text') and not streamed:
             await text(result['text'])
         return PromptResponse(stop_reason='end_turn' if result['outcome'] == 'completed' else 'cancelled')
@@ -244,7 +266,7 @@ class HostAgent:
             async with self.creation:
                 disposition = await self.owner.retire(params['sessionId'])
         except (AppError, ValueError, RuntimeError) as error:
-            raise RequestError(-32000, str(error)) from None
+            raise RequestError(_REQUEST_FAILED, str(error)) from None
         return {'sessionId': params['sessionId'], 'disposition': disposition}
 
 

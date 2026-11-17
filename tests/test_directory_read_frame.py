@@ -138,6 +138,69 @@ async def test_real_browser_snapshot_prepares_each_admitted_row_once(service, mo
     assert calls == [row['id'] for row in service._state['sessions']]
 
 
+@pytest.mark.parametrize('operation', ['chats', 'pinned_navigation'])
+async def test_shell_query_fence_prepares_live_rows_once_and_observes_current_facts(service, tmp_path, monkeypatch, operation):
+    from amplifier_web.history_directory_observations import revision
+    from amplifier_web.native_catalog import NativeCatalog
+    from test_native_directory import seed
+
+    state = service._state
+    row = service._session('alpha', hydrate=False)
+    row.update(manualUnread='unread-alpha', approvals=[
+        {'id': 'allow-alpha', 'title': 'Original request', 'status': 'pending'}])
+    state['pinnedSessionIds'] = ['alpha', 'saved-00005']
+    service._save_changes(sessions={'alpha', 'beta'}, globals={'pinnedSessionIds'})
+    notice = service.db.execute(
+        "SELECT key,fingerprint FROM history_directory_notices WHERE owner=? AND key=?",
+        ('alpha', 'unread:alpha')).fetchone()
+    assert notice is not None
+    state['attentionRead'] = {notice[0]: notice[1]}
+    directory = service.directory
+    catalog = NativeCatalog(tmp_path / 'fence-native.sqlite3', tmp_path / 'native')
+    seed(catalog, tmp_path / 'workspace', 27000)
+    directory.bind(catalog)
+    queries = service.shell.resources.queries
+    calls = observe(monkeypatch)
+    app_revision = state['revision']
+
+    def current_fence():
+        before = deepcopy(row)
+        calls.clear()
+        actual = queries._fence(operation)
+        assert calls == [item['id'] for item in state['sessions']]
+        assert directory._read_frame.get() is None
+        assert row == before and state['revision'] == app_revision
+        # Retain the original unscoped computation as an exact value oracle.
+        # It still rechecks live facts, native generations and SQLite fences.
+        with monkeypatch.context() as legacy:
+            legacy.setattr(history_directory.HistoryDirectory, 'observation_revision',
+                property(lambda owner: revision(owner, owner._frozen_state
+                    if owner.snapshot else owner.service._state)))
+            assert queries._fence(operation) == actual
+        return actual
+
+    first = current_fence()
+    row['title'] = 'Changed between reads without publication'
+    renamed = current_fence()
+    assert renamed != first
+    row['approvals'][0]['title'] = 'Changed nested request'
+    approval = current_fence()
+    assert approval != renamed
+    state['attentionRead'].clear()
+    unread = current_fence()
+    assert unread != approval
+
+    # A temporary directory edit must not survive rollback or reuse a prior
+    # uncommitted semantic generation. The completion fence remains current.
+    saved = directory.resolve('saved-00001')
+    saved['title'] = 'Uncommitted dormant title'
+    directory.sync([saved], state)
+    assert service.db.in_transaction
+    assert current_fence() != unread
+    service.db.rollback()
+    assert current_fence() == unread
+
+
 async def test_explicit_session_projection_retains_unscoped_hydration(service, monkeypatch):
     seen = []
     def project(session_id):

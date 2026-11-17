@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from contextlib import contextmanager, ExitStack
 import errno
 import os
+import socket
 import sys
 from pathlib import Path
 import threading
@@ -98,8 +100,10 @@ def _parse() -> argparse.Namespace:
     runtime.add_argument("runtime_command", choices=["prepare", "status"])
     runtime.add_argument("--json", action="store_true", help=argparse.SUPPRESS)
     browsers = subcommands.add_parser("browsers", help="Manage signed-in browsers")
-    browsers.add_argument("browsers_command", choices=["sign-out"],
-                          help="sign-out: sign out every browser on every device")
+    browsers.add_argument("browsers_command", choices=["sign-out", "code"],
+                          help="sign-out: sign out every browser on every device; "
+                               "code: make a one-use code that signs in a browser on another device (Windows host)")
+    browsers.add_argument("--origin", metavar="URL", help="code: the address that the other device opens")
     setup_tls = subcommands.add_parser("setup-tls", help="Create or inspect the app-owned local CA")
     setup_tls.add_argument("mode", nargs="?", choices=["status", "default", "force", "export"], default="default")
     reset = subcommands.add_parser("reset", help="Reinstall a clean app and runtime while preserving user data")
@@ -250,19 +254,98 @@ def _serve(args, data_dir: Path, *, task_runner=None) -> None:
             _serve_unlocked(args, data_dir, task_runner=task_runner)
 
 
+@contextmanager
+def _listener_sockets(binds, port):
+    """Reserve real listeners before application startup, without a rebind gap.
+
+    Each configured name must succeed. Like asyncio's per-name resolution, an
+    unavailable address family may yield to another result of that same name.
+    Keep raw bind errors: asyncio discards EADDRNOTAVAIL and loses its errno.
+    """
+    with ExitStack() as owned:
+        sockets = []
+        try:
+            for host in binds:
+                infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM,
+                                           flags=socket.AI_PASSIVE)
+                if not infos:
+                    raise socket.gaierror(socket.EAI_NONAME, "No listener addresses")
+                available = []
+                unavailable = None
+                for family, kind, protocol, _, address in dict.fromkeys(infos):
+                    try:
+                        sock = socket.socket(family, kind, protocol)
+                    except OSError as exc:
+                        if exc.errno not in {errno.EAFNOSUPPORT, errno.EPROTONOSUPPORT}:
+                            raise
+                        unavailable = exc
+                        continue
+                    owned.callback(sock.close)
+                    if os.name == "posix" and sys.platform != "cygwin":
+                        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, True)
+                    if family == socket.AF_INET6 and hasattr(socket, "IPPROTO_IPV6"):
+                        sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, True)
+                    try:
+                        sock.bind(address)
+                    except OSError as exc:
+                        if exc.errno != errno.EADDRNOTAVAIL:
+                            raise
+                        sock.close()
+                        unavailable = exc
+                        continue
+                    # Strong reservation, including overlapping wildcard binds.
+                    # TCP may queue here; authenticated HTTP health is not ready.
+                    sock.listen(128)
+                    sock.setblocking(False)
+                    available.append(sock)
+                if not available:
+                    assert unavailable is not None
+                    raise unavailable
+                sockets.extend(available)
+        except socket.gaierror:
+            # EAI codes can collide numerically with ordinary errno values.
+            raise SystemExit(
+                f"Could not resolve configured bind address {host}, port {port}.\n"
+                "Check the bind hostname and this computer's name resolution. "
+                "No running process was stopped or replaced."
+            ) from None
+        except OSError as exc:
+            guidance = {
+                errno.EADDRINUSE: 'The address or port is already in use. Check the existing service with amplifier-unified service status, or choose another port with --port.',
+                errno.EADDRNOTAVAIL: 'The configured bind address is not available on this computer. Check its current network addresses and your bind setting.',
+                errno.EACCES: 'Permission was denied. Check permission to use the configured address and port; choose an allowed port with --port if needed.',
+                errno.EAFNOSUPPORT: 'The configured address family is not supported on this computer. Check its network support and your bind setting.',
+                errno.EPROTONOSUPPORT: 'The configured address family is not supported on this computer. Check its network support and your bind setting.',
+            }.get(exc.errno)
+            if guidance is None:
+                raise
+            raise SystemExit(
+                f"Could not start Amplifier on {host}, port {port}.\n"
+                f"{guidance}\nNo running process was stopped or replaced."
+            ) from None
+        # Do not classify exceptions from application construction or serving as
+        # bind failures. The same owned sockets close on every exit, even when
+        # aiohttp never attaches them or only attaches a prefix.
+        yield sockets
+
+
 def _serve_unlocked(args, data_dir: Path, *, task_runner=None) -> None:
-    from aiohttp import web
     from .deployment import load_server_config
-    overrides = _server_overrides(args)
-    config = load_server_config(data_dir, overrides=overrides)
+    from .tls import ssl_context
+    config = load_server_config(data_dir, overrides=_server_overrides(args))
     os.environ["AMPLIFIER_WEB_HOME"] = str(data_dir)
+    secure = ssl_context(data_dir, config)
+    with _listener_sockets(config["bind"], config["port"]) as sockets:
+        _serve_listeners(args, data_dir, config, secure, sockets, task_runner=task_runner)
+
+
+def _serve_listeners(args, data_dir, config, secure, sockets, *, task_runner=None):
+    from aiohttp import web
     from .settings_migration import migrate_settings
     migrate_settings(data_dir, [args.workspace])
     from .host.config import load_config
     load_config(args.workspace)
     from .server import create_app
-    from .tls import ssl_context
-    secure = ssl_context(data_dir, config)
     scheme = "https" if secure else "http"
     browser_host = {'0.0.0.0': '127.0.0.1', '::': '::1'}.get(config['bind'][0], config['bind'][0])
     if ':' in browser_host:
@@ -270,13 +353,11 @@ def _serve_unlocked(args, data_dir: Path, *, task_runner=None) -> None:
     url = (config["public_origins"][0] if config["public_origins"] else
            f"{scheme}://{browser_host}:{config['port']}")
     timer = None
-    listener_ready = False
 
     def listening(_message):
-        # aiohttp calls this only after every configured socket has bound.
-        # Application startup signals run earlier and cannot establish this.
-        nonlocal timer, listener_ready
-        listener_ready = True
+        # aiohttp calls this only after every held socket has attached.
+        # TCP reservation and application startup alone cannot establish this.
+        nonlocal timer
         if task_runner is not None:
             task_runner.phase("listening")
         print(f"Amplifier Unified · listening on {', '.join(config['bind'])}, port {config['port']} ({scheme})\n"
@@ -304,20 +385,7 @@ def _serve_unlocked(args, data_dir: Path, *, task_runner=None) -> None:
                 return app
             app = managed_app()
         web.run_app(app,
-                    host=config["bind"], port=config["port"], ssl_context=secure, print=listening, access_log_class=SafeAccessLogger, access_log_format='%a %t "%r" %s %b')
-    except OSError as exc:
-        guidance = {
-            errno.EADDRINUSE: 'The address or port is already in use. Check the existing service with amplifier-unified service status, or choose another port with --port.',
-            errno.EADDRNOTAVAIL: 'The configured bind address is not available on this computer. Check its current network addresses and your bind setting.',
-            errno.EACCES: 'Permission was denied. Check permission to use the configured address and port; choose an allowed port with --port if needed.',
-        }.get(exc.errno)
-        # A filesystem error during application startup is not a bind failure.
-        if listener_ready or guidance is None or exc.filename is not None:
-            raise
-        raise SystemExit(
-            f"Could not start Amplifier on {', '.join(config['bind'])}, port {config['port']}.\n"
-            f"{guidance}\nNo running process was stopped or replaced."
-        ) from None
+                    sock=sockets, ssl_context=secure, print=listening, access_log_class=SafeAccessLogger, access_log_format='%a %t "%r" %s %b')
     except PublishingError as exc:
         # The same library error can also mean unsupported OS locking. Only an
         # actual held-lock conflict establishes that another process owns it.
@@ -335,12 +403,19 @@ def _serve_unlocked(args, data_dir: Path, *, task_runner=None) -> None:
             timer.cancel()
 
 
-def _open_browser(args, data_dir, config):
+def _say_waiting():
+    try:
+        print("Amplifier is not ready yet. Waiting up to a minute for it.", file=sys.stderr, flush=True)
+    except OSError:
+        pass  # Nobody reads this output any more. The wait itself goes on.
+
+
+def _open_browser(args, data_dir, config, *, wait=0.0):
     if args.no_open:
         print("Browser opening disabled; no browser grant was issued.")
         return
     if browser_entry.is_windows():
-        url = asyncio.run(browser_entry.owner_browser_url(data_dir, config))
+        url = asyncio.run(browser_entry.owner_browser_url(data_dir, config, wait=wait, waiting=_say_waiting))
     else:
         from types import SimpleNamespace
         from .update_readiness import probe_targets
@@ -354,6 +429,48 @@ def _open_browser(args, data_dir, config):
         raise browser_entry.BrowserEntryUnavailable("Could not open the browser. " + browser_entry.REOPEN) from None
     if not opened:
         raise browser_entry.BrowserEntryUnavailable("The browser did not accept the open request. " + browser_entry.REOPEN)
+
+
+def _code_origin(config, given):
+    """The address a code is for: the given one, or the only one for other devices."""
+    from urllib.parse import urlsplit
+    from .deployment import validate_origin
+    remote = [origin for origin in config["public_origins"] if origin.startswith("https://")
+              and not browser_entry.loopback_host(urlsplit(origin).hostname)]
+    if not remote:
+        raise SystemExit("Amplifier has no address for other devices yet; add one with "
+                         "amplifier-unified config set public_origins (the deployment guide has the steps).")
+    if given is None and len(remote) == 1:
+        return remote[0]
+    try:
+        given = validate_origin(given.rstrip("/")) if given is not None else None
+    except ValueError:
+        given = ""
+    if given in remote:
+        return given
+    raise SystemExit(("That is not one of Amplifier's addresses for other devices." if given is not None
+                      else "Amplifier has more than one address for other devices.")
+                     + " Run the command again with --origin and one of these:\n  " + "\n  ".join(remote))
+
+
+def _browser_code(args, data_dir):
+    """Show the owner one code. The pinned helper alone reads the control credential."""
+    if not browser_entry.is_windows():
+        raise SystemExit("On this computer, sign in with the host account password on the sign-in page.")
+    from .deployment import load_server_config
+    try:
+        config = load_server_config(data_dir, overrides=_server_overrides(args))
+        origin = _code_origin(config, args.origin)
+        code = asyncio.run(browser_entry.owner_browser_code(data_dir, config, origin))
+    except browser_entry.BrowserEntryUnavailable as exc:
+        raise SystemExit(str(exc)) from None
+    except (OSError, ValueError):
+        raise SystemExit("Could not make a code. " + browser_entry.NEW_CODE) from None
+    print(f"Open {origin} on the other device and type this code within two minutes:")
+    print()
+    print("    " + browser_entry.CodeStore.display(code))
+    print()
+    print("The code works once.")
 
 
 def _open_browser_safely(args, data_dir, config):
@@ -507,9 +624,14 @@ def main():
         _config(args, data_dir)
         return
     if args.command == "browsers":
-        from .auth import sign_out_all
+        if args.browsers_command == "code":
+            return _browser_code(args, data_dir)
+        from .auth import SignOutUncertain, sign_out_all
         try:
             sign_out_all(data_dir)
+        except SignOutUncertain:
+            raise SystemExit("Amplifier could not confirm that every browser is signed out. "
+                             "Run the command again.") from None
         except (OSError, ValueError):
             raise SystemExit("Browsers were NOT signed out: the sign-out time could not be saved in "
                              f"{data_dir}. Nothing was changed.") from None
@@ -575,11 +697,16 @@ def main():
         # Explicit foreground-owner entry only. Default Windows launch and
         # Scheduler/installer activation remain independently gated above.
         try:
-            return _open_browser(args, data_dir, config)
+            # The host can be away for some seconds: it restarts to finish an
+            # update. Wait for it, then open the browser once.
+            _open_browser(args, data_dir, config, wait=browser_entry.HOST_WAIT)
         except (OSError, ValueError):
             raise SystemExit("Cannot open the owned host. " + browser_entry.REOPEN) from None
         except browser_entry.BrowserEntryUnavailable as exc:
             raise SystemExit(str(exc)) from None
+        if not args.no_open:
+            print(browser_entry.OPENED, flush=True)
+        return
     if args.command in {"run", "continue", "tool", "access"}:
         os.environ["AMPLIFIER_WEB_HOME"] = str(data_dir)
         from .settings_migration import migrate_settings

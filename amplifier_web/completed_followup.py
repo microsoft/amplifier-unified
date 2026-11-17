@@ -39,7 +39,7 @@ def independent_authority(service, source, target):
             'targetAssignmentId': assignment['id'] if assignment else None}
 
 
-def matches_request(service, receipt, task, *, for_reply=False):
+def matches_request(service, receipt, task):
     proof = receipt.get('completedTaskFollowup')
     if (not isinstance(proof, dict) or proof.get('version') not in {1, 2}
             or receipt.get('commandAction') != 'coordination.send'
@@ -61,13 +61,4 @@ def matches_request(service, receipt, task, *, for_reply=False):
         if (not authority or any(proof.get(key) != value for key, value in authority.items())
                 or source.get('interruptionRevision', 0) != receipt.get('sourceInterruptionRevision')):
             return False
-    if task.get('status') == 'completed' and matches(task, proof):
-        return True
-    # Reporting may describe native objectives created within this correction.
-    # This never admits another input, and does not search or rewrite history.
-    previous = task.get('followupOf') or {}
-    return bool(for_reply and task.get('status') in {'active', 'completed'}
-                and previous.get('taskId') == proof['taskId']
-                and previous.get('revision') == proof['taskRevision']
-                and previous.get('inputId') == receipt.get('inputId')
-                and previous.get('generationId'))
+    return task.get('status') == 'completed' and matches(task, proof)

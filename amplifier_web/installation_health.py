@@ -124,11 +124,21 @@ async def _status_once(home, wait=0):
     from .update_readiness import probe_targets, running_identity
     import yaml
     expected = running_identity()
+    problem = None
     try:
         initial_state = await asyncio.to_thread(service_state, home)
-    except (OSError, RuntimeError, subprocess.SubprocessError):
-        initial_state = 'unavailable'
+    except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+        initial_state, problem = 'unavailable', error
     if initial_state == 'unavailable':
+        from .windows_service import TaskNotConfirmed
+        if isinstance(problem, TaskNotConfirmed):
+            # Task Scheduler answered. The task exists and is not used: say that,
+            # not that the service manager is out of reach.
+            return {'ok': False, 'service': initial_state, 'message': str(problem),
+                    'nextStep': 'Restart Windows, then read the status again.' if problem.retry else
+                                f'Review the task {problem.entry} in Task Scheduler. Amplifier uses '
+                                'only a task that it can confirm as its own.',
+                    'entry': {'name': problem.entry, 'retry': problem.retry}}
         from .reset import service_manager_help
         return {'ok': False, 'service': initial_state, 'message': "The background service manager could not be reached.",
                 'nextStep': service_manager_help() if sys.platform == 'linux' else 'Sign in to your desktop account and retry service status.'}

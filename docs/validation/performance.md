@@ -86,7 +86,18 @@ including exact source-byte hashing and refusal of intervening mutations. Compar
 actual copy/publication paths and preserve source HEAD, staged blobs/modes, failure
 and cancellation cleanup; a manual index refresh is not production qualification.
 
+Fresh installed-graph verification reads each physical checkout once with at most
+two readers per call, preserves failure ordering, and settles all started reads
+before synchronous return or raise; this adds no async Stop guarantee or live
+latency claim.
+
 ## Separate current presentation from historical evidence
+
+Selecting an already admitted chat uses the existing private client commit when
+its workspace needs no restoration. Unrelated hidden workspaces must not force
+both conversations through history serialization. Keep actual workspace
+restoration, unsaved Canvas changes and dormant admission on their existing
+shared-write path; selection must also preserve pending runtime publications.
 
 The native status adapter prepares its live scalar rows once per synchronous
 poll, sharing the existing directory read frame across its observation reads.
@@ -94,6 +105,13 @@ Each leased query retains its own durable/native fences, and the next poll must
 observe in-place edits even without a publication or revision bump. Compare small
 and paginated catalogs, cold and warm polls, and exact public facts; this reduces
 status polling cost, not the model's response time or all chat-loading work.
+
+Direct shell-resource assembly and an uninterrupted publication to bound web
+clients share that same synchronous read boundary. Prepare admitted metadata
+once while preserving each client's selection, private drafts and detached
+snapshot. A publication containing any full/session or non-web reader keeps its
+existing path because those readers can hydrate mutable owners. End reuse before
+callbacks or awaits; each new call still observes in-place edits and query fences.
 
 The first web chat view contains at most 20 recent messages. Explicit earlier
 history reads keep their existing cursor and up-to-100-message page; canonical
@@ -669,3 +687,18 @@ Include actual Work-wrapped Full/incomplete-assurance children sharing the enclo
 checkpoint, and verify that their assurance eligibility remains unchanged.
 This reduces nested completion work without eliminating the remaining enclosing
 transcript persistence cost or adding a stronger crash-recovery guarantee.
+
+Next-message preparation uses a private startup projection before its detached
+copy, while Send retains its original complete frozen snapshot. Ordinary startup
+does not copy execution or message history again; forks retain their full captured
+messages. Qualify selected-field aliases, pending choices, authority, Stop and
+owned preparation failures without changing direct `prepare()` return semantics.
+Measure the first capture and second preparation copy separately: reducing the
+second copy does not establish a native startup or history-lock latency improvement.
+
+Automatic host-history diagnostics separate `history.merge`,
+`history.activity.apply` and `history.publish`. The enclosing
+`history.native.refresh` includes execution-owner acquisition, activity and
+publication, so these durations overlap. Counts are phase calls, not message
+counts; these clocks do not measure the worker's native history load. Loading,
+busy and error paths retain the existing inclusive `history.load` timing.
