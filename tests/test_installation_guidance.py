@@ -70,7 +70,15 @@ class InstallationGuidanceTests(unittest.TestCase):
         offered = [row["name"] for row in json.loads(source("amplifier_web/ai_services.json"))]
         self.assertEqual(sorted(re.findall(r"\*\*([^*]+?):?\*\*", folder)), sorted(offered))
         statements = (
-                "- **OpenAI API:** in our test on a PC, a chat wrote no file outside the folder.",
+                # What the tests on a PC looked at, and what they found. Their probe reads names directly in
+                # a fixed list of places of the Windows account. It does not look inside other folders, and it
+                # does not see every file that a chat can write. So this statement must not say that a chat
+                # wrote no file outside the folder.
+                "- **OpenAI API:** in our tests on a PC, we looked after a chat for a file or folder with "
+                "\"amplifier\" in its name. We looked directly in the usual places of the Windows account, "
+                "such as the profile folder, AppData, Documents and the Desktop. Outside the folder, the only "
+                "one from Amplifier was its Start-menu entry, which setup makes. We did not look inside other "
+                "folders there or on the rest of the disk.",
                 # Both halves were seen on a PC: the file outside the folder with an earlier version, and
                 # the file inside the folder with 0.106.3. The probes of that test read names in the usual
                 # per-user places, not every file on the PC. So the statement says where the file was written
@@ -92,6 +100,7 @@ class InstallationGuidanceTests(unittest.TestCase):
                 "we have not tested this.")
         # The item is these sentences and nothing else: it must not say that nothing is outside the folder.
         self.assertEqual(folder.split(" depends on the AI connection: ", 1)[1], " ".join(statements))
+        self.assertNotIn("no file outside", folder)
         # "Amplifier writes that file inside the folder" is the host's rule, with that file name. The statement
         # names three versions: the last release without the rule, the first release with it, and the release
         # that was tested on a PC. This check refuses a version that does not exist yet, a first release with
