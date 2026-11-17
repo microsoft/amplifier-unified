@@ -244,6 +244,13 @@ never reclassifies an earlier refusal record as waiting: its form does not
 prove that only a connection was missing. A later completed update settles it.
 The installed-package reader runs Git for a package from a local checkout, so
 a caller without the installation's Git folder on PATH reads "not prepared".
+A reader of a private file can hold an object that another process replaced
+(`publish_private(replace=True)`). Windows then reports 0 links and a path below
+`$Extend\$Deleted` for it. That is `PrivateFileUnlinked` in `windows_files.py`,
+never a hardlink or an alias of the named file, and never accepted:
+`_existing` opens the name again and validates everything again, bounded in
+count and time. A handle that `_existing` returned can lose its name later; do
+not read a later `info()` of it as a refusal of the named file.
 A folder below the installation folder that the app itself uses as a session
 workspace gets a CLI project name that repeats the installation path, so its
 session paths pass the Windows limit with long paths off (the first chat of

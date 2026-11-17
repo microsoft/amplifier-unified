@@ -353,6 +353,8 @@ class PublicationTests(unittest.TestCase):
             self.rename_error = None
             self.discard_error = None
             self.post_error = False
+            self.superseded = False
+            self.existing_unlinked = 0
             self.renamed = False
             self.bytes = bytearray()
 
@@ -362,7 +364,9 @@ class PublicationTests(unittest.TestCase):
             self.events.append(("open", path.name, create))
             if not create and not cleanup and not self.present and not self.renamed:
                 raise FileNotFoundError(path)
-            return 10 if create or cleanup else 20
+            # 20 is the existing file; a higher number is an object that
+            # another publisher replaced after this open.
+            return 10 if create or cleanup else 20 + self.existing_unlinked
 
         def validate_acl(self, handle, *, private):
             self.events.append(("acl", handle))
@@ -370,6 +374,11 @@ class PublicationTests(unittest.TestCase):
         def info(self, handle, path, *, directory):
             if self.post_error and self.renamed:
                 raise OSError("post-rename check")
+            if self.superseded and self.renamed:
+                raise wf.PrivateFileUnlinked("another publisher replaced it")
+            if handle > 20:
+                self.existing_unlinked -= 1
+                raise wf.PrivateFileUnlinked("replaced after the open")
             return wf.FILE_INFO(volume=1, links=1, index_low=handle)
 
         def write(self, handle, content):
@@ -516,6 +525,29 @@ class PublicationTests(unittest.TestCase):
             self.pinned(api).publish_private("server.yaml", b"new", replace=True)
         self.assertFalse(any(event[0] == "discard" for event in api.events))
 
+    def test_publication_that_another_publisher_replaced_at_once_is_not_a_failure(self):
+        api = self.API()
+        api.present = api.superseded = True
+        self.pinned(api).publish_private("task-failure.json", b"mine", replace=True)
+        # Nothing but the name check is dropped for the object without a name.
+        self.assertGreater(len(api.events) - 1 - api.events[::-1].index(("acl", 10)),
+                           api.events.index(("move", True)))
+        self.assertFalse(any(event[0] == "discard" for event in api.events))
+        self.assertIn(("close", 10), api.events)
+
+    def test_existing_file_check_of_a_publication_opens_a_replaced_name_again(self):
+        api = self.API()
+        api.present, api.existing_unlinked = True, 2
+        with patch.object(wf.time, "sleep"):
+            self.pinned(api).publish_private("task-failure.json", b"mine", replace=True)
+        self.assertEqual(api.events.count(("open", "task-failure.json", False)), 3)
+        # Both replaced objects are closed before the name is opened again;
+        # the valid one is held until the publication ends.
+        closes = [event for event in api.events if event[0] == "close" and event[1] >= 20]
+        self.assertEqual(closes, [("close", 22), ("close", 21), ("close", 20)])
+        self.assertLess(api.events.index(("close", 21)), api.events.index(("move", True)))
+        self.assertLess(api.events.index(("move", True)), api.events.index(("close", 20)))
+
     def test_write_loops_on_partial_writes(self):
         api = wf._API.__new__(wf._API)
         written = bytearray()
@@ -532,6 +564,181 @@ class PublicationTests(unittest.TestCase):
         api.WriteFile = lambda *args: True
         with self.assertRaisesRegex(OSError, "zero"):
             api.write(1, b"x")
+
+
+class ReplacedObjectTests(unittest.TestCase):
+    """Decisions on injected Windows answers. The native cases show the real answers."""
+
+    PATH = wf.PureWindowsPath(r"C:\private\task-runtime.json")
+    DELETED = r"C:\$Extend\$Deleted\00230000000093B771E89098"  # what Windows names such an object
+
+    def api(self, links, finals=(), attributes=0x20):
+        """Successive link counts and final paths (None: the path query fails)."""
+        api = wf._API.__new__(wf._API)
+        self.links, self.finals = list(links), list(finals)
+
+        def information(handle, reference):
+            reference._obj.attributes, reference._obj.links = attributes, self.links.pop(0)
+            return 1
+
+        def final_path(handle, buffer, size, flags):
+            value = self.finals.pop(0)
+            if value is None:
+                return 0
+            buffer.value = "\\\\?\\" + value
+            return len(buffer.value)
+
+        api.GetFileInformationByHandle, api.GetFinalPathNameByHandleW = information, final_path
+        return api
+
+    def refused(self, api, error=PermissionError, *, directory=False, path=None):
+        with self.assertRaises(error) as refused:
+            api.info(7, path or self.PATH, directory=directory)
+        self.assertEqual((self.links, self.finals), ([], []), "an expected Windows query did not run")
+        return refused.exception
+
+    def test_one_link_at_the_exact_path_is_accepted(self):
+        info = self.api([1], [str(self.PATH)]).info(7, self.PATH, directory=False)
+        self.assertEqual(info.links, 1)
+
+    def test_two_links_stay_a_hardlink_refusal(self):
+        for links in (2, 3, 0xFFFFFFFF):
+            error = self.refused(self.api([links]))
+            self.assertIs(type(error), PermissionError)
+            self.assertIn("hardlink", str(error))
+
+    def test_no_link_is_its_own_answer_and_not_a_hardlink(self):
+        error = self.refused(self.api([0]), wf.PrivateFileUnlinked)
+        self.assertNotIn("hardlink", str(error))
+        # Every earlier handler of the refusal still catches it.
+        self.assertIsInstance(error, PermissionError)
+
+    def test_reparse_point_and_wrong_type_stay_refused_with_no_link(self):
+        for attributes in (0x420, 0x10):
+            error = self.refused(self.api([0], attributes=attributes))
+            self.assertIs(type(error), PermissionError)
+
+    def test_name_lost_between_the_two_queries_is_not_an_alias(self):
+        self.refused(self.api([1, 0], [self.DELETED]), wf.PrivateFileUnlinked)
+        self.refused(self.api([1, 0], [None]), wf.PrivateFileUnlinked)
+
+    def test_other_path_of_a_linked_object_stays_refused(self):
+        for final in (self.DELETED, r"C:\private\TASK-RUNTIME.JSON", r"C:\PRIVAT~1\task-runtime.json"):
+            error = self.refused(self.api([1, 1], [final]))
+            self.assertIs(type(error), PermissionError)
+            self.assertIn("alias", str(error))
+        error = self.refused(self.api([1, 1], [None]), OSError)
+        self.assertIs(type(error), OSError)
+
+    def test_directory_is_never_read_as_replaced(self):
+        folder = wf.PureWindowsPath(r"C:\private")
+        self.assertEqual(self.api([0], [str(folder)], 0x10).info(7, folder, directory=True).links, 0)
+        error = self.refused(self.api([0, 0], [r"C:\other"], 0x10), directory=True, path=folder)
+        self.assertIs(type(error), PermissionError)
+
+    class API:
+        """One answer per open of the name: replaced in open(), replaced at the
+        second check, a refusal to raise, or "file" for a valid file."""
+
+        def __init__(self, *answers):
+            self.answers, self.handles, self.closed = list(answers), [], []
+
+        def open(self, path, **options):
+            self.handles.append(30 + len(self.handles))
+            if self.answers[0] == "replaced in open":
+                self.answers.pop(0)
+                self.closed.append(self.handles[-1])  # open() closes what it refuses
+                raise wf.PrivateFileUnlinked("replaced")
+            if isinstance(self.answers[0], OSError) and self.answers[0].errno == 2:
+                raise self.answers.pop(0)
+            return self.handles[-1]
+
+        def validate_acl(self, handle, *, private):
+            pass
+
+        def info(self, handle, path, *, directory):
+            answer = self.answers.pop(0)
+            if answer == "replaced at the second check":
+                raise wf.PrivateFileUnlinked("replaced")
+            if isinstance(answer, OSError):
+                raise answer
+            return wf.FILE_INFO(volume=1, links=1)
+
+        def read(self, handle, *, limit):
+            return b"content of %d" % handle
+
+        def close(self, handle):
+            self.closed.append(handle)
+
+    def pinned(self, api):
+        pinned = wf.PinnedDirectory.__new__(wf.PinnedDirectory)
+        pinned.path, pinned._api = Path("private"), api
+        pinned._pins = [(Path("private"), 1, (1, 0, 1), True)]
+        self.checks = 0
+
+        def check():
+            self.checks += 1
+        pinned._check = check
+        return pinned
+
+    def test_replaced_object_is_closed_and_the_name_is_opened_and_validated_again(self):
+        api = self.API("replaced at the second check", "replaced in open", "file")
+        with patch.object(wf.time, "sleep") as sleep:
+            self.assertEqual(self.pinned(api).read_private("task-runtime.json", limit=64), b"content of 32")
+        self.assertEqual(api.handles, [30, 31, 32])
+        self.assertEqual(api.closed, [30, 31, 32])  # no replaced object stays open; the read one closes last
+        self.assertEqual(self.checks, 3)  # the pins are checked before each open
+        self.assertEqual(len(sleep.call_args_list), 2)
+
+    def test_file_that_never_settles_is_a_distinct_error_after_a_bounded_number_of_opens(self):
+        api = self.API(*["replaced at the second check", "replaced in open"] * wf._REPLACED_ATTEMPTS)
+        with patch.object(wf.time, "sleep") as sleep, self.assertRaises(wf.PrivateFileUnsettled) as unsettled:
+            self.pinned(api).read_private("task-runtime.json", limit=64)
+        self.assertEqual(len(api.handles), wf._REPLACED_ATTEMPTS)
+        self.assertEqual(api.closed, api.handles)
+        self.assertNotIsInstance(unsettled.exception, wf.PrivateFileUnlinked)
+        self.assertNotIn("hardlink", str(unsettled.exception))
+        self.assertIn("did not settle", str(unsettled.exception))
+        self.assertIsInstance(unsettled.exception.__cause__, wf.PrivateFileUnlinked)
+        waits = [call.args[0] for call in sleep.call_args_list]
+        self.assertEqual(len(waits), wf._REPLACED_ATTEMPTS - 1)
+        self.assertLessEqual(max(waits), 0.05)
+        self.assertLess(sum(waits), wf._REPLACED_SECONDS)
+        self.assertLessEqual(wf._REPLACED_ATTEMPTS, 8)
+        self.assertLessEqual(wf._REPLACED_SECONDS, 2)
+
+    def test_no_open_after_the_time_bound(self):
+        api = self.API(*["replaced at the second check"] * wf._REPLACED_ATTEMPTS)
+        clock = iter([100.0, 100.0 + wf._REPLACED_SECONDS - 0.001, 100.0 + wf._REPLACED_SECONDS])
+        with patch.object(wf.time, "sleep"), patch.object(wf.time, "monotonic", lambda: next(clock)), \
+                self.assertRaises(wf.PrivateFileUnsettled):
+            self.pinned(api).read_private("task-runtime.json", limit=64)
+        self.assertEqual(api.handles, [30, 31])
+
+    def test_real_refusal_is_not_opened_again(self):
+        for refusal in (PermissionError("private-file path is a reparse point, hardlink, or wrong type"),
+                        PermissionError("Windows private-file path has an alternate namespace/case alias"),
+                        PermissionError("Windows private-file DACL grants foreign access"),
+                        OSError("cannot validate final Windows private-file path")):
+            api = self.API(refusal)
+            with patch.object(wf.time, "sleep") as sleep, self.assertRaises(OSError) as refused:
+                self.pinned(api).read_private("task-runtime.json", limit=64)
+            self.assertIs(refused.exception, refusal)
+            self.assertEqual((api.handles, api.closed, sleep.call_count), ([30], [30], 0))
+
+    def test_refusal_of_the_file_that_has_the_name_now_stands(self):
+        refusal = PermissionError("private-file path is a reparse point, hardlink, or wrong type")
+        api = self.API("replaced at the second check", refusal)
+        with patch.object(wf.time, "sleep"), self.assertRaises(PermissionError) as refused:
+            self.pinned(api).read_private("task-runtime.json", limit=64)
+        self.assertIs(refused.exception, refusal)
+        self.assertEqual(api.closed, [30, 31])
+
+    def test_file_removed_after_the_open_is_absent(self):
+        api = self.API("replaced at the second check", FileNotFoundError(2, "gone"))
+        with patch.object(wf.time, "sleep"), self.assertRaises(FileNotFoundError):
+            self.pinned(api).read_private("task-runtime.json", limit=64)
+        self.assertEqual(api.closed, [30])
 
 
 @unittest.skipUnless(os.name == "nt", "requires native Windows local NTFS and profile ACLs")
@@ -973,8 +1180,11 @@ class ReplacedWhileReadNativeTests(unittest.TestCase):
             self.fail("replacing writer failed: " + process.communicate(timeout=10)[1])
 
     def forced(self, pinned, point, replacements):
-        """Run each replacement when the reader reaches `point` with the file open."""
-        api, target, opened = pinned._api, str(self.path / self.NAME), set()
+        """Run one replacement each time the reader reaches `point` with the file open.
+
+        Returns the list of the reader's opens of the name.
+        """
+        api, target, opened, opens = pinned._api, str(self.path / self.NAME), set(), []
         create, acl, final = api.CreateFileW, api.validate_acl, api.GetFinalPathNameByHandleW
 
         def fire():
@@ -983,6 +1193,8 @@ class ReplacedWhileReadNativeTests(unittest.TestCase):
 
         def create_file(path, *rest):
             handle = create(path, *rest)
+            if path.lower() == target.lower():
+                opens.append(path)
             if path == target and handle != wf._INVALID:
                 opened.add(handle)
                 if point == "after-open":
@@ -1000,6 +1212,7 @@ class ReplacedWhileReadNativeTests(unittest.TestCase):
             return final(handle, *rest)
 
         api.CreateFileW, api.validate_acl, api.GetFinalPathNameByHandleW = create_file, validate_acl, final_path
+        return opens
 
     def test_facts_of_an_object_that_was_replaced_while_open(self):
         api = wf._API()
@@ -1017,13 +1230,17 @@ class ReplacedWhileReadNativeTests(unittest.TestCase):
                 print(f"FACT replaced-open-object links={info.links} attributes={info.attributes:#x} "
                       f"final_path_length={length} final_path_error={error} "
                       f"final_path_tail={buffer.value[-60:]!r}")
-                try:
-                    api.validate_acl(handle, private=True)
-                    print("FACT replaced-open-object validate_acl=passes")
-                except OSError as refused:
-                    print(f"FACT replaced-open-object validate_acl={type(refused).__name__}: {refused}")
-                print(f"FACT replaced-open-object read={api.read(handle, limit=64)!r}")
+                # Windows reports no link, and a path that is not the name.
+                # Neither is a hardlink or an alias of the named file.
                 self.assertEqual(info.links, 0)
+                self.assertNotEqual(buffer.value.removeprefix("\\\\?\\"), str(target))
+                with self.assertRaises(wf.PrivateFileUnlinked):
+                    api.info(handle, target, directory=False)
+                # The object keeps its private ACL and its complete content,
+                # so a reader that validated it before the replacement reads
+                # the complete earlier file.
+                api.validate_acl(handle, private=True)
+                self.assertEqual(api.read(handle, limit=64), b"old")
             finally:
                 api.close(handle)
             self.assertEqual(pinned.read_private(self.NAME, limit=64), b"new")
@@ -1033,22 +1250,96 @@ class ReplacedWhileReadNativeTests(unittest.TestCase):
         writer = self.writer("step")
         with wf.directory(self.path, owned_root=self.root) as pinned:
             pinned.publish_private(self.NAME, b"old")
-            self.forced(pinned, "between-checks", [lambda: self.replace(writer, "new")])
+            opens = self.forced(pinned, "between-checks", [lambda: self.replace(writer, "new")])
             self.assertEqual(pinned.read_private(self.NAME, limit=64), b"new")
+            self.assertEqual(len(opens), 2)
 
     def test_replacement_right_after_the_open_reads_the_new_file(self):
         writer = self.writer("step")
         with wf.directory(self.path, owned_root=self.root) as pinned:
             pinned.publish_private(self.NAME, b"old")
-            self.forced(pinned, "after-open", [lambda: self.replace(writer, "new")])
+            opens = self.forced(pinned, "after-open", [lambda: self.replace(writer, "new")])
             self.assertEqual(pinned.read_private(self.NAME, limit=64), b"new")
+            self.assertEqual(len(opens), 2)
 
-    def test_replacement_before_the_final_path_query_reads_a_complete_file(self):
+    def test_replacement_before_the_final_path_query_reads_the_new_file(self):
+        # Windows gives the replaced object a path below $Extend\$Deleted. That
+        # is not an alternate path of the named file.
         writer = self.writer("step")
         with wf.directory(self.path, owned_root=self.root) as pinned:
             pinned.publish_private(self.NAME, b"old")
-            self.forced(pinned, "before-final-path", [lambda: self.replace(writer, "new")])
-            self.assertIn(pinned.read_private(self.NAME, limit=64), {b"old", b"new"})
+            opens = self.forced(pinned, "before-final-path", [lambda: self.replace(writer, "new")])
+            self.assertEqual(pinned.read_private(self.NAME, limit=64), b"new")
+            self.assertEqual(len(opens), 2)
+
+    def test_file_replaced_at_every_attempt_is_unsettled_after_a_bounded_number_of_opens(self):
+        writer = self.writer("step")
+        with wf.directory(self.path, owned_root=self.root) as pinned:
+            pinned.publish_private(self.NAME, b"old")
+            replacements = [lambda: self.replace(writer, "new")] * (wf._REPLACED_ATTEMPTS + 3)
+            opens = self.forced(pinned, "between-checks", replacements)
+            with self.assertRaises(wf.PrivateFileUnsettled) as unsettled:
+                pinned.read_private(self.NAME, limit=64)
+            self.assertNotIn("hardlink", str(unsettled.exception))
+            self.assertEqual(len(opens), wf._REPLACED_ATTEMPTS)
+            self.assertEqual(len(replacements), 3)
+            del replacements[:]
+            self.assertEqual(pinned.read_private(self.NAME, limit=64), b"new")
+
+    def test_refused_files_are_refused_at_the_first_open(self):
+        with wf.directory(self.path, owned_root=self.root) as pinned:
+            pinned.publish_private(self.NAME, b"sentinel")
+            opens = self.forced(pinned, "none", [])
+            with patch.object(wf.time, "sleep") as sleep:
+                with self.assertRaises((PermissionError, FileNotFoundError)) as alias:
+                    pinned.read_private(self.NAME.upper(), limit=64)
+                self.assertNotIsInstance(alias.exception, (wf.PrivateFileUnlinked, wf.PrivateFileUnsettled))
+                self.assertEqual(len(opens), 1)
+                os.link(self.path / self.NAME, self.root / "alias")
+                del opens[:]
+                with self.assertRaises(PermissionError) as hardlink:
+                    pinned.read_private(self.NAME, limit=64)
+                self.assertIs(type(hardlink.exception), PermissionError)
+                self.assertIn("hardlink", str(hardlink.exception))
+                self.assertEqual(len(opens), 1)
+                self.assertEqual(sleep.call_count, 0)
+        self.assertEqual((self.root / "alias").read_bytes(), b"sentinel")
+
+    def test_file_removed_while_the_reader_has_it_open_is_absent(self):
+        import hashlib
+        with wf.directory(self.path, owned_root=self.root) as pinned, \
+                wf.directory(self.path, owned_root=self.root) as remover:
+            pinned.publish_private(self.NAME, b"old")
+            digest = hashlib.sha256(b"old").hexdigest()
+            opens = self.forced(pinned, "between-checks", [lambda: remover.remove_private(self.NAME, digest)])
+            # A removal is not a hardlink either. The reader finds no file.
+            with self.assertRaises(FileNotFoundError):
+                pinned.read_private(self.NAME, limit=64)
+            self.assertEqual(len(opens), 2)
+            self.assertEqual(list(self.path.iterdir()), [])
+
+    def test_publication_whose_existing_file_was_replaced_still_publishes(self):
+        writer = self.writer("step")
+        with wf.directory(self.path, owned_root=self.root) as pinned:
+            pinned.publish_private(self.NAME, b"old")
+            self.forced(pinned, "between-checks", [lambda: self.replace(writer, "theirs")])
+            pinned.publish_private(self.NAME, b"mine", replace=True)
+            self.assertEqual(pinned.read_private(self.NAME, limit=64), b"mine")
+            self.assertEqual([path.name for path in self.path.iterdir()], [self.NAME])
+
+    def test_publication_that_another_process_replaces_at_once_is_not_a_failure(self):
+        writer = self.writer("step")
+        with wf.directory(self.path, owned_root=self.root) as pinned:
+            pinned.publish_private(self.NAME, b"old")
+            move = pinned._api.move
+
+            def moved_then_replaced(handle, destination, *, replace):
+                move(handle, destination, replace=replace)
+                self.replace(writer, "theirs")
+            pinned._api.move = moved_then_replaced
+            pinned.publish_private(self.NAME, b"mine", replace=True)
+            self.assertEqual(pinned.read_private(self.NAME, limit=64), b"theirs")
+            self.assertEqual([path.name for path in self.path.iterdir()], [self.NAME])
 
     def test_free_running_reads_against_a_replacing_process_never_fail(self):
         import time
@@ -1075,8 +1366,10 @@ class ReplacedWhileReadNativeTests(unittest.TestCase):
             finally:
                 (self.root / "stop").write_text("stop")
             output, error = writer.communicate(timeout=30)
-            print(f"FACT free-running reads={reads} opens={opens[0]} "
-                  f"replacements={output.strip()} failures={len(failures)}")
+            from collections import Counter
+            print(f"FACT free-running reads={reads} opens={opens[0]} (opens above reads: the name was "
+                  f"opened again) replacements={output.strip()} failures={len(failures)} "
+                  f"kinds={dict(Counter(failures))}")
             self.assertEqual(writer.returncode, 0, error)
             self.assertEqual(failures[:3], [])
 

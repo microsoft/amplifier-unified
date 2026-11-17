@@ -450,6 +450,77 @@ assert marker.read_text() == 'cleaned'
     assert marker.read_text() == "cleaned"
 
 
+_WRITING_HOST = """
+import sys, time
+from types import SimpleNamespace
+from amplifier_web import windows_task_runtime as runtime
+spec = SimpleNamespace(data_dir=sys.argv[1], registration_id="a" * 32, supervised=False)
+runner = runtime.Runner(spec)
+runner.phase("listening")
+print("ready", flush=True)
+count, deadline = 0, time.monotonic() + 60
+while time.monotonic() < deadline:
+    # The real host writes a phase twice at a stop. This one writes without a
+    # pause, so that each read of the stop command can meet a replacement.
+    runner.phase("listening")
+    count += 1
+    if count % 10 == 0 and runner.stop_requested():
+        break
+else:
+    raise SystemExit("no stop request arrived")
+for _ in range(200):
+    runner.phase("stopping")
+runner.phase("stopped")
+print(count, flush=True)
+"""
+
+
+@pytest.mark.skipif(os.name != "nt", reason="requires native Windows private files and process identity")
+def test_stop_reads_the_receipt_while_the_host_writes_its_phases():
+    """Stop Amplifier's reads of task-runtime.json against the host's real writer.
+
+    Clean room, November 16, 2026: the app stopped, and Stop Amplifier still
+    reported a failure, because one read met the host's replacement of the file.
+    """
+    import shutil
+    import time
+    import uuid
+    from amplifier_web import windows_files
+    root = windows_files.address(Path.home() / (".unified-runtime-test-" + uuid.uuid4().hex))
+    with windows_files.directory(root / "config/services", owned_root=root, create=True):
+        pass
+    target = SimpleNamespace(data_dir=str(root), registration_id="a" * 32)
+    host = subprocess.Popen([sys.executable, "-c", _WRITING_HOST, str(root)],
+                            cwd=Path(__file__).resolve().parents[1],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        assert host.stdout.readline().strip() == "ready", host.communicate(timeout=30)[1]
+        reads, failures, deadline = 0, [], time.monotonic() + 8
+        while reads < 2000 and time.monotonic() < deadline:
+            try:
+                assert runtime.read(target)["phase"] == "listening"
+            except OSError as failed:
+                failures.append(f"{type(failed).__name__}: {failed}")
+            reads += 1
+        # The real stop command: one request, then a read every 0.1 seconds
+        # until the exact host process has exited.
+        runtime.request_stop(target, timeout=45)
+        output, error = host.communicate(timeout=30)
+        print(f"FACT stop-reader reads={reads} failures={len(failures)} "
+              f"host-replacements-before-stop={output.strip()}")
+        assert host.returncode == 0, error
+        assert failures[:3] == []
+        assert runtime.read(target)["phase"] == "stopped"
+        assert runtime.observe(target) is None
+    finally:
+        if host.poll() is None:
+            host.kill()
+            host.communicate(timeout=10)
+        # Do not hide the case's own failure behind a folder that a late
+        # child still holds; the folder is below this profile only.
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def test_private_log_bounds_tail_and_coalesces_writes(monkeypatch):
     from amplifier_web import windows_files
     snapshots = []
