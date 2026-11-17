@@ -157,12 +157,13 @@ async def _probe(request):
     _runtime_transfer_fence()
     if request.get("source"):
         from amplifier_foundation import Bundle
+        from amplifier_web.source_imports import prepare
         previous_home = os.environ.get("AMPLIFIER_HOME")
         try:
             os.environ["AMPLIFIER_HOME"] = request["registryHome"]
             bundle = Bundle.from_dict({"bundle": {"name": "destination-execution-probe"},
                 "providers": [{"module": request["module"], "source": request["source"]}]})
-            await bundle.prepare(strict=True)
+            await prepare(bundle, strict=True)
         finally:
             if previous_home is None:
                 os.environ.pop("AMPLIFIER_HOME", None)

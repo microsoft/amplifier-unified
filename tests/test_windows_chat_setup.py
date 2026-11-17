@@ -22,6 +22,42 @@ finds none of the stopped preparation. That list is a sample, and the case
 prints it as a measurement. ``tests/test_windows_stopped_command.py`` shows
 with a controlled command and open process handles what a stop ends.
 
+In a new worker environment the app's decision-catalog helper finds no
+bytecode of the provider packages (in each run so far this case counted 0
+bytecode files before its first start). The helper imports those packages,
+and the app gives one start of it a time limit
+(``decision_accounts._catalog_snapshot``). On a hosted runner most first
+starts take 2 to 6 seconds of the app's 10. When the app's own start was the
+first one, it reached the limit twice, and the preparation then failed by
+timing (pull request 2270, run 44143862317, two attempts). So this case
+starts the helper itself, with the app's own command, directly before the
+app's first probe command in each new environment: twice.
+It measures both starts and counts the bytecode files before and after the
+first one. The app's own start then finds bytecode and has less to compile.
+It still has the app's limit. Of the first 55 first starts that this case
+measured, one took longer than that limit (11.56 s, run 44170978228); the
+case passed, and the run's page has a warning.
+
+What this case therefore does not show:
+
+- That a first start of the helper is inside the app's limit. The case prints
+  how long its own first start took, the creation of the process included.
+  The CI job keeps those times on the run's page and warns when one was longer
+  than the limit.
+- A probe command of the app in an environment without that bytecode. The
+  times of the two probe phases that the case prints include the case's two
+  starts of the helper.
+- A stop while the helper compiles those packages for the first time. The
+  stop of a preparation comes after the case's own starts of the helper.
+
+The case requires that its first start added bytecode files. A first start
+that adds none fails there, for a reason that is not a path limit. Possible
+causes, for example: a preparation already wrote all of that bytecode; the
+helper writes none; the bytecode is in another folder (the case counts below
+``.venv\\Lib\\site-packages`` of the environment). Find out which it is. If
+the environment already has the bytecode, the case's own starts of the helper
+are of no use: remove them.
+
 It then lists every path below the installation folder. That is the measured
 answer to "which paths pass the Windows limit, and does the app need them":
 the worker environments, the update stages, Foundation's source store with the
@@ -130,7 +166,7 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
     if not REQUIRED:
         pytest.skip('Downloads the worker dependencies and the default components; the CI job opts in.')
     from fixtures.manual_app_handoff_native import token_user_default_owner
-    from amplifier_web import runtime_profiles, update_diagnostics
+    from amplifier_web import runtime_profiles, update_diagnostics, updates
     from amplifier_web.deployment import write_private
     from amplifier_web.runtime_environment import prepare_project, project_path, receipt_directory
     from amplifier_web.updates import process
@@ -169,6 +205,42 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
         return facts(stdout, stderr, returncode, duration)
 
     monkeypatch.setattr(update_diagnostics, 'command_facts', observed)
+
+    # The case's own two starts of the decision-catalog helper, directly before the app's first probe command
+    # in a new worker environment (see the top of this file). The call is read from the app, before any
+    # other thread of this process starts a program.
+    helper = native.update_stage_probe.catalog_helper_call()
+    helper_limit, helper_times, app_commands, app_process = helper[1]['timeout'], {}, set(), updates.process
+    helper_failures = {}
+
+    def helper_in(environment):
+        """Two starts of the helper: (seconds of the first, seconds of the second, bytecode files of the
+        environment's packages before the first start, and after it)."""
+        python, packages = environment / '.venv' / 'Scripts' / 'python.exe', environment / '.venv' / 'Lib' / 'site-packages'
+
+        def bytecode():
+            return sum(1 for size, kind, relative in tree(packages) if relative.lower().endswith('.pyc'))
+
+        before = bytecode()
+        first, = native.update_stage_probe.catalog_helper_times(helper, python, starts=1)
+        after = bytecode()
+        second, = native.update_stage_probe.catalog_helper_times(helper, python, starts=1)
+        return first, second, before, after
+
+    async def process_after_the_helper(*args, **settings):
+        if '--project' in args and any(Path(str(value)).name == 'update_probe.py' for value in args):
+            environment = Path(args[args.index('--project') + 1])
+            if environment.name not in helper_times:
+                try:
+                    helper_times[environment.name] = await asyncio.to_thread(helper_in, environment)
+                except Exception as error:   # the app's step fails with it; keep its text for this log.
+                    # A cancelled wait is no failure of the helper: CancelledError is not an Exception.
+                    helper_failures[environment.name] = f'{type(error).__name__}: {error}'
+                    raise
+            app_commands.add(environment.name)   # from here on the app's own command runs in it
+        return await app_process(*args, **settings)
+
+    monkeypatch.setattr(updates, 'process', process_after_the_helper)
 
     # The component generation that the installation has: an empty one, with the worker environment of setup.
     generation = uuid.uuid4().hex
@@ -215,9 +287,13 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
         running, made, known, deadline = {}, set(), set(), time.monotonic() + 900
         while not running:
             assert not task.done() and time.monotonic() < deadline, f'The preparation ended before the stop: {task}'
-            await asyncio.sleep(1)
+            await asyncio.sleep(0.2)
             made = {path.name for path in releases.iterdir()} - before
-            if len(made) == 1 and steps[label][-1:] == ['Checking this chat’s tools…']:
+            # The stop is for the app's own command, not for the case's starts of the helper before it. That
+            # command has less to do now, so the list of processes is read as soon as the command is started.
+            # While the list does not hold the command, it is read again 0.2 s after the read before.
+            if (len(made) == 1 and steps[label][-1:] == ['Checking this chat’s tools…']
+                    and 'prepare-' + next(iter(made)) in app_commands):
                 running = of_attempt(await asyncio.to_thread(processes), next(iter(made)), known)
         stage = releases / next(iter(made))
         attempt = json.loads((stage / 'profile-attempt.json').read_text(encoding='utf-8'))
@@ -289,8 +365,28 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
         for returncode, duration, stdout, stderr in commands[-3:]:
             print(f'COMMAND exit {returncode} after {duration} s\nSTDOUT {stdout}\nSTDERR {stderr}')
         raise
+    finally:
+        for name, (first, second, before, after) in helper_times.items():
+            print(native.update_stage_probe.catalog_helper_line(name, first, second, before, after, helper_limit))
+        for name, failure in helper_failures.items():
+            print(f'FAILED what the case does itself in {name} before the app\'s probe command (its starts of '
+                  f'the decision-catalog helper and its counts of bytecode files): {failure}')
 
     assert len({generation, *selected.values()}) == 3   # each folder's setup is its own
+    # The case started the helper in every environment in which the app then ran a probe command, and in no
+    # other: for each setup the preparation environment and the frozen one, and the preparation environment
+    # of the stopped attempt. Each later start by the app was inside the app's limit: every probe command
+    # that was not stopped ended well.
+    new_environments = {'prepare-' + stopped['folder that a person chose']}
+    for value in selected.values():
+        new_environments |= {'prepare-' + value, project_path(home, value).name}
+    assert set(helper_times) == app_commands == new_environments, (sorted(helper_times), sorted(app_commands))
+    # The first start added bytecode files to the environment's packages. A later start can read them and
+    # has less to compile. The printed time of the second start is the whole time of a start with that
+    # bytecode there; it does not measure the compilation alone. A first start that adds no bytecode file
+    # fails here (see the top of this file).
+    for name, (first, second, before, after) in helper_times.items():
+        assert after > before, (name, before, after)
     for label, folder in folders.items():
         stage = receipt_directory(home, selected[label])
         project_name = 'update-' + selected[label][:12]
