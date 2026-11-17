@@ -10,7 +10,7 @@ import shutil
 import threading
 import uuid
 
-from PIL import Image
+from PIL import Image, ImageDraw
 import pytest
 
 from amplifier_web import instance_branding as branding, windows_files
@@ -50,6 +50,20 @@ def decoded(data):
         return image.convert('RGBA')
 
 
+def approved_badge(size, color):
+    # Build the approved composite independently from the original asset:
+    # a full-size rounded tile and a centered 352px alpha mark, no rim or halo.
+    expected = Image.new('RGBA', (512, 512), (0, 0, 0, 0))
+    ImageDraw.Draw(expected).rounded_rectangle((0, 0, 511, 511), radius=112, fill='#' + color)
+    asset = Path(branding.__file__).parent / 'static' / 'branding' / 'pwa' / 'pwa-512.png'
+    with Image.open(asset) as source:
+        mark = source.convert('RGBA')
+        mark.thumbnail((352, 352), Image.Resampling.LANCZOS)
+    assert mark.size == (352, 352)
+    expected.alpha_composite(mark, ((512 - mark.width) // 2, (512 - mark.height) // 2))
+    return expected.resize((size, size), Image.Resampling.LANCZOS)
+
+
 def test_appearance_mode_clear_color_and_restart_preserve_other_fields(tmp_path):
     store = owner(tmp_path)
     initial = store.snapshot()
@@ -74,33 +88,50 @@ def test_appearance_mode_clear_color_and_restart_preserve_other_fields(tmp_path)
 
 @pytest.mark.parametrize('size', branding.SIZES)
 @pytest.mark.parametrize('color', ['000000', 'ffffff', '0080ff', 'ffdc00', '03aef9', '48646d'])
-def test_badge_rounded_corners_and_contrasting_boundary(tmp_path, size, color):
+def test_badge_matches_original_mark_on_borderless_tile(tmp_path, size, color):
     store = owner(tmp_path)
     image = decoded(store.icon(size, color))
     assert image.size == (size, size)
     assert all(image.getpixel(point)[3] == 0 for point in (
         (0, 0), (size - 1, 0), (0, size - 1), (size - 1, size - 1)))
-    sample = image.getpixel((size // 8, size * 5 // 16))
-    assert sample[3] == 255
-    assert all(abs(actual - expected) <= 3 for actual, expected in zip(sample[:3], bytes.fromhex(color)))
-    # Verify actual fully opaque pixels include both the accent and selected
-    # contrasting rim/halo as well as substantial original blue artwork.
-    pixels = list(image.getdata())
-    ink = tuple(bytes.fromhex(branding._contrast_ink('#' + color)[1:]))
-    assert any(pixel[3] == 255 and sum(abs(pixel[n] - ink[n]) for n in range(3)) <= (60 if size == 32 else 0)
-               for pixel in pixels)
-    assert sum(1 for r, g, b, a in pixels if a == 255 and b > r * 1.3 and b > g * 1.05) > size * size // 100
+    expected_color = (*bytes.fromhex(color), 255)
+    for point in ((size // 2, 1), (size // 2, size - 2),
+                  (1, size // 2), (size - 2, size // 2)):
+        assert image.getpixel(point) == expected_color
+
+    assert image.tobytes() == approved_badge(size, color).tobytes()
 
 
-@pytest.mark.parametrize('color', ['000000', 'ffffff', '0080ff', 'ffdc00', '03aef9', '777777'])
-def test_contrast_ink_meets_graphical_contrast_on_representative_accents(color):
-    def luminance(value):
-        rgb = [channel / 255 for channel in bytes.fromhex(value)]
-        linear = [c / 12.92 if c <= .04045 else ((c + .055) / 1.055) ** 2.4 for c in rgb]
-        return sum(c * weight for c, weight in zip(linear, (.2126, .7152, .0722)))
-    background = luminance(color)
-    ink = luminance(branding._contrast_ink('#' + color)[1:])
-    assert (max(background, ink) + .05) / (min(background, ink) + .05) >= 4.5
+@pytest.mark.parametrize('mode', ['appearance', 'custom', 'upload'])
+def test_render_generation_refreshes_urls_without_changing_saved_branding(tmp_path, monkeypatch, mode):
+    store = owner(tmp_path)
+    patch = {'name': 'Studio'}
+    if mode == 'custom':
+        patch['color'] = '#123456'
+    if mode == 'upload':
+        patch['image'] = noisy_image()
+    store.update(store.prepare(patch))
+    saved = store.path.read_bytes()
+    template = {'id': '/', 'start_url': '/', 'scope': '/',
+                'icons': [{'sizes': '192x192', 'src': 'old'}, {'sizes': '512x512', 'src': 'old'}]}
+    with monkeypatch.context() as previous:
+        previous.setattr(branding, '_ICON_GENERATION', 'rounded-contrast-v1')
+        old = owner(tmp_path)
+        old_snapshot = old.snapshot()
+        old_urls = [old.icon_url(size) for size in branding.SIZES]
+    current = owner(tmp_path)
+    assert current.path.read_bytes() == saved
+    assert {k: v for k, v in current.snapshot().items() if k not in {'revision', 'iconUrl'}} == {
+        k: v for k, v in old_snapshot.items() if k not in {'revision', 'iconUrl'}}
+    assert current.snapshot()['revision'] != old_snapshot['revision']
+    assert all(current.icon_url(size) != old_url for size, old_url in zip(branding.SIZES, old_urls))
+    document = current.document('<head></head>')
+    assert current.icon_url(32) in document and current.icon_url(180) in document
+    manifest = current.manifest(template, 'abcdef')
+    assert manifest['id'] == manifest['start_url'] == manifest['scope'] == '/'
+    assert [icon['src'] for icon in manifest['icons']] == [
+        current.icon_url(192, 'abcdef'), current.icon_url(512, 'abcdef')]
+    assert all(old_snapshot['revision'] not in icon['src'] for icon in manifest['icons'])
 
 
 def test_browser_variants_are_bounded_ephemeral_and_customizations_win(tmp_path):
