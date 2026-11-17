@@ -278,15 +278,29 @@ def test_portability_dependency_receipt_is_bound_to_published_source(selected_pa
         delivery.verify(root, component="portability")
 
 
-@pytest.fixture(params=["operations", "kernels"])
+@pytest.fixture(params=[
+    ("operations", "amplifier_operations"),
+    ("operations", "components/operations"),
+    ("operations", "."),
+    ("kernels", "amplifier_kernels"),
+])
 def flat_selection(tmp_path, request):
-    component = request.param
+    component, subdirectory = request.param
     root, revision, dist, _ = make_candidate(tmp_path, component)
     with zipfile.ZipFile(next(dist.glob("*.whl")), "a") as archive:
         archive.writestr(f"amplifier_{component}-0.1.0.dist-info/licenses/LICENSE", "MIT\n")
     (dist / f"{component}-source.json").unlink(); (dist / "SHA256SUMS").unlink()
     release.seal(root, revision, dist, component=component)
-    # Selection consumes the published historical project without cloning it.
+    receipt_path = dist / f"{component}-source.json"
+    receipt = json.loads(receipt_path.read_bytes())
+    receipt["subdirectory"] = subdirectory
+    if subdirectory == ".":
+        receipt.update(repository="bkrabach/amplifier-platform-operations", component=component)
+    receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
+    (dist / "SHA256SUMS").write_text("".join(
+        f"{release.sha((dist / name).read_bytes())}  {name}\n"
+        for name in (*release.artifact_names(receipt), receipt_path.name)))
+    # All source layouts select the same flat runtime, without a producer clone.
     plain = tmp_path / "consumer"; (plain / "components").mkdir(parents=True)
     (plain / "pyproject.toml").write_text(
         '[project]\nname="amplifier-unified"\nversion="1.0.0"\ndependencies=[]\n'
@@ -297,12 +311,12 @@ def flat_selection(tmp_path, request):
 
 
 def test_flat_selection_does_not_shadow_independent_author(flat_selection):
-    root, _, _, _, component = flat_selection
+    root, _, dist, _, component = flat_selection
     before = delivery.verify(root, component=component)
     author = root / f"components/{component}"; author.mkdir()
     (author / "__init__.py").write_text('raise RuntimeError("unpublished author change")\n')
     assert delivery.verify(root, component=component) == before
-    assert before["source"]["subdirectory"] == f"amplifier_{component}"
+    assert before["source"] == json.loads((dist / f"{component}-source.json").read_bytes())
     assert set(before["files"]) == {"__init__.py", "LICENSE"} | ({"node_runner.cjs"} if component == "kernels" else set())
     if component == "kernels":
         assert (root / "amplifier_kernels/node_runner.cjs").read_bytes() == b"const selected = true;\n"
@@ -311,6 +325,17 @@ def test_flat_selection_does_not_shadow_independent_author(flat_selection):
     result = subprocess.check_output([sys.executable, "-c",
         f'import amplifier_{component} as p; print(p.value); print(p.__file__)'], cwd=root, text=True)
     assert result.splitlines() == ["selected", str(root / f"amplifier_{component}/__init__.py")]
+
+
+def test_flat_selection_can_restore_original_artifact(flat_selection):
+    root, revision, dist, _, component = flat_selection
+    producer = root.parent / "repo"
+    (dist / f"{component}-source.json").unlink()
+    (dist / "SHA256SUMS").unlink()
+    historical = release.seal(producer, revision, dist, component=component)
+    checksum = delivery.sha((dist / f"{component}-source.json").read_bytes())
+    delivery.select(root, dist, revision, checksum, component=component)
+    assert delivery.verify(root, component=component)["source"] == historical
 
 
 def test_flat_selection_refuses_author_packaging(flat_selection):
@@ -341,6 +366,7 @@ def test_flat_selection_preserves_modified_root_snapshot(flat_selection, recorde
 
 @pytest.fixture(params=[
     ("workspace-metadata", "workspaces", "amplifier_workspace_metadata"),
+    ("workspace-metadata", ".", "amplifier_workspace_metadata"),
     ("outputs", "outputs", "amplifier_outputs"),
     ("publishing", "publishing", "amplifier_publishing"),
     ("recall", "recall", "amplifier_recall"),
@@ -352,6 +378,15 @@ def nested_selection(tmp_path, request):
         archive.writestr(f"{package}-0.1.0.dist-info/licenses/LICENSE", "MIT\n")
     (dist / f"{component}-source.json").unlink(); (dist / "SHA256SUMS").unlink()
     release.seal(root, revision, dist, component=component)
+    if author_directory == ".":
+        path = dist / f"{component}-source.json"
+        receipt = json.loads(path.read_bytes())
+        receipt.update(repository="bkrabach/amplifier-platform-workspaces",
+                       component=component, subdirectory=".")
+        path.write_text(json.dumps(receipt, indent=2) + "\n")
+        (dist / "SHA256SUMS").write_text("".join(
+            f"{release.sha((dist / name).read_bytes())}  {name}\n"
+            for name in (*release.artifact_names(receipt), path.name)))
     plain = tmp_path / "consumer"; (plain / "components").mkdir(parents=True)
     (plain / "pyproject.toml").write_text(
         '[project]\nname="amplifier-unified"\nversion="1.0.0"\ndependencies=[]\n'
@@ -359,30 +394,47 @@ def nested_selection(tmp_path, request):
         f'packages=["components/{component}-delivery/{package}"]\n')
     checksum = delivery.sha((dist / f"{component}-source.json").read_bytes())
     delivery.select(plain, dist, revision, checksum, component=component)
-    return plain, component, author_directory, package
+    return plain, component, author_directory, package, revision, dist
 
 
 def test_nested_selection_preserves_published_names_without_author_or_git(nested_selection):
-    root, component, author_directory, package = nested_selection
+    root, component, author_directory, package, *_ = nested_selection
     before = delivery.verify(root, component=component)
-    assert before["source"]["subdirectory"] == f"components/{author_directory}"
+    expected_source = "." if author_directory == "." else f"components/{author_directory}"
+    assert before["source"]["subdirectory"] == expected_source
     assert before["source"]["tag"] == f"{component}-v0.1.0"
     assert before["artifact"]["url"].endswith(f"/{package}-0.1.0-py3-none-any.whl")
     assert set(before["files"]) == {"LICENSE", f"{package}/__init__.py"}
     assert before["runtimeRequirements"] == []
-    assert not (root / ".git").exists() and not (root / "components" / author_directory).exists()
+    assert not (root / ".git").exists()
+    author_directory = "workspaces" if author_directory == "." else author_directory
+    assert not (root / "components" / author_directory).exists()
     author = root / "components" / author_directory / package; author.mkdir(parents=True)
     (author / "__init__.py").write_text('raise RuntimeError("unselected author")\n')
     assert delivery.verify(root, component=component) == before
 
 
 def test_nested_selection_refuses_two_installed_owners(nested_selection):
-    root, component, author_directory, package = nested_selection
+    root, component, author_directory, package, *_ = nested_selection
+    author_directory = "workspaces" if author_directory == "." else author_directory
     project = root / "pyproject.toml"
     project.write_text(project.read_text().replace(
         'packages=[', f'packages=["components/{author_directory}/{package}",'))
     with pytest.raises(ValueError, match="only the selected"):
         delivery.verify(root, component=component)
+
+
+def test_nested_reselection_preserves_local_delivery(nested_selection):
+    root, component, _, package, revision, dist = nested_selection
+    record = root / f"components/{component}.source.json"
+    before = record.read_bytes()
+    runtime = root / f"components/{component}-delivery/{package}/__init__.py"
+    runtime.write_text("local_work = True\n")
+    checksum = delivery.sha((dist / f"{component}-source.json").read_bytes())
+    with pytest.raises(ValueError, match="locally modified"):
+        delivery.select(root, dist, revision, checksum, component=component)
+    assert record.read_bytes() == before
+    assert runtime.read_text() == "local_work = True\n"
 
 
 @pytest.fixture

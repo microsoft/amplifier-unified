@@ -717,7 +717,8 @@ class Children:
                 nonlocal child
                 child = constructing
             initialization = initialization_hooks(isolation=isolation, decision_accounts=decision_accounts,
-                                                  routing=routing, retain=retain_child)
+                                                  routing=routing, retain=retain_child,
+                                                  providers=child_prepared.mount_plan.get("providers", []))
             from ..module_failures import ConfiguredModuleError, safe_failures
             load_failures = []
             remove_failure_hook = None
