@@ -439,7 +439,7 @@ try{
   await action('shell.changes.apply',{clientId:current.clientId,expectedRevision:current.shell.revision,changeId:prepared.result.id});
   await expect(page.locator('#amp-one')).toHaveAttribute('data-theme-scheme',scheme);
  };
- for(const scheme of ['light','dark']){
+ for(const scheme of process.env.CANVAS_CHROME_ADAPTIVE_ONLY==='1'?[]:['light','dark']){
   await presentation(scheme);
   for(const size of [{name:'desktop-1500',width:1500,pane:720},{name:'split-390',width:1500,pane:390},{name:'mobile-390',width:390,pane:390},{name:'mobile-320',width:320,pane:320}]){
    await check(scheme+' '+size.name+' real wheel/keyboard reachability, toolbar and focused toggle',async()=>{
