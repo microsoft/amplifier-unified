@@ -1493,6 +1493,46 @@ class Steps:
         return all(step["status"] == "PASS" for step in self.report["steps"])
 
 
+def accept_start(steps, key, again, home, root, started, state, status, text, *, wait=time.sleep):
+    """Require one start of the launcher, and say which answer was not as required.
+
+    A start has three answers: the launcher's own, Task Scheduler's, and the
+    app's status. All three are saved before the check. When one is not as
+    required, the step fails. Its text names that part and holds its answer.
+
+    Task Scheduler and the status are then read once more after five seconds,
+    and that pair is saved too. It never makes the step pass. It only says
+    whether an answer changed in that time.
+
+    One run of this case failed at a start with only the launcher's answer in
+    its text, and the launcher had said that the start worked (run 44149453625,
+    November 17, 2026). This keeps the two other answers.
+    """
+    record = steps.report[key] = {"launcher": started, "task": state, "serviceStatus": status}
+    steps.save()
+    brief = lambda result: {"exitCode": result.get("exitCode"), "json": result.get("json"),
+                            "stderr": (result.get("stderr") or "")[-300:]}
+    parts = {"the launcher": (started["exitCode"] == 0 and (started["json"] or {}).get("background") is True,
+                              brief(started)),
+             "Task Scheduler": (again.running(state), state),
+             "the app's status": (again.healthy(status), brief(status))}
+    wrong = {name: answer for name, (good, answer) in parts.items() if not good}
+    if wrong:
+        try:
+            wait(5)
+            later = {"task": again.task_facts(home), "serviceStatus": again.cli(root, "service", "status", "--json")}
+            wrong["fiveSecondsLater"] = {"Task Scheduler": again.running(later["task"]),
+                                         "the app's status": again.healthy(later["serviceStatus"])}
+        except Exception as error:  # The first answers stay the step's text.
+            later = {"errorType": type(error).__name__, "error": str(error)[-300:]}
+            wrong["fiveSecondsLater"] = later
+        log = home / "config/services/task-output.log"
+        record.update(fiveSecondsLater=later, taskOutput="\n".join(
+            log.read_text(encoding="utf-8", errors="replace").splitlines()[-40:])[-6000:] if log.exists() else None)
+        steps.save()
+    need(not wrong, text + ". Not as required: " + ", ".join(name for name in parts if name in wrong), wrong)
+
+
 def installation_folder():
     """Setup's folder for this account: %LOCALAPPDATA%\\Amplifier."""
     return Path(os.environ["LOCALAPPDATA"]) / "Amplifier"
@@ -1724,11 +1764,7 @@ def journey(stage, exchange, account, token):
         steps.begin(JOURNEY[7])
         again_started = again.launcher(root, "--no-open")
         state, status = again.task_facts(home), again.cli(root, "service", "status", "--json")
-        steps.report["secondStart"] = {"launcher": again_started, "task": state, "serviceStatus": status}
-        steps.save()
-        need(again_started["exitCode"] == 0 and (again_started["json"] or {}).get("background") is True
-             and again.running(state) and again.healthy(status),
-             "The second start failed. The launcher said", again_started["json"] or again_started)
+        accept_start(steps, "secondStart", again, home, root, again_started, state, status, "The second start failed")
         need(again.process_identity(status["json"]) != again.process_identity(started["json"]["health"])
              and windows_installation.saved_port(home) == port,
              "The second start did not give a new host on the same port")
@@ -1880,9 +1916,8 @@ def second(stage, exchange, account, token):
         need(entries["exitCode"] == 0 and shell.listed(root), "The entries were not added again", entries)
         started = again.launcher(root, "--no-open")
         state, status = again.task_facts(home), again.cli(root, "service", "status", "--json")
-        need(started["exitCode"] == 0 and (started["json"] or {}).get("background") is True
-             and again.running(state) and again.healthy(status),
-             "The start after the uninstall failed. The launcher said", started["json"] or started)
+        accept_start(steps, "startAfterUninstall", again, home, root, started, state, status,
+                     "The start after the uninstall failed")
         need(windows_installation.saved_port(home) == before["port"], "The start after the uninstall changed the port")
         # The certificate stayed (No). The connection needs no new question.
         trusted = windows_installation.trust_state(urls, pin)

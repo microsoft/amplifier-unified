@@ -267,6 +267,169 @@ def test_a_step_passes_only_when_it_was_stated(case, tmp_path):
     assert json.loads((tmp_path / "report.json").read_text())["steps"][1]["reason"] == "Not reached"
 
 
+# What the launcher said in run 44149453625 (November 17, 2026), where the start after the uninstall failed.
+SAID = {"background": True, "created": True,
+        "health": {"ok": True, "service": "running", "responding": True, "probeAttempted": True,
+                   "processVerified": True, "pid": 4500, "created": "134394144230336231",
+                   "url": "https://127.0.0.1:27595"},
+        "runtime": {"ok": True, "prepared": True, "generation": None, "connectionRequired": True}}
+STARTED = {"exitCode": 0, "json": SAID, "stdout": json.dumps(SAID), "stderr": "", "seconds": 9.9}
+TASK = {"managed": True, "state": "running", "processVerified": False, "healthy": False,
+        "taskPath": "\\AmplifierUnified-S-1-5-21-1-2-3-1003", "lastResult": 267009, "instances": 1}
+STATUS = {"exitCode": 0, "json": dict(SAID["health"]), "stdout": "", "stderr": "", "seconds": 1.2}
+
+
+@pytest.fixture(scope="module")
+def start_rules():
+    """The two rules of the maintained start-again case. The standard-account case uses them unchanged."""
+    spec = importlib.util.spec_from_file_location(
+        "start_again_rules", ROOT / "tests/fixtures/windows_start_again_native.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class Reads:
+    """The start-again case for one start: its two rules, and fixed answers for the reads five seconds later."""
+
+    def __init__(self, rules, task=None, status=None, fails=None):
+        self.running, self.healthy = rules.running, rules.healthy
+        self.task, self.status, self.fails, self.calls = task or TASK, status or STATUS, fails, []
+
+    def wait(self, seconds):
+        self.calls.append(("wait", seconds))
+
+    def task_facts(self, home):
+        self.calls.append(("task", home))
+        return self.task
+
+    def cli(self, root, *args):
+        self.calls.append(("cli", root, *args))
+        if self.fails:
+            raise self.fails
+        return self.status
+
+
+def accept(case, tmp_path, reads, started=STARTED, task=TASK, status=STATUS):
+    steps = case.Steps(tmp_path / "report.json", ("one",))
+    steps.begin("one")
+    try:
+        case.accept_start(steps, "theStart", reads, tmp_path / "app", tmp_path, started, task, status,
+                          "The start failed", wait=reads.wait)
+        text = None
+    except AssertionError as error:
+        text = str(error)
+    return text, json.loads((tmp_path / "report.json").read_text(encoding="utf-8")).get("theStart")
+
+
+def test_a_start_with_the_three_required_answers_is_accepted_and_its_answers_are_saved(case, start_rules, tmp_path):
+    reads = Reads(start_rules)
+    text, saved = accept(case, tmp_path, reads)
+    assert text is None
+    assert saved == {"launcher": STARTED, "task": TASK, "serviceStatus": STATUS}
+    assert reads.calls == []  # No wait and no second read.
+
+
+WRONG = [
+    ("the launcher", {"started": {**STARTED, "exitCode": 1}}),
+    ("the launcher", {"started": {**STARTED, "json": {**SAID, "background": False}}}),
+    ("the launcher", {"started": {**STARTED, "json": None}}),
+    ("Task Scheduler", {"task": {**TASK, "managed": False}}),
+    ("Task Scheduler", {"task": {**TASK, "state": "stopped"}}),
+    ("Task Scheduler", {"task": {**TASK, "instances": 0}}),
+    ("Task Scheduler", {"task": {**TASK, "instances": 2}}),
+    ("the app's status", {"status": {**STATUS, "exitCode": 1}}),
+    ("the app's status", {"status": {**STATUS, "json": {**STATUS["json"], "ok": False}}}),
+    ("the app's status", {"status": {**STATUS, "json": {**STATUS["json"], "processVerified": False}}}),
+    ("the app's status", {"status": {**STATUS, "json": {**STATUS["json"], "responding": False}}}),
+    ("the app's status", {"status": {**STATUS, "json": None}}),
+]
+
+
+@pytest.mark.parametrize("part, answers", WRONG)
+def test_a_start_names_the_one_answer_that_was_not_as_required(case, start_rules, tmp_path, part, answers):
+    reads = Reads(start_rules)
+    text, saved = accept(case, tmp_path, reads, **answers)
+    head, _, detail = text.partition(": {")
+    assert head == "The start failed. Not as required: " + part
+    detail = json.loads("{" + detail)
+    assert list(detail) == [part, "fiveSecondsLater"]
+    # The text holds the answer of that part. The whole three answers are in the saved report.
+    given = {"started": STARTED, "task": TASK, "status": STATUS, **answers}
+    expected = {"the launcher": given["started"], "Task Scheduler": given["task"], "the app's status": given["status"]}
+    answer = expected[part]
+    assert detail[part] == (answer if part == "Task Scheduler" else
+                            {"exitCode": answer["exitCode"], "json": answer["json"], "stderr": ""})
+    assert {name: saved[name] for name in ("launcher", "task", "serviceStatus")} == {
+        "launcher": given["started"], "task": given["task"], "serviceStatus": given["status"]}
+
+
+def test_a_start_names_every_answer_that_was_not_as_required_in_one_text(case, start_rules, tmp_path):
+    text, _ = accept(case, tmp_path, Reads(start_rules), started={**STARTED, "exitCode": 1},
+                     task={**TASK, "instances": 0}, status={**STATUS, "exitCode": 1})
+    assert text.startswith("The start failed. Not as required: the launcher, Task Scheduler, the app's status: {")
+    # The failure of November 17: the launcher said that the start worked. The text now says which read did not.
+    text, _ = accept(case, tmp_path, Reads(start_rules), task={**TASK, "state": "stopped", "instances": 0})
+    assert text.startswith("The start failed. Not as required: Task Scheduler: {")
+    assert '"state": "stopped"' in text and '"instances": 0' in text
+
+
+@pytest.mark.parametrize("later_task, later_status, expected", [
+    (TASK, STATUS, {"Task Scheduler": True, "the app's status": True}),
+    ({**TASK, "instances": 0}, STATUS, {"Task Scheduler": False, "the app's status": True}),
+    (TASK, {**STATUS, "exitCode": 1}, {"Task Scheduler": True, "the app's status": False}),
+])
+def test_the_reads_five_seconds_later_are_saved_and_never_make_the_step_pass(
+        case, start_rules, tmp_path, later_task, later_status, expected):
+    reads = Reads(start_rules, task=later_task, status=later_status)
+    text, saved = accept(case, tmp_path, reads, task={**TASK, "state": "stopped"})
+    # Also when both later answers are as required, the step fails with the first answer.
+    assert text.startswith("The start failed. Not as required: Task Scheduler: {")
+    assert json.loads(text[text.index("{"):])["fiveSecondsLater"] == expected
+    assert saved["fiveSecondsLater"] == {"task": later_task, "serviceStatus": later_status}
+    # One wait of five seconds, then the same two reads as before.
+    assert reads.calls == [("wait", 5), ("task", tmp_path / "app"), ("cli", tmp_path, "service", "status", "--json")]
+
+
+def test_a_later_read_that_fails_keeps_the_first_answers_as_the_steps_text(case, start_rules, tmp_path):
+    import subprocess
+    reads = Reads(start_rules, fails=subprocess.TimeoutExpired("amplifier-unified.exe", 120))
+    text, saved = accept(case, tmp_path, reads, status={**STATUS, "exitCode": 1, "stderr": "x" * 500 + "the end"})
+    assert text.startswith("The start failed. Not as required: the app's status: {")
+    detail = json.loads(text[text.index("{"):])
+    assert detail["the app's status"]["stderr"] == "x" * 293 + "the end"  # The end of a long text.
+    assert detail["fiveSecondsLater"]["errorType"] == "TimeoutExpired"
+    assert saved["fiveSecondsLater"]["errorType"] == "TimeoutExpired"
+
+
+def test_a_start_that_is_not_accepted_saves_the_end_of_the_tasks_output(case, start_rules, tmp_path):
+    text, saved = accept(case, tmp_path, Reads(start_rules), task={**TASK, "instances": 0})
+    assert text is not None and saved["taskOutput"] is None  # No file: said, not invented.
+    log = tmp_path / "app/config/services/task-output.log"
+    log.parent.mkdir(parents=True)
+    log.write_text("\n".join(f"line {number}" for number in range(1, 101)) + "\n", encoding="utf-8")
+    text, saved = accept(case, tmp_path, Reads(start_rules), task={**TASK, "instances": 0})
+    assert saved["taskOutput"].splitlines() == [f"line {number}" for number in range(61, 101)]
+    assert "line 100" not in text  # The output is in the report, not in the step's text.
+
+
+def test_each_later_start_is_accepted_through_the_check_that_names_the_answer():
+    source = FIXTURE.read_text(encoding="utf-8")
+    journey = source[source.index("def journey(stage, exchange, account, token):"):
+                     source.index("def certificate(stage, exchange, account, token):")]
+    second = source[source.index("def second(stage, exchange, account, token):"):source.index("def delete_everything(")]
+    assert ('accept_start(steps, "secondStart", again, home, root, again_started, state, status, '
+            '"The second start failed")') in journey
+    assert ('accept_start(steps, "startAfterUninstall", again, home, root, started, state, status,\n'
+            '                     "The start after the uninstall failed")') in second
+    assert source.count("        accept_start(steps, ") == 2  # The two calls; the definition is not indented.
+    # No later start is accepted with a text that holds only the launcher's answer.
+    assert "start failed. The launcher said" not in source
+    # Each call follows the launcher command and the two reads directly.
+    reads = '        state, status = again.task_facts(home), again.cli(root, "service", "status", "--json")\n'
+    assert reads + "        accept_start(steps, " in journey and reads + "        accept_start(steps, " in second
+
+
 def test_the_steps_are_the_consumer_journey_in_setups_order(case):
     names = case.FIRST + case.SECOND + case.THIRD
     assert len(names) == len(set(names)) == 18 and case.JOURNEY == case.FIRST[3:]
