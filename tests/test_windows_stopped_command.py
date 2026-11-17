@@ -293,4 +293,3 @@ def test_the_launchers_job_ends_such_a_program_when_the_app_ends(tmp_path, conta
             host.kill()
         host.stdout.close()
         errors.close()
-        host.stderr.close()
