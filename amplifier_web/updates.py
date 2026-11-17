@@ -24,6 +24,10 @@ from .host.config import write_private
 
 DEFAULT_CHECK_INTERVAL_HOURS = 4
 CHECK_INTERVAL_HOURS = (1, 4, 8, 24)
+# A host start checks soon after it when the last check was older than this
+# at that moment. The timed check above is unchanged; a PC that restarts does
+# not wait the rest of an interval for a release that came out meanwhile.
+HOST_START_CHECK_AFTER_HOURS = 1
 
 
 def work_paused(state):
@@ -533,6 +537,7 @@ class UpdateManager:
         from .update_health import publish as publish_health
         self._active_update_evidence = {}
         self._update_health_initial = True
+        self._host_started = time.time()  # See check_due.
         self._update_health_seen_revision = service.state.get('configurationRevision')
         publish_health(self)
         if restart_repair:
@@ -1688,6 +1693,26 @@ class UpdateManager:
     async def rollback(self):
         await self.activate(rollback=True)
 
+    def check_due(self):
+        """Why the update owner checks by itself now: 'timed', 'start' or None.
+
+        The one rule for every automatic check. tick() asks only where a timed
+        check is allowed, so a host start adds no other place and no retry.
+        'start': when this host started, the last check was older than
+        HOST_START_CHECK_AFTER_HOURS, and no check has begun since. Any check
+        ends it, also a person's own. A start check asks again; it does not
+        reuse the answers that are saved for the timed interval.
+        """
+        settings = self.service.state['settings'].get('updates', {})
+        if not settings.get('autoCheck', True):
+            return None
+        state = self.service.state['updates']
+        last = max(state.get('lastCheck') or 0, state.get('lastAttempt') or 0)
+        if time.time() - last >= settings.get('intervalHours', DEFAULT_CHECK_INTERVAL_HOURS) * 3600:
+            return 'timed'
+        started = getattr(self, '_host_started', 0)
+        return 'start' if started - last >= HOST_START_CHECK_AFTER_HOURS * 3600 else None
+
     async def tick(self):
         if getattr(self, '_manual_handoff_commit_unknown', False):return
         settings=self.service.state['settings'].get('updates',{})
@@ -1734,19 +1759,15 @@ class UpdateManager:
             if state.get('phase') in {'error', 'interrupted'}:
                 return  # Retained scope never authorizes retry of failed effects.
             if state.get('pendingApp'):
-                if (settings.get('autoCheck', True)
-                        and time.time()-max(state.get('lastCheck') or 0, state.get('lastAttempt') or 0)
-                        >= settings.get('intervalHours', DEFAULT_CHECK_INTERVAL_HOURS)*3600):
+                if self.check_due():
                     await self.check(fresh=True, automatic=True)
                 await self.app()
             elif state.get('appAvailable'):
                 await self.app()
-            elif (settings.get('autoCheck', True)
-                    and time.time() - max(state.get('lastCheck') or 0, state.get('lastAttempt') or 0)
-                    >= settings.get('intervalHours', DEFAULT_CHECK_INTERVAL_HOURS) * 3600):
+            elif due := self.check_due():
                 # A future ordinary check is a new policy cycle, not continuation
                 # of the superseded whole-install command or its stale inventory.
-                await self.check(fresh=False, automatic=True)
+                await self.check(fresh=due == 'start', automatic=True)
             return
         if state.get('pendingSmartTools') and not self.independent_tool_results(state):
             if (state.get('phase') not in {'error', 'interrupted'} or any(
@@ -1755,7 +1776,7 @@ class UpdateManager:
             return
         if state.get('pendingApp'):
             if state.get('phase') in {'error', 'interrupted'}:return
-            if settings.get('autoCheck', True) and time.time()-max(state.get('lastCheck') or 0,state.get('lastAttempt') or 0)>=settings.get('intervalHours',DEFAULT_CHECK_INTERVAL_HOURS)*3600:
+            if self.check_due():
                 await self.check(fresh=True, automatic=True)
             await self.app()
             return
@@ -1771,8 +1792,8 @@ class UpdateManager:
         if pending_preparation(self.diagnostics.state):
             # Health, drain, storage, worker adoption and independent app/tool
             # paths above still run. No component availability/install is replayed.
-            if settings.get('autoCheck', True) and time.time()-max(state.get('lastCheck') or 0,state.get('lastAttempt') or 0)>=settings.get('intervalHours',DEFAULT_CHECK_INTERVAL_HOURS)*3600:
-                await self.check(tier='application', fresh=False, automatic=True)
+            if due := self.check_due():
+                await self.check(tier='application', fresh=due == 'start', automatic=True)
             from .windows_app_recovery import automatic_retry_held
             if state.get('appAvailable') and settings.get('autoInstall', True) and not automatic_retry_held(state):
                 await self.app()
@@ -1785,8 +1806,8 @@ class UpdateManager:
             # checking them, leaving only results from a previous update cycle.
             await self.check(tier=sequence['nextStage'], install=sequence.get('install', False),
                              fresh=True, automatic=True)
-        elif settings.get('autoCheck',True) and time.time()-max(state.get('lastCheck') or 0,state.get('lastAttempt') or 0)>=settings.get('intervalHours',DEFAULT_CHECK_INTERVAL_HOURS)*3600:
-            await self.check(fresh=False, automatic=True)
+        elif due := self.check_due():
+            await self.check(fresh=due == 'start', automatic=True)
         def admitted():
             state=self.service.state['updates']
             settings=self.service.state['settings'].get('updates',{})

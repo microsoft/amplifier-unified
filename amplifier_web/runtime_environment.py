@@ -193,7 +193,12 @@ def shared_build_policies(home, generation, graph):
         return {}
     builds = Path(environment['AMPLIFIER_SOURCE_STORE']).resolve() / 'builds'
     bindings = {}
-    base = receipt_directory(home, generation) / 'foundation/cache/.source-bindings'
+    # The Foundation home of this generation. With no generation that is the
+    # data folder itself (updates.foundation_home): a new installation's
+    # conversations write their bindings there. Setup's receipt folder
+    # (updates/baseline-runtime) holds no Foundation home.
+    owner = receipt_directory(home, generation) if generation else Path(home)
+    base = owner / 'foundation/cache/.source-bindings'
     for path in base.glob('*.json'):
         if path.is_symlink():
             raise ValueError('External shared source binding')

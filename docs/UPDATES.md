@@ -217,6 +217,8 @@ Available updates are listed immediately at the top of Settings. The application
 
 Automatic update checks default to every **4 hours**. Under **Update preferences**, choose every **1 hour**, **4 hours**, **8 hours**, or **daily**. Existing saved schedules remain unchanged on upgrade, including the previous daily default and older 6-hour or weekly choices. Older choices are shown with an explanation until replaced. Resetting app settings restores the 4-hour check interval while leaving automatic installation off.
 
+A host start adds one check. When the host starts and its last check is more than **1 hour** old, the update owner checks soon after the start and does not wait for the rest of the interval. This check asks again; it does not reuse saved availability results. Everything else is as for a timed check: it follows **Keep Amplifier up to date**, it interrupts no running work, and it retries no failed attempt. A start with a younger last check starts no check, and a host with automatic checks off never checks by itself. The two numbers are `DEFAULT_CHECK_INTERVAL_HOURS` and `HOST_START_CHECK_AFTER_HOURS` in `amplifier_web/updates.py`; `UpdateManager.check_due` is the one rule for every automatic check.
+
 Settings also provides manual checks, installation, and ecosystem rollback. Scheduled checks run while the local host is open; this is not a separate OS daemon. The Settings icon shows an update indicator. These controls use the shared action registry; forced interruption requires an explicit user confirmation.
 
 Application updates download the selected release's prebuilt wheel and checksum
@@ -349,6 +351,19 @@ that changed after its check (`UpdateManager.install_checked`): the refusal
 before anything is prepared leads to one new check, and that checked selection
 is installed under the caller's own admission. A second refusal, and a check
 that fails, are reported as before; nothing is repeated.
+
+A new installation has no component generation until its first component
+update. Until then a conversation fetches each declared source and installs its
+modules at its first use, so a check there lists neither as an update. A
+declared source that no conversation has fetched yet is not listed "to
+install": the count would be withdrawn by the next check. A module that a chat
+installed follows the branch of the binding that the chat wrote below the data
+folder's `foundation/cache/.source-bindings`; it is not a fixed version, and it
+starts no "Refresh included components" update. Both hold only with no selected
+generation. A generation is immutable, so there an absent declared source stays
+an update, and a module's branch comes only from that generation's own
+bindings. Without exactly one binding for a module's source and commit, the
+commit stays a fixed version as before.
 
 A proven catalog-data-only change reuses an already qualified runtime. This requires an exact tree comparison, an allowlisted data contract and unchanged app-profile inputs. Unknown files, code, dependency or profile changes take the qualification path. Failed qualification leaves the active pointer unchanged.
 

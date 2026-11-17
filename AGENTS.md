@@ -244,6 +244,18 @@ never reclassifies an earlier refusal record as waiting: its form does not
 prove that only a connection was missing. A later completed update settles it.
 The installed-package reader runs Git for a package from a local checkout, so
 a caller without the installation's Git folder on PATH reads "not prepared".
+Until that first component update the Foundation home is the data folder
+itself (`updates.foundation_home`), not setup's receipt folder
+`updates/baseline-runtime`. A conversation there fetches a declared source and
+installs its modules at first use; the module's build view carries its commit
+as its ref, and the branch is in the binding below
+`<data>/foundation/cache/.source-bindings`. A reader that looks below the
+receipt folder finds no binding, takes the commit for an unexplained fixed
+version, and offers "Refresh included components": a full component update
+that changes no component (`runtime_environment.shared_build_policies`,
+`tests/test_update_new_installation.py`). For the same reason an absent
+declared source is no update there (`update_sequence.classify`); a selected
+generation is immutable, so only there must an update add it.
 A reader of a private file can hold an object that another process replaced
 (`publish_private(replace=True)`). Windows then reports 0 links and a path below
 `$Extend\$Deleted` for it. That is `PrivateFileUnlinked` in `windows_files.py`,
