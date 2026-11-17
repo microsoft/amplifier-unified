@@ -21,14 +21,17 @@ app selection. Do not restore a second author copy here. Follow the
 [selection instructions](README.md#select-a-workspace-metadata-artifact).
 This metadata boundary is not the whole workspace domain.
 
-`components/outputs/` is temporarily authored here as an independently buildable
-Python project. Preserve `amplifier_outputs` imports and its saved-body formats.
+Author the output relationship, saved-body decoder and Git evidence package in
+[amplifier-platform-resources](https://github.com/bkrabach/amplifier-platform-resources).
+Preserve `amplifier_outputs` imports and its saved-body formats.
 Its Git/SQLite mechanism tests belong with the package; Unified retains
 transactions, authorization, source access, content integrity and retention.
 Unified consumes only the published artifact selected into `outputs-delivery/`
 by `outputs.source.json`, as the sole installed owner. Never edit that generated
 copy by hand or coinstall the standalone distribution. Author edits and publication
-do not refresh the app selection. This package is not the whole resources domain.
+do not refresh the app selection. Do not restore an author copy here; follow the
+[selection instructions](README.md#select-an-outputs-artifact).
+This package is not the whole resources domain.
 
 `components/portability/` is temporarily authored here as an independently
 buildable Python project. Preserve `amplifier_portability` imports and its existing
