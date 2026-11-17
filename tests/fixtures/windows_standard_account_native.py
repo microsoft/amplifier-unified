@@ -433,12 +433,23 @@ def windows_of(pid):
 
 
 def find_session(listing, name):
-    """(number, state) of the user's desktop session in the list of Windows; None when it has none."""
-    for line in listing.splitlines():
-        parts = line.replace(">", " ").split()
-        for index, part in enumerate(parts[:-2]):
-            if part.casefold() == name.casefold() and parts[index + 1].isdigit():
-                return int(parts[index + 1]), parts[index + 2]
+    """(number, state) of the user's desktop session in the list of Windows; None when it has none.
+
+    The list has fixed columns below its heading. The user name is read only
+    from the user column: a session name is never taken for a user.
+    """
+    rows = listing.splitlines()
+    heading = next((row for row in rows if "USERNAME" in row and "STATE" in row), None)
+    if heading is None:
+        return None
+    user, state = heading.index("USERNAME"), heading.index("STATE")
+    for row in rows:
+        if row is heading:
+            continue
+        fields, status = row[user:state].split(), row[state:].split()
+        # With a user: its name and the number. Without: the number only.
+        if len(fields) == 2 and fields[0].casefold() == name.casefold() and fields[1].isdigit() and status:
+            return int(fields[1]), status[0]
     return None
 
 
@@ -459,7 +470,8 @@ def sign_in(name, password):
         if saved("viewer-setting.json") is None:
             save("viewer-setting.json", {"earlier": earlier})
         winreg.SetValueEx(key, "AuthenticationLevelOverride", 0, winreg.REG_DWORD, 0)
-    remember(os.environ["COMPUTERNAME"] + "\\" + name, password)
+    computer = os.environ["COMPUTERNAME"]
+    remember(computer + "\\" + name, password)
     try:
         viewer = subprocess.Popen([str(system("mstsc.exe")), "/v:" + DESKTOP, "/w:1024", "/h:768"])
         save("viewers.json", (saved("viewers.json") or []) + [viewer.pid])
