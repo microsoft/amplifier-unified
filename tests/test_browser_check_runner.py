@@ -1078,26 +1078,44 @@ def shared_room_browser_addition(rows, readiness_scripts=()):
     return selected_client_browser_addition(rows, readiness_scripts, 'shared-room', current=True)
 
 
+TRANSCRIPT_SUGGESTION_BROWSER_IDS = ('transcript-suggestion-mounted', 'transcript-suggestion-boot')
+
+
 def transcript_suggestion_browser_addition(rows, readiness_scripts=()):
-    return selected_client_browser_addition(
-        rows, readiness_scripts, 'transcript-suggestion-mounted', current=True)
+    identities = set()
+    for name in TRANSCRIPT_SUGGESTION_BROWSER_IDS:
+        identities.update(selected_client_browser_addition(rows, readiness_scripts, name, current=True))
+    return identities
 
 
 def test_transcript_suggestion_is_composed_once_without_reordering_prior_owners():
     host = json.loads((ROOT / 'tests/web/browser-checks.json').read_text())
-    plan = current_plan()
-    name = 'transcript-suggestion-mounted'
-    assert transcript_suggestion_browser_addition(plan['scenarios']) == {name}
-    assert host['scenarioOrder'][-1] == name
-    assert host['scenarioOrder'].count(name) == 1
-    assert not any(row['id'] == name for row in host['scenarios'])
-    assert name not in {row['id'] for row in coverage_plan()['scenarios']}
+    plan, proof = runner.load_plan(ROOT, ROOT / 'tests/web/browser-checks.json')
+    names = TRANSCRIPT_SUGGESTION_BROWSER_IDS
+    assert transcript_suggestion_browser_addition(plan['scenarios']) == set(names)
+    assert host['scenarioOrder'][-2:] == list(names)
+    client_path = source_test('tests/transcript-suggestion-boot-browser.mjs').with_name('browser-checks.json')
+    client = json.loads(client_path.read_text())
+    for name in names:
+        script = f'tests/{name}-browser.mjs'
+        expected = {'id': name, 'command': ['node', script],
+                    'env': {'AMPLIFIER_TEST_ARTIFACTS': f'{{root}}/output/browser-checks/{name}'}}
+        def owns(row):
+            return row['id'] == name or script in row['command']
+        assert host['scenarioOrder'].count(name) == 1
+        assert not any(owns(row) for row in host['scenarios'])
+        assert [row for row in client['scenarios'] if owns(row)] == [expected]
+        assert [row for row in plan['scenarios'] if owns(row)] == [{**expected, 'cwd': '.build/web-client'}]
+        assert (client_path.parent / Path(script).name).is_file()
+    assert not set(names) & {row['id'] for row in coverage_plan()['scenarios']}
+    assert proof['registrySha256'] == {
+        'unified': runner.digest(ROOT / 'tests/web/browser-checks.json'), 'client': runner.digest(client_path)}
 
 
 @pytest.mark.parametrize('fault', ['missing', 'duplicate', 'renamed', 'command', 'environment', 'cwd', 'readiness'])
-def test_transcript_suggestion_owner_is_validated_before_historical_exclusion(monkeypatch, fault):
+@pytest.mark.parametrize('name', TRANSCRIPT_SUGGESTION_BROWSER_IDS)
+def test_transcript_suggestion_owner_is_validated_before_historical_exclusion(monkeypatch, fault, name):
     plan = current_plan()
-    name = 'transcript-suggestion-mounted'
     owner = next(row for row in plan['scenarios'] if row['id'] == name)
     readiness = set()
     if fault == 'missing': plan['scenarios'].remove(owner)
@@ -4258,7 +4276,7 @@ def test_layout_pass2_assembly_retains_prior_order_and_binds_all_four_selected_o
                         before_focus.index('delivery-warning')] == ['settings-action-spacing']
     assert before_focus[-2:] == ['shared-room', 'work-hierarchy']
     assert [row['id'] for row in plan['scenarios']] == host['scenarioOrder']
-    assert len(plan['scenarios']) == len(host['scenarioOrder']) == 165 + len(new_ids) + 2 + len(suggestion_ids) == 171
+    assert len(plan['scenarios']) == len(host['scenarioOrder']) == 165 + len(new_ids) + 2 + len(suggestion_ids) == 172
     assert proof['registrySha256'] == {'unified': runner.digest(host_path), 'client': runner.digest(client_path)}
     assert proof['clientSelectionSha256'] == runner.digest(ROOT / 'components/web-client.source.json')
     assert not identities & {row['id'] for row in coverage_plan()['scenarios']}

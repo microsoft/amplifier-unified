@@ -1381,6 +1381,7 @@
     "work-hierarchy",
     "external-approval",
     "attachment-preview",
-    "transcript-suggestion-mounted"
+    "transcript-suggestion-mounted",
+    "transcript-suggestion-boot"
   ]
 }
