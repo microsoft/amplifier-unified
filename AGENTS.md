@@ -233,6 +233,17 @@ or in a guide: another installation's root has the same name. The record
 never loses a root that Windows may still hold; a full or unreadable record
 stops `force` with nothing changed. Windows asks the person once for each
 deletion, and no code answers it; say the number of questions before them.
+Windows has no exec: `os.execv` starts a new process there and ends the
+caller at once with exit status 0, before the command's output is complete.
+The launcher hands a command to the active app generation with
+`application_generations.hand_over`, which waits on Windows and ends with the
+app's status. Do not use `os.execv` on Windows where a caller reads the
+output or the status. A launcher from a setup file before that change still
+returns 0 at once, so the confirmation line of `open` stays the launcher's
+proof that the browser opened. The Start-menu start shows `windows_start.sign`
+and holds `windows_start.only`; both must end before the launcher's own last
+message, which sends the person back to the Start menu. While the start holds
+that lock, a second click does nothing and shows nothing.
 Task Scheduler expands percent-bearing executable/working-directory paths.
 Reject those paths rather than recording a literal identity that launches a
 different program. Task registration/state is not authenticated host health.
@@ -248,6 +259,18 @@ task on a hosted runner and renames that runner's account domain. Its fixture
 changes the machine's security policy: it runs only with the workflow's opt-in
 in a hosted runner's environment. That guard stops accidental use and does not
 prove the machine; never run the fixture on a machine that is kept.
+`windows-standard-account.yml` runs the consumer journey as a standard user
+(not a member of Administrators) on a hosted runner. Its fixture creates one
+local user and signs it in through Remote Desktop to the same computer
+(`127.0.0.2`): Task Scheduler starts a task that runs with a person's own
+sign-in only in a desktop session of that person. The fixture creates a
+Windows user, changes a Remote Desktop setting of the runner's account and
+deletes that user's installation folder. The same guard and the same rule
+apply: only a hosted runner with the workflow's opt-in, never a machine that
+is kept. No hosted runner runs the setup file, because setup refuses Windows
+Server. The case compares the product's texts of the Stop question, the
+uninstall questions and the certificate message; change them together with
+the fixture.
 Python on Windows accepts only root certificates that the Windows store holds
 at that moment, and aiohttp builds its default list once at import. A new PC's
 store lacks many public roots (seen in Windows Sandbox: the package registry's
