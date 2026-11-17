@@ -552,8 +552,12 @@ a certificate, and the earlier certificate's bytes were gone from disk.
   search that failed, so `windows_trust.contains` raises for every other
   result; a failed search and a store that cannot be opened both count as
   "Windows may hold it". `remove_root` uses the same search (`_search`): a
-  failed search is `blocked`, not `absent`, so an uninstall says that Windows
-  kept the certificate. `add_root` keeps its plain first search: a failure
+  failed search is `blocked`, not `absent`. For `blocked` an uninstall says
+  that Windows can still hold the certificate, because the program does not
+  know it. Only for the person's No (`declined`) does it say that Windows kept
+  the certificate. With several certificates neither outcome tells which one
+  stays, so the text then says "at least one" or "one or more" of their
+  number. `add_root` keeps its plain first search: a failure
   there leads to the add, which Windows decides and the check after it
   confirms. If the record is still full, `force` stops with a
   plain text and changes nothing (`windows_tls.ReplacedRecord`). A record that is too long to
@@ -599,7 +603,9 @@ a certificate, and the earlier certificate's bytes were gone from disk.
   each replaced root that the store holds. Uninstall asks Windows once for
   each (`_trusted_root` and `_forget_root` in `windows_consumer.py`), and its
   first question says how many questions Windows asks. The normal case is one.
-  The result is `declined` or `blocked` when Windows kept at least one.
+  The result is `declined` when Windows reported the person's No for at least
+  one. Otherwise it is `blocked` when at least one deletion failed in another
+  way; the program then does not know whether Windows still holds that one.
 
 Limits. The record is written by app code, which an in-app update brings. The
 deletion is launcher code: an installation keeps the launcher of its setup file
@@ -1200,8 +1206,11 @@ So the order is:
    a certificate that stays has no signing key anywhere and names only this
    PC. There is no second attempt, no elevation and no Local Machine store. An
    identity from an earlier setup added nothing and is not touched.
-7. One message says that uninstall is complete. It says so when Windows kept
-   the certificate.
+7. One message says that uninstall is complete. After the person's No it
+   says that Windows kept the certificate. After another failure it says that
+   Windows can still hold it. With several certificates it gives their number
+   and says "at least one" or "one or more", because no outcome tells which
+   one stays.
 
 A step that fails leaves the entries of every later step in place and shows
 one message with the cause, the next action and a short reference (step name,
@@ -1541,10 +1550,11 @@ looks again under the lock and refuses (step 1 of the order). When it cannot
 take the lock, it looks too. An uninstall with the delete choice goes on, as
 a second uninstall does. It looks for the journal's name at two moments:
 when a step before the write of its own journal fails, and directly before
-that write. A stop of an uninstall that saw a journal at one of these looks
-shows a text of a removal that did not finish, not the text of an uninstall
-that changed nothing. These looks choose a text and the place of the failure
-note. They change nothing that uninstall deletes.
+that write. If the first look finds a journal, the failed step shows a text
+of a removal that did not finish, not the text of an uninstall that changed
+nothing. If the second look finds one, a failure of that write shows the
+text that says not to open Amplifier. These looks choose a text and the
+place of the failure note. They change nothing that uninstall deletes.
 
 **No link is followed.** In the process, every entry is opened relative to
 its parent's handle as the entry itself, judged on its own handle and deleted

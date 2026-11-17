@@ -558,6 +558,30 @@ def _certificate_sentence(certificate, *, at_the_end):
             + ("Select Yes each time to remove them." if at_the_end else "Those are separate questions."))
 
 
+def _certificate_left(certificate, trust):
+    """The last message's sentence about a certificate that Windows did not delete, else nothing.
+
+    `certificate` is what _trusted_root returned, and `trust` is what _forget_root returned for it.
+    `declined`: Windows reported the person's No for at least one certificate. `blocked`: no No, and
+    for at least one this program does not know whether Windows still holds it (a search of the
+    store that failed, a deletion that Windows refused, a check afterwards that failed). So the
+    text for `blocked` does not say that Windows kept it. Neither outcome says for which
+    certificate, so the text for several gives no number of those that stay.
+    """
+    from .windows_trust import ROOT_NAME
+    if trust not in {"declined", "blocked"}:
+        return ""
+    count = len(certificate or ())
+    if count < 2:
+        return ("\n\n" + (f'Windows kept the certificate "{ROOT_NAME}".' if trust == "declined" else
+                          f'Windows can still hold the certificate "{ROOT_NAME}".')
+                + " It works only for Amplifier on this PC.")
+    return ("\n\n" + (f'Windows kept at least one of the {count} certificates named "{ROOT_NAME}".'
+                      if trust == "declined" else
+                      f'Windows can still hold one or more of the {count} certificates named "{ROOT_NAME}".')
+            + " Each works only for Amplifier on this PC.")
+
+
 async def _uninstall(root):
     """Stop the app and remove its sign-in task first; remove the Windows entries last.
 
@@ -573,7 +597,6 @@ async def _uninstall(root):
     from .installation_health import windows_working
     from .windows_installation import owner_notice
     from .windows_service import uninstall
-    from .windows_trust import ROOT_NAME
     # Read-only: say in the first question what Windows will ask at the end.
     certificate = await asyncio.to_thread(_trusted_root, root)
     unchanged = {"ok": True, "cancelled": True}
@@ -718,9 +741,7 @@ async def _uninstall(root):
             + ("This uninstall deleted none of your chats, settings, accounts or program files in "
                "this folder:\n" if unfinished else
                "Your chats, settings, accounts and the program files are still in this folder:\n")
-            + str(root)
-            + (f'\n\nWindows kept the certificate "{ROOT_NAME}". It works only for Amplifier on this PC.'
-               if trust in {"declined", "blocked"} else ""), services=not unfinished)
+            + str(root) + _certificate_left(certificate, trust), services=not unfinished)
     return {"ok": True, "operation": "uninstall", "userDataRetained": True,
             "installationFilesRetained": True, "certificate": trust}
 
@@ -732,20 +753,18 @@ def _last_files(root, foreign, opening):
             + str(root) + ("\n\nYou can delete that folder." if foreign == [] else ""))
 
 
-def _removed_notice(root, foreign, trust, *, last=True):
+def _removed_notice(root, foreign, trust, *, last=True, certificate=None):
     """The one confirmation of a deleted installation. It says only what was observed.
 
     Without `last` the last step does not follow this text: Windows did not show the confirmation, so
     the uninstall stopped before that step, and the program files that it runs from stay.
+    `certificate` is what _trusted_root returned: the certificates that Windows was asked about.
     """
-    from .windows_trust import ROOT_NAME
     text = ("Amplifier is uninstalled. It no longer runs, and it no longer starts when you sign in.\n\n"
             "Your chats, settings, saved accounts and stored keys are deleted.\n\n")
     if not last:
-        text += _last_files(root, foreign, "Amplifier did not remove its last program files.")
-        if trust in {"declined", "blocked"}:
-            text += f'\n\nWindows kept the certificate "{ROOT_NAME}". It works only for Amplifier on this PC.'
-        return text
+        return (text + _last_files(root, foreign, "Amplifier did not remove its last program files.")
+                + _certificate_left(certificate, trust))
     text += "When you close this message, Amplifier starts to remove its last program files. "
     if foreign:
         text += ("The folder itself stays, because it holds entries that are not Amplifier's. "
@@ -756,9 +775,7 @@ def _removed_notice(root, foreign, trust, *, last=True):
     else:
         text += ("If this folder still exists a minute later, you can delete it. "
                  "It holds none of your data:\n" + str(root))
-    if trust in {"declined", "blocked"}:
-        text += f'\n\nWindows kept the certificate "{ROOT_NAME}". It works only for Amplifier on this PC.'
-    return text
+    return text + _certificate_left(certificate, trust)
 
 
 async def _delete(root, certificate, *, resumed):
@@ -815,8 +832,9 @@ async def _delete(root, certificate, *, resumed):
     if sys.stdout is None:
         # When Windows does not show this confirmation, the uninstall stops before its last step, as
         # before. The further attempt then says that the last program files stay.
-        _last_message(root, _removed_notice(root, foreign, done["certificate"]),
-                      again=_removed_notice(root, foreign, done["certificate"], last=False), services=False)
+        _last_message(root, _removed_notice(root, foreign, done["certificate"], certificate=certificate),
+                      again=_removed_notice(root, foreign, done["certificate"], last=False, certificate=certificate),
+                      services=False)
     # Last: the two folders that this running program runs from. After this
     # step the process imports nothing more and ends: its own files are gone.
     try:

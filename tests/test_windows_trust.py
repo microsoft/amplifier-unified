@@ -337,7 +337,7 @@ def test_remove_reports_each_outcome_and_handles_the_default_no(store):
         fake = store(search=error)
         fake.held.add(b"root")
         assert trust.remove_root(b"root") == "blocked" and fake.questions == [] and b"root" in fake.held
-        # So an uninstall says that Windows kept the certificate.
+        # So an uninstall says that Windows can still hold the certificate, not that Windows kept it.
         assert trust.forget_roots([b"root"]) == "blocked"
 
 

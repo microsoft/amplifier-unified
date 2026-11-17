@@ -117,7 +117,7 @@ Limits of this preview:
   These are the results of an uninstall that finishes. If Amplifier finds that
   it is working on a chat, it asks before it stops that work. An uninstall
   stops Amplifier and removes it from the Start menu and the Apps list. If
-  Windows asks whether to delete the certificate, select **Yes**.
+  Windows asks whether to delete a certificate, select **Yes** each time.
 
   After a delete, Amplifier says "Amplifier is uninstalled." When you close
   that message, it starts to remove its last program files and then the

@@ -411,8 +411,18 @@ def test_receipt_write_does_not_wait_for_a_failure_that_waiting_cannot_cure(mode
     assert isinstance(shell.remove(root)["receiptError"], ValueError) and not waits
 
 
+# The last message's sentence about a certificate that Windows did not delete, complete. A No is Windows'
+# own answer: it kept the certificate. After every other failure the program does not know that.
+KEPT = 'Windows kept the certificate "{name}". It works only for Amplifier on this PC.'
+UNKNOWN = 'Windows can still hold the certificate "{name}". It works only for Amplifier on this PC.'
+KEPT_OF_2 = ('Windows kept at least one of the 2 certificates named "{name}". '
+             "Each works only for Amplifier on this PC.")
+UNKNOWN_OF_2 = ('Windows can still hold one or more of the 2 certificates named "{name}". '
+                "Each works only for Amplifier on this PC.")
+
+
 @pytest.mark.parametrize("answer,kept", [
-    ("removed", False), ("absent", False), ("declined", True), ("blocked", True), (OSError("store"), True)])
+    ("removed", None), ("absent", None), ("declined", KEPT), ("blocked", UNKNOWN), (OSError("store"), UNKNOWN)])
 def test_uninstall_asks_windows_once_to_delete_its_certificate_and_every_answer_finishes(
         uninstaller, monkeypatch, answer, kept):
     from amplifier_web.windows_trust import ROOT_NAME
@@ -426,8 +436,10 @@ def test_uninstall_asks_windows_once_to_delete_its_certificate_and_every_answer_
     (question, _), (confirmation, _) = state["notices"]
     assert f'delete the certificate "{ROOT_NAME}"' in question and "Select Yes there to remove it" in question
     assert "Amplifier is uninstalled" in confirmation
-    # A certificate that stays is said plainly, and it is not an error.
-    assert (f'Windows kept the certificate "{ROOT_NAME}"' in confirmation) is kept
+    # A certificate that stays is said plainly, and it is not an error. The message ends with that sentence.
+    folder = "Your chats, settings, accounts and the program files are still in this folder:\n" + str(uninstaller.root)
+    assert confirmation.endswith(folder + ("\n\n" + kept.format(name=ROOT_NAME) if kept else ""))
+    assert ("certificate" in confirmation.replace(str(uninstaller.root), "")) is bool(kept)
     assert "could not" not in confirmation and "Reference:" not in confirmation
 
 
@@ -478,9 +490,13 @@ def test_only_roots_that_windows_trusts_for_this_installation_count_as_its_certi
 
 
 @pytest.mark.parametrize("answers,outcome,kept", [
-    (["removed", "removed"], "removed", False), (["removed", "declined"], "declined", True),
-    (["declined", "removed"], "declined", True), (["absent", "removed"], "removed", False),
-    ([OSError("store"), "removed"], "blocked", True)])
+    (["removed", "removed"], "removed", None), (["removed", "declined"], "declined", KEPT_OF_2),
+    (["declined", "removed"], "declined", KEPT_OF_2), (["absent", "removed"], "removed", None),
+    (["declined", "declined"], "declined", KEPT_OF_2), (["absent", "absent"], "absent", None),
+    # A search that failed for one: the program does not know whether Windows holds it.
+    ([OSError("store"), "removed"], "blocked", UNKNOWN_OF_2), (["blocked", "blocked"], "blocked", UNKNOWN_OF_2),
+    # A No for one and a failure for the other: one stays for certain.
+    ([OSError("store"), "declined"], "declined", KEPT_OF_2)])
 def test_uninstall_asks_windows_once_for_each_certificate_that_windows_holds(
         uninstaller, monkeypatch, answers, outcome, kept):
     from amplifier_web.windows_trust import ROOT_NAME
@@ -496,7 +512,11 @@ def test_uninstall_asks_windows_once_for_each_certificate_that_windows_holds(
     assert (f'At the end, Windows asks 2 times whether to delete a certificate named "{ROOT_NAME}". '
             "Windows holds 2 of them. Select Yes each time to remove them.") in question
     assert "Amplifier is uninstalled" in confirmation
-    assert (f'Windows kept the certificate "{ROOT_NAME}"' in confirmation) is kept
+    # The text gives the number that Windows was asked about, and no number of those that stay.
+    folder = "Your chats, settings, accounts and the program files are still in this folder:\n" + str(uninstaller.root)
+    assert confirmation.endswith(folder + ("\n\n" + kept.format(name=ROOT_NAME) if kept else ""))
+    words = confirmation.replace(str(uninstaller.root), "")  # The folder's path is not the product's text.
+    assert ("certificate" in words) is bool(kept) and "the certificate" not in words
 
 
 def test_the_uninstall_question_says_how_often_windows_asks():
