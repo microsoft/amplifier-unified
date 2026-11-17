@@ -711,6 +711,7 @@ def run():
             assert apps_list() == old["version"] and not follow_state().get("appsList"), follow_state()
             assert record(refresher.REQUEST) is None and helper_task().get("exists") is False
             assert not follow_state().get("attempt") and not calls(root)
+            confirmed_at = time.time()
             assert recovery.acknowledge(spec, {
                 key: validated[0][key] for key in ("revision", "generation", "attemptId")})
             wait("the Apps list shows the confirmed app version", lambda: apps_list() == new["version"], 300)
@@ -725,9 +726,10 @@ def run():
             passed(3, appsList=apps_list(), written=written, launcher=launcher_now(), undecided=undecided)
 
             begin(4)
-            asked_at = time.monotonic()
             one = wait("the app's own request", request_after(), 600)
-            request_seconds = round(time.monotonic() - asked_at)
+            # The app that already ran asks by itself: from the confirmation to its request.
+            request_seconds = round(one["at"] - confirmed_at)
+            assert 0 <= request_seconds <= 600, (one["at"], confirmed_at)
             assert one["target"]["generation"] == validated[0]["generation"] and one["registration"] == spec.registration_id
             asked = wait("the helper task", lambda: (lambda value: value.get("exists") and value)(helper_task()), 60)
             assert asked["request"] == one["id"], asked
@@ -743,7 +745,7 @@ def run():
             assert failed["attempt"]["generation"] == validated[0]["generation"], failed
             assert failed["attempt"]["automatic"] is True and failed["attempt"]["step"] == "installing the launcher", failed
             passed(4, request={key: one.get(key) for key in ("id", "registration", "target")},
-                   secondsFromStartToRequest=request_seconds, helperTask=asked, helperRecord=helper,
+                   secondsFromConfirmationToRequest=request_seconds, helperTask=asked, helperRecord=helper,
                    launcher=launcher_now(), port=port, appState=app_state(home))
 
             begin(5)

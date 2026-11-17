@@ -957,7 +957,8 @@ async def automatic(home, request_id, *, service, wait=180, process=None,
         left = deadline - time.monotonic()
         if left <= 0:
             return {}
-        await asyncio.sleep(min(poll, left))
+        # The lock is a file: a try costs nothing. Only a look at the app is slow.
+        await asyncio.sleep(min(poll, 1.0, left))
     if result.get("state") == "settled" and result.get("result") == "refreshed" and result.get("previous"):
         try:
             _keep_previous(home, service.launcher, result["previous"])

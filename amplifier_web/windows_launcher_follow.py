@@ -51,6 +51,7 @@ class _Follow:
     fence: bool = False
     facts: dict | None = None
     owner_tries: int = 0
+    plan_errors: int = 0
     spec: object = None
     run: dict | None = None
     request: dict | None = None
@@ -275,10 +276,16 @@ async def _begin(manager, follow):
     except refresh.Refused:
         refused = True
     except Exception as error:
-        # Nothing outside this process has started. A check that cannot run is
-        # one counted attempt, not a fence that every pass sets again.
-        refused, step = True, 'plan'
+        # Nothing outside this process has started, and the fence is cleared.
+        # The check is tried again after 5 minutes, twice. The third failure
+        # in this host run is one counted attempt.
         _error(manager, error)
+        follow.plan_errors += 1
+        if follow.plan_errors < 3:
+            follow.fence, follow.phase = False, None
+            await _publish(manager, follow, retryAfter=time.time() + 300)
+            return
+        refused, step = True, 'plan'
     if refused:
         follow.fence, follow.phase = False, 'failed-unchanged'
         await _publish(manager, follow, attempt={**attempt, 'result': 'refused', 'step': step}, requested=None)
@@ -338,7 +345,7 @@ async def _finish(manager, follow, result, step=None):
         refresh.write_json(manager.home, refresh.REQUEST, request)
         await _release(manager)
     # Do not retain the refresh lock during publication or Scheduler calls.
-    follow.request, follow.fence = None, False
+    follow.request, follow.fence, follow.hold_pending = None, False, False
     follow.reopened, follow.held_at = False, None
     follow.remove_pending, follow.remove_tries, follow.remove_after = True, 0, 0
     attempt = _saved(manager).get('attempt') or {}
@@ -397,6 +404,13 @@ async def _commit_hold(manager, follow):
     follow.request, follow.hold_pending = request, False
 
 
+def _begun(manager, follow):
+    """Did a refresh change anything for this request? Rule R repairs only such a refresh."""
+    from . import windows_launcher_refresh as refresh
+    return (refresh.journal_kind(manager.home, follow.spec.registration_id) != 'none'
+        or refresh.started(manager.home, follow.request))
+
+
 async def _reopen(manager, follow):
     from . import windows_launcher_refresh as refresh
     with refresh.try_lock(manager.home) as locked:
@@ -443,7 +457,8 @@ async def _poll_once(manager, follow):
         return await _finish(manager, follow, record.get('result'), record.get('step'))
     if follow.reopened:
         follow.phase = 'needs-repair'
-        if record.get('state') == 'ready' and record.get('run') == follow.run:
+        # A repair go needs no setting, so it is only for a refresh that started.
+        if started and record.get('state') == 'ready' and record.get('run') == follow.run:
             await _go(manager, follow, repair=True)
         elif _idle(manager):
             await _repair(manager, follow, 3600)
@@ -478,8 +493,15 @@ async def _consider(manager, follow):
         if follow.held_at is None or time.time() - follow.held_at < 600:
             await _commit_hold(manager, follow)
             return
-        # The same bound as for a hold that was saved: admission does not stay
-        # closed for a hold that could not be saved. _reopen writes "no hold".
+        # The bound, also for a hold that could not be saved: admission does
+        # not stay closed for it. Rule R decides how it ends. A refresh that
+        # did not start changed nothing: the request is closed, as one attempt
+        # (_finish needs the lock and no stop record, and tries again when it
+        # has neither). A refresh that started stays an open request that
+        # needs a repair.
+        if not _begun(manager, follow):
+            await _finish(manager, follow, 'not-started')
+            return
         follow.hold_pending, follow.reopen_pending = False, True
     if follow.reopen_pending:
         await _reopen(manager, follow)
@@ -493,6 +515,7 @@ async def _consider(manager, follow):
             follow.facts['confirmed'] = await asyncio.to_thread(_confirmed, manager, follow)
         except Exception as error:
             # Not decided. An open request must still get its steps in this pass.
+            follow.unsaved = follow.unsaved or _saved(manager).get('error') != type(error).__name__
             _error(manager, error)
     if follow.announce:
         await _announce(manager, follow)

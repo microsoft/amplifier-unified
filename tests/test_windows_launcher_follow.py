@@ -695,21 +695,43 @@ async def test_apps_list_pass_only_for_confirmed_setup_once_and_failure_is_nonfa
 
 
 @pytest.mark.asyncio
-async def test_a_check_that_cannot_run_counts_once_and_does_not_keep_the_fence(rig):
+async def test_a_check_that_cannot_run_is_tried_three_times_then_counts_once_and_never_keeps_the_fence(rig):
     # Nothing outside the host has started. A fence that every pass sets again
     # would stop every update for as long as the check fails.
+    plans = lambda: sum(row[0] == 'plan' for row in rig.calls)
     rig.config.plan = PermissionError()
     await two_passes(rig)
-    assert not follow.fenced(rig.m)
-    assert saved(rig)['error'] == 'PermissionError'
+    assert plans() == 1 and not follow.fenced(rig.m)
+    assert saved(rig)['error'] == 'PermissionError' and not saved(rig).get('attempt')
+    assert saved(rig)['retryAfter'] == rig.now[0] + 300 and saved(rig)['phase'] is None
+    assert rig.m.published[-1]['launcherRefresh']['error'] == 'PermissionError'
+    await two_passes(rig)
+    assert plans() == 1  # Not before the 5 minutes.
+    rig.now[0] += 300
+    await follow.consider(rig.m)
+    assert plans() == 2 and not follow.fenced(rig.m) and not saved(rig).get('attempt')
+    rig.now[0] += 300
+    await follow.consider(rig.m)
     attempt = saved(rig)['attempt']
-    assert (attempt['result'], attempt['step'], attempt['automatic']) == ('refused', 'plan', True)
-    assert saved(rig)['phase'] == 'failed-unchanged' and 'request' not in rig.records
+    assert plans() == 3 and (attempt['result'], attempt['step'], attempt['automatic']) == ('refused', 'plan', True)
+    assert saved(rig)['phase'] == 'failed-unchanged' and not follow.fenced(rig.m)
     rig.config.plan = 'refresh'
     for _ in range(3):
+        rig.now[0] += 300
         await follow.consider(rig.m)
-    assert sum(row[0] == 'plan' for row in rig.calls) == 1
-    assert not follow.fenced(rig.m) and 'request' not in rig.records
+    assert plans() == 3 and not follow.fenced(rig.m) and 'request' not in rig.records
+
+
+@pytest.mark.asyncio
+async def test_a_check_that_fails_once_does_not_spend_the_attempt(rig):
+    rig.config.plan = PermissionError()
+    await two_passes(rig)
+    rig.config.plan = 'refresh'
+    rig.now[0] += 300
+    await follow.consider(rig.m)
+    assert rig.records['request']['status'] == 'open' and follow.fenced(rig.m)
+    assert saved(rig)['attempt']['result'] is None
+    assert [row[0] for row in rig.calls if row[0] in {'ensure', 'start'}] == ['ensure', 'start']
 
 
 @pytest.mark.asyncio
@@ -762,6 +784,22 @@ async def test_unreadable_confirmation_is_not_a_decision_and_keeps_the_request_s
     rig.config.recovery = good
     await follow.consider(rig.m)
     assert rig.m._launcher_follow.facts['confirmed'] is True
+
+
+@pytest.mark.asyncio
+async def test_unreadable_confirmation_is_saved_once_and_not_at_every_pass(rig):
+    good = rig.config.recovery
+    rig.config.recovery = {**good, 'status': 'prepared'}
+    rig.m.busy = True
+    await two_passes(rig)
+    count = len(rig.m.published)
+    # Nothing else changes in these passes: the error itself must cause the save.
+    rig.config.recovery = ValueError()
+    for _ in range(3):
+        await follow.consider(rig.m)
+    assert len(rig.m.published) == count + 1
+    assert rig.m.published[-1]['launcherRefresh']['error'] == 'ValueError'
+    assert rig.calls.count(('recovery',)) == 5 and rig.m._launcher_follow.facts['confirmed'] is None
 
 
 @pytest.mark.asyncio
@@ -832,20 +870,23 @@ async def test_task_that_windows_keeps_is_asked_for_ten_passes_then_once_an_hour
     assert rig.calls.count(('remove', False)) == 12 and not rig.m._launcher_follow.remove_pending
 
 
-def test_a_forced_restart_is_refused_while_the_launcher_request_is_open(rig):
-    """The command passes the first fence test; its own target has the fence."""
+def test_no_forced_restart_target_exists_while_the_launcher_request_is_open(rig):
+    """The command passes the first fence test. The forced restart's own target is the second.
+
+    On Windows `require` refuses every forced restart before it reads the target.
+    """
     from amplifier_web import update_restart
     from amplifier_web.updates import UpdateManager
     m = rig.m
     m.awaiting_restart = lambda: UpdateManager.awaiting_restart(m)
     m.state.update(phase='app-staged', application={},
         pendingApp={'revision': 'a' * 40, 'generation': 'b' * 32, 'attemptId': 'attempt'})
-    args = {**update_restart.target(m), 'confirm': True}
-    assert update_restart.require(m, args)
+    target = update_restart.target(m)
+    assert target == {'hostInstanceId': 'host', 'revision': 'a' * 40, 'generation': 'b' * 32, 'attemptId': 'attempt'}
     m._launcher_follow.fence = True
     assert update_restart.target(m) is None
     with pytest.raises(update_restart.RestartRejected):
-        update_restart.require(m, args)
+        update_restart.require(m, {**target, 'confirm': True})
 
 
 @pytest.mark.asyncio
@@ -1114,28 +1155,99 @@ async def test_failed_hold_write_retries_without_losing_closed_admission(rig, mo
     assert update_drain.held(rig.m.service)
 
 
-@pytest.mark.asyncio
-async def test_hold_that_cannot_be_saved_reaches_the_same_bound(rig, monkeypatch):
-    await two_passes(rig)
-    record(rig, 'ready')
-    write = rig.refresh.write_json
+def refuse_holds(rig, monkeypatch):
+    """The private write of a request that names a hold fails, for as long as the returned list holds True."""
+    write, refuse = rig.refresh.write_json, [True]
 
-    def refuses_a_hold(home, name, value):
-        if name == 'request' and value.get('hold'):
+    def flaky(home, name, value):
+        if refuse[0] and name == 'request' and value.get('hold'):
             raise PermissionError()
         write(home, name, value)
-    monkeypatch.setattr(rig.refresh, 'write_json', refuses_a_hold)
+    monkeypatch.setattr(rig.refresh, 'write_json', flaky)
+    return refuse
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('barrier', [None, 'lock', 'stop'])
+async def test_hold_that_cannot_be_saved_ends_at_the_bound_and_closes_a_refresh_that_did_not_start(
+        rig, monkeypatch, barrier):
+    """Rule R, second case. An unstarted refresh is never taken for one that needs a repair."""
+    await two_passes(rig)
+    record(rig, 'ready')
+    refuse_holds(rig, monkeypatch)
     for _ in range(3):
         await follow.consider(rig.m)
-    assert rig.m._launcher_follow.hold_pending and update_drain.held(rig.m.service)
+    f = rig.m._launcher_follow
+    assert f.hold_pending and update_drain.held(rig.m.service)
     assert rig.records['request']['hold'] is None and not rig.released
+    rig.m.service.state['settings']['updates']['autoInstall'] = False
+    rig.m.state['drain']['messages'] = [['chat', 'message']]
+    rig.now[0] += 600
+    if barrier:
+        rig.lock[0], rig.config.stop = barrier == 'lock', 'stop' if barrier == 'stop' else None
+        await follow.consider(rig.m)
+        # Neither the lock nor "no stop record": nothing changes, and the next pass tries again.
+        assert f.hold_pending and update_drain.held(rig.m.service) and follow.fenced(rig.m)
+        assert rig.records['request']['status'] == 'open' and not rig.released
+        rig.lock[0], rig.config.stop = False, None
+    await follow.consider(rig.m)
+    assert not f.hold_pending and not f.reopen_pending and not f.reopened and f.request is None
+    assert not update_drain.held(rig.m.service) and not follow.fenced(rig.m)
+    assert rig.released == [['chat', 'message']]
+    closed = rig.records['request']
+    assert (closed['status'], closed['result'], closed['hold']) == ('closed', 'not-started', None)
+    assert saved(rig)['attempt']['result'] == 'not-started' and saved(rig)['phase'] == 'failed-unchanged'
+    # The helper's record still says "ready" for this run, and the setting is off.
+    # No later pass gives a go, closes admission or starts the helper.
+    assert rig.records['record']['state'] == 'ready'
+    before = [row for row in rig.calls if row[0] in {'write', 'start', 'ensure', 'plan'}]
+    for _ in range(3):
+        rig.now[0] += 3600
+        await follow.consider(rig.m)
+    assert [row for row in rig.calls if row[0] in {'write', 'start', 'ensure', 'plan'}] == before
+    assert not update_drain.held(rig.m.service) and not follow.fenced(rig.m) and not rig.lock[0]
+
+
+@pytest.mark.asyncio
+async def test_hold_that_cannot_be_saved_for_a_started_refresh_reopens_for_its_repair_at_the_bound(rig, monkeypatch):
+    """Rule R, third case: the request stays open and fenced; only admission opens."""
+    request(rig, started=True)
+    refuse_holds(rig, monkeypatch)
+    follow.at_start(rig.m)
+    f = rig.m._launcher_follow
+    assert f.hold_pending and update_drain.held(rig.m.service) and follow.fenced(rig.m)
+    await follow.consider(rig.m)
+    assert f.hold_pending and saved(rig)['error'] == 'PermissionError'
     rig.now[0] += 600
     await follow.consider(rig.m)
-    f = rig.m._launcher_follow
     assert not f.hold_pending and not f.reopen_pending and f.reopened
     assert not update_drain.held(rig.m.service) and follow.fenced(rig.m)
     assert rig.records['request']['hold'] is None and rig.records['request']['status'] == 'open'
     assert saved(rig)['phase'] == 'needs-repair' and not rig.lock[0]
+
+
+@pytest.mark.asyncio
+async def test_a_reopened_request_whose_refresh_did_not_start_gets_no_repair_go(rig, monkeypatch):
+    """A repair go ignores the setting. It is only for a refresh that started."""
+    await two_passes(rig)
+    record(rig, 'ready')
+    refuse = refuse_holds(rig, monkeypatch)
+    await follow.consider(rig.m)
+    f = rig.m._launcher_follow
+    assert f.hold_pending
+    # A person's own refresh command left a record of its own: something is unfinished, and it is not this request's.
+    rig.records['journal'] = {'done': False}
+    rig.m.service.state['settings']['updates']['autoInstall'] = False
+    rig.now[0] += 600
+    await follow.consider(rig.m)
+    assert f.reopened and not f.hold_pending and not update_drain.held(rig.m.service) and follow.fenced(rig.m)
+    refuse[0] = False
+    for _ in range(3):
+        await follow.consider(rig.m)
+    # The record says "ready" for exactly this run, and the app is idle: still no go.
+    assert rig.records['record']['state'] == 'ready' and rig.records['record']['run'] == rig.run
+    assert rig.records['request']['hold'] is None and not update_drain.held(rig.m.service)
+    assert saved(rig)['phase'] == 'needs-repair'
 
 
 @pytest.mark.asyncio

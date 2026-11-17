@@ -416,11 +416,16 @@ restart of the PC or a power loss is settled at the next sign-in. The recovery
 always rolls back; it never finishes a refresh forward. A host that waited 10
 minutes with admission closed reopens as soon as it has the lock, says that
 one part of the update still needs a repair, and tries that repair about once
-an hour when no work runs. Until then Amplifier checks for no updates.
+an hour when no work runs. Until then Amplifier checks for no updates. That
+is for a refresh that started. The repair's own "go" needs no setting, so a
+host gives it only for such a refresh. A request whose refresh did not start
+changed nothing: the host closes it, as one counted attempt. A hold that a
+host could not save ends after the same 10 minutes, in one of these two ways.
 
 **Bounded.** One counted automatic attempt for one app version: a refusal, a
-check that could not run, a helper that did not become ready, or any settled
-result except "withdrawn"
+check that could not run three times in one host run (the host tries it again
+after 5 minutes), a helper that did not become ready, or any settled result
+except "withdrawn"
 (the app was busy at "go", or the setting was turned off). The next automatic
 attempt comes with the next app update. The page's install button tries once
 more for each press.
