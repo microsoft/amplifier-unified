@@ -280,7 +280,7 @@ _UNFINISHED = {
                 "Wait a few minutes or restart this PC, then select Stop Amplifier again.",
     "status": "Amplifier could not read its status.\n\nRestart this PC, then select Amplifier status again.",
     # The steps of an uninstall, in their order.
-    "entries-check": _UNCHANGED + "Its entries in the Start menu or the Apps list are in use, or they were "
+    "entries-check": _UNCHANGED + "Amplifier's entries in the Start menu or the Apps list are in use, or they were "
                      "changed after setup. If another Amplifier message is open, answer it first. "
                      "Otherwise restart this PC, then uninstall again.",
     "task-read": _UNCHANGED + "Amplifier could not read its start-at-sign-in entry from Windows Task "

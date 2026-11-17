@@ -1975,6 +1975,20 @@ STOPS = {
                    "Amplifier could not check its own installation files. Restart this PC, then uninstall again.",
     "questions": "This uninstall stopped before it changed anything.\n\n"
                  "Amplifier could not show one of its questions. Restart this PC, then uninstall again.",
+    "lock": "This uninstall stopped before it changed anything.\n\n"
+            "Amplifier could not find out whether it is being opened or uninstalled in another window. "
+            "Restart this PC, then uninstall again.",
+    "folder": "This uninstall stopped before it changed anything.\n\n"
+              "Amplifier could not check its own folder, so it deleted nothing. Restart this PC, then uninstall "
+              "again. If this message returns, select No in the first question: Amplifier is then uninstalled, and "
+              "its folder stays.",
+    "entries-check": "This uninstall stopped before it changed anything.\n\n"
+                     "Amplifier's entries in the Start menu or the Apps list are in use, or they were changed after "
+                     "setup. If another Amplifier message is open, answer it first. Otherwise restart this PC, then "
+                     "uninstall again.",
+    "task-read": "This uninstall stopped before it changed anything.\n\n"
+                 "Amplifier could not read its start-at-sign-in entry from Windows Task Scheduler. Restart this PC, "
+                 "then uninstall again.",
     "journal": "Amplifier has stopped and no longer starts when you sign in, but it could not begin to delete its "
                "folder. This uninstall deleted nothing in the folder.\n\n"
                "Wait a minute or restart this PC, then uninstall again. Amplifier might not open until then.",
