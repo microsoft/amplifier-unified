@@ -59,14 +59,13 @@ and installed-test instructions are in its README. Unified consumes the generate
 `portability-delivery/` and `worktrees-delivery/` selections, preserving the exact
 published dependency receipt; author edits do not refresh either app selection.
 
-[`worktrees/`](worktrees/README.md) is the temporary authoring home for the
-independently buildable managed Git worktree package and its real-Git tests.
-Unified consumes its published artifact selected into `worktrees-delivery/`,
-recorded by `worktrees.source.json`. From the author directory, `uv build` builds
-the standalone wheel/source distribution and `uv run --extra test pytest` runs its
-mechanism tests; no Unified or Core installation is needed. Normal Unified builds
-already include the package: do not coinstall its standalone distribution there.
-The future repository handoff remains a separate decision.
+[amplifier-platform-worktrees](https://github.com/bkrabach/amplifier-platform-worktrees)
+is the public authoring owner for the managed Git worktree mechanism and its
+real-Git tests. Unified consumes the exact published artifact selected into
+`worktrees-delivery/`, recorded by `worktrees.source.json`. Follow the
+[paired selection instructions](#select-worktrees-and-portability-artifacts).
+The host retains active-task, permission, handoff and cleanup policy. Do not
+restore an author copy here or coinstall the standalone distribution with Unified.
 
 [`publishing/`](publishing/README.md) is the temporary authoring home for the
 independently buildable static publishing package and its portable tests. Unified
@@ -85,6 +84,43 @@ Unified consumes the explicitly selected published wheel through the generated
 Author changes and component publication do not change that app default. The app
 remains the sole installed distribution owner; this is artifact assembly, not a
 separately updatable pip dependency. Do not restore a second author copy here.
+
+## Select Worktrees and Portability artifacts
+
+Worktrees is authored and published in
+[amplifier-platform-worktrees](https://github.com/bkrabach/amplifier-platform-worktrees).
+Unified selects its public `worktrees-v0.1.0` artifact together with the matching
+Portability `portability-v0.1.1` artifact from Unified's existing Portability author.
+The separate `microsoft/amplifier-portability` implementation has a different API;
+this delivery does not substitute it.
+
+Download each release's wheel, source archive, source receipt and `SHA256SUMS`
+into separate private directories. Verify both original receipt hashes against
+the reviewed publications. Select Worktrees first, then its matching Portability:
+
+```sh
+python scripts/scheduling_delivery.py select --component worktrees \
+  --dist /path/to/worktrees-assets --revision FULL_WORKTREES_SOURCE_SHA \
+  --receipt-sha256 REVIEWED_WORKTREES_RECEIPT_SHA256
+python scripts/scheduling_delivery.py select --component portability \
+  --dist /path/to/portability-assets --revision FULL_PORTABILITY_SOURCE_SHA \
+  --receipt-sha256 REVIEWED_PORTABILITY_RECEIPT_SHA256
+python scripts/scheduling_delivery.py verify --component worktrees
+python scripts/scheduling_delivery.py verify --component portability
+```
+
+Portability must name the exact selected Worktrees source receipt and artifact;
+matching versions alone do not suffice. Authoring, standalone publication and
+Unified selection remain separate. Keep both selections together in the reviewed
+consumer change; do not publish an intermediate mismatched pair.
+
+Normal wheel, source-archive and editable builds verify both generated snapshots
+offline, without their author checkouts. Unified remains the sole installed owner
+and carries each original provenance record and license under
+`amplifier_web/component_delivery/`. Historical receipts and releases retain their
+original source identities. No worktree files, ownership records, transfer
+journals or active work are moved or migrated; ordinary app rollback restores
+code while preserving newer caller-owned state.
 
 ## Select an Operations artifact
 
