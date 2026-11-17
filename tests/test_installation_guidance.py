@@ -75,7 +75,7 @@ class InstallationGuidanceTests(unittest.TestCase):
                 # and nothing deletes it.
                 "- **Anthropic API:** in our test on a PC, a chat wrote one small file outside the folder: "
                 "`%USERPROFILE%\\.amplifier\\rate-limit-state.json`. "
-                "Versions after 0.106.0 keep that file in the folder. We have not tested this on a PC yet. "
+                "Versions after 0.106.1 keep that file in the folder. We have not tested this on a PC yet. "
                 "A file that an earlier version wrote stays where it is. "
                 "Later versions do not use it, and uninstall does not remove it. You can delete it.",
                 "- **GitHub Copilot Subscription:** its component makes two folders, "
@@ -86,8 +86,10 @@ class InstallationGuidanceTests(unittest.TestCase):
                 "we have not tested this.")
         # The item is these sentences and nothing else: it must not say that nothing is outside the folder.
         self.assertEqual(folder.split(" depends on the AI connection: ", 1)[1], " ".join(statements))
-        # "Versions after 0.106.0 keep that file in the folder" is the host's rule, with that file name.
-        # 0.106.0 is the last release without the rule: the version that is named is not later than this one.
+        # "Versions after 0.106.1 keep that file in the folder" is the host's rule, with that file name.
+        # 0.106.1 is the last release without the rule. This check refuses only a version that does not exist
+        # yet. It cannot see a release: whoever merges a change of this sentence checks, directly before the
+        # merge, that the named version is the latest release.
         from amplifier_web.provider_state_files import STATE_FILES
         self.assertEqual(STATE_FILES["provider-anthropic"]["rate_limit_state_path"], "rate-limit-state.json")
         self.assertIn('"AMPLIFIER_HOME": "shared"', source("amplifier_web/windows_consumer.py"))
