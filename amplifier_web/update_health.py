@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import sys
 import time
 
 from .update_diagnostics import RUNTIME_SOURCE_REASONS, failure_guidance
@@ -76,13 +77,21 @@ def browser_view(updates):
     publish `updates` too, so the view also requires the state that the claim
     describes. A claim that the state no longer supports changes nothing:
     the page then gets the real marker, phase and error.
+
+    The page offers "Interrupt work and restart" whenever it gets
+    `forceRestartTarget`. It gets none when no work delays the update, and none
+    on Windows, where a forced restart is always refused (update_restart.require).
+    The saved field stays: task.waitForUpdate names it.
     """
-    live = updates.get('activation')
-    if not (live == 'installing' and _replacing(updates)
-            or live == 'starting' and _prepared(updates) and not updates.get('blockers')):
+    claim = updates.get('activation')
+    live = bool(claim == 'installing' and _replacing(updates)
+                or claim == 'starting' and _prepared(updates) and not updates.get('blockers'))
+    if not live and (updates.get('forceRestartTarget') is None or sys.platform != 'win32'):
         return updates
-    view = {**updates, 'phase': 'activating'}
-    view.pop('pendingReplacement', None)
+    view = {**updates, 'forceRestartTarget': None}
+    if live:
+        view['phase'] = 'activating'
+        view.pop('pendingReplacement', None)
     return view
 
 

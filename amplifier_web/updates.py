@@ -536,7 +536,7 @@ class UpdateManager:
         self._update_health_seen_revision = service.state.get('configurationRevision')
         from .update_restart import target
         state['activation'] = activation(self)
-        state['forceRestartTarget'] = None if state['activation'] in {'starting', 'installing'} else target(self)
+        state['forceRestartTarget'] = target(self)
         publish_health(self)
         if restart_repair:
             self.diagnostics.record('restart-repair','failed',errorType='ValueError',preserve_last_failure=True)
@@ -582,7 +582,9 @@ class UpdateManager:
             state['detail'] = PREPARED_STARTING if state['activation'] == 'starting' else PREPARED_WAITING
         publish_health(self)
         from .update_restart import target
-        state['forceRestartTarget'] = None if state['activation'] in {'starting', 'installing'} else target(self)
+        # Also the identity that task.waitForUpdate names. The page's offer to
+        # interrupt work is a matter of its view (update_health.browser_view).
+        state['forceRestartTarget'] = target(self)
         return before != tuple(state.get(key) for key in fields)
 
     def configuration_changed(self):

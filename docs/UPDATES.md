@@ -284,7 +284,9 @@ active objective at a supported native turn boundary as described below.
 `updates.activation` describes the prepared app: `waiting` while work blocks it,
 or `starting` when it can continue by itself. When no work runs, the update starts
 by itself and the page offers no interruption. The saved phase stays `app-staged`
-until the replacement marker is written.
+until the replacement marker is written. `updates.forceRestartTarget` stays in
+the saved state in both cases, because `task.waitForUpdate` names it. Only the
+bundled page's view omits it: when no work delays the update, and on Windows.
 
 `updates.forceRestart` requires `confirm: true` and the exact
 `hostInstanceId`, staged `revision`, `generation`, and `attemptId` from
@@ -293,7 +295,9 @@ supply its own confirmation. A changed host or candidate rejects the request
 before effects. The action returns a request ID; a queued rejection is reported
 in `updates.forceRestartResult` for that request, without an automatic retry.
 Force is available only for an immutable qualified application generation, not
-an in-place legacy installation or an ecosystem-only update.
+an in-place legacy installation or an ecosystem-only update. On Windows a forced
+restart is not available: the request is refused before it is recorded, and the
+prepared update stays as it is and continues when work has finished.
 
 Candidate and serving-component validation still run. At final admission the
 normal durable replacement fence blocks new work, then the owned runtime is
