@@ -220,6 +220,16 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
         print(f'LONGEST {size:3} {kind:6} {"needed" if needed else "not needed":10} {name}: {relative}')
     # No path that the app or a chat needs passes the limit. Windows refused nothing above: every step ended well.
     assert [row for row in over if budget.needed(row[2])] == []
+    # What happens to each path over the limit. The source store wrote it, through the extended-length form.
+    # An ordinary path does not open such a file. Windows creates no folder over its limit by an ordinary
+    # path (see long_paths_off), and it still reads one that exists while the path is inside the file limit.
     for size, kind, relative in over:
-        assert relative.startswith(budget.SOURCE_FOLDER + '\\objects\\'), relative   # written by the source store
-        assert os.path.lexists(native.EXTENDED + str(root / relative)) and not os.path.lexists(root / relative)
+        assert relative.startswith(budget.SOURCE_FOLDER + '\\objects\\'), relative
+        assert os.path.lexists(native.EXTENDED + str(root / relative))
+        assert os.path.lexists(root / relative) == (kind == budget.FOLDER and size <= budget.FILE_LIMIT), relative
+    print('MEASURED each path over the limit exists, written by the source store through extended-length paths; '
+          'an ordinary path opens none of the files')
+    # The same files in the two places from which a program reads them by an ordinary path are inside the limit:
+    # the build view of a module (42 characters shorter) and uv's own copy.
+    for name in (budget.SOURCE_FOLDER + '\\builds', 'cache', 'app\\runtime', 'app\\updates', 'capture'):
+        assert not [row for row in over if area(row[2]) == name], name
