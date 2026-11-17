@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import base64
 import binascii
-import colorsys
+from collections import OrderedDict
 import hashlib
 import html
 import io
@@ -14,6 +14,7 @@ import re
 import socket
 import stat
 import struct
+import threading
 import unicodedata
 import warnings
 
@@ -22,6 +23,10 @@ from .deployment import canonical_host, write_private
 MAX_IMAGE_BYTES = 2 * 1024 * 1024
 MAX_IMAGE_TEXT = 4 * ((MAX_IMAGE_BYTES + 2) // 3)
 SIZES = (32, 180, 192, 512)
+# Light Reference accent for requests made before a browser supplies its own.
+REFERENCE_ACCENT = '#48646d'
+_ICON_GENERATION = 'rounded-contrast-v1'
+_ICON_CACHE_LIMIT = 32
 # Match the existing native private-file read AND publication boundary.
 _RECORD_LIMIT = 1024 * 1024
 _WINDOWS = os.name == 'nt'
@@ -67,12 +72,13 @@ def definitions(schema, string):
             schema()),
         'instanceBranding.update': (
             'Change this server listener’s app name or icon for every browser. '
-            'An empty name uses the default; image is raw base64 PNG, JPEG, WebP, GIF or ICO '
+            'An empty name uses the default; an empty color uses the browser appearance accent. '
+            'Image is raw base64 PNG, JPEG, WebP, GIF or ICO '
             '(up to 2 MB and 4096 × 4096). An empty image returns to the colored badge. '
             'Requires global host-defaults authority.',
             schema({'patch': schema({
                 'name': string(120),
-                'color': {'type': 'string', 'pattern': '^#[0-9a-fA-F]{6}$'},
+                'color': {'type': 'string', 'pattern': '^(?:#[0-9a-fA-F]{6})?$'},
                 'image': string(MAX_IMAGE_TEXT),
             }, [])}, ['patch'])),
         'instanceBranding.reset': (
@@ -94,6 +100,62 @@ def _color(value):
     if not isinstance(value, str) or not re.fullmatch(r'#[0-9a-fA-F]{6}', value):
         raise ValueError('Use a six-digit hex color, such as #456abc.')
     return value.lower()
+
+
+def _accent(value):
+    """An untrusted URL parameter, never a persisted listener preference."""
+    if isinstance(value, str) and re.fullmatch(r'[0-9a-fA-F]{6}', value):
+        return value.lower()
+    return None
+
+
+def _contrast_ink(color):
+    """Choose black or white with at least 4.58:1 contrast against any sRGB."""
+    rgb = [int(color[index:index + 2], 16) / 255 for index in (1, 3, 5)]
+    linear = [channel / 12.92 if channel <= .04045 else ((channel + .055) / 1.055) ** 2.4
+              for channel in rgb]
+    luminance = sum(channel * weight for channel, weight in zip(linear, (.2126, .7152, .0722)))
+    return '#000000' if (luminance + .05) / .05 >= 1.05 / (luminance + .05) else '#ffffff'
+
+
+def _load_mark():
+    from PIL import Image
+    path = Path(__file__).parent / 'static/branding/pwa/pwa-512.png'
+    try:
+        with Image.open(path) as source:
+            mark = source.convert('RGBA')
+            mark.thumbnail((352, 352), Image.Resampling.LANCZOS)
+            return mark
+    except OSError:
+        # Match the existing missing-static behavior: the host can still start,
+        # but icon generation fails rather than inventing replacement artwork.
+        return None
+
+
+def _badge(size, color, mark):
+    from PIL import Image, ImageDraw, ImageFilter
+    if mark is None:
+        raise FileNotFoundError('Bundled Amplifier icon artwork is unavailable.')
+    # The contrasting outer rim separates even a white/black badge from a
+    # matching launcher. The halo separates the original colored mark from
+    # arbitrary accents without flattening or replacing its artwork.
+    canvas = Image.new('RGBA', (512, 512), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(canvas)
+    ink = _contrast_ink(color)
+    draw.rounded_rectangle((0, 0, 511, 511), radius=112, fill=ink)
+    draw.rounded_rectangle((7, 7, 504, 504), radius=105, fill=color)
+    offset = ((512 - mark.width) // 2, (512 - mark.height) // 2)
+    mask = Image.new('L', canvas.size, 0)
+    mask.paste(mark.getchannel('A'), offset)
+    halo = Image.new('RGBA', canvas.size, ink)
+    halo.putalpha(mask.filter(ImageFilter.MaxFilter(17)))
+    canvas.alpha_composite(halo)
+    canvas.alpha_composite(mark, offset)
+    return canvas.resize((size, size), Image.Resampling.LANCZOS)
+
+
+class StaleIconRevision(ValueError):
+    """A versioned URL cannot name pixels from another listener revision."""
 
 
 def _png(image):
@@ -152,11 +214,13 @@ class InstanceBranding:
         hostname = _name(socket.gethostname().split('.')[0][:80]) or 'this computer'
         port = '' if config['port'] in {80, 443} else f":{config['port']}"
         self.default_name = f'Amplifier · {hostname}{port}'
-        seed = hashlib.sha256((hostname + key).encode()).digest()
-        rgb = colorsys.hls_to_rgb(int.from_bytes(seed[:2], 'big') / 65536, .40, .62)
-        self.default_color = '#' + ''.join(f'{round(channel * 255):02x}' for channel in rgb)
-        self._icons = {}
+        self.default_color = REFERENCE_ACCENT
+        self._icons = OrderedDict()
+        self._icon_lock = threading.Lock()
         self._record = self._load()
+        # Pin the packaged mark at startup. Snapshot, manifest and icon reads,
+        # including uncached browser accents, do not read configuration/assets.
+        self._mark = _load_mark()
         self._refresh()
 
     def _load(self):
@@ -187,16 +251,19 @@ class InstanceBranding:
     def _refresh(self):
         name = self._record['name'] or self.default_name
         color = self._record['color'] or self.default_color
-        revision = hashlib.sha256(json.dumps([name, color, self._record['image']],
+        mode = 'custom' if self._record['color'] else 'appearance'
+        revision = hashlib.sha256(json.dumps([_ICON_GENERATION, name, color, mode, self._record['image']],
                                             ensure_ascii=True).encode()).hexdigest()[:24]
-        self._snapshot = {
+        snapshot = {
             'name': name, 'defaultName': self.default_name,
-            'color': color, 'defaultColor': self.default_color,
+            'color': color, 'defaultColor': self.default_color, 'colorMode': mode,
             'iconUrl': f'/instance-icon/192.png?v={revision}',
             'customIcon': bool(self._record['image']), 'revision': revision,
         }
-        self._current = (self._record, self._snapshot)
-        self._icons.clear()
+        with self._icon_lock:
+            self._snapshot = snapshot
+            self._current = (self._record, snapshot)
+            self._icons.clear()
 
     def snapshot(self):
         return dict(self._snapshot)
@@ -209,7 +276,7 @@ class InstanceBranding:
         if 'name' in patch:
             result['name'] = _name(patch['name'])
         if 'color' in patch:
-            result['color'] = _color(patch['color'])
+            result['color'] = '' if patch['color'] == '' else _color(patch['color'])
         if 'image' in patch:
             result['image'] = safe_image(patch['image']) if patch['image'] != '' else ''
         return result
@@ -226,43 +293,54 @@ class InstanceBranding:
             self._refresh()
         return self.snapshot()
 
-    def icon_url(self, size):
-        return f'/instance-icon/{size}.png?v={self._snapshot["revision"]}'
+    def icon_url(self, size, accent=None, *, snapshot=None):
+        snapshot = snapshot or self._snapshot
+        accent = _accent(accent)
+        suffix = f'&accent={accent}' if accent and snapshot['colorMode'] == 'appearance' and not snapshot['customIcon'] else ''
+        return f'/instance-icon/{size}.png?v={snapshot["revision"]}{suffix}'
 
-    def icon(self, size):
+    def icon(self, size, accent=None, *, revision=None):
         from PIL import Image, ImageOps
         if size not in SIZES:
             raise ValueError('Choose an app icon size of 32, 180, 192 or 512.')
-        # Requests encode off the event loop. A preference change during that
-        # encode must not put old pixels into the new revision's cache.
-        record, snapshot = self._current
-        key = (snapshot['revision'], size)
-        cached = self._icons.get(key)
+        with self._icon_lock:
+            current = self._current
+            record, snapshot = current
+            if revision is not None and revision != snapshot['revision']:
+                raise StaleIconRevision('This app icon URL is no longer current.')
+            accent = _accent(accent) if snapshot['colorMode'] == 'appearance' and not record['image'] else None
+            color = '#' + accent if accent else snapshot['color']
+            key = (snapshot['revision'], size, color if not record['image'] else None)
+            cached = self._icons.get(key)
+            if cached is not None:
+                self._icons.move_to_end(key)
         if cached is None:
             if record['image']:
                 with Image.open(io.BytesIO(base64.b64decode(record['image']))) as source:
                     image = ImageOps.pad(source.convert('RGBA'), (size, size),
                                          method=Image.Resampling.LANCZOS, color=(0, 0, 0, 0))
             else:
-                image = Image.new('RGBA', (512, 512), snapshot['color'])
-                # Keep the shipped Amplifier mark recognizable, with enough
-                # surrounding instance color to distinguish installed apps.
-                mark_path = Path(__file__).parent / 'static/branding/pwa/pwa-512.png'
-                with Image.open(mark_path) as source:
-                    mark = source.convert('RGBA')
-                    mark.thumbnail((384, 384), Image.Resampling.LANCZOS)
-                    image.alpha_composite(mark, ((512 - mark.width) // 2, (512 - mark.height) // 2))
-                image = image.resize((size, size), Image.Resampling.LANCZOS)
+                image = _badge(size, color, self._mark)
             cached = _png(image)
-            if self._current[1]['revision'] == snapshot['revision']:
-                self._icons[key] = cached
+            with self._icon_lock:
+                # Object identity also rejects A -> B -> A while encoding.
+                if self._current is current:
+                    self._icons[key] = cached
+                    self._icons.move_to_end(key)
+                    while len(self._icons) > _ICON_CACHE_LIMIT:
+                        self._icons.popitem(last=False)
         return cached
 
-    def manifest(self, template):
-        result = {**template, 'name': self._snapshot['name'], 'short_name': self._snapshot['name']}
-        result['icons'] = [{**icon, 'src': self.icon_url(int(icon['sizes'].split('x')[0]))}
-                           if icon.get('sizes') in {'192x192', '512x512'} else dict(icon)
-                           for icon in template['icons']]
+    def manifest(self, template, accent=None):
+        snapshot = self._snapshot
+        result = {**template, 'name': snapshot['name'], 'short_name': snapshot['name']}
+        result['icons'] = [
+            {**icon, 'src': self.icon_url(int(icon['sizes'].split('x')[0]), accent, snapshot=snapshot)}
+            if (icon.get('sizes') in {'192x192', '512x512'}
+                and 'maskable' not in icon.get('purpose', 'any').split())
+            else dict(icon)
+            for icon in template['icons']
+        ]
         return result
 
     def document(self, source, *, login=False):

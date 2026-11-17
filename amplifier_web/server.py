@@ -834,19 +834,54 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     static = Path(__file__).parent / "static"
     manifest_path = static / 'manifest.webmanifest'
     manifest_template = json.loads(manifest_path.read_text(encoding='utf-8')) if manifest_path.exists() else None
+    icon_encodes = 0
 
     async def instance_manifest(request):
         if manifest_template is None:
             raise AppError("Frontend assets are missing. Build frontend before packaging.", 503)
-        return web.json_response(service.instance_branding.manifest(manifest_template),
+        accents = request.query.getall('accent', [])
+        accent = accents[0] if len(accents) == 1 else None
+        return web.json_response(service.instance_branding.manifest(manifest_template, accent),
                                  content_type='application/manifest+json')
 
     async def instance_icon(request):
-        from .instance_branding import SIZES
+        nonlocal icon_encodes
+        from functools import partial
+        from .instance_branding import SIZES, StaleIconRevision
         size = int(request.match_info['size'])
         if size not in SIZES:
             raise web.HTTPNotFound()
-        content = await asyncio.to_thread(service.instance_branding.icon, size)
+        accents = request.query.getall('accent', [])
+        revisions = request.query.getall('v', [])
+        if len(revisions) > 1:
+            raise web.HTTPGone()
+        # Public arbitrary variants must not build an unbounded executor queue.
+        # Hold the slot until the actual thread finishes, even if the request
+        # is cancelled, rather than releasing it when its waiter disappears.
+        if icon_encodes >= 4:
+            raise web.HTTPServiceUnavailable(headers={'Retry-After': '1'})
+        icon_encodes += 1
+        try:
+            future = asyncio.get_running_loop().run_in_executor(
+                None, partial(service.instance_branding.icon, size,
+                              accents[0] if len(accents) == 1 else None,
+                              revision=revisions[0] if revisions else None))
+        except BaseException:
+            icon_encodes -= 1
+            raise
+
+        def finished(future):
+            nonlocal icon_encodes
+            icon_encodes -= 1
+            # Retrieve any exception if the original HTTP waiter was cancelled.
+            if not future.cancelled():
+                future.exception()
+
+        future.add_done_callback(finished)
+        try:
+            content = await asyncio.shield(future)
+        except StaleIconRevision:
+            raise web.HTTPGone() from None
         return web.Response(body=content, content_type='image/png')
 
     app.router.add_get('/manifest.webmanifest', instance_manifest)
