@@ -8,7 +8,10 @@ name: Provider state files
 # Core's own session initialization, and the module talks to an HTTP server on
 # the runner. Nothing goes to a model and no key is needed. Without the host's
 # step the files appear below the profile; with it they are in the shared home
-# and the profile stays empty. A skipped case fails here.
+# and the profile stays empty. A case that fails, is skipped or does not run
+# fails the job: each step checks the exit status of pytest and its summary
+# line (tests/test_provider_state_files_workflow.py runs the Linux step's own
+# script with failing and skipped results).
 #
 # It is not setup-file or clean-account acceptance: no installation, no app
 # and no chat.
@@ -29,7 +32,11 @@ on:
       - amplifier_web/ai_services.json
       - README.md
       - tests/test_provider_state_files.py
+      - tests/test_provider_state_files_workflow.py
       - tests/test_installation_guidance.py
+      # Test files that the state-file cases take fixtures and numbers from.
+      - tests/test_host_session_resume.py
+      - tests/test_provider_environment.py
       - tests/test_windows_path_budget.py
       # A dependency change can bring a module version with another file or name.
       - pyproject.toml
@@ -67,9 +74,9 @@ jobs:
           AMPLIFIER_REQUIRE_PROVIDER_STATE_FILES: '1'
         run: |
           .\.venv\Scripts\python.exe -B -m pytest -q -rA -p no:cacheprovider tests/test_provider_state_files.py | Tee-Object -Variable report
-          if ($LASTEXITCODE -ne 0) { throw 'A provider state file is not in the shared home on native Windows.' }
-          $summary = ($report | Select-Object -Last 1)
-          if (-not ($summary -match '\d+ passed') -or ($summary -match 'skipped|deselected')) { throw "A case did not run; on this lane every case must run: $summary" }
+          if ($LASTEXITCODE -ne 0) { throw 'A provider state-file case failed on native Windows.' }
+          $summary = [string]($report | Where-Object { $_ } | Select-Object -Last 1)
+          if ($summary -notmatch '^\d+ passed(, \d+ warnings?)? in ') { throw "A case did not pass or did not run; on this lane every case must run: $summary" }
   linux:
     name: Provider state files, the README item and the probes
     runs-on: ubuntu-latest
@@ -83,15 +90,24 @@ jobs:
           python-version: '3.13'
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
       - run: uv sync --locked --group dev
+      # "shell: bash" gives pipefail: without it the step would take the status
+      # of tee, not of pytest. The summary line must name passed cases only.
       - name: Require every state-file case with no skip
+        shell: bash
         env:
           AMPLIFIER_REQUIRE_PROVIDER_STATE_FILES: '1'
         run: |
+          set -euo pipefail
           uv run --no-sync pytest -q -rA tests/test_provider_state_files.py | tee report.txt
-          tail -n 1 report.txt | grep -E '[0-9]+ passed' | grep -vqE 'skipped|deselected'
+          summary=$(grep -v '^$' report.txt | tail -n 1)
+          if ! grep -qE '^[0-9]+ passed(, [0-9]+ warnings?)? in ' <<<"$summary"; then
+            echo "A case did not pass or did not run; on this lane every case must run: $summary" >&2
+            exit 1
+          fi
       # The README item "Folder" names every AI connection that the app offers.
       - name: Check the README item and the tests around the changed code
         run: >-
-          uv run --no-sync pytest -q -ra tests/test_installation_guidance.py tests/test_provider_environment.py
+          uv run --no-sync pytest -q -ra tests/test_provider_state_files_workflow.py
+          tests/test_installation_guidance.py tests/test_provider_environment.py
           tests/test_portability_probe.py tests/test_ephemeral_mcp.py tests/test_host_children.py
           tests/test_image_setup.py tests/test_catalog_review_boundaries.py

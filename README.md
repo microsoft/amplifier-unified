@@ -90,9 +90,10 @@ Limits of this preview:
     folder.
   - **Anthropic API:** in our test on a PC, a chat wrote one small file
     outside the folder: `%USERPROFILE%\.amplifier\rate-limit-state.json`.
-    Amplifier now keeps that file in the folder. A file that an earlier
-    version of this preview wrote is still there. Amplifier does not use it
-    any more, and uninstall does not remove it. You can delete it.
+    Versions after 0.106.0 keep that file in the folder. We have not tested
+    this on a PC yet. A file that an earlier version wrote stays where it
+    is. Later versions do not use it, and uninstall does not remove it. You
+    can delete it.
   - **GitHub Copilot Subscription:** its component makes two folders,
     `%USERPROFILE%\.amplifier-provider-github-copilot` and
     `%LOCALAPPDATA%\amplifier-provider-github-copilot`. We read this in its

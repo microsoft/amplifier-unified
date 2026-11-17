@@ -74,9 +74,10 @@ class InstallationGuidanceTests(unittest.TestCase):
                 # Seen on a PC with an earlier version. An installation that ran one can hold this file,
                 # and nothing deletes it.
                 "- **Anthropic API:** in our test on a PC, a chat wrote one small file outside the folder: "
-                "`%USERPROFILE%\\.amplifier\\rate-limit-state.json`. Amplifier now keeps that file in the folder. "
-                "A file that an earlier version of this preview wrote is still there. "
-                "Amplifier does not use it any more, and uninstall does not remove it. You can delete it.",
+                "`%USERPROFILE%\\.amplifier\\rate-limit-state.json`. "
+                "Versions after 0.106.0 keep that file in the folder. We have not tested this on a PC yet. "
+                "A file that an earlier version wrote stays where it is. "
+                "Later versions do not use it, and uninstall does not remove it. You can delete it.",
                 "- **GitHub Copilot Subscription:** its component makes two folders, "
                 "`%USERPROFILE%\\.amplifier-provider-github-copilot` and "
                 "`%LOCALAPPDATA%\\amplifier-provider-github-copilot`. We read this in its source code. "
@@ -85,10 +86,14 @@ class InstallationGuidanceTests(unittest.TestCase):
                 "we have not tested this.")
         # The item is these sentences and nothing else: it must not say that nothing is outside the folder.
         self.assertEqual(folder.split(" depends on the AI connection: ", 1)[1], " ".join(statements))
-        # "Amplifier now keeps that file in the folder" is the host's rule, with that file name.
+        # "Versions after 0.106.0 keep that file in the folder" is the host's rule, with that file name.
+        # 0.106.0 is the last release without the rule: the version that is named is not later than this one.
         from amplifier_web.provider_state_files import STATE_FILES
         self.assertEqual(STATE_FILES["provider-anthropic"]["rate_limit_state_path"], "rate-limit-state.json")
         self.assertIn('"AMPLIFIER_HOME": "shared"', source("amplifier_web/windows_consumer.py"))
+        named, = re.findall(r"Versions after (\d+\.\d+\.\d+) keep", folder)
+        current = re.search(r'^version = "(\d+\.\d+\.\d+)"$', source("pyproject.toml"), re.M).group(1)
+        self.assertLessEqual(tuple(map(int, named.split("."))), tuple(map(int, current.split("."))))
         # Uninstall: the questions and the three buttons are the product's own, and each answer has its result.
         # A sentence of the product can continue in the next string of its source.
         consumer = re.sub(r'"\s*\n\s*"', "", source("amplifier_web/windows_consumer.py"))

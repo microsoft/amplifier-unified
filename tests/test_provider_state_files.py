@@ -65,7 +65,7 @@ def folders(tmp_path, monkeypatch):
     monkeypatch.setenv('NO_PROXY', '127.0.0.1')
     # Nothing in this file may reach the real home folder.
     assert Path(os.path.expanduser('~')) == profile
-    return SimpleNamespace(profile=profile, shared=shared.resolve())
+    return SimpleNamespace(profile=profile, shared=shared.resolve(), declared=str(shared))
 
 
 def below(folder):
@@ -265,10 +265,25 @@ async def test_a_child_chat_gets_the_paths_and_its_saved_plan_holds_none(folders
 # The settings page and the transfer check construct a provider without a session.
 
 
+def module_source(registry, prepared):
+    """Stands in for Foundation's bundle of one module source. It records the home that preparation sees."""
+    class Source:
+        @staticmethod
+        def from_dict(value):
+            return Source()
+
+        async def prepare(self, strict):
+            # The registry of this process, as a probe sets it for a module source.
+            assert os.environ['AMPLIFIER_HOME'] == str(registry)
+            prepared.append(os.environ['AMPLIFIER_HOME'])
+
+    return Source
+
+
 async def test_a_connection_test_gets_the_paths_that_it_read_before_the_registry_home(folders, monkeypatch, tmp_path):
     import amplifier_foundation
     from amplifier_web import provider_probe
-    constructed = []
+    constructed, prepared = [], []
 
     class Provider:
         def get_info(self):
@@ -280,15 +295,6 @@ async def test_a_connection_test_gets_the_paths_that_it_read_before_the_registry
         async def list_image_models(self):
             return []
 
-    class Source:
-        @staticmethod
-        def from_dict(value):
-            return Source()
-
-        async def prepare(self, strict):
-            # The registry of this process, as the probe sets it for a module source.
-            assert os.environ['AMPLIFIER_HOME'] == str(tmp_path / 'registry')
-
     async def schema(*arguments, **options):
         return {'fields': []}
 
@@ -299,7 +305,7 @@ async def test_a_connection_test_gets_the_paths_that_it_read_before_the_registry
         constructed.append(config)
         return Provider()
 
-    monkeypatch.setattr(amplifier_foundation, 'Bundle', Source)
+    monkeypatch.setattr(amplifier_foundation, 'Bundle', module_source(tmp_path / 'registry', prepared))
     monkeypatch.setattr(provider_probe, 'provider_class', lambda module: Provider)
     monkeypatch.setattr(provider_probe, 'construct_schema_provider', lambda *arguments: Provider())
     monkeypatch.setattr(provider_probe, 'construct_provider', construct)
@@ -308,38 +314,50 @@ async def test_a_connection_test_gets_the_paths_that_it_read_before_the_registry
     request = {'module': ANTHROPIC, 'action': 'providers.imageModels', 'source': 'fixture-source',
                'registryHome': str(tmp_path / 'registry'), 'config': {'fallback_state_path': ''}}
     await provider_probe.query(request)
+    assert prepared == [str(tmp_path / 'registry')]   # The home did change before the provider was constructed.
     assert constructed == [{'rate_limit_state_path': str(folders.shared / RATE), 'fallback_state_path': ''}]
     await provider_probe.query({'module': 'provider-openai', 'action': 'providers.imageModels', 'config': {'a': 1}})
     assert constructed[1] == {'a': 1}
 
 
-async def test_the_readiness_check_of_a_transfer_gets_the_paths(folders, monkeypatch):
+@pytest.mark.parametrize('source', [None, 'fixture-source'], ids=['installed module', 'module source'])
+async def test_the_readiness_check_of_a_transfer_asks_the_model_with_the_paths(folders, monkeypatch, tmp_path, source):
+    import amplifier_foundation
     from amplifier_web import portability_probe
     from amplifier_web.portability_policy import readiness_policy
-    from test_portability_probe import completed_response
-    constructed = []
+    constructed, asked, prepared = [], [], []
 
     class Provider:
         def __init__(self, *, api_key=None, config=None):
+            self.config = config
             constructed.append(config)
 
         def get_info(self):
             return {'capabilities': ['completion:single_attempt:v1', 'completion:single_attempt:v2'], 'config_fields': []}
 
         async def complete(self, request, **options):
-            return completed_response()
+            asked.append(self.config)   # The model call. Its answer is not the subject here.
+            raise RuntimeError('no answer')
 
         async def close(self):
             pass
 
+    # The transfer fence is not the subject. tests/test_portability_probe.py runs it.
+    monkeypatch.setattr(portability_probe, '_runtime_transfer_fence', lambda: None)
     monkeypatch.setattr(portability_probe, 'provider_class', lambda module: Provider)
-    result = await portability_probe.probe({
-        'module': ANTHROPIC, 'config': {'api_key': 'k', 'fallback_state_path': ''}, 'model': 'selected-model',
-        'readinessPolicy': readiness_policy(ANTHROPIC, 'anthropic', 'selected-model', 'high')})
-    assert result['accountVerified'] is True
-    # The first instance reads the schema only. A configured value stays.
-    assert constructed == [{}, {'api_key': 'k', 'fallback_state_path': '',
-                                'rate_limit_state_path': str(folders.shared / RATE)}]
+    monkeypatch.setattr(amplifier_foundation, 'Bundle', module_source(tmp_path / 'registry', prepared))
+    request = {'module': ANTHROPIC, 'config': {'api_key': 'k', 'fallback_state_path': ''}, 'model': 'selected-model',
+               'readinessPolicy': readiness_policy(ANTHROPIC, 'anthropic', 'selected-model', 'high')}
+    if source:
+        request.update(source=source, registryHome=str(tmp_path / 'registry'))
+    result = await portability_probe.probe(request)
+    assert result['code'] == 'probe_failed'   # The stand-in gives no answer.
+    # With a module source the home changes for the preparation, and it is the shared home again afterwards.
+    assert prepared == ([str(tmp_path / 'registry')] if source else [])
+    assert os.environ['AMPLIFIER_HOME'] == folders.declared
+    # The first instance reads the schema only. The second gets the model call. A configured value stays.
+    expected = {'api_key': 'k', 'fallback_state_path': '', 'rate_limit_state_path': str(folders.shared / RATE)}
+    assert constructed == [{}, expected] and asked == [expected]
 
 
 # The real module: the cause, and the fix.
@@ -433,6 +451,8 @@ def test_the_names_are_the_ones_the_module_uses():
         assert f'os.path.expanduser("~"),".amplifier","{name}"' in joined
         assert f'self.config.get("{key}",' in joined
     assert text.count('os.path.expanduser("~")') == len(STATE_FILES[ANTHROPIC]) == 2
+    for other in ('Path.home(', 'USERPROFILE', 'APPDATA', 'XDG_', 'tempfile.', 'gettempdir'):
+        assert other not in text, other   # No other way to a folder outside the configured paths.
     assert text.count('tmp_path = path + ".tmp"') == 2   # Each file is written beside itself, then renamed.
 
 
