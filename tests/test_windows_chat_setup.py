@@ -19,8 +19,12 @@ other waits for it. One preparation is cancelled while its first command runs,
 as ``RuntimeManager.stop`` cancels it when a person stops the chat, and the
 chat is then started again. The case reads the list of processes until it
 finds none of the stopped preparation. That list is a sample, and the case
-prints it as a measurement. ``tests/test_windows_stopped_command.py`` shows
-with a controlled command and open process handles what a stop ends.
+prints it as a measurement. A process is one of the preparation by its ID
+and its creation time, not by its ID alone (``of_attempt``): Windows gives
+the ID of an ended process to a new one. Once the case waited 900 seconds for
+the programs of a sign-in session (run 44168885490, attempt 1).
+``tests/test_windows_stopped_command.py`` shows with a controlled command and
+open process handles what a stop ends.
 
 In a new worker environment the app's decision-catalog helper finds no
 bytecode of the provider packages (in each run so far this case counted 0
@@ -67,6 +71,8 @@ environment, the private Python, the private Git) are not in this tree.
 It downloads several hundred megabytes, so it runs only where
 ``AMPLIFIER_REQUIRE_CHAT_SETUP`` is set: the CI job
 ``.github/workflows/windows-path-length.yml``. There a skip is a failure.
+The cases of ``of_attempt`` with a made-up list of processes run on every
+system.
 """
 from __future__ import annotations
 
@@ -78,6 +84,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import time
 import uuid
 
@@ -88,7 +95,8 @@ import test_windows_path_budget as budget
 import test_windows_long_paths_off as native
 from test_windows_long_paths_off import base, chosen_folder, installation, long_paths_off  # noqa: F401  (fixtures)
 
-pytestmark = pytest.mark.skipif(os.name != 'nt', reason='Windows path limits need native Windows')
+# The cases with a made-up list of processes run on every system. The others need native Windows.
+windows = pytest.mark.skipif(os.name != 'nt', reason='Windows path limits need native Windows')
 REQUIRED = os.environ.get('AMPLIFIER_REQUIRE_CHAT_SETUP') == '1'
 TREE_FILE = os.environ.get('AMPLIFIER_CHAT_SETUP_TREE')
 # A dependency override that each folder declares: a module of the default bundle, from its own repository, at
@@ -122,34 +130,204 @@ def tree(root):
 
 
 def processes():
-    """Every process on this PC: {process ID: (parent process ID, name, command line)}."""
-    script = ('[Console]::OutputEncoding = [Text.Encoding]::UTF8; Get-CimInstance Win32_Process | ForEach-Object { '
+    """Every process on this PC, and when the list was read:
+    ({process ID: (parent process ID, name, command line, created)}, read).
+
+    ``created`` is the time at which Windows created the process. ``read`` is a time after the whole list was
+    read. Both are of the PC's clock, in units of 100 nanoseconds. A process for which Windows gives no
+    creation time has 0.
+    """
+    # The last row is not a process: it has the time after the list was read.
+    script = ('[Console]::OutputEncoding = [Text.Encoding]::UTF8; & { '
+              'Get-CimInstance Win32_Process | ForEach-Object { '
+              '$c = [long]0; if ($_.CreationDate) { $c = $_.CreationDate.ToUniversalTime().Ticks }; '
               '[pscustomobject]@{ p = [int]$_.ProcessId; q = [int]$_.ParentProcessId; n = [string]$_.Name; '
-              'l = [string]$_.CommandLine } } | ConvertTo-Json -Compress')
+              'l = [string]$_.CommandLine; c = $c } }; '
+              '[pscustomobject]@{ p = -1; q = -1; n = [string]::Empty; l = [string]::Empty; '
+              'c = [DateTime]::UtcNow.Ticks } } | ConvertTo-Json -Compress')
     done = subprocess.run(['powershell', '-NoProfile', '-NonInteractive', '-EncodedCommand',
                            base64.b64encode(script.encode('utf-16-le')).decode('ascii')],
                           capture_output=True, timeout=180, check=True)
     rows = json.loads(done.stdout.decode('utf-8-sig', errors='replace').strip())
-    return {row['p']: (row['q'], row['n'], row['l']) for row in (rows if isinstance(rows, list) else [rows])}
+    assert rows[-1]['p'] == -1 and all(row['p'] >= 0 for row in rows[:-1]), rows[-3:]
+    return {row['p']: (row['q'], row['n'], row['l'], row['c']) for row in rows[:-1]}, rows[-1]['c']
 
 
-def of_attempt(snapshot, identity, known):
+def of_attempt(listed, identity, known):
     """The processes of one preparation that run now: {process ID: name}.
 
-    A process belongs to the preparation when the preparation's ID is in its command line (the app's commands
-    name the stage, ``--profiles <stage>\\profiles.json``, and the project, ``--project ...\\prepare-<ID>``),
-    or when it descends from such a process. ``known`` keeps every member that an earlier list had, so a process
-    is still found after its parent ended.
+    ``listed`` is what ``processes()`` returned. A process belongs to the preparation when the preparation's
+    ID is in its command line (the app's commands name the stage, ``--profiles <stage>\\profiles.json``, and
+    the project, ``--project ...\\prepare-<ID>``), or when it descends from such a process. ``known`` keeps
+    every member that an earlier list had, so a process is still found after its parent ended.
+
+    Windows keeps the ID of a process's parent after that parent ended, and it gives the ID of an ended
+    process to a new one. So an equal ID does not make a member. Microsoft's text for ``ParentProcessId`` of
+    ``Win32_Process`` says to use the creation time to tell whether the process with that ID was created
+    after the process that names it. ``known`` holds each member by its ID and its creation time, with the
+    time of the first list that no longer held it (``None`` while a list holds it):
+
+    - A process is a member of an earlier list only with that ID and that creation time.
+    - A process is a child of a member only when the member had the parent's ID at the moment at which the
+      process was created: not before the member was created; for a member that ended, not after the first
+      list without it was read; and not when the process that has the ID now was created before the process.
+
+    One thing stays open. A member ends, another program gets its ID, starts a program and ends, all between
+    two lists: that program counts as a child of the member. The times are of the PC's clock: a clock that is
+    set back between the creation of a member and the creation of its child hides that child.
     """
-    members = {pid for pid, (parent, name, line) in snapshot.items() if identity in line or (pid, name) in known}
+    snapshot, read = listed
+    for key in [key for key, gone in known.items() if gone is None]:
+        if snapshot.get(key[0], (None, None, None, None))[3] != key[1]:
+            known[key] = read   # this list does not hold the member: it ended before the list was read
+
+    def child_of_a_member(parent, created):
+        holder = snapshot.get(parent)   # the process that has the parent's ID now
+        return any(member == parent and since <= created and (
+            gone is None or created <= gone and not (holder and holder[3] <= created))
+            for (member, since), gone in known.items())
+
+    members = {pid for pid, (parent, name, line, created) in snapshot.items()
+               if identity in line or (pid, created) in known}
     while True:
-        parents = members | {pid for pid, name in known}
-        more = {pid for pid, (parent, name, line) in snapshot.items() if parent in parents} - members
+        for pid in members:
+            known.setdefault((pid, snapshot[pid][3]), None)
+        more = {pid for pid, (parent, name, line, created) in snapshot.items()
+                if pid not in members and child_of_a_member(parent, created)}
         if not more:
             break
         members |= more
-    known |= {(pid, snapshot[pid][1]) for pid in members}
     return {pid: snapshot[pid][1] for pid in sorted(members)}
+
+
+def session_programs(listed):
+    """One line for each program that Windows starts for a sign-in session, in a list of ``processes()``.
+
+    The process that started ``csrss.exe`` and ``winlogon.exe`` ended at once, and Windows still gives its ID
+    as their parent's ID. The line says what has that ID now.
+    """
+    snapshot, read = listed
+    lines = []
+    for pid, (parent, name, line, created) in sorted(snapshot.items()):
+        if name.lower() in ('csrss.exe', 'winlogon.exe'):
+            holder = snapshot.get(parent)
+            has = ('no process' if holder is None else f'{holder[1]}, its parent' if holder[3] <= created else
+                   f'{holder[1]}, created {(holder[3] - created) / 10_000_000:.0f} s after it')
+            lines.append(f'{name} {pid}, created {(read - created) / 10_000_000:.0f} s before this list, '
+                         f'parent ID {parent}: {has}')
+    return lines
+
+
+ATTEMPT = 'c0ffee0123456789c0ffee0123456789'   # the ID of a made-up preparation
+PROBE = f'python update_probe.py --profiles C:\\i\\app\\updates\\releases\\{ATTEMPT}\\profiles.json'
+
+
+def made_up(read, *rows):
+    """A made-up list as ``processes()`` returns it; a row is (process ID, parent's ID, name, created[, command
+    line])."""
+    return {row[0]: (row[1], row[2], row[4] if len(row) > 4 else '', row[3]) for row in rows}, read
+
+
+def test_the_programs_of_a_sign_in_session_are_not_processes_of_a_preparation_that_got_their_parents_id():
+    """Seen once (run 44168885490, attempt 1): the case waited 900 s for these four programs to end.
+
+    The session manager process that started ``csrss.exe`` and ``winlogon.exe`` ended long ago. Windows still
+    gives its ID as their parent's ID. Here a program of the preparation gets that ID.
+    """
+    session = [(7656, 7600, 'csrss.exe', 100), (7720, 7600, 'winlogon.exe', 101),
+               (7800, 7720, 'fontdrvhost.exe', 102), (7824, 7720, 'dwm.exe', 103)]
+    known = {}
+    command = (4000, 3000, 'uv.exe', 900, f'uv run --project C:\\i\\app\\runtime\\prepare-{ATTEMPT} python')
+    assert of_attempt(made_up(1000, *session, command, (7600, 4000, 'python.exe', 905)), ATTEMPT, known) == {
+        4000: 'uv.exe', 7600: 'python.exe'}
+    # The preparation is stopped and its programs end. The session's programs run on, with 7600 as their parent.
+    assert of_attempt(made_up(1010, *session), ATTEMPT, known) == {}
+    assert of_attempt(made_up(1020, *session), ATTEMPT, known) == {}
+
+
+def test_the_line_of_a_session_program_says_what_has_its_parents_id_now():
+    second = 10_000_000   # the list's times are in units of 100 nanoseconds
+    listed = made_up(1000 * second, (500, 4, 'smss.exe', 1 * second), (640, 500, 'csrss.exe', 2 * second),
+                     (7656, 7600, 'csrss.exe', 100 * second), (7720, 7604, 'winlogon.exe', 101 * second),
+                     (7600, 4000, 'python.exe', 905 * second), (7800, 7720, 'dwm.exe', 103 * second))
+    assert session_programs(listed) == [
+        'csrss.exe 640, created 998 s before this list, parent ID 500: smss.exe, its parent',
+        'csrss.exe 7656, created 900 s before this list, parent ID 7600: python.exe, created 805 s after it',
+        'winlogon.exe 7720, created 899 s before this list, parent ID 7604: no process']
+
+
+def test_a_program_that_gets_the_id_of_an_ended_member_is_not_that_member_and_what_it_starts_is_no_member():
+    known = {}
+    assert of_attempt(made_up(1000, (4010, 4000, 'python.exe', 905, PROBE)), ATTEMPT, known) == {4010: 'python.exe'}
+    assert of_attempt(made_up(1010), ATTEMPT, known) == {}   # the member ended
+    # Another program has the ID now. The same name does not make it the member. It starts a program.
+    other, started = (4010, 600, 'python.exe', 1015, 'python -m another_program'), (5000, 4010, 'conhost.exe', 1016)
+    assert of_attempt(made_up(1020, other, started), ATTEMPT, known) == {}
+    # Also after the other program ended: the member was gone before that program was created.
+    assert of_attempt(made_up(1030, started), ATTEMPT, known) == {}
+
+
+def test_a_child_of_the_program_that_has_the_id_now_is_not_a_child_of_the_member_that_had_it():
+    known = {}
+    assert of_attempt(made_up(1000, (4010, 4000, 'python.exe', 905, PROBE)), ATTEMPT, known) == {4010: 'python.exe'}
+    # Between two lists the member ended, another program got its ID (created 1006) and started a program (1007).
+    assert of_attempt(made_up(1010, (4010, 600, 'cmd.exe', 1006), (5000, 4010, 'conhost.exe', 1007)),
+                      ATTEMPT, known) == {}
+
+
+def test_a_process_of_the_preparation_is_still_found_after_its_parent_ended():
+    known = {}
+    # The child has no ID of the preparation in its command line. It can have the creation time of its parent.
+    member, child = (4010, 4000, 'uv.exe', 905, PROBE), (5000, 4010, 'python.exe', 905, 'python setup.py')
+    assert of_attempt(made_up(1000, member, child), ATTEMPT, known) == {4010: 'uv.exe', 5000: 'python.exe'}
+    # The member ended. Its child runs on and has a child. A program that the member started after the first
+    # list and before it ended is found too: nothing else has had the member's ID since.
+    grandchild, late = (5100, 5000, 'git.exe', 1005), (5200, 4010, 'conhost.exe', 1004)
+    assert of_attempt(made_up(1010, child, grandchild, late), ATTEMPT, known) == {
+        5000: 'python.exe', 5100: 'git.exe', 5200: 'conhost.exe'}
+    # Later lists find a member by its own ID and creation time, and what it starts.
+    assert of_attempt(made_up(1020, late, (5300, 5200, 'git.exe', 1015)), ATTEMPT, known) == {
+        5200: 'conhost.exe', 5300: 'git.exe'}
+    assert of_attempt(made_up(1030), ATTEMPT, known) == {}
+
+
+@windows
+def test_the_real_list_has_the_creation_time_of_each_process_and_finds_what_a_started_program_starts():
+    """The real list of this PC, with a program that this case starts. That program starts a second one,
+    which has nothing of the first one in its command line: it is found only as a descendant."""
+    token = uuid.uuid4().hex
+    second = "import time; time.sleep(120)"
+    first = f"import subprocess, sys, time; subprocess.Popen([sys.executable, '-c', {second!r}]); time.sleep(120)"
+    program = subprocess.Popen([sys.executable, '-c', first, token])
+    try:
+        known, deadline = {}, time.monotonic() + 120
+        while True:
+            snapshot, read = processes()
+            found = of_attempt((snapshot, read), token, known)
+            if any(token not in snapshot[pid][2] for pid in found):
+                break
+            assert time.monotonic() < deadline, f'The list never held the second program: {found}'
+            time.sleep(1)
+        mine, started = snapshot[os.getpid()], snapshot[program.pid]
+        # The program names this process as its parent. It was created after this process and before the read.
+        assert started[0] == os.getpid() and token in started[2], started
+        assert 0 < mine[3] <= started[3] <= read, (mine[3], started[3], read)
+        assert program.pid in found and os.getpid() not in found, found
+        # Each process that is found only as a descendant was created not before the member that started it.
+        for pid in found:
+            parent, name, line, created = snapshot[pid]
+            assert token in line or parent in found and snapshot[parent][3] <= created, (pid, snapshot[pid])
+        again, later = processes()
+        # The same process has the same creation time in the next list, and the same processes are found.
+        assert again[program.pid][3] == started[3] and read <= later, (again[program.pid], started, read, later)
+        assert set(found) <= set(of_attempt((again, later), token, known))
+        print(f'MEASURED the real list of processes: {len(snapshot)} processes; the program that this case '
+              f'started and what it started are {len(found)} of them ({", ".join(sorted(set(found.values())))}), '
+              f'{sum(1 for pid in found if token not in snapshot[pid][2])} found only as a descendant')
+        print('MEASURED the programs of the sign-in sessions of this PC: ' + '; '.join(session_programs((snapshot, read))))
+    finally:
+        subprocess.run(['taskkill', '/PID', str(program.pid), '/T', '/F'], capture_output=True, timeout=60)
+        program.wait(60)
 
 
 def over_the_limit(rows):
@@ -161,6 +339,7 @@ def area(relative):
     return '\\'.join(parts[:2]) if parts[0] in ('app', budget.SOURCE_FOLDER) and len(parts) > 2 else parts[0]
 
 
+@windows
 def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_installation_folder(
         installation, chosen_folder, monkeypatch):  # noqa: F811
     if not REQUIRED:
@@ -284,7 +463,7 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
         steps[label] = []
         session, progress = chat(folder), reporter(steps[label])
         task = asyncio.create_task(runtime_profiles.ensure(home, generation, session, progress=progress))
-        running, made, known, deadline = {}, set(), set(), time.monotonic() + 900
+        running, made, known, deadline = {}, set(), {}, time.monotonic() + 900
         while not running:
             assert not task.done() and time.monotonic() < deadline, f'The preparation ended before the stop: {task}'
             await asyncio.sleep(0.2)
