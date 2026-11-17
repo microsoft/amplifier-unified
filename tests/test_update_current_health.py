@@ -829,7 +829,9 @@ async def test_component_fence_allows_health_storage_adoption_and_independent_ap
     async def publish(**kw):m.service.state['updates'].update(kw)
     m.publish=publish;m.retire_storage=retire;m.app=app
     # The owner's real rule for a check that time causes. Automatic checks are off,
-    # so it names no reason; this stand-in has no check to run.
+    # so it names no reason. A rule that named one would run this check.
+    async def forbidden(*a,**kw):pytest.fail('a check although automatic checks are off')
+    m.check=forbidden
     m.check_due=lambda:UpdateManager.check_due(m)
     m.service.state['updates']['appAvailable']=True
     monkeypatch.setattr(health,'refresh',refresh)

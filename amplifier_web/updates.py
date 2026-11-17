@@ -1631,6 +1631,12 @@ class UpdateManager:
                         # is not a failed attempt and the phase stays, as when a
                         # switch waits for work. The next request tries again.
                         # Said once: the owner's pass comes here every minute.
+                        # So an earlier failed validation must not hold the
+                        # owner now (_activation_held): this request validated
+                        # nothing, and only the owner's pass finds the end of
+                        # this refusal by itself.
+                        if not rollback:
+                            self._activation_failed = None
                         if state.get('error') != STALE_STAGE_KEYS:
                             await self.publish(error=STALE_STAGE_KEYS)
                         return

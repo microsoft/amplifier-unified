@@ -22,7 +22,7 @@ import yaml
 
 from amplifier_web.host.config import amplifier_home
 from amplifier_web.update_diagnostics import CommandFailure
-from test_update_stage_keys import stage_at
+from test_update_stage_keys import held_copy, stage_at
 from test_updates import app, prepare, repo  # noqa: F401 -- existing real manager fixture
 
 
@@ -212,6 +212,59 @@ async def test_a_persons_request_validates_again_and_time_alone_still_does_not(p
     assert p.calls == [p.first.name] * 2
 
 
+async def test_a_request_that_stops_at_a_refused_keys_refresh_ends_the_hold(prepared, tmp_path):
+    """A person's request after a failed validation can stop before its validation: the stage holds a
+    copy of the keys file that Amplifier can neither replace nor remove at that moment. Nothing was
+    validated, so the earlier failure must not hold the owner. Its pass comes back by itself, as the
+    text of that refusal promises, and validates when the refusal is over. That validation fails with
+    the same inputs, and it is held again."""
+    from amplifier_web.update_health import STALE_STAGE_KEYS
+
+    p = prepared
+    await p.passes(2)
+    assert p.calls == [p.first.name] and p.manager._activation_held(p.first.name) is True
+    # A copy that the removal refuses: it has a second name (a real refusal, not a stub). Nothing that
+    # the hold compares changes: the prepared update, the settings and the live keys file are as before.
+    (p.first / 'shared-config/keys.env').write_bytes(b'FIXTURE_KEY=fake-old\n')
+    second = held_copy(p.first, tmp_path)
+    await p.manager.command('install', None, 'c' * 32)   # It raises nothing.
+    assert p.calls == [p.first.name]
+    assert p.state['error'] == STALE_STAGE_KEYS and p.state['pendingRelease'] == p.first.name
+    await p.passes(2)   # While the refusal lasts the owner validates nothing.
+    assert p.calls == [p.first.name] and p.state['error'] == STALE_STAGE_KEYS
+    second.unlink()     # The refusal is over.
+    await p.passes(3)
+    assert p.calls == [p.first.name] * 2
+    assert p.state['error'] != STALE_STAGE_KEYS and p.manager._activation_held(p.first.name) is True
+    assert not (p.first / 'shared-config/keys.env').exists()
+
+
+@pytest.mark.parametrize('rollback', ['its-validation-fails', 'its-validation-passes', 'stops-at-a-refused-keys-refresh'])
+async def test_a_rollback_neither_makes_nor_ends_the_hold_of_a_prepared_update(prepared, monkeypatch, tmp_path,
+                                                                              rollback):
+    """A rollback validates another stage: the version before. What that validation says is about that
+    stage, and a rollback that stops before its validation says nothing. The prepared update whose
+    validation failed stays held, and the owner's pass validates nothing for it."""
+    p = prepared
+    before = p.stage('b' * 32)
+    (p.manager.directory / 'active.json').write_text(json.dumps({'current': None, 'previous': before.name}))
+    await p.passes(2)
+    assert p.calls == [p.first.name] and p.manager._activation_held(p.first.name) is True
+    held = p.manager._activation_failed
+    if rollback == 'its-validation-passes':
+        p.outcome['error'] = None
+        monkeypatch.setattr(p.manager, 'busy', lambda: True)   # The rollback waits for work after its validation.
+    if rollback == 'stops-at-a-refused-keys-refresh':
+        held_copy(before, tmp_path)   # That stage's copy of the keys file can be neither replaced nor removed.
+    await p.manager.command('rollback', None, 'c' * 32)   # It raises nothing.
+    p.outcome['error'] = 'command'
+    validated = [p.first.name] + [before.name] * (rollback != 'stops-at-a-refused-keys-refresh')
+    assert p.calls == validated
+    assert p.manager._activation_failed == held and p.manager._activation_held(p.first.name) is True
+    await p.passes(2)
+    assert p.calls == validated
+
+
 async def test_a_new_start_of_the_app_validates_once_more(prepared):
     """Nothing about the hold is saved: the update owner of a new start of the app has none."""
     from amplifier_web.updates import UpdateManager
@@ -237,10 +290,26 @@ async def test_a_stopped_validation_is_not_a_failed_one(prepared):
     assert p.calls == [p.first.name] * 2
 
 
+async def test_a_stopped_validation_leaves_an_earlier_hold_as_it_is(prepared):
+    """A validation failed and is held. A later validation with the same inputs is stopped. It says
+    nothing, so the earlier failure still holds: time alone validates nothing."""
+    p = prepared
+    await p.passes(2)
+    assert p.calls == [p.first.name] and p.manager._activation_held(p.first.name) is True
+    p.outcome['error'] = 'cancelled'
+    with pytest.raises(asyncio.CancelledError):
+        await p.manager.activate()
+    p.outcome['error'] = 'command'
+    assert p.calls == [p.first.name] * 2 and p.manager._activation_held(p.first.name) is True
+    await p.passes(2)
+    assert p.calls == [p.first.name] * 2
+
+
 async def test_a_validation_that_passes_ends_the_hold_and_the_update_waits_for_work_as_before(prepared, monkeypatch):
     """A person's request validates again while work runs. The validation passes, and the update waits
-    for that work. The owner's pass must come back to the update at every pass, as before, so that it
-    activates when the work has ended. It validates nothing again: the stage has its receipt now."""
+    for that work. The owner's pass must come back to the update at every pass, as before, and it
+    activates the update when the work has ended. It validates nothing again: the stage has its
+    receipt now."""
     p = prepared
     await p.passes(2)
     assert p.calls == [p.first.name] and p.manager._activation_held(p.first.name) is True
@@ -261,15 +330,26 @@ async def test_a_validation_that_passes_ends_the_hold_and_the_update_waits_for_w
     monkeypatch.setattr(p.manager, 'activate', counted)
     await p.passes(3)
     assert activations == [False] * 3 and p.calls == [p.first.name] * 2
+    # The work ends. The next pass switches to the update and validates nothing again.
+    monkeypatch.setattr(p.manager, 'busy', lambda: False)
+    await p.passes(1)
+    assert p.calls == [p.first.name] * 2
+    assert (p.state['phase'], p.state['pendingRelease'], p.state['release']) == ('installed', None, p.first.name)
+    assert json.loads((p.manager.directory / 'active.json').read_text())['current'] == p.first.name
 
 
 async def test_settings_that_cannot_be_read_do_not_make_the_owner_fail_or_validate_every_pass(prepared):
     p = prepared
     await p.passes(2)
     events = len(p.manager.diagnostics.state['events'])
+    readable = (amplifier_home() / 'settings.yaml').read_text()
     (amplifier_home() / 'settings.yaml').write_text('config: [unclosed')
     await p.passes(3)
     # One more validation for the change, then held; the owner's pass itself recorded no failure of its own.
     assert p.calls == [p.first.name] * 2
     assert [event['phase'] for event in p.manager.diagnostics.state['events'][events:]
             if event['phase'] == 'background-update'] == []
+    # Settings that can be read again are a change too: one more validation, then held.
+    (amplifier_home() / 'settings.yaml').write_text(readable)
+    await p.passes(3)
+    assert p.calls == [p.first.name] * 3

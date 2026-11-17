@@ -487,8 +487,10 @@ never saved. While the hold is in force the update stays prepared, the page
 says "Update needs attention" with the failure, and the count of failed
 attempts does not grow. As before, no check for updates runs while an update
 is prepared. A refused keys refresh is not such a failure: the owner's pass
-still tries that again by itself. A rollback has no hold: only a request
-starts one.
+still tries that again by itself. It also ends a hold: a request that stops
+at that refusal validated nothing, so the owner's pass comes back and
+validates when the refusal is over. A rollback has no hold: only a request
+starts one, and it neither makes nor ends the hold of a prepared update.
 Idle maintenance also scrubs at most eight stage copies per pass, even when
 unused-code cleanup is off. A validated stage qualifies immediately. An
 unvalidated stage that holds no `profile-attempt.json` qualifies only when both
