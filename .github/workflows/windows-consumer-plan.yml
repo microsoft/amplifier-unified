@@ -49,9 +49,10 @@ jobs:
           architecture: x64
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
       - name: Install a published wheel, build its plan, and run the gate three times
-        # The fixture gives each command that it starts itself a time limit. It ends them at the latest
-        # 12 minutes after its start, so that it can record a timeout in result.json before the limit below.
-        # That limit can still end the step without result.json: see LIMIT in the fixture.
+        # The fixture gives each command that it starts itself a time limit: the command's own, and at most
+        # what is left of 12 minutes from the fixture's start. The purpose: a timeout is recorded in
+        # result.json and not cut off by the limit below. That limit can still end the step without
+        # result.json: see LIMIT in the fixture.
         timeout-minutes: 15
         shell: pwsh
         run: |

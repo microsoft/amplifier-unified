@@ -2839,30 +2839,34 @@ def test_windows_plan_native_check_gives_its_commands_less_time_than_the_step_an
     workflow = yaml.load((ROOT / '.github/workflows/windows-consumer-plan.yml').read_text(), Loader=yaml.BaseLoader)
     job = workflow['jobs']['windows-consumer-plan']
     step = next(step for step in job['steps'] if 'windows_consumer_plan_native.py' in step.get('run', ''))
-    # The step's limit is not raised. The check ends its commands two minutes or more before that limit.
+    # The step's limit is not raised. The time for the check's commands is two minutes or more below it.
     assert step['timeout-minutes'] == '15' and job['timeout-minutes'] == '20'
     assert fixture.LIMIT <= (int(step['timeout-minutes']) - 2) * 60
     # One command gets its own limit, and at most what is left of the check's 12 minutes.
     assert fixture.left(30) == 30
     monkeypatch.setattr(fixture, 'STARTED', fixture.time.monotonic() - fixture.LIMIT + 20)
     assert 0 < fixture.left(300) <= 20
-    # A command that passes its own limit is ended. The error is a sentence, not a traceback of the timeout.
-    sleeps = (sys.executable, '-c', 'import time; time.sleep(30)')
+    # A command that passes its own limit is ended: the call returns long before the command's 60 seconds.
+    # The error is a sentence, not a traceback of the timeout.
+    sleeps = (sys.executable, '-c', 'import time; time.sleep(60)')
     monkeypatch.setattr(fixture, 'STARTED', fixture.time.monotonic())
+    begun = fixture.time.monotonic()
     with pytest.raises(RuntimeError, match=r'^python[\w.]* -c did not end in 1 seconds\.$'):
         fixture.run(*sleeps, limit=1)
-    # The gate's command line has the same sentence. When the rest of the time is shorter than the command's
-    # own limit, the sentence says so.
+    assert fixture.time.monotonic() - begun < 30
+    # The gate's command line has a sentence too. When the rest of the check's time is shorter than the
+    # command's own limit, the sentence says that, and not the command's own limit.
     slow = tmp_path / 'slow.py'
-    slow.write_text('import time\ntime.sleep(30)\n')
-    cut = r" did not end in [12] seconds\. It had what was left of the check's 12 minutes\."
+    slow.write_text('import time\ntime.sleep(60)\n')
+    cut = r" did not end in what was left of the check's 12 minutes \(at most [12] seconds\)\."
     monkeypatch.setattr(fixture, 'STARTED', fixture.time.monotonic() - fixture.LIMIT + 2)
     with pytest.raises(RuntimeError, match=r'^slow\.py verify-consumer' + cut + '$'):
         fixture.command(slow, 'verify-consumer')
     # A rest of less than one second is not reported as 0 seconds.
     with monkeypatch.context() as patch:
         patch.setattr(fixture, 'left', lambda limit: 0.4)
-        with pytest.raises(RuntimeError, match=r"^python[\w.]* -c did not end in 1 seconds\. It had what was left"):
+        with pytest.raises(RuntimeError, match=r"^python[\w.]* -c did not end in what was left of the check's "
+                                               r"12 minutes \(at most 1 seconds\)\.$"):
             fixture.run(*sleeps, limit=300)
     # When the time is used up before a command starts, the check returns 1 and result.json has the reason.
     (tmp_path / 'used-up').mkdir()
@@ -2875,7 +2879,7 @@ def test_windows_plan_native_check_gives_its_commands_less_time_than_the_step_an
     result = json.loads((tmp_path / 'used-up/consumer-plan-evidence/result.json').read_text())
     assert result['ok'] is False and result['stage'] == 'installation'
     assert result['error'] == 'RuntimeError: The check did not end in 12 minutes.'
-    # A runner without uv ends the check with a sentence.
+    # On a runner without uv, the preparation ends with a sentence.
     monkeypatch.setattr(fixture, 'STARTED', fixture.time.monotonic())
     monkeypatch.setattr(fixture.shutil, 'which', lambda name: None)
     with pytest.raises(RuntimeError, match='^uv is not on this runner\\.$'):

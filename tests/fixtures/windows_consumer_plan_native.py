@@ -44,13 +44,15 @@ RELEASE = {"version": "0.106.0", "sha256": "5d89c247b7ba19aa0264516036d17a26e314
 NAME = "amplifier-foundation"
 # Any commit other than the installed one. Nothing installs it; the gate compares text.
 OTHER = "e37a946b64854eb39c09a3857ce2bc366ff297e0"
-# Each command that this file starts itself (started) gets a time limit. This file ends them at the
-# latest this long after its import. That is below the workflow step's limit of 15 minutes, so that
-# a timeout can be recorded in result.json before the step's limit.
-# No limit here: the download's body; the commands that the release tool starts in this process (it
-# reads the checkout's commit and the installation's packages); the file work.
-# Also not covered: Python on Windows waits for the output of a command that it ended, and a program
-# that the command started can hold that output open.
+# Each command that this file starts itself (see started) gets a time limit: its own, and at most what
+# is left of this time, counted from the import of this file. This time is below the workflow step's
+# limit of 15 minutes. The purpose: a timeout is recorded in result.json and not cut off by that limit.
+# The step's limit can still end the check without result.json:
+# - Not limited as a whole: the download (its timeout is for single socket operations); the commands
+#   that the release tool starts in this process (in receipts and in prepare: it reads the checkout's
+#   commit and the installation's packages); the file work.
+# - Python on Windows waits for the output of a command that it ended. A program that the command
+#   started can hold that output open.
 LIMIT = 12 * 60
 STARTED = time.monotonic()
 # The last line of a refusal, after one line for each difference.
@@ -79,8 +81,10 @@ def started(name, arguments, limit, **options):
         return subprocess.run([*map(str, arguments)], capture_output=True, text=True, encoding="utf-8",
                               errors="replace", timeout=seconds, **options)
     except subprocess.TimeoutExpired:
-        cut = "" if seconds == limit else f" It had what was left of the check's {LIMIT // 60} minutes."
-        raise RuntimeError(f"{name} did not end in {math.ceil(seconds)} seconds.{cut}") from None
+        if seconds == limit:
+            raise RuntimeError(f"{name} did not end in {limit} seconds.") from None
+        raise RuntimeError(f"{name} did not end in what was left of the check's {LIMIT // 60} minutes "
+                           f"(at most {math.ceil(seconds)} seconds).") from None
 
 
 def command(tool, *arguments):
