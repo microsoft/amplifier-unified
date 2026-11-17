@@ -20,6 +20,8 @@ optional capability -> negotiated extension or explicit unavailable result
 ```
 
 [Protocol fit](../docs/architecture/protocol-fit.md) contains the mapping inventory.
+The [supported pilot record](../docs/validation/acp-supported-composition.md)
+separates exact-version acceptance from these promises and later source review.
 
 ACP's session is not assumed to be the experience's shared conversation. Adapters
 own that mapping and their context/memory strategy, including whether one instance
