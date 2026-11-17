@@ -738,16 +738,31 @@ characters fits. The path-length work in the app owns this number. It measured
 the whole tree below the folder in a clean-room installation: 59 is the root
 that its design supports under both of its variants, and it may raise the
 number in its own change when its budget test proves a larger one. Worst
-observed depths below the folder: app generation 169 characters, worker
-environment 162, private Python 142, tools 124, private Git 68. Those fit at
-59 today.
+observed depths below the folder: frozen worker environment 194 characters,
+uv cache 189, first worker environment 187, app generation 171, private Python
+142, tools 124, private Git 90. Those fit at 59 today: the longest is 253
+characters, with 6 to spare. The numbers are from a clean-room installation of
+release 0.105.0 after an in-app update and a chat, and the budget test holds
+the same numbers. The frozen worker environment
+(`app\runtime\q-<32 hex digits>`) is the one that an update or the setup of
+a chat makes. Its deepest file is bytecode; its deepest source file is 180.
+While the app prepares such an environment, and after a preparation that was
+stopped or that failed, the same files are in
+`app\runtime\prepare-<32 hex digits>`. That name is 6 characters longer than
+the frozen one. Its deepest source file is then 186 (245 at 59). A bytecode
+file as deep as the deepest one of the frozen environment is 200 there: 259
+at 59, the limit itself. Python uses the source file when it cannot write
+bytecode.
+Earlier text here gave 162 for the first worker environment (its deepest
+source file) and 68 for the private Git (the earlier, smaller Git).
 
 The short folder is necessary and not sufficient. The app must also keep what
 it adds below the folder inside the budget of the next section. In a new
 installation every row of that budget fits at 59; the next section also names
-the cases that the budget does not cover. The tightest row is module
-source in the source store (253 characters at 59; see the source-store items
-below), and it fits only because the store folder is named `s`. A change to
+the cases that the budget does not cover. The tightest rows are in the
+source store (see the source-store items below): module source is 253
+characters at 59, and the deepest other file that counts as needed is 255.
+They fit only because the store folder is named `s`. A change to
 the folder name must respect this number, and
 `tests/test_windows_setup_folder.py` fails when code and document disagree.
 Setup stops before it asks anything when the path would be longer.
@@ -779,10 +794,38 @@ table with `python tests/test_windows_path_budget.py`.
   oversized-request diagnostic copy (51; the app records "unavailable" and the
   turn continues), background-job records (68), the saved view (93). A shorter
   folder path adds the same number of characters to each limit.
-- **Not covered:** a chat that a person starts in the default workspace folder
-  (`<folder>\workspace`) keeps the CLI name, like every folder a person chooses.
-  Its background-job records fit only up to a folder path of 51, and its request
-  diagnostics up to 42. An installation made by an earlier setup file (folder
+- **A folder that a person chose** keeps the CLI name, which is as long as the
+  folder's own path. For the files that keeping a chat needs (its history, its
+  saved view and its capture), the installation folder path plus the path of
+  that folder may be at most 137 characters. So the folder may have a path of
+  78 characters at 59, and of 103 at 34. When it is longer, the app answers
+  before it makes anything, when a chat is created and when a conversation
+  worker starts: "This chat's folder has a path that is too long for Windows:
+  `<folder>` (`<length>` characters; at most `<number>` fit here). Move the
+  folder to a shorter path, or start a chat in another folder." Before, the
+  app could not create the chat ("unexpected response (500)"), or the worker
+  stopped at its first write. The app gives this answer only while Windows
+  long paths are off. It reads that setting when it answers, because a
+  conversation worker is a new process and gets the setting of that moment.
+  The app itself keeps the setting that it started with. After long paths are
+  turned on, the app's own writes for such a chat can still fail until the app
+  starts again. After long paths are turned off, the app answers for a folder
+  that it could still write itself; a new worker could not.
+  Two kinds of files have less room than a kept chat: background-job records
+  (112 in place of 137) and request diagnostics (94). The default workspace
+  folder (`<folder>\workspace`) is the folder path plus 10 characters. A chat
+  there is always kept. Its background-job records fit only up to a folder
+  path of 51, and its request diagnostics up to 42.
+  A helper (sub-agent) session has less room too. Its ID is 34 characters plus
+  the agent's name, and its history is saved under the same project name as
+  the chat's. With the longest folder that the app accepts, the history of a
+  helper fits up to an agent name of 15 characters. In the default workspace
+  folder it fits up to a name of 24 characters at a folder path of 59, of 40
+  at 51 and of 74 at 34. In an app chat folder it fits up to 72 at 59. The
+  app's answer measures the chat and not a helper. This is arithmetic from
+  the names. What a person sees when the history of a helper does not fit has
+  not been run.
+- **Not covered:** an installation made by an earlier setup file (folder
   path of 74 characters plus the account name) has no budget; new chats there
   get the short name, which is necessary and not always sufficient. A chat
   there with saved history under the CLI name stays under it, including history
@@ -801,10 +844,13 @@ table with `python tests/test_windows_path_budget.py`.
   consumer installation has one (the shortest is 34, and a session folder
   below it fits only up to 22). Release 0.98.5 failed the component stage of
   its first in-app update on this (258 characters at a folder path of 51; the
-  page showed "ENOENT · FileNotFoundError · Probe: prepare"). The folder now
-  has the project name `update-<first 12 hex digits of the stage ID>` (19
-  characters) on Windows, when the process runs with that stage as its app
-  home. At 59 the longest path that a stage and its probe create is 248, with
+  page showed "ENOENT · FileNotFoundError · Probe: prepare"). On Windows, a
+  process that runs with a stage as its app home and that stage's
+  `shared-config` as its shared home now gives every folder the project name
+  `update-<first 12 hex digits of the stage ID>` (19 characters). With any
+  other shared home every folder keeps its name, so the stage's name is never
+  used where a person's history is.
+  At 59 the longest path that a stage and its probe create is 248, with
   11 characters to spare; the probe's session folder is 202. The probe's
   capture files go to the installation's capture folder, as before, under the
   same name (folder 154 at 59). Each stage has its own shared home, so two
@@ -817,12 +863,26 @@ table with `python tests/test_windows_path_budget.py`.
   A first installation without an
   AI connection has no stage: `<folder>\app\updates\baseline-runtime` holds
   receipts only (longest path 118).
-  **Not covered:** a chat with its own setup (dependency overrides of its
-  workspace or session) is checked in a stage with the chat's folder. An app
-  chat folder keeps its short name there and fits (250). A folder that a person
-  chose keeps the CLI name there; for the default workspace folder the probe's
-  transcript write fits only up to a folder path of 39. This is arithmetic
-  from the code and has not been run on a PC.
+- **A chat with its own setup** (a saved plan, which a fork has; a bundle
+  that is not offered; dependency overrides or local code in its folder) is
+  prepared and checked in a stage too (`runtime_profiles.ensure`). The probe
+  then gets the chat's folder as its workspace. Its session is not a saved
+  conversation: it is in the stage's own shared home. Every folder has the
+  stage's name there, so the probe's paths are the rows above, whatever the
+  chat's folder is: an app chat folder, the default workspace folder, a folder
+  that a person chose. The preparation itself adds only shorter paths (155 at
+  59). Before this rule a folder that a person chose kept the CLI name inside
+  the stage. For the default workspace folder the probe's session folder was
+  twice the folder path plus 134 (252 at 59), and its history write fitted
+  only up to a folder path of 39. For another folder the length of its own
+  path decided: at most 30 characters at 59, 38 at 51 and 55 at 34. The
+  native job shows that failure with the app's real probe at 51 and 59, under
+  the names from before this rule. A run of the app's whole preparation at 59
+  without the rule is on a branch that is not merged (November 17, 2026):
+  every step up to the frozen worker environment ended well, and then the
+  check ended with "FileNotFoundError" (ENOENT). Earlier versions refused every chat with
+  its own setup on Windows before they made a stage, and the chat page showed
+  only "The conversation worker could not start."
 - **Source store:** Amplifier Foundation owns its layout; the app supplies the
   folder: `<folder>\s` in a new installation, `<folder>\source-store` in an
   installation that an earlier setup file made. A Foundation revision before `7526bb55`
@@ -841,6 +901,32 @@ table with `python tests/test_windows_path_budget.py`.
   default module more than 6 characters deeper fails on the longest accepted
   account name until the budget changes. An entry that already exists under a
   64-digit name stays in use and is 48 characters longer.
+- **Source store, the files beyond the limit:** the store stages whole
+  repositories, with their Git data and their tests. Measured on native
+  Windows with long paths off at a folder path of 59, after the app prepared
+  the default components for two chats: in the run of November 17, 2026,
+  4 files and 2 folders pass the limit. The job prints these counts and the
+  size of the whole tree at each run; a later revision of a component can
+  change them. All six are test
+  fixtures of one module of the context-intelligence repository
+  (`modules\tool-context-intelligence-upload\tests\fixtures\ground_truth\<ID>\context-intelligence`,
+  for two IDs): `metadata.json` is 268 characters, `events.jsonl` is 267, and
+  the folder is 254. Their depth in the repository is 140. At a folder path of
+  51 the two `metadata.json` files are 260, as a clean-room installation
+  showed. The store writes all of them through extended-length paths, and
+  every step of the preparation ends well. An ordinary path does not open the
+  4 files. No bundle file, module source, context file or skill is among
+  them, and no chat reads them. The copy that a build reads by ordinary paths
+  is in the build view of the module and is 42 characters shorter (226). The
+  deepest files that count as needed are two documents below `docs\lanes`,
+  one of them in the skills repository (depth 127): 255 at 59, with 4
+  characters to spare. They count as needed because nothing shows that no
+  chat opens them. The
+  native job lists each path over the limit. It fails when one is anywhere
+  else than in the Git data or the tests of a staged repository, in the tests
+  of one of its modules, or in bytecode (`NOT_NEEDED` in the budget test). A
+  folder that is only named `tests` somewhere else does not count. The layout
+  of the store is unchanged.
 - **Source store, the earlier folder name:** earlier setup files named the
   folder `source-store`, 11 characters longer. There module source is folder
   path + 205. It fits up to a folder path of **54** and is 264 at 59. Those
@@ -888,6 +974,69 @@ it leaves with that test profile is exactly the list in
 `tests/update_stage_probe.py`. That is the
 probe in a stage, not a whole in-app update: no component is fetched or
 installed. It is not setup-file or clean-account acceptance.
+The same job runs that probe with the folder of a chat as its workspace: the
+default workspace folder, a person's folder with a path of 150 characters, and
+an app chat folder. With the earlier names the probe fails for the first two.
+With the stage's name it completes for all three and writes nothing into the
+chat's folder. The job also checks the app's answer for a folder that a person
+chose against Windows, one character apart: at 59 a folder path of 78
+characters keeps a chat, and at 79 Windows refuses the saved view.
+
+A second job, `windows-chat-setup`, runs the whole preparation of a chat's own
+setup, unchanged (`runtime_profiles.ensure`): real uv, the worker
+dependencies, the default components from their repositories, the freeze and
+both probes. It runs below a folder path of 59 with the folders and settings
+that the installed launcher gives the app, for the default workspace folder
+and for a person's folder. Each of the two folders declares a dependency
+override of its own. Two chats with the same setup start at the same time:
+one prepares the setup, and the other waits and uses it. One preparation is
+cancelled while its first command runs. That is what a stop of the chat does:
+`RuntimeManager.stop` cancels the preparation's task. The
+job requires that the attempt is recorded as cancelled, that nothing admits
+it, and that its copy of the keys file is still private. The job starts the
+chat again directly after the stop. The second start gets a new stage and
+ends well. Whether a program of the stopped command still ran at that moment
+is not required; the job prints what it saw. It reads the list of processes
+every two seconds until it finds no process of the stopped preparation. That
+list is a sample: a program whose parent started and ended between two
+readings is not in it. In the runs of November 17, 2026, the list held
+programs of the stopped command (Python and Git) directly after the stop and
+none some seconds later. The stopped stage and its project stay on the disk;
+this change adds nothing that removes them.
+
+What a stop ends is checked with a command that the test controls
+(`tests/test_windows_stopped_command.py`, in the same job). The command
+starts a program through a parent that ends at once, so the program has no
+living parent. The test holds an open handle of that program, and Windows
+signals the handle when the program ends; no list of processes is used. A
+stop and a time limit both go through `updates.process`. Each ends the
+command that the app started: the command has ended when the app's call
+returns. The app does not end the program that the command started: 3
+seconds later that program still runs. The launcher puts the app into a
+kill-on-close Job before it starts any child (`contain_current_host` in
+`amplifier_web/windows_jobs.py`, called for the supervised sign-in task in
+`amplifier_web/windows_service.py`). The third case runs that same call and
+the same stop in a process of its own, and then lets that process end:
+Windows ends the program with it. The fourth case is the control: the same
+process without that call ends, and the program still runs 10 seconds later.
+So a program of a stopped preparation can run on while the app runs, and the
+Job ends it with the app at the latest. That the installed launcher makes
+the call is read from the code; these cases run the call, not the installed
+launcher. The first two cases run without the launcher's Job, as the big
+preparation case does. The
+job reads each stage's copy of the keys file through the app's private-file
+reader, which refuses another owner and a wider access list. It then lists
+every path below the installation
+folder (the list is an artifact of the run) and requires that no path which
+the app or a chat needs passes the limit. That tree holds the worker
+environments, the stages, the source store with the default components, and
+uv's cache. It does not hold what the setup file installs (the launcher
+environment, the private Python, the private Git), and the job starts no
+conversation worker and calls no model. A hosted runner's account is
+elevated, so the case makes the account the default owner of the files that
+its process creates, as on a person's PC. The job prepares a chat's own setup
+from dependency overrides. A saved plan, which a fork has, goes the same way
+through the preparation and is not run there.
 
 Setup checks the PC and the folder before its first question. Each stop names
 one cause and one next step in plain language, and never shows exception text,
