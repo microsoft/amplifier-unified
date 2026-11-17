@@ -36,12 +36,13 @@ checked again on handles.
 It runs only on Windows, only in the host that the start-at-sign-in task
 started, only on the store of the installation that this host belongs to, and
 only while it holds the data folder's host lock exclusively: no other host of
-this data folder is inside its serving part, and this host has started
-no worker, helper or update stage yet. Three cases are not excluded; each needs a host that a person
-started by hand (docs/design/native-windows-installation.md, "Repair of a
-source store object"). A process of an app version before 0.106.6 in them
-can write new bytecode; that object is then refused again until the next app
-version. Nothing outside the rule above is deleted in any of them.
+this data folder is inside its serving part, and this host has started no
+worker, helper or update stage yet. Three cases are not excluded; each needs a
+host that a person started by hand (docs/design/native-windows-installation.md,
+"Repair of a source store object that holds bytecode"). A process of an app
+version before 0.106.6 in them can write new bytecode; that object is then
+refused again until the next app version. Nothing outside the rule above is
+deleted in any of them.
 
 The record ``<data>\\updates\\source-store-repair.json`` holds the app version,
 whether the pass is complete, a change number, and for each object that was
