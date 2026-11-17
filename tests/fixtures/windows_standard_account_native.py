@@ -46,6 +46,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+from contextlib import contextmanager
 import ctypes as C
 from ctypes import wintypes as W
 import hashlib
@@ -58,6 +59,7 @@ import shutil
 import string
 import subprocess
 import sys
+import threading
 import time
 import tomllib
 import uuid
@@ -86,29 +88,36 @@ FIRST = (
     "Status",
     "Stop Amplifier",
     "Second start",
+    "The certificate: Amplifier's message, the Windows question (the test selects Yes), then Windows trusts "
+    "the connection",
     "Setup's own code reads this installation as installed, with its sign-in task",
 )
 SECOND = (
-    "Sign-out and sign-in: the task's own trigger starts the host",
-    "Uninstall with the choice that keeps the folder",
+    "Sign-out and sign-in: the task's own trigger starts the host, and Windows still trusts the connection",
+    "Uninstall with the choice that keeps the folder (the test selects No at the Windows question; the "
+    "certificate stays)",
     "Entries again and a start after that uninstall",
-    "Uninstall with the choice that deletes the folder",
+    "Uninstall with the choice that deletes the folder (the test selects Yes at the Windows question; the "
+    "certificate is removed)",
 )
 THIRD = (
     "After the delete choice: no folder, no sign-in task, no Start-menu entry, no Apps-list entry",
 )
 JOURNEY = FIRST[3:]
+CERTIFICATE = JOURNEY[8]
 NOT_SHOWN = (
     ("The setup file: its windows and its question, its Windows 11 check with the answer yes, and its "
      "downloads of uv, Python and Git",
      "the setup file refuses Windows Server, and every GitHub-hosted x64 runner is Windows Server. The "
      "fixture makes setup's layout with setup's uv commands for Python, the candidate wheel and the "
      "runner's Git."),
-    ("The certificate question",
-     "Windows asks the person, and the case does not answer a Windows security question in a person's "
-     "place. The launcher runs with --no-open, so Windows is not asked to trust the certificate, and "
-     "uninstall has no certificate to remove."),
-    ("The browser", "the launcher runs with --no-open."),
+    ("A person's own answer to the Windows certificate question, and that the question is in front of "
+     "other windows",
+     "no person is present. The case calls the launcher's own certificate step, records the text of the "
+     "Windows question, and gives the answer with a window message from the same program."),
+    ("The browser",
+     "the launcher runs with --no-open, and the certificate step ends before the launcher's `open` "
+     "command. Nothing in the case reads a browser window."),
     ("A click on a Start-menu or Apps-list entry, and the messages of the windowless launcher",
      "a message waits for a person. The case runs the same launcher commands with the console Python. For "
      "Stop and Uninstall it calls the product's function and answers the product's question in the test."),
@@ -586,6 +595,138 @@ def in_session(sid, program, phase, stage, exchange, *, timeout):
                        + json.dumps(read_json(exchange / f"{phase}.json"))[-3000:])
 
 
+# ---- The Windows question about a certificate.
+_user = C.WinDLL("user32", use_last_error=True) if sys.platform == "win32" else None
+
+
+def dialogs(own=True):
+    """The visible dialogs of this process (or of every program on this desktop), with their texts and buttons."""
+    callback = C.WINFUNCTYPE(W.BOOL, W.HWND, W.LPARAM)
+    _user.EnumWindows.argtypes = [callback, W.LPARAM]
+    _user.EnumChildWindows.argtypes = [W.HWND, callback, W.LPARAM]
+    _user.GetWindowThreadProcessId.argtypes = [W.HWND, C.POINTER(W.DWORD)]
+    _user.IsWindowVisible.argtypes = [W.HWND]
+    _user.GetClassNameW.argtypes = [W.HWND, W.LPWSTR, C.c_int]
+    _user.GetWindowTextW.argtypes = [W.HWND, W.LPWSTR, C.c_int]
+    _user.GetDlgCtrlID.argtypes = [W.HWND]
+    found = []
+
+    def text(handle, size=8192):
+        value = C.create_unicode_buffer(size)
+        _user.GetWindowTextW(handle, value, size)
+        return value.value
+
+    def kind(handle):
+        value = C.create_unicode_buffer(32)
+        _user.GetClassNameW(handle, value, 32)
+        return value.value
+
+    def top(handle, _):
+        owner = W.DWORD()
+        _user.GetWindowThreadProcessId(handle, C.byref(owner))
+        if (owner.value == os.getpid()) is own and _user.IsWindowVisible(handle) and kind(handle) == "#32770":
+            parts, buttons = [], {}
+
+            def child(control, _):
+                if kind(control) == "Button":
+                    buttons[_user.GetDlgCtrlID(control)] = (control, text(control, 64).replace("&", ""))
+                elif text(control):
+                    parts.append(text(control))
+                return True
+
+            _user.EnumChildWindows(handle, callback(child), 0)
+            found.append({"window": handle, "pid": owner.value, "title": text(handle, 256),
+                          "text": "\n".join(parts), "buttons": buttons})
+        return True
+
+    _user.EnumWindows(callback(top), 0)
+    return found
+
+
+def names_certificate(dialog, marks):
+    """True when the dialog's text has one of the marks of this installation's certificate.
+
+    Spaces and letter case do not count: Windows groups a thumbprint in its own way.
+    """
+    plain = "".join((dialog["title"] + dialog["text"]).split()).casefold()
+    return any("".join(mark.split()).casefold() in plain for mark in marks if mark.strip())
+
+
+def button_for(dialog, answer):
+    """The dialog's Yes or No button: by its Windows number (6, 7), else by its English text."""
+    number, word = (6, "yes") if answer == "yes" else (7, "no")
+    if number in dialog["buttons"]:
+        return number, dialog["buttons"][number][0]
+    return next(((key, control) for key, (control, label) in dialog["buttons"].items()
+                 if label.strip().casefold() == word), None)
+
+
+@contextmanager
+def answering(steps, asked, answer, marks):
+    """While the block runs, answer the Windows question about this installation's certificate.
+
+    Windows asks in a dialog when a program adds a root certificate to the
+    person's own store, or deletes one. A person reads it and selects Yes or
+    No. No person is present here: this thread records the text and gives the
+    answer in the person's place, with a window message. It answers only a
+    dialog of this process that names this installation's certificate
+    (`marks`: its name and its thumbprint). Any other dialog is recorded and
+    never answered; the step then ends at its time limit, with that text.
+    """
+    done, answered, recorded = threading.Event(), set(), set()
+    _user.PostMessageW.argtypes = [W.HWND, W.UINT, W.WPARAM, W.LPARAM]
+
+    def record(entry, own=True):
+        key = json.dumps(entry, sort_keys=True)
+        if key not in recorded:
+            recorded.add(key)
+            if own:
+                asked.append(entry)
+            steps.report.setdefault("windowsQuestions", []).append(entry)
+            steps.save()
+
+    def watch():
+        started = time.monotonic()
+        while not done.wait(0.5):
+            for dialog in dialogs():
+                if dialog["window"] in answered or not dialog["text"]:
+                    continue  # Answered already, or Windows has not filled it yet.
+                ours, button = names_certificate(dialog, marks), button_for(dialog, answer)
+                entry = {"title": dialog["title"], "text": dialog["text"][:4000],
+                         "buttons": sorted(label for _, label in dialog["buttons"].values()),
+                         "namesThisCertificate": ours, "answer": answer if ours and button else None}
+                record(entry)
+                if ours and button:
+                    answered.add(dialog["window"])
+                    _user.PostMessageW(dialog["window"], 0x0111, button[0], button[1])  # WM_COMMAND
+            if not answered and time.monotonic() - started > 25:
+                # For a failed step: the dialogs of other programs that this program can see.
+                for dialog in dialogs(own=False):
+                    record({"otherProgram": dialog["pid"], "title": dialog["title"], "text": dialog["text"][:2000],
+                            "buttons": sorted(label for _, label in dialog["buttons"].values())}, own=False)
+
+    thread = threading.Thread(target=watch, daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        done.set()
+        thread.join(5)
+
+
+def certificate_marks(home):
+    """The name and the thumbprint that Windows shows for this installation's certificate."""
+    from amplifier_web import windows_tls, windows_trust
+    identity = windows_tls.keyless_identity(home)
+    need(identity is not None, "This installation has no key-less certificate")
+    return [windows_trust.ROOT_NAME, windows_trust.thumbprint(identity[0])]
+
+
+def one_question(asked, answer):
+    """Exactly one Windows question, about this installation's certificate, with this answer."""
+    return (len(asked) == 1 and asked[0].get("namesThisCertificate") is True and asked[0].get("answer") == answer)
+
+
 # ---- As the runner's account.
 def folders():
     base = Path(os.environ["RUNNER_TEMP"]).resolve()
@@ -774,7 +915,7 @@ def cleanup():
                 winreg.SetValueEx(key, "AuthenticationLevelOverride", 0, winreg.REG_DWORD, setting["earlier"])
         result["viewerSetting"] = "restored"
     # The user's own reports, beside the evidence of the runner's account.
-    for name in ("first.json", "journey.json", "second.json", "third.json"):
+    for name in ("first.json", "journey.json", "certificate.json", "second.json", "third.json"):
         report = read_json(folders()[1] / name)
         if report is not None:
             save("user-" + name, report)
@@ -790,15 +931,16 @@ class Steps:
     """The user's report: one entry for each step, saved after each change."""
 
     def __init__(self, path, names, **facts):
-        self.path, self.names = Path(path), names
+        self.path, self.names, self.lock = Path(path), names, threading.Lock()
         self.report = {"finished": False, **facts,
                        "steps": [{"name": name, "status": "FAIL", "reason": "Not reached"} for name in names]}
         self.save()
 
     def save(self):
-        partial = self.path.with_suffix(".partial")
-        partial.write_text(json.dumps(self.report, indent=2, default=str) + "\n", encoding="utf-8")
-        os.replace(partial, self.path)
+        with self.lock:
+            partial = self.path.with_suffix(".partial")
+            partial.write_text(json.dumps(self.report, indent=2, default=str) + "\n", encoding="utf-8")
+            os.replace(partial, self.path)
 
     def begin(self, name):
         self.report["steps"][self.names.index(name)]["reason"] = "In progress"
@@ -1047,13 +1189,79 @@ def journey(stage, exchange, account, token):
         steps.report.update(hostBeforeSignOut=again.process_identity(status["json"]), port=port)
         steps.passed(JOURNEY[7], seconds=again_started["seconds"], port=port)
 
-        steps.begin(JOURNEY[8])
+        steps.begin(CERTIFICATE)
+        # In a program of its own, with a time limit: a Windows question that
+        # nothing answers would wait without end.
+        try:
+            ran = again.execute([sys.executable, "-I", "-B", Path(__file__), "standard", "--stage", stage,
+                                 "--exchange", exchange, "--phase", "certificate"], cwd=exchange, timeout=240)
+        except subprocess.TimeoutExpired:
+            ran = "The certificate step did not end in 240 seconds"
+        shown = read_json(exchange / "certificate.json") or {}
+        result = (shown.get("steps") or [{}])[0]
+        need(shown.get("finished") is True and result.get("status") == "PASS",
+             "The certificate step failed", {"reason": result.get("reason"), "program": ran,
+                                             "windowsQuestions": shown.get("windowsQuestions")})
+        steps.passed(CERTIFICATE, **{key: value for key, value in result.items() if key not in ("name", "status")})
+
+        steps.begin(JOURNEY[9])
         # A second setup run reads exactly this: it would open this installation.
         reads = setup_reads(stage, exchange)
         need(reads.get("folder") == "installed" and reads.get("signInTask") == "present"
              and reads.get("taskProgramExists") is True,
              "Setup's own code does not read this installation and its sign-in task", reads)
-        steps.passed(JOURNEY[8], account=reads)
+        steps.passed(JOURNEY[9], account=reads)
+    except BaseException as error:
+        steps.failed(error)
+    return steps.finish()
+
+
+def trust_targets(home):
+    from amplifier_web import browser_entry
+    from amplifier_web.deployment import load_server_config
+    urls, pin = browser_entry._owner_probe_targets(home, load_server_config(home))
+    need(pin is not None and urls, "The installation's private HTTPS identity is unavailable")
+    return urls, pin
+
+
+def certificate(stage, exchange, account, token):
+    """The launcher's own certificate step, as at a later open. Windows asks; the test selects Yes."""
+    steps = Steps(exchange / "certificate.json", (CERTIFICATE,))
+    try:
+        root = installation_folder()
+        home, again = product(stage, root)
+        from amplifier_web import windows_consumer as consumer, windows_installation, windows_trust
+        os.environ.update(consumer.environment(root, consumer.installation(root)[1]))
+        steps.begin(CERTIFICATE)
+        urls, pin = trust_targets(home)
+        before = windows_installation.trust_state(urls, pin)
+        need(before == "untrusted", "Before the question Windows must not trust the connection yet. It read", before)
+        need(windows_trust.user_roots_disabled() is False, "This computer's policy disables a person's own certificates")
+        marks = certificate_marks(home)
+        notices, asked = [], []
+        original = windows_installation.owner_notice
+
+        def note(message, *, confirm=False):
+            notices.append({"confirm": confirm, "message": message})
+            return True
+
+        with again.no_message_box(), answering(steps, asked, "yes", marks):
+            windows_installation.owner_notice = note
+            try:
+                accepted = windows_installation.review_browser_trust(root, urls, pin)
+            finally:
+                windows_installation.owner_notice = original
+        # Amplifier's one message before the question, with the thumbprint that Windows then shows.
+        need(len(notices) == 1 and notices[0]["confirm"] is False
+             and notices[0]["message"].startswith("Windows will now ask one question:")
+             and marks[1] in notices[0]["message"], "Amplifier did not show its one message before the question", notices)
+        need(one_question(asked, "yes"), "Windows did not ask its one question about this certificate", asked)
+        after = windows_installation.trust_state(urls, pin)
+        need(accepted is True and after == "trusted",
+             "After Yes, Windows does not trust the connection", {"accepted": accepted, "state": after})
+        steps.passed(CERTIFICATE, amplifierMessage=notices[0]["message"], windowsQuestion=asked[0],
+                     # Amplifier tells the person which thumbprint the Windows message shows.
+                     thumbprintInTheSameGrouping=marks[1] in asked[0]["text"], before=before, after=after)
     except BaseException as error:
         steps.failed(error)
     return steps.finish()
@@ -1080,12 +1288,23 @@ def second(stage, exchange, account, token):
         need(list(again.process_identity(status["json"])) != list(before["hostBeforeSignOut"])
              and windows_installation.saved_port(home) == before["port"],
              "The host after the sign-in is not a new host on the same port")
-        steps.passed(SECOND[0], task=state, host=again.process_identity(status["json"]), port=before["port"])
+        urls, pin = trust_targets(home)
+        marks = certificate_marks(home)
+        trusted = windows_installation.trust_state(urls, pin)
+        need(trusted == "trusted", "After the new sign-in Windows does not trust the connection. It read", trusted)
+        steps.passed(SECOND[0], task=state, host=again.process_identity(status["json"]), port=before["port"],
+                     trust=trusted)
 
         steps.begin(SECOND[1])
-        notices = []
-        removed = again.uninstall(root, notices)
+        notices, asked = [], []
+        with answering(steps, asked, "no", marks):
+            removed = again.uninstall(root, notices)
         need(again.kept_folder_question(notices), "Uninstall did not ask its one question", notices)
+        need("Windows asks whether to delete the certificate" in notices[0]["message"],
+             "The uninstall question did not say that Windows asks about the certificate", notices)
+        need(one_question(asked, "no") and removed.get("certificate") == "declined",
+             "Windows did not ask once about the certificate, or No did not keep it",
+             {"asked": asked, "certificate": removed.get("certificate")})
         state, status = again.task_facts(home), again.cli(root, "service", "status", "--json")
         need(removed.get("ok") is True and not state.get("managed")
              and not (status["json"] or {}).get("responding", False) and not shell.listed(root)
@@ -1096,7 +1315,7 @@ def second(stage, exchange, account, token):
         reads = setup_reads(stage, exchange)
         need(reads.get("folder") == "installed" and reads.get("signInTask") == "absent",
              "After the uninstall setup's own code does not read a kept installation without a sign-in task", reads)
-        steps.passed(SECOND[1], result=removed, notices=notices, folderKept=True, account=reads)
+        steps.passed(SECOND[1], result=removed, notices=notices, folderKept=True, account=reads, windowsQuestion=asked[0])
 
         steps.begin(SECOND[2])
         # As setup's second run: the entries come back, then the start.
@@ -1108,17 +1327,24 @@ def second(stage, exchange, account, token):
              and again.running(state) and again.healthy(status),
              "The start after the uninstall failed. The launcher said", started["json"] or started)
         need(windows_installation.saved_port(home) == before["port"], "The start after the uninstall changed the port")
-        steps.passed(SECOND[2], seconds=started["seconds"], task=state, port=before["port"])
+        # The certificate stayed (No). The connection needs no new question.
+        trusted = windows_installation.trust_state(urls, pin)
+        need(trusted == "trusted", "After the start Windows does not trust the connection. It read", trusted)
+        steps.passed(SECOND[2], seconds=started["seconds"], task=state, port=before["port"], trust=trusted)
 
         steps.begin(SECOND[3])
-        notices = []
-        removed = delete_everything(again, root, notices)
+        notices, asked = [], []
+        with answering(steps, asked, "yes", marks):
+            removed = delete_everything(again, root, notices)
         # From here this program starts nothing from the installation: its files are gone.
         need(delete_questions(notices, root), "Uninstall did not ask its two questions of the delete choice", notices)
         need(removed.get("ok") is True and removed.get("userDataRetained") is False and removed.get("kept") == []
              and removed.get("afterExit") is True and not removed.get("programLeft"),
              "The delete choice did not finish", removed)
-        steps.passed(SECOND[3], result=removed, notices=notices)
+        need(one_question(asked, "yes") and removed.get("certificate") == "removed",
+             "Windows did not ask once about the certificate, or Yes did not remove it",
+             {"asked": asked, "certificate": removed.get("certificate")})
+        steps.passed(SECOND[3], result=removed, notices=notices, windowsQuestion=asked[0])
     except BaseException as error:
         steps.failed(error)
     return steps.finish()
@@ -1213,7 +1439,7 @@ def standard(stage, exchange, phase):
             marker.write(str(os.getpid()))
     except FileExistsError:
         raise SystemExit("Refused: this phase already ran.") from None
-    return {"first": first, "journey": journey, "second": second, "third": third}[phase](
+    return {"first": first, "journey": journey, "certificate": certificate, "second": second, "third": third}[phase](
         stage, exchange, account, token)
 
 
@@ -1222,7 +1448,7 @@ if __name__ == "__main__":
     parser.add_argument("operation", choices=("prepare", "run", "cleanup", "standard"))
     parser.add_argument("--stage")
     parser.add_argument("--exchange")
-    parser.add_argument("--phase", choices=("first", "journey", "second", "third"))
+    parser.add_argument("--phase", choices=("first", "journey", "certificate", "second", "third"))
     args = parser.parse_args()
     if args.operation == "standard":
         raise SystemExit(0 if standard(args.stage, args.exchange, args.phase) else 1)

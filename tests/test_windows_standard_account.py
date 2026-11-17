@@ -149,13 +149,14 @@ def test_a_step_passes_only_when_it_was_stated(case, tmp_path):
 
 def test_the_steps_are_the_consumer_journey_in_setups_order(case):
     names = case.FIRST + case.SECOND + case.THIRD
-    assert len(names) == len(set(names)) == 17 and case.JOURNEY == case.FIRST[3:]
+    assert len(names) == len(set(names)) == 18 and case.JOURNEY == case.FIRST[3:]
     order = ("The account", "Setup's own code: the checks", "The installation folder", "Setup's check of the installation",
              "Start-menu and Apps-list entries", "First start: the task registration", "First start: the launcher",
-             "First start: the host", "Status", "Stop Amplifier", "Second start", "Setup's own code reads",
-             "Sign-out and sign-in", "Uninstall with the choice that keeps", "Entries again and a start",
-             "Uninstall with the choice that deletes", "After the delete choice")
-    assert [name.startswith(start) for name, start in zip(names, order, strict=True)] == [True] * 17
+             "First start: the host", "Status", "Stop Amplifier", "Second start", "The certificate:",
+             "Setup's own code reads", "Sign-out and sign-in", "Uninstall with the choice that keeps",
+             "Entries again and a start", "Uninstall with the choice that deletes", "After the delete choice")
+    assert [name.startswith(start) for name, start in zip(names, order, strict=True)] == [True] * 18
+    assert case.CERTIFICATE == case.FIRST[11] and "the test selects Yes" in case.CERTIFICATE
     # What a runner does not show is said in the result, each with its reason.
     shown = " ".join(name for name, _ in case.NOT_SHOWN)
     for part in ("The setup file", "certificate question", "browser", "windowless launcher", "chat", "Windows 11"):
@@ -290,3 +291,94 @@ def test_the_delete_choice_runs_only_as_the_user_that_the_run_created():
     folder = source[source.index("def installation_folder():"):source.index("def setup_reads(")]
     assert 'return Path(os.environ["LOCALAPPDATA"]) / "Amplifier"' in folder
     assert "--root" not in source[source.index('parser = argparse.ArgumentParser'):]
+
+
+NAME, THUMBPRINT = "Amplifier Unified (this PC only)", "0A1B2C3D 4E5F6071 8293A4B5 C6D7E8F9 00112233"
+MARKS = [NAME, THUMBPRINT]
+
+
+def dialog(text, *, title="Security Warning", buttons=None, window=100):
+    return {"window": window, "pid": 1, "title": title, "text": text,
+            "buttons": {6: (61, "Yes"), 7: (71, "No")} if buttons is None else buttons}
+
+
+def test_a_dialog_is_this_certificates_question_only_by_its_name_or_thumbprint(case):
+    assert case.names_certificate(dialog("You are about to install a certificate ... " + NAME), MARKS)
+    # Windows groups the thumbprint in its own way; spaces and case do not count.
+    assert case.names_certificate(dialog("Thumbprint (sha1): 0a1b2c3d4e5f60718293a4b5c6d7e8f900112233"), MARKS)
+    assert case.names_certificate(dialog("Subject : Amplifier  Unified (this PC only)"), MARKS)
+    assert not case.names_certificate(dialog("You are about to install a certificate from Another Root"), MARKS)
+    assert not case.names_certificate(dialog("Thumbprint (sha1): FFFFFFFF 4E5F6071 8293A4B5 C6D7E8F9 00112233"), MARKS)
+    assert not case.names_certificate(dialog(""), MARKS)
+    assert not case.names_certificate(dialog("anything"), ["", "  "])  # An empty mark names nothing.
+
+
+def test_the_answer_is_the_yes_or_no_button_of_the_dialog(case):
+    assert case.button_for(dialog("x"), "yes") == (6, 61) and case.button_for(dialog("x"), "no") == (7, 71)
+    # A dialog with other numbers: by the button's text.
+    other = dialog("x", buttons={1: (11, "Yes"), 2: (21, "No"), 9: (91, "Help")})
+    assert case.button_for(other, "yes") == (1, 11) and case.button_for(other, "no") == (2, 21)
+    assert case.button_for(dialog("x", buttons={1: (11, "OK")}), "yes") is None
+
+
+class Posted:
+    def __init__(self):
+        self.messages = []
+
+    def __call__(self, window, message, number, control):
+        self.messages.append((window, message, number, control))
+        return 1
+
+
+class Report:
+    def __init__(self):
+        self.report, self.saved = {}, 0
+
+    def save(self):
+        self.saved += 1
+
+
+def answer_with(case, monkeypatch, shown, answer):
+    import types
+    post = Posted()
+    monkeypatch.setattr(case, "_user", types.SimpleNamespace(PostMessageW=post))
+    monkeypatch.setattr(case, "dialogs", lambda own=True: list(shown) if own else [])
+    steps, asked = Report(), []
+    with case.answering(steps, asked, answer, MARKS):
+        import time
+        deadline = time.monotonic() + 5
+        while not (post.messages or (asked and steps.saved)) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        time.sleep(0.7)  # One more look: an answered dialog is not answered twice.
+    return post.messages, asked, steps
+
+
+def test_the_question_about_this_certificate_is_recorded_and_answered_once(case, monkeypatch):
+    shown = [dialog("You are about to install a certificate claiming to represent: " + NAME + "\nThumbprint (sha1): "
+                    + THUMBPRINT)]
+    messages, asked, steps = answer_with(case, monkeypatch, shown, "yes")
+    assert messages == [(100, 0x0111, 6, 61)]  # One WM_COMMAND for Yes.
+    assert case.one_question(asked, "yes") and not case.one_question(asked, "no")
+    assert asked[0]["text"].startswith("You are about to install") and asked[0]["buttons"] == ["No", "Yes"]
+    assert steps.report["windowsQuestions"] == asked
+    messages, asked, _ = answer_with(case, monkeypatch, shown, "no")
+    assert messages == [(100, 0x0111, 7, 71)] and case.one_question(asked, "no")
+
+
+def test_another_dialog_is_recorded_and_never_answered(case, monkeypatch):
+    shown = [dialog("You are about to install a certificate claiming to represent: Another Root")]
+    messages, asked, _ = answer_with(case, monkeypatch, shown, "yes")
+    assert messages == []
+    assert len(asked) == 1 and asked[0]["namesThisCertificate"] is False and asked[0]["answer"] is None
+    assert not case.one_question(asked, "yes")
+    # This certificate's question without the button for the answer is not answered either.
+    shown = [dialog(NAME, buttons={1: (11, "OK")})]
+    messages, asked, _ = answer_with(case, monkeypatch, shown, "yes")
+    assert messages == [] and asked[0]["answer"] is None and not case.one_question(asked, "yes")
+
+
+def test_one_question_means_exactly_one(case):
+    yes = {"namesThisCertificate": True, "answer": "yes"}
+    assert case.one_question([yes], "yes")
+    assert not case.one_question([], "yes") and not case.one_question([yes, yes], "yes")
+    assert not case.one_question([{**yes, "namesThisCertificate": False}], "yes")
