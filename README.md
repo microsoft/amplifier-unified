@@ -122,8 +122,9 @@ Limits of this preview:
   After a delete, Amplifier says "Amplifier is uninstalled." When you close
   that message, it starts to remove its last program files and then the
   folder. A file or folder directly in the Amplifier folder whose name
-  Amplifier does not use stays, and then the folder stays too. The folder also
-  stays, with some program files, if that last step does not finish.
+  Amplifier does not use stays, and then the folder stays too. If that last
+  step does not finish, the folder stays, and some program files can stay in
+  it.
 
   An uninstall can stop before its end. Amplifier then says what happened and
   what to do next. If it says that it "could not begin to delete its folder",

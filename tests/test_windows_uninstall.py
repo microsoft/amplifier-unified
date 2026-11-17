@@ -1827,21 +1827,33 @@ def test_design_entry_on_the_journal_names_what_the_cases_above_show():
             "A removal that goes on to its end without its journal stops when its last step begins, with the "
             "leftover of the next part less the journal.",
             "A program of this account replaces the journal with its own file in the instant of the write.",
-            "refuses a journal whose token is not its own, before it starts the step after exit",
-            "So `python`, `tools` and both records stay, and a message says that the last program files could not "
-            "be removed. That is the leftover of L3: Amplifier cannot start from that folder. Nothing more is "
-            "deleted than the person chose.",
+            "reads the journal again through the private-file boundary, before it starts the step after exit.",
+            # `test_journal_that_a_program_replaces_in_the_instant_of_the_write_...` and `test_finish_refuses_...`.
+            "It refuses a file that it cannot read there, a file that is not a journal, a journal that records "
+            "another choice, and a journal with another token.",
+            "Then `python`, `tools`, that file and setup's completion record stay, and a message says that the "
+            "last program files could not be removed. That is the leftover of L3: Amplifier cannot start from "
+            "that folder.",
+            # `test_journal_that_a_program_replaces_with_the_same_choice_and_token_...`.
+            "A file that records the delete choice and this removal's own token passes: every later check takes "
+            "it for this removal's journal, and the removal ends as it does without a replacement. In each case "
+            "nothing more is deleted than the person chose.",
             "one that records the delete choice lets the person choose again, twice, and any other one is L4",
             "It reads the journal again only when its last step begins (`windows_uninstall.finish`)."):
         assert stated in entry, stated
     # The two texts as the entry describes them are the texts that the product has for this step.
     first, second = consumer._UNFINISHED["journal"], consumer._UNFINISHED["journal-again"]
-    assert "When no journal was in the folder before the write, the text says that this uninstall deleted nothing " \
-           "in the folder, and that Amplifier might not open until the next uninstall." in entry
+    # Which text: what this uninstall saw (`earlier` in `_delete`), not what is in the folder at the write.
+    assert ("Which of the two it is follows what this uninstall saw, not what is in the folder at the write. It saw "
+            "an earlier removal when a journal that records the delete choice was in the folder at its start (a "
+            "second uninstall), and when an entry with the journal's name is in the folder directly before it "
+            "writes its own (another window began a removal while a question waited).") in entry
+    assert "When the uninstall saw no earlier removal, the text says that this uninstall deleted nothing in the " \
+           "folder, and that Amplifier might not open until the next uninstall." in entry
     assert "This uninstall deleted nothing in the folder." in first and first.endswith(
         "then uninstall again. Amplifier might not open until then.")
-    assert "When one was there (a second uninstall, or another window began a removal while a question waited), " \
-           "the text says not to open Amplifier, because its folder can be partly deleted." in entry
+    assert ("Then the text says not to open Amplifier, because its folder can be partly deleted. A journal that a "
+            "program deleted after the uninstall saw it still counts.") in entry
     assert second.endswith("Do not open Amplifier before that: its folder can be partly deleted.")
     for text in (first, second):
         assert "does not open" not in text and "Start menu" not in text and "keep using" not in text
@@ -1852,21 +1864,28 @@ def test_design_entry_on_the_journal_names_what_the_cases_above_show():
             "that stopped. For the others it must act in the moment of the uninstall.") in limits
     # L4: what an uninstall says that found a journal which proves no delete choice.
     assert ("The question and the messages of that uninstall say what it does, not what the folder holds: an "
-            "earlier removal can have deleted files. A step of it that fails shows a text of a removal that did "
-            "not finish, which says that Amplifier does not open.") in limits
+            "earlier removal can have deleted files. When one of its steps from the lock to the removal of the "
+            "Windows entries fails, it shows a text of a removal that did not finish, which says that Amplifier "
+            "does not open. Its other stops show other texts. A failed check of the installation files, and a "
+            "question that Windows does not show, show the text of an uninstall that stopped before it changed "
+            "anything. While another Amplifier window holds the lock, the text says that. A last message that "
+            "Windows does not show is shown once more. A failure that no step names shows a text that does not "
+            "say what was changed.") in limits
     # "a text": the one of the step's cause. Both say that Amplifier does not open.
     assert consumer._UNFINISHED["removal"].endswith("Until then Amplifier does not open.")
     assert consumer.entry_notice("removal", "entry", False).startswith(
         "Amplifier could not finish its removal from this PC. Until it has finished, Amplifier does not open.")
     # What the order and the paragraph on the journal say about the texts, against the cases above.
     for stated in (
-            "If Windows does not show that message, the uninstall stops there, before its last step",
+            "If Windows does not show that message, the uninstall stops there, before its last step: `python`, "
+            "`tools`, the journal, setup's completion record and the private note of that failure stay.",
             "One further message then says that the data is deleted and that the last program files were not "
             "removed. It is never the message of an uninstall that changed nothing.",
             "the further message is that last message again",
-            "When it stops at a step before its own journal and a journal is in the folder at that moment, and "
-            "when a journal is in the folder before it writes its own, it shows a text of a removal that did not "
-            "finish, not the text of an uninstall that changed nothing.",
+            "It looks for the journal's name at two moments: when a step before the write of its own journal "
+            "fails, and directly before that write. A stop of an uninstall that saw a journal at one of these "
+            "looks shows a text of a removal that did not finish, not the text of an uninstall that changed "
+            "nothing.",
             "They change nothing that uninstall deletes."):
         assert stated in design, stated
 
@@ -2090,7 +2109,7 @@ README_UNINSTALL = [
        "folder stays too.",
        [("confirmation of a delete", "The folder itself stays, because it holds entries that are not Amplifier's. "
                                      "They were not changed: mine.txt")]),
-      ("The folder also stays, with some program files, if that last step does not finish.",
+      ("If that last step does not finish, the folder stays, and some program files can stay in it.",
        [("last step that cannot start", "Amplifier could not remove its last program files. They are in this "
                                         "folder,")])]],
     [[("An uninstall can stop before its end.", ABOUT),

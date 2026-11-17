@@ -274,8 +274,15 @@ _UNFINISHED = {
     # Before the first step: nothing was asked yet, or the question itself failed.
     "preparation": _UNCHANGED + "Amplifier could not check its own installation files. "
                    "Restart this PC, then uninstall again.",
-    # The installation is checked. A question could not be asked: Windows did not show it.
+    # The installation is checked. Windows did not show a question of this uninstall. Every question
+    # comes before the first change.
     "questions": _UNCHANGED + "Amplifier could not show one of its questions. Restart this PC, then uninstall again.",
+    # A failure inside the uninstall that no step and no question names. This program does not know
+    # whether it came before or after a change, so this text says neither. Where the person can
+    # uninstall again depends on which entries are left, as in the text `removing`.
+    "uninstall": "Amplifier could not finish this uninstall.\n\n"
+                 "Restart this PC. Then select Uninstall Amplifier in the Start menu or in the Windows Apps list. "
+                 "If Amplifier is in neither, it is already uninstalled.",
     "stop-app": "Amplifier could not stop its background app.\n\n"
                 "Wait a few minutes or restart this PC, then select Stop Amplifier again.",
     "status": "Amplifier could not read its status.\n\nRestart this PC, then select Amplifier status again.",
@@ -559,22 +566,35 @@ async def _uninstall(root):
     record = windows_uninstall.pending(root) if unfinished else None
     resumed = record is not None and record["choice"] == "delete"
     delete = chosen = False
+
+    def ask(show, text, **options):
+        """One question of this uninstall. When Windows does not show it, the uninstall stops and says so.
+
+        Every question comes before the first change, so the text of that stop says that this uninstall
+        changed nothing. The note of the failure goes where a failed preparation puts it.
+        """
+        try:
+            return show(text, **options)
+        except (OSError, ValueError, RuntimeError, TimeoutError) as error:
+            _record(root, "uninstall", "questions", error)
+            raise Unfinished("questions", error) from error
     if resumed:
         # A removal began and did not finish. The journal is not proof that
         # the person chose it: a program of this account can write that file.
         # So the person chooses again, twice, as for a first removal.
-        if windows_uninstall.question(
-                "The removal of Amplifier from this PC did not finish.\n\n"
-                "Select Yes to finish it now. This deletes everything that Amplifier still keeps in this "
-                "folder, including chats, settings, saved accounts and stored keys. This cannot be undone.\n"
-                + str(root) + "\n\n"
-                "Amplifier asks you once more before it deletes anything.\n\n"
-                "Select No to change nothing now. Amplifier does not open until the removal has finished.") != "yes":
+        if ask(windows_uninstall.question,
+               "The removal of Amplifier from this PC did not finish.\n\n"
+               "Select Yes to finish it now. This deletes everything that Amplifier still keeps in this "
+               "folder, including chats, settings, saved accounts and stored keys. This cannot be undone.\n"
+               + str(root) + "\n\n"
+               "Amplifier asks you once more before it deletes anything.\n\n"
+               "Select No to change nothing now. Amplifier does not open until the removal has finished.") != "yes":
             return unchanged
         chosen = True
     elif not unfinished and windows_uninstall.completed(root):
         # Only a folder that setup completed as an installation can be deleted.
-        answer = windows_uninstall.question(
+        answer = ask(
+            windows_uninstall.question,
             "Uninstall Amplifier?\n\n"
             "Amplifier will stop and will no longer start when you sign in. Its entries in the "
             "Start menu and the Apps list will be removed.\n\n"
@@ -590,7 +610,8 @@ async def _uninstall(root):
         if answer == "cancel":
             return unchanged
         chosen = answer == "yes"
-    elif not owner_notice(
+    elif not ask(
+            owner_notice,
             "Uninstall Amplifier?\n\n"
             "Amplifier will stop and will no longer start when you sign in. Its entries in the "
             "Start menu and the Apps list will be removed.\n\n"
@@ -605,19 +626,20 @@ async def _uninstall(root):
         return unchanged
     if chosen:
         # The second choice, immediately before the deletion, in every case.
-        if windows_uninstall.question(
-                "Delete everything that Amplifier keeps in this folder?\n\n" + str(root) + "\n\n"
-                "This deletes all your Amplifier chats, your settings, your saved accounts and your "
-                "stored keys. It also deletes the files that Amplifier or you saved in its workspace "
-                "folder there. This cannot be undone.\n\n"
-                "Select Yes to delete all of that and uninstall Amplifier.\n"
-                + ("Select No to change nothing now." if resumed else
-                   "Select No to change nothing. Amplifier stays installed.")) != "yes":
+        if ask(windows_uninstall.question,
+               "Delete everything that Amplifier keeps in this folder?\n\n" + str(root) + "\n\n"
+               "This deletes all your Amplifier chats, your settings, your saved accounts and your "
+               "stored keys. It also deletes the files that Amplifier or you saved in its workspace "
+               "folder there. This cannot be undone.\n\n"
+               "Select Yes to delete all of that and uninstall Amplifier.\n"
+               + ("Select No to change nothing now." if resumed else
+                  "Select No to change nothing. Amplifier stays installed.")) != "yes":
             return unchanged
         delete = True
     # A removal that did not finish stopped the app before it deleted anything.
     working = None if resumed else await windows_working(root / "app")
-    if working and not owner_notice(
+    if working and not ask(
+            owner_notice,
             ("Amplifier is working on a chat right now." if working == 1 else
              f"Amplifier is working on {working} chats right now.") + "\n\n"
             "Select Yes to stop that work and uninstall now.\n"
@@ -829,7 +851,9 @@ async def maintenance(root, operation):
                              else result["message"])
             return result
         if operation == "uninstall":
-            step = "questions"  # The installation is checked. What fails from here, before a step, is a question.
+            # The installation is checked. A step or a question of the uninstall that fails leaves it as
+            # `Unfinished`, with its own text. Any other failure in it has no name of its own.
+            step = "uninstall"
             return await _uninstall(checked)
         if not owner_notice("Stop Amplifier's background app?", confirm=True):
             return {"ok": True, "cancelled": True}
