@@ -30,19 +30,20 @@ if not hasattr(dispatch_module.ApprovedDispatch, 'current_call'):
 
 class ConfiguredClient:
     server_name = 'selected'
-    url = 'https://configured.invalid/mcp'
+    command = 'fixture-command'
+    args = ['fixture-argument']
     def __init__(self):
-        self.headers = {'Authorization': 'fixture-only-not-a-credential'}
+        self.env = {'AUTH': 'fixture-only-not-a-credential'}
         self.session = object()
         self.tools = [{'name': 'remote/name', 'input_schema': ExactTool.input_schema}]
     def approval_binding(self):
-        return {'version': 1, 'key': tool_approval_scope.fingerprint(self.headers)}
+        return {'version': 1, 'key': tool_approval_scope.fingerprint(self.env)}
     @contextmanager
     def approval_scope(self, expected, tool_name, arguments):
         assert expected == self.approval_binding()
         yield
-ConfiguredClient.__module__ = 'amplifier_module_tool_mcp.streamable_http_client'
-ConfiguredClient.__name__ = 'MCPStreamableHTTPClient'
+ConfiguredClient.__module__ = 'amplifier_module_tool_mcp.client'
+ConfiguredClient.__name__ = 'MCPClient'
 
 
 @dataclass
@@ -221,7 +222,7 @@ async def test_matching_is_exact_across_new_calls(flow, change):
     args = None
     if change == 'args': args = {'command': 'a different request'}
     elif change == 'config': flow.coordinator.config['tools'][-1]['config']['configured'] = False
-    elif change == 'authorization': flow.tools['mcp'].client.headers['Authorization'] = 'changed-fixture'
+    elif change == 'authorization': flow.tools['mcp'].client.env['AUTH'] = 'changed-fixture'
     else: flow.coordinator.session_state['require_approval_tools'] = ['mcp']
     second = await decide(flow, 'mcp', decision='deny', arguments=args)
     assert first['toolScope']['descriptor']['key'] != second['toolScope']['descriptor']['key']
@@ -233,7 +234,7 @@ async def test_matching_is_exact_across_new_calls(flow, change):
 async def test_inflight_binding_or_stop_change_prevents_effect(flow, change):
     def changed():
         if change == 'client': flow.tools['mcp'].client = ConfiguredClient()
-        elif change == 'authorization': flow.tools['mcp'].client.headers['Authorization'] = 'changed'
+        elif change == 'authorization': flow.tools['mcp'].client.env['AUTH'] = 'changed'
         else: flow.facts['epoch']['stopRevision'] += 1
     await decide(flow, 'mcp', change=changed)
     assert not flow.tools['mcp'].effects

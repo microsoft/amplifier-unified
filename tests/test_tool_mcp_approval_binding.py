@@ -16,24 +16,20 @@ from test_tool_request_memory import flow, decide  # noqa: F401
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('transport', ['stdio', 'http'])
-async def test_canonical_client_uses_host_bound_invocation(flow, monkeypatch, transport):
+async def test_canonical_stdio_client_uses_host_bound_invocation(flow, monkeypatch):
     effects = []
     class Session:
         async def call_tool(self, name, arguments):
             effects.append((name, arguments.copy()))
             return CallToolResult(content=[TextContent(type='text', text='Fixture')])
-    client = (MCPClient('selected', 'fixture-command', [], env={'AUTH': 'fixture-only'})
-              if transport == 'stdio' else
-              MCPStreamableHTTPClient('selected', 'https://fixture.invalid/mcp',
-                                      headers={'Authorization': 'fixture-only'}))
+    client = MCPClient('selected', 'fixture-command', [], env={'AUTH': 'fixture-only'})
     client._state, client._connected = ConnectionState.CONNECTED, True
     client._protocol_version = '2026-07-28'
     client.tools = [{'name': 'remote/name', 'input_schema': flow.tools['mcp'].input_schema}]
     def connected_session():
         client.session = Session()
         client._approval_connection = ConnectionBinding(client, client.session,
-            client._approval_configuration(), {'transport': transport, 'protocol': client._protocol_version})
+            client._approval_configuration(), {'transport': 'stdio', 'protocol': client._protocol_version})
     connected_session()
     tool = MCPToolWrapper('selected', client.tools[0], client, flow.coordinator.hooks)
     tool.role = 'mcp'  # Explicit private source shim, never product authority.
@@ -54,3 +50,29 @@ async def test_canonical_client_uses_host_bound_invocation(flow, monkeypatch, tr
     flow.callbacks.append(connected_session)
     await decide(flow, 'mcp')
     assert len(effects) == 1
+
+
+@pytest.mark.asyncio
+async def test_canonical_http_client_retains_once_and_deny(flow, monkeypatch):
+    effects = []
+    class Session:
+        async def call_tool(self, name, arguments):
+            effects.append((name, arguments.copy()))
+            return CallToolResult(content=[TextContent(type='text', text='Fixture')])
+    client = MCPStreamableHTTPClient('selected', 'https://fixture.invalid/mcp')
+    client.session, client._connected = Session(), True
+    client.tools = [{'name': 'remote/name', 'input_schema': flow.tools['mcp'].input_schema}]
+    # Even an older candidate exposing configuration-only APIs must not create
+    # a reusable HTTP offer. Actual send-time authorization is not enforced.
+    client.approval_binding = lambda: {'version': 1, 'key': 'a' * 64}
+    prior = tool_approval_scope._implementation
+    monkeypatch.setattr(tool_approval_scope, '_implementation', lambda item, proof, method='execute':
+        {'fixture': 'canonical-client-source'} if item is client else prior(item, proof, method))
+    tool = MCPToolWrapper('selected', client.tools[0], client, flow.coordinator.hooks)
+    tool.role = 'mcp'
+    flow.tools['mcp'] = tool
+    await flow.coordinator.mount('tools', tool, name='mcp')
+    await decide(flow, 'mcp', decision='deny', scoped=False)
+    assert effects == []
+    await decide(flow, 'mcp', scoped=False)
+    assert effects == [('remote/name', {'command': 'exact request'})]
