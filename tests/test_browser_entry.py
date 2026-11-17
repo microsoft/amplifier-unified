@@ -967,7 +967,7 @@ async def test_native_unrelated_listener_and_proxy_never_receive_bearer(
             monkeypatch.setenv(name, str(target.make_url("/")))
         monkeypatch.setenv("NO_PROXY", "")
         monkeypatch.setenv("no_proxy", "")
-        with pytest.raises(entry.BrowserEntryUnavailable, match="identity"):
+        with pytest.raises(entry.BrowserEntryUnavailable, match="No Amplifier of this version and this data folder answered"):
             await entry.owner_browser_url(home, config)
         assert received == []
         assert trusted_received == (["Bearer " + token] if mode == "redirect" else [])
@@ -1074,7 +1074,7 @@ async def owner_url(home, config):
             await handler(types.SimpleNamespace(headers={"Authorization": "Bearer synthetic"}))
         except web.HTTPFound:
             pass
-    raise Unavailable("identity mismatch")
+    raise Unavailable("No Amplifier of this version and this data folder answered on this PC.")
 @contextlib.contextmanager
 def directory(*args, **kwargs): yield
 entry = types.SimpleNamespace(BrowserEntryUnavailable=Unavailable, owner_browser_url=owner_url,
