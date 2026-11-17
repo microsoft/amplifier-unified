@@ -91,15 +91,30 @@ namespace UnifiedBootstrap {
             }
             return thread.Join(1000)?result:-2;
         }
+        static int Account() {
+            // What setup's own code reads for the account that runs this program:
+            // its elevation, the state of its real installation folder and its
+            // sign-in task. It only reads. It creates and changes nothing.
+            string local=Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            string root=Path.Combine(local,NativeInstaller.RootName), folder, program;
+            try { InstallStorage.Check(local); folder=NativeInstaller.RootState(root); }
+            catch(Exception) { folder="refused"; }
+            string task=NativeInstaller.SignInTask(out program);
+            Console.WriteLine("{\"elevation\":\""+NativeInstaller.Elevation()+"\",\"folder\":\""+folder+
+                "\",\"signInTask\":\""+task+"\",\"taskProgramExists\":"+(program!=null?"true":"false")+
+                ",\"folderLength\":"+root.Length+",\"folderLimit\":"+NativeInstaller.MaxRootLength+"}");
+            return 0;
+        }
         static int Main(string[] args) {
             // Only a stand-in inherits this value: the checks below set it, and
             // nothing sets it for the checks themselves. Any other arguments end
             // the stand-in with 9; they never run the checks a second time.
             if(Environment.GetEnvironmentVariable("AMPLIFIER_SETUP_TEST_ROOT")!=null) return StandIn(args);
+            if(args.Length==1 && args[0]=="--account") return Account();
             string local=Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
             string work=Path.Combine(local,"Temp","amplifier-setup-test-"+Guid.NewGuid().ToString("N").Substring(0,8));
             Directory.CreateDirectory(work);
-            string outcome="unknown", task="unknown", plain="unknown", elevation=NativeInstaller.Elevation();
+            string outcome="unknown", task="unknown", plain="unknown", reached="unknown", elevation=NativeInstaller.Elevation();
             try {
                 // The fixed folder: short, and the same on every run.
                 Need(NativeInstaller.RootName=="Amplifier" && NativeInstaller.MaxRootLength==59,"folder constants");
@@ -310,11 +325,19 @@ namespace UnifiedBootstrap {
                         : stop.Message.Contains("administrator rights"),"elevation cause");
                 }
                 outcome=stop==null?"precheck passed: "+state:"precheck stopped";
+                // Which check stopped it, from setup's own platform check and not
+                // from a text: a standard account passes the elevation part, so
+                // its platform stop is the Windows version or the processor.
+                SetupStop platform=null;
+                try { NativeInstaller.Platform(); } catch(SetupStop error) { platform=error; }
+                reached=stop==null?"none":platform==null || stop.Message!=platform.Message?"after-platform"
+                    :elevation!="none"?"elevation":"windows-or-processor";
 
                 foreach(string bad in new[]{"","..","a\\b","Amplifier ","con:",new string('a',65)})
                     Need(Refused(()=>Make(work,bad)),"unsafe folder name");
                 Console.WriteLine("{\"ok\":true,\"assertions\":"+assertions+",\"elevation\":\""+elevation+
-                    "\",\"precheck\":\""+outcome+"\",\"signInTask\":\""+task+"\",\"ordinaryFolder\":\""+plain+"\"}");
+                    "\",\"precheck\":\""+outcome+"\",\"precheckStop\":\""+reached+"\",\"signInTask\":\""+task+
+                    "\",\"ordinaryFolder\":\""+plain+"\"}");
                 return 0;
             } catch(Exception error) {
                 Console.WriteLine("{\"ok\":false,\"assertions\":"+assertions+",\"elevation\":\""+elevation+"\"}");

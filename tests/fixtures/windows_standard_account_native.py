@@ -1,41 +1,132 @@
-"""PROBE (temporary): facts of a GitHub-hosted Windows runner for a standard account.
+"""What the consumer installation does for a standard Windows account.
 
-Creates one local user that is not a member of Administrators, logs it on with
-its name and password (CreateProcessWithLogonW, the Secondary Logon service,
-with its profile), and records what that logon can do. The password is made in
-this process, is never written, printed or put on a command line, and the user
-is removed again.
+A standard account is not a member of Administrators. The account of a
+GitHub-hosted runner is the built-in Administrator, so this case makes its own
+person: one new local user, member of Users (and of Remote Desktop Users, only
+for the sign-in below), with a random password.
+
+The user signs in with its name and password through Remote Desktop to this
+same computer. Windows then gives the user a desktop session of its own, as at
+a PC's screen. A helper task starts this file as that user in that session.
+From there everything runs as the standard user, in the user's own profile:
+
+- setup's own code (the compiled setup sources): its checks before any
+  question, its folder checks and its read of the sign-in task;
+- the installation in %LOCALAPPDATA%\\Amplifier in setup's layout, with the
+  candidate; setup's check of it; the Start-menu and Apps-list entries;
+- the first start: the task registration, the launcher, the host that Task
+  Scheduler starts; status; "Stop Amplifier"; a second start;
+- a sign-out and a new sign-in: the task's own trigger starts the host;
+- uninstall, with the choice that keeps the folder.
+
+Not shown: see NOT_SHOWN below. In short: the setup file itself (setup refuses
+Windows Server, and every hosted x64 runner is Windows Server), the
+certificate question, the browser, a chat, the delete choice of uninstall,
+Windows 11, and a sign-in at the PC's own screen.
+
+The password is made in the `run` process. It goes to Windows for the new
+user and, for each sign-in, to the credential store of the runner's own logon,
+in memory only. It is never written to a file, an environment variable, a
+command line or the log.
+
+The fixture creates a Windows user and changes a Remote Desktop setting of the
+runner's account. It runs only with the workflow's opt-in on a hosted runner.
+That guard stops accidental use and does not prove the machine. Never run it
+on a machine that is kept.
 """
 from __future__ import annotations
 
 import argparse
+import asyncio
+import base64
 import ctypes as C
 from ctypes import wintypes as W
+import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
 import secrets
+import shutil
 import string
 import subprocess
 import sys
 import time
+import tomllib
 import uuid
 
+ROOT = Path(__file__).resolve().parents[2]
+SOURCE = "https://github.com/microsoft/amplifier-unified"
 OPT_IN = "AMPLIFIER_CREATE_A_STANDARD_USER_ON_THIS_RUNNER"
-USERS, ADMINISTRATORS = "S-1-5-32-545", "S-1-5-32-544"
+USERS, ADMINISTRATORS, REMOTE_DESKTOP_USERS = "S-1-5-32-545", "S-1-5-32-544", "S-1-5-32-555"
+# Remote Desktop refuses a connection to the address of this computer's own
+# screen session. Another loopback address reaches the same computer.
+DESKTOP, DESKTOP_TARGET = "127.0.0.2", "TERMSRV/127.0.0.2"
+HELPER = "AmplifierStandardAccountCheck"
+FILES = ("tests/fixtures/windows_standard_account_native.py", "tests/fixtures/windows_start_again_native.py",
+         "amplifier_web/windows_files.py")
+# One line for each step. FIRST runs after the first sign-in, SECOND after the
+# sign-out and the new sign-in.
+FIRST = (
+    "The account: a standard user, signed in, in a desktop session of its own",
+    "Setup's own code: the checks before any question, the folder checks, the read of the sign-in task",
+    "The installation folder and the app in setup's layout (the fixture's commands, not the setup file)",
+    "Setup's check of the installation (setup's two commands)",
+    "Start-menu and Apps-list entries",
+    "First start: the task registration",
+    "First start: the launcher",
+    "First start: the host that Task Scheduler starts",
+    "Status",
+    "Stop Amplifier",
+    "Second start",
+    "Setup's own code reads this installation as installed, with its sign-in task",
+)
+SECOND = (
+    "Sign-out and sign-in: the task's own trigger starts the host",
+    "Uninstall (the folder is kept)",
+)
+JOURNEY = FIRST[3:]
+NOT_SHOWN = (
+    ("The setup file: its windows and its question, its Windows 11 check with the answer yes, and its "
+     "downloads of uv, Python and Git",
+     "the setup file refuses Windows Server, and every GitHub-hosted x64 runner is Windows Server. The "
+     "fixture makes setup's layout with setup's uv commands for Python, the candidate wheel and the "
+     "runner's Git."),
+    ("The certificate question",
+     "no person answers it. The launcher runs with --no-open, so Windows is not asked to trust the "
+     "certificate, and uninstall has no certificate to remove."),
+    ("The browser", "the launcher runs with --no-open."),
+    ("A chat and a model request", "no AI account is connected."),
+    ("The delete choice of uninstall",
+     "this case answers the uninstall question with the choice that keeps the folder. It can be shown on "
+     "a runner; this case does not run it."),
+    ("Windows 11, and a sign-in at the PC's own screen",
+     "the runner is Windows Server, and the user signs in through Remote Desktop to the same computer."),
+)
 
 
-def require_disposable_runner():
-    """Refuse unless this is the hosted workflow, with its opt-in.
+def require_disposable_runner(environ=None, platform=None):
+    """Refuse before any effect unless this is the hosted workflow, with its opt-in.
 
     A guard against accidental use. It reads the environment that GitHub sets
     on a hosted runner; environment variables do not prove the machine. Never
     set them by hand on a machine that is kept.
     """
-    if not (sys.platform == "win32" and os.environ.get("GITHUB_ACTIONS") == "true"
-            and os.environ.get("RUNNER_ENVIRONMENT") == "github-hosted" and os.environ.get(OPT_IN) == "1"):
-        raise SystemExit("Refused: this check creates a local Windows user. It runs only on a "
-                         f"GitHub-hosted runner, with {OPT_IN}=1.")
+    environ = os.environ if environ is None else environ
+    if not ((platform or sys.platform) == "win32" and environ.get("GITHUB_ACTIONS") == "true"
+            and environ.get("RUNNER_ENVIRONMENT") == "github-hosted" and environ.get(OPT_IN) == "1"):
+        raise SystemExit("Refused: this check creates a Windows user and changes a Remote Desktop setting. "
+                         f"It runs only on a GitHub-hosted runner, with {OPT_IN}=1.")
+    if sys.version_info[:2] != (3, 13) or sys.maxsize <= 2 ** 32:
+        raise SystemExit("Refused: this check needs 64-bit CPython 3.13.")
+
+
+def load(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def evidence():
@@ -44,13 +135,45 @@ def evidence():
 
 def save(name, value):
     evidence().mkdir(parents=True, exist_ok=True)
-    (evidence() / name).write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+    raw = json.dumps(value, indent=2) + "\n"
+    assert len(raw.encode()) <= 256 * 1024, name
+    (evidence() / name).write_text(raw, encoding="utf-8")
 
 
-def run(argv, *, timeout=60, stdin=None):
-    result = subprocess.run(list(map(str, argv)), capture_output=True, text=True, timeout=timeout,
-                            input=stdin, encoding="utf-8", errors="replace")
-    return {"exitCode": result.returncode, "stdout": result.stdout[-6000:], "stderr": result.stderr[-2000:]}
+def saved(name):
+    try:
+        return json.loads((evidence() / name).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+
+
+def execute(argv, *, env=None, cwd=None, timeout=120, stdin=None):
+    started = time.monotonic()
+    result = subprocess.run(list(map(str, argv)), env=env, cwd=cwd, timeout=timeout, input=stdin,
+                            capture_output=True, text=True, encoding="utf-8", errors="replace")
+    try:
+        value = json.loads(result.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        value = None
+    return {"exitCode": result.returncode, "json": value, "stdout": result.stdout[-6000:],
+            "stderr": result.stderr[-3000:], "seconds": round(time.monotonic() - started, 3)}
+
+
+def need(condition, text, detail=None):
+    """A failed step keeps its exact text: what was required, and what the program said."""
+    if not condition:
+        raise AssertionError(text if detail is None else text + ": " + json.dumps(detail, default=str)[-2500:])
+
+
+def system(name):
+    return Path(os.environ["SystemRoot"]) / "System32" / name
+
+
+def powershell(script, value):
+    """Static source only. JSON is data on stdin, never text in the command."""
+    return execute([system("WindowsPowerShell/v1.0/powershell.exe"), "-NoLogo", "-NoProfile", "-NonInteractive",
+                    "-EncodedCommand", base64.b64encode(script.encode("utf-16-le")).decode("ascii")],
+                   stdin=json.dumps(value))
 
 
 # ---- Windows accounts and tokens.
@@ -75,11 +198,15 @@ def sid_text(sid):
 
 
 def account_sid(name):
-    """The SID bytes of a local account name."""
+    """The SID bytes of a local account name; None when Windows knows no such name."""
     size, domain_size, use = W.DWORD(0), W.DWORD(0), W.DWORD()
     _adv.LookupAccountNameW.argtypes = [W.LPCWSTR, W.LPCWSTR, C.c_void_p, C.POINTER(W.DWORD),
                                         W.LPWSTR, C.POINTER(W.DWORD), C.POINTER(W.DWORD)]
-    _adv.LookupAccountNameW(None, name, None, C.byref(size), None, C.byref(domain_size), C.byref(use))
+    if not _adv.LookupAccountNameW(None, name, None, C.byref(size), None, C.byref(domain_size), C.byref(use)):
+        if C.get_last_error() == 1332:  # No mapping between account names and security IDs.
+            return None
+        if C.get_last_error() != 122:  # The first call only asks for the sizes.
+            raise _failed()
     sid, domain = C.create_string_buffer(size.value), C.create_unicode_buffer(domain_size.value)
     if not _adv.LookupAccountNameW(None, name, sid, C.byref(size), domain, C.byref(domain_size), C.byref(use)):
         raise _failed()
@@ -87,7 +214,7 @@ def account_sid(name):
 
 
 def sid_name(text):
-    """The local name of a well-known SID (the group's name differs by language)."""
+    """The name of a built-in group on this computer. It differs by language."""
     sid = C.c_void_p()
     _adv.ConvertStringSidToSidW.argtypes = [W.LPCWSTR, C.POINTER(C.c_void_p)]
     if not _adv.ConvertStringSidToSidW(text, C.byref(sid)):
@@ -121,25 +248,27 @@ def new_password():
             return value
 
 
+def join(name, group):
+    net = C.WinDLL("netapi32")
+    net.NetLocalGroupAddMembers.argtypes = [W.LPCWSTR, W.LPCWSTR, W.DWORD, C.c_void_p, W.DWORD]
+    net.NetLocalGroupAddMembers.restype = W.DWORD
+    sid = account_sid(name)
+    status = net.NetLocalGroupAddMembers(None, sid_name(group), 0, C.byref(_Member(C.cast(sid, C.c_void_p))), 1)
+    if status:
+        raise OSError(f"NetLocalGroupAddMembers failed with status {status}")
+
+
 def create_user(name, password):
-    """One local user, member of Users only: a standard account."""
+    """One new local user. An existing name is refused by Windows, never adopted."""
     net = C.WinDLL("netapi32")
     net.NetUserAdd.argtypes = [W.LPCWSTR, W.DWORD, C.c_void_p, C.POINTER(W.DWORD)]
     net.NetUserAdd.restype = W.DWORD
     # USER_PRIV_USER; UF_SCRIPT | UF_DONT_EXPIRE_PASSWD.
     info = _UserInfo1(name, password, 0, 1, None, "Amplifier standard-account check (one run)", 0x1 | 0x10000, None)
-    field = W.DWORD()
-    status = net.NetUserAdd(None, 1, C.byref(info), C.byref(field))
+    status = net.NetUserAdd(None, 1, C.byref(info), C.byref(W.DWORD()))
     if status:
-        raise OSError(f"NetUserAdd failed with status {status} (field {field.value})")
-    sid = account_sid(name)
-    net.NetLocalGroupAddMembers.argtypes = [W.LPCWSTR, W.LPCWSTR, W.DWORD, C.c_void_p, W.DWORD]
-    net.NetLocalGroupAddMembers.restype = W.DWORD
-    member = _Member(C.cast(sid, C.c_void_p))
-    status = net.NetLocalGroupAddMembers(None, sid_name(USERS), 0, C.byref(member), 1)
-    if status not in (0, 1378):  # Already a member.
-        raise OSError(f"NetLocalGroupAddMembers failed with status {status}")
-    return sid_text(sid)
+        raise OSError(f"NetUserAdd failed with status {status}")
+    return sid_text(account_sid(name))
 
 
 def local_groups(name):
@@ -166,53 +295,6 @@ def delete_user(name):
     return net.NetUserDel(None, name)  # 0 removed; 2221 no such user.
 
 
-class _Startup(C.Structure):
-    _fields_ = [("size", W.DWORD), ("reserved", W.LPWSTR), ("desktop", W.LPWSTR), ("title", W.LPWSTR),
-                ("x", W.DWORD), ("y", W.DWORD), ("width", W.DWORD), ("height", W.DWORD),
-                ("columns", W.DWORD), ("rows", W.DWORD), ("fill", W.DWORD), ("flags", W.DWORD),
-                ("show", W.WORD), ("reserved2", W.WORD), ("reserved3", C.c_void_p),
-                ("stdin", W.HANDLE), ("stdout", W.HANDLE), ("stderr", W.HANDLE)]
-
-
-class _Process(C.Structure):
-    _fields_ = [("process", W.HANDLE), ("thread", W.HANDLE), ("pid", W.DWORD), ("tid", W.DWORD)]
-
-
-def run_as(name, password, argv, *, cwd, timeout):
-    """Log the user on with name and password and run one program as that user.
-
-    CreateProcessWithLogonW: the Secondary Logon service makes a new logon of
-    the user (as "Run as different user" does), loads the user's profile and
-    gives the program the user's own environment. Returns the exit code.
-    """
-    command = C.create_unicode_buffer(subprocess.list2cmdline(list(map(str, argv))))
-    startup, made = _Startup(), _Process()
-    startup.size, startup.flags, startup.show = C.sizeof(startup), 0x1, 0  # A hidden console window.
-    _adv.CreateProcessWithLogonW.argtypes = [
-        W.LPCWSTR, W.LPCWSTR, W.LPCWSTR, W.DWORD, W.LPCWSTR, W.LPWSTR, W.DWORD, C.c_void_p,
-        W.LPCWSTR, C.POINTER(_Startup), C.POINTER(_Process)]
-    _adv.CreateProcessWithLogonW.restype = W.BOOL
-    # LOGON_WITH_PROFILE; CREATE_UNICODE_ENVIRONMENT. A null environment is the user's own.
-    if not _adv.CreateProcessWithLogonW(name, ".", password, 0x1, None, command, 0x400, None,
-                                        str(cwd), C.byref(startup), C.byref(made)):
-        raise _failed()
-    _kernel.WaitForSingleObject.argtypes = [W.HANDLE, W.DWORD]
-    _kernel.GetExitCodeProcess.argtypes = [W.HANDLE, C.POINTER(W.DWORD)]
-    _kernel.TerminateProcess.argtypes = [W.HANDLE, C.c_uint]
-    _kernel.CloseHandle.argtypes = [W.HANDLE]
-    try:
-        if _kernel.WaitForSingleObject(made.process, int(timeout * 1000)) != 0:
-            _kernel.TerminateProcess(made.process, 1)
-            raise TimeoutError("The program of the standard user did not end in time.")
-        code = W.DWORD()
-        if not _kernel.GetExitCodeProcess(made.process, C.byref(code)):
-            raise _failed()
-        return code.value
-    finally:
-        _kernel.CloseHandle(made.thread)
-        _kernel.CloseHandle(made.process)
-
-
 class _Luid(C.Structure):
     _fields_ = [("low", W.DWORD), ("high", W.LONG)]
 
@@ -233,7 +315,7 @@ class _LogonSession(C.Structure):
 
 
 def token_facts():
-    """What Windows says about this process's own token and logon."""
+    """What Windows says about this process's own token, logon and desktop session."""
     token = W.HANDLE()
     _kernel.GetCurrentProcess.restype = W.HANDLE
     _adv.OpenProcessToken.argtypes = [W.HANDLE, W.DWORD, C.POINTER(W.HANDLE)]
@@ -253,14 +335,17 @@ def token_facts():
         # Each buffer stays referenced while a pointer into it is read.
         owner, kind, raised, label, numbers = info(1), info(18), info(20), info(25), info(10)
         user = sid_text(C.c_void_p.from_buffer(owner).value)  # TokenUser: the SID pointer comes first.
-        elevation_type = W.DWORD.from_buffer(kind).value
-        elevated = W.DWORD.from_buffer(raised).value
         level = C.c_void_p.from_buffer(label).value  # TokenIntegrityLevel
         _adv.GetSidSubAuthorityCount.argtypes, _adv.GetSidSubAuthorityCount.restype = [C.c_void_p], C.POINTER(C.c_ubyte)
         _adv.GetSidSubAuthority.argtypes, _adv.GetSidSubAuthority.restype = [C.c_void_p, W.DWORD], C.POINTER(W.DWORD)
         integrity = _adv.GetSidSubAuthority(level, _adv.GetSidSubAuthorityCount(level).contents.value - 1).contents.value
         statistics = _Statistics.from_buffer(numbers)  # TokenStatistics
         logon = _Luid(statistics.authentication.low, statistics.authentication.high)
+        facts = {"sid": user,
+                 # 1: the account has one token and no administrator token beside it.
+                 "elevationType": W.DWORD.from_buffer(kind).value,
+                 "elevated": bool(W.DWORD.from_buffer(raised).value),
+                 "integrityLevel": hex(integrity)}  # 0x2000 medium, 0x3000 high.
     finally:
         _kernel.CloseHandle.argtypes = [W.HANDLE]
         _kernel.CloseHandle(token)
@@ -270,215 +355,743 @@ def token_facts():
     if (not _adv.ConvertStringSidToSidW(ADMINISTRATORS, C.byref(administrators))
             or not _adv.CheckTokenMembership(None, administrators, C.byref(member))):
         raise _failed()
-    facts = {"sid": user, "memberOfAdministrators": bool(member.value),
-             # 1: the account has one token and no administrator token beside it.
-             "elevationType": elevation_type, "elevated": bool(elevated), "integrityLevel": hex(integrity)}
+    facts["memberOfAdministrators"] = bool(member.value)
     secur = C.WinDLL("secur32")
     data = C.POINTER(_LogonSession)()
     secur.LsaGetLogonSessionData.argtypes = [C.POINTER(_Luid), C.POINTER(C.POINTER(_LogonSession))]
-    status = secur.LsaGetLogonSessionData(C.byref(logon), C.byref(data))
-    if status == 0:
-        # 2 Interactive, 3 Network, 4 Batch, 5 Service, 10 RemoteInteractive, 11 CachedInteractive.
-        facts.update(logonType=data.contents.type, logonSession=data.contents.session,
-                     logonPackage=data.contents.package.buffer)
+    if secur.LsaGetLogonSessionData(C.byref(logon), C.byref(data)) == 0:
+        # 2 Interactive (at the screen), 10 RemoteInteractive (Remote Desktop).
+        facts["logonType"] = data.contents.type
         secur.LsaFreeReturnBuffer.argtypes = [C.c_void_p]
         secur.LsaFreeReturnBuffer(data)
-    else:
-        facts["logonTypeStatus"] = hex(status & 0xFFFFFFFF)
     session = W.DWORD()
     _kernel.ProcessIdToSessionId.argtypes = [W.DWORD, C.POINTER(W.DWORD)]
-    _kernel.ProcessIdToSessionId(os.getpid(), C.byref(session))
-    user32 = C.WinDLL("user32", use_last_error=True)
-    user32.GetProcessWindowStation.restype = W.HANDLE
-    user32.GetUserObjectInformationW.argtypes = [W.HANDLE, C.c_int, C.c_void_p, W.DWORD, C.POINTER(W.DWORD)]
-    name, needed = C.create_unicode_buffer(256), W.DWORD()
-    station = user32.GetProcessWindowStation()
-    facts.update(desktopSession=session.value,
-                 windowStation=name.value if station and user32.GetUserObjectInformationW(
-                     station, 2, name, C.sizeof(name), C.byref(needed)) else None)
+    if not _kernel.ProcessIdToSessionId(os.getpid(), C.byref(session)):
+        raise _failed()
+    facts["desktopSession"] = session.value
     return facts
 
 
-TASK = r"""
-$ErrorActionPreference = 'Stop'
-$p = [Console]::In.ReadToEnd() | ConvertFrom-Json
-$s = New-Object -ComObject 'Schedule.Service'; $s.Connect(); $f = $s.GetFolder('\')
-$out = @{}
-if ($p.phase -eq 'register') {
-  $d = $s.NewTask(0)
-  $d.Principal.UserId = $p.sid; $d.Principal.LogonType = 3; $d.Principal.RunLevel = 0
-  $d.Settings.DisallowStartIfOnBatteries = $false; $d.Settings.StopIfGoingOnBatteries = $false
-  $tr = $d.Triggers.Create(9); $tr.UserId = $p.sid
-  $a = $d.Actions.Create(0); $a.Path = $env:ComSpec
-  $a.Arguments = '/d /c echo %SESSIONNAME% %TIME%>> "' + $p.marker + '"'
-  try { $t = $f.RegisterTaskDefinition($p.name, $d, 2, $p.sid, $null, 3, $null); $out.registered = $true }
-  catch { $out.registered = $false; $out.registerHresult = $_.Exception.HResult }
-} else {
-  $t = $f.GetTask($p.name)
-  $out.before = if (Test-Path $p.marker) { Get-Content -Raw $p.marker } else { $null }
-  try { $null = $t.Run($null); $out.run = $true } catch { $out.run = $false; $out.runHresult = $_.Exception.HResult }
-  Start-Sleep -Seconds 6
-  $t = $f.GetTask($p.name)
-  $out.state = [int]$t.State; $out.lastResult = [long]$t.LastTaskResult
-  $out.after = if (Test-Path $p.marker) { Get-Content -Raw $p.marker } else { $null }
-  $f.DeleteTask($p.name, 0)
-}
-$out | ConvertTo-Json -Compress
-"""
+def standard_token(token, account):
+    """True for the token of the standard user of this run, in a desktop session of its own sign-in."""
+    return (token["sid"] == account["sid"] and token["memberOfAdministrators"] is False
+            # One token, no administrator token beside it; not elevated; medium integrity.
+            and token["elevationType"] == 1 and token["elevated"] is False and token["integrityLevel"] == "0x2000"
+            # A sign-in of this user itself, not in the session of services or of the runner's account.
+            and token.get("logonType") in (2, 10) and token["desktopSession"] not in (0, account["runnerSession"]))
 
 
-def probe_child(exchange, phase):
-    """Runs as the standard user."""
-    import base64
-    exchange = Path(exchange)
-    report = {"stage": "token", "phase": phase}
-    try:
-        report["token"] = token_facts()
-        local = Path(os.environ["LOCALAPPDATA"])
-        marker = local / "standard-account-task-ran.txt"
-        report["task"] = run(["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand",
-                              base64.b64encode(TASK.encode("utf-16-le")).decode("ascii")],
-                             stdin=json.dumps({"sid": report["token"]["sid"], "marker": str(marker),
-                                               "phase": phase, "name": "AmplifierStandardAccountProbe"}))
-        report["stage"] = "complete"
-    except BaseException as error:
-        report.update(errorType=type(error).__name__, error=str(error)[-1000:])
-    (exchange / f"child-{phase}.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-    return report["stage"] == "complete"
-
-
-# ---- A desktop session of the user: Remote Desktop to this same computer.
+# ---- The user's own desktop session: Remote Desktop to this same computer.
 class _Credential(C.Structure):
     _fields_ = [("flags", W.DWORD), ("type", W.DWORD), ("target", W.LPWSTR), ("comment", W.LPWSTR),
                 ("written", W.FILETIME), ("blob_size", W.DWORD), ("blob", C.c_void_p), ("persist", W.DWORD),
                 ("attribute_count", W.DWORD), ("attributes", C.c_void_p), ("alias", W.LPWSTR), ("user", W.LPWSTR)]
 
 
-def remember(target, user, password, persist):
-    """Give Windows the password for one Remote Desktop target, in memory of this logon (persist 1)."""
+def remember(user, password):
+    """Give Windows the password for the Remote Desktop target, in memory of this logon only."""
     blob = C.create_string_buffer(password.encode("utf-16-le"))
-    value = _Credential(0, 1, target, None, W.FILETIME(), len(password) * 2, C.cast(blob, C.c_void_p),
-                        persist, 0, None, None, user)
+    # CRED_TYPE_GENERIC; CRED_PERSIST_SESSION: not saved to disk, gone at sign-out.
+    value = _Credential(0, 1, DESKTOP_TARGET, None, W.FILETIME(), len(password) * 2, C.cast(blob, C.c_void_p),
+                        1, 0, None, None, user)
     _adv.CredWriteW.argtypes = [C.POINTER(_Credential), W.DWORD]
     if not _adv.CredWriteW(C.byref(value), 0):
         raise _failed()
 
 
-def forget(target):
+def forget():
     _adv.CredDeleteW.argtypes = [W.LPCWSTR, W.DWORD, W.DWORD]
-    return bool(_adv.CredDeleteW(target, 1, 0))
+    return bool(_adv.CredDeleteW(DESKTOP_TARGET, 1, 0))
 
 
 def windows_of(pid):
-    """The texts of the windows of one process: what a person would read."""
+    """The texts of the windows of one process: what a person would read there."""
     user32 = C.WinDLL("user32", use_last_error=True)
     callback = C.WINFUNCTYPE(W.BOOL, W.HWND, W.LPARAM)
+    user32.GetWindowThreadProcessId.argtypes = [W.HWND, C.POINTER(W.DWORD)]
     found = []
 
     def text(handle):
-        value, kind = C.create_unicode_buffer(512), C.create_unicode_buffer(128)
+        value = C.create_unicode_buffer(512)
         user32.GetWindowTextW(handle, value, 512)
-        user32.GetClassNameW(handle, kind, 128)
-        return kind.value, value.value
+        return value.value
 
     def child(handle, _):
-        found.append(("  child", *text(handle)))
+        found.append(text(handle))
         return True
 
     def top(handle, _):
         owner = W.DWORD()
         user32.GetWindowThreadProcessId(handle, C.byref(owner))
         if owner.value == pid:
-            found.append(("top", *text(handle)))
+            found.append(text(handle))
             user32.EnumChildWindows(handle, callback(child), 0)
         return True
 
-    user32.GetWindowThreadProcessId.argtypes = [W.HWND, C.POINTER(W.DWORD)]
     user32.EnumWindows(callback(top), 0)
-    return [list(item) for item in found if item[2]][:60]
+    return [item for item in found if item and "IME" not in item][:40]
+
+
+def find_session(listing, name):
+    """(number, state) of the user's desktop session in the list of Windows; None when it has none."""
+    for line in listing.splitlines():
+        parts = line.replace(">", " ").split()
+        for index, part in enumerate(parts[:-2]):
+            if part.casefold() == name.casefold() and parts[index + 1].isdigit():
+                return int(parts[index + 1]), parts[index + 2]
+    return None
 
 
 def session_of(name):
-    """The line of the user's desktop session, as Windows lists it; None when there is none."""
-    listing = run(["qwinsta.exe"])["stdout"]
-    return next((line.strip() for line in listing.splitlines() if f" {name.lower()} " in line.lower()), None)
+    return find_session(execute([system("qwinsta.exe")])["stdout"], name)
 
 
-def probe():
-    """Runs as the runner's account."""
-    report = {"stage": "runner"}
-    name = "amp-std-" + uuid.uuid4().hex[:6]
-    target, viewer = "TERMSRV/127.0.0.2", None
+def sign_in(name, password):
+    """A Remote Desktop sign-in of the user to this same computer. Returns the viewer and the session number."""
+    import winreg
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Terminal Server Client") as key:
+        # The viewer of the runner's own account must not ask about this
+        # computer's own certificate: no person answers there.
+        try:
+            earlier = winreg.QueryValueEx(key, "AuthenticationLevelOverride")[0]
+        except FileNotFoundError:
+            earlier = None
+        if saved("viewer-setting.json") is None:
+            save("viewer-setting.json", {"earlier": earlier})
+        winreg.SetValueEx(key, "AuthenticationLevelOverride", 0, winreg.REG_DWORD, 0)
+    remember(os.environ["COMPUTERNAME"] + "\\" + name, password)
     try:
-        exchange = evidence() / "exchange"
-        exchange.mkdir(parents=True, exist_ok=True)
-        script = exchange / Path(__file__).name
-        script.write_bytes(Path(__file__).read_bytes())
-        report["stage"] = "user"
+        viewer = subprocess.Popen([str(system("mstsc.exe")), "/v:" + DESKTOP, "/w:1024", "/h:768"])
+        save("viewers.json", (saved("viewers.json") or []) + [viewer.pid])
+        deadline, session = time.monotonic() + 180, None
+        while time.monotonic() < deadline:
+            time.sleep(3)
+            session = session_of(name)
+            if session and session[1] == "Active":
+                return viewer, session[0]
+            if viewer.poll() is not None:
+                break
+        raise RuntimeError("The Remote Desktop sign-in did not give the user a desktop session. Session: "
+                           + json.dumps(session) + ". The viewer's windows: " + json.dumps(windows_of(viewer.pid)))
+    finally:
+        forget()
+
+
+def sign_out(name, viewer):
+    """Sign the user out. True when Windows lists no session of the user afterwards."""
+    session = session_of(name)
+    if session:
+        execute([system("logoff.exe"), session[0]])
+    deadline = time.monotonic() + 90
+    while session_of(name) and time.monotonic() < deadline:
+        time.sleep(2)
+    if viewer is not None and viewer.poll() is None:
+        viewer.kill()
+    return session_of(name) is None
+
+
+TASKS = r"""
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+$p = [Console]::In.ReadToEnd() | ConvertFrom-Json
+$s = New-Object -ComObject 'Schedule.Service'; $s.Connect(); $f = $s.GetFolder('\')
+function Find($name) {
+    try { return $f.GetTask($name) }
+    catch {
+        $e = $_.Exception
+        while ($null -ne $e.InnerException) { $e = $e.InnerException }
+        if ($e.HResult -ne -2147024894) { throw }
+        return $null
+    }
+}
+if ($p.op -eq 'start') {
+    $d = $s.NewTask(0)
+    # The user's own token in the user's own desktop session; no password; not elevated.
+    $d.Principal.UserId = $p.sid; $d.Principal.LogonType = 3; $d.Principal.RunLevel = 0
+    $d.Settings.DisallowStartIfOnBatteries = $false; $d.Settings.StopIfGoingOnBatteries = $false
+    $d.Settings.ExecutionTimeLimit = 'PT1H'
+    $a = $d.Actions.Create(0); $a.Path = $p.program; $a.Arguments = $p.arguments; $a.WorkingDirectory = $p.folder
+    $t = $f.RegisterTaskDefinition($p.name, $d, 6, $p.sid, $null, 3, $null)
+    $null = $t.Run($null)
+} elseif ($p.op -eq 'remove') {
+    if ($null -ne (Find $p.name)) { $f.DeleteTask($p.name, 0) }
+}
+$t = Find $p.name
+if ($null -eq $t) { @{exists=$false} | ConvertTo-Json -Compress }
+else {
+    @{exists=$true; state=[int]$t.State; lastResult=[long]$t.LastTaskResult;
+      instances=[int]$t.GetInstances(0).Count} | ConvertTo-Json -Compress
+}
+"""
+
+
+def task(op, name, **values):
+    result = powershell(TASKS, {"op": op, "name": name, **values})
+    need(result["exitCode"] == 0 and isinstance(result["json"], dict), "Task Scheduler refused " + op, result)
+    return result["json"]
+
+
+def read_json(path):
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None  # Absent, or the writer is at work.
+
+
+def in_session(sid, program, phase, stage, exchange, *, timeout):
+    """Start this file as the standard user in the user's desktop session; return its report."""
+    arguments = subprocess.list2cmdline(["-I", "-B", str(stage / FILES[0]), "standard", "--stage", str(stage),
+                                         "--exchange", str(exchange), "--phase", phase])
+    task("start", HELPER, sid=sid, program=str(program), arguments=arguments, folder=str(exchange))
+    deadline, idle = time.monotonic() + timeout, 0
+    while time.monotonic() < deadline:
+        time.sleep(3)
+        report = read_json(exchange / f"{phase}.json")
+        if report and report.get("finished"):
+            return report
+        state = task("state", HELPER)
+        idle = idle + 1 if state.get("instances") == 0 else 0
+        if idle >= 5:
+            report = read_json(exchange / f"{phase}.json")
+            if report and report.get("finished"):
+                return report
+            raise RuntimeError("The program of the standard user ended without a result. Helper task: "
+                               + json.dumps(state) + ". Report so far: " + json.dumps(report)[-3000:])
+    raise TimeoutError("The program of the standard user did not end in time. Report so far: "
+                       + json.dumps(read_json(exchange / f"{phase}.json"))[-3000:])
+
+
+# ---- As the runner's account.
+def folders():
+    base = Path(os.environ["RUNNER_TEMP"]).resolve()
+    return base / "standard-account-stage", base / "standard-account-exchange"
+
+
+def prepare():
+    """Build what the standard user installs and runs. Preparation is not the subject."""
+    report = {"status": "FAIL", "stage": "candidate"}
+    try:
+        git = lambda *args: subprocess.check_output(["git", *args], cwd=ROOT, text=True).strip()
+        need(not git("status", "--porcelain"), "The candidate checkout must be clean")
+        revision = git("rev-parse", "HEAD")
+        version = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
+        stage, exchange = folders()
+        need(not stage.exists() and not exchange.exists(), "This runner already has this case's folders")
+        stage.mkdir(parents=True)
+        exchange.mkdir(parents=True)
+        uv = shutil.which("uv")
+        need(uv, "uv is not on PATH")
+        report["stage"] = "candidate wheel"
+        release = load("standard_account_release", ROOT / "scripts/release.py")
+        release.stage_source(ROOT, "microsoft/amplifier-unified", revision, version)
+        built = execute([uv, "build", "--wheel", "--out-dir", stage / "build"], cwd=ROOT, timeout=300)
+        need(built["exitCode"] == 0, "The candidate wheel build failed", built)
+        wheels = list((stage / "build").glob("*.whl"))
+        need(len(wheels) == 1, "Expected exactly one candidate wheel")
+        wheel = stage / wheels[0].name
+        shutil.copyfile(wheels[0], wheel)
+        report["stage"] = "setup's compiled checks"
+        setup = load("standard_account_setup", ROOT / "tests/fixtures/windows_setup_native.py")
+        shutil.copyfile(setup.build(stage / "setup"), stage / "native-setup-tests.exe")
+        report["stage"] = "files"
+        shutil.copyfile(uv, stage / "uv.exe")
+        for name in FILES:
+            (stage / name).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / name, stage / name)
+        # A lone Git wrapper cannot fetch. The user copies this tree, as setup unpacks one.
+        git_tree = Path(git("--exec-path")).parents[2]
+        need((git_tree / "cmd/git.exe").is_file(), "The runner's Git tree was not found")
+        prepared = {"stage": str(stage), "exchange": str(exchange), "version": version, "revision": revision,
+                    "wheel": wheel.name, "sha256": hashlib.sha256(wheel.read_bytes()).hexdigest(),
+                    "python": sys.executable, "gitTree": str(git_tree)}
+        (stage / "prepared.json").write_text(json.dumps(prepared), encoding="utf-8")
+        save("prepared.json", prepared)
+        report.update(status="PASS", stage="prepared", revision=revision, version=version)
+    except BaseException as error:
+        report.update(errorType=type(error).__name__, error=str(error)[-2000:])
+    save("preparation.json", report)
+    print(json.dumps(report), flush=True)
+    return report["status"] == "PASS"
+
+
+def lines(report):
+    """One line for each step, as the result states it."""
+    out = []
+    for step in report["steps"]:
+        out.append(("PASSED as a standard user: " if step["status"] == "PASS" else "FAILED: ") + step["name"]
+                   + ("" if step["status"] == "PASS" else " -- " + str(step.get("reason"))[:1500]))
+    out.extend(f"NOT SHOWN: {name} -- {why}" for name, why in NOT_SHOWN)
+    return out
+
+
+def run():
+    report = {"status": "FAIL", "stage": "the account",
+              "steps": [{"name": name, "status": "FAIL", "reason": "Not reached"} for name in FIRST + SECOND],
+              "notShown": [{"name": name, "why": why} for name, why in NOT_SHOWN]}
+    viewer = None
+    try:
+        prepared = saved("prepared.json")
+        need(prepared, "The preparation step did not finish")
+        stage, exchange = Path(prepared["stage"]), Path(prepared["exchange"])
+        runner = token_facts()
+        need(saved("ownership.json") is None, "This runner already has an account of this case")
+        name = "amp-std-" + uuid.uuid4().hex[:6]
+        need(account_sid(name) is None, "An account with this name exists; it is not adopted")
         password = new_password()
         sid = create_user(name, password)
-        net = C.WinDLL("netapi32")
-        member = _Member(C.cast(account_sid(name), C.c_void_p))
-        report["remoteDesktopUsers"] = net.NetLocalGroupAddMembers(None, sid_name("S-1-5-32-555"), 0, C.byref(member), 1)
-        report["user"] = {"name": name, "sid": sid, "localGroups": local_groups(name)}
-        report["grant"] = run(["icacls.exe", exchange, "/grant", f"*{sid}:(OI)(CI)M"])["exitCode"]
+        # Recorded at once: the cleanup removes exactly this account.
+        save("ownership.json", {"user": name, "sid": sid})
+        join(name, USERS)
+        join(name, REMOTE_DESKTOP_USERS)  # Only the right to sign in through Remote Desktop.
+        groups = local_groups(name)
+        need(sorted(groups) == sorted([sid_name(USERS), sid_name(REMOTE_DESKTOP_USERS)]),
+             "The user's groups are not those of a standard account", groups)
+        report["account"] = {"sid": sid, "localGroups": groups, "runnerAccount": runner}
+        for folder, right in ((stage, "RX"), (exchange, "M")):
+            granted = execute([system("icacls.exe"), folder, "/grant", f"*{sid}:(OI)(CI){right}", "/T", "/Q"])
+            need(granted["exitCode"] == 0, "The user was not given access to this case's folder", granted)
+        (exchange / "account.json").write_text(json.dumps({"sid": sid, "runnerSession": runner["desktopSession"]}),
+                                               encoding="utf-8")
+        need(not task("state", "AmplifierUnified-" + sid)["exists"], "The new user already has an Amplifier task")
 
-        def child(phase):
-            code = run_as(name, password, [sys.executable, "-I", "-B", script, "probe-child",
-                                           "--exchange", exchange, "--phase", phase], cwd=exchange, timeout=180)
-            path = exchange / f"child-{phase}.json"
-            return {"exitCode": code, "report": json.loads(path.read_text(encoding="utf-8")) if path.exists() else None}
+        report["stage"] = "the first sign-in"
+        save("result.json", report)
+        viewer, session = sign_in(name, password)
+        report["firstSignIn"] = {"desktopSession": session}
+        report["stage"] = "the steps after the first sign-in"
+        first = in_session(sid, prepared["python"], "first", stage, exchange, timeout=40 * 60)
+        report["steps"][:len(FIRST)] = first["steps"]
+        report["first"] = {key: value for key, value in first.items() if key != "steps"}
+        save("result.json", report)
+        need(all(step["status"] == "PASS" for step in first["steps"]), "A step after the first sign-in failed")
 
-        report["stage"] = "register"
-        report["register"] = child("register")
-        report["stage"] = "remote desktop"
+        report["stage"] = "the sign-out"
+        need(sign_out(name, viewer), "Windows still lists a desktop session of the user after the sign-out")
+        viewer = None
+        deadline = time.monotonic() + 60
+        while True:
+            between = task("state", "AmplifierUnified-" + sid)
+            if between.get("instances") == 0 or time.monotonic() >= deadline:
+                break
+            time.sleep(2)
+        need(between["exists"] and between["instances"] == 0,
+             "After the sign-out the user's Amplifier task must exist and must not run", between)
+        report["signOut"] = {"task": between}
+        report["stage"] = "the second sign-in"
+        viewer, session = sign_in(name, password)
+        del password
+        report["secondSignIn"] = {"desktopSession": session}
+        report["stage"] = "the steps after the second sign-in"
+        second = in_session(sid, first["python"], "second", stage, exchange, timeout=15 * 60)
+        report["steps"][len(FIRST):] = second["steps"]
+        report["second"] = {key: value for key, value in second.items() if key != "steps"}
+        save("result.json", report)
+        need(all(step["status"] == "PASS" for step in second["steps"]), "A step after the second sign-in failed")
+        need(not task("state", "AmplifierUnified-" + sid)["exists"],
+             "After the uninstall Task Scheduler still has the user's Amplifier task")
+        report.update(status="PASS", stage="Complete")
+    except BaseException as error:
+        report.update(errorType=type(error).__name__, error=str(error)[-4000:])
+    finally:
+        try:
+            owned = saved("ownership.json")
+            if owned:
+                report["signedOutAtEnd"] = sign_out(owned["user"], viewer)
+        except Exception as error:
+            report["signedOutAtEnd"] = "failed: " + type(error).__name__
+    report["lines"] = lines(report)
+    save("result.json", report)
+    print("\n".join(report["lines"]), flush=True)
+    print(json.dumps({key: report.get(key) for key in ("status", "stage", "errorType", "error")}), flush=True)
+    return report["status"] == "PASS"
+
+
+def cleanup():
+    """Sign the user out and remove its tasks, its processes, its profile and the account itself."""
+    result = {}
+    owned = saved("ownership.json")
+    forget()
+    for pid in saved("viewers.json") or []:
+        execute([system("taskkill.exe"), "/F", "/PID", pid, "/FI", "IMAGENAME eq mstsc.exe"])
+    if owned:
+        name, sid = owned["user"], owned["sid"]
+        result["signedOut"] = sign_out(name, None)
+        execute([system("taskkill.exe"), "/F", "/FI", f"USERNAME eq {name}"])
+        for label, task_name in (("helperTask", HELPER), ("amplifierTask", "AmplifierUnified-" + sid)):
+            try:
+                result[label] = "absent" if not task("remove", task_name)["exists"] else "left"
+            except Exception as error:
+                result[label] = "left: " + type(error).__name__
+        removed = powershell("$p = [Console]::In.ReadToEnd() | ConvertFrom-Json\n"
+                             "Get-CimInstance Win32_UserProfile | Where-Object { $_.SID -eq $p.sid } | "
+                             "Remove-CimInstance -ErrorAction Stop\n", {"sid": sid})
+        result["profile"] = "absent" if removed["exitCode"] == 0 else "left"
+        result["deleteStatus"] = delete_user(name)
+        result["account"] = "absent" if account_sid(name) is None else "left"
+    setting = saved("viewer-setting.json")
+    if setting is not None:
         import winreg
         with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Terminal Server Client") as key:
-            winreg.SetValueEx(key, "AuthenticationLevelOverride", 0, winreg.REG_DWORD, 0)
-        computer = os.environ["COMPUTERNAME"]
-        remember(target, computer + "\\" + name, password, 1)
-        viewer = subprocess.Popen([os.path.join(os.environ["SystemRoot"], "System32", "mstsc.exe"),
-                                   "/v:127.0.0.2", "/w:1024", "/h:768"])
-        deadline, line = time.monotonic() + 120, None
-        while time.monotonic() < deadline and line is None:
-            time.sleep(3)
-            line = session_of(name)
-        report["session"] = line
-        report["viewerAlive"] = viewer.poll() is None
-        report["viewerWindows"] = windows_of(viewer.pid)
-        report["sessions"] = run(["qwinsta.exe"])["stdout"]
-        if line is not None:
-            time.sleep(25)  # The logon trigger, if Task Scheduler fires it.
-            report["sessionAfter"] = session_of(name)
-            report["viewerWindowsAfter"] = windows_of(viewer.pid)
-        report["stage"] = "run"
-        report["run"] = child("run")
-        report["stage"] = "complete"
+            if setting["earlier"] is None:
+                try:
+                    winreg.DeleteValue(key, "AuthenticationLevelOverride")
+                except FileNotFoundError:
+                    pass
+            else:
+                winreg.SetValueEx(key, "AuthenticationLevelOverride", 0, winreg.REG_DWORD, setting["earlier"])
+        result["viewerSetting"] = "restored"
+    # The user's own reports, beside the evidence of the runner's account.
+    for name in ("first.json", "journey.json", "second.json"):
+        report = read_json(folders()[1] / name)
+        if report is not None:
+            save("user-" + name, report)
+    save("cleanup.json", result)
+    print(json.dumps(result), flush=True)
+    # The runner is deleted after the job. The account and its tasks must be gone before it ends.
+    return not owned or (result["account"] == "absent" and result["amplifierTask"] == "absent"
+                         and result["helperTask"] == "absent")
+
+
+# ---- As the standard user, in the user's own desktop session.
+class Steps:
+    """The user's report: one entry for each step, saved after each change."""
+
+    def __init__(self, path, names, **facts):
+        self.path, self.names = Path(path), names
+        self.report = {"finished": False, **facts,
+                       "steps": [{"name": name, "status": "FAIL", "reason": "Not reached"} for name in names]}
+        self.save()
+
+    def save(self):
+        partial = self.path.with_suffix(".partial")
+        partial.write_text(json.dumps(self.report, indent=2, default=str) + "\n", encoding="utf-8")
+        os.replace(partial, self.path)
+
+    def begin(self, name):
+        self.report["steps"][self.names.index(name)]["reason"] = "In progress"
+        self.save()
+
+    def passed(self, name, **facts):
+        self.report["steps"][self.names.index(name)] = {"name": name, "status": "PASS", **facts}
+        self.save()
+
+    def failed(self, error):
+        """The step that was in progress failed with this text. Later steps were not reached."""
+        text = (type(error).__name__ + ": " + str(error))[-3000:]
+        for step in self.report["steps"]:
+            if step.get("reason") == "In progress":
+                step["reason"] = text
+        self.report.update(errorType=type(error).__name__, error=text)
+        self.save()
+
+    def finish(self):
+        self.report["finished"] = True
+        self.save()
+        return all(step["status"] == "PASS" for step in self.report["steps"])
+
+
+def installation_folder():
+    """Setup's folder for this account: %LOCALAPPDATA%\\Amplifier."""
+    return Path(os.environ["LOCALAPPDATA"]) / "Amplifier"
+
+
+def setup_reads(stage, exchange):
+    """What setup's own compiled code reads for this account. It changes nothing."""
+    result = execute([stage / "native-setup-tests.exe", "--account"], cwd=exchange, timeout=60)
+    need(result["exitCode"] == 0 and isinstance(result["json"], dict), "Setup's own code could not read the account", result)
+    return result["json"]
+
+
+def first(stage, exchange, account, token):
+    """Setup's own checks and the installation, with the runner's Python. Then the journey, with the app's own."""
+    steps = Steps(exchange / "first.json", FIRST, token=token)
+    try:
+        prepared = json.loads((stage / "prepared.json").read_text(encoding="utf-8"))
+        root = installation_folder()
+        python = root / "tools/amplifier-unified/Scripts/python.exe"
+        steps.report.update(root=str(root), python=str(python))
+
+        steps.begin(FIRST[0])
+        need(standard_token(token, account), "This is not a standard user in a desktop session of its own sign-in", token)
+        need(root.parent.parent.parent == Path(os.environ["USERPROFILE"]) and not root.exists(),
+             "The installation folder is not a new folder in the user's own profile")
+        steps.passed(FIRST[0], token=token)
+
+        steps.begin(FIRST[1])
+        checks = execute([stage / "native-setup-tests.exe"], cwd=exchange, timeout=240)
+        actual = checks["json"] or {}
+        need(checks["exitCode"] == 0 and actual.get("ok") is True and actual.get("assertions", 0) >= 50,
+             "Setup's compiled checks failed as a standard user", checks)
+        # "none": setup's elevation check lets this account continue. The
+        # runner's own account never reaches this value.
+        need(actual.get("elevation") == "none", "Setup's elevation check did not read a standard account", actual)
+        # Only a proven "absent" lets setup continue on an ordinary PC.
+        need(actual.get("signInTask") == "absent", "Setup could not read Task Scheduler as a standard user", actual)
+        # A folder that an ordinary program of this person made is this person's
+        # own. For the runner's account it belongs to the administrators group.
+        need(actual.get("ordinaryFolder") == "unfinished",
+             "Setup did not read an ordinary folder of a standard user as that user's own", actual)
+        # The one stop that is left is the Windows version: the runner is Windows Server.
+        need(actual.get("precheckStop") == "windows-or-processor",
+             "Setup's checks before any question stopped for another reason than the Windows version", actual)
+        before = setup_reads(stage, exchange)
+        need(before.get("elevation") == "none" and before.get("folder") == "absent"
+             and before.get("signInTask") == "absent" and before["folderLength"] <= before["folderLimit"],
+             "Setup's own code did not read a new account that it can install for", before)
+        steps.passed(FIRST[1], checks=actual, account=before)
+
+        steps.begin(FIRST[2])
+        files = load("standard_account_files", stage / "amplifier_web/windows_files.py")
+        for name in ("", "app", "app/updates", "shared", "ownership", "capture", "import",
+                     "s", "workspace", "cache", "python", "python-bin", "tools",
+                     "tool-bin", "temp", "uv", "git", "git/cmd"):
+            with files.directory(root / name, owned_root=root, create=True):
+                pass
+        shutil.copyfile(stage / "uv.exe", root / "uv/uv.exe")
+        uv = root / "uv/uv.exe"
+        # Setup's own folders and settings for uv, and setup's two commands for
+        # a private Python. The runner's Python is not the app's Python.
+        env = {**os.environ, "UV_NO_CONFIG": "1", "UV_NO_PROGRESS": "1", "UV_LINK_MODE": "copy",
+               "UV_NO_BUILD_PACKAGE": "amplifier-core", "PYTHONUTF8": "1", "PYTHONDONTWRITEBYTECODE": "1",
+               "UV_CACHE_DIR": str(root / "cache"), "UV_TOOL_DIR": str(root / "tools"),
+               "UV_TOOL_BIN_DIR": str(root / "tool-bin"), "UV_PYTHON_INSTALL_DIR": str(root / "python"),
+               "UV_PYTHON_BIN_DIR": str(root / "python-bin"), "TEMP": str(root / "temp"), "TMP": str(root / "temp")}
+        fetched = execute([uv, "python", "install", "3.13", "--no-bin", "--no-registry"], env=env, cwd=root, timeout=600)
+        need(fetched["exitCode"] == 0, "uv did not install a private Python", fetched)
+        found = execute([uv, "python", "find", "--no-project", "--managed-python", "3.13"], env=env, cwd=root)
+        base = Path(found["stdout"].strip().splitlines()[-1]) if found["exitCode"] == 0 and found["stdout"].strip() else None
+        need(base is not None and base.is_file() and root / "python" in base.parents,
+             "The private Python is not inside the installation folder", found)
+        wheel = root / prepared["wheel"]
+        shutil.copyfile(stage / prepared["wheel"], wheel)
+        need(hashlib.sha256(wheel.read_bytes()).hexdigest() == prepared["sha256"], "The candidate wheel changed")
+        installed = execute([uv, "tool", "install", "--python", base, "--link-mode", "copy", wheel],
+                            env=env, cwd=root, timeout=900)
+        need(installed["exitCode"] == 0 and python.is_file(), "The app was not installed into the user's folder", installed)
+        shutil.copytree(prepared["gitTree"], root / "git", dirs_exist_ok=True)
+        git = execute([root / "git/cmd/git.exe", "--version"])
+        need(git["exitCode"] == 0, "The private Git does not run", git)
+        steps.passed(FIRST[2], root=str(root), rootLength=len(str(root)), basePython=str(base),
+                     installSeconds=installed["seconds"])
+
+        # The rest needs the installed app. Its report continues this one.
+        ran = execute([python, "-I", "-B", Path(__file__), "standard", "--stage", stage,
+                       "--exchange", exchange, "--phase", "journey"], cwd=exchange, timeout=35 * 60)
+        journey_report = read_json(exchange / "journey.json")
+        need(journey_report and journey_report.get("finished"), "The journey ended without a result", ran)
+        steps.report["steps"][len(FIRST) - len(JOURNEY):] = journey_report["steps"]
+        steps.report["journey"] = {key: value for key, value in journey_report.items() if key != "steps"}
     except BaseException as error:
-        report.update(errorType=type(error).__name__, error=str(error)[-1000:])
-    finally:
-        line = session_of(name)
-        if line:
-            number = next((part for part in line.split() if part.isdigit()), None)
-            report["logoff"] = run(["logoff.exe", number])["exitCode"] if number else None
-            time.sleep(5)
-            report["sessionsAfterLogoff"] = run(["qwinsta.exe"])["stdout"]
-        if viewer is not None and viewer.poll() is None:
-            viewer.kill()
-        report["forgotten"] = forget(target)
-        report["userRemoved"] = delete_user(name)
-    save("probe.json", report)
-    print(json.dumps(report, indent=2), flush=True)
-    return report["stage"] == "complete"
+        steps.failed(error)
+    return steps.finish()
+
+
+def product(stage, root):
+    """Bind this process to the installation, as its launcher does, and load the maintained helpers."""
+    home = root / "app"
+    need(Path(sys.prefix) == root / "tools/amplifier-unified", "Run this phase with the installation's own Python")
+    # Bind homes before importing code that can read the user's profile.
+    os.environ.update(AMPLIFIER_WEB_HOME=str(home), AMPLIFIER_HOME=str(root / "shared"),
+                      AMPLIFIER_SESSION_STATE_HOME=str(root / "ownership"), AMPLIFIER_GITHUB_ACCESS="anonymous")
+    # The maintained start-again case owns the launcher calls, the message-box
+    # guard and the uninstall question. This case adds only the account.
+    return home, load("standard_account_start_again", stage / "tests/fixtures/windows_start_again_native.py")
+
+
+def stop(again, root, notices):
+    """The product's "Stop Amplifier", with its one question answered Yes."""
+    from amplifier_web import windows_consumer, windows_installation
+    original = windows_installation.owner_notice
+
+    def yes(message, *, confirm=False):
+        notices.append({"confirm": confirm, "message": message})
+        return True
+
+    with again.no_message_box():
+        need(again.guard_refuses(original), "The guard did not refuse the product's message box")
+        windows_installation.owner_notice = yes
+        try:
+            return asyncio.run(windows_consumer.maintenance(root, "stop"))
+        finally:
+            windows_installation.owner_notice = original
+
+
+def journey(stage, exchange, account, token):
+    """Setup's last steps and the starts, with the installation's own Python."""
+    steps = Steps(exchange / "journey.json", JOURNEY)
+    try:
+        prepared = json.loads((stage / "prepared.json").read_text(encoding="utf-8"))
+        root = installation_folder()
+        home, again = product(stage, root)
+        from amplifier_web import app_component_graph as components
+        from amplifier_web import windows_consumer as consumer
+        from amplifier_web import windows_consumer_shell as shell, windows_installation, windows_service
+        from amplifier_web import windows_uninstall
+        from amplifier_web.deployment import write_private
+        from amplifier_web.updates import process
+
+        steps.begin(JOURNEY[0])
+        artifact = {"url": f"{SOURCE}/releases/download/v{prepared['version']}/{prepared['wheel']}",
+                    "path": str(root / prepared["wheel"]), "sha256": prepared["sha256"]}
+        graph = asyncio.run(components.read_graph(process, sys.executable, artifact=artifact))
+        write_private(root / consumer.RECEIPT, json.dumps({
+            "schema": 1, "kind": "windows-consumer-preview",
+            "version": prepared["version"], "revision": prepared["revision"],
+            "artifact": artifact, "graph": graph,
+            "uv": str(root / "uv/uv.exe"), "git": str(root / "git/cmd/git.exe")}), owned_root=root)
+        os.environ.update(consumer.environment(root, consumer.installation(root)[1]))
+        need(not windows_service._read()[0]["exists"], "A pre-existing task must not be changed")
+        # Setup's two commands of its step "Checking the installation", then
+        # setup's completion record, where setup writes it.
+        audit = again.launcher(root, "--audit")
+        need(audit["exitCode"] == 0 and (audit["json"] or {}).get("ok") is True, "Setup's audit failed", audit)
+        packages = again.execute([root / "uv/uv.exe", "pip", "check", "--python", sys.executable], cwd=root)
+        need(packages["exitCode"] == 0, "The package check failed", packages)
+        write_private(root / windows_uninstall.COMPLETE,
+                      json.dumps({"schema": 1, "version": prepared["version"]}), owned_root=root)
+        need(windows_uninstall.completed(root), "Setup's completion record was not accepted")
+        steps.passed(JOURNEY[0], audit=audit["json"])
+
+        steps.begin(JOURNEY[1])
+        entries = again.launcher(root, "--integrate")
+        need(entries["exitCode"] == 0 and shell.listed(root), "The entries were not added", entries)
+        folder = Path(json.loads((root / shell.FILE).read_text())["folder"])
+        need({child.name for child in folder.iterdir()} == set(shell.LINKS)
+             and Path(os.environ["APPDATA"]) in folder.parents, "The Start-menu folder is not the user's own", str(folder))
+        steps.passed(JOURNEY[1], startMenuFolder=str(folder), listed=True)
+
+        # One launcher command. Its three parts get one line each.
+        for name in JOURNEY[2:5]:
+            steps.begin(name)
+        started = again.launcher(root, "--no-open", timeout=1500)
+        state, status = again.task_facts(home), again.cli(root, "service", "status", "--json")
+        steps.report["firstStart"] = {"launcher": started, "task": state, "serviceStatus": status}
+        if started["exitCode"] or not again.running(state) or not again.healthy(status):
+            log = home / "config/services/task-output.log"
+            steps.report["firstStart"]["taskOutput"] = "\n".join(
+                log.read_text(encoding="utf-8", errors="replace").splitlines()[-40:])[-6000:] if log.exists() else None
+        steps.save()
+        need(state.get("managed") is True, "The task was not registered. The launcher said", started["json"] or started)
+        steps.passed(JOURNEY[2], task=state.get("taskPath"))
+        need(started["exitCode"] == 0 and (started["json"] or {}).get("background") is True,
+             "The launcher did not finish the start. It said", started["json"] or started)
+        steps.passed(JOURNEY[3], seconds=started["seconds"])
+        need(again.running(state) and again.healthy(status),
+             "Task Scheduler did not start a host that answers", {"task": state, "status": status["json"]})
+        port = windows_installation.saved_port(home)
+        need(isinstance(port, int), "No port was saved")
+        steps.passed(JOURNEY[4], task=state, port=port, host=again.process_identity(started["json"]["health"]))
+
+        steps.begin(JOURNEY[5])
+        shown = again.launcher(root, "--status")
+        need(shown["exitCode"] == 0 and (shown["json"] or {}).get("ok") is True,
+             "Status did not report a working app", shown["json"] or shown)
+        steps.passed(JOURNEY[5], message=shown["json"].get("message"))
+
+        steps.begin(JOURNEY[6])
+        notices = []
+        stopped = stop(again, root, notices)
+        need(notices == [{"confirm": True, "message": "Stop Amplifier's background app?"}],
+             "Stop asked something else than its one question", notices)
+        state, status = again.task_facts(home), again.cli(root, "service", "status", "--json")
+        need(stopped.get("ok") is True and state.get("managed") is True and state.get("instances") == 0
+             and not (status["json"] or {}).get("responding", False)
+             and not asyncio.run(again.listener_answers(home)),
+             "The app still runs after Stop", {"result": stopped, "task": state, "status": status["json"]})
+        steps.passed(JOURNEY[6], result=stopped, task=state)
+
+        steps.begin(JOURNEY[7])
+        again_started = again.launcher(root, "--no-open")
+        state, status = again.task_facts(home), again.cli(root, "service", "status", "--json")
+        steps.report["secondStart"] = {"launcher": again_started, "task": state, "serviceStatus": status}
+        steps.save()
+        need(again_started["exitCode"] == 0 and (again_started["json"] or {}).get("background") is True
+             and again.running(state) and again.healthy(status),
+             "The second start failed. The launcher said", again_started["json"] or again_started)
+        need(again.process_identity(status["json"]) != again.process_identity(started["json"]["health"])
+             and windows_installation.saved_port(home) == port,
+             "The second start did not give a new host on the same port")
+        steps.report.update(hostBeforeSignOut=again.process_identity(status["json"]), port=port)
+        steps.passed(JOURNEY[7], seconds=again_started["seconds"], port=port)
+
+        steps.begin(JOURNEY[8])
+        # A second setup run reads exactly this: it would open this installation.
+        reads = setup_reads(stage, exchange)
+        need(reads.get("folder") == "installed" and reads.get("signInTask") == "present"
+             and reads.get("taskProgramExists") is True,
+             "Setup's own code does not read this installation and its sign-in task", reads)
+        steps.passed(JOURNEY[8], account=reads)
+    except BaseException as error:
+        steps.failed(error)
+    return steps.finish()
+
+
+def second(stage, exchange, account, token):
+    """After the sign-out and the new sign-in. No launcher command runs before the first check."""
+    steps = Steps(exchange / "second.json", SECOND, token=token)
+    try:
+        before = json.loads((exchange / "journey.json").read_text(encoding="utf-8"))
+        root = installation_folder()
+        home, again = product(stage, root)
+        from amplifier_web import windows_consumer as consumer
+        from amplifier_web import windows_consumer_shell as shell, windows_installation, windows_uninstall
+        os.environ.update(consumer.environment(root, consumer.installation(root)[1]))
+
+        steps.begin(SECOND[0])
+        need(standard_token(token, account), "This is not a standard user in a desktop session of its own sign-in", token)
+        status = again.cli(root, "service", "status", "--wait", "120", "--json", timeout=180)
+        state = again.task_facts(home)
+        need(again.running(state) and again.healthy(status),
+             "After the sign-in the task did not start a host that answers", {"task": state, "status": status["json"]})
+        # The sign-out ended the earlier host. This one is new, and only the sign-in started it.
+        need(list(again.process_identity(status["json"])) != list(before["hostBeforeSignOut"])
+             and windows_installation.saved_port(home) == before["port"],
+             "The host after the sign-in is not a new host on the same port")
+        steps.passed(SECOND[0], task=state, host=again.process_identity(status["json"]), port=before["port"])
+
+        steps.begin(SECOND[1])
+        notices = []
+        removed = again.uninstall(root, notices)
+        need(again.kept_folder_question(notices), "Uninstall did not ask its one question", notices)
+        state, status = again.task_facts(home), again.cli(root, "service", "status", "--json")
+        need(removed.get("ok") is True and not state.get("managed")
+             and not (status["json"] or {}).get("responding", False) and not shell.listed(root)
+             and not asyncio.run(again.listener_answers(home)),
+             "The uninstall left a part in place", {"result": removed, "task": state, "status": status["json"]})
+        need(root.is_dir() and windows_uninstall.completed(root) and not windows_uninstall.unfinished(root),
+             "The choice that keeps the folder did not keep the installation as it was")
+        reads = setup_reads(stage, exchange)
+        need(reads.get("folder") == "installed" and reads.get("signInTask") == "absent",
+             "After the uninstall setup's own code does not read a kept installation without a sign-in task", reads)
+        steps.passed(SECOND[1], result=removed, notices=notices, folderKept=True, account=reads)
+    except BaseException as error:
+        steps.failed(error)
+    return steps.finish()
+
+
+def standard(stage, exchange, phase):
+    stage, exchange = Path(stage), Path(exchange)
+    account = json.loads((exchange / "account.json").read_text(encoding="utf-8"))
+    token = token_facts()
+    if token["sid"] != account["sid"] or token["memberOfAdministrators"]:
+        raise SystemExit("Refused: this program runs only as the standard user that this run created.")
+    # One run for each phase: a second start of the helper task changes nothing.
+    try:
+        with open(exchange / f"{phase}.started", "x", encoding="utf-8") as marker:
+            marker.write(str(os.getpid()))
+    except FileExistsError:
+        raise SystemExit("Refused: this phase already ran.") from None
+    return {"first": first, "journey": journey, "second": second}[phase](stage, exchange, account, token)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=("probe", "probe-child"))
+    parser.add_argument("operation", choices=("prepare", "run", "cleanup", "standard"))
+    parser.add_argument("--stage")
     parser.add_argument("--exchange")
-    parser.add_argument("--phase")
+    parser.add_argument("--phase", choices=("first", "journey", "second"))
     args = parser.parse_args()
-    if args.operation == "probe-child":
-        raise SystemExit(0 if probe_child(args.exchange, args.phase) else 1)
+    if args.operation == "standard":
+        raise SystemExit(0 if standard(args.stage, args.exchange, args.phase) else 1)
     require_disposable_runner()
-    raise SystemExit(0 if probe() else 1)
+    raise SystemExit(0 if globals()[args.operation]() else 1)
