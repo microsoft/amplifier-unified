@@ -88,11 +88,29 @@ jobs:
         run: |
           git show "$SELECTED_REVISION:components/portability/worktrees-source.json" > "$RUNNER_TEMP/selected-worktrees-source.json"
           dependency_tag=$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["tag"])' "$RUNNER_TEMP/selected-worktrees-source.json")
-          dependency_revision=$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["revision"])' "$RUNNER_TEMP/selected-worktrees-source.json")
+          dependency_repository=$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["repository"])' "$RUNNER_TEMP/selected-worktrees-source.json")
           mkdir "$RUNNER_TEMP/worktrees-dist"
-          gh release download "$dependency_tag" --repo microsoft/amplifier-unified --dir "$RUNNER_TEMP/worktrees-dist"
+          gh release download "$dependency_tag" --repo "$dependency_repository" --dir "$RUNNER_TEMP/worktrees-dist"
           cmp "$RUNNER_TEMP/selected-worktrees-source.json" "$RUNNER_TEMP/worktrees-dist/worktrees-source.json"
-          python scripts/scheduling_release.py verify --component worktrees --revision "$dependency_revision" --dist "$RUNNER_TEMP/worktrees-dist"
+          # The selected receipt anchors an independent producer; its Git objects
+          # need not exist in this consumer repository. Keep exact bytes bound.
+          python - "$RUNNER_TEMP/worktrees-dist" <<'PY'
+          import json, sys
+          from pathlib import Path
+          from scripts.scheduling_release import artifact_names, component_name, package_identity, sha
+          dist = Path(sys.argv[1])
+          receipt = json.loads((dist / "worktrees-source.json").read_bytes())
+          if component_name(receipt) != "worktrees":
+              raise ValueError("Expected the selected worktrees dependency")
+          names = (*artifact_names(receipt), "worktrees-source.json")
+          if {path.name for path in dist.iterdir()} != {*names, "SHA256SUMS"}:
+              raise ValueError("Unexpected worktrees release asset set")
+          if package_identity(dist, receipt) != receipt["artifacts"]:
+              raise ValueError("Worktrees artifacts differ from the selected receipt")
+          sums = "".join(f"{sha((dist / name).read_bytes())}  {name}\n" for name in names)
+          if (dist / "SHA256SUMS").read_text() != sums:
+              raise ValueError("Worktrees release checksums differ")
+          PY
       - name: Verify original bytes and test the installed wheel outside checkout
         env:
           SELECTED_REVISION: ${{ needs.build.outputs.revision }}

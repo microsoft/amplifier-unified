@@ -90,6 +90,16 @@ admission, permissions, Stop, cancellation and execution policy. Source handoff
 and publication do not rewrite historical receipts or refresh the selected app
 default; returning to prior app code preserves newer operation state.
 
+## Current Worktrees mechanism delivery
+
+[amplifier-platform-worktrees](https://github.com/bkrabach/amplifier-platform-worktrees)
+owns the Git mechanism and direct tests. Unified selects its published artifact
+and remains the sole installed owner; host permissions, active work, handoff and
+cleanup policy retain their existing owners. Portability's published dependency
+receipt must match the selected Worktrees receipt exactly. This moves no user
+files or ownership/transfer records and does not extract the whole resource
+lifecycle domain. Source publication and app adoption remain separate.
+
 ## Not in v1
 
 Mandatory microservices or a new central runtime framework; promote only when a

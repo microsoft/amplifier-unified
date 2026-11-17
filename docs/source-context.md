@@ -63,11 +63,16 @@ Scheduling is authored in the public
 repository. Its selected artifact remains in generated `components/scheduling-delivery`,
 bound by `components/scheduling.source.json`; see the
 [selection guide](../components/README.md#select-a-scheduling-artifact).
-Worktrees, portability, outputs, publishing and Recall artifact snapshots follow the same author/delivery
+Portability, outputs, publishing and Recall artifact snapshots follow the same author/delivery
 distinction: `components/<name>` is authored, while `components/<name>-delivery`
 is generated and opt-in. Visible `components/<name>.source.json` records the
 selected public wheel. Use `--all --under components/<name>-delivery` to inspect
 it; a new component source edit or publication does not silently refresh the copy.
+Worktrees is authored in public
+[amplifier-platform-worktrees](https://github.com/bkrabach/amplifier-platform-worktrees).
+Its generated `components/worktrees-delivery` snapshot and `worktrees.source.json`
+selection stay paired with Portability's exact dependency receipt; see the
+[selection guide](../components/README.md#select-worktrees-and-portability-artifacts).
 Workspace metadata is authored in public
 [amplifier-platform-workspaces](https://github.com/bkrabach/amplifier-platform-workspaces).
 Its generated selection uses `workspace-metadata-delivery` and

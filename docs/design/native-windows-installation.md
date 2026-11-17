@@ -362,6 +362,115 @@ uninstall. Public artifact availability, a new installation's human trust
 decision/authenticated browser onboarding, and real sign-out/sign-in remain
 distinct acceptance boundaries; source admission does not label them passed.
 
+### A start that a person can see, and a command's real exit status
+
+Two defects of the launcher from the first clean-room runs, and their repair
+(pull request 2270). Both are launcher code: a new installation has the
+repair, and an existing installation keeps the launcher of its setup file.
+
+**A command that the active app version takes over.** The launcher hands each
+`amplifier-unified` command to the active app generation
+(`application_generations.delegate`). It did that with `os.execv`. Windows has
+no exec: `os.execv` starts a new process there and ends the calling one at once
+with exit status 0. So the caller of a command went on while the command still
+ran, and never learned that it failed. Measured in a clean room: a command
+"returned after 430 ms with exit code 0; output characters at return: 0", and
+its 166 characters came 4 seconds later. Measured on a Windows runner before
+the repair (run 44124470533): a caller that waits for a command of a real
+launcher with a real active generation has none of its three output lines at
+the return, and the launcher's own reader of its commands gets no failure from
+a command that ended with status 3. For that reason a failed `service start`
+or `config set` of the launcher was silent.
+
+`application_generations.hand_over` is exec where exec exists. On Windows the
+launcher starts the app's interpreter, waits for its end and ends with its
+exit status:
+
+- The app gets the launcher's own standard handles and its console. A
+  launcher process without a console gives the app a console that has no
+  window (`CREATE_NO_WINDOW`); Windows would otherwise open a console window
+  for it. The rule "no console window" holds in both cases.
+- Ctrl+C and Ctrl+Break reach both processes. The app decides what they do.
+  The launcher ignores them and reports the app's end.
+- A caller that ends the command at a time limit ends the launcher's process
+  and not the app's, as before. The launcher's open step still says "may not
+  have opened" after its limit, and `open` can still open the browser.
+- Two processes exist for the time of a command, where one existed. The task
+  that starts the background app does not use this hand-over.
+
+The Start-menu launcher now gets a failure status from its own commands.
+`service start` waits up to a minute for the host and ends with a failure
+status when the host is not healthy then. The launcher goes on to its status
+step, as it did when it could not see that status: the status step decides,
+so a host that needs longer keeps its time. `service status` ends with a
+failure status when the host is not healthy. The launcher treats that as a
+host that is not ready: it first asks whether another program holds the saved
+address, and names that; otherwise the start fails with its usual message.
+(Read from source: before, a launcher with no active app generation got that
+failure status too, and then did not ask about the address.) Every other command that fails
+ends the start at its step, as it did for a launcher with no active app
+generation: `config set`, `setup-tls`, the preparation, and `service
+install`. `service install` registers the task and does not wait for the
+host, so a taken address cannot make it fail.
+
+Shown on a Windows runner (lane `windows-local-connection`, a skip fails it):
+the complete output and the exit status through the real hand-over, into a
+file and into pipes, in a folder with a space; the launcher's reader gets the
+failure; no console window with a shared console and with no console (with
+and without standard handles), beside a control that has a window;
+Ctrl+Break; and the first start with the three launchers that exist on PCs.
+Not shown by a runner: the launcher program `amplifier-unified.exe` in front
+of the launcher's Python, and a person's terminal. Those are clean-room steps.
+
+**What a person sees during a start.** The Start-menu entry's program has no
+window. A start takes seconds; a first start can take minutes. Until the
+browser opened, the person saw nothing (about 1 second after Yes to the
+certificate question in the clean room; 15 seconds when the app updated itself
+first). A second click on the entry in that time started Amplifier a second
+time and gave two browser tabs.
+
+- For the time of a start from the Start menu, a small window in the corner
+  above the clock says "Amplifier is starting." (`windows_start.sign`). It has
+  no button, needs no click and never takes the keyboard focus. It stays in
+  front of other windows. While the step that downloads runs, it also says:
+  "It downloads the remaining parts of the app from the internet. This can
+  take a few minutes." While the launcher shows a message of its own (the
+  certificate explanation, a question, a failure), the sign is hidden: the
+  person reads one thing at a time. It goes away when the start ends, also
+  when the start fails. The window is of a class that Windows provides; there
+  is no new dependency and no console.
+- One start from the Start menu runs at a time, for one installation in one
+  sign-in session (`windows_start.only`, a named lock of this person with the
+  rules of the installation's lock). A second start while the first runs does
+  nothing and shows nothing: the first one's sign or message is on the screen.
+  So no second tab opens. The lock and the sign end before the message "may
+  not have opened", because that message sends the person to the Start menu.
+  A message of the start step or of the certificate step (the question about
+  a taken address, the certificate explanation, "Open Amplifier again ...")
+  is shown while the start still runs. It is in front of other windows. A
+  second click does nothing until the person has answered it; then the lock
+  is free. A lock that Windows does not give never keeps the person from
+  Amplifier: the start goes on, and the only loss is a second tab.
+- While a start waits for the browser, an uninstall can begin to delete the
+  folder. The message is then not "may not have opened" with a next start or
+  the setup file: it is the text of a start on a folder whose removal began.
+- Limits. Another sign-in session of the same account has its own lock; the
+  installation's lock still lets one start step run at a time. `amplifier-unified
+  open` from a terminal takes no lock and opens its own tab. The sign does
+  not know which process shows the Windows certificate question, so it can
+  stay in its corner beside that question. A start at sign-in shows nothing,
+  as before: it opens no browser.
+
+Shown on a Windows runner: the real window (its text for each step, its
+styles, its place inside the screen without the taskbar, that it is not the
+active window, that it hides beside a message of its own program and comes
+back, that it is gone after the start), the real lock across two processes
+(also one that a program left behind), and the launcher's start with both: a
+second start during the first runs no start step, no certificate step and no
+`open`. Only a desktop with a person shows: that the sign is noticed, how it
+looks, its place beside a real taskbar, and a real second click on the
+Start-menu entry.
+
 ### Local HTTPS trust without a manual import
 
 A new consumer installation gets a **key-less identity**
@@ -431,10 +540,14 @@ request 5 more. The typed-code command for another device
 wait: it asks each local address once.
 
 The launcher learns the result from one line of the command's output
-(`browser_entry.OPENED`), not from its exit status. On Windows a command that
-a generation takes over ends with exit status 0 for its caller, whatever it
-did: `os.execv` starts a new process there and ends the calling one. The
-launcher allows the command 120 seconds: the wait, 10 seconds for the last two
+(`browser_entry.OPENED`), not from its exit status. With a launcher from a
+setup file before pull request 2270, a command that a generation takes over
+ends on Windows with exit status 0 for its caller, whatever it did: `os.execv`
+starts a new process there and ends the calling one. A launcher from that pull
+request on gets the real status (see "A start that a person can see, and a
+command's real exit status"). It still reads the line: the line says that the
+browser accepted the address, and a status 0 says only that the command ended.
+The launcher allows the command 120 seconds: the wait, 10 seconds for the last two
 requests, and 50 for the start of the command and the browser call (the check
 of the generation that takes the command over has its own limit of 30
 seconds). Without the confirmation line the launcher knows only that
@@ -457,12 +570,14 @@ the grant.
 The hand-over also keeps each argument whole. The Windows C runtime joins an
 `os.execv` list with spaces and quotes nothing, so the installation folder of a
 person whose user name has a space would reach the app as two arguments.
-`application_generations.exec_arguments` quotes each argument on Windows.
+From pull request 2169 the launcher quoted each argument of that list on
+Windows. From pull request 2270 it starts the app with an argument list that
+`subprocess` quotes (`application_generations.hand_over`).
 
 **Limit, not repaired here:** the hand-over is made by the launcher, and an
 installation keeps the launcher of its setup file. An installation that a
-setup file before this change made, in a folder with a space, keeps the plain
-list. From its first app update, the `amplifier-unified` commands that are
+setup file before pull request 2169 made, in a folder with a space, keeps the
+plain list. From its first app update, the `amplifier-unified` commands that are
 handed to the app generation do not reach the app. Read from source, for the
 two places where a person meets it: the Start-menu entry gets no status from
 its `service status` command and shows "Amplifier could not start", and a
@@ -521,9 +636,12 @@ Consequences and limits:
   of the focused Windows workflow asks the Windows chain builder about the
   shape and about a name outside the constraints, and asks Edge the same two
   questions on a disposable runner (with the test root in the machine store,
-  which the product never uses). The Windows confirmation, and Edge on an
-  ordinary PC with the root in the person's own store, are clean-room
-  acceptance.
+  which the product never uses). A person's own answer to the Windows
+  confirmation, and Edge on an ordinary PC with the root in the person's own
+  store, are clean-room acceptance. The standard-account case (see "A standard
+  Windows account") runs this step as a standard user: it records the text of
+  the Windows confirmation, answers it in the test, and requires that the
+  launcher's check then reads the connection as trusted.
 - The retained prototype launcher is unchanged: it keeps the earlier CA with a
   key on disk and the person's own certificate-viewer action.
 
@@ -883,6 +1001,11 @@ table with `python tests/test_windows_path_budget.py`.
   check ended with "FileNotFoundError" (ENOENT). Earlier versions refused every chat with
   its own setup on Windows before they made a stage, and the chat page showed
   only "The conversation worker could not start."
+- **A provider's own state files:** the Anthropic component keeps two small
+  files in the shared home, and it writes each one under a temporary name
+  first (`amplifier_web/provider_state_files.py`). The longest of those paths
+  is the folder path plus 41 (100 at 59); in the shared home of an update
+  stage it is the folder path plus 102 (161 at 59).
 - **Source store:** Amplifier Foundation owns its layout; the app supplies the
   folder: `<folder>\s` in a new installation, `<folder>\source-store` in an
   installation that an earlier setup file made. A Foundation revision before `7526bb55`
@@ -1305,7 +1428,10 @@ use the setup file or a clean
 ordinary account (the runner's account is elevated). The launcher runs there
 with a console Python and `--no-open`, so the certificate question and the
 browser are not part of it. It has no chat, and no sign-out and sign-in: the
-task starts because it was registered, not because a person signed in.
+task starts because it was registered, not because a person signed in. The
+standard-account case (see "A standard Windows account") runs the same
+commands as a standard user in that user's own profile, with the certificate
+step, a sign-out and a new sign-in.
 
 A runner does not show the state after a chat: a chat installs further parts
 into the same runtime. That state was shown once on a real installation
@@ -1737,20 +1863,39 @@ look for the journal. The launcher then does not open Amplifier:
   finishes the removal.
 - When those records are already deleted (a removal that stopped in its last
   seconds), no entry is added, and the launcher's own check of the
-  installation fails before it looks for the journal. Its message says that
-  Amplifier could not start and names the setup file again. Like setup's
-  message, that is not true for this leftover (L3).
+  installation fails before it looks for the journal. A launcher from a setup
+  file before pull request 2270 then says that Amplifier could not start and
+  names the setup file again, with "It keeps your chats and settings". Like
+  setup's message, that is not true for this leftover (L3). A launcher from
+  that pull request on looks for the journal when a start fails, and says
+  what it says under the lock: the removal did not finish, and Amplifier does
+  not open until it has.
 
 This is read from the source of both programs; the combination was not run.
 In none of these states can Amplifier start, and in none of them does setup
 delete anything.
 
-The program that adds the entries again does not take the installation's
-lock. So a second setup run that the person answers with Yes in the seconds
-between an uninstall's removal of its entries and its deletion of the
-launcher's records can leave Start-menu and Apps-list entries for an
-installation that is then deleted. No file of the person is involved. Not
-changed here.
+The program that adds the entries again takes the installation's lock and
+checks the installation under it (`windows_consumer.integrate`, from pull
+request 2270; before, it took no lock). An uninstall that deletes the folder
+holds that lock from before it removes its entries until it has deleted the
+launcher's records. So a second setup run that the person answers with Yes in
+those seconds waits, at most 10 seconds. Then it finds no installation, or the
+lock is still taken; in both cases it adds no entry, and setup says that it
+could not add Amplifier to the Start menu. One case remains. Each file that
+the check reads stayed in the folder, because another program held it. The
+uninstall's last message is open, so the lock is free. A setup run in that
+time adds the entries, as it does after a removal that stopped. The uninstall
+then removes its own program files, and the entries name a program that is
+gone. No file of the person is involved. The program does not look for the
+journal here: after a removal that stopped, the entries are what lets the
+person uninstall again.
+
+The start texts name the setup file when Amplifier is not in the Start menu.
+"It keeps your chats and settings" follows only where the launcher sees that:
+setup's completion record is in the folder, no journal is, and the app's own
+folder is there. Before pull request 2270 the sentence was also shown after an
+uninstall that deleted the folder.
 
 **A second setup run after an uninstall.** What the delete choice changes:
 
@@ -1819,6 +1964,188 @@ removal did not finish; a complete
 uninstall of an installed build. These remain clean-room acceptance. Not
 built: "keep my chats, remove the program". The launcher refresh command does
 not look at the journal.
+
+The standard-account case (next section) runs the delete choice once on an
+installation that was started, stopped and started again, with the real task
+and the Windows question about the certificate. Its start program is the one
+that `uv tool install` made (the runner's uv, not the uv that setup
+downloads). Afterwards the folder is gone. That is one run on a folder that
+the test made. It is not an installed build, and it has no chat.
+
+### A standard Windows account
+
+A standard account is not a member of Administrators. Many work PCs give the
+person such an account. Every clean-room run until November 17, 2026 used
+Windows Sandbox. Its user is a member of Administrators, so those runs showed
+"no administrator rights" only as "no elevation prompt appeared". The account
+of a hosted runner is the built-in Administrator.
+
+`.github/workflows/windows-standard-account.yml` runs the consumer journey as
+a standard user on a hosted Windows runner
+(`tests/fixtures/windows_standard_account_native.py`). The job creates one
+local user with a random password that is never printed. The user is a member
+of Users and of Remote Desktop Users; the second group gives only the right to
+sign in through Remote Desktop. The user signs in with its name and password
+through Remote Desktop to the same computer (address `127.0.0.2`). Windows
+gives it a desktop session of its own. The test requires what Windows says
+about its own token there: this user, not a member of Administrators, one
+token with no administrator token beside it, not elevated, medium integrity,
+a sign-in of the user itself, and a desktop session that is not the runner's.
+A helper task of that user starts the test in that session. The program that
+runs as the user refuses unless the run's account record names this user,
+belongs to the administrators group, and cannot be changed by this user. It
+reads the record's text, its owner and its permissions from one open file,
+and Windows itself computes from the permissions whether this user could
+change the file or its folder. A person without administrator rights cannot
+make such a record.
+
+The job's cleanup step (the step before the one that keeps the results) runs
+in every case, also after a failure. It has these parts. In every case: end
+the Remote Desktop viewers that the run recorded, delete the saved sign-in,
+restore the one setting that the job changed. For the run's account: sign the
+user out, try to ask Windows to end the programs of the user, remove the
+user's tasks, its profile and the account. A part can fail. The next
+paragraphs say what the step does then, and which parts it leaves out.
+
+The job records the account's name before Windows creates the account, with a
+mark that Windows keeps as the account's comment. It records the account's
+SID before it signs the user in. When the job recorded no account, the step
+has only the three parts of every case. A record without a name or without a
+mark fails the step, and the step touches no account. Before the cleanup step
+removes anything of the account, it reads whether the account with that name
+has that mark. When the name belongs to another account, or Windows does not
+answer, the step removes nothing of that account and fails. When Windows has
+no account with the recorded name, the step sends no request to end programs
+and deletes no account; it does the other parts with the recorded name and
+the recorded SID. Windows names the user's Amplifier task and its profile by
+the account's SID. When the step has no SID (the job did not record it, and
+Windows does not give it or has no account with the recorded name), it counts
+the task and the profile as not read, does the other parts, and fails. It
+concludes nothing from an account that is absent. Apart from these cases, a
+part that fails does not stop the parts after it, and the step fails when one
+of these parts is not done: the recorded viewers, the saved sign-in, the
+setting, the user's session, the tasks, the profile, the account.
+
+The step decides that from Windows. A recorded viewer is one process: its
+number and the time at which Windows created it. The step opens the process
+that has that number once. When its creation time is the recorded one and the
+process still runs, the step asks Windows to end it and waits up to 20
+seconds for its end, through that same open process. A viewer that still runs
+then counts as left. When no process has the number, or the process with the
+number has another creation time, the viewer is gone, and the step ends
+nothing. A viewer that the run started and did not record is not ended by
+this step. Before the job creates the user, it requires three things on the
+runner, with a program of the test: the recorded creation time is the time of
+the program's start (within two seconds); under another creation time the
+program is left alone; and its own record ends it. For the user's session,
+the tasks, the profile, the account and the setting, the step reads what
+Windows lists after the part. A list that Windows does not give is a failed
+part. For the saved sign-in the step takes Windows' answer to the deletion.
+
+For the run's account, the step tries once to ask Windows to end the programs
+that run under the user's name (`taskkill`). When the request cannot be sent,
+the result says so, and the step does not fail for that. The step does not
+read whether a program of the user is left, and that does not decide whether
+the step passes. The step also copies the user's reports to the results and
+saves its own result; neither decides whether the step passes. The step does
+not delete this case's folders in the runner's temporary folder; no file
+there holds the password. If GitHub ends the job at its time limit, the step
+may not finish. A hosted runner is deleted after its job.
+
+The sign-in is needed. A program that another account starts with the user's
+name and password (`CreateProcessWithLogonW`) can register the user's task,
+but Task Scheduler does not start it: a task that runs with a person's own
+sign-in starts only in a desktop session of that person (state Ready, result
+0x41303, measured on a hosted runner).
+
+As that user, in `%LOCALAPPDATA%\Amplifier` of its own profile, the case has
+18 steps. Each step is one line of the result: passed as a standard user, or
+failed with the exact text. A failed step fails the job, and nothing in the
+job can skip.
+
+1. Setup's own code, compiled from the setup sources. Its checks before any
+   question read no elevation and stop only at setup's platform check: the
+   Windows version or the processor. The runner is Windows Server on an x64
+   processor; the case does not tell the two apart. A folder that a program
+   of the user made reads as the user's own. The sign-in task reads as
+   absent. The program of these checks is made by setup's compiler with
+   setup's options. Its file is a 64-bit program that asks Windows for the
+   rights of the person who starts it (`asInvoker`), and it starts for this
+   user.
+2. The installation in setup's layout. The test makes it, not the setup file:
+   setup's two uv commands for a private Python, `uv tool install` of the
+   candidate wheel (without the component list of a release), and a copy of
+   the runner's Git.
+3. Setup's two commands of its step "Checking the installation", and setup's
+   completion record. Then the Start-menu and Apps-list entries, in the
+   user's own profile.
+4. The first start (the launcher with a console Python and `--no-open`): the
+   task is registered, the launcher finishes, and the host that Task
+   Scheduler starts answers. Status. "Stop Amplifier" (the product's
+   function, with its one question answered in the test). A second start: a
+   new host on the same port.
+5. The launcher's certificate step (`review_browser_trust`). Before it,
+   Windows does not trust the connection. Amplifier shows its one message.
+   Windows asks its one question. The test requires that its text is the
+   install question, names the certificate and shows the thumbprint as
+   Amplifier's message shows it. The test selects Yes with a window message,
+   once. Then the launcher's check reads the connection as trusted, and
+   Windows' own list of the user's root certificates holds the certificate.
+   A dialog of this program that is not this question, and a second question,
+   get no answer. When such a dialog stays open for 90 seconds, the step
+   fails with what the dialog shows, and the program ends.
+6. Setup's own code reads the installation as installed, with its sign-in
+   task. A second setup run would open it.
+7. A sign-out and a new sign-in. After the sign-out the task exists and does
+   not run. After the sign-in the task's own trigger starts a new host on the
+   same port, with no launcher command, and Windows still trusts the
+   connection.
+8. Uninstall with the choice that keeps the folder. Windows asks whether to
+   delete the certificate; the test selects No, and the certificate stays in
+   Windows' own list. Then the entries again and a start, as setup's second
+   run does them.
+9. Uninstall with the choice that deletes the folder (Yes, and Yes again).
+   The test selects Yes at the Windows question. Afterwards the user has no
+   installation folder, no sign-in task, no Start-menu entry and no Apps-list
+   entry, Windows' own list of the user's root certificates no longer holds
+   the certificate, and setup's own code reads an account without an
+   installation.
+
+First result (November 17, 2026): every step passed. In these steps the case
+found nothing that a standard account cannot do.
+
+The case does not show these parts. The result names each of them with its
+reason.
+
+- The setup file: its windows and its question, its Windows 11 check with the
+  answer yes, and its downloads of uv, Python and Git. The setup file refuses
+  Windows Server, and every hosted x64 runner is Windows Server. Read from
+  the published setup file of release 0.105.0, without a run: it is a 64-bit
+  program, and its one manifest level is `asInvoker`. Windows asks for an
+  administrator when a manifest says so, or, for a 32-bit program without a
+  level, when the file name looks like a setup program. Neither is the case
+  here, so a standard user should get no administrator question at the
+  start. No check reads the setup file of a new release for this.
+- A person's own answer to the Windows certificate question, and that the
+  question is in front of other windows. No person is present. The test
+  answers the question from the program that asked it.
+- The browser. The launcher runs with `--no-open`, and nothing in the case
+  reads a browser window.
+- A click on a Start-menu or Apps-list entry, and the messages of the
+  windowless launcher. A message waits for a person. The case runs the same
+  launcher commands with the console Python, and answers the product's
+  questions in the test.
+- A chat and a model request. No AI account is connected.
+- Windows 11, and a sign-in at the PC's own screen. The runner is Windows
+  Server, and the user signs in through Remote Desktop.
+
+Also not shown anywhere: a standard account on a PC that an organization
+manages (rules for programs, a policy that disables a person's own
+certificates, limits on Task Scheduler); a Microsoft, domain or Entra account
+(the case's user is a local account); and a standard user who starts setup
+with "Run as administrator" and gives an administrator's name and password.
+Setup then runs as that other account. Read from source: it stops with one of
+its administrator texts and installs nothing.
 
 ## Process-local Proactor cleanup backport
 
@@ -2999,14 +3326,27 @@ account name, once that account's authority no longer exists (and the two
 variants in which an account was also renamed or deleted). In each of them the
 task still runs as the owner, with least privilege and the app's exact action:
 the principal, the task name, the action and every setting stay an exact
-comparison. An authority that still exists is refused, so a deleted or renamed
-account is not accepted. A lookup that Windows did not answer is not "no such
-name": the check then refuses and says that it could not check.
+comparison. A stored name that maps to nothing while its authority still maps
+is refused, so the name of a deleted or renamed account is not accepted. A
+lookup that Windows did not answer is not "no such name": the check then
+refuses and says that it could not check.
 
-Limits. A renamed Windows account is still refused (the task then needs a new
-registration). On a domain member, a local account with the owner's account
-name makes form 3 refuse a domain owner. Domain-joined, Entra-joined and
-offline PCs are not measured.
+Limits. A renamed Windows account is still refused: the stored name is the
+account's earlier name, it maps to nothing, and the computer's name still
+maps. Amplifier does not repair this by itself, and that is a decision
+(follow-up B6, November 17, 2026; two independent reviews accepted it). The
+check cannot tell the earlier name of this account from the name of another
+account that was deleted, and each rule that accepts the first also accepts
+the second. That holds for a private record of the name that the launcher saw
+resolve: a program that can edit the task can put the recorded name back
+after the name was another account's. The person gets the message below and
+its steps: delete the task in Task Scheduler, restart the PC, open Amplifier.
+A start without a task registers a new one when its own checks pass; the
+chats and settings stay. Read from source, not seen on a PC: the complete
+repair after a real account rename, and whether Windows still starts the task
+at sign-in after such a rename. On a domain member, a local account with the
+owner's account name makes form 3 refuse a domain owner. Domain-joined,
+Entra-joined and offline PCs are not measured.
 
 An installation whose launcher predates this rule is not covered. The launcher
 runs the check before any app version starts, and an in-app update does not
@@ -3040,14 +3380,25 @@ Of the two repairs, only a new task helps there.
 
 When the check does not confirm the task, the launcher says that it could not
 confirm that the entry belongs to this installation, names the entry, and
-gives the steps to delete it; a new start then registers a new entry with the
-saved port and settings. It does not say that the entry was changed, because
-it cannot know that. When Windows gave no answer about the account, it asks
-for a restart and deletes nothing. Start, Status, Stop and Uninstall each have
-this text; before, they named the internet connection, an unreachable service
-manager, or a Task Scheduler that could not be read. A start at sign-in shows
-no window: the task ends with an error, and the person sees the text at the
-next start from the Start menu.
+gives the steps to delete it; a new start then registers a new entry when its
+checks pass, with the saved port and settings. It does not say that the entry
+was changed, because it cannot know that. The entry can belong to another
+Amplifier installation of the same Windows account. The text says so, and
+what that installation does not have without the entry: it does not start at
+sign-in. Then: "If that is all right, delete the entry." The text makes no
+claim that the other installation starts today, and it does not tell the
+person to keep the entry or to go to that installation (before pull request
+2270: "use that installation, or uninstall it first"). After an account
+rename that installation's entry has the same cause; its start and its
+uninstall stop in the same way, and deleting the entry is its repair too.
+When Windows gave no answer about the
+account, the launcher asks for a restart and deletes nothing. Start, Status
+and Uninstall each have these two texts. Stop has one text for both causes:
+to stop the app now, sign out of Windows or restart the PC. Before, they
+named the internet connection, an unreachable service manager, or a Task
+Scheduler that could not be read. A start at sign-in shows no window: the
+task ends with an error, and the person sees the text at the next start from
+the Start menu.
 
 Work survives browser/terminal closure while the owner remains signed in.
 This model does **not** promise execution after sign-out or before sign-in.

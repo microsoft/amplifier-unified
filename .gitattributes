@@ -39,12 +39,8 @@
 /components/publishing/LICENSE source-context=documentation
 /components/publishing.source.json source-context=configuration
 /components/publishing-delivery/** source-context=generated linguist-vendored=true linguist-generated=true -text
-/components/worktrees/amplifier_worktrees/** source-context=source
-/components/worktrees/tests/** source-context=tests
-/components/worktrees/MANIFEST.in source-context=configuration
-/components/worktrees/.gitignore source-context=configuration
-/components/worktrees/LICENSE source-context=documentation
 /components/worktrees.source.json source-context=configuration
+/components/portability/worktrees-source.json source-context=configuration
 /components/worktrees-delivery/** source-context=generated linguist-vendored=true linguist-generated=true -text
 /components/portability/amplifier_portability/** source-context=source
 /components/portability/tests/** source-context=tests

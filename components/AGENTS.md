@@ -41,13 +41,15 @@ an exact public worktrees artifact through `portability/worktrees-source.json`;
 install both selected wheels explicitly, never alongside their Unified-owned copies.
 Never edit either generated delivery copy by hand.
 
-`components/worktrees/` is temporarily authored here as an independently buildable
-Python project. Preserve `amplifier_worktrees` and `amplifier_worktrees.git` imports;
-Unified selects published bytes into `worktrees-delivery/`, recorded by
-`worktrees.source.json`, as the sole installed owner. Its real-Git mechanism
-tests belong here; host permission, active-task, handoff and cleanup policy remain
-in Unified. The author project is independent of the generated delivery copy;
-never edit that copy by hand or coinstall the standalone distribution.
+[amplifier-platform-worktrees](https://github.com/bkrabach/amplifier-platform-worktrees)
+is the sole Worktrees author and owns its real-Git mechanism tests. Preserve
+`amplifier_worktrees` and `amplifier_worktrees.git` imports. Unified selects public
+bytes into generated `worktrees-delivery/`, recorded by `worktrees.source.json`,
+as the sole installed owner. Host permissions, active-task, handoff and cleanup
+policy remain in Unified. Portability must retain its exact selected Worktrees
+receipt; follow the [paired selection guide](README.md#select-worktrees-and-portability-artifacts).
+Never restore an author copy, edit generated delivery or coinstall the standalone
+distribution with Unified.
 
 `components/publishing/` is temporarily authored here as its independently
 buildable Python project. Preserve its `amplifier_publishing` imports and existing
