@@ -8,6 +8,7 @@ import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 import {acceptedCanvasReceipt,settleCanvasReceipts,assertCanvasVisibility,acceptedCanvasVisibility} from './canvas-test-receipts.mjs';
 
 const root=fileURLToPath(new URL('../../',import.meta.url));
@@ -65,6 +66,19 @@ try{
  };
  const state=()=>page.evaluate(()=>window.amplifier.getState());
  await page.goto(url);await showFixtureConversation(page,{navPinned:false});
+ const fixtureIdentity=await (await page.request.get(url+'/fixture')).json();
+ if(process.env.AMPLIFIER_TEST_PACKAGE_ROOT)assert.equal(fixtureIdentity.installedPackageVerified,true,'Browser fixture must import the exact installed package');
+ const componentResponse=await page.request.get(url+'/client-component.json');assert.equal(componentResponse.status(),200);
+ const component=await componentResponse.json(),served={};
+ const entry=await page.request.get(url+'/');assert.equal(entry.status(),200);
+ const index=await entry.body();assert.equal(createHash('sha256').update(index).digest('hex'),component.assets['index.html'].sha256);
+ for(const path of [...index.toString().matchAll(/(?:src|href)=["'](\/[^"']+\.(?:js|css)(?:\?[^"']*)?)["']/g)].map(match=>match[1]).concat('/build.json')){
+  const response=await page.request.get(url+path);assert.equal(response.status(),200);
+  const bytes=await response.body(),name=new URL(url+path).pathname.slice(1),sha256=createHash('sha256').update(bytes).digest('hex');
+  assert.equal(sha256,component.assets[name].sha256,'Served entry asset must match packaged client provenance');
+  served[path]={bytes:bytes.length,sha256};
+ }
+ report.pairedIdentity={installedPackageVerified:fixtureIdentity.installedPackageVerified,packageRoot:process.env.AMPLIFIER_TEST_PACKAGE_ROOT||null,source:component.source,build:component.build,served};
  await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  await action('session.create');
  const sessionId=(await state()).selectedSessionId;

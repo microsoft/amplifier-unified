@@ -68,6 +68,7 @@ print(root)
         target = output / name
         scenarios.append({'id': name, 'command': ['node', f'tests/web/{name}-browser.mjs'], 'env': {
             'AMPLIFIER_TEST_PYTHON': str(python), 'AMPLIFIER_TEST_PACKAGE_ROOT': package,
+            'AMPLIFIER_SHELL_NODE_MODULES': str(ROOT / '.build/web-client/node_modules'),
             'AMPLIFIER_TEST_INSTALLED_PACKAGE': package, 'AMPLIFIER_TEST_WHEEL_IDENTITY': str(identity_path),
             'AMPLIFIER_TEST_ARTIFACTS': str(target), 'AMPLIFIER_TEST_OUTPUT': str(target), 'PYTHONPATH': ''}})
     result = run_scenarios(harness, {'schemaVersion': 1, 'scenarios': scenarios}, output / 'browser',
