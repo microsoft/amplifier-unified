@@ -185,13 +185,17 @@ No display-text hashing or argument
 equivalence is used. Modes, existing approvals, observations, file checks, Work,
 budgets and native execution ownership keep their normal order and authority.
 
-Canonical stdio MCP wrappers require a connection witness captured by the client that
+Canonical MCP wrappers require a connection witness captured by the client that
 opened the transport, plus the exact remote tool, current connected registry
 schema and arguments. Stdio captures the process environment and working folder.
-The negotiated protocol and selected client implementation are bound too. Older
-clients and all HTTP MCP requests remain Once/Deny: the HTTP SDK queues requests
-and may use changed headers, cookies or authentication when it later sends them.
-A pre-queue configuration check does not establish reusable authorization. This does
+The negotiated protocol and selected client implementation are bound too.
+HTTP clients must additionally advertise `httpSendAuthorization: 1`: the client
+binds the effective request headers, cookies, endpoint and parameter-header
+mapping, tracks the exact queued RPC and rechecks the complete constructed
+request at the actual transport-send boundary. Changed authorization or a
+withdrawn invocation cannot authorize that send. A redirect or resend requires
+a new approval decision; a refusal does not undo an earlier send. Custom auth
+flows, URL credentials and older HTTP clients remain Once/Deny. This does
 not attest a remote account or promise a freshly queried remote catalog or
 implementation. A new connection with the same facts can match a future rule,
 but replacing a connection during a pending approval invalidates that invocation.
