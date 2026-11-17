@@ -31,6 +31,14 @@ finish its turn before adopting the new one.
   and rollback. They do not turn a configured moving ref into a permanent pin
   for later updates.
 
+When configuration explicitly replaces a module's full commit pin with another
+commit of the same repository and package, preparation replaces the old generated
+retention entry in its new candidate. The actual selected manifest must declare
+that module and agree with its configured commit, package and source identity.
+Authored dependency constraints and resolver overrides still apply. Preparation
+rechecks configuration, source and generation identity before qualification;
+it never rewrites the serving generation or its rollback receipts.
+
 ### Explicit app-only requests and idle configuration holds
 
 `updates.app` requests only application preparation and activation, including the

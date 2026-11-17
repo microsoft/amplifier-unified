@@ -63,13 +63,16 @@ Scheduling is authored in the public
 repository. Its selected artifact remains in generated `components/scheduling-delivery`,
 bound by `components/scheduling.source.json`; see the
 [selection guide](../components/README.md#select-a-scheduling-artifact).
-Worktrees, portability, outputs, publishing, Recall and workspace metadata artifact snapshots follow the same author/delivery
+Worktrees, portability, outputs, publishing and Recall artifact snapshots follow the same author/delivery
 distinction: `components/<name>` is authored, while `components/<name>-delivery`
 is generated and opt-in. Visible `components/<name>.source.json` records the
 selected public wheel. Use `--all --under components/<name>-delivery` to inspect
 it; a new component source edit or publication does not silently refresh the copy.
-Workspace metadata's author project is `components/workspaces`; its selection
-uses `workspace-metadata-delivery` and `workspace-metadata.source.json`.
+Workspace metadata is authored in public
+[amplifier-platform-workspaces](https://github.com/bkrabach/amplifier-platform-workspaces).
+Its generated selection uses `workspace-metadata-delivery` and
+`workspace-metadata.source.json`; follow the
+[selection guide](../components/README.md#select-a-workspace-metadata-artifact).
 Operations is authored in `components/operations`; its generated selection stays
 at top-level `amplifier_operations` to preserve editable and isolated-worker import
 paths. `components/operations.source.json` records its published artifact.
@@ -111,7 +114,7 @@ guides remain visible for current direction, reproduction and evidence limits.
 | Agent instructions and readbacks | [app guidance](../amplifier_web/app_guidance.py), [agent state](../amplifier_web/agent_state.py), [receipts](../amplifier_web/agent_receipts.py) | [Agent results](AGENT-RESULTS.md), client privacy and receipt contracts; optional skill absence does not remove supported actions |
 | Domain capabilities | Relevant `amplifier_web` handler, portable `amplifier_*` package, frontend consumer and domain tests | Domain guide under `docs/`; [component boundaries](../contracts/component-boundaries.v1.md) |
 | Output relationships and review evidence | [portable mechanisms](../components/outputs/README.md), [host outputs](../amplifier_web/outputs.py), [transfer reader](../amplifier_web/portability_data.py) | [Output guide](OUTPUTS.md); host owns authorization, transactions, resource integrity and retention |
-| Workspace registration and selection | [metadata owner](../components/workspaces/README.md), [host selection](../amplifier_web/workspace_selection.py), [placement](../amplifier_web/workspace_placement.py) | [Placement](workspaces/contracts/placement.v1.md), [context](workspaces/contracts/context.v1.md); selection preserves native history identity and existing Canvas visibility |
+| Workspace registration and selection | [metadata owner](https://github.com/bkrabach/amplifier-platform-workspaces), [host selection](../amplifier_web/workspace_selection.py), [placement](../amplifier_web/workspace_placement.py) | [Placement](workspaces/contracts/placement.v1.md), [context](workspaces/contracts/context.v1.md); selection preserves native history identity and existing Canvas visibility |
 | Shell, canvas and appearance | [Canvas rendering](../amplifier_web/workspace_canvas.py), [appearance package and CSS validation](../amplifier_web/appearance_packages.py), [shell](shell), [SDK](../packages/shell-sdk), [frontend shell](https://github.com/microsoft/amplifier-client-web/blob/main/src/shell) | Public extension/appearance contracts; saved user skins and independent components remain consumers |
 | Test and release mechanisms | [Python tests](../tests), [browser registry](../tests/web/browser-checks.json), [scripts](../scripts) | [Performance validation](validation/performance.md), [release qualification](validation/release-qualification.md); exact evidence and independent modes remain distinct |
 
