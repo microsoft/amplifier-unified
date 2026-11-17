@@ -35,6 +35,7 @@ def definitions(schema, string):
             schema(owner)),
         'session.suggestion.cancel': (
             'Withdraw this browser’s suggestion and cancel its owned utility call. '
+            'Exact authenticated ownership still permits cancellation after leaving the chat. '
             'Cancellation does not undo provider effects; no automatic retry.',
             schema(owner)),
     }
@@ -69,13 +70,13 @@ class PromptSuggestions:
     def settings(self):
         return selected(self.manager, str(self.service.data_dir))
 
-    def audience(self, sid, origin):
+    def audience(self, sid, origin, *, require_selected=True):
         clients = self.service.clients
         identity, record = clients.current.get(), clients.record()
         browser = BROWSER.get()
         if (origin != 'ui' or not browser or not browser['valid']()
                 or not identity or not record or record.get('kind') != 'web'
-                or record.get('selectedSessionId') != sid):
+                or (require_selected and record.get('selectedSessionId') != sid)):
             raise AppError('Prompt suggestions belong to the browser displaying this conversation.', 403)
         # deviceOwner comes from authenticated HTTP attachment, never args.
         # No synthetic tenant ACL: today's app has one authenticated principal.
@@ -172,7 +173,10 @@ class PromptSuggestions:
         async with self.service.lock:
             if admission_check:
                 admission_check()
-            audience = self.audience(sid, origin)
+            # Navigation can precede its best-effort cancellation request.
+            # Only cancellation omits display selection; the lookup below
+            # remains exact principal/device/client/session/request ownership.
+            audience = self.audience(sid, origin, require_selected=action != 'session.suggestion.cancel')
             self._retire()
             key = digest([audience, sid, request_id])
             record = self.records.get(key)

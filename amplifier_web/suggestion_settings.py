@@ -41,11 +41,11 @@ def describe(manager, workspace):
 def configure(manager, args, workspace, scope):
     if scope != 'global' or not manager.global_only:
         raise ValueError('Prompt suggestions use app-global Settings.')
-    value = {key: args.get(key, default) for key, default in {
-        'enabled': False, 'provider': None, 'model': None,
-        'transcriptMode': 'last_n', 'humanTurns': 6}.items()}
     previous = _values(manager, workspace)
-    value.update({key: args.get(key, previous[key]) for key in ('effort', 'prompt')})
+    # Independent Settings controls submit only their changed fields. Merge all
+    # omitted preferences before validation, then publish one complete value.
+    value = {key: args.get(key, previous[key]) for key in (
+        'enabled', 'provider', 'model', 'effort', 'prompt', 'transcriptMode', 'humanTurns')}
     validate_options(value['effort'], value['prompt'])
     if value['transcriptMode'] not in {'full', 'last_n'} or type(value['humanTurns']) is not int or not 1 <= value['humanTurns'] <= 20:
         raise ValueError('Choose full transcript or 1 to 20 recent human turns.')
@@ -83,5 +83,5 @@ def definitions(schema, string):
                     'effort': {'type': ['string', 'null'], 'pattern': r'^[A-Za-z0-9_-]{1,100}$'},
                     'prompt': {**string(MAX_PROMPT_BYTES), 'minLength': 1},
                     'humanTurns': {'type': 'integer', 'minimum': 1, 'maximum': 20},
-                    'scope': {'const': 'global'}}, ['enabled', 'transcriptMode', 'humanTurns', 'scope'])),
+                    'scope': {'const': 'global'}}, ['scope'])),
     }

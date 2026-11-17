@@ -88,15 +88,19 @@ from every conversation participant and execution runtime.
 `{suggestionModels:{enabled,provider,model,effort,prompt,defaultPrompt,transcriptMode,humanTurns,revision,
 takesEffect:"next_request"},providers:[existing nonsecret connection rows]}`.
 
-`providers.configureSuggestions {enabled,provider?,model?,effort?,prompt?,transcriptMode,
-humanTurns,scope:"global",configurationTarget:{kind:"global"}}` saves the same
+`providers.configureSuggestions {enabled?,provider?,model?,effort?,prompt?,transcriptMode?,
+humanTurns?,scope:"global",configurationTarget:{kind:"global"}}` saves the same
 selection and returns `suggestionModels`, `configurationChanged:true`,
 `takesEffect:"next_request"` and the updated `configurationRevision`.
 Existing configuration authority applies. No setting changes a chat's model.
 `effort` is null or the ordinary provider effort identifier; existing model catalog
 metadata supplies choices. Cached choices, when available, use the same validation
-as ordinary model selection without a save-time discovery or model call. Omitted
-`effort`/`prompt` preserve the saved values (or their defaults for old settings).
+as ordinary model selection without a save-time discovery or model call. Every
+omitted preference preserves its saved/effective value (or its default for old
+settings). Independent prompt-only/reset or model-only forms therefore do not
+disable the utility, clear its account/model or reset its transcript window.
+The complete merged value is validated before one atomic settings write;
+invalid partial edits change neither settings nor the configuration revision.
 `defaultPrompt` is read-only metadata; Reset sends its exact value as `prompt`.
 Effort/prompt edits change the settings/configuration witness and invalidate pending
 or ready candidates like other app configuration edits; no existing paid claim is
@@ -107,6 +111,11 @@ promptly with `pending` or a typed terminal result.
 `session.suggestion.status|cancel {sessionId,requestId}` targets that exact private
 request. All return `{requestId,sessionId,status,suggestion,sourceKey,
 configRevision,usage,cost,reason,expiresAt}`; unavailable fields are null.
+Request/status require that browser to display the intended chat. Cancellation
+alone may target its exact authenticated principal/device/client/session/request
+owner after navigation selects another chat. A foreign owner or unknown request
+gets only an empty `expired` receipt and cannot cancel another request, start a
+call, expose a candidate or create a new claim. It does not bypass authentication.
 `expiresAt` is admission wall time plus 60 seconds, expressed as epoch
 **milliseconds**, fixed across pending/ready reads and exact request retries.
 Clients use the earlier of that timestamp and their original request-start
@@ -159,9 +168,10 @@ row values or arbitrary component keys enter wire/shared state/durable claims.
 The authenticated HTTP adapter supplies a live cookie-backed principal alongside
 device-owner and client identities; a bearer credential plus a spoofed `web`
 registration does not authorize private suggestions. Callers cannot supply a
-principal or audience. The requesting browser must display
-the intended conversation. Today's host has one authenticated user: this is not a
-new multi-user ACL system. A future multi-user host must bind these operations to
+principal or audience. Requesting/reading a suggestion requires displaying the
+intended conversation; withdrawing an exact owned request after navigation does
+not require continuing to display it. Today's host has one authenticated user:
+this is not a new multi-user ACL system. A future multi-user host must bind these operations to
 its real principal-specific display authorization before enabling the feature.
 
 Candidate bodies live only in a bounded in-memory request owner (128 records),

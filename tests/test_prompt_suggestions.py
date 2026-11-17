@@ -1532,6 +1532,42 @@ class Integration(unittest.IsolatedAsyncioTestCase):
                 'enabled': False, 'transcriptMode': 'last_n', 'humanTurns': 6, 'scope': 'global'},
                 origin='agent', caller_session_id=None, include_state=False)
 
+    async def test_real_action_schema_prompt_only_reset_and_model_only_preserve_all_omitted_settings(self):
+        manager = self.app.prompt_suggestions.manager
+        manager.store.update(self.root, 'global', lambda value: value.update(config={'providers': [{
+            'id': 'saved', 'module': 'provider-openai', 'config': {'api_key': 'synthetic-key'}}]}))
+        authority = {'scope': 'global', 'configurationTarget': {'kind': 'global'}}
+        async def save(values):
+            return (await self.app.dispatch('providers.configureSuggestions', {**authority, **values},
+                                           include_state=False))['result']
+        initial = (await save({'enabled': True, 'provider': 'saved', 'model': 'utility',
+                              'effort': 'low', 'prompt': 'Original advanced prompt.',
+                              'transcriptMode': 'full', 'humanTurns': 9}))['suggestionModels']
+        core = ('enabled', 'provider', 'model', 'effort', 'transcriptMode', 'humanTurns')
+        # No fixture merge: these are the exact Advanced form payloads.
+        edited = (await save({'prompt': 'Only the prompt changes.'}))['suggestionModels']
+        self.assertEqual({key: edited[key] for key in core}, {key: initial[key] for key in core})
+        self.assertEqual(edited['prompt'], 'Only the prompt changes.')
+        reset = (await save({'prompt': edited['defaultPrompt']}))['suggestionModels']
+        self.assertEqual(reset['prompt'], INSTRUCTION)
+        self.assertEqual({key: reset[key] for key in core}, {key: initial[key] for key in core})
+        changed_model = (await save({'model': 'other-utility'}))['suggestionModels']
+        self.assertEqual(changed_model['model'], 'other-utility')
+        for key in (*core, 'prompt'):
+            if key != 'model':
+                self.assertEqual(changed_model[key], reset[key])
+        before = copy.deepcopy(manager.config(self.root).settings)
+        revision = self.app.state['configurationRevision']
+        with patch.object(manager.store, 'update', wraps=manager.store.update) as write:
+            with self.assertRaises(Exception):
+                await save({'prompt': ' \n'})
+            write.assert_not_called()
+        self.assertEqual(manager.config(self.root).settings, before)
+        self.assertEqual(self.app.state['configurationRevision'], revision)
+        self.assertEqual(len({row['revision'] for row in (initial, edited, reset, changed_model)}), 4)
+        self.runtime.start.assert_not_called()
+        self.runtime.send.assert_not_called()
+
     async def test_prompt_effort_save_reset_validation_and_revision_fence_existing_private_request(self):
         manager = self.app.prompt_suggestions.manager
         manager.store.update(self.root, 'global', lambda value: value.update(config={'providers': [{
@@ -1794,6 +1830,113 @@ class Integration(unittest.IsolatedAsyncioTestCase):
             response = await client.post('/api/actions', json=status, headers=headers(cookie_one, bearer=True))
             self.assertEqual(response.status, 403)
             self.assertNotIn('SECRET', await response.text())
+
+    async def test_cookie_owner_can_cancel_pending_request_after_real_navigation_but_cannot_read_old_chat(self):
+        from aiohttp import web
+        from aiohttp.test_utils import TestClient, TestServer
+        from amplifier_web.auth import auth_required, new_session, SESSION_COOKIE, Sessions
+        from amplifier_web.live_clients import client_context
+        from amplifier_web.errors import AppError
+        await self.app.dispatch('session.create', {}, include_state=False)
+        old = self.app._session()
+        sid = old['id']
+        old.update(status='idle', messages=[
+            {'id': 'human', 'role': 'user', 'text': 'Human', 'inputOrigin': 'ui'},
+            {'id': 'assistant', 'role': 'assistant', 'text': 'Completed reply'}])
+        await self.app.dispatch('session.create', {}, include_state=False)
+        other_sid = self.app._session()['id']
+        host = self.app.prompt_suggestions
+        host.settings = lambda: ({'enabled': True, 'provider': 'saved', 'model': 'utility',
+                                  'humanTurns': 6, 'transcriptMode': 'last_n'}, {'id': 'saved'}, 'revision')
+        entered, cleanup_entered, release, settled = (asyncio.Event() for _ in range(4))
+        async def pending(*args):
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cleanup_entered.set()
+                await release.wait()
+                raise
+            finally:
+                settled.set()
+        host.complete = AsyncMock(side_effect=pending)
+        for identity in ('one', 'foreign'):
+            self.app.clients.attach(identity, kind='web')
+            self.app.clients.records[identity]['selectedSessionId'] = sid
+        @web.middleware
+        async def errors(request, handler):
+            try:
+                return await handler(request)
+            except AppError as exc:
+                return web.json_response({'error': str(exc)}, status=exc.status)
+        http = web.Application(middlewares=[errors, auth_required, client_context])
+        http.update(service=self.app, session_secret='synthetic-secret', control_token='control',
+                    server_config={'session_ttl_seconds': 600}, sessions=Sessions(), allowed_origins=set())
+        async def endpoint(request):
+            payload = await request.json()
+            return web.json_response(await self.app.dispatch(payload['action'], payload['args'], include_state=False))
+        http.router.add_post('/api/actions', endpoint)
+        cookie, foreign_cookie = new_session('synthetic-secret'), new_session('synthetic-secret')
+        def headers(value=cookie, identity='one', bearer=False):
+            return {'X-Amplifier-Client': identity, 'Cookie': SESSION_COOKIE + '=' + value,
+                    **({'Authorization': 'Bearer control'} if bearer else {})}
+        args = {'sessionId': sid, 'requestId': 'owned', 'expectedLastMessageId': 'assistant'}
+        try:
+            async with TestClient(TestServer(http)) as client:
+                async def post(action, values, **header_values):
+                    response = await client.post('/api/actions', json={'action': action, 'args': values},
+                                                 headers=headers(**header_values))
+                    return response.status, await response.json()
+                code, result = await post('session.suggestion.request', args)
+                self.assertEqual(code, 200)
+                self.assertEqual(result['result']['status'], 'pending')
+                await asyncio.wait_for(entered.wait(), 5)
+                claims = list(self.app.db.execute('SELECT * FROM suggestion_requests'))
+                code, _ = await post('session.select', {'id': other_sid})
+                self.assertEqual(code, 200)
+                self.assertEqual(self.app.clients.records['one']['selectedSessionId'], other_sid)
+                cancel_args = {'sessionId': sid, 'requestId': 'owned'}
+                # Different principal/client or a guessed request cannot affect
+                # the original pending task or reveal its source/candidate.
+                for values, header_values in (
+                        (cancel_args, {'value': foreign_cookie}),
+                        (cancel_args, {'identity': 'foreign'}),
+                        ({**cancel_args, 'requestId': 'unknown'}, {})):
+                    code, result = await post('session.suggestion.cancel', values, **header_values)
+                    self.assertEqual(code, 200)
+                    self.assertEqual(result['result']['status'], 'expired')
+                    self.assertIsNone(result['result']['sourceKey'])
+                    self.assertIsNone(result['result']['suggestion'])
+                    self.assertFalse(cleanup_entered.is_set())
+                code, _ = await post('session.suggestion.cancel', cancel_args, bearer=True)
+                self.assertEqual(code, 403)
+                self.assertFalse(cleanup_entered.is_set())
+                # Request/status remain display-selection-bound after leaving A.
+                for action, values in (('session.suggestion.request', args),
+                                       ('session.suggestion.status', cancel_args)):
+                    code, _ = await post(action, values)
+                    self.assertEqual(code, 403)
+                code, result = await post('session.suggestion.cancel', cancel_args)
+                self.assertEqual(code, 200)
+                self.assertEqual(result['result']['status'], 'cancelled')
+                self.assertIsNone(result['result']['suggestion'])
+                await asyncio.wait_for(cleanup_entered.wait(), 5)
+                self.assertFalse(settled.is_set())
+                self.assertTrue(host.jobs, 'owned slot remains until physical cleanup settles')
+                release.set()
+                await asyncio.gather(*tuple(host.jobs))
+                self.assertTrue(settled.is_set())
+                self.assertFalse(host.jobs)
+                host.complete.assert_awaited_once()
+                self.assertEqual(list(self.app.db.execute('SELECT * FROM suggestion_requests')), claims)
+                code, _ = await post('session.suggestion.status', cancel_args)
+                self.assertEqual(code, 403)
+        finally:
+            release.set()
+            for task in tuple(host.jobs):
+                task.cancel()
+            if host.jobs:
+                await asyncio.gather(*tuple(host.jobs), return_exceptions=True)
 
     async def test_owned_probe_handshake_revokes_after_subprocess_creation(self):
         """Real process/pipes/cleanup; synthetic provider and zero network."""
