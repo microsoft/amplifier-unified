@@ -2546,7 +2546,10 @@ This document records the design, source audit and bounded qualification results
 The manual installation guide (`docs/DEPLOYMENT.md`) selects 3.13 in its
 commands. The README offers the consumer setup file
 for Windows 11 as an unsigned preview and states its limits: one stable
-download link, the browser's hold on the unsigned file, Windows 11 on an Intel
+download link, the browser's hold on the unsigned file, three stops that setup
+or the first start explains by itself (a sign-in that runs every program as
+administrator, a folder path over the limit, security settings that stop the
+certificate step), Windows 11 on an Intel
 or AMD processor, one Windows account, the installation folder, and an
 uninstall that leaves that folder. `tests/test_installation_guidance.py` keeps
 that section and the product's own names in agreement. Qualified native Windows

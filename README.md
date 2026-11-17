@@ -44,11 +44,14 @@ confirm the download. You do not need WSL, Python, Git or a terminal.
 2. Microsoft Edge holds the download and says that the file "isn't commonly
    downloaded". In the Downloads list, point at the file and select
    **More actions (…)**, then **Keep**. Edge then shows "Publisher: Unknown".
-   Select the small arrow next to **Delete**, then **Keep anyway**.
-3. Open the file: select **Open file** in the Downloads list, or double-click
-   the file in your Downloads folder. Do not use "Run as administrator". Select
-   **OK** to install. Setup takes about 3 minutes. Select **OK** when it has
-   finished.
+   Select the small arrow next to **Delete**, then **Keep anyway**. Another
+   browser can ask in other words. Choose to keep the file.
+3. Open the file. In Microsoft Edge, select **Open file** below the file's
+   name in the Downloads list. In another browser, use that browser's list of
+   downloads. You can also double-click the file in the folder where your
+   browser saved it, usually your Downloads folder. Do not use "Run as
+   administrator". Select **OK** to install. Setup takes about 3 minutes.
+   Select **OK** when it has finished.
 4. Amplifier starts. The first start can take a few minutes. Amplifier shows one
    message; select **OK**. Windows then shows a "Security Warning" that asks
    whether to install a certificate named "Amplifier Unified (this PC only)".
@@ -62,6 +65,22 @@ Your first message takes longer than later ones (about a minute in our test).
 Amplifier shows "Preparing chat…" during that time.
 
 To open Amplifier later, use the Start menu: **Amplifier Unified**.
+
+Three cases stop you before Amplifier opens. Each one shows a message that says
+what to do:
+
+- **Your sign-in runs every program as administrator.** Setup stops and says:
+  "This Windows sign-in runs every program as administrator." Sign in to
+  Windows with a standard account, or turn User Account Control on. Then run
+  setup again.
+- **The folder path is too long.** Setup stops and says that the path of the
+  Amplifier folder "is too long for Windows". The limit is 59 characters. Use a
+  Windows account with a shorter name.
+- **This PC's security settings stop the certificate step.** In step 4,
+  Amplifier says that "this PC's security settings do not let it finish setting
+  up its private connection to your browser". The message names a certificate
+  file. If your organization manages this PC, ask its IT support to trust this
+  certificate for your account.
 
 Limits of this preview:
 
