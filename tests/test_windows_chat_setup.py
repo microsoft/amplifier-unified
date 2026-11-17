@@ -130,7 +130,7 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
     if not REQUIRED:
         pytest.skip('Downloads the worker dependencies and the default components; the CI job opts in.')
     from fixtures.manual_app_handoff_native import token_user_default_owner
-    from amplifier_web import runtime_profiles, update_diagnostics
+    from amplifier_web import runtime_profiles, update_diagnostics, update_storage
     from amplifier_web.deployment import write_private
     from amplifier_web.runtime_environment import prepare_project, project_path, receipt_directory
     from amplifier_web.updates import process
@@ -222,10 +222,22 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
         stage = releases / next(iter(made))
         attempt = json.loads((stage / 'profile-attempt.json').read_text(encoding='utf-8'))
         assert (attempt['status'], attempt['phase']) == ('preparing', 'dependency-prepare'), attempt
+        # While the preparation runs, its stage holds a copy of the keys file. (Not opened here: a program of
+        # the preparation can read it at this moment.)
+        copy = stage / 'shared-config' / 'keys.env'
+        assert copy.is_file()
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
         at = time.monotonic()
+        # The stop removed that copy (runtime_profiles._profile_attempt). The app made the stage and its
+        # shared-config folder with an ordinary mkdir and the copy with an ordinary copy; the removal goes
+        # through the private-file boundary from the app's home folder down.
+        assert not copy.exists(), (
+            'The stop did not remove the stage\'s copy of the keys file. The same removal now answers '
+            f'{update_storage.remove_stage_keys(home, stage)!r}: None means removed now, so the first one was '
+            'refused for a moment (a program of the stopped command held the file); another answer means that '
+            'the private-file boundary refuses this stage.')
         attempt = json.loads((stage / 'profile-attempt.json').read_text(encoding='utf-8'))
         assert (attempt['status'], attempt['errorType']) == ('cancelled', 'CancelledError'), attempt
         assert (attempt['timings'][-1]['phase'], attempt['timings'][-1]['status']) == ('dependency-prepare', 'cancelled')
@@ -248,9 +260,9 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
             await asyncio.sleep(2)
             left = of_attempt(await asyncio.to_thread(processes), stage.name, known)
         ended = time.monotonic() - at
-        # Also after its last process nothing admits the stopped attempt. Its copy of the keys file stays, and it
-        # is still private. Nothing was written into the chat's folder.
-        assert not_admitted() and keys_copy(stage) == KEYS
+        # Also after its last process nothing admits the stopped attempt, and its copy of the keys file is still
+        # gone: no program of the stopped command made it again. Nothing was written into the chat's folder.
+        assert not_admitted() and not copy.exists()
         assert native.update_stage_probe.created(folder) == kept[label], label
         stopped[label] = stage.name
         new = await again
@@ -261,7 +273,7 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
               f'({", ".join(sorted(set(after.values()))) or "none"}); the chat was started again directly after that '
               f'list; the list (a sample) held no process of the stopped preparation {ended:.0f} s after the stop. '
               f'The attempt is '
-              f'recorded as cancelled, nothing admits it, and its copy of the keys file is private. The second '
+              f'recorded as cancelled, nothing admits it, and the stop removed its copy of the keys file. The second '
               f'start prepared the setup in a new stage.')
         return new
 

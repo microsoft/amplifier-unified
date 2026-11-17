@@ -5,6 +5,9 @@ on:
     paths:
       - .github/workflows/update-states.yml
       - amplifier_web/update_storage.py
+      # A chat's own setup removes its stage's copy of the keys file (the cases use its real preparation).
+      - amplifier_web/runtime_profiles.py
+      - tests/test_runtime_profile_inputs.py
       - amplifier_web/updates.py
       - amplifier_web/app_updates.py
       - amplifier_web/update_health.py

@@ -1,5 +1,6 @@
 """Credential lifetimes use synthetic files only; no app or model is launched."""
 import asyncio
+import json
 import os
 from contextlib import contextmanager
 from pathlib import Path
@@ -12,6 +13,7 @@ import pytest
 
 from amplifier_web import update_storage as storage
 from amplifier_web.host.config import amplifier_home
+from test_runtime_profile_inputs import profile_inputs  # noqa: F401 -- the real preparation of a chat's own setup
 from test_updates import app, prepare, repo  # noqa: F401 -- existing real manager fixture
 
 
@@ -648,27 +650,166 @@ async def test_scrub_age_preparation_bound_and_no_folder_deletion(app):
     assert all(s.is_dir() for s in more)
 
 
-@pytest.mark.parametrize('validated', [False, True])
-@pytest.mark.parametrize('entry', ['file', 'directory', 'dangling-symlink'])
-async def test_scrub_profile_attempt_entry_protects_only_unvalidated_stage(app, validated, entry):
-    manager = app.update_manager
-    stage = stage_at(manager.home, validated=validated)
-    attempt = stage / 'profile-attempt.json'
-    if entry == 'file':
-        attempt.write_text('{"status": "preparing"}')
-    elif entry == 'directory':
-        attempt.mkdir()
-    else:
-        attempt.symlink_to(stage / 'absent-attempt-target')
-    # Creating the entry changes stage mtime: age both folders afterwards so
-    # this cannot pass merely through the existing recent-stage exclusion.
-    old = time.time() - 25 * 3600
+def aged(stage, hours=25):
+    """Both folders are older than the 24 hours that a stage without a receipt waits."""
+    old = time.time() - hours * 3600
     for folder in (stage, stage / 'shared-config'):
         os.utime(folder, (old, old))
+
+
+@pytest.mark.parametrize('status', ['failed', 'cancelled'])
+async def test_scrub_takes_the_copy_of_a_failed_or_stopped_chat_setup_at_once(app, status):
+    """Its record says that the preparation has ended: no wait for 24 hours."""
+    manager = app.update_manager
+    stage = stage_at(manager.home)
+    attempt = stage / 'profile-attempt.json'
+    attempt.write_text(json.dumps({'generation': stage.name, 'status': status, 'errorType': 'RuntimeError'}))
+    saved = attempt.read_bytes()
     await storage.scrub_stage_keys(manager)
-    assert (stage / 'shared-config/keys.env').exists() is (not validated)
+    assert not (stage / 'shared-config/keys.env').exists()
     assert_preserved(stage)
-    assert attempt.lstat()  # No attempt entry, including a dangling link, was removed.
+    assert attempt.read_bytes() == saved   # Only the copy of the keys file went.
+
+
+NO_ANSWER = {
+    'preparing': lambda attempt: attempt.write_text('{"status": "preparing"}'),
+    'succeeded-without-a-receipt': lambda attempt: attempt.write_text('{"status": "succeeded"}'),
+    'other-letters': lambda attempt: attempt.write_text('{"status": "Failed"}'),
+    'no-status': lambda attempt: attempt.write_text('{"errorType": "failed"}'),
+    'a-list': lambda attempt: attempt.write_text('["failed"]'),
+    'no-json': lambda attempt: attempt.write_text('{"status": "failed"'),
+    'not-text': lambda attempt: attempt.write_bytes(b'\xff\xfe{"status": "failed"}'),
+    'over-the-bound': lambda attempt: attempt.write_text(
+        json.dumps({'status': 'failed', 'padding': 'x' * (1024 * 1024)})),
+    'directory': lambda attempt: attempt.mkdir(),
+    'dangling-symlink': lambda attempt: attempt.symlink_to(attempt.parent / 'absent-attempt-target'),
+    'symlink-to-a-failed-record': lambda attempt: (
+        (attempt.parent / 'another-record.json').write_text('{"status": "failed"}'),
+        attempt.symlink_to(attempt.parent / 'another-record.json')),
+    'fifo': lambda attempt: os.mkfifo(attempt),
+}
+
+
+@pytest.mark.parametrize('old', [False, True])
+@pytest.mark.parametrize('entry', sorted(NO_ANSWER))
+async def test_scrub_waits_for_age_when_the_chat_setup_record_is_no_answer(app, entry, old):
+    """Only "failed" and "cancelled" in a regular, readable record say that the preparation ended."""
+    manager = app.update_manager
+    stage = stage_at(manager.home)
+    attempt = stage / 'profile-attempt.json'
+    NO_ANSWER[entry](attempt)
+    if old:
+        aged(stage)   # after the entry: its creation changes the stage's time
+    await asyncio.wait_for(storage.scrub_stage_keys(manager), timeout=5)   # a FIFO must not hold the pass
+    assert (stage / 'shared-config/keys.env').exists() is (not old)
+    assert_preserved(stage)
+    assert attempt.lstat()   # No entry, including a dangling link, was removed.
+
+
+async def test_scrub_takes_a_validated_stage_whatever_its_chat_setup_record_says(app):
+    manager = app.update_manager
+    stage = stage_at(manager.home, validated=True)
+    (stage / 'profile-attempt.json').write_text('{"status": "preparing"}')
+    await storage.scrub_stage_keys(manager)
+    assert not (stage / 'shared-config/keys.env').exists()
+    assert_preserved(stage)
+
+
+@pytest.mark.parametrize('validated', [False, True])
+async def test_scrub_leaves_a_stage_that_a_preparation_of_this_process_owns_now(app, tmp_path, validated):
+    """Neither a receipt nor age takes the copy from a preparation that still runs here."""
+    from amplifier_web import runtime_profiles
+
+    manager = app.update_manager
+    stage = stage_at(manager.home, validated=validated)
+    copy = stage / 'shared-config/keys.env'
+    assert not runtime_profiles.owned(stage.name)
+    async with runtime_profiles._profile_attempt(
+            manager.home, 'f' * 32, stage.name, stage, tmp_path / 'absent-index.json'):
+        assert runtime_profiles.owned(stage.name)
+        aged(stage)
+        await storage.scrub_stage_keys(manager)
+        assert copy.is_file()
+    # The preparation has ended: the same pass takes the copy now.
+    assert not runtime_profiles.owned(stage.name)
+    aged(stage)
+    await storage.scrub_stage_keys(manager)
+    assert not copy.exists()
+    assert_preserved(stage)
+
+
+def one_new_stage(h):
+    stages = [path for path in (h.home / 'updates' / 'releases').iterdir() if path != h.receipt]
+    assert len(stages) == 1
+    return stages[0]
+
+
+@pytest.mark.parametrize('end', ['failed', 'cancelled', 'succeeded'])
+async def test_a_chat_setup_that_fails_or_is_stopped_removes_its_copy_of_the_keys_file(profile_inputs, end):
+    """The real preparation (runtime_profiles.ensure) with stand-ins for its commands only."""
+    from amplifier_web import runtime_profiles
+
+    h = profile_inputs
+    live = (h.shared / 'keys.env').read_bytes()
+    during, entered = {}, asyncio.Event()
+
+    async def command(*args, **kwargs):
+        stage = one_new_stage(h)
+        during.update(copy=(stage / 'shared-config' / 'keys.env').read_bytes(),
+                      owned=runtime_profiles.owned(stage.name))
+        if end == 'failed':
+            raise RuntimeError('fixture failure')
+        if end == 'cancelled':
+            entered.set()
+            await asyncio.Event().wait()
+
+    h.process_hook = command
+    task = asyncio.create_task(runtime_profiles.ensure(h.home, h.generation, h.child('keys-' + end)))
+    if end == 'cancelled':
+        await asyncio.wait_for(entered.wait(), 5)
+        task.cancel()
+    if end == 'succeeded':
+        await task
+    else:
+        with pytest.raises({'failed': RuntimeError, 'cancelled': asyncio.CancelledError}[end]):
+            await task
+    # While its command ran, the stage held the copy and the preparation owned the stage.
+    assert during == {'copy': live, 'owned': True}
+    stage = one_new_stage(h)
+    assert json.loads((stage / 'profile-attempt.json').read_text())['status'] == end
+    assert not runtime_profiles.owned(stage.name)
+    shared = stage / 'shared-config'
+    if end == 'succeeded':
+        assert (shared / 'keys.env').read_bytes() == live   # idle maintenance takes it (a validated stage)
+    else:
+        assert not (shared / 'keys.env').exists()
+    # Only that one file went: the stage, its settings and its routing stay, and so does the live keys file.
+    assert (shared / 'settings.yaml').is_file() and (shared / 'routing' / 'matrix.yaml').is_file()
+    assert (stage / 'foundation').is_dir() and (h.shared / 'keys.env').read_bytes() == live
+
+
+async def test_a_refused_removal_does_not_change_how_a_chat_setup_ends(profile_inputs, tmp_path):
+    """A real refusal: the copy has a second name. The copy stays for idle maintenance, which goes by the
+    recorded status (test_scrub_takes_the_copy_of_a_failed_or_stopped_chat_setup_at_once)."""
+    from amplifier_web import runtime_profiles
+
+    h = profile_inputs
+
+    async def command(*args, **kwargs):
+        os.link(one_new_stage(h) / 'shared-config' / 'keys.env', tmp_path / 'second-name')
+        raise RuntimeError('fixture failure')
+
+    h.process_hook = command
+    with pytest.raises(RuntimeError, match='fixture failure'):
+        await runtime_profiles.ensure(h.home, h.generation, h.child('keys-refused'))
+    stage = one_new_stage(h)
+    copy = stage / 'shared-config' / 'keys.env'
+    assert copy.is_file() and storage.remove_stage_keys(h.home, stage) == 'refused'
+    assert json.loads((stage / 'profile-attempt.json').read_text())['status'] == 'failed'
+    assert not (stage / 'validated.json').exists() and not runtime_profiles.owned(stage.name)
+    # The refusal is over: the same removal works now.
+    (tmp_path / 'second-name').unlink()
+    assert storage.remove_stage_keys(h.home, stage) is None and not copy.exists() and stage.is_dir()
 
 
 @pytest.mark.parametrize('blocker', ['lock', 'checking', 'staging', 'validating', 'activating',

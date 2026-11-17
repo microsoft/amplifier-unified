@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager, ExitStack
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -183,6 +184,33 @@ def refresh_stage_keys(home, stage, source):
         return 'refused'
 
 
+def _ended_without_admission(stage):
+    """The record of a chat's own setup says that its preparation failed or was stopped.
+
+    That preparation writes ``profile-attempt.json`` (runtime_profiles). Its
+    coroutine has ended when the status is ``failed`` or ``cancelled``, and
+    nothing uses the stage again. Anything else is no answer, and the caller
+    then waits for age: another status, an entry that is no regular file, a
+    record that cannot be read.
+    """
+    try:
+        path = stage / 'profile-attempt.json'
+        if not stat.S_ISREG(path.lstat().st_mode):
+            return False
+        record = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)
+                         | getattr(os, 'O_NONBLOCK', 0) | getattr(os, 'O_BINARY', 0))
+        with os.fdopen(record, 'rb') as stream:
+            if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                return False
+            content = stream.read(1024 * 1024 + 1)
+        if len(content) > 1024 * 1024:
+            return False
+        attempt = json.loads(content)
+        return isinstance(attempt, dict) and attempt.get('status') in ('failed', 'cancelled')
+    except Exception:
+        return False
+
+
 async def scrub_stage_keys(manager):
     """Key-only maintenance, independent of unused-code policy; never retire trees.
 
@@ -193,6 +221,7 @@ async def scrub_stage_keys(manager):
     second has gone, but it handles at least one entry first, so a slow folder
     or a long listing cannot hold the scan at one place.
     """
+    from .runtime_profiles import owned
     from .update_health import pending_preparation
     from .update_retention import maintenance_blocked
 
@@ -229,7 +258,9 @@ async def scrub_stage_keys(manager):
                             return
                         progressed = True
                         manager._stage_keys_offset = index + 1
-                        if not re.fullmatch('[a-f0-9]{32}', entry.name) or entry.name in protected:
+                        # A chat's own setup that this process prepares now owns its stage.
+                        if (not re.fullmatch('[a-f0-9]{32}', entry.name) or entry.name in protected
+                                or owned(entry.name)):
                             continue
                         stage = root / entry.name
                         shared = stage / 'shared-config'
@@ -241,15 +272,13 @@ async def scrub_stage_keys(manager):
                                 validated = stat.S_ISREG((stage / 'validated.json').lstat().st_mode)
                             except FileNotFoundError:
                                 validated = False
-                            if not validated:
-                                try:
-                                    (stage / 'profile-attempt.json').lstat()
-                                except FileNotFoundError:
-                                    pass
-                                else:
-                                    continue  # Another preparation owner; age is not settlement.
-                                if max(stage_info.st_mtime, shared_info.st_mtime) >= time.time() - 86400:
-                                    continue
+                            # A failed or stopped chat setup has settled by its own record.
+                            # For every other stage without a receipt only age speaks: a
+                            # record that still says "preparing" does not prove an end.
+                            if (not validated
+                                    and max(stage_info.st_mtime, shared_info.st_mtime) >= time.time() - 86400
+                                    and not _ended_without_admission(stage)):
+                                continue
                             # Already-scrubbed stages do not consume the effect budget.
                             (shared / 'keys.env').lstat()
                             attempts += 1

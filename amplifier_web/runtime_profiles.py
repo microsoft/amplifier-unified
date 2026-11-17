@@ -170,6 +170,17 @@ async def _run_phase(stage, attempt, phase, function, *args, **kwargs):
     return result
 
 
+# The stages that a preparation of this process owns now. A stage leaves the set
+# when its coroutine ends, however it ends; what that coroutine started can still
+# run. Idle maintenance never takes the keys copy of a stage that is in the set
+# (update_storage.scrub_stage_keys).
+_OWNED = set()
+
+
+def owned(name):
+    return name in _OWNED
+
+
 @asynccontextmanager
 async def _profile_attempt(home, generation, selected, stage, index):
     """Retain diagnostics; cancelled to_thread writers may still be running."""
@@ -197,6 +208,7 @@ async def _profile_attempt(home, generation, selected, stage, index):
             ),
         },
     }
+    _OWNED.add(selected)
     try:
         _write_attempt(stage, attempt)
         yield attempt
@@ -230,7 +242,17 @@ async def _profile_attempt(home, generation, selected, stage, index):
                 f"Profile admission-marker cleanup failed ({type(cleanup_error).__name__}); "
                 f"inspect retained attempt at {stage} before admitting it."
             )
+        # The stage's copy of the keys file is not a diagnostic. This coroutine
+        # wrote it once, before its first command, and nothing uses this stage
+        # again: a retry gets a new stage, and nothing admits what a program of
+        # this attempt still produces. A refused removal keeps the copy for idle
+        # maintenance, which reads the status that is recorded above.
+        from .update_storage import remove_stage_keys
+
+        remove_stage_keys(home, stage)
         raise
+    finally:
+        _OWNED.discard(selected)
 
 
 async def ensure(home, generation, session, *, progress=None):
