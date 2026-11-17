@@ -13,6 +13,7 @@ Synthetic files only; no app, probe or model is started.
 """
 import asyncio
 import json
+import os
 import time
 from types import SimpleNamespace
 
@@ -48,6 +49,9 @@ async def prepared(app, repo, monkeypatch):
         """Give an update owner the validation of this case."""
         async def validate(target, release):
             calls.append(release)
+            during, outcome['during'] = outcome.get('during'), None
+            if during:
+                during()   # Something changes while the validation runs.
             if outcome['error'] == 'cancelled':
                 raise asyncio.CancelledError
             if outcome['error'] == 'command':
@@ -153,6 +157,42 @@ async def test_a_keys_file_that_changes_again_gives_one_more_validation_each_tim
     assert p.calls == [p.first.name] * 3
 
 
+async def test_a_keys_file_of_the_same_size_at_another_time_is_a_change(prepared):
+    p = prepared
+    keys = amplifier_home() / 'keys.env'
+    live_keys('FIXTURE_KEY=synthetic-one\n')
+    os.utime(keys, ns=(1_700_000_000_000_000_000, 1_700_000_000_000_000_000))
+    await p.passes(2)
+    live_keys('FIXTURE_KEY=synthetic-two\n')   # the same size
+    os.utime(keys, ns=(1_700_000_001_000_000_000, 1_700_000_001_000_000_000))
+    await p.passes(2)
+    assert p.calls == [p.first.name] * 2
+
+
+async def test_a_keys_file_of_another_size_at_the_same_time_is_a_change(prepared):
+    """A clock that was set back, or a file that was put back with its old time."""
+    p = prepared
+    keys = amplifier_home() / 'keys.env'
+    live_keys('FIXTURE_KEY=synthetic-one\n')
+    os.utime(keys, ns=(1_700_000_000_000_000_000, 1_700_000_000_000_000_000))
+    await p.passes(2)
+    live_keys('FIXTURE_KEY=synthetic-one-and-more\n')
+    os.utime(keys, ns=(1_700_000_000_000_000_000, 1_700_000_000_000_000_000))
+    await p.passes(2)
+    assert p.calls == [p.first.name] * 2
+
+
+async def test_a_change_while_the_validation_runs_gives_one_more_validation(prepared):
+    """The validation takes minutes. What it failed with is what was there when it started."""
+    p = prepared
+    p.outcome['during'] = lambda: live_keys('FIXTURE_KEY=synthetic-added-during-the-validation\n')
+    await p.passes(3)
+    # The first validation started without that keys file. The next pass validates with it, once.
+    assert p.calls == [p.first.name] * 2
+    await p.passes(3)
+    assert p.calls == [p.first.name] * 2
+
+
 async def test_another_prepared_update_is_validated(prepared):
     p = prepared
     await p.passes(3)
@@ -197,16 +237,30 @@ async def test_a_stopped_validation_is_not_a_failed_one(prepared):
     assert p.calls == [p.first.name] * 2
 
 
-async def test_a_validation_that_passes_ends_the_hold(prepared):
+async def test_a_validation_that_passes_ends_the_hold_and_the_update_waits_for_work_as_before(prepared, monkeypatch):
+    """A person's request validates again while work runs. The validation passes, and the update waits
+    for that work. The owner's pass must come back to the update at every pass, as before, so that it
+    activates when the work has ended. It validates nothing again: the stage has its receipt now."""
     p = prepared
     await p.passes(2)
-    assert p.manager._activation_held(p.first.name) is True
+    assert p.calls == [p.first.name] and p.manager._activation_held(p.first.name) is True
     p.outcome['error'] = None
-    await p.manager.command('install', None, 'c' * 32)   # The synthetic stage fails later; not this case.
+    monkeypatch.setattr(p.manager, 'busy', lambda: True)
+    await p.manager.command('install', None, 'c' * 32)
     assert p.calls == [p.first.name] * 2
     marker = json.loads((p.first / 'validated.json').read_text())
     assert marker['hostVersion'] == __import__('amplifier_web').__version__
-    assert p.manager._activation_held(p.first.name) is False
+    assert p.state['pendingRelease'] == p.first.name
+    assert p.state['detail'] == 'Update ready; it will activate when work and calls finish.'
+    activations, activate = [], p.manager.activate
+
+    async def counted(rollback=False):
+        activations.append(rollback)
+        await activate(rollback)
+
+    monkeypatch.setattr(p.manager, 'activate', counted)
+    await p.passes(3)
+    assert activations == [False] * 3 and p.calls == [p.first.name] * 2
 
 
 async def test_settings_that_cannot_be_read_do_not_make_the_owner_fail_or_validate_every_pass(prepared):
