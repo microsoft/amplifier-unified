@@ -9,8 +9,9 @@ name: Source store bytecode
 # folder does not stop a new entry, so only Windows shows the files.
 #
 # Both jobs run the real helper file through the product's own start of it,
-# against Foundation's real store and a Git repository on the runner, and then
-# prepare the same module again as a conversation worker does. Nothing goes to
+# against Foundation's real code and a Git repository on the runner: once on a
+# host that names the store, where the same module is then prepared again as a
+# conversation worker does, and once on a host that names none. Nothing goes to
 # a network after the dependencies are installed. A case that fails, has an
 # error, is skipped, is deselected or is expected to fail fails the job, and so
 # does a run with no case: each step checks the exit status of pytest and its
@@ -23,18 +24,23 @@ on:
   pull_request:
     paths:
       - .github/workflows/source-store-bytecode.yml
-      - amplifier_web/host_dependencies.py
-      - amplifier_web/update_sources.py
-      - amplifier_web/setup.py
+      - amplifier_web/source_imports.py
       - amplifier_web/provider_probe.py
+      - amplifier_web/portability_probe.py
+      - amplifier_web/module_validate.py
+      - amplifier_web/setup.py
+      - amplifier_web/registry.py
+      - amplifier_web/portability.py
       - amplifier_web/provider_environment.py
+      - amplifier_web/provider_isolation.py
       - amplifier_web/probe_process.py
       - amplifier_web/probe_git.py
       - amplifier_web/runtime_bootstrap.py
+      - amplifier_web/update_sources.py
+      - amplifier_web/host/components.py
       - amplifier_web/windows_jobs.py
       - amplifier_web/windows_service.py
       - amplifier_web/windows_consumer.py
-      - amplifier_web/provider_isolation.py
       - tests/test_source_store_bytecode.py
       # A dependency change can bring a Foundation with another store rule.
       - pyproject.toml
@@ -65,7 +71,8 @@ jobs:
           uv sync --locked --group dev --no-install-project --python (Get-Command python).Source
           if ($LASTEXITCODE -ne 0) { throw 'Locked dependency installation failed.' }
       # -B is for this pytest process only. The helper is a child with the
-      # environment that the host gives it; the case removes the setting first.
+      # environment that the host gives it, and the cases take the setting out
+      # of that environment and out of their own process first.
       - name: Require an unchanged store object after the real helper, with no skip
         shell: pwsh
         run: |
@@ -74,7 +81,7 @@ jobs:
           $summary = [string]($report | Where-Object { $_ } | Select-Object -Last 1)
           if ($summary -notmatch '^(=+ )?\d+ passed(, \d+ warnings?)? in ') { throw "A case did not pass or did not run; on this lane every case must run: $summary" }
   linux:
-    name: A host that names a store gives its children the setting
+    name: A connection check leaves the source that it imports from unchanged
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

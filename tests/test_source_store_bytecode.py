@@ -1,46 +1,47 @@
-"""A helper process does not change an object of the shared source store.
+"""A helper process does not change a source that it imports a module from.
 
 Seen on a new Windows installation (0.106.3): "Save and check connection" for
 an "OpenAI Compatible API" connection passed, and then no chat with that
 connection started ("Configured modules could not be prepared"), and the next
 component update failed. The connection check runs in a helper process
 (``provider_probe.py``) with the host's environment. On Windows that
-environment names the shared source store, and it did not turn bytecode
-writing off. The helper prepared the module from its source, imported it from
-the store object, and Python wrote ``__pycache__`` into the object. From then
-on Foundation refused the object: "Shared source contents changed".
+environment names the shared source store. The helper prepared the module from
+its source, imported it from the store object, and Python wrote
+``__pycache__`` into the object. From then on Foundation refused the object:
+"Shared source contents changed".
 
 Windows shows it and Linux and macOS do not, for one reason: Foundation takes
 the write permission from every folder of an object, and a read-only attribute
 on a Windows folder does not stop a new entry in it.
 
-The rule is one statement at the host's start
-(``host_dependencies.prepare_environment``): a host whose environment names a
-store gives every child the setting that workers get from
-``update_sources.store_environment``.
+The rule is ``amplifier_web.source_imports.prepare``: a helper that prepares a
+module from a source writes no bytecode from that call on. Three helpers
+prepare a module from a source with the host's environment: the connection
+check, the readiness check of a transfer, and the module validation.
 
-The case of the whole way uses the real helper file, the product's own start
-of it, Foundation's real store, and a Git repository on this computer. It
-sends nothing to a network. No case here skips on any platform.
+The two cases of the whole way use the real helper file, the product's own
+start of it, Foundation's real code, and a Git repository on this computer.
+They send nothing to a network. No case here skips on any platform.
 """
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
+from types import SimpleNamespace
 
 import pytest
 
 from amplifier_web.host.config import HostConfig, merge
-from amplifier_web.host_dependencies import prepare_environment
 from amplifier_web.setup import SetupManager
 
 HELPER = Path(__file__).resolve().parents[1] / 'amplifier_web' / 'provider_probe.py'
 MODULE, PACKAGE, CONNECTION = 'provider-store-case', 'amplifier_module_provider_store_case', 'store-case-one'
-FLAG = 'import sys; print(sys.dont_write_bytecode)'
 
 # A provider module with two files, as a real one has. It says where Python
 # loaded it from and whether that process writes bytecode.
@@ -67,42 +68,6 @@ FILES = {
 }
 
 
-@pytest.fixture
-def host_start(monkeypatch):
-    """The environment of a host when it starts, then the host's own first step."""
-    saved = dict(os.environ)
-
-    def start(store):
-        # A Windows installation's host gets the store's name from its task and
-        # has no bytecode setting. A job or a shell that has one must not hide that.
-        monkeypatch.delenv('PYTHONDONTWRITEBYTECODE', raising=False)
-        if store is None:
-            monkeypatch.delenv('AMPLIFIER_SOURCE_STORE', raising=False)
-        else:
-            monkeypatch.setenv('AMPLIFIER_SOURCE_STORE', str(store))
-        prepare_environment()
-
-    yield start
-    # prepare_environment writes names itself (PATH, and more on Windows).
-    os.environ.clear()
-    os.environ.update(saved)
-
-
-def child_flag():
-    return subprocess.run([sys.executable, '-c', FLAG], capture_output=True, text=True, check=True).stdout.strip()
-
-
-def test_a_host_that_names_a_source_store_gives_its_children_no_bytecode_writing(host_start, tmp_path):
-    host_start(tmp_path / 's')
-    assert os.environ.get('PYTHONDONTWRITEBYTECODE') == '1'
-    assert child_flag() == 'True'
-
-
-def test_a_host_without_a_source_store_keeps_its_environment(host_start):
-    host_start(None)
-    assert 'PYTHONDONTWRITEBYTECODE' not in os.environ
-    assert child_flag() == 'False'
-
 
 def repository(folder):
     """A Git repository on this computer with the module at the branch main."""
@@ -121,14 +86,16 @@ def repository(folder):
     return 'git+' + folder.as_uri() + '@main'
 
 
-async def test_the_connection_check_leaves_the_store_object_as_foundation_published_it(
-        host_start, tmp_path, monkeypatch):
-    from amplifier_foundation import Bundle
-    from amplifier_foundation.sources.shared import SharedSourceStore
-    from amplifier_web.provider_isolation import ProviderIsolation
+def bytecode(folder):
+    return sorted(path.relative_to(folder).as_posix() for path in folder.rglob('*')
+                  if path.name == '__pycache__' or path.suffix == '.pyc')
 
+
+@pytest.fixture
+def connection(tmp_path, monkeypatch):
+    """A saved connection whose module has a source, and the product's own start of the real helper."""
     source = repository(tmp_path / 'repository')
-    home, workspace, store = tmp_path / 'app', tmp_path / 'workspace', tmp_path / 's'
+    home, workspace = tmp_path / 'app', tmp_path / 'workspace'
     workspace.mkdir()
     manager = SetupManager(home, probe_command=[sys.executable, str(HELPER)])
 
@@ -139,17 +106,32 @@ async def test_the_connection_check_leaves_the_store_object_as_foundation_publis
         return HostConfig(home=manager.home, workspace=Path(folder), settings=settings,
                           registry_home=manager.home / 'foundation')
     monkeypatch.setattr(manager, 'config', config)
-    connection = {'id': CONNECTION, 'module': MODULE, 'source': source, 'config': {}}
-    manager.store.update(workspace, 'global', lambda settings: settings.update(config={'providers': [connection]}))
+    saved = {'id': CONNECTION, 'module': MODULE, 'source': source, 'config': {}}
+    manager.store.update(workspace, 'global', lambda settings: settings.update(config={'providers': [saved]}))
 
-    # 1. The host starts. 2. The person selects "Save and check connection":
-    # the product starts the real helper, which prepares the module from its
-    # source and asks it for its models.
-    host_start(store)
-    checked = await manager.probe('providers.models', {'id': CONNECTION}, str(workspace))
-    model = checked['models'][0]
+    async def check(store):
+        """The person selects "Save and check connection" on a host with this store name, or with none."""
+        # The helper gets the host's environment. A host has no bytecode
+        # setting; a job or a shell that has one must not hide that.
+        monkeypatch.delenv('PYTHONDONTWRITEBYTECODE', raising=False)
+        if store is None:
+            monkeypatch.delenv('AMPLIFIER_SOURCE_STORE', raising=False)
+        else:
+            monkeypatch.setenv('AMPLIFIER_SOURCE_STORE', str(store))
+        return (await manager.probe('providers.models', {'id': CONNECTION}, str(workspace)))['models'][0]
+    return SimpleNamespace(check=check, source=source, cache=home / 'foundation' / 'cache')
 
-    binding, = (home / 'foundation' / 'cache' / '.source-bindings').glob('*.json')
+
+async def test_the_connection_check_leaves_the_store_object_as_foundation_published_it(
+        connection, tmp_path, monkeypatch):
+    """A host whose environment names the store: a Windows installation."""
+    from amplifier_foundation import Bundle
+    from amplifier_foundation.sources.shared import SharedSourceStore
+    from amplifier_web.provider_isolation import ProviderIsolation
+
+    store = tmp_path / 's'
+    model = await connection.check(store)
+    binding, = (connection.cache / '.source-bindings').glob('*.json')
     record = json.loads(binding.read_text())
     shared = SharedSourceStore(store)
     published = shared.checkout(record['git_url'], record['commit'])
@@ -159,21 +141,20 @@ async def test_the_connection_check_leaves_the_store_object_as_foundation_publis
     except ValueError as error:
         verified = f'refused: {error}'
 
-    # 3. What a conversation worker does next: it prepares the same module
-    # from the same source, with the host's rule for a provider that fails.
+    # What a conversation worker does next: it prepares the same module from
+    # the same source, with the host's rule for a provider that fails.
     monkeypatch.setattr(sys, 'path', list(sys.path))
     isolation = ProviderIsolation()
-    provider = {'module': MODULE, 'source': source, 'config': {}}
+    provider = {'module': MODULE, 'source': connection.source, 'config': {}}
     await Bundle.from_dict({'bundle': {'name': 'worker'}, 'providers': [provider]}).prepare(
-        strict=True, install_deps=False, cache_dir=home / 'foundation' / 'cache',
+        strict=True, install_deps=False, cache_dir=connection.cache,
         provider_failure_policy=isolation.preparation_failed)
     failure = isolation.failure(provider)
 
     assert {
         'the helper loaded the module from the store object': Path(model['loadedFrom']).parent.parent == published,
         'the helper writes bytecode': model['writesBytecode'],
-        'bytecode in the object': sorted(path.relative_to(published).as_posix() for path in published.rglob('*')
-                                         if path.name == '__pycache__' or path.suffix == '.pyc'),
+        'bytecode in the object': bytecode(published),
         'Foundation, asked for the object again': verified,
         "the worker's record for the connection": failure and {
             name: failure.get(name) for name in ('reason_code', 'diagnostic')},
@@ -184,3 +165,100 @@ async def test_the_connection_check_leaves_the_store_object_as_foundation_publis
         'Foundation, asked for the object again': 'accepted',
         "the worker's record for the connection": None,
     }
+
+
+async def test_on_a_host_without_a_store_the_connection_check_leaves_the_checkout_clean(connection):
+    """Then the helper imports from a checkout in Foundation's cache, on every platform."""
+    from amplifier_foundation.sources.shared import clean_checkout
+    model = await connection.check(None)
+    checkout = Path(model['loadedFrom']).parent.parent
+    assert {
+        'the helper loaded the module from a checkout in the cache':
+            checkout.resolve().parent == connection.cache.resolve(),
+        'the helper writes bytecode': model['writesBytecode'],
+        'bytecode in the checkout': bytecode(checkout),
+        'Foundation finds the checkout clean': clean_checkout(checkout),
+    } == {
+        'the helper loaded the module from a checkout in the cache': True,
+        'the helper writes bytecode': False,
+        'bytecode in the checkout': [],
+        'Foundation finds the checkout clean': True,
+    }
+
+
+@pytest.fixture
+def preparation(monkeypatch):
+    """Stands in for Foundation's bundle. It records whether the process writes bytecode when preparation starts."""
+    import amplifier_foundation
+    seen = []
+
+    class Source:
+        @staticmethod
+        def from_dict(value):
+            return Source()
+
+        async def prepare(self, **options):
+            seen.append({'writes bytecode': not sys.dont_write_bytecode})
+            raise RuntimeError('The case ends here: what the helper does with the module is not its subject.')
+
+    saved = dict(os.environ)   # Each helper writes AMPLIFIER_HOME for its preparation.
+    monkeypatch.setattr(amplifier_foundation, 'Bundle', Source)
+    # pytest itself can run with -B. The helper must turn bytecode writing off itself.
+    monkeypatch.setattr(sys, 'dont_write_bytecode', False)
+    yield seen
+    os.environ.clear()
+    os.environ.update(saved)
+
+
+async def connection_check(tmp_path, monkeypatch):
+    from amplifier_web import provider_probe
+    with pytest.raises(provider_probe.ProbeFailure, match='preparation'):
+        await provider_probe.query({'module': MODULE, 'action': 'providers.models', 'source': 'a-source',
+                                    'registryHome': str(tmp_path / 'registry'), 'config': {}})
+
+
+async def transfer_readiness_check(tmp_path, monkeypatch):
+    from amplifier_web import portability_probe
+    from amplifier_web.portability_policy import readiness_policy
+    # The transfer fence is not the subject. tests/test_portability_probe.py runs it.
+    monkeypatch.setattr(portability_probe, '_runtime_transfer_fence', lambda: None)
+    result = await portability_probe.probe({
+        'module': MODULE, 'config': {}, 'model': 'a-model', 'source': 'a-source',
+        'registryHome': str(tmp_path / 'registry'),
+        'readinessPolicy': readiness_policy(MODULE, 'store-case', 'a-model', 'high')})
+    assert result['code'] == 'probe_failed'
+
+
+async def module_validation(tmp_path, monkeypatch):
+    from amplifier_web import module_validate
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path / 'app'))
+    monkeypatch.setattr(sys, 'stdin', io.StringIO(json.dumps(
+        {'id': CONNECTION, 'module': MODULE, 'section': 'providers', 'source': 'a-source'}) + '\n'))
+    await module_validate.main()
+
+
+@pytest.mark.parametrize('helper', [connection_check, transfer_readiness_check, module_validation],
+                         ids=lambda helper: helper.__name__)
+async def test_each_helper_that_prepares_a_module_from_a_source_writes_no_bytecode_from_then_on(
+        helper, preparation, tmp_path, monkeypatch, capsys):
+    await helper(tmp_path, monkeypatch)
+    assert preparation == [{'writes bytecode': False}]
+    assert sys.dont_write_bytecode is True   # Also for the imports that follow the preparation.
+
+
+def test_a_helper_starts_the_preparation_of_a_bundle_only_through_the_rule():
+    """A reminder for the next helper, not a proof.
+
+    It finds the call by the two names that this code gives a Foundation
+    bundle. ``host/components.py`` prepares for conversation workers and update
+    stages; their environment turns bytecode writing off
+    (``update_sources.store_environment``).
+    """
+    package = HELPER.parent
+    callers = sorted(
+        path.relative_to(package).as_posix() for path in package.rglob('*.py')
+        if 'static' not in path.relative_to(package).parts
+        and re.search(r'\b(?:bundle|projected)\.prepare\(', path.read_text(encoding='utf-8')))
+    assert callers == ['host/components.py', 'source_imports.py'], (
+        'A helper that prepares a module from a source calls amplifier_web.source_imports.prepare, '
+        'not the bundle. Else it writes __pycache__ into the source, and Foundation then refuses a store object.')
