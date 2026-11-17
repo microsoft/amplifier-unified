@@ -42,15 +42,16 @@ question and recovery tests. Author changes and publication do not update the ap
 selection or ACP's separate public Git dependency. Unified remains the sole
 installed owner; do not coinstall the standalone distribution.
 
-[`outputs/`](outputs/README.md) authors the independently buildable output
+[amplifier-platform-resources](https://github.com/bkrabach/amplifier-platform-resources)
+authors the independently buildable output
 relationship, saved-body decoder and read-only Git evidence package. Its existing
 Git/SQLite mechanism tests run without Unified or Core; host authorization,
 transactions, resource storage and retention stay in Unified. Unified consumes the
 published artifact selected into `outputs-delivery/`, recorded by
 `outputs.source.json`. Author edits and publication do not refresh this generated
 copy; Unified remains the sole installed owner. Follow the
-[selection instructions](outputs/README.md#unified-artifact-selection), and do not
-coinstall the standalone distribution.
+[selection instructions](#select-an-outputs-artifact), and do not restore an author
+copy here or coinstall the standalone distribution.
 
 [`portability/`](portability/README.md) is the temporary authoring home for the
 independently buildable signed transfer journal and Git capsule package. Its
@@ -84,6 +85,28 @@ Unified consumes the explicitly selected published wheel through the generated
 Author changes and component publication do not change that app default. The app
 remains the sole installed distribution owner; this is artifact assembly, not a
 separately updatable pip dependency. Do not restore a second author copy here.
+
+## Select an Outputs artifact
+
+The public Resources repository publishes `amplifier-outputs` under `outputs-vX.Y.Z`;
+the repository name does not rename its distribution or `amplifier_outputs` import.
+Download the original wheel, source archive, `outputs-source.json` and `SHA256SUMS`
+from one accepted release. Verify the receipt and assets, then select that exact
+public receipt through the existing assembler:
+
+```sh
+python scripts/scheduling_delivery.py select --component outputs \
+  --dist /path/to/verified-outputs-assets --revision FULL_SOURCE_SHA \
+  --receipt-sha256 ORIGINAL_PUBLIC_RECEIPT_SHA256
+python scripts/scheduling_delivery.py verify --component outputs
+```
+
+The generated `outputs-delivery/` and `outputs.source.json` travel together.
+Qualify the packaged, editable and source-archive builds before the normal Unified
+release; component publication alone does not change the app's selected code.
+Unified remains the sole installed owner. Historical monorepo receipts remain
+valid for explicit selection and ordinary app rollback, without migrating or
+deleting output relationships, command receipts or retained bodies.
 
 ## Select Worktrees and Portability artifacts
 

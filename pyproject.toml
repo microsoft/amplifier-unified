@@ -80,8 +80,6 @@ exclude = [
     "/components/publishing/.venv/**", "/components/publishing/*.egg-info/**",
     "/components/portability/build/**", "/components/portability/dist/**",
     "/components/portability/.venv/**", "/components/portability/*.egg-info/**",
-    "/components/outputs/build/**", "/components/outputs/dist/**",
-    "/components/outputs/.venv/**", "/components/outputs/*.egg-info/**",
 ]
 
 [tool.hatch.build.targets.wheel.force-include]
