@@ -17,12 +17,19 @@ From there everything runs as the standard user, in the user's own profile:
 - the first start: the task registration, the launcher, the host that Task
   Scheduler starts; status; "Stop Amplifier"; a second start;
 - a sign-out and a new sign-in: the task's own trigger starts the host;
-- uninstall, with the choice that keeps the folder.
+- uninstall with the choice that keeps the folder; the entries and a start
+  again; uninstall with the choice that deletes the folder; then nothing of
+  the installation is left.
 
 Not shown: see NOT_SHOWN below. In short: the setup file itself (setup refuses
 Windows Server, and every hosted x64 runner is Windows Server), the
-certificate question, the browser, a chat, the delete choice of uninstall,
-Windows 11, and a sign-in at the PC's own screen.
+certificate question, the browser, a click on a Start-menu entry and the
+messages of the windowless launcher, a chat, Windows 11, and a sign-in at the
+PC's own screen.
+
+The delete choice removes the folder %LOCALAPPDATA%\\Amplifier of the account
+that runs it. Here that is only the user that this run created: `standard`
+refuses every other account.
 
 The password is made in the `run` process. It goes to Windows for the new
 user and, for each sign-in, to the credential store of the runner's own logon,
@@ -83,7 +90,12 @@ FIRST = (
 )
 SECOND = (
     "Sign-out and sign-in: the task's own trigger starts the host",
-    "Uninstall (the folder is kept)",
+    "Uninstall with the choice that keeps the folder",
+    "Entries again and a start after that uninstall",
+    "Uninstall with the choice that deletes the folder",
+)
+THIRD = (
+    "After the delete choice: no folder, no sign-in task, no Start-menu entry, no Apps-list entry",
 )
 JOURNEY = FIRST[3:]
 NOT_SHOWN = (
@@ -93,13 +105,14 @@ NOT_SHOWN = (
      "fixture makes setup's layout with setup's uv commands for Python, the candidate wheel and the "
      "runner's Git."),
     ("The certificate question",
-     "no person answers it. The launcher runs with --no-open, so Windows is not asked to trust the "
-     "certificate, and uninstall has no certificate to remove."),
+     "Windows asks the person, and the case does not answer a Windows security question in a person's "
+     "place. The launcher runs with --no-open, so Windows is not asked to trust the certificate, and "
+     "uninstall has no certificate to remove."),
     ("The browser", "the launcher runs with --no-open."),
+    ("A click on a Start-menu or Apps-list entry, and the messages of the windowless launcher",
+     "a message waits for a person. The case runs the same launcher commands with the console Python. For "
+     "Stop and Uninstall it calls the product's function and answers the product's question in the test."),
     ("A chat and a model request", "no AI account is connected."),
-    ("The delete choice of uninstall",
-     "this case answers the uninstall question with the choice that keeps the folder. It can be shown on "
-     "a runner; this case does not run it."),
     ("Windows 11, and a sign-in at the PC's own screen",
      "the runner is Windows Server, and the user signs in through Remote Desktop to the same computer."),
 )
@@ -638,7 +651,8 @@ def lines(report):
 
 def run():
     report = {"status": "FAIL", "stage": "the account",
-              "steps": [{"name": name, "status": "FAIL", "reason": "Not reached"} for name in FIRST + SECOND],
+              "steps": [{"name": name, "status": "FAIL", "reason": "Not reached"}
+                        for name in FIRST + SECOND + THIRD],
               "notShown": [{"name": name, "why": why} for name, why in NOT_SHOWN]}
     viewer = None
     try:
@@ -695,10 +709,17 @@ def run():
         report["secondSignIn"] = {"desktopSession": session}
         report["stage"] = "the steps after the second sign-in"
         second = in_session(sid, first["python"], "second", stage, exchange, timeout=15 * 60)
-        report["steps"][len(FIRST):] = second["steps"]
+        report["steps"][len(FIRST):len(FIRST) + len(SECOND)] = second["steps"]
         report["second"] = {key: value for key, value in second.items() if key != "steps"}
         save("result.json", report)
         need(all(step["status"] == "PASS" for step in second["steps"]), "A step after the second sign-in failed")
+        report["stage"] = "the check after the delete choice"
+        # Not with the installation's Python: the delete choice removed it.
+        third = in_session(sid, prepared["python"], "third", stage, exchange, timeout=8 * 60)
+        report["steps"][len(FIRST) + len(SECOND):] = third["steps"]
+        report["third"] = {key: value for key, value in third.items() if key != "steps"}
+        save("result.json", report)
+        need(all(step["status"] == "PASS" for step in third["steps"]), "The check after the delete choice failed")
         need(not task("state", "AmplifierUnified-" + sid)["exists"],
              "After the uninstall Task Scheduler still has the user's Amplifier task")
         report.update(status="PASS", stage="Complete")
@@ -753,7 +774,7 @@ def cleanup():
                 winreg.SetValueEx(key, "AuthenticationLevelOverride", 0, winreg.REG_DWORD, setting["earlier"])
         result["viewerSetting"] = "restored"
     # The user's own reports, beside the evidence of the runner's account.
-    for name in ("first.json", "journey.json", "second.json"):
+    for name in ("first.json", "journey.json", "second.json", "third.json"):
         report = read_json(folders()[1] / name)
         if report is not None:
             save("user-" + name, report)
@@ -1076,6 +1097,105 @@ def second(stage, exchange, account, token):
         need(reads.get("folder") == "installed" and reads.get("signInTask") == "absent",
              "After the uninstall setup's own code does not read a kept installation without a sign-in task", reads)
         steps.passed(SECOND[1], result=removed, notices=notices, folderKept=True, account=reads)
+
+        steps.begin(SECOND[2])
+        # As setup's second run: the entries come back, then the start.
+        entries = again.launcher(root, "--integrate")
+        need(entries["exitCode"] == 0 and shell.listed(root), "The entries were not added again", entries)
+        started = again.launcher(root, "--no-open")
+        state, status = again.task_facts(home), again.cli(root, "service", "status", "--json")
+        need(started["exitCode"] == 0 and (started["json"] or {}).get("background") is True
+             and again.running(state) and again.healthy(status),
+             "The start after the uninstall failed. The launcher said", started["json"] or started)
+        need(windows_installation.saved_port(home) == before["port"], "The start after the uninstall changed the port")
+        steps.passed(SECOND[2], seconds=started["seconds"], task=state, port=before["port"])
+
+        steps.begin(SECOND[3])
+        notices = []
+        removed = delete_everything(again, root, notices)
+        # From here this program starts nothing from the installation: its files are gone.
+        need(delete_questions(notices, root), "Uninstall did not ask its two questions of the delete choice", notices)
+        need(removed.get("ok") is True and removed.get("userDataRetained") is False and removed.get("kept") == []
+             and removed.get("afterExit") is True and not removed.get("programLeft"),
+             "The delete choice did not finish", removed)
+        steps.passed(SECOND[3], result=removed, notices=notices)
+    except BaseException as error:
+        steps.failed(error)
+    return steps.finish()
+
+
+def delete_everything(again, root, notices):
+    """The product's uninstall with the choice that deletes the folder: Yes, and Yes again.
+
+    It deletes %LOCALAPPDATA%\\Amplifier of the account that runs it. `standard`
+    lets only the user of this run reach it.
+    """
+    from amplifier_web import windows_consumer, windows_installation, windows_uninstall
+    message, question = windows_installation.owner_notice, windows_uninstall.question
+
+    def note(text, *, confirm=False):
+        notices.append({"kind": "message", "confirm": confirm, "message": text})
+        return True
+
+    def yes(text, *, cancel=False):
+        notices.append({"kind": "question", "cancel": cancel, "answer": "yes", "message": text})
+        return "yes"
+
+    with again.no_message_box():
+        windows_installation.owner_notice, windows_uninstall.question = note, yes
+        try:
+            return asyncio.run(windows_consumer.maintenance(root, "uninstall"))
+        finally:
+            windows_installation.owner_notice, windows_uninstall.question = message, question
+
+
+def delete_questions(notices, root):
+    """Exactly the two questions of the delete choice, in their order, and no message.
+
+    The first has three buttons and says what Yes does. The second has two
+    buttons, names the folder and says that this cannot be undone. Another
+    question, a message, or one question more is another case: it fails here.
+    """
+    return (len(notices) == 2 and all(notice["kind"] == "question" and notice["answer"] == "yes" for notice in notices)
+            and notices[0]["cancel"] is True and notices[0]["message"].startswith("Uninstall Amplifier?")
+            and "Select Yes to delete them, together with the program files." in notices[0]["message"]
+            and notices[1]["cancel"] is False
+            and notices[1]["message"].startswith("Delete everything that Amplifier keeps in this folder?")
+            and str(root) in notices[1]["message"] and "This cannot be undone." in notices[1]["message"])
+
+
+def third(stage, exchange, account, token):
+    """After the delete choice, with the runner's Python: nothing of the installation is left."""
+    steps = Steps(exchange / "third.json", THIRD, token=token)
+    try:
+        import winreg
+        root = installation_folder()
+        steps.begin(THIRD[0])
+        need(standard_token(token, account), "This is not a standard user in a desktop session of its own sign-in", token)
+        # The last program files go after the uninstall program has ended.
+        deadline = time.monotonic() + 240
+        while root.exists() and time.monotonic() < deadline:
+            time.sleep(3)
+        left = sorted(child.name for child in root.iterdir())[:40] if root.exists() else None
+        need(left is None, "The installation folder still exists. It holds", left)
+        reads = setup_reads(stage, exchange)
+        # What setup reads on a PC that never had Amplifier: it would install.
+        need(reads.get("folder") == "absent" and reads.get("signInTask") == "absent",
+             "Setup's own code does not read an account without an installation", reads)
+        programs = Path(os.environ["APPDATA"]) / "Microsoft/Windows/Start Menu/Programs"
+        menu = sorted(child.name for child in programs.iterdir() if child.name.startswith("Amplifier"))
+        need(menu == [], "A Start-menu entry is left", menu)
+        listed = []
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Uninstall") as key:
+                for index in range(winreg.QueryInfoKey(key)[0]):
+                    name = winreg.EnumKey(key, index)
+                    if name.startswith("AmplifierUnified"):
+                        listed.append(name)
+        except FileNotFoundError:
+            pass  # This account has no Apps-list entry of its own at all.
+        need(listed == [], "An Apps-list entry is left", listed)
+        steps.passed(THIRD[0], account=reads, folderExists=False)
     except BaseException as error:
         steps.failed(error)
     return steps.finish()
@@ -1093,7 +1213,8 @@ def standard(stage, exchange, phase):
             marker.write(str(os.getpid()))
     except FileExistsError:
         raise SystemExit("Refused: this phase already ran.") from None
-    return {"first": first, "journey": journey, "second": second}[phase](stage, exchange, account, token)
+    return {"first": first, "journey": journey, "second": second, "third": third}[phase](
+        stage, exchange, account, token)
 
 
 if __name__ == "__main__":
@@ -1101,7 +1222,7 @@ if __name__ == "__main__":
     parser.add_argument("operation", choices=("prepare", "run", "cleanup", "standard"))
     parser.add_argument("--stage")
     parser.add_argument("--exchange")
-    parser.add_argument("--phase", choices=("first", "journey", "second"))
+    parser.add_argument("--phase", choices=("first", "journey", "second", "third"))
     args = parser.parse_args()
     if args.operation == "standard":
         raise SystemExit(0 if standard(args.stage, args.exchange, args.phase) else 1)

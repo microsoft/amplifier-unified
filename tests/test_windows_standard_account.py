@@ -148,17 +148,19 @@ def test_a_step_passes_only_when_it_was_stated(case, tmp_path):
 
 
 def test_the_steps_are_the_consumer_journey_in_setups_order(case):
-    names = case.FIRST + case.SECOND
-    assert len(names) == len(set(names)) == 14 and case.JOURNEY == case.FIRST[3:]
+    names = case.FIRST + case.SECOND + case.THIRD
+    assert len(names) == len(set(names)) == 17 and case.JOURNEY == case.FIRST[3:]
     order = ("The account", "Setup's own code: the checks", "The installation folder", "Setup's check of the installation",
              "Start-menu and Apps-list entries", "First start: the task registration", "First start: the launcher",
              "First start: the host", "Status", "Stop Amplifier", "Second start", "Setup's own code reads",
-             "Sign-out and sign-in", "Uninstall")
-    assert [name.startswith(start) for name, start in zip(names, order, strict=True)] == [True] * 14
+             "Sign-out and sign-in", "Uninstall with the choice that keeps", "Entries again and a start",
+             "Uninstall with the choice that deletes", "After the delete choice")
+    assert [name.startswith(start) for name, start in zip(names, order, strict=True)] == [True] * 17
     # What a runner does not show is said in the result, each with its reason.
     shown = " ".join(name for name, _ in case.NOT_SHOWN)
-    for part in ("The setup file", "certificate question", "browser", "chat", "delete choice", "Windows 11"):
+    for part in ("The setup file", "certificate question", "browser", "windowless launcher", "chat", "Windows 11"):
         assert part in shown
+    assert "delete choice" not in shown  # The case runs it.
     assert all(len(why) > 20 for _, why in case.NOT_SHOWN)
 
 
@@ -222,7 +224,7 @@ def test_the_case_fails_when_a_step_fails_and_cleanup_fails_when_the_account_is_
     # The run passes only at its last statement, after every step of both sign-ins passed.
     assert run.count('report.update(status="PASS"') == 1
     assert run.index('"A step after the first sign-in failed"') < run.index('"A step after the second sign-in failed"') \
-        < run.index('report.update(status="PASS"')
+        < run.index('"The check after the delete choice failed"') < run.index('report.update(status="PASS"')
     assert 'return report["status"] == "PASS"' in run
     cleanup = source[source.index("def cleanup():"):source.index("# ---- As the standard user")]
     assert ('return not owned or (result["account"] == "absent" and result["amplifierTask"] == "absent"\n'
@@ -245,3 +247,46 @@ def test_setups_native_checks_report_which_check_stopped_and_read_one_account():
     for change in ("Create", "Delete", "Write", "Make(", "Register", "Process.Start"):
         assert change not in account.replace("Console.WriteLine", ""), change
     assert 'if(args.Length==1 && args[0]=="--account") return Account();' in harness
+
+
+ROOT_FOLDER = Path("C:/Users/amp-std-000000/AppData/Local/Amplifier")
+FIRST_QUESTION = {"kind": "question", "cancel": True, "answer": "yes",
+                  "message": "Uninstall Amplifier?\n\nSelect Yes to delete them, together with the program files. More."}
+SECOND_QUESTION = {"kind": "question", "cancel": False, "answer": "yes",
+                   "message": "Delete everything that Amplifier keeps in this folder?\n\n" + str(ROOT_FOLDER)
+                              + "\n\nThis cannot be undone."}
+
+
+def test_the_delete_choice_is_exactly_its_two_questions(case):
+    assert case.delete_questions([FIRST_QUESTION, SECOND_QUESTION], ROOT_FOLDER)
+
+
+@pytest.mark.parametrize("notices", [
+    [FIRST_QUESTION],                                              # No second question before a deletion.
+    [SECOND_QUESTION, FIRST_QUESTION],                             # Another order.
+    [FIRST_QUESTION, SECOND_QUESTION, SECOND_QUESTION],            # One question more.
+    [FIRST_QUESTION, {**SECOND_QUESTION, "cancel": True}],
+    [{**FIRST_QUESTION, "cancel": False}, SECOND_QUESTION],        # The question of a folder that setup did not complete.
+    [FIRST_QUESTION, {**SECOND_QUESTION, "answer": "no"}],
+    [FIRST_QUESTION, {**SECOND_QUESTION, "kind": "message"}],
+    [FIRST_QUESTION, {**SECOND_QUESTION, "message": SECOND_QUESTION["message"].replace(str(ROOT_FOLDER), "C:/other")}],
+    [FIRST_QUESTION, {**SECOND_QUESTION, "message": SECOND_QUESTION["message"].replace("This cannot be undone.", "")}],
+    [{**FIRST_QUESTION, "message": "Uninstall Amplifier?\n\nSelect No to keep them."}, SECOND_QUESTION],
+])
+def test_any_other_set_of_questions_is_not_the_delete_choice(case, notices):
+    assert not case.delete_questions(notices, ROOT_FOLDER)
+
+
+def test_the_delete_choice_runs_only_as_the_user_that_the_run_created():
+    source = FIXTURE.read_text(encoding="utf-8")
+    # One call, in the phase after the second sign-in. `standard` starts every phase and refuses other accounts.
+    assert source.count("delete_everything(") == 2  # Its definition and its one call.
+    second = source[source.index("def second(stage, exchange, account, token):"):source.index("def delete_everything(")]
+    assert "removed = delete_everything(again, root, notices)" in second
+    assert source.count('"second": second') == 1 and "installation_folder()" in second
+    standard = source[source.index("def standard(stage, exchange, phase):"):source.index('if __name__ == "__main__":')]
+    assert standard.index("Refused: this program runs only as the standard user") < standard.index('"second": second')
+    # The folder is the one of the account's own profile, never an argument.
+    folder = source[source.index("def installation_folder():"):source.index("def setup_reads(")]
+    assert 'return Path(os.environ["LOCALAPPDATA"]) / "Amplifier"' in folder
+    assert "--root" not in source[source.index('parser = argparse.ArgumentParser'):]
