@@ -471,9 +471,9 @@ needs attention" with the reason, for an update and for a rollback. The next
 activation or rollback request tries again (the owner's pass does that by
 itself for a prepared update) and takes the text back when the refusal is over.
 After a rollback request nothing tries the rollback again by itself. Its text
-goes when a later activation or rollback request gets past this refusal, when
-a check for updates runs while no update is prepared, or when a prepared app
-update starts to install.
+goes when a later activation or rollback request gets past this refusal or
+switches versions, when a check for updates runs while no update is prepared,
+or when a prepared app update starts to install.
 A qualification that runs there and fails is recorded and shown like any other
 failed update step; the old copy is gone then too.
 Idle maintenance also scrubs at most eight stage copies per pass, even when
