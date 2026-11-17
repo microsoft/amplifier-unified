@@ -1427,6 +1427,14 @@ class RuntimeManager:
                 elif data.get("type") == "history.revised":
                     await row["emit"]("history.revised", {**data, "sessionId": sid})
                 elif data.get("type") in {"approval.requested", "approval.resolved"} and data.get("id"):
+                    # Only this live worker channel supplies ordinary tool
+                    # scopes. Never accept them from saved/display event data.
+                    data = dict(data)
+                    scope = data.pop('toolScope', None)
+                    scopes = row.setdefault('approvalScopes', {})
+                    scopes.pop(data['id'], None)
+                    if data['type'] == 'approval.requested' and isinstance(scope, dict):
+                        scopes[data['id']] = scope
                     await row["emit"](data["type"], {**data, "sessionId": sid})
                 else:
                     if data.get('type') == 'execution.event' and isinstance(data.get('event'), dict):
@@ -2133,9 +2141,17 @@ class RuntimeManager:
             finally:
                 await asyncio.to_thread(held.release)
 
-    async def approval(self, session_id, approval_id, decision, comment=None):
+    def approval_scope(self, session_id, approval_id):
+        row = self.workers.get(session_id)
+        if (not row or row.get('closing') or row.get('yielding') or row.get('yielded')
+                or row['process'].returncode is not None):
+            return None
+        return copy.deepcopy(row.get('approvalScopes', {}).get(approval_id))
+
+    async def approval(self, session_id, approval_id, decision, comment=None, expected_scope=None):
         return await self._request(session_id, "approval", approval_id=approval_id, decision=decision,
-                                   **({"comment": comment} if comment else {}))
+                                   **({"comment": comment} if comment else {}),
+                                   **({"expected_scope": expected_scope} if expected_scope is not None else {}))
 
     async def scheduled_input(self, session_id, arguments, guard):
         """Internal authorized schedule handoff using ordinary worker admission."""

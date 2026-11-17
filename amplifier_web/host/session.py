@@ -1239,8 +1239,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
             messages, recovered = jobs.recover(messages or [])
         if messages is not None:
             messages = repair_interrupted_receipts(messages)
-    approvals = Approvals(runtime, ask)
     session = None
+    approvals = Approvals(runtime, ask, coordinator=lambda: session.coordinator if session else None)
     from ..provider_catalog import mounted_catalog_keys
     catalog_sources={row.get('instance_id') or row.get('id') or row['module'].removeprefix('provider-'):
         module_source(config,snapshot,row['module'],row.get('source'),components)

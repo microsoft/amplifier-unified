@@ -1,7 +1,7 @@
 """Optional Instance-owned approval policy; this module stores no rules.
 
-The reusable scope is a canonical configuration grant, not its model-authored
-reason. Unstructured tool prompts and session-specific targets remain once-only.
+Reusable scopes describe canonical grants or supported exact native file calls,
+never model-authored reasons. Unstructured prompts remain once-only.
 """
 import hashlib
 import json
@@ -33,8 +33,10 @@ def negotiate(profile):
 
 def descriptor(service, session, approval):
     identity = approval.get('id', '')
-    if not identity.startswith('capability:') or approval.get('status') != 'pending':
+    if approval.get('status') != 'pending':
         return None
+    if not identity.startswith('capability:'):
+        return _tool_descriptor(service, session, approval)
     grant = service.configuration_authority.record(identity)
     if (not grant or grant.get('sessionId') != session['id'] or grant.get('status') != 'pending'
             or grant.get('workspace') != session['workspace']
@@ -70,3 +72,31 @@ def descriptor(service, session, approval):
         return None  # Never truncate a reusable scope into misleading wording.
     return {'version': 1, 'producer': PRODUCER, 'key': key, 'description': description,
             'allowOptionId': 'allow', 'authorityLifetime': 'conversation'}
+
+
+def _tool_descriptor(service, session, approval):
+    observe = getattr(getattr(service, 'runtime', None), 'approval_scope', None)
+    if not callable(observe):
+        return None
+    try:
+        if set(approval.get('options') or ['allow', 'deny']) != {'allow', 'deny'}:
+            return None
+        fact = observe(session['id'], approval['id'])
+        if (not isinstance(fact, dict) or fact.get('owner') != str(service.data_dir.resolve())
+                or fact.get('workspace') != str(Path(session['workspace']).resolve())):
+            return None
+        value = fact['descriptor']
+        key, description = value['key'], value['description']
+        if (type(value.get('version')) is not int or value['version'] != 1
+                or value.get('producer') != PRODUCER or value.get('allowOptionId') != 'allow'
+                or value.get('authorityLifetime') != 'request'
+                or not isinstance(key, str) or len(key) != 64
+                or any(char not in '0123456789abcdef' for char in key)
+                or not isinstance(description, str) or not description
+                or len(description.encode()) > 512
+                or any(unicodedata.category(char) == 'Cc' for char in description)):
+            return None
+        return {field: value[field] for field in
+                ('version', 'producer', 'key', 'description', 'allowOptionId', 'authorityLifetime')}
+    except (KeyError, TypeError, ValueError, OSError):
+        return None

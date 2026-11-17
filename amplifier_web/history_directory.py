@@ -32,7 +32,7 @@ FIELDS = {
     'description', 'bundle', 'workspace', 'workspaceId', 'workspaceAvailable',
     'workingDirectory', 'executionRevision', 'executionHost', 'executionHandoffId', 'assignmentId', 'interruptionRevision',
     'createdAt', 'updatedAt', 'recentActivityAt', 'navigationActivityAt',
-    'runtimeSessionId', 'nativeIdentity', 'nativeProject', 'externalAgent', 'parentId', 'nativeParentId',
+    'activityPresentation', 'runtimeSessionId', 'nativeIdentity', 'nativeProject', 'externalAgent', 'parentId', 'nativeParentId',
     'nativeRevision', 'turnCount', 'shared', 'historyManaged', 'historyLoaded',
     'historyLoading', 'sharedHistoryTotal', 'displayMessageCount', 'sessionKind', 'sessionPurpose', 'location', 'nativeAvailable',
     'historyReadOnlyReason', 'status', 'configurationBusy', 'configurationPending', 'fileAccessPending',
@@ -51,6 +51,8 @@ def _membership(values):
 
 
 def initialize(db):
+    from .client_presentation import initialize as presentation_initialize
+    presentation_initialize(db)
     from .state_records import initialize as initialize_records
     initialize_records(db)
     columns = ','.join(f'{name} ' + ('REAL' if name in {'created', 'recent'} else

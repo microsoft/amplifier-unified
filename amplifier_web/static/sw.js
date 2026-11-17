@@ -1,7 +1,7 @@
 /* Only public branding and the offline help page are cached. No app shell,
    authenticated pages, API responses, chats, attachments, or canvas documents. */
 const CACHE_PREFIX='amplifier-public-';
-const CACHE=CACHE_PREFIX+'e93ef9d632774102';
+const CACHE=CACHE_PREFIX+'5172cc5159d28209';
 const PUBLIC_FILES=[
   '/offline.html','/app-pages.css','/pwa.js','/manifest.webmanifest','/favicon.ico',
   '/branding/favicons/favicon.ico','/branding/favicons/favicon-32.png',
@@ -17,14 +17,6 @@ self.addEventListener('activate',event=>{
 self.addEventListener('fetch',event=>{
   const request=event.request,url=new URL(request.url);
   if(request.method!=='GET'||url.origin!==self.location.origin)return;
-  // Instance metadata can change without a client build. Bypass the old
-  // build-versioned cache, including legacy install-icon addresses.
-  if(url.pathname==='/manifest.webmanifest'||url.pathname==='/favicon.ico'||
-     url.pathname.startsWith('/instance-icon/')||
-     /^\/branding\/(?:favicons\/|pwa\/)/.test(url.pathname)){
-    event.respondWith(fetch(request,{cache:'no-store'}));
-    return;
-  }
   if(PUBLIC_FILES.includes(url.pathname)){
     event.respondWith(caches.open(CACHE).then(async cache=>(await cache.match(url.pathname))||fetch(request)));
     return;

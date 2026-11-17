@@ -315,6 +315,8 @@ def ingest(session,event):
         node=safe;tree['nodes'].append(node)
     from .input_status import execution as observe_input_execution
     observe_input_execution(session, event)
+    from .client_presentation import observe_execution as observe_presentation
+    observe_presentation(session, node, tree)
     # Tool output/progress cannot change model-call usage. Preserve the existing
     # aggregates when neither call membership nor ownership/turn mapping changed.
     # A late parent or an unassigned turn still requires the complete rebuild.

@@ -56,7 +56,7 @@ async def test_worker_ready_does_not_wait_for_slow_provenance_hashing(tmp_path, 
     monkeypatch.setattr('amplifier_web.host.config.app_home', lambda: tmp_path / 'home')
     monkeypatch.setattr('amplifier_web.worker_diagnostics.StartupCapture', Mock)
     monkeypatch.setattr('amplifier_web.host.session.prepare_manager', AsyncMock(return_value=(session, runtime, {})))
-    monkeypatch.setattr('amplifier_web.runtime_qualification.active_install_overrides', lambda *args: None)
+    monkeypatch.setattr('amplifier_web.runtime_qualification.active_install_overrides', lambda *args, **kwargs: None)
     monkeypatch.setattr('amplifier_web.history_revision.recover_pending', lambda *args: None)
     def make_controls(session_arg, runtime_arg, telemetry, *, preserve_configuration, tool_invocation):
         assert session_arg is session

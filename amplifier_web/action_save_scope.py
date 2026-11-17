@@ -26,6 +26,7 @@ GLOBAL_ACTIONS = {
     'session.pinOrder': {'pinnedSessionIds', 'pinnedItemIds', 'pinOrderCustomized'},
     'navigation.pinOrder': {'pinnedSessionIds', 'pinnedWorkspaceIds', 'pinnedItemIds', 'pinOrderCustomized'},
     'attention.read': {'attentionRead'},
+    'presentation.dismiss': set(),
     'settings.update': {'settings', 'workspaceDefaults', 'bundleDefaults'},
     'bundle.default': {'settings', 'bundleDefaults'},
     'theme.save': set(), 'theme.import': set(), 'theme.update': set(), 'theme.delete': set(),
