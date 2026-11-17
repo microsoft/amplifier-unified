@@ -25,6 +25,7 @@ on:
       - amplifier_web/runtime_worker.py
       - amplifier_web/runtime.py
       - amplifier_web/runtime_environment.py
+      - amplifier_web/update_sequence.py
       - amplifier_web/ownership.py
       - amplifier_web/host/storage.py
       - amplifier_web/auth.py
@@ -59,6 +60,7 @@ on:
       - amplifier_web/windows_ports.py
       - amplifier_web/windows_consumer.py
       - amplifier_web/windows_consumer_shell.py
+      - amplifier_web/windows_start.py
       - amplifier_web/windows_removal.py
       - amplifier_web/windows_uninstall.py
       - amplifier_web/installation_runtime.py
@@ -94,6 +96,7 @@ on:
       - tests/test_update_checks.py
       - tests/test_update_registry_trust.py
       - tests/test_update_health_setup_record.py
+      - tests/test_update_new_installation.py
       - tests/test_windows_tls.py
       - tests/test_windows_trust.py
       - tests/test_session_sign_out.py
@@ -104,6 +107,7 @@ on:
       - tests/test_windows_ports.py
       - tests/test_windows_consumer.py
       - tests/test_windows_first_open.py
+      - tests/test_windows_start.py
       - tests/test_windows_consumer_shell.py
       - tests/test_windows_removal.py
       - tests/test_windows_uninstall.py
@@ -359,18 +363,51 @@ jobs:
         run: |
           .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -p no:cacheprovider tests/test_update_health_setup_record.py
           if ($LASTEXITCODE -ne 0) { throw 'Setup-record update health checks failed.' }
-      # First start with an update: the real `open` command, handed over with
-      # os.execv as an app generation is, against this installation's host
-      # while that host restarts as another package version. Real private
-      # files, pinned HTTPS and grant store, in a folder with a space in its
-      # name. A recorder stands in for the browser; Task Scheduler, the update
-      # and the Windows certificate question are not part of this check.
+      # What an update check lists on a new installation: the real inventory,
+      # policy and classification readers on native Windows, on the files that
+      # setup and a first chat leave (a build view of the shared source store
+      # and the chat's binding), with this runner's Git. No worker, no app and
+      # no network. A skipped native case would hide the answer; here it fails.
+      - name: Check that a new installation's check offers no update for its first chat's modules or an unfetched source
+        shell: pwsh
+        run: |
+          .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -p no:cacheprovider tests/test_update_new_installation.py | Tee-Object -Variable report
+          if ($LASTEXITCODE -ne 0) { throw 'New-installation update listing checks failed.' }
+          if (-not ($report -match ' passed') -or ($report -match 'skipped')) { throw 'A native new-installation case did not run; on this lane it must run.' }
+      # A command that the active app version takes over, and the first start
+      # with an update. First the launcher's real hand-over
+      # (application_generations.hand_over) with real processes: the caller
+      # gets control back when the output is complete, with the real exit
+      # status, and no console window opens. Then the real `open` command
+      # against this installation's host while that host restarts as another
+      # package version, handed over as each of the three launchers on
+      # people's PCs does it: the current one waits for the app, the two
+      # earlier ones use os.execv. Real private files, pinned HTTPS and grant
+      # store. The first two launchers run in a folder with a space in its
+      # name; the earliest one cannot work there. A recorder stands in for the
+      # browser; Task Scheduler, the update and the Windows certificate
+      # question are not part of this check.
       - name: Check that the first start's open step waits for a restarting host and opens the browser once
         shell: pwsh
         run: |
           .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -s -p no:cacheprovider tests/test_windows_first_open.py | Tee-Object -Variable report
           if ($LASTEXITCODE -ne 0) { throw 'Windows first-start open checks failed.' }
           if ($report -match 'skipped') { throw 'A native first-start open case was skipped; on this lane it must run.' }
+      # A start that a person can see, and one start at a time. The real sign
+      # window on this runner's desktop (its text, that it takes no focus, that
+      # it hides beside a message of its own program and goes away), the real
+      # lock of a running start across two processes, the launcher's start
+      # with both, the installation's real lock around setup's entries, and the
+      # start texts over real private files. Stand-ins: the installation
+      # check, Task Scheduler, the certificate question and the browser. A
+      # runner's desktop has no person: what a person notices is a clean-room
+      # step. A skipped case would hide the answer; on this lane it fails.
+      - name: Check the sign of a running start, the one-start lock and the lock around setup's entries
+        shell: pwsh
+        run: |
+          .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -s -p no:cacheprovider tests/test_windows_start.py | Tee-Object -Variable report
+          if ($LASTEXITCODE -ne 0) { throw 'Windows start sign or lock checks failed.' }
+          if (($report -join "`n") -match '\d+ skipped') { throw 'A native start case was skipped; on this lane it must run.' }
       - name: Check sign-out of all browsers and remote sign-in by code (real private store, real HTTPS)
         shell: pwsh
         run: |
