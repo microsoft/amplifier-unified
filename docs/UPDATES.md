@@ -307,6 +307,49 @@ Shared remote/ref lookups join across application and worker checks, with bounde
 
 Installation stages changed source bindings and prepares the **currently offered app profiles** with the enabled app behaviors. Saved chats and historical workspace/bundle combinations do not expand this qualification set. A single dependency batch collects selected modules and bundle-root packages, resolves their union once in an isolated environment, freezes the graph, and mounts each offered profile in a fresh process. These checks deny approval requests, verify required host capabilities and absence of CLI libraries, and never execute a model turn. Module initialization hooks still run.
 
+A component update qualifies the selected conversation profile, and a profile
+with no provider cannot qualify. While the app's own profile is selected and no
+AI connection is set up, the update owner starts no component candidate and
+records no attempt. Settings says that components update after an AI connection
+is set up, and that nothing failed. The published status is `waiting` with
+`action: connect`; it requires no attention. This holds for the automatic update of a new
+installation and for a person's own Update request, on every platform. The
+update starts after the first connection: a connection changes the checked
+configuration, so the owner checks once more and installs that checked
+selection. An installation that never gets a connection never updates its
+components; it also cannot hold a conversation. An application update does not
+wait, and neither does a check that finds only Smart Tool updates. The other
+tier is still checked after the included tier, so it waits behind an included
+component update that waits.
+
+The rule (`profile_catalog.connection`) reads the same global settings as the
+stage, and it merges and drops provider rows by the same steps as composition
+(`host.config.merge`, `host.config.provider_dropped`). It makes a claim only for the app's own
+profiles from their own source with the app's own behaviors, which declare no
+provider. A profile from another source, a bundle source override or another
+app behavior can declare a provider itself: there the stage runs and the probe
+decides. Its refusal of an incomplete selected profile carries a reason,
+`ai-connection-needed` when only a provider is missing and the loop is
+supported, and `incomplete-conversation-profile` otherwise.
+
+Update health does not reclassify an earlier failure record. Releases before
+this rule started the component update of a new installation by themselves and
+recorded its refusal as a failed update. That record named no reason, and the
+refusal covered every incomplete selected profile, so the record cannot prove
+that only a connection was missing. It keeps its priority as component attention
+until a later component update completes; a separate application success does
+not resolve that attempt. The
+existing rule for an older preparation failure then makes it history. On such
+an installation the person sets up an AI connection; the update then starts
+(by itself, or at the person's Update request when automatic installation is
+off). A new installation never gets such a record, because no attempt starts.
+
+The owner's pass and a person's Update request share one step for a selection
+that changed after its check (`UpdateManager.install_checked`): the refusal
+before anything is prepared leads to one new check, and that checked selection
+is installed under the caller's own admission. A second refusal, and a check
+that fails, are reported as before; nothing is repeated.
+
 A proven catalog-data-only change reuses an already qualified runtime. This requires an exact tree comparison, an allowlisted data contract and unchanged app-profile inputs. Unknown files, code, dependency or profile changes take the qualification path. Failed qualification leaves the active pointer unchanged.
 
 Qualified component generations use per-worker activation. Promotion atomically changes the generation selected by new starts. Running workers retain their source generation, environment and native writer, including while idle. The existing retirement handshake saves, rechecks pending work/resources and exits before releasing ownership. The next explicit work starts a fresh worker on the current generation and resumes native history. Active voice protects its worker. The updater does not interrupt a turn, automatically replay an operation, or add another checkpoint format. Application replacements, incompatible worker protocols and legacy generations retain the coordinated restart boundary.
@@ -318,6 +361,20 @@ The logical roles are candidate, current and previous. Physical generations rema
 Availability checks reuse a private inventory index, invalidated by generation, registry and configuration changes, with periodic full reconciliation. Remote-ref requests retain coalescing and bounded cached availability; a manual refresh refreshes remote availability. Every installation repeats exact source preflight, so cached availability cannot authorize overwriting an intervening local edit. Unified owns its registry, source store and runtimes. CLI caches and registries remain separate; shared settings, credentials and native projects/history authorities are unchanged.
 
 Core follows published PyPI releases using the app's wheel-only policy. Foundation's host library, the streaming engine and loop-live track their configured `@main` sources. Provider/tool modules also follow their configured mutable sources. Candidate preparation resolves exact revisions in an isolated runtime and records them as validation evidence; these receipts do not replace branch-tracking configuration with commit pins. Activation still requires the candidate runtime checks described above. Application releases come from the private `microsoft/amplifier-unified` GitHub repository. Checks use the signed-in GitHub CLI and resolve the release tag to an exact commit. Installation first builds a separate uv tool environment and checks the host import, packaged frontend assets and package version. This validates packaging, not every provider account or live audio connection. Once idle, the host installs that exact revision into its normal uv tool location and restarts on the same port, workspace and data directory. Restart output is retained privately in `updates/restart.log`; the prior Git install reference is recorded in `updates/previous-app.json` for manual recovery. Ecosystem rollback does not roll back application code. If there is no accessible release or GitHub sign-in, the UI reports a failed check rather than claiming the application is current.
+
+App-authored direct Git dependencies also retain their update policy independently
+of frozen revisions. Before recording a new generation, an untyped Git requirement
+must resolve unambiguously to a branch at the exact installed commit. For an older
+generation whose app dependency was recorded as an unresolved full-SHA pin,
+prospective checking additionally requires matching current and stored app
+declarations, unchanged recorded manifest/lock/installed graph, and the exact
+stored source identity and origin. A moving branch may now be newer than that
+verified old installation; the ordinary checked-candidate resolution guard still
+binds the next revision. This proof changes only the prospective inventory and
+new candidate's policy, never the old generation's receipts. Explicit pins, tags
+(including same-name branch/tag ambiguity), custom sources, local edits and
+external resolver policy do not acquire branch authority from an `originalRef`
+spelling or matching commit.
 
 The worker's transitive Foundation override names the distribution without
 independently declaring a URL/ref. The effective `tool.uv.sources` choice owns
@@ -457,15 +514,19 @@ check setup again and grant observation separately for a connected voice call.
 
 ### Changelog and high-impact notices
 
-Updates includes an offline changelog packaged from `amplifier_web/release-notes.json`. History begins at 0.11.0; earlier releases are not reconstructed. Update checks fetch this same file from the exact published Git commit, so skipped releases and their notices appear before installing. Unavailable or invalid notes show a fallback message without blocking installation. Cached notes survive failed checks and restarts; installed package entries take precedence over older cached wording.
+Updates includes an offline changelog packaged from `amplifier_web/release-notes.json`. The full archive begins at 0.11.0 in Git and the immutable GitHub releases; earlier releases are not reconstructed. The packaged and cached changelog is a bounded displayed history: it retains every notice-bearing release, regardless of age, plus the newest 256 ordinary releases. It removes the oldest ordinary entries first if the unchanged 512-entry or 512,000-UTF-8-byte hard limit needs more room. This does not delete conversation history, published releases or notice acknowledgements.
 
-Add an entry for every release with `version`, a concise `title`, a nonempty `changes` list, and `notices` (empty for ordinary changes). Add a notice for configuration migrations, compatibility changes, changes to existing workflows, or required action. Each notice needs a stable `id`, `title`, `detail` explaining the impact, and `action` explaining what to check or do. Do not use HTML or invent notices from commit titles. Keep existing entries so users who skip versions can review the intervening changes.
+Update checks fetch the same history from the exact published Git commit. Cached notes survive failed checks and restarts. For a duplicate version, the whole installed package entry still takes precedence over cached wording; superseded cached notices are not revived or combined with the installed entry. Fetched future entries retain the existing latest-version ceiling. After that merge, the shared retention rule protects notices before selecting ordinary entries; old cached ordinary entries cannot displace guidance.
+
+Add an entry for every release with `version`, a concise `title`, a nonempty `changes` list, and `notices` (empty for ordinary changes). Add a notice for configuration migrations, compatibility changes, changes to existing workflows, or required action. Each notice needs a stable `id`, `title`, `detail` explaining the impact, and `action` explaining what to check or do. Do not use HTML or invent notices from commit titles. Retention selects complete records without rewriting their fields, notice identities, wording or `previousTitles` aliases. The full older ordinary history remains in Git and immutable GitHub releases.
 
 The release owner follows the [version and notes checklist](validation/release-qualification.md#version-choice-and-release-notes), including maintenance-only releases. Historical omissions are backfilled under their actual release versions and delivered in the next package; published tags and assets remain immutable.
 
 Updates shows a release summary above its actions without expanding a disclosure: the available release before installation, the update owner's exact target during preparation/restart, and the verified running release afterward. Newer discovery cannot relabel an in-flight target. While components finish, the app summary stays on the installed release; unknown target identity and missing notes are labeled rather than inferred. The summary uses the existing bounded release history and never marks high-impact notices read. Important changes and the full Changelog remain expandable below the actions, outside Advanced details. Ordinary release entries do not create attention badges. High-impact notices contribute to the shared Settings / Updates attention badges. `attention.read` marks the current notice wording reviewed across devices when its content is visible. Reviewing is acknowledgment, not confirmation that an action was performed, and never gates installation. Notices remain in history after review; changed wording becomes unread again. Fresh installations begin attention at their installed version, while older history remains browsable; legacy state without that boundary retains its existing notices.
 
-The release validator requires an entry for the package version, rejects future or duplicate versions and malformed notices, and checks that the wheel and source archive contain the validated history. The publisher generates GitHub release text from that entry. Historical immutable releases through 0.11.2 can still be rerun without a changelog; new releases require one. The bounded format supports up to 512 releases, five notices per release and 512,000 UTF-8 bytes; plan older-history retention deliberately when approaching those limits.
+The release validator requires an entry for the package version, rejects future or duplicate versions and malformed notices, and checks that the wheel and source archive contain the validated history. Release preparation and runtime merging use the same retention policy. All rows are validated before selection, including ordinary entries that would age out. The unchanged format supports up to 512 releases, five notices per release and 512,000 UTF-8 bytes, including serialization overhead. If protected notices alone cannot fit, or a newly prepared current release cannot fit beside them, the operation fails explicitly instead of dropping guidance or returning an empty-success history. Preparation fails before writing metadata. Oversized input histories likewise report a capacity error rather than silently clearing notices; missing or malformed history retains the damaged-app fallback. None of this marks a notice reviewed or changes its acknowledgement fingerprint.
+
+The publisher generates GitHub release text from the current entry. Published tags and assets remain immutable. Historical immutable releases through 0.11.2 can still be rerun without a changelog; new releases require one.
 
 ### Release workflow
 
@@ -516,6 +577,17 @@ If bounded activation history has aged out, a matching selected graph can be
 reported as retained with activation verification unavailable, not falsely healthy
 or a request to reinstall. Newer failures, failed activation and unrelated source
 scope remain actionable. Settings revalidation uses a neutral pending state.
+When a verified application restart is newer than unresolved component attention,
+the headline names the successful application update and the earlier component
+issue separately, including the attempt's UTC date. Attention and source/retry
+guards remain unchanged; an application success is not component recovery.
+Current health identifies its selected failure through the sanitized diagnostic
+allowlist, independently of the last failure pointer and recent event window.
+The support report uses that same selector and includes at most 32 retained
+failure summaries, total/omitted counts, and activation/configuration proof
+limitations. It does not rename the selected record as the last failure or
+discard history. A missing older activation receipt alone remains neutral,
+does not request reinstallation, and does not claim full component verification.
 If the selected installation's graph, lock and activation still verify but its
 source-configuration key no longer matches, health reports incomplete component
 verification, not a renewed claim that an older source conflict is occurring.
@@ -523,6 +595,21 @@ Only covered failures predating that installation remain historical; newer
 failures, missing source scope and uncertain operations retain their priority.
 This explanatory proof cannot authorize partial-source retention or declare the
 changed configuration qualified. No settings or qualification receipts are rewritten.
+A new installation has no selected generation until its first component update.
+When setup recorded the worker dependencies it installed, and no generation was
+ever selected, health verifies the installed lock, manifest, recorded packages
+and installer policy against that record, as a conversation-worker start does.
+A complete check that finds nothing newer is then reported as up to date, in
+words that name setup's record and do not call those components qualified.
+Packages are compared by name, version and source; packages that a conversation
+added after setup are not part of the record and are not compared. This record
+has no activation time: it cannot supersede a recorded failure and cannot
+authorize preparation. It never describes a selected generation: a held setup
+proof is checked against the generation pointer each time it is shown or
+reported, so it ends when an activation writes the pointer, also when the
+promotion after that write fails. A missing or changed record, and an
+installation that went back from its first generation, keep the
+incomplete-verification report.
 An ordinary Check offers an included runtime qualification when app-level source
 declarations differ, even if every Git branch is unchanged. Install still uses
 the checked selection and existing unchanged-input, source-policy and activation

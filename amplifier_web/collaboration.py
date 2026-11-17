@@ -173,6 +173,8 @@ def definitions(schema, string):
         }, ["sessionId"])),
         "coordination.cancel": ("Withdraw your exact queued request, or request cancellation of already admitted work. Does not stop the recipient chat, undo effects, or prove cancellation. Active recipients see the request at their next coordination boundary and report outcome=cancelled when settled. Inspect coordination.result; never replay an unknown admission.", schema({
             **sid, "requestId": string(200), "reason": string(1000)}, ["sessionId", "requestId"])),
+        "coordination.unsubscribe": ("Stop awaiting your exact request without cancelling recipient execution, resuming a task or resolving uncertain effects. Sticky withdrawal closes future automatic returns and suppresses only queued notifications. Already submitting, admitted or unknown returns may still arrive; inspect the bounded receipt and coordination.result. Exact subscribe/send retries never rearm the wait.", schema({
+            **sid, "requestId": string(200), "reason": string(1000)}, ["sessionId", "requestId"])),
         "coordination.acknowledge": ("After reviewing an exact result, retire only its unsubmitted completion notification. Use the review reference from coordination.result or workspace.tests.read/result and a stable command ID. Does not cancel work, qualify success, change limits or suppress later changed outcomes. Reading alone never acknowledges.", schema({**sid, "requestId": string(200), "outcomeRevision": {"type": "integer", "minimum": 1}, "reviewKey": string(200)}, ["sessionId", "requestId", "outcomeRevision", "reviewKey"])),
         "coordination.result": ("Inspect admission and exact qualified final result links for one request without loading history. Original participants retain access; a Full-access observer or its current delegated reviewer may inspect a registered request using workspace/all read scope. Observation does not change participants, producer or notification ownership. Acknowledgements and unrelated turns do not count.", schema({"requestId": string(200), "scope": {"enum": ["workspace", "all"]}}, ["requestId"])),
         "coordination.artifact": ("Read an exact retained file as an original request participant or Full-access observer, even after its source disappears. Current delegated Full-access reviewers may use this passive read. Observers use workspace/all read scope. Bounded text and download identity; no peer output-library access or work admission. Retained bytes are not proof of correctness.", schema({**sid,
@@ -273,6 +275,8 @@ class Collaboration:
             AND json_extract(receipt,'$.subscription.status')='backpressured'""")
         service.db.execute("""CREATE INDEX IF NOT EXISTS coordination_replies ON commands(
             json_extract(receipt,'$.commandAction'), json_extract(receipt,'$.result.requestId'))""")
+        service.db.execute("""CREATE INDEX IF NOT EXISTS coordination_request_returns ON commands(
+            json_extract(receipt,'$.dependencyRequestId'), json_extract(receipt,'$.delivery'))""")
         service.db.execute("""CREATE INDEX IF NOT EXISTS coordination_pair_window ON commands(
             json_extract(receipt,'$.commandAction'), json_extract(receipt,'$.senderSessionId'),
             json_extract(receipt,'$.target.sessionId'), json_extract(receipt,'$.acceptedAt'))""")
@@ -470,6 +474,7 @@ class Collaboration:
             waiting = self.service.db.execute("""SELECT count(*) FROM commands
                 WHERE json_extract(receipt,'$.commandAction') IN ('coordination.send','coordination.create','coordination.watch','workspace.tests.submit','worktree.handoff','configuration.apply')
                 AND json_extract(receipt,'$.senderSessionId')=?
+                AND json_extract(receipt,'$.subscription.withdrawal.operationId') IS NULL
                 AND (json_extract(receipt,'$.subscription.status') IN ('waiting','reserved','backpressured')
                     OR json_extract(receipt,'$.subscription.open')=1)
                 AND json_extract(receipt,'$.subscription.interruptionRevision')=?
@@ -640,6 +645,8 @@ class Collaboration:
 
     def validate_reply(self, source, args):
         binding, active = self.active_binding(source)
+        if source.get('status') in {'stopping', 'stopped', 'cancelled', 'interrupted', 'error', 'failed'}:
+            self.error('A stopped or unavailable recipient cannot declare a fresh report.', 409)
         request = self.receipt(args["requestId"])
         delivered = set(active.get('inputIds', [])) & {row.get('inputId') for row in binding.get('_inputBindings', [])}
         if (request.get('commandAction') != 'coordination.send'
@@ -660,9 +667,9 @@ class Collaboration:
         if args['requestId'] not in delivered:
             if request.get('delivery') not in {'accepted', 'applied'}:
                 self.error('A later generation needs confirmed prior input admission.', 409)
-            reason = self.guard(request, for_reply=True)
-            if reason:
-                self.error('The original request boundary no longer permits a later reply: ' + reason, 409)
+            # Retaining a report does not execute the original request again.
+            # Current root/Stop/participant identity above and terminal sealing
+            # below govern this report, not the old task's admission boundary.
         self.validate_reply_message_ids(source, args.get('messageIds', []), active['id'])
         return active, request, revision, delivered
 
@@ -877,7 +884,7 @@ class Collaboration:
         if notify and receipt.get('subscription') and continuation_outcome(receipt):
             self.enqueue_continuation(receipt)
 
-    def creation_guard(self, receipt, *, for_reply=False):
+    def creation_guard(self, receipt):
         if reason := self.service.assignments.request_membership_reason(receipt):
             return reason
         if receipt.get('assignmentId'):
@@ -897,10 +904,6 @@ class Collaboration:
                 or task.get('status') == 'completed' and receipt.get('sourceTaskStatus') != 'completed'):
             return 'The requester or its assignment was stopped.'
         binding = {'taskId': receipt.get('sourceTaskId'), 'taskRevision': receipt.get('sourceTaskRevision')}
-        # A later report describes already admitted work. Progress on the same
-        # objective may retain that evidence without authorizing new execution.
-        if for_reply and 'sourceTaskContinuationEpoch' in receipt:
-            binding['taskContinuationEpoch'] = receipt['sourceTaskContinuationEpoch']
         if not task_matches(task, binding):
             return 'The requesting assignment changed.'
         if (source['workspace'] != receipt['workspace']
@@ -932,8 +935,8 @@ class Collaboration:
                 and 'taskContinuationEpoch' not in receipt
                 and task_matches(task, receipt) and dependency_blocked(task))
 
-    def guard(self, receipt, *, for_reply=False):
-        if not for_reply and receipt.get('cancellation'):
+    def guard(self, receipt):
+        if receipt.get('cancellation'):
             return 'The requester cancelled this exact request before further admission.'
         try:
             if receipt.get('delivery') == 'queued' and receipt.get('expiresAt', float('inf')) <= time.time():
@@ -954,11 +957,16 @@ class Collaboration:
                 return 'The assignment requester was interrupted after this request; old input is not replayed.'
             if receipt.get('creationOperationId'):
                 creation = self.receipt(receipt['creationOperationId'])
-                reason = self.creation_guard(creation, for_reply=for_reply)
+                reason = self.creation_guard(creation)
                 if reason:
                     return reason
             if receipt.get('dependencyRequestId'):
                 dependency = self.receipt(receipt['dependencyRequestId'])
+                # Once submitted, this input's actual admission belongs to the
+                # transport. Withdrawal never retroactively asserts absence.
+                if (receipt.get('delivery') == 'queued'
+                        and (dependency.get('subscription') or {}).get('withdrawal')):
+                    return 'The requester withdrew this wait; no new automatic return is admitted.'
                 if reason := self.service.assignments.request_membership_reason(dependency):
                     return reason
                 if dependency.get('cancellation'):
@@ -1007,13 +1015,11 @@ class Collaboration:
                 return "The recipient is stopped or unavailable."
             task = target.get("task") or self.service.coordination.task(target["id"])
             from .completed_followup import matches_request
-            completed_followup = matches_request(self.service, receipt, task, for_reply=for_reply)
+            completed_followup = matches_request(self.service, receipt, task)
             if (task.get("status") in {"paused", "blocked", "completed", "cancelled"}
                     and not resuming and not self.blocked_input(receipt, task) and not completed_followup):
                 return "The recipient task is not active."
             task_binding = intake_task_binding(receipt)
-            if for_reply and 'replyTaskContinuationEpoch' in receipt:
-                task_binding = {**receipt, 'taskContinuationEpoch': receipt['replyTaskContinuationEpoch']}
             if not task_matches(task, task_binding) and not completed_followup:
                 return "The recipient task changed."
             if target.get("ownership", {}).get("status") in {"blocked", "yielding", "yielded", "yield-failed", "taking-over"}:
@@ -1653,6 +1659,8 @@ class Collaboration:
         on the shared connection, including an awaited retained file write.
         """
         wait = request['subscription']
+        if wait.get('withdrawal'):
+            return  # Sticky across cancel/review/status changes and restart.
         versioned = wait.get('notificationVersion') == 2
         # Recover only receipts identifiable as these retired implementation
         # limits, not arbitrary limits, cancellation or uncertain delivery.
@@ -1916,6 +1924,9 @@ class Collaboration:
         if action == 'coordination.cancel':
             from .request_cancellation import cancel
             return await cancel(self, source, args, origin, command_id)
+        if action == 'coordination.unsubscribe':
+            from .request_cancellation import unsubscribe
+            return await unsubscribe(self, source, args, origin, command_id)
         if action == 'coordination.artifact.save':
             from .result_artifact_save import save
             return {'accepted': True, 'result': await save(self, source, args, origin, caller, admission_check=admission_check)}
@@ -2081,6 +2092,7 @@ class Collaboration:
                 active, request, revision, delivered = self.validate_reply(source, args)
                 response = {**copy.deepcopy(args), 'generationId': active['id'], 'recipientSessionId': source['id'],
                             'operationId': identity, 'responseRevision': revision+1,
+                            'interruptionRevision': source.get('interruptionRevision', 0),
                             'causalDepth': self.causal_depth(source, lineage, origin),
                             'admittedInputIds': sorted(delivered),
                             'executionDirectory': source.get('workingDirectory') or source['workspace'],

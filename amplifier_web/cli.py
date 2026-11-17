@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from contextlib import contextmanager, ExitStack
 import errno
 import os
+import socket
 import sys
 from pathlib import Path
 import threading
@@ -252,19 +254,98 @@ def _serve(args, data_dir: Path, *, task_runner=None) -> None:
             _serve_unlocked(args, data_dir, task_runner=task_runner)
 
 
+@contextmanager
+def _listener_sockets(binds, port):
+    """Reserve real listeners before application startup, without a rebind gap.
+
+    Each configured name must succeed. Like asyncio's per-name resolution, an
+    unavailable address family may yield to another result of that same name.
+    Keep raw bind errors: asyncio discards EADDRNOTAVAIL and loses its errno.
+    """
+    with ExitStack() as owned:
+        sockets = []
+        try:
+            for host in binds:
+                infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM,
+                                           flags=socket.AI_PASSIVE)
+                if not infos:
+                    raise socket.gaierror(socket.EAI_NONAME, "No listener addresses")
+                available = []
+                unavailable = None
+                for family, kind, protocol, _, address in dict.fromkeys(infos):
+                    try:
+                        sock = socket.socket(family, kind, protocol)
+                    except OSError as exc:
+                        if exc.errno not in {errno.EAFNOSUPPORT, errno.EPROTONOSUPPORT}:
+                            raise
+                        unavailable = exc
+                        continue
+                    owned.callback(sock.close)
+                    if os.name == "posix" and sys.platform != "cygwin":
+                        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, True)
+                    if family == socket.AF_INET6 and hasattr(socket, "IPPROTO_IPV6"):
+                        sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, True)
+                    try:
+                        sock.bind(address)
+                    except OSError as exc:
+                        if exc.errno != errno.EADDRNOTAVAIL:
+                            raise
+                        sock.close()
+                        unavailable = exc
+                        continue
+                    # Strong reservation, including overlapping wildcard binds.
+                    # TCP may queue here; authenticated HTTP health is not ready.
+                    sock.listen(128)
+                    sock.setblocking(False)
+                    available.append(sock)
+                if not available:
+                    assert unavailable is not None
+                    raise unavailable
+                sockets.extend(available)
+        except socket.gaierror:
+            # EAI codes can collide numerically with ordinary errno values.
+            raise SystemExit(
+                f"Could not resolve configured bind address {host}, port {port}.\n"
+                "Check the bind hostname and this computer's name resolution. "
+                "No running process was stopped or replaced."
+            ) from None
+        except OSError as exc:
+            guidance = {
+                errno.EADDRINUSE: 'The address or port is already in use. Check the existing service with amplifier-unified service status, or choose another port with --port.',
+                errno.EADDRNOTAVAIL: 'The configured bind address is not available on this computer. Check its current network addresses and your bind setting.',
+                errno.EACCES: 'Permission was denied. Check permission to use the configured address and port; choose an allowed port with --port if needed.',
+                errno.EAFNOSUPPORT: 'The configured address family is not supported on this computer. Check its network support and your bind setting.',
+                errno.EPROTONOSUPPORT: 'The configured address family is not supported on this computer. Check its network support and your bind setting.',
+            }.get(exc.errno)
+            if guidance is None:
+                raise
+            raise SystemExit(
+                f"Could not start Amplifier on {host}, port {port}.\n"
+                f"{guidance}\nNo running process was stopped or replaced."
+            ) from None
+        # Do not classify exceptions from application construction or serving as
+        # bind failures. The same owned sockets close on every exit, even when
+        # aiohttp never attaches them or only attaches a prefix.
+        yield sockets
+
+
 def _serve_unlocked(args, data_dir: Path, *, task_runner=None) -> None:
-    from aiohttp import web
     from .deployment import load_server_config
-    overrides = _server_overrides(args)
-    config = load_server_config(data_dir, overrides=overrides)
+    from .tls import ssl_context
+    config = load_server_config(data_dir, overrides=_server_overrides(args))
     os.environ["AMPLIFIER_WEB_HOME"] = str(data_dir)
+    secure = ssl_context(data_dir, config)
+    with _listener_sockets(config["bind"], config["port"]) as sockets:
+        _serve_listeners(args, data_dir, config, secure, sockets, task_runner=task_runner)
+
+
+def _serve_listeners(args, data_dir, config, secure, sockets, *, task_runner=None):
+    from aiohttp import web
     from .settings_migration import migrate_settings
     migrate_settings(data_dir, [args.workspace])
     from .host.config import load_config
     load_config(args.workspace)
     from .server import create_app
-    from .tls import ssl_context
-    secure = ssl_context(data_dir, config)
     scheme = "https" if secure else "http"
     browser_host = {'0.0.0.0': '127.0.0.1', '::': '::1'}.get(config['bind'][0], config['bind'][0])
     if ':' in browser_host:
@@ -272,13 +353,11 @@ def _serve_unlocked(args, data_dir: Path, *, task_runner=None) -> None:
     url = (config["public_origins"][0] if config["public_origins"] else
            f"{scheme}://{browser_host}:{config['port']}")
     timer = None
-    listener_ready = False
 
     def listening(_message):
-        # aiohttp calls this only after every configured socket has bound.
-        # Application startup signals run earlier and cannot establish this.
-        nonlocal timer, listener_ready
-        listener_ready = True
+        # aiohttp calls this only after every held socket has attached.
+        # TCP reservation and application startup alone cannot establish this.
+        nonlocal timer
         if task_runner is not None:
             task_runner.phase("listening")
         print(f"Amplifier Unified · listening on {', '.join(config['bind'])}, port {config['port']} ({scheme})\n"
@@ -306,20 +385,7 @@ def _serve_unlocked(args, data_dir: Path, *, task_runner=None) -> None:
                 return app
             app = managed_app()
         web.run_app(app,
-                    host=config["bind"], port=config["port"], ssl_context=secure, print=listening, access_log_class=SafeAccessLogger, access_log_format='%a %t "%r" %s %b')
-    except OSError as exc:
-        guidance = {
-            errno.EADDRINUSE: 'The address or port is already in use. Check the existing service with amplifier-unified service status, or choose another port with --port.',
-            errno.EADDRNOTAVAIL: 'The configured bind address is not available on this computer. Check its current network addresses and your bind setting.',
-            errno.EACCES: 'Permission was denied. Check permission to use the configured address and port; choose an allowed port with --port if needed.',
-        }.get(exc.errno)
-        # A filesystem error during application startup is not a bind failure.
-        if listener_ready or guidance is None or exc.filename is not None:
-            raise
-        raise SystemExit(
-            f"Could not start Amplifier on {', '.join(config['bind'])}, port {config['port']}.\n"
-            f"{guidance}\nNo running process was stopped or replaced."
-        ) from None
+                    sock=sockets, ssl_context=secure, print=listening, access_log_class=SafeAccessLogger, access_log_format='%a %t "%r" %s %b')
     except PublishingError as exc:
         # The same library error can also mean unsupported OS locking. Only an
         # actual held-lock conflict establishes that another process owns it.

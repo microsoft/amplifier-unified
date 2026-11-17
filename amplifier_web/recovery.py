@@ -26,9 +26,12 @@ def _read_reset_configuration(path, home):
             # pinned parents, ACL-checked existing handle and native reader,
             # but bound this already persisted plan by that handle's size.
             pinned._check()
-            handle = pinned._existing(path.name)
+            # The size comes from the validation that accepted this object.
+            # The handle denies writers, so the size cannot change. Another
+            # query of its name would refuse an object that a later
+            # replacement unlinked, although its content is complete.
+            handle, info = pinned._existing_info(path.name)
             try:
-                info = pinned._api.info(handle, pinned.path / path.name, directory=False)
                 size = (info.size_high << 32) | info.size_low
                 content = pinned._api.read(handle, limit=size)
             finally:

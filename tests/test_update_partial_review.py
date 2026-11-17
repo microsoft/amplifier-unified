@@ -36,6 +36,9 @@ async def review(preparation, manager, monkeypatch, tmp_path):
     shared = tmp_path / 'review-shared'
     monkeypatch.setattr(host_config, 'amplifier_home', lambda: shared)
     monkeypatch.setattr(session_files, 'amplifier_home', lambda: shared)
+    host_config.write_private(shared / 'settings.yaml', json.dumps({
+        'config': {'providers': [{'module': 'provider-anthropic',
+                                 'config': {'default_model': 'fixture-model'}}]}}))
     # Restore the actual pointer digest; only working-baseline qualification is
     # synthetic. The source-selection and owned-checkout guards stay unmocked.
     monkeypatch.setattr(update_health, 'pointer_witness', pointer_witness)
@@ -300,7 +303,9 @@ async def test_retained_retry_projection_does_not_offer_unchecked_target(prior_p
         for row in m.inventory:row['appSelection']='stale'
     elif invalid=='live-configuration':
         host_config.write_private(host_config.amplifier_home()/'settings.yaml',
-            'sources:\n  bundles:\n    routing-matrix: git+https://example.invalid/changed@main\n')
+            json.dumps({'sources': {'bundles': {'routing-matrix': 'git+https://example.invalid/changed@main'}},
+                        'config': {'providers': [{'module': 'provider-anthropic',
+                                                 'config': {'default_model': 'fixture-model'}}]}}))
         m.service.state['configurationRevision']=m.service.state.get('configurationRevision',0)+1
     else:
         # No known target remains: C's held result cannot qualify A's unknown.

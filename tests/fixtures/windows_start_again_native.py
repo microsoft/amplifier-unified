@@ -479,13 +479,23 @@ def run():
             begin(8)
             state, status = task_facts(home), cli(root, "service", "status", "--json")
             after_port, after_folders = windows_installation.saved_port(home), releases(root)
+            # The failure handler saves these facts even when passed(8) is not reached.
+            verification = dict(task=state, serviceStatus=status,
+                                expectedPort=port, port=after_port,
+                                expectedReleaseFolders=folders, releaseFolders=after_folders,
+                                expectedMarkerSha256=digest)
+            report["secondStartVerification"] = verification
             assert running(state) and healthy(status), (state, status)
             # A new host process, not the one that the uninstall stopped.
-            assert process_identity(status["json"]) != process_identity(first["json"]["health"])
-            assert after_port == port and after_folders == folders
-            assert hashlib.sha256(marker.read_bytes()).hexdigest() == digest
-            assert installation_runtime._needs_connection(home) is False
-            assert second["json"]["runtime"]["prepared"] is True
+            assert process_identity(status["json"]) != process_identity(first["json"]["health"]), \
+                "Second start retained the first host process identity"
+            assert after_port == port and after_folders == folders, \
+                "Saved port or preparation folders changed"
+            verification["markerSha256"] = hashlib.sha256(marker.read_bytes()).hexdigest()
+            assert verification["markerSha256"] == digest, "Saved marker changed"
+            verification["needsConnection"] = installation_runtime._needs_connection(home)
+            assert verification["needsConnection"] is False, "Configured account needs connection"
+            assert second["json"]["runtime"]["prepared"] is True, "Second start runtime is not prepared"
             passed(8, task=state, serviceStatus=status, port=after_port, releaseCount=len(after_folders),
                    markerUnchanged=True, needsConnection=False, runtime=second["json"]["runtime"],
                    firstStartSeconds=first["seconds"], secondStartSeconds=second["seconds"],

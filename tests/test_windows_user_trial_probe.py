@@ -2411,18 +2411,26 @@ def test_foreground_cli_output_is_private_bounded_and_preserves_export_bytes():
     assert len(output.getvalue()) == 65536
 
 
-@pytest.mark.parametrize("fault", [None, "wrong-code", "wrong-object", "wrong-port", "repeat", "not-serve"])
-def test_foreground_cli_bind_guard_is_exact_real_asyncio_socket_only(tmp_path, monkeypatch, fault):
+@pytest.mark.parametrize("fault", [None, "wrong-code", "wrong-object", "wrong-port", "repeat", "not-serve",
+                                  "unresolved", "other-binds", "helper-port"])
+def test_foreground_cli_bind_guard_is_exact_acquisition_socket_only(tmp_path, monkeypatch, fault):
+    from amplifier_web import cli
     guard = probe.CliNetworkGuard(tmp_path / "network.jsonl", 8942, serve=fault != "not-serve")
+    guard.resolved = fault != "unresolved"
     stream = types.SimpleNamespace(family=socket.AF_INET, type=socket.SOCK_STREAM)
-    code = probe.asyncio.BaseEventLoop.create_server.__code__
-    frame = types.SimpleNamespace(f_code=code, f_locals={"sock": stream})
+    code = cli._listener_sockets.__wrapped__.__code__
+    frame = types.SimpleNamespace(f_code=code, f_locals={
+        "sock": stream, "binds": ["127.0.0.1"], "port": 8942})
     if fault == "wrong-code":
         frame.f_code = (lambda: None).__code__
     if fault == "wrong-object":
         frame.f_locals["sock"] = object()
     if fault == "repeat":
         guard.listener = object()
+    if fault == "other-binds":
+        frame.f_locals["binds"] = ["127.0.0.1", "192.0.2.1"]
+    if fault == "helper-port":
+        frame.f_locals["port"] = 8943
     # No socket, loop, process or real network event is emitted by this model.
     with monkeypatch.context() as patch:
         patch.setattr(probe.sys, "_getframe", lambda *a: frame)
@@ -2435,6 +2443,80 @@ def test_foreground_cli_bind_guard_is_exact_real_asyncio_socket_only(tmp_path, m
     assert guard.port is None  # Serving never admits outbound app networking.
     if fault:
         assert guard.blocked == 1 and tmp_path.joinpath("network.jsonl").exists()
+
+
+@pytest.mark.parametrize("fault", [None, "wrong-wrapper", "wrong-helper", "no-helper", "other-binds",
+    "helper-port", "hostname", "wrong-port", "family", "datagram", "protocol", "flags",
+    "repeat", "not-serve", "wrong-event-args"])
+def test_foreground_numeric_resolution_guard_is_exact_configured_helper_only(tmp_path, monkeypatch, fault):
+    from amplifier_web import cli
+    guard = probe.CliNetworkGuard(tmp_path / "network.jsonl", 8942, serve=fault != "not-serve")
+    helper = types.SimpleNamespace(f_code=cli._listener_sockets.__wrapped__.__code__,
+                                  f_locals={"binds": ["127.0.0.1"], "port": 8942})
+    frame = types.SimpleNamespace(f_code=socket.getaddrinfo.__code__, f_back=helper, f_locals={
+        "host": "127.0.0.1", "port": 8942, "family": socket.AF_UNSPEC,
+        "type": socket.SOCK_STREAM, "proto": 0, "flags": socket.AI_PASSIVE})
+    event_args = ("127.0.0.1", 8942, socket.AF_UNSPEC, socket.SOCK_STREAM, 0)
+    if fault == "wrong-wrapper":
+        frame.f_code = (lambda: None).__code__
+    if fault == "wrong-helper":
+        helper.f_code = (lambda: None).__code__
+    if fault == "no-helper":
+        frame.f_back = None
+    if fault == "other-binds":
+        helper.f_locals["binds"] = ["localhost"]
+    if fault == "helper-port":
+        helper.f_locals["port"] = 8943
+    for label, field, value in (("hostname", "host", "localhost"), ("wrong-port", "port", 8943),
+        ("family", "family", socket.AF_INET6), ("datagram", "type", socket.SOCK_DGRAM),
+        ("protocol", "proto", socket.IPPROTO_UDP), ("flags", "flags", 0)):
+        if fault == label:
+            frame.f_locals[field] = value
+    if fault == "repeat":
+        guard.resolved = True
+    if fault == "wrong-event-args":
+        event_args = ("private.invalid", 8942, socket.AF_UNSPEC, socket.SOCK_STREAM, 0)
+    with monkeypatch.context() as patch:
+        patch.setattr(probe.sys, "_getframe", lambda *a: frame)
+        if fault is None:
+            guard.audit("socket.getaddrinfo", event_args)
+            assert guard.resolved and guard.blocked == 0
+        else:
+            with pytest.raises(PermissionError):
+                guard.audit("socket.getaddrinfo", event_args)
+    if fault:
+        assert guard.blocked == 1
+    assert guard.port is None
+
+
+def test_foreground_guard_accepts_actual_numeric_helper_and_still_denies_unowned_network(tmp_path):
+    # Real stdlib audit frames and helper socket identity, in a child because
+    # audit hooks cannot be removed. No app/runtime/provider or remote network.
+    script = r'''
+import importlib.util, pathlib, socket, sys
+from amplifier_web import cli
+spec = importlib.util.spec_from_file_location("probe", sys.argv[1])
+probe = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(probe)
+with socket.socket() as unused:
+    unused.bind(("127.0.0.1", 0))
+    port = unused.getsockname()[1]
+guard = probe.CliNetworkGuard(pathlib.Path(sys.argv[2]), port, serve=True)
+sys.addaudithook(guard.audit)
+with cli._listener_sockets(["127.0.0.1"], port) as sockets:
+    assert guard.resolved and guard.listener is sockets[0]
+    assert guard.listener.getsockname() == ("127.0.0.1", port)
+assert guard.listener.fileno() == -1 and guard.verify()["unknownAttempts"] == 0
+try:
+    socket.getaddrinfo("127.0.0.1", port, type=socket.SOCK_STREAM, flags=socket.AI_PASSIVE)
+except PermissionError:
+    assert guard.blocked == 1
+else:
+    raise AssertionError("unowned same-target resolution admitted")
+'''
+    result = subprocess.run([sys.executable, "-B", "-c", script, SPEC.origin, str(tmp_path / "network.jsonl")],
+                            capture_output=True, text=True, timeout=15, cwd=ROOT)
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 @pytest.mark.parametrize("event", ["socket.getaddrinfo", "socket.gethostbyname",

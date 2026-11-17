@@ -20,6 +20,7 @@ from amplifier_web import task_environments as owner
 from amplifier_web import test_environment_worker as worker
 from amplifier_web.service import AppError, AppService
 from amplifier_web.smart_tools import SmartToolsManager
+from native_cleanup_fixture import checkout_cleanup
 
 pytestmark = pytest.mark.skipif(
     os.environ.get('CHECK_SUITE') != 'fresh-cleanup-native',
@@ -65,11 +66,10 @@ async def test_native_unknown_cleanup_keeps_history_and_preserves_current_files(
     command('docker', 'compose', 'version')
     image = json.loads(docker('image', 'inspect', owner.APPROVED_IMAGE))[0]
     assert image['Os'] == 'linux' and image['Architecture'] == 'amd64'
-    assert command('git', 'rev-parse', 'HEAD') == os.environ['GITHUB_SHA']
-    core = Path('.ci/dtu-core').resolve()
-    assert command('git', '-C', str(core), 'rev-parse', 'HEAD') == owner.DTU_COMMIT
+    # The common driver already checked the selected Git source and installed
+    # module origins. This copied test runs outside that checkout.
     installation_id = hashlib.sha256(owner.DTU_COMMIT.encode()).hexdigest()[:24]
-    interpreter = root / 'app/smart-tools/installs' / installation_id / 'venv/bin/python'
+    interpreter = Path(os.environ['UNIFIED_DTU_PYTHON'])
     package = json.loads(command(str(interpreter), '-I', '-c',
         'import importlib.metadata as m,json; print(json.dumps({"version":m.version("digital-twin-universe"),"source":json.loads(m.distribution("digital-twin-universe").read_text("direct_url.json"))}))'))
     save(output, 'prerequisites.json', {'source': os.environ['GITHUB_SHA'],
@@ -105,6 +105,7 @@ async def test_native_unknown_cleanup_keeps_history_and_preserves_current_files(
     (app.data_dir / 'test-environments.json').chmod(0o600)
     config, availability, reason = owner.configuration(app)
     assert availability == 'ready', reason
+    checkout_cleanup(monkeypatch)
     workspace = next(row for row in app.state['workspaces'] if row['path'] == str(repository))
     scope = {'workspaceId': workspace['id'], 'sessionId': source['id']}
 
@@ -133,20 +134,20 @@ async def test_native_unknown_cleanup_keeps_history_and_preserves_current_files(
         raw = owner.get(app.data_dir, source['id'], row['id'])
         directory = owner.storage.directory(app.data_dir, raw)
         source_before = (directory / 'source.tar').read_bytes()
-        real_popen = subprocess.Popen
+        from amplifier_web import environment_cleanup_execution as execution
+        real_send = execution.send
         terminated = []
 
-        def interrupt_launched_helper(argv, *args, **kwargs):
-            process = real_popen(argv, *args, **kwargs)
-            if any(str(value).endswith('/test_environment_worker.py') for value in argv):
-                # Fault injection only: terminate the actual canonical child.
-                # Observation, local-process proof, exports and teardown remain real.
+        def interrupt_permitted_helper(process, value, **kwargs):
+            real_send(process, value, **kwargs)
+            if 'payload' in value:
+                # The actual loaded child received a permit. Its lost result
+                # is UNKNOWN, unlike a positive pre-permit refusal.
                 os.kill(process.pid, signal.SIGKILL)
                 terminated.append(process.pid)
-            return process
 
         with monkeypatch.context() as injection:
-            injection.setattr(owner.subprocess, 'Popen', interrupt_launched_helper)
+            injection.setattr(execution, 'send', interrupt_permitted_helper)
             interrupted = await act('remove', row, request='interrupted-native-remove')
         save(output, 'interrupted.json', interrupted)
         assert len(terminated) == 1

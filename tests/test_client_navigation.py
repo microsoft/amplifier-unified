@@ -1,5 +1,6 @@
 from copy import deepcopy
 import json
+import uuid
 
 import pytest
 
@@ -57,6 +58,136 @@ async def test_selection_is_local_durable_and_keeps_catalog_projections(app, mon
     duplicate = await select(app, first, command_id='select-first')
     assert duplicate['duplicate']
     assert duplicate['state']['selectedSessionId'] == second
+
+
+async def test_unrelated_hidden_workspace_keeps_selection_private(app, tmp_path, monkeypatch):
+    from amplifier_web.session_files import project_slug
+    from amplifier_web.state_records import load as load_saved_state
+    from amplifier_web.workspace_selection import _registration
+
+    first, second = [next(row['id'] for row in app._state['sessions'] if row['title'] == title)
+                     for title in ('First', 'Second')]
+    path = tmp_path / 'unrelated-hidden'
+    path.mkdir()
+    unrelated = _registration(path)
+    unrelated['nativeProject'] = project_slug(path)
+    app._state['workspaces'].append(unrelated)
+    hidden = [unrelated['id'], uuid.uuid5(uuid.NAMESPACE_URL,
+        'amplifier-project:' + unrelated['nativeProject']).hex]
+    app._state['hiddenNativeWorkspaces'] = hidden.copy()
+    for row in app._state['sessions']:
+        row['messages'].append({'id': 'retained-' + row['id'], 'role': 'assistant', 'text': 'Keep this saved answer'})
+    app._publish_changes(sessions={first, second}, globals={'workspaces', 'hiddenNativeWorkspaces'})
+    with app.clients.bind('one'):
+        app.clients.draft(first, 'Private destination draft')
+        app.clients.draft(second, 'Private source draft')
+        app.browser_state()
+    owners = list(app._state['sessions'])
+    bodies = [(row, {key: row[key] for key in ('messages', 'execution', 'workers') if key in row})
+              for row in owners]
+    histories = deepcopy(owners)
+    other = deepcopy(app.clients.records['two'])
+
+    def forbidden(*args, **kwargs):
+        pytest.fail('An unrelated hidden folder must not require saving or hydrating chat bodies')
+
+    with monkeypatch.context() as patch:
+        patch.setattr(app, '_save', forbidden)
+        patch.setattr(app.cold_display, 'hydrate', forbidden)
+        result = await select(app, first, command_id='select-unrelated-hidden')
+    assert result['state']['selectedSessionId'] == first
+    assert result['state']['view']['draft'] == 'Private destination draft'
+    stored = json.loads(app.db.execute('SELECT value FROM client_views WHERE id=?', ('one',)).fetchone()[0])
+    assert stored['selectedSessionId'] == first
+    assert stored['drafts'][second] == 'Private source draft'
+    assert app.clients.records['two'] == other
+    assert app._state['hiddenNativeWorkspaces'] == hidden
+    assert load_saved_state(app.db)['hiddenNativeWorkspaces'] == hidden
+    assert app._state['sessions'] == histories
+    for row, fields in bodies:
+        assert next(owner for owner in app._state['sessions'] if owner['id'] == row['id']) is row
+        assert all(row[key] is value for key, value in fields.items())
+
+
+@pytest.mark.parametrize('alias', ['registered', 'native-project'])
+async def test_selected_hidden_workspace_still_restores_durably(app, tmp_path, monkeypatch, alias):
+    from amplifier_web import client_navigation
+    from amplifier_web.session_files import project_slug
+    from amplifier_web.state_records import load as load_saved_state
+    from amplifier_web.workspace_selection import _registration
+
+    first = next(row for row in app._state['sessions'] if row['title'] == 'First')
+    workspace = next(row for row in app._state['workspaces'] if row['path'] == first['workspace'])
+    first['workspaceId'] = workspace['id']
+    workspace['nativeProject'] = project_slug(workspace['path'])
+    selected_alias = (workspace['id'] if alias == 'registered' else
+        uuid.uuid5(uuid.NAMESPACE_URL, 'amplifier-project:' + workspace['nativeProject']).hex)
+    path = tmp_path / 'still-hidden'
+    path.mkdir()
+    unrelated = _registration(path)
+    app._state['workspaces'].append(unrelated)
+    app._state['hiddenNativeWorkspaces'] = [selected_alias, unrelated['id']]
+    app._publish_changes(sessions={first['id']}, globals={'workspaces', 'hiddenNativeWorkspaces'})
+
+    def forbidden(*args, **kwargs):
+        pytest.fail('Restoring the selected workspace must use shared persistence')
+
+    with monkeypatch.context() as patch:
+        patch.setattr(client_navigation, 'select', forbidden)
+        result = await select(app, first['id'], command_id='restore-hidden-' + alias)
+    assert result['state']['selectedSessionId'] == first['id']
+    assert app._state['hiddenNativeWorkspaces'] == [unrelated['id']]
+    assert load_saved_state(app.db)['hiddenNativeWorkspaces'] == [unrelated['id']]
+    stored = json.loads(app.db.execute('SELECT value FROM client_views WHERE id=?', ('one',)).fetchone()[0])
+    assert stored['selectedSessionId'] == first['id']
+    assert stored['selectedWorkspaceId'] == workspace['id']
+
+
+@pytest.mark.parametrize('workspace_id', [None, 'stale-registration'])
+async def test_path_fallback_restores_hidden_canonical_registration(app, monkeypatch, workspace_id):
+    from pathlib import Path
+    from amplifier_web import client_navigation, workspace_selection
+    from amplifier_web.state_records import load as load_saved_state
+
+    first = next(row for row in app._state['sessions'] if row['title'] == 'First')
+    path = Path(first['workspace']).resolve()
+    assert path.is_dir()
+    canonical_id = uuid.uuid5(uuid.NAMESPACE_URL, str(path)).hex
+    retained = next(row for row in app._state['workspaces'] if row['path'] == str(path))
+    retained['id'] = 'retained-path-registration'
+    if workspace_id is None:
+        first.pop('workspaceId', None)
+    else:
+        first['workspaceId'] = workspace_id
+    app._state['hiddenNativeWorkspaces'] = []
+    app._publish_changes(sessions={first['id']}, globals={'workspaces', 'hiddenNativeWorkspaces'})
+    assert canonical_id not in {row['id'] for row in app._state['workspaces']}
+
+    def forbidden_resolution(*args, **kwargs):
+        pytest.fail('No hidden folders must keep the existing path-match fast selection')
+
+    with app.clients.bind('one'), monkeypatch.context() as patch:
+        patch.setattr(workspace_selection, 'registration_for_session', forbidden_resolution)
+        assert client_navigation.accepts(app, first)
+
+    app._state['hiddenNativeWorkspaces'] = [canonical_id]
+    app._publish_changes(globals={'hiddenNativeWorkspaces'})
+
+    def forbidden_selection(*args, **kwargs):
+        pytest.fail('The hidden canonical path registration requires shared restoration')
+
+    with monkeypatch.context() as patch:
+        patch.setattr(client_navigation, 'select', forbidden_selection)
+        result = await select(app, first['id'], command_id='restore-path-' + (workspace_id or 'absent'))
+    assert result['state']['selectedSessionId'] == first['id']
+    assert app._state['hiddenNativeWorkspaces'] == []
+    saved = load_saved_state(app.db)
+    assert saved['hiddenNativeWorkspaces'] == []
+    assert {row['id'] for row in saved['workspaces'] if row['path'] == str(path)} == {
+        canonical_id, retained['id']}
+    stored = json.loads(app.db.execute('SELECT value FROM client_views WHERE id=?', ('one',)).fetchone()[0])
+    assert stored['selectedSessionId'] == first['id']
+    assert stored['selectedWorkspaceId'] == canonical_id
 
 
 async def test_selection_failure_restores_client_and_receipt(app, monkeypatch):

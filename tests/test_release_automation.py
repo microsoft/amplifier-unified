@@ -154,6 +154,43 @@ def test_prepare_optional_build_runs_only_the_existing_build_once(preparation, m
     assert release.version_at(root) == '1.2.4'
 
 
+def test_prepare_prunes_shared_history_before_bounds_and_is_idempotent(preparation):
+    root, notes = preparation
+    path = root / 'amplifier_web/release-notes.json'
+    protected = json.loads(path.read_text())['releases'][0]
+    protected['notices'][0]['previousTitles'] = ['Original title']
+    protected['extension'] = {'untouched': True}
+    ordinary = [{'version': f'0.1.{i}', 'title': 'Ordinary', 'changes': ['Fix'], 'notices': []}
+                for i in range(511)]
+    path.write_text(json.dumps({'schemaVersion': 1, 'releases': [protected, *ordinary]}))
+    release.prepare(root, '1.2.4', notes)
+    result = json.loads(path.read_text())['releases']
+    assert result == [json.loads(notes.read_text()), protected, *reversed(ordinary[256:])]
+    assert len(result) == 257  # One new + 255 older ordinary entries, plus the notice.
+    before = {p: ((root/p).read_bytes(), (root/p).stat().st_mtime_ns) for p in
+              ('pyproject.toml', 'amplifier_web/__init__.py', 'uv.lock', 'amplifier_web/release-notes.json')}
+    assert release.prepare(root, '1.2.4', notes)['changedFiles'] == []
+    assert before == {p: ((root/p).read_bytes(), (root/p).stat().st_mtime_ns) for p in before}
+
+
+@pytest.mark.parametrize('pressure', ['count', 'bytes'])
+def test_prepare_unfit_new_entry_fails_before_writing_any_metadata(preparation, pressure):
+    root, notes = preparation
+    module = root / 'amplifier_web/release_notes.py'
+    if pressure == 'count':
+        module.write_text(module.read_text().replace('MAX_RELEASES = 512', 'MAX_RELEASES = 1'))
+    else:
+        module.write_text(module.read_text().replace('MAX_BYTES = 512_000', 'MAX_BYTES = 500'))
+        authored = json.loads(notes.read_text())
+        authored['changes'] = ['é' * 200]
+        notes.write_text(json.dumps(authored))
+    names = ('pyproject.toml', 'amplifier_web/__init__.py', 'uv.lock', 'amplifier_web/release-notes.json')
+    before = {name: (root/name).read_bytes() for name in names}
+    with pytest.raises(ValueError, match='current release'):
+        release.prepare(root, '1.2.4', notes)
+    assert before == {name: (root/name).read_bytes() for name in names}
+
+
 @pytest.mark.parametrize('valid_component', [True, False])
 def test_prepare_verifies_selected_client_instead_of_matching_host_version(
         preparation, monkeypatch, valid_component):
@@ -354,6 +391,42 @@ def test_release_distribution_verification_checks_source_assets_and_references(r
     (repository/'amplifier_web/static/index.html').write_text('<script src="/assets/missing.js"></script>')
     distributions(repository)
     with pytest.raises(ValueError,match='missing asset'):release.verify_dist(repository,dist,'1.2.3')
+
+
+@pytest.mark.parametrize('missing', [None, 'status_protocol/publisher.py', 'other/tests/helper.py'])
+def test_release_requires_selected_status_runtime_but_not_component_author_tests(repository, missing):
+    standalone = 'components/status/tests/test_standalone.py'
+    for name in [standalone, 'amplifier_web/status_protocol/publisher.py', 'amplifier_web/other/tests/helper.py']:
+        path = repository / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('VALUE = "reviewed source"\n')
+    dist = distributions(repository)
+    wheel = next(dist.glob('*.whl'))
+    omitted = set()
+    if missing:
+        omitted.add('amplifier_web/' + missing)
+    with zipfile.ZipFile(wheel) as archive:
+        entries = {name: archive.read(name) for name in archive.namelist() if name not in omitted}
+    with zipfile.ZipFile(wheel, 'w') as archive:
+        for name, data in entries.items():
+            archive.writestr(name, data)
+    # The app source archive retains author inputs; its wheel owns only selected runtime.
+    source = next(dist.glob('*.tar.gz'))
+    with tarfile.open(source) as archive:
+        members = [(item, archive.extractfile(item).read()) for item in archive.getmembers()]
+    with tarfile.open(source, 'w:gz') as archive:
+        for item, raw in members:
+            archive.addfile(item, io.BytesIO(raw))
+        archive.add(repository / standalone, 'amplifier_unified-1.2.3/' + standalone)
+    with tarfile.open(source) as archive:
+        assert archive.extractfile('amplifier_unified-1.2.3/' + standalone).read() == (repository / standalone).read_bytes()
+    if missing:
+        with pytest.raises(ValueError, match='validated source/assets: amplifier_web/' + missing):
+            release.verify_dist(repository, dist, '1.2.3')
+        assert not (dist / 'SHA256SUMS').exists()
+    else:
+        release.verify_dist(repository, dist, '1.2.3')
+        assert len((dist / 'SHA256SUMS').read_text().splitlines()) == 2
 
 
 @pytest.mark.parametrize('kind', ['wheel', 'source'])
@@ -653,14 +726,16 @@ def test_real_sdist_build_excludes_untracked_ci_checkouts(repository):
                  'components/scheduling.source.json', 'components/worktrees.source.json',
                  'components/portability.source.json', 'components/operations.source.json',
                  'components/workspace-metadata.source.json', 'components/kernels.source.json',
-                 'components/outputs.source.json', 'components/publishing.source.json'):
+                 'components/outputs.source.json', 'components/publishing.source.json',
+                 'components/recall.source.json', 'components/status-emitter.source.json'):
         target = repository / name; target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(project / name, target)
-    for component in ('scheduling', 'worktrees', 'portability', 'workspace-metadata', 'outputs', 'publishing'):
+    for component in ('scheduling', 'worktrees', 'portability', 'workspace-metadata', 'outputs', 'publishing', 'recall'):
         shutil.copytree(project / f'components/{component}-delivery',
                         repository / f'components/{component}-delivery')
     shutil.copytree(project / 'amplifier_operations', repository / 'amplifier_operations')
     shutil.copytree(project / 'amplifier_kernels', repository / 'amplifier_kernels')
+    shutil.copytree(project / 'amplifier_web/status_protocol', repository / 'amplifier_web/status_protocol')
     (repository / 'README.md').write_text('Package build fixture')
     for dependency in ('loop-live', 'recipes'):
         checkout = repository / '.ci' / dependency

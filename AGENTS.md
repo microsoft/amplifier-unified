@@ -20,23 +20,21 @@ sacrificing accessibility, authority, meaningful feedback or recovery. Measure t
 whole journey, including entry, repeated setup and keyboard/focus behavior, rather
 than optimizing one control in isolation.
 
-## Web client: temporary two-repository maintenance
+## Web client: public source selection
 
 Author browser source, client tests and client build tools in
 [`amplifier-client-web`](https://github.com/microsoft/amplifier-client-web), the
-sole client authoring owner.
-Until an approved repository-delivery cutover, every client change intended for
-Unified must also reach the committed `components/web-client` delivery copy.
-Follow [component ownership and assembly](components/README.md#refresh-and-retire-the-copy):
-port any copied-tree change upstream first, then refresh the whole selected
-snapshot and `web-client.source.json` together, preserving later accepted changes.
+sole client authoring owner. Unified selects an exact accepted public revision
+and source digest in `components/web-client.source.json`; normal preparation
+fetches that selection into ignored `.build/web-client`.
+Follow [component ownership and assembly](components/README.md#select-public-client-source).
+Do not restore a committed source copy or hand-edit built assets.
 
-A client-only PR merge is not a delivered Unified change. Carry both repositories
-through, or name the integration owner and hand off exact client and Unified
-PRs/revisions with remaining work explicitly pending. Coordinate with that owner;
-do not duplicate ports or build campaigns. Report source acceptance, copy selection,
-build/paired qualification and release separately. Public visibility alone does
-not end this obligation: the approved cutover must retire the copy and this guidance.
+A client-only PR merge is not a delivered Unified change. Carry the selected
+source through paired qualification and Unified release, or name the integration
+owner and hand off exact client and Unified revisions with remaining work pending.
+Coordinate with that owner; do not duplicate ports or build campaigns. Report
+source acceptance, selection, build/paired qualification and release separately.
 
 Neither disposable `.build/web-client` nor generated `amplifier_web/static/` is
 another authoring owner. Unified owns the assembler in `scripts/` and
@@ -91,6 +89,14 @@ the demonstrated cost and the affected history, authority and recovery semantics
 Use measured workload budgets; this does not add a full-suite release gate.
 
 ## Keep the development release loop fast
+
+For native runner checks, use the ordinary manual `python-checks.yml` suite
+`prepared-runtime-native` on an explicit source revision; `candidate_ref` can
+select a separate immutable candidate. A standing scoped task includes dispatch,
+inspection, ordinary repairs and corrected runs after known terminal failures,
+without nomination variables or another approval round. Inspect uncertain
+original operations before new effects; preserve Stop, ownership and cleanup
+receipts. Test workflows are convenience shortcuts, not exclusive execution paths.
 
 Follow the [Fast Release Guide](docs/validation/release-qualification.md):
 **one PR → review while required CI runs → merge → automatic publication and
@@ -237,6 +243,26 @@ store lacks many public roots (seen in Windows Sandbox: the package registry's
 root entered only after a Windows program asked for that site). An outbound request
 that must work there verifies against the system store plus the bundled roots,
 built per request (`update_checks.registry_trust`). Never turn verification off.
+A new installation has no component generation until its first component
+update; update health then verifies setup's record (`update_health.setup_evidence`),
+which is weaker than a qualified generation and never authorizes preparation.
+On every platform a component update waits for the first AI connection
+(`profile_catalog.connection`): the update owner starts no candidate and records
+no attempt, because a profile with no provider cannot qualify. The rule and
+bundle composition share `host.config.provider_dropped`; keep them on one rule.
+It makes a claim only for the app's own profiles. A connection changes the
+checked selection, so the owner checks again before it installs. Update health
+never reclassifies an earlier refusal record as waiting: its form does not
+prove that only a connection was missing. A later completed update settles it.
+The installed-package reader runs Git for a package from a local checkout, so
+a caller without the installation's Git folder on PATH reads "not prepared".
+A reader of a private file can hold an object that another process replaced
+(`publish_private(replace=True)`). Windows then reports 0 links and a path below
+`$Extend\$Deleted` for it. That is `PrivateFileUnlinked` in `windows_files.py`,
+never a hardlink or an alias of the named file, and never accepted:
+`_existing` opens the name again and validates everything again, bounded in
+count and time. A handle that `_existing` returned can lose its name later; do
+not read a later `info()` of it as a refusal of the named file.
 A folder below the installation folder that the app itself uses as a session
 workspace gets a CLI project name that repeats the installation path, so its
 session paths pass the Windows limit with long paths off (the first chat of

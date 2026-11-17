@@ -64,6 +64,11 @@ async def roundtrip(tmp_path, monkeypatch):
     workspace.mkdir()
     app = AppService(root, runtime, workspace=workspace)
     try:
+        # Direct AppService callers use ordinary app folders, not server.py's
+        # private-root setup. Reading absent branding must remain noncreating.
+        initial_branding = app.instance_branding.snapshot()
+        assert app.state['instanceBranding'] == initial_branding
+        assert not app.instance_branding.path.exists()
         await app.dispatch('session.create', {'title': 'Synthetic Windows trial'})
         sid = app._session()['id']
         assert not app.publishing.available and not app.portability.available
@@ -83,6 +88,8 @@ async def roundtrip(tmp_path, monkeypatch):
         await app.close()
     restored = AppService(root, Runtime(), workspace=workspace)
     try:
+        assert restored.instance_branding.snapshot() == initial_branding
+        assert not restored.instance_branding.path.exists()
         session = restored._session(sid)
         assert [row['text'] for row in session['messages']] == texts
         await restored.dispatch('session.rename', {'id': sid, 'title': 'Saved synthetic trial'})

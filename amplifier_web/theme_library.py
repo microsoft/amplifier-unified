@@ -54,8 +54,7 @@ def preset(service, identity):
     if identity not in BUILTINS:
         raise AppError('Appearance not found.', 404)
     css = files('amplifier_web').joinpath('appearances', identity + '.amplifier.css').read_text(encoding='utf-8')
-    from .service import validate_theme
-    validate_theme(css)
+    packages.validate_theme(css)
     return {'id': 'builtin:' + identity, **BUILTINS[identity], 'source': 'built-in', 'base': 'reference-v1',
             'css': css, 'fingerprint': fingerprint(css), 'readOnly': True}
 
@@ -181,8 +180,7 @@ def resolve(service, identity):
     key = (identity, digest)
     if key not in cache:
         if raw is None:
-            from .service import validate_theme
-            validate_theme(css)
+            packages.validate_theme(css)
             row = {'id': identity, **BUILTINS[identity[8:]], 'source': 'built-in',
                    'base': 'reference-v1', 'css': css, 'fingerprint': digest, 'readOnly': True}
         else:

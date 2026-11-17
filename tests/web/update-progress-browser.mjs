@@ -22,6 +22,40 @@ try{
  const errors=[];page.on('pageerror',error=>errors.push(error.message));
  await page.goto(base);await page.waitForSelector('#amp-one');await openSettingsPage(page,'updates');
  const overview=page.locator('[data-part="application-update"]').first(),updates=page.locator('[data-part="updates"]'),advanced=page.locator('[data-part="ecosystem-update-details"]');
+ if(process.env.UNIFIED_UPDATE_HISTORY_ONLY==='1'){
+  const observations=async()=>{const response=await page.request.get(base+'/fixture/update-observations');assert.ok(response.ok());return response.json()};
+  const before=await observations();
+  const cases=[];
+  for(const scenario of ['historical-component','activation-history-only']){
+   const response=await page.request.post(base+'/fixture/update-progress',{data:{stage:scenario}});
+   assert.ok(response.ok(),await response.text());
+   const historical=scenario==='historical-component';
+   await expect(overview.getByRole('heading',{level:4})).toHaveText(historical?
+    'Application updated; earlier component issue needs review':'Application is up to date');
+   await expect(overview.locator('[data-part="confirmed-application-result"]')).toContainText('Application updated successfully');
+   if(historical){
+    await expect(overview.locator('#update-action-status')).toContainText('2026-11-10');
+    await expect(overview.locator('#update-action-status')).toContainText('not a failure of the application update');
+    await expect(overview.locator('[data-part="current-update-failure-context"]')).toContainText('Unresolved component update');
+    await expect(overview.locator('[data-part="current-update-failure-context"]')).toContainText('7'.repeat(32));
+   }else await expect(overview.locator('#update-action-status')).toContainText('No reinstall is requested');
+   const health=await page.evaluate(()=>window.amplifier.getState().updates.currentStatus);
+   assert.equal(health.actionRequired,historical);
+   assert.equal(health.proofLimitation.activationUnknown,true);
+   for(const width of [1280,320]){
+    await page.setViewportSize({width,height:950});
+    await expect.poll(()=>page.locator('.a-dialog').evaluate(el=>el.scrollWidth-el.clientWidth)).toBeLessThanOrEqual(1);
+    await overview.scrollIntoViewIfNeeded();
+    await page.screenshot({path:output+`-${scenario}-${width}.png`});
+   }
+   cases.push({scenario,health});
+  }
+  assert.deepEqual(await observations(),before);
+  assert.deepEqual(before.calls,{check:0,install:0,rollback:0});
+  assert.deepEqual(errors,[]);
+  result.status='passed';result.historyClarity={cases,noUpdateEffects:true,originalPreferencesPreserved:true};
+  result.browserVersion=browser.version();
+ }else{
  await expect(overview).toContainText('Finishing your update');
  await expect(updates.locator('[data-part="update-batch"]')).not.toBeVisible();
  await expect(updates.locator('[data-part="update-support"]')).not.toBeVisible();
@@ -562,5 +596,6 @@ try{
  result.availabilityIndependence.originalApplicationResult=confirmedAppResult;
  result.availabilityIndependence.noUpdateEffects=true;
  assert.deepEqual(errors,[]);result.status='passed';result.checks={progress:true,componentIdentity:true,completedMilestones:true,partialSuccess:true,partialSuccessReload:true,staleAppResultExcluded:true,unconfirmedRestartExcluded:true,savedPreferences:true,unknownIntervalPreserved:true,explicitCheckFailureRetry:true,noInstallEffects:true,noPrematureActivation:true,waitingDistinct:true,activationBusy:true,duplicateInstallDisabled:true,reducedMotion:true,retryAfterFailure:true,completionRestoresControls:true,failureDistinct:true,reload:true,mobileOverflow:false};result.browserErrors=errors;result.browserVersion=browser.version();
-}catch(error){result.status='failed';result.error=String(error);if(page)await page.screenshot({path:output+'-failed.png'});throw error}
+ }
+ }catch(error){result.status='failed';result.error=String(error);if(page)await page.screenshot({path:output+'-failed.png'});throw error}
 finally{try{await browser?.close()}finally{fixture.kill('SIGTERM');await new Promise(resolve=>{if(fixture.exitCode!==null)return resolve();const timer=setTimeout(()=>{fixture.kill('SIGKILL');resolve()},10000);fixture.once('exit',()=>{clearTimeout(timer);resolve()})});result.fixtureLog=log;await writeFile(output+'.json',JSON.stringify(result,null,2));console.log(JSON.stringify(result));}}

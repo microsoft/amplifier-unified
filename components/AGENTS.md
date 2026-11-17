@@ -1,5 +1,15 @@
 # Component ownership
 
+`recall/` authors the independently buildable `amplifier_recall` storage package.
+Its SQLite mechanism tests belong here; Unified retains source access, scope,
+authorization, model execution and memory policy. Unified consumes only the published
+artifact selected into `recall-delivery/` by `recall.source.json`, as the sole
+installed owner. Never edit that generated copy by hand; author changes and
+publication do not refresh the app selection. Preserve existing
+imports and database formats; the database includes durable explicit notes and
+receipts, not only rebuildable search data. Do not coinstall the standalone
+distribution with Unified or create a second writable runtime copy.
+
 `components/workspaces/` is the temporary authoring home for the independently
 buildable `amplifier_workspace_metadata` package. Its registration and query
 mechanism tests belong here; Unified retains initialization, filesystem effects,
@@ -45,12 +55,15 @@ Never edit that generated copy by hand or coinstall the standalone distribution.
 Author edits and publication do not refresh the app selection. Its POSIX mechanism
 tests stay with the package; host authorization, policy and integration stay in Unified.
 
-`components/scheduling/` is temporarily authored here as its independently
-buildable Python project. Preserve its normal `amplifier_scheduling` import.
-Unified consumes only the generated `scheduling-delivery/` snapshot selected by
-`scheduling.source.json`; author edits and publication do not change this default.
-Never edit the delivery copy by hand or coinstall the standalone distribution with
-Unified, which remains the sole installed owner. Follow the author project's README.
+Author Scheduling's policy/store and standalone tests in
+[amplifier-platform-scheduling](https://github.com/bkrabach/amplifier-platform-scheduling).
+Preserve its normal `amplifier_scheduling` import. Unified consumes only the
+generated `scheduling-delivery/` snapshot selected by `scheduling.source.json`;
+author edits and publication do not change this default. Never restore an editable
+author copy here, edit the delivery copy by hand or coinstall the standalone
+distribution with Unified, which remains the sole installed owner. Follow
+[the selection instructions](README.md#select-a-scheduling-artifact); host admission,
+authorization, Stop and execution remain in Unified.
 
 `operations/` is the temporary authoring project for `amplifier_operations`.
 Its SQLite operation observations and bounded delivery/cursor tests belong here;
@@ -68,16 +81,24 @@ Never edit that snapshot by hand or coinstall the standalone distribution with
 Unified. Author edits and publication do not refresh the app selection; the host
 retains process approval, execution, observation and recovery authority.
 
+`status/` authors the independently published local observation package. Preserve
+the public `amplifier_status` import, CLI and optional hook. Unified consumes only
+the published artifact selected into generated `amplifier_web/status_protocol`,
+bound by `status-emitter.source.json`; do not edit that private delivery copy.
+Author changes/publication do not refresh it. Unlike the other embedded packages,
+distinct private/public imports and executable names permit coinstallation. Keep
+host enablement, projection and authority in Unified.
+
 ## Web client delivery
 
-`web-client/` is a verbatim snapshot of the separate client repository selected
-by `web-client.source.json`. Maintain source, client tests and build tools in that
-owning repository, then refresh the whole snapshot and record together. Do not
-make independent fixes inside this copy. Its nested guides describe upstream
-development; this wrapper governs maintenance of the delivery copy.
+`web-client.source.json` selects an exact accepted public revision of
+[microsoft/amplifier-client-web](https://github.com/microsoft/amplifier-client-web).
+Maintain source, client tests and build tools there. Unified prepares the selected
+repository source into ignored `.build/web-client` and assembles its built assets;
+no committed client source copy is maintained here.
 
-Read [README.md](README.md) and the small source record before opting into copied
-contents. Unified assembles the selected client through
-`scripts/web_client_build.py`; ignored `.build/web-client` is disposable prepared
-source. Host/browser/producer checks and their own dependencies live in
-`tests/web`. Neither delivery nor preparation creates another client owner.
+Read [README.md](README.md#select-public-client-source) and the source record for
+selection and handoff. Unified owns `scripts/web_client_build.py` and the
+host/browser/producer checks in `tests/web`. Neither prepared source nor generated
+assets create another client owner. Source acceptance does not change the selected
+client or publish a Unified release automatically.

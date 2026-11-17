@@ -15,6 +15,10 @@ class Runtime:
 
 @pytest.fixture
 async def manager(tmp_path, monkeypatch):
+    from amplifier_web.host.config import amplifier_home, write_private
+    write_private(amplifier_home() / 'settings.yaml', json.dumps({
+        'config': {'providers': [{'module': 'provider-anthropic',
+                                 'config': {'default_model': 'fixture-model'}}]}}))
     service = AppService(tmp_path/'app', Runtime(), workspace=tmp_path)
     manager = UpdateManager(service)
     service.update_manager = manager
@@ -145,7 +149,8 @@ async def test_configuration_only_change_is_an_ordinary_included_update(manager,
         'profiles': ['work'], 'configuration': None if case == 'malformed' else key}))
     from amplifier_web.host.config import amplifier_home, write_private
     write_private(amplifier_home() / 'settings.yaml', json.dumps({
-        'web_bundles': {'excluded': [CONTEXT_INTELLIGENCE_BEHAVIOR_URI]}}) if case != 'same' else '{}')
+        'config': config.settings['config'],
+        **({'web_bundles': {'excluded': [CONTEXT_INTELLIGENCE_BEHAVIOR_URI]}} if case != 'same' else {})}))
     monkeypatch.setattr(runtime_environment, 'locked_sources', lambda *args: {})
     monkeypatch.setattr(runtime_policy_reconciliation, 'pending', lambda *args: None)
     # The existing full inventory/graph is an explicit empty seam here: this
@@ -183,13 +188,14 @@ async def test_waiting_configuration_candidate_rechecks_selection_before_pointer
     target, previous = 'd' * 32, 'e' * 32
     stage = manager.directory / 'releases' / target
     (stage / 'shared-config').mkdir(parents=True)
-    (stage / 'shared-config/settings.yaml').write_text('{}')
+    settings = json.loads((amplifier_home() / 'settings.yaml').read_text())
+    (stage / 'shared-config/settings.yaml').write_text(json.dumps(settings))
     witness = update_sequence.app_selection(home)['witness']
     (stage / 'validated.json').write_text(json.dumps({
         'hostVersion': __version__, 'generationSchema': 1, 'workerProtocol': 1,
         'appSelection': witness}))
     if case != 'same':
-        write_private(amplifier_home() / 'settings.yaml', 'routing: {enabled: true}')
+        write_private(amplifier_home() / 'settings.yaml', json.dumps({**settings, 'routing': {'enabled': True}}))
     pointer = {'current': target if case == 'committed' else previous, 'previous': target}
     write_private(manager.directory / 'active.json', json.dumps(pointer))
     before = (manager.directory / 'active.json').read_bytes()
@@ -211,7 +217,7 @@ async def test_waiting_configuration_candidate_rechecks_selection_before_pointer
                    if row.get('phase') == 'ecosystem-selection-retired']
         assert len(retired) == 1 and retired[0]['status'] == 'succeeded'
         assert not manager.diagnostics.state.get('activeFailures')
-        write_private(amplifier_home() / 'settings.yaml', '{}')
+        write_private(amplifier_home() / 'settings.yaml', json.dumps(settings))
         manager.service.state['settings']['updates'].update(autoCheck=False, autoInstall=False)
         await manager.tick()
         assert promoted == []
@@ -353,6 +359,9 @@ async def test_checked_source_failure_retry_disposition_survives_checks_and_rest
     monkeypatch.setattr(updates, 'process', remote)
     monkeypatch.setattr(updates, 'foundation_home', lambda home: home/'absent')
     monkeypatch.setattr(session_files, 'amplifier_home', lambda: manager.home/'absent-shared')
+    from amplifier_web.host.config import amplifier_home, write_private
+    write_private(manager.home/'absent-shared/settings.yaml',
+                  (amplifier_home()/'settings.yaml').read_text())
     async def build(*args):
         return {'mode': 'worker', 'reason': 'fixture', 'activation': 'per-worker'}
     monkeypatch.setattr(update_plan, 'build', build)
@@ -522,6 +531,8 @@ async def test_qualification_configuration_repair_rechecks_same_sources(manager,
         'config':{'value':'${UNIFIED_MISSING_FIXTURE_VALUE}'}}]}}
     if repair=='bundle-key-file':
         settings={}
+    settings.setdefault('config', {})['providers'] = [
+        {'module': 'provider-anthropic', 'config': {'default_model': 'fixture-model'}}]
     def save():host_config.write_private(shared/'settings.yaml',yaml.safe_dump(settings))
     save()
     row={**source(manager, 'included'),'kind':'runtime dependency','package':'amplifier-foundation'}
@@ -598,7 +609,9 @@ async def test_active_profile_repair_rechecks_same_registered_candidates(manager
     shared=manager.home/'shared';shared.mkdir()
     monkeypatch.setattr(host_config,'amplifier_home',lambda:shared)
     monkeypatch.setattr(session_files,'amplifier_home',lambda:shared)
-    settings={'bundle':{'active':'unsupported','added':{'unsupported':'fixture:unsupported'}}}
+    settings={'bundle':{'active':'unsupported','added':{'unsupported':'fixture:unsupported'}},
+              'config': {'providers': [{'module': 'provider-anthropic',
+                                       'config': {'default_model': 'fixture-model'}}]}}
     def save():host_config.write_private(shared/'settings.yaml',yaml.safe_dump(settings))
     save()
     row={**source(manager, 'included'),'kind':'runtime dependency','package':'amplifier-foundation'}

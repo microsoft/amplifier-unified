@@ -591,6 +591,24 @@ Foreground `serve` announces the listener and schedules browser opening only
 after all configured addresses bind successfully. An occupied port, unavailable
 address or permission refusal gives a specific next step. It does not stop an
 existing process, choose another interface, or change the saved configuration.
+Name-resolution failures give hostname guidance rather than a port-conflict
+diagnosis. A configured name may use its available address family, but success
+for one configured entry never substitutes for another unavailable entry.
+
+The CLI acquires and holds the actual listening sockets before settings migration
+or application construction. A bind failure therefore starts no app controllers
+and creates no new app diagnostic capture. Every held socket is released on a
+failed start; successful startup transfers the same sockets to the HTTP server
+without closing and rebinding. TCP connections may queue during construction:
+a TCP connect alone is **not** readiness. Continue to use the authenticated
+HTTP(S) health checks above. Later application/TLS/filesystem failures keep their
+own identity rather than being reported as bind errors.
+
+Service-manager retry policies are unchanged, including launchd's `KeepAlive`.
+An unavailable VPN address still causes failed starts until it returns or the
+operator deliberately changes the configuration or stops the service. This fix
+does not suppress process retries, rewrite service definitions or repair/delete
+historical failed-start captures.
 
 If the generated definition differs, rerun the same install command with `--replace` to save a timestamped private backup and restart with the new definition. The command reports the backup location. Custom service files are preserved unless `--replace` is explicit; review them before replacing. Expected service setup errors are reported without a Python traceback and do not undo a separately completed package installation.
 

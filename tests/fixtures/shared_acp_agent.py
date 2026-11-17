@@ -71,7 +71,8 @@ class SharedFixture(Fixture):
         if source == 'permission':
             result = await self.client.request_permission(session_id=session_id,
                 tool_call=ToolCallUpdate(tool_call_id='synthetic', title='Synthetic permission'),
-                options=[PermissionOption(option_id='allow-this', name='Allow', kind='allow_once')])
+                options=[PermissionOption(option_id='allow-this', name='Allow once', kind='allow_once'),
+                         PermissionOption(option_id='deny-this', name='Deny', kind='reject_once')])
             self.record('permission', outcome=result.outcome.model_dump(mode='json', by_alias=True, exclude_none=True))
         if source == 'wait-for-stop':
             await self.emit(session_id, self.identity + ' unfinished draft')

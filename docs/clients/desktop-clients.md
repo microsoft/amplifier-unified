@@ -33,7 +33,7 @@ Canonical specifications:
 Mac-specific consumption and exact reviewed revisions belong in its
 [compatibility record](https://github.com/microsoft/amplifier-client-macos/blob/main/docs/compatibility.md).
 Windows should choose the current supported public observation resources after
-reviewing their compatibility; do not copy the temporary `/api/companion` adapter
+reviewing their compatibility; do not restore the retired `/api/companion` adapter
 or treat a future AHP lane as a prerequisite for an independent desktop client.
 No app identifier, platform artwork or release location is a new host permission.
 

@@ -52,6 +52,8 @@ def definitions(schema, string):
 
 
 def requirement(action, args):
+    if action in {'instanceBranding.update', 'instanceBranding.reset'}:
+        return 'host_defaults', 'global'
     if action in {'externalAgents.get', 'externalAgents.save', 'externalAgents.remove'}:
         return 'connections', 'global'
     if action in {'testing.capacity.save', 'testing.machine.save', 'testing.runners.register', 'testing.runners.refresh', 'testing.runners.enable', 'testing.runners.enrollment.cancel', 'testing.runners.enrollment.reconcile', 'testing.runners.machine.save', 'testing.runners.capacity.save', 'testing.execution.save'}:
@@ -774,6 +776,12 @@ class ConfigurationAuthority:
                 self.error('This configuration approval is no longer pending.', 409)
             if args.get('expectedRequestHash') and args['expectedRequestHash'] != self.request_view(session, args['id'])['requestHash']:
                 self.error('The request changed. Review its current scope before deciding.', 409)
+            if args.get('expectedApprovalScope'):
+                from .approval_policy import descriptor
+                card = next(row for row in session['approvals'] if row['id'] == args['id'])
+                current = descriptor(self.service, session, card)
+                if not current or current['key'] != args['expectedApprovalScope']:
+                    self.error('The configuration target changed. Review its current scope before deciding.', 409)
             if (grant['workspace'] != session['workspace'] or grant['interruptionRevision'] != session.get('interruptionRevision', 0)
                     or grant.get('expiresAt', time.time() + 1) <= time.time()):
                 self.error('The configuration request expired or the conversation changed. Request current scope again.', 409)

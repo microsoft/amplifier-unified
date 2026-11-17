@@ -67,7 +67,7 @@ try {
   await row.getByRole('button', {name:'Remove access'}).click();
   await page.waitForURL(origin+'/devices');
   await page.getByText('No connected devices.').waitFor();
-  assert.equal((await fetch(origin+'/api/companion',{headers})).status,401);
+  assert.equal((await fetch(origin+'/api/attention',{headers})).status,401);
   assert.equal((await post('/api/devices/pair/token',{id:request.id,verifier})).status,'revoked');
   console.log('PASS: browser sign-in, code comparison, explicit approval, restricted access, device listing, revocation');
 } finally { try { await context?.close(); await browser?.close(); } finally { await stopFixture(); } }

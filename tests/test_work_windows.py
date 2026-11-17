@@ -46,6 +46,86 @@ def fixture(tmp_path, monkeypatch, count=140):
 
 
 @pytest.mark.asyncio
+async def test_loading_work_window_defers_terminal_workers_without_losing_evidence(tmp_path, monkeypatch):
+    from amplifier_web import browser_detail
+    from amplifier_web.browser_state import SnapshotCopies
+
+    class Report(str):
+        def __deepcopy__(self, memo):
+            raise AssertionError('A deferred terminal report was copied')
+
+    owner, session, _, _ = fixture(tmp_path, monkeypatch, count=1)
+    statuses = ['completed'] * 201 + ['cancelled'] * 5 + ['error'] + ['interrupted'] * 3
+    session['workers'] = [{'id': f'w-{i}', 'callId': f'c-{i % 133}',
+        'kind': 'job' if i < 109 else 'session', 'name': f'Worker {i}', 'status': status,
+        'report': Report('Retained report ' + 'x' * 700),
+        'reportReceipts': [{'id': f'report-{i}', 'text': 'Durable receipt'}]}
+        for i, status in enumerate(statuses)]
+    session.update(status='working', activity={'phase': 'tools', 'label': 'Current work',
+        'activeTools': [{'callId': 'current-tool', 'tool': 'read', 'startedAt': 1}]},
+        runtimeEvents=[{'type': 'runtime.tool', 'phase': 'pre', 'callId': 'current-tool', 'tool': 'read'}])
+    original = json.dumps(session, sort_keys=True)
+    legacy = browser_detail.project(session)
+    owner.projector.gate = asyncio.Event()
+    pending = owner.request('s')
+    try:
+        await asyncio.sleep(0)
+        assert not pending.done()
+        overlay = owner.project(session)
+        assert overlay['workProjection'] == {'status': 'loading', 'current': False}
+        assert all(not overlay['execution'][key] for key in ('nodes', 'turns', 'segments'))
+
+        def unexpected_hash(text):
+            raise AssertionError('A deferred terminal report was hashed')
+
+        with monkeypatch.context() as patch:
+            patch.setattr(browser_detail, 'digest', unexpected_hash)
+            loading = SnapshotCopies().detach(browser_detail.project(session, work_overlay=overlay), 'web')
+        assert loading['workers'] == []
+        assert loading['workerSummary']['bounded'] is True
+        assert loading['workerSummary']['total'] == loading['workerSummary']['finished'] == 210
+        assert len(loading['workerSummary']['recentFinished']) == 5
+        assert loading['workProjection'] == overlay['workProjection']
+        assert loading['executionWindow'] == overlay['executionWindow']
+        assert loading['execution'] == overlay['execution']
+        assert loading['status'] == session['status']
+        assert loading['activity'] == session['activity'] and loading['runtimeEvents'] == session['runtimeEvents']
+        assert len(json.dumps(loading).encode()) < len(json.dumps(legacy).encode()) / 10
+        assert json.dumps(session, sort_keys=True) == original
+
+        explicit = browser_detail.page(session, 'workers')
+        assert explicit['total'] == 210 and len(explicit['items']) == 100
+        reference = explicit['items'][-1]['reportDetail']
+        assert browser_detail.read_text(session, reference)['value'] == session['workers'][-1]['report']
+
+        # Active/unknown observations and the terminal override for the same
+        # call remain available to the existing controls during loading.
+        retained = [{'id': state, 'status': state, 'kind': 'session'}
+                    for state in ('running', 'idle', 'pending', 'new-state')]
+        retained += [{'id': 'late', 'callId': 'mixed', 'kind': 'session', 'status': 'working'},
+                     {'id': 'done', 'callId': 'mixed', 'kind': 'job',
+                      'event': 'job.returned', 'status': 'completed'},
+                     {'status': 'completed', 'name': 'Unidentified observation'}]
+        session['workers'].extend(retained)
+        with monkeypatch.context() as patch:
+            patch.setattr(browser_detail, 'digest', unexpected_hash)
+            current = browser_detail.project(session, work_overlay=overlay)
+        assert current['workers'] == retained
+        assert current['workerSummary']['total'] == 217
+        assert loading['workerSummary']['total'] == 210 and loading['workers'] == []
+
+        owner.projector.gate.set()
+        await pending
+        ready = browser_detail.project(session, work_overlay=owner.project(session))
+        assert ready['workProjection']['status'] == 'ready'
+        assert ready['execution']['turns'] and ready['workerSummary']['bounded']
+        assert ready['workers'] == retained
+        assert json.dumps({**session, 'workers': session['workers'][:210]}, sort_keys=True) == original
+    finally:
+        await owner.close()
+
+
+@pytest.mark.asyncio
 async def test_initial_and_older_windows_never_change_execution_or_history(tmp_path, monkeypatch):
     owner, session, path, _ = fixture(tmp_path, monkeypatch)
     original = json.dumps(session, sort_keys=True)

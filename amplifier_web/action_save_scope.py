@@ -17,6 +17,8 @@ SESSION_ACTIONS = {
     'configuration.operation.reconcile', 'configuration.operation.resume', 'configuration.operation.cancel',
 }
 GLOBAL_ACTIONS = {
+    'instanceBranding.update': {'instanceBranding'},
+    'instanceBranding.reset': {'instanceBranding'},
     'externalAgents.save': set(), 'externalAgents.remove': set(),
     'view.update': set(),
     'session.archive': {'conversationOrganization'},
@@ -24,6 +26,7 @@ GLOBAL_ACTIONS = {
     'session.pinOrder': {'pinnedSessionIds', 'pinnedItemIds', 'pinOrderCustomized'},
     'navigation.pinOrder': {'pinnedSessionIds', 'pinnedWorkspaceIds', 'pinnedItemIds', 'pinOrderCustomized'},
     'attention.read': {'attentionRead'},
+    'presentation.dismiss': set(),
     'settings.update': {'settings', 'workspaceDefaults', 'bundleDefaults'},
     'bundle.default': {'settings', 'bundleDefaults'},
     'theme.save': set(), 'theme.import': set(), 'theme.update': set(), 'theme.delete': set(),

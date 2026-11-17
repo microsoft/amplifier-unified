@@ -748,7 +748,11 @@ class UpdateManager:
                     await self.publish(applicationIntent=intent,
                         **({'pendingApp': {**pending, 'updateIntent': intent}} if pending else {}))
                 if not self.closed and not self.awaiting_restart():
-                    await self.install()
+                    def found():
+                        # After a new check the request installs what that check found.
+                        state = self.service.state['updates']
+                        return state.get('phase') == 'available' and state.get('available', 0)
+                    await self.install_checked(found)
             else:
                 await getattr(self, action)()
         except asyncio.CancelledError: raise
@@ -1061,6 +1065,23 @@ class UpdateManager:
                 await stage(self)
         await activate(self)
 
+    async def install_checked(self, admitted, *, automatic=False):
+        """Install the checked selection. When the settings changed after that check, check once more.
+
+        Only the refusal before anything is prepared arrives here: for example
+        after a first AI connection, for which the update waited. The new
+        check's selection is installed under the caller's own admission. A
+        second refusal is reported as before.
+        """
+        from .update_sequence import StaleAppSelection
+        install = (lambda: self.install(automatic=True)) if automatic else self.install
+        try:
+            await install()
+        except StaleAppSelection:
+            await self.check(fresh=not automatic, automatic=automatic)
+            if admitted():
+                await install()
+
     async def install(self, *, automatic=False):
         if getattr(self, '_manual_handoff_commit_unknown', False):return
         if self.awaiting_restart() or self.lock.locked():return
@@ -1090,7 +1111,9 @@ class UpdateManager:
                     and not availability(row) for row in self.inventory if row.get('updateTier') == 'included'))):
             await self.publish(detail='Resolve the included component issues and check again before installing.')
             return
-        if state.get('sequence'):
+        if state.get('sequence') and state['sequence'].get('install') is not True:
+            # Saved once: an update that waits (for an AI connection, or for
+            # changed inputs) reaches this line again at every minute tick.
             await self.publish(sequence={**state['sequence'], 'install': True})
         if state.get('pendingSmartTools') and not self.independent_tool_results(state):
             await self.activateSmartTools()
@@ -1147,6 +1170,17 @@ class UpdateManager:
                     raise ValueError('The interrupted component preparation must be reconciled before another installation.')
             if not candidates:
                 await self.publish(detail='Check for updates before installing. No eligible updates are available.')
+                return
+            from .update_health import read_connection
+            waiting = await asyncio.to_thread(read_connection, self)
+            changed = getattr(self, '_update_connection', None) != waiting
+            self._update_connection = waiting
+            if waiting.get('needed'):
+                # The selected profile has no provider, so no candidate could
+                # qualify. This is not an attempt: no candidate, no diagnostic
+                # batch and no retry record. A minute tick repeats no publication.
+                if changed:
+                    await self.publish()
                 return
             from .update_sequence import verify_app_selection
             await asyncio.to_thread(verify_app_selection, self, self.inventory)
@@ -1753,16 +1787,20 @@ class UpdateManager:
                              fresh=True, automatic=True)
         elif settings.get('autoCheck',True) and time.time()-max(state.get('lastCheck') or 0,state.get('lastAttempt') or 0)>=settings.get('intervalHours',DEFAULT_CHECK_INTERVAL_HOURS)*3600:
             await self.check(fresh=False, automatic=True)
-        state=self.service.state['updates']
-        managed_preview=state.get('appAvailable') and state.get('application',{}).get('canInstall') is False
-        sequence = state.get('sequence', {})
-        install_intent = (sequence.get('install') if sequence.get('manualHandoff')
-                          else settings.get('autoInstall', True) or sequence.get('install'))
-        if not managed_preview and install_intent and state.get('available',0) and state.get('phase') == 'available':
+        def admitted():
+            state=self.service.state['updates']
+            settings=self.service.state['settings'].get('updates',{})
+            managed_preview=state.get('appAvailable') and state.get('application',{}).get('canInstall') is False
+            sequence = state.get('sequence', {})
+            install_intent = (sequence.get('install') if sequence.get('manualHandoff')
+                              else settings.get('autoInstall', True) or sequence.get('install'))
+            return not managed_preview and install_intent and state.get('available',0) and state.get('phase') == 'available'
+        if admitted():
             # A newly checked desired graph still goes through install's input
             # admission. Elapsed time never replays a settled failed preparation.
-            await self.install(automatic=True)
+            await self.install_checked(admitted, automatic=True)
             return
+        state=self.service.state['updates']
         if self.independent_tool_results(state) and (state.get('phase') not in {'error', 'interrupted'} or any(
                 row.get('runnerUpdate') and not row.get('failure') for row in state['pendingSmartTools'])):
             await self.activateSmartTools()

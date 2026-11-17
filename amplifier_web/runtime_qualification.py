@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.metadata
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import inspect
 import json
@@ -120,46 +121,64 @@ def _cache_subdirectory(path, root):
     return path.relative_to(root).as_posix()
 
 
+def _installed_root(root, git_env):
+    """Read one fresh checkout witness with the existing local Git policy."""
+    data = json.loads((root / '.amplifier_cache_meta.json').read_text())
+    checkout_env = _installed_checkout_environment(root, git_env)
+    revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, env=checkout_env, text=True,
+        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)).strip()
+    dirty = subprocess.check_output(['git', '--no-optional-locks', 'status', '--porcelain', '--untracked-files=no'], cwd=root, env=checkout_env, text=True,
+        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)).strip()
+    if dirty and checkout_env is not git_env:
+        dirty = _installed_checkout_dirty(root, checkout_env)
+    tracked = subprocess.check_output(['git', 'ls-files', '-z'], cwd=root, env=checkout_env,
+        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)).split(b'\0')
+    tree = hashlib.sha256()
+    for raw in sorted(item for item in tracked if item):
+        file = root / raw.decode()
+        tree.update(raw + b'\0')
+        tree.update(file.read_bytes() if file.is_file() and not file.is_symlink() else b'<non-regular>')
+    return {'url': data['git_url'], 'ref': data.get('ref') or 'HEAD',
+            'revision': revision, 'dirty': bool(dirty), 'trackedContentSha256': tree.hexdigest()}
+
+
 def installed_graph(project):
     """Read complete PEP 610 provenance, including Foundation's editable caches."""
     paths = list((Path(project) / '.venv').glob('lib/python*/site-packages'))
     paths += [Path(project) / '.venv/Lib/site-packages']
-    rows = []
+    rows, links = [], []
     roots = {}  # One fresh evidence snapshot per real checkout, per call.
     git_env = _installed_git_environment()
-    for dist in importlib.metadata.distributions(path=[str(path) for path in paths if path.is_dir()]):
-        row = {'name': environments.package_name(dist.metadata['Name']), 'version': dist.version}
-        direct = json.loads(dist.read_text('direct_url.json') or '{}')
-        if direct:
-            row['directUrl'] = direct
-            parsed = urlsplit(direct.get('url', ''))
-            if parsed.scheme == 'file' and direct.get('dir_info') is not None:
-                path = _file_url_path(parsed).resolve()
-                row['path'] = str(path)
-                for parent in (path, *path.parents):
-                    meta = parent / '.amplifier_cache_meta.json'
-                    if meta.is_file() and (parent / '.git').exists():
-                        if parent not in roots:
-                            data = json.loads(meta.read_text())
-                            checkout_env = _installed_checkout_environment(parent, git_env)
-                            revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=parent, env=checkout_env, text=True,
-                                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)).strip()
-                            dirty = subprocess.check_output(['git', '--no-optional-locks', 'status', '--porcelain', '--untracked-files=no'], cwd=parent, env=checkout_env, text=True,
-                                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)).strip()
-                            if dirty and checkout_env is not git_env:
-                                dirty = _installed_checkout_dirty(parent, checkout_env)
-                            tracked = subprocess.check_output(['git', 'ls-files', '-z'], cwd=parent, env=checkout_env,
-                                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)).split(b'\0')
-                            tree = hashlib.sha256()
-                            for raw in sorted(item for item in tracked if item):
-                                file = parent / raw.decode()
-                                tree.update(raw + b'\0')
-                                tree.update(file.read_bytes() if file.is_file() and not file.is_symlink() else b'<non-regular>')
-                            roots[parent] = {'url': data['git_url'], 'ref': data.get('ref') or 'HEAD',
-                                             'revision': revision, 'dirty': bool(dirty), 'trackedContentSha256': tree.hexdigest()}
-                        row['cacheSource'] = {**roots[parent], 'subdirectory': _cache_subdirectory(path, parent)}
-                        break
-        rows.append(row)
+    readers = ThreadPoolExecutor(max_workers=2)
+    try:
+        try:
+            for dist in importlib.metadata.distributions(path=[str(path) for path in paths if path.is_dir()]):
+                row = {'name': environments.package_name(dist.metadata['Name']), 'version': dist.version}
+                direct = json.loads(dist.read_text('direct_url.json') or '{}')
+                if direct:
+                    row['directUrl'] = direct
+                    parsed = urlsplit(direct.get('url', ''))
+                    if parsed.scheme == 'file' and direct.get('dir_info') is not None:
+                        path = _file_url_path(parsed).resolve()
+                        row['path'] = str(path)
+                        for parent in (path, *path.parents):
+                            meta = parent / '.amplifier_cache_meta.json'
+                            if meta.is_file() and (parent / '.git').exists():
+                                if parent not in roots:
+                                    roots[parent] = readers.submit(_installed_root, parent, git_env)
+                                links.append((row, parent, path))
+                                break
+                rows.append(row)
+        except Exception:
+            # Earlier checkout errors retain precedence over later metadata errors.
+            for future in roots.values():
+                future.result()
+            raise
+        for row, root, path in links:
+            row['cacheSource'] = {**roots[root].result(), 'subdirectory': _cache_subdirectory(path, root)}
+    finally:
+        # Never leave started reads running after this synchronous call exits.
+        readers.shutdown(wait=True, cancel_futures=True)
     names = [row['name'] for row in rows]
     if len(names) != len(set(names)):
         raise ValueError('The worker contains ambiguous duplicate installed distributions.')
@@ -442,12 +461,14 @@ async def freeze(manager, generation, project, *, baseline_manifest=None):
         policies[name] = policy
     from .runtime_source_policy import qualify_cache_policies
     policies = await qualify_cache_policies(policies, checked, process)
+    baseline_manifest = environments.declared_manifest() if baseline_manifest is None else baseline_manifest
+    from .runtime_source_policy import qualify_app_policies
+    policies = await qualify_app_policies(policies, checked, project, baseline_manifest, process)
     if not graph:
         raise ValueError('The prepared worker has no installed distribution evidence.')
     # Qualification reproduces the prepared policy, not newer app declarations.
     # A lazy profile can start from an older generation after an app update.
     content = frozen_manifest((Path(project) / 'pyproject.toml').read_bytes(), graph)
-    baseline_manifest = environments.declared_manifest() if baseline_manifest is None else baseline_manifest
     # Share only a fully qualified immutable graph with the same Python/OS
     # contract. Active environments are never uv-synced or repaired in place.
     # Generation receipts retain separate ref policy and rollback identity.
@@ -526,11 +547,18 @@ async def freeze(manager, generation, project, *, baseline_manifest=None):
     return final
 
 
-def verify_recorded(project, receipt, *, allow_additions=False):
-    evidence = Path(receipt) / 'runtime-installed.json'
-    if not evidence.exists():
-        return
-    expected = json.loads(evidence.read_text())
+def verify_recorded(project, receipt, *, allow_additions=False, expected=None):
+    """Compare the installed packages with a recorded list.
+
+    A caller that has read and validated the record passes it as `expected`.
+    The comparison then uses exactly that list: a record that disappears after
+    the caller's read cannot turn the comparison into a silent pass.
+    """
+    if expected is None:
+        evidence = Path(receipt) / 'runtime-installed.json'
+        if not evidence.exists():
+            return
+        expected = json.loads(evidence.read_text())
     actual = installed_graph(project)
     if allow_additions:
         names = {row['name'] for row in expected}
@@ -540,7 +568,7 @@ def verify_recorded(project, receipt, *, allow_additions=False):
         raise ValueError('The worker graph changed after qualification; its recorded generation was preserved.')
 
 
-def active_install_overrides(home, current_override=None):
+def active_install_overrides(home, current_override=None, *, on_verified=None):
     """Use a recorded generation's ordinary installer policy, never refresh.
 
     An explicit user override remains authoritative. Legacy generations have no
@@ -559,5 +587,8 @@ def active_install_overrides(home, current_override=None):
     if (project / 'uv.lock').read_bytes() != (receipt / 'runtime.lock').read_bytes():
         raise ValueError('The recorded worker installation policy changed; its generation was preserved.')
     verify_install_overrides(project, target)
-    verify_recorded(project, receipt, allow_additions=True)
+    expected = json.loads((receipt / 'runtime-installed.json').read_text())
+    verify_recorded(project, receipt, allow_additions=True, expected=expected)
+    if on_verified is not None:
+        on_verified(project, receipt, expected)
     return target

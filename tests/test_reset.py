@@ -655,6 +655,51 @@ def test_cli_reset_accepts_large_saved_plans_without_a_reset_size_limit(
     assert not saved.module.exists()
 
 
+def test_windows_reset_reader_reads_a_validated_file_that_is_replaced_afterwards(tmp_path, monkeypatch):
+    """A replacement after the validation leaves the reader the complete earlier file."""
+    from contextlib import contextmanager
+    from amplifier_web import recovery, windows_files
+    home = tmp_path / "app"
+    path = home / "sessions/chat/configuration.json"
+    content = b'{"instruction": "complete earlier file"}'
+    queries = []
+
+    class API:
+        def info(self, handle, target, *, directory):
+            queries.append(handle)
+            if queries.count("file") > 1:
+                # Windows' answer for an object that lost its name.
+                raise windows_files.PrivateFileUnlinked("replaced after validation")
+            return SimpleNamespace(volume=1, index_high=0, index_low=2,
+                                   size_high=0, size_low=len(content))
+
+        def open(self, target):
+            return "file"
+
+        def validate_acl(self, handle, *, private):
+            pass
+
+        def read(self, handle, *, limit):
+            assert limit == len(content)
+            return content
+
+        def close(self, handle):
+            queries.append("close")
+
+    pinned = object.__new__(windows_files.PinnedDirectory)
+    pinned.path, pinned._api = path.parent, API()
+    pinned._pins = [(path.parent, "parent", (1, 0, 2), True)]
+
+    @contextmanager
+    def directory(parent, *, owned_root):
+        yield pinned
+
+    monkeypatch.setattr(windows_files, "directory", directory)
+    monkeypatch.setattr(recovery, "os", SimpleNamespace(name="nt"))
+    assert recovery._read_reset_configuration(path, home) == content
+    assert queries == ["parent", "file", "close"]
+
+
 @pytest.mark.parametrize("deny_file_acl", [False, True])
 def test_windows_reset_reader_uses_file_size_and_retains_private_handle_checks(
         tmp_path, monkeypatch, deny_file_acl):

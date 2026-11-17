@@ -6,7 +6,6 @@ on:
     paths:
       - 'components/web-client.source.json'
       - 'scripts/web_client_*.py'
-      - 'components/web-client/commands.json'
       - 'amplifier_web/browser_*.py'
       - 'amplifier_web/attention.py'
       - 'amplifier_web/directory_attention.py'
@@ -18,7 +17,6 @@ on:
       - 'amplifier_web/task_continuity.py'
       - 'amplifier_web/server_websocket.py'
       - 'amplifier_web/service.py'
-      - 'components/web-client/src/main.jsx'
       - 'tests/web/package.json'
       - 'tests/web/package-lock.json'
       - 'pyproject.toml'
@@ -31,10 +29,7 @@ on:
       - 'tests/fixtures/empty_host_ui_server.py'
       - 'tests/fixtures/configured_browser.py'
       - 'tests/web/browser-chat-pages.mjs'
-      - 'components/web-client/src/state-*.js'
-      - 'components/web-client/src/view-reporter.js'
       - 'tests/web/client-traffic-browser.mjs'
-      - 'components/web-client/tests/state-revision-presentation.test.mjs'
       - 'tests/fixtures/client_traffic_server.py'
       - '.github/workflows/client-performance.yml'
   workflow_dispatch:

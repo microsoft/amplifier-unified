@@ -881,7 +881,7 @@ class Management:
             model = row['info']['defaults']['model']
             result = {'provider': identity, 'models': [model] if model else [], 'supported': False}
         async with self.service.lock:
-            current = self.service._session(session['id'])
+            current = self.service._session(session['id'], hydrate=False)
             if current.get('status') != 'error' or catalog(self.service.data_dir, current) != recovery:
                 return True
             controls = self.service.state.setdefault('runtimeControl', {}).setdefault(session['id'], {})

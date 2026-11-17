@@ -18,7 +18,7 @@ from .live_clients import client_context
 from .setup_page import detect_platform, render_setup_page
 from .tls import ca_bytes
 from .request_timing import request_timing
-from .static_files import BundledFileResponse, BundledStaticResource
+from .static_files import BundledStaticResource
 from . import browser_entry
 
 
@@ -44,11 +44,11 @@ def _set_response_headers(response: web.StreamResponse, request: web.Request) ->
     # document. Keep the login form same-origin without leaking referrers to
     # other sites; do not weaken the Origin check to accept opaque origins.
     response.headers["Referrer-Policy"] = "same-origin" if path in {"/login", "/devices", "/devices/pair"} or path.startswith('/connect') else "no-referrer"
-    response.headers["Cache-Control"] = "no-store" if path.startswith(("/api/", "/share/", "/devices", "/connect")) or path in {"/login", "/oauth/mcp/callback", "/oauth/mcp/complete"} else "no-cache"
+    response.headers["Cache-Control"] = "no-store" if path.startswith(("/api/", "/share/", "/devices", "/connect", "/instance-icon/")) or path in {"/login", "/manifest.webmanifest", "/oauth/mcp/callback", "/oauth/mcp/complete"} else "no-cache"
     response.headers.setdefault("Content-Security-Policy", f"default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; frame-src 'self' http: https:; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' {sockets} https://api.openai.com wss://api.openai.com; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'")
     if path == "/login" and browser_entry.is_windows():
         response.headers["Content-Security-Policy"] = (
-            "default-src 'none'; script-src 'self'; style-src 'self'; "
+            "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; manifest-src 'self'; "
             "form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
         )
     from .device_connections import response_headers
@@ -111,7 +111,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     from .auth import Sessions
     app["sessions"] = Sessions.load(data_dir)
     app["control_token"] = control_token(data_dir)
-    service = AppService(data_dir, runtime=runtime, workspace=workspace)
+    service = AppService(data_dir, runtime=runtime, workspace=workspace, server_config=config)
     service.port = config["port"]
     service.server_config = config
     from .profiling_host import ProfilingHost
@@ -750,8 +750,6 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     setup_clients(app, streams)
     from .client_observations import setup_routes as setup_observations
     setup_observations(app)
-    from .companion import setup_routes as setup_companion
-    setup_companion(app)
 
     async def shell_state(request):
         from .shell_modules import IDENTITY
@@ -834,14 +832,35 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         service.voice_service = setup_routes(app)
 
     static = Path(__file__).parent / "static"
+    manifest_path = static / 'manifest.webmanifest'
+    manifest_template = json.loads(manifest_path.read_text(encoding='utf-8')) if manifest_path.exists() else None
+
+    async def instance_manifest(request):
+        if manifest_template is None:
+            raise AppError("Frontend assets are missing. Build frontend before packaging.", 503)
+        return web.json_response(service.instance_branding.manifest(manifest_template),
+                                 content_type='application/manifest+json')
+
+    async def instance_icon(request):
+        from .instance_branding import SIZES
+        size = int(request.match_info['size'])
+        if size not in SIZES:
+            raise web.HTTPNotFound()
+        content = await asyncio.to_thread(service.instance_branding.icon, size)
+        return web.Response(body=content, content_type='image/png')
+
+    app.router.add_get('/manifest.webmanifest', instance_manifest)
+    app.router.add_get('/instance-icon/{size:32|180|192|512}.png', instance_icon)
 
     async def index(request):
         file = static / "index.html"
         if not file.exists():
             raise AppError("Frontend assets are missing. Build frontend before packaging.", 503)
-        return BundledFileResponse(file)
+        return web.Response(text=service.instance_branding.document(file.read_text(encoding='utf-8')),
+                            content_type='text/html')
 
     app.router.add_get("/", index)
+    app.router.add_get("/index.html", index)
     if static.exists():
         app.router.register_resource(BundledStaticResource("", static, show_index=False))
 

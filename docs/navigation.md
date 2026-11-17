@@ -88,8 +88,8 @@ that retention lasts only while this page stays open.
 
 Focused checks (run against the candidate in an owned isolated environment):
 `tests/test_auth.py`, `tests/test_history_scope.py`,
-`components/web-client/tests/destination-history.test.mjs`,
-`components/web-client/tests/destination-history-ui.test.mjs`, and
+[tests/destination-history.test.mjs](https://github.com/microsoft/amplifier-client-web/blob/main/tests/destination-history.test.mjs),
+[tests/destination-history-ui.test.mjs](https://github.com/microsoft/amplifier-client-web/blob/main/tests/destination-history-ui.test.mjs), and
 `tests/web/destination-history-browser.mjs`. The browser script requires an
 owned `AMPLIFIER_TEST_OUTPUT` directory and rebuilt production assets. These
 instructions are not evidence that the checks have passed.

@@ -316,8 +316,8 @@ class ShellResources:
         if registration is None or registration['scope'] != scope_for(state):
             return None
         client, composition, instances, bootstrap = self._prepare(identity, registration['recovery'])
-        return self._prepared_snapshot(identity, state=state, client=client,
-            composition=composition, instances=instances, bootstrap=bootstrap)
+        return self.shell.service.directory.read_frame(self._prepared_snapshot, identity,
+            state=state, client=client, composition=composition, instances=instances, bootstrap=bootstrap)
 
     def _prepared_snapshot(self, identity, *, state, client, composition, instances, bootstrap):
         registration = self.clients[identity]

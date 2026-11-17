@@ -21,11 +21,12 @@ def test_serve_refuses_existing_publishing_owner_without_traceback_or_takeover(t
     home = tmp_path / 'app with spaces'
     workspace = tmp_path / 'workspace'
     workspace.mkdir()
-    # Reserve an unused address throughout the refusal. The second process must
-    # fail at publishing ownership before trying to bind any HTTP listener.
+    # Select an unused address, then let the CLI reserve its real listener before
+    # constructing the app. The separate publishing owner must still be refused.
     with socket.socket() as reserved:
         reserved.bind(('127.0.0.1', 0))
         port = reserved.getsockname()[1]
+        reserved.close()
         config = load_server_config(home)
         save_server_config(home, {**config, 'port': port})
         env = {**os.environ, 'AMPLIFIER_WEB_HOME': str(home),

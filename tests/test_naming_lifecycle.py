@@ -164,7 +164,7 @@ async def test_worker_rejects_uncontrolled_naming_before_execute(tmp_path, monke
         assert tool_invocation == worker.tool_invocation
         return controls
     monkeypatch.setattr('amplifier_web.runtime_controls.RuntimeControls', make_controls)
-    monkeypatch.setattr('amplifier_web.runtime_qualification.active_install_overrides', lambda *args: None)
+    monkeypatch.setattr('amplifier_web.runtime_qualification.active_install_overrides', lambda *args, **kwargs: None)
     monkeypatch.setattr('amplifier_web.history_revision.recover_pending', lambda *args: None)
     monkeypatch.setattr('amplifier_web.app_guidance.install_app_access', AsyncMock())
     monkeypatch.setitem(sys.modules, 'amplifier_module_loop_live.runtime',

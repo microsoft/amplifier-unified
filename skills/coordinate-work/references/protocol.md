@@ -225,6 +225,13 @@ compare those exact links, not equal message text.
    exact request you sent without that option, within current authority.
    Exact command retries never add or rearm a return; changed arguments with the
    same command ID conflict. Old requests are not upgraded automatically.
+   `coordination.unsubscribe` deliberately withdraws your saved wait even when its
+   outcome is unknown or cancellation was requested. This is not execution
+   cancellation, result acceptance or task resume. Its receipt lists bounded
+   suppressed and already in-flight returns with overflow counts; already
+   submitting, admitted or unknown input may still arrive. Withdrawal survives
+   restart, cancellation, review and exact subscribe/send retries. Inspect past
+   effects; independently choose fresh safe work within standing authority.
    Read `returnState` for separate subscription, report, terminal qualification,
    notification and acknowledgement facts. A claimed subscription or an admitted
    notification does not prove the requester consumed or accepted the result.
@@ -292,8 +299,13 @@ Acknowledgement, failure, defer or unrelated input cannot satisfy a successful
 dependency. Background jobs do not replace exact root terminal evidence, and an
 unrelated still-running job does not erase an otherwise proven manager result.
 A later current generation of the same recipient may explicitly correlate a new
-report with expectedResponseRevision from coordination.result, while the original
-task, workspace and Stop boundary remains valid. A question/deferral does not
+report with expectedResponseRevision from coordination.result after confirmed
+prior admission. Original participant/location identity and current authenticated
+root/generation/Stop govern reporting; a separately authorized new task or fresh
+generation after Stop need not reactivate the old execution. Historical UNKNOWN
+is not confirmed admission. Reporting never restores execution or automatic-return
+rights, whose saved requester task/Stop and withdrawal guards still apply.
+A question/deferral does not
 close the request. Earlier revisions remain readable; a pending staged report
 must settle before another declaration. There is no lifetime declaration count
 limit; result views show the latest 32 declarations and older command receipts

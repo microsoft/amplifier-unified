@@ -33,12 +33,14 @@ FACTS = {
     'terminal_status': '$.terminalOutcome.status', 'terminal_outcome': '$.terminalOutcome.outcome',
     'terminal_revision': '$.terminalOutcome.outcomeRevision',
     'cancellation_status': '$.cancellation.status',
+    'wait_withdrawal': '$.subscription.withdrawal.operationId',
 }
 COLUMNS = ('id', 'sender', 'task_id', 'interruption', 'epoch', 'generation',
            'input_id', 'target', 'title', *FACTS)
 OPEN_WAIT = """wait_open=1 AND wait_status IN ('waiting','backpressured')
  AND response_status IS NULL AND terminal_status IS NULL
  AND cancellation_status IS NULL
+ AND wait_withdrawal IS NULL
  AND delivery IN ('queued','accepted','pending_steer','started','applied')"""
 
 
@@ -46,7 +48,8 @@ def initialize(db):
     if not db.execute("SELECT 1 FROM sqlite_master WHERE name='commands'").fetchone():
         return
     if db.execute("SELECT 1 FROM sqlite_master WHERE name='navigation_dependency_requests'").fetchone():
-        return
+        if 'wait_withdrawal' in {row[1] for row in db.execute('PRAGMA table_info(navigation_dependency_requests)')}:
+            return
     db.execute('SAVEPOINT navigation_wait_init')
     try:
         _initialize(db)
@@ -63,11 +66,12 @@ def _initialize(db):
     for name in ('insert', 'update', 'delete'):
         db.execute(f'DROP TRIGGER IF EXISTS navigation_wait_{name}')
     db.execute('DROP TABLE IF EXISTS navigation_pending_requests')
+    db.execute('DROP TABLE IF EXISTS navigation_dependency_requests')
     db.execute(f'''CREATE TABLE navigation_dependency_requests(
         id TEXT PRIMARY KEY,sender TEXT,task_id TEXT,interruption INTEGER,epoch INTEGER,
         generation TEXT,input_id TEXT,target TEXT,title TEXT,
         {','.join(FACTS)})''')
-    db.execute('CREATE INDEX navigation_dependency_scope ON navigation_dependency_requests(sender,task_id,interruption,epoch,generation,input_id)')
+    db.execute('CREATE INDEX navigation_dependency_scope ON navigation_dependency_requests(sender,task_id,interruption,epoch,generation,input_id) WHERE wait_withdrawal IS NULL')
     db.execute(f'CREATE INDEX navigation_dependency_target ON navigation_dependency_requests(target,sender) WHERE {OPEN_WAIT}')
     values = f'{KEYS},{TARGET},{TITLE},' + ','.join(
         f"json_extract(receipt,'{path}')" for path in FACTS.values())
@@ -170,7 +174,7 @@ def refresh_directory(db):
     """
     import json
     db.execute('CREATE TABLE IF NOT EXISTS navigation_fact_versions(version INTEGER PRIMARY KEY)')
-    if db.execute('SELECT 1 FROM navigation_fact_versions WHERE version=2').fetchone():
+    if db.execute('SELECT 1 FROM navigation_fact_versions WHERE version=3').fetchone():
         return
     db.execute('SAVEPOINT navigation_fact_refresh')
     try:
@@ -183,7 +187,8 @@ def refresh_directory(db):
                 json_extract(summary,'$.interruptionRevision'),
                 base_activity_kind,base_activity_label
                 FROM history_local_rows WHERE id>? AND
-                base_activity_label IN ('Work blocked','Waiting for another chat')
+                (base_activity_label IN ('Work blocked','Waiting for another chat')
+                 OR json_type(summary,'$._navigationWaiting')='object')
                 ORDER BY id LIMIT 128""", (after,)).fetchall()
             if not rows:
                 break
@@ -206,7 +211,7 @@ def refresh_directory(db):
             db.execute('UPDATE history_directory_layout SET revision=revision+1 WHERE version=1')
             db.execute("""UPDATE history_observation_revisions SET revision=revision+1
                 WHERE collection IN ('navigation','root_navigation','workspace')""")
-        db.execute('INSERT INTO navigation_fact_versions VALUES(2)')
+        db.execute('INSERT INTO navigation_fact_versions VALUES(3)')
         db.execute('RELEASE navigation_fact_refresh')
     except BaseException:
         db.execute('ROLLBACK TO navigation_fact_refresh')
@@ -226,6 +231,8 @@ def operation_refs(task):
 
 def disposition(row):
     """Fixed labels over saved scalar facts; no report/reason text inference."""
+    if row['wait_withdrawal']:
+        return None  # The manager no longer awaits it; historical effects remain.
     delivery = row['delivery']
     if delivery == 'unknown':
         return 'unknown', 'Dependency outcome unknown', 'attention'
@@ -300,6 +307,7 @@ def project(db, session, task):
         refs = [ref for ref in refs if isinstance(ref, str) and 0 < len(ref) <= 200]
         rows.extend(db.execute(f"""SELECT {','.join(COLUMNS)} FROM navigation_dependency_requests
             WHERE id IN ({','.join('?' for _ in refs)}) AND sender=? AND task_id=?
+            AND wait_withdrawal IS NULL
             AND interruption=? AND epoch IN ({','.join('?' for _ in epochs)})
             LIMIT ?""", (*refs, session['id'], task['id'],
                          session.get('interruptionRevision', 0), *epochs, LIMIT + 1)).fetchall())
@@ -311,6 +319,7 @@ def project(db, session, task):
         excluded = [row[0] for row in rows]
         rows.extend(db.execute(f"""SELECT {','.join(COLUMNS)} FROM navigation_dependency_requests
             WHERE sender=? AND task_id=? AND interruption=?
+            AND wait_withdrawal IS NULL
             AND epoch=? AND generation=? AND input_id=?
             AND id NOT IN ({','.join('?' for _ in excluded)})
             LIMIT ?""", (session['id'], task['id'], session.get('interruptionRevision', 0),

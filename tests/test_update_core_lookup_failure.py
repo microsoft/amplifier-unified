@@ -4,6 +4,7 @@ The real update manager, application check and current-status projection run.
 Only external answers are injected: release metadata, the release tag lookup,
 the host's installed-component list and the registry request for Core.
 """
+from contextlib import asynccontextmanager
 import json
 import ssl
 from types import SimpleNamespace
@@ -45,10 +46,17 @@ def page_status(state):
 @pytest.fixture
 async def current_install(worker, monkeypatch):  # noqa: F811 -- pytest fixture reuse
     """An install on the newest release whose worker uses the app-managed Core wheel."""
-    service = AppService(worker.home, Runtime(), workspace=worker.home.parent)
+    async with checked_install(worker.home, core(worker), monkeypatch) as install:
+        yield install
+
+
+@asynccontextmanager
+async def checked_install(home, row, monkeypatch):
+    """The real service and update manager for `home`; only external answers are injected."""
+    service = AppService(home, Runtime(), workspace=home.parent)
     manager = UpdateManager(service)
     service.update_manager = manager
-    row = core(worker)
+    row = dict(row)
     row['updateTier'] = 'included'
     # The real inventory stamps every row with the checked app selection.
     from amplifier_web.update_sequence import app_selection
@@ -179,6 +187,29 @@ async def test_a_failed_core_lookup_blocks_an_available_sibling_update(current_i
     assert release_directories(c.manager) == before and not c.state.get('pendingRelease')
     assert c.state['detail'] == 'Resolve the included component issues and check again before installing.'
     assert statuses()['runtime:amplifier-core'] == 'check_failed'
+
+
+class ForeignError(ValueError):
+    """Not a registry lookup failure, although it carries a `reason` of the closed set."""
+    reason = 'certificate'
+
+
+async def test_a_foreign_error_with_a_reason_attribute_gets_no_lookup_guidance(current_install, monkeypatch):
+    c = current_install
+    monkeypatch.setattr(registry, 'check', AsyncMock(side_effect=ForeignError(SECRET)))             # The row.
+    monkeypatch.setattr(app_component_graph, 'updates', AsyncMock(side_effect=ForeignError(SECRET)))  # The app release.
+    await c.manager.check()
+    application = c.state['application']
+    assert application['status'] == 'check_failed'
+    assert (application['checkStage'], application['checkReason']) == ('components', 'invalid_response')
+    assert application['detail'] == ('The published application release was verified, but its component check failed. '
+                                     'Review source details, then check for updates again. '
+                                     'No update was installed by this check.')
+    checked = c.manager.inventory[0]
+    assert checked['status'] == 'check_failed' and 'checkReason' not in checked and 'detail' not in checked
+    assert page_status(c.state)['detail'] == (
+        'The installed source is preserved. Review its source details before updating.')
+    assert SECRET not in json.dumps(c.state)
 
 
 async def test_a_core_release_that_cannot_be_verified_keeps_the_generic_report(current_install):

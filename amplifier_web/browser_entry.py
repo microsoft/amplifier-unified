@@ -521,7 +521,9 @@ def remote_login_page(request):
         csrf = new_csrf(secret)
     error = ("That code did not work. Check it and type it again. A code works for two minutes "
              "and only once. After that, make a new code on the PC.") if request.query.get("error") else ""
-    response = web.Response(text=_CODE_PAGE.replace("__ERROR__", error).replace("__CSRF__", csrf),
+    page = _CODE_PAGE.replace("__ERROR__", error).replace("__CSRF__", csrf)
+    page = request.app['service'].instance_branding.document(page, login=True)
+    response = web.Response(text=page,
                             content_type="text/html",
                             headers={"Cache-Control": "no-store", "Referrer-Policy": "same-origin"})
     response.set_cookie(CSRF_COOKIE, csrf, httponly=True, samesite="Strict", secure=request.secure, path="/")

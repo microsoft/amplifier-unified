@@ -324,8 +324,12 @@ def entry_notice(purpose, entry, retry, *, listed=True):
     stopped, and data can already be deleted); `entry` is the task's
     name in Task Scheduler. The check cannot say why the entry differs (a
     changed setting, another installation, a renamed Windows account), so the
-    text does not say that someone changed it. With `retry`, Windows gave no
-    answer about the entry's account: that can pass, and nothing is deleted.
+    text does not say that someone changed it. The cause sentence makes no
+    claim about what Amplifier changed: a start can make an entry and then
+    not confirm it. (Only the uninstall opening says that nothing was changed;
+    an uninstall reads the entry before it changes anything.) With `retry`,
+    Windows gave no answer about the entry's account: that can pass, and
+    nothing is deleted.
     `listed` is False when Amplifier is not in the Start menu: the setup file
     then opens it.
     """
@@ -343,7 +347,7 @@ def entry_notice(purpose, entry, retry, *, listed=True):
     cause = ("Windows could not check the account of Amplifier's start-at-sign-in entry, so "
              "Amplifier could not confirm that the entry belongs to this installation." if retry else
              "Amplifier could not confirm that its start-at-sign-in entry in Windows belongs to "
-             "this installation. It uses and changes only an entry that it can confirm.")
+             "this installation. It uses only an entry that it can confirm.")
     if purpose == "stop":
         # The person wants the app to stop. That needs no confirmed entry.
         return opening + "\n\n" + cause + "\n\nTo stop the app now, sign out of Windows or restart this PC."

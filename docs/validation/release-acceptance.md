@@ -7,7 +7,7 @@ or an explicit acceptance request and reuse matching qualified evidence. Routine
 publication follows the [Fast Release Guide](release-qualification.md).
 Run against the exact candidate artifact supplied by the release owner. Record
 its version, commit, artifact checksum and source link before starting. Follow
-the [setup instructions](../../README.md#set-up-unified-on-your-computer) for
+the [setup instructions](../../README.md#install) for
 that candidate, rather than installing a moving main branch. Use a fresh test
 profile/account and synthetic work; keep any working installation separate.
 

@@ -297,10 +297,22 @@ def current(session):
 
 def exact(session, kind, value):
     owner = working(session)
+    wanted = value.get('id') if owner is None and type(value) is dict else None
     identity = records.key(kind, value)
     if owner is not None:
         return owner.record(kind, identity)
-    return next((row for row in session.get('execution', {}).get(kind, [])
+    rows = session.get('execution', {}).get(kind, [])
+    if type(kind) is str and kind in ('nodes', 'turns') and type(wanted) is str:
+        # These keys encode only the ID. Keep the ordered, borrowed-row lookup
+        # without JSON-encoding every ordinary row; other values retain validation.
+        for row in rows:
+            if type(row) is dict and type(row.get('id')) is str and row['id']:
+                if row['id'] == wanted:
+                    return row
+            elif records.key(kind, row) == identity:
+                return row
+        return None
+    return next((row for row in rows
                  if records.key(kind, row) == identity), None)
 
 

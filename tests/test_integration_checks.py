@@ -47,8 +47,8 @@ def test_changed_feature_selects_its_owner_without_full_matrix():
     assert not {'release-runtime', 'browser-installed'} & {job['lane'] for job in all_jobs}
 
 
-@pytest.mark.parametrize('path', ['components/web-client/src/main.jsx',
-    'components/web-client/public/pwa.js', 'components/web-client.source.json',
+@pytest.mark.parametrize('path', ['amplifier_web/static/index.html',
+    'tests/test_web_client_source.py', 'components/web-client.source.json',
     'scripts/web_client_build.py', 'scripts/web_client_source.py',
     'scripts/web_test_harness.py', 'scripts/web-client-inputs.mjs',
     'tests/web/package.json', 'tests/web/package-lock.json',
@@ -441,6 +441,7 @@ def test_status_installed_owner_is_explicit_and_affected_changes_are_discoverabl
     assert lane['command'] == ['python', 'scripts/qualify_status_emitter.py']
     assert 'status-installed' not in {job['lane'] for job in checks.select_lanes()}
     for path in ['amplifier_web/status_emitter.py', 'amplifier_web/status_protocol/hook.py',
+                 'components/status/hook.py', 'components/status-emitter.source.json',
                  'amplifier_web/execution_events.py', 'tests/fixtures/status_package_probe.py']:
         assert 'status-installed' in {job['lane'] for job in checks.select_lanes([path], include_manual=True)}
     assert 'status-installed' not in {job['lane'] for job in checks.select_lanes(['README.md'], include_manual=True)}

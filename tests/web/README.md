@@ -43,8 +43,8 @@ rather than starting a shared application. Renderer checks use the selected
 client's dependency tree, not a second production dependency owner. Shared generic
 helpers keep one implementation with injected test-framework facades.
 
-Current source inspection belongs in the canonical client repository or its
-selected delivery copy at `components/web-client`; `.build/web-client` is prepared,
-disposable input, not an authoring location. Keep saved historical results bound
+Current source inspection belongs in the canonical client repository or its exact
+selected `.build/web-client` preparation. The latter is disposable input, not an
+authoring location. Keep saved historical results bound
 to their original paths and sources. After review, remove unneeded owned fixtures,
 outputs and dependencies while retaining finite evidence and recoverable changes.

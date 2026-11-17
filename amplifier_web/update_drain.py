@@ -203,7 +203,7 @@ async def wait_for_update(service, args, command_id, *, origin, guard=None):
 
 
 async def observe_waiters(manager):
-    """Inspect only enrolled owners; an idle event alone is not checkpoint proof."""
+    """Inspect enrolled owners; return False while exact cancellation is pending."""
     service = manager.service
     current = service.state['updates'].get('drain') or {}
     phase = current.get('phase')
@@ -231,6 +231,7 @@ async def observe_waiters(manager):
                           'checkpoint_ready' if row.get('ready') else 'waiting')
                 service._publish_changes(globals={'updates'})
 
+    pending_cancellations = []
     for sid, row in list(current['workers'].items()):
         if not retained(row) or phase == 'released' and not row.get('withdrawn'):
             continue
@@ -266,6 +267,12 @@ async def observe_waiters(manager):
                 try:
                     result = await service.runtime.handoff_boundary(sid, row['boundaryId'], cancel=True,
                         receipt={'updateWait': {'owner': row['owner']}})
+                    if result == {'ready': False, 'waitingFor': ['boundary-reply'], 'requestPending': True}:
+                        # The runtime still owns this exact shielded reply. Keep
+                        # its receipt and checkpoint, but do not release the wait
+                        # or permit replacement before cancellation is confirmed.
+                        pending_cancellations.append(row)
+                        continue
                     if result.get('cancelled') is not True:
                         raise RuntimeError('The original worker did not confirm cancellation of its update wait.')
                 except Exception:
@@ -307,6 +314,8 @@ async def observe_waiters(manager):
             continue
         await observe_checkpoint(sid, row, worker)
     async with service.lock:
+        if any(retained(row) for row in pending_cancellations):
+            return False
         if (service.state['updates'].get('drain') is current and current.get('phase') == 'waiting'
                 and all(row.get('suppressed') for row in current['workers'].values())):
             current.update(phase='released', result='superseded')
@@ -356,7 +365,8 @@ async def prepare(manager, release):
         await finish(manager, 'withdrawn')
         return False
     if prior.get('phase') == 'waiting':
-        await observe_waiters(manager)
+        if await observe_waiters(manager) is False:
+            return False
         if any(not row.get('ready') and not row.get('suppressed') for row in prior['workers'].values()):
             return False
         # Saved settings freshness waits for the enrolled writer's checkpoint.

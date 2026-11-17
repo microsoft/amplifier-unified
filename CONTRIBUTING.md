@@ -21,7 +21,7 @@ python scripts/web_client_build.py build
 
 Author the client in [amplifier-client-web](https://github.com/microsoft/amplifier-client-web).
 [Component ownership and assembly](components/README.md) explains the selected
-delivery copy and disposable prepared source. `npm test --prefix .build/web-client`
+exact public source selection and disposable prepared source. `npm test --prefix .build/web-client`
 runs client units; `npm test --prefix tests/web` runs Unified's integration/producer
 units. Built-asset checks use `npm run test:artifact-assets --prefix .build/web-client`.
 See [host browser checks](tests/web/README.md) for affected real-server journeys.
