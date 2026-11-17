@@ -222,6 +222,16 @@ step works with paths. Its paths are safe only because it inherits two open
 files that the uninstall program created through handles; do not give it a
 tree walk, a file that it creates or opens by a path, or a rule that rests on
 its current folder.
+Windows has no exec: `os.execv` starts a new process there and ends the
+caller at once with exit status 0, before the command's output is complete.
+The launcher hands a command to the active app generation with
+`application_generations.hand_over`, which waits on Windows and ends with the
+app's status. Do not use `os.execv` on Windows where a caller reads the
+output or the status. A launcher from a setup file before that change still
+returns 0 at once, so the confirmation line of `open` stays the launcher's
+proof that the browser opened. The Start-menu start shows `windows_start.sign`
+and holds `windows_start.only`; both must end before a message that sends the
+person back to the Start menu.
 Task Scheduler expands percent-bearing executable/working-directory paths.
 Reject those paths rather than recording a literal identity that launches a
 different program. Task registration/state is not authenticated host health.

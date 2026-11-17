@@ -209,6 +209,17 @@ def single(root, *, wait=10.0):
     OSError. Another account can then make Amplifier refuse to open or
     uninstall while its program runs; it can never hold or release the lock.
     """
+    with named("Global\\AmplifierUnified-installation-", root, wait=wait):
+        yield
+
+
+@contextmanager
+def named(prefix, root, *, wait):
+    """The lock of `single` under another name: `prefix`, then the installation's identity.
+
+    The same rules. A `prefix` in the name space of one sign-in session is a
+    lock of that session only (windows_start.only).
+    """
     if os.name != "nt":
         raise RuntimeError("The installation lock requires native Windows.")
     from .windows_consumer_shell import identity
@@ -226,8 +237,7 @@ def single(root, *, wait=10.0):
     # One name for every sign-in session of this person on this PC. Windows
     # needs no privilege for a mutex in this name space. Not owned at creation.
     with api.private_security() as security:
-        handle = kernel.CreateMutexW(C.byref(security), 0,
-                                     "Global\\AmplifierUnified-installation-" + identity(root))
+        handle = kernel.CreateMutexW(C.byref(security), 0, prefix + identity(root))
         if not handle:
             raise C.WinError(C.get_last_error())
     try:

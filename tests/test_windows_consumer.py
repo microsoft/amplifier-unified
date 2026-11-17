@@ -371,23 +371,28 @@ def folder_state(monkeypatch, root, state):
         (root / "app").mkdir(exist_ok=True)
 
 
-def opening_launch(tmp_path, monkeypatch, outcome, *, listed=True, during=None):
+def opening_launch(tmp_path, monkeypatch, outcome, *, listed=True, during=None, events=None, steps=(),
+                   open_browser=True, progress=None):
     """Launch with trust established, up to the one `open` command; record every effect.
 
     `during` is the state that the folder gets while the `open` command runs
     (the start step has ended then, and an uninstall can take the lock).
+    `steps` are the names that the start step reports.
     """
     from amplifier_web import windows_installation, windows_consumer_shell, deployment, browser_entry, updates
     monkeypatch.setattr(consumer, "installation", lambda root: (root, {}))
     monkeypatch.setattr(consumer, "environment", lambda *a: {"private": "environment"})
     monkeypatch.setattr(windows_consumer_shell, "listed", lambda root: listed)
     folder_state(monkeypatch, tmp_path, "whole")
+    events = [] if events is None else events
     async def prepared(*args, identity, progress):
+        for name in steps:
+            progress(name)
+        events.append(("prepared",)) if steps else None
         return {"background": True, "created": False, "health": {"ok": True}}
     monkeypatch.setattr(windows_installation, "prepare_background", prepared)
     monkeypatch.setattr(deployment, "load_server_config", lambda home: {})
     monkeypatch.setattr(browser_entry, "_owner_probe_targets", lambda *a: (["private-target"], "private-pin"))
-    events = []
     monkeypatch.setattr(windows_installation, "review_browser_trust",
                         lambda *a, fresh: events.append(("trust",)) or True)
     async def process(*args, env, timeout):
@@ -400,7 +405,112 @@ def opening_launch(tmp_path, monkeypatch, outcome, *, listed=True, during=None):
     monkeypatch.setattr(updates, "process", process)
     monkeypatch.setattr(windows_installation, "owner_notice",
                         lambda message, **kw: events.append(("notice", message, kw)) or True)
-    return asyncio.run(consumer.launch(tmp_path)), events
+    return asyncio.run(consumer.launch(tmp_path, open_browser=open_browser, progress=progress)), events
+
+
+def recorded_start(monkeypatch, events, *, running=False):
+    """Stand-ins for the lock of a running start and for its sign; both record when they begin and end."""
+    from amplifier_web import windows_start
+
+    @contextmanager
+    def only(root):
+        if running:
+            raise windows_start.Running()
+        events.append(("lock", root))
+        try:
+            yield
+        finally:
+            events.append(("unlock",))
+
+    @contextmanager
+    def sign():
+        events.append(("sign",))
+        try:
+            yield SimpleNamespace(step=lambda name: events.append(("sign says", name)))
+        finally:
+            events.append(("sign gone",))
+    monkeypatch.setattr(windows_start, "only", only)
+    monkeypatch.setattr(windows_start, "sign", sign)
+
+
+def test_a_start_shows_its_sign_from_its_first_step_until_the_browser_command_has_returned(tmp_path, monkeypatch):
+    """The person sees that Amplifier is starting for the whole start, also after Yes to the certificate."""
+    from amplifier_web import browser_entry
+    from amplifier_web.update_diagnostics import CommandOutput
+    events, reported = [], []
+    recorded_start(monkeypatch, events)
+    result, _ = opening_launch(tmp_path, monkeypatch, CommandOutput(browser_entry.OPENED), events=events,
+                               steps=("address", "tls", "prepare", "task", "ready"), progress=reported.append)
+    assert result["browser"] == {"opened": True}
+    assert [event[0] for event in events] == [
+        "lock", "sign",
+        # The sign follows the start's own steps, so that it can say what a long step does.
+        "sign says", "sign says", "sign says", "sign says", "sign says", "prepared",
+        "trust", "command",  # The certificate question and the `open` command: the sign is still up.
+        "sign gone", "unlock"]
+    assert events[0] == ("lock", tmp_path)
+    assert [event[1] for event in events if event[0] == "sign says"] == ["address", "tls", "prepare", "task", "ready"]
+    assert reported == ["address", "tls", "prepare", "task", "ready"]  # The caller's own record, as before.
+
+
+def test_the_sign_and_the_lock_end_before_the_message_that_sends_the_person_to_the_start_menu(tmp_path, monkeypatch):
+    """The message says "open Amplifier from the Start menu". That click must start Amplifier."""
+    from amplifier_web.update_diagnostics import CommandOutput
+    events = []
+    recorded_start(monkeypatch, events)
+    result, _ = opening_launch(tmp_path, monkeypatch, CommandOutput(""), events=events)
+    assert result["browser"] == {"opened": False, "reason": "not-confirmed"}
+    assert [event[0] for event in events] == ["lock", "sign", "trust", "command", "sign gone", "unlock", "notice"]
+
+
+def test_a_second_start_while_one_runs_opens_no_second_tab_and_shows_nothing(tmp_path, monkeypatch, capsys):
+    """A second click on the Start-menu entry: no start step, no certificate step, no `open`, no message."""
+    from amplifier_web import browser_entry, windows_installation
+    from amplifier_web.update_diagnostics import CommandOutput
+    events = []
+    recorded_start(monkeypatch, events, running=True)
+    result, _ = opening_launch(tmp_path, monkeypatch, CommandOutput(browser_entry.OPENED), events=events,
+                               steps=("address",))
+    assert result == {"browser": {"opened": False, "reason": "start-in-progress"}}
+    assert events == []
+    # The Start-menu entry's program ends with status 0 and shows nothing.
+    monkeypatch.setattr(consumer.sys, "stdout", None)
+    monkeypatch.setattr(windows_installation, "owner_notice",
+                        lambda *args, **options: pytest.fail("A second start shows no message."))
+    consumer.main(["--root", str(tmp_path)])
+    assert events == [] and capsys.readouterr().out == ""
+
+
+def test_a_start_that_opens_no_browser_takes_no_start_lock_and_shows_no_sign(tmp_path, monkeypatch):
+    from amplifier_web.update_diagnostics import CommandOutput
+    events, reported = [], []
+    recorded_start(monkeypatch, events)
+    result, _ = opening_launch(tmp_path, monkeypatch, CommandOutput(""), events=events, steps=("address",),
+                               open_browser=False, progress=reported.append)
+    assert result["health"]["ok"] and "browser" not in result
+    assert events == [("prepared",)] and reported == ["address"]
+
+
+def test_a_start_that_fails_takes_its_sign_and_its_lock_away_before_the_failure_message(tmp_path, monkeypatch):
+    from amplifier_web import windows_consumer_shell, windows_installation
+    events = []
+    recorded_start(monkeypatch, events)
+    monkeypatch.setattr(consumer, "installation", lambda root: (root, {}))
+    monkeypatch.setattr(consumer, "environment", lambda *a: {})
+    monkeypatch.setattr(windows_consumer_shell, "listed", lambda root: True)
+    folder_state(monkeypatch, tmp_path, "whole")
+
+    async def failing(*args, identity, progress):
+        progress("address")
+        raise RuntimeError("The owned background host is not ready; private detail")
+    monkeypatch.setattr(windows_installation, "prepare_background", failing)
+    monkeypatch.setattr(windows_installation, "owner_notice", lambda message, **kw: events.append(("notice", message)))
+    monkeypatch.setattr(consumer.sys, "stdout", None)
+    with pytest.raises(SystemExit) as stopped:
+        consumer.main(["--root", str(tmp_path)])
+    assert stopped.value.code == 1
+    assert [event[0] for event in events] == ["lock", "sign", "sign says", "sign gone", "unlock", "notice"]
+    assert events[-1][1].startswith("Amplifier could not start.")
 
 
 def test_first_start_reports_the_browser_on_the_open_commands_own_confirmation(tmp_path, monkeypatch):

@@ -59,6 +59,7 @@ on:
       - amplifier_web/windows_ports.py
       - amplifier_web/windows_consumer.py
       - amplifier_web/windows_consumer_shell.py
+      - amplifier_web/windows_start.py
       - amplifier_web/windows_removal.py
       - amplifier_web/windows_uninstall.py
       - amplifier_web/installation_runtime.py
@@ -104,6 +105,8 @@ on:
       - tests/test_windows_ports.py
       - tests/test_windows_consumer.py
       - tests/test_windows_first_open.py
+      - tests/test_application_generations.py
+      - tests/test_windows_start.py
       - tests/test_windows_consumer_shell.py
       - tests/test_windows_removal.py
       - tests/test_windows_uninstall.py
@@ -352,6 +355,21 @@ jobs:
           .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -s -p no:cacheprovider tests/test_windows_first_open.py | Tee-Object -Variable report
           if ($LASTEXITCODE -ne 0) { throw 'Windows first-start open checks failed.' }
           if ($report -match 'skipped') { throw 'A native first-start open case was skipped; on this lane it must run.' }
+      # A start that a person can see, and one start at a time. The real sign
+      # window on this runner's desktop (its text, that it takes no focus, that
+      # it hides beside a message of its own program and goes away), the real
+      # lock of a running start across two processes, the launcher's start
+      # with both, the installation's real lock around setup's entries, and the
+      # start texts over real private files. Stand-ins: the installation
+      # check, Task Scheduler, the certificate question and the browser. A
+      # runner's desktop has no person: what a person notices is a clean-room
+      # step. A skipped case would hide the answer; on this lane it fails.
+      - name: Check the sign of a running start, the one-start lock and the lock around setup's entries
+        shell: pwsh
+        run: |
+          .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -s -p no:cacheprovider tests/test_windows_start.py | Tee-Object -Variable report
+          if ($LASTEXITCODE -ne 0) { throw 'Windows start sign or lock checks failed.' }
+          if (($report -join "`n") -match '\d+ skipped') { throw 'A native start case was skipped; on this lane it must run.' }
       - name: Check sign-out of all browsers and remote sign-in by code (real private store, real HTTPS)
         shell: pwsh
         run: |

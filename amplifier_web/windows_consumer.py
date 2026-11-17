@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 import hashlib
 from importlib import metadata
 import json
@@ -204,10 +204,52 @@ async def browser_opened(command, env, *, limit=None):
 
 
 async def launch(root, *, open_browser=True, progress=None):
+    """Start the app and, with `open_browser`, open it in the person's browser.
+
+    With `open_browser` this is the start of the Start-menu entry. Its
+    program has no window, so for as long as the start runs a sign on the
+    screen says that Amplifier is starting (windows_start.sign). One such
+    start runs at a time (windows_start.only): a second one while the first
+    runs does nothing and shows nothing, so no second browser tab opens. The
+    sign and the lock end before the message that sends the person back to
+    the Start menu.
+    """
+    from . import windows_start
+    from .windows_installation import owner_notice
+    root, value = installation(root)
+    if not open_browser:
+        return await _start(root, value, False, progress)
+    with ExitStack() as running:
+        try:
+            running.enter_context(windows_start.only(root))
+        except windows_start.Running:
+            return {"browser": {"opened": False, "reason": "start-in-progress"}}
+        shown = running.enter_context(windows_start.sign())
+
+        def step(name):
+            shown.step(name)
+            if progress is not None:
+                progress(name)
+        result = await _start(root, value, True, step)
+    if result.get("browser") == {"opened": False, "reason": "not-confirmed"}:
+        # Say only what is known here: the browser was not confirmed. It
+        # can still open, so the person looks for a tab before a new start.
+        # The same next step as a failed start: the Start menu only when
+        # its entry exists (after an uninstall, setup adds it again).
+        from .windows_consumer_shell import listed
+        owner_notice("Amplifier may not have opened in your browser.\n\n"
+                     "Look for an Amplifier tab in your browser. If there is none, " + (
+            "open Amplifier from the Start menu: Amplifier Unified. "
+            "If this message appears again, restart this PC." if listed(root) else
+            _setup_again(root) + "."))
+    return result
+
+
+async def _start(root, value, open_browser, progress):
+    """The start itself, for a checked installation: the app, then trust, then the browser."""
     from .windows_installation import (AddressUnavailable, address_message, change_address,
                                        prepare_background, owner_notice, review_browser_trust)
     from . import windows_uninstall
-    root, value = installation(root)
     launcher = root / "tools/amplifier-unified/Scripts/amplifier-unified.exe"
     created = []
 
@@ -251,16 +293,7 @@ async def launch(root, *, open_browser=True, progress=None):
         # behavior. Do not print or expose its transient grant in this process.
         if not await browser_opened((launcher, "--data-dir", root / "app",
                                      "--workspace", root / "workspace"), env):
-            # Say only what is known here: the browser was not confirmed. It
-            # can still open, so the person looks for a tab before a new start.
-            # The same next step as a failed start: the Start menu only when
-            # its entry exists (after an uninstall, setup adds it again).
-            from .windows_consumer_shell import listed
-            owner_notice("Amplifier may not have opened in your browser.\n\n"
-                         "Look for an Amplifier tab in your browser. If there is none, " + (
-                "open Amplifier from the Start menu: Amplifier Unified. "
-                "If this message appears again, restart this PC." if listed(root) else
-                _setup_again(root) + "."))
+            # The caller says so, after the sign of this start is gone.
             return {**result, "browser": {"opened": False, "reason": "not-confirmed"}}
         return {**result, "browser": {"opened": True}}
     return result
