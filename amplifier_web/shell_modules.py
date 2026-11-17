@@ -597,6 +597,11 @@ class ShellModules:
         # without rebuilding those pages just to recover their identities.
         if context_visible_ids is not None:
             visible_ids.update(context_visible_ids)
+            # Selected admitted details can remain visible before any catalog
+            # page completes. The admitted index below is lookup-only; this
+            # never loads a dormant conversation to manufacture coverage.
+            if state.get('selectedSessionId'):
+                visible_ids.add(state['selectedSessionId'])
         # Exact review receipts for these bounded rows; never error bodies or
         # unrelated settings/permission notices from the full attention inbox.
         read_receipts = projections.attention_receipts(state, visible_ids) if not _page_only else []
