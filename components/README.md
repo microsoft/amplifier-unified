@@ -16,14 +16,15 @@ context assembly and model execution stay in the host. Existing imports and
 database formats are unchanged, including durable explicit notes and receipts.
 Do not coinstall the standalone distribution with Unified.
 
-[`workspaces/`](workspaces/README.md) is the temporary authoring home for the
-independently buildable workspace registration metadata package and its direct
-tests. Unified consumes the published artifact selected into
+[amplifier-platform-workspaces](https://github.com/bkrabach/amplifier-platform-workspaces)
+owns the independently buildable workspace registration metadata package and its
+direct tests. Unified consumes the published artifact selected into
 `workspace-metadata-delivery/`, recorded by `workspace-metadata.source.json`, and
 keeps host selection, filesystem, native history, authority and persistence.
 Author edits and publication do not refresh this generated copy. The standalone
 distribution must not be coinstalled with Unified. This metadata boundary does
-not extract the full workspace domain.
+not extract the full workspace domain. See the
+[artifact selection instructions](#select-a-workspace-metadata-artifact).
 
 [`kernels/`](kernels/README.md) authors the independently buildable computation
 mechanism. Unified consumes its published artifact at generated
@@ -77,6 +78,38 @@ Unified consumes the explicitly selected published wheel through the generated
 Author changes and component publication do not change that app default. The app
 remains the sole installed distribution owner; this is artifact assembly, not a
 separately updatable pip dependency. Do not restore a second author copy here.
+
+## Select a workspace metadata artifact
+
+Unified selects Workspace Metadata 0.2.0 from the public repository's
+[`workspace-metadata-v0.2.0` release](https://github.com/bkrabach/amplifier-platform-workspaces/releases/tag/workspace-metadata-v0.2.0).
+The original receipt and artifact hashes are retained in
+`workspace-metadata.source.json`. The public repository owns publication; the old
+Unified workspace publication workflow is retired. Historical artifact verification
+remains supported.
+
+Download the release's wheel, source archive, `workspace-metadata-source.json`
+and `SHA256SUMS` into a private directory. Verify the original receipt's SHA256
+against the reviewed publication, then run:
+
+```sh
+python scripts/scheduling_delivery.py select --component workspace-metadata \
+  --dist /path/to/release-assets --revision FULL_PUBLISHED_SOURCE_SHA \
+  --receipt-sha256 REVIEWED_RECEIPT_SHA256
+python scripts/scheduling_delivery.py verify --component workspace-metadata
+```
+
+The selector verifies the original artifact bytes and refuses a locally changed
+delivery copy. Normal wheel, source archive and editable builds verify the selected
+snapshot offline; rebuilding the source archive requires no producer checkout or
+Git history. Review the selection record and qualify the installed package before
+release. Do not edit generated files or coinstall the standalone distribution.
+Unified remains the sole installed owner and carries the original provenance and
+license under `amplifier_web/component_delivery/`.
+
+Selecting this package does not move files, allocate workspace identities, change
+permissions or migrate settings/history. Ordinary app rollback restores selected
+code while preserving newer caller-owned workspace records.
 
 ## Select a Scheduling artifact
 
