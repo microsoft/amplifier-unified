@@ -412,7 +412,7 @@ def test_receipt_write_does_not_wait_for_a_failure_that_waiting_cannot_cure(mode
 
 
 # The last message's sentence about a certificate that Windows did not delete, complete. A No is Windows'
-# own answer: it kept the certificate. After every other failure the program does not know that.
+# own answer: it kept the certificate. After another failure the text does not say that Windows kept it.
 KEPT = 'Windows kept the certificate "{name}". It works only for Amplifier on this PC.'
 UNKNOWN = 'Windows can still hold the certificate "{name}". It works only for Amplifier on this PC.'
 KEPT_OF_2 = ('Windows kept at least one of the 2 certificates named "{name}". '

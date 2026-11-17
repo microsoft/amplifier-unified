@@ -378,8 +378,8 @@ _UNFINISHED.update({
     "data": "Amplifier has stopped, but some of your chats, settings or saved accounts could not be deleted. "
             "A program may still use them.\n\n" + _AGAIN,
     # Every other failure after the deletion began, and every other failure of an uninstall that found a
-    # journal in the folder. This program saw the journal: at its start, at the step that failed, or
-    # directly after it wrote it.
+    # journal in the folder. A removal began: this uninstall wrote its journal, or this program saw one
+    # at its start, at a failed step before its own journal, or directly before it wrote its own.
     "removal": "Amplifier could not finish its removal from this PC.\n\n" + _AGAIN,
 })
 
@@ -660,12 +660,14 @@ async def _uninstall(root):
 
         Every question comes before the first change, so the text of that stop says that this uninstall
         changed nothing. With a journal in the folder the note of the failure stays out of the app's own
-        folder: an earlier removal can have deleted that folder.
+        folder: an earlier removal can have deleted that folder. The journal can be another window's,
+        written while a question waited, so this looks for it again now.
         """
         try:
             return show(text, **options)
         except (OSError, ValueError, RuntimeError, TimeoutError) as error:
-            _record(root, "uninstall", "questions", error, services=not unfinished)
+            _record(root, "uninstall", "questions", error,
+                    services=not (unfinished or windows_uninstall.unfinished(root)))
             raise Unfinished("questions", error) from error
     if resumed:
         # A removal began and did not finish. The journal is not proof that

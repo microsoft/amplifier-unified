@@ -151,8 +151,10 @@ class Disk:
         listed, left, parked = set(os.listdir(self.root)), [], []
         for name in names:
             if name in listed:  # The exact spelling of the listing, as the real walk; never a path lookup.
-                # The rule that everything else rests on.
-                assert (self.root / plan.JOURNAL).is_file(), f"{name} would be deleted before the journal exists"
+                # The rule that everything else rests on. (`journal_taken`: only the case in which a program
+                # deletes the journal after the uninstall's look found it; the design's limit.)
+                assert (self.root / plan.JOURNAL).is_file() or self.state.get("journal_taken"), (
+                    f"{name} would be deleted before the journal exists")
                 self.state["calls"].append(("delete", name))
                 # Record each move, including files below the named folder.
                 def move(path):
@@ -1507,9 +1509,15 @@ def test_journal_that_a_program_replaces_in_the_instant_of_the_write_never_delet
     # Both messages are true here: the data is deleted, and the last program files stay.
     (confirmation, _), (leftover, _) = state["notices"]
     assert "Your chats, settings, saved accounts and stored keys are deleted" in confirmation
-    assert "Amplifier could not remove its last program files" in leftover and "You can delete" not in leftover
+    # One entry is not Amplifier's, so the text does not say that the folder can be deleted.
+    assert leftover == LAST_MESSAGES["the last step could not start, entries that are not Amplifier's"].format(
+        folder=root)
     # The name is there, so Amplifier does not open from this folder.
     assert opens(deleter, monkeypatch) is False
+    # No second uninstall follows from here (the design's L3): no Windows entry is left to start one from, and
+    # the records that the launcher's own check reads are deleted.
+    assert state["registry"] is None and not deleter.folder.exists()
+    assert not any((root / name).exists() for name in top(LAST))
 
 
 def test_journal_that_a_program_replaces_in_the_instant_of_the_write_and_a_program_file_in_use_stays(
@@ -1535,6 +1543,33 @@ def test_journal_that_a_program_replaces_in_the_instant_of_the_write_and_a_progr
                                "they hold none of your chats, settings or accounts:")
 
 
+def test_journal_that_a_program_deletes_during_the_removal_stops_it_at_its_last_step(deleter, monkeypatch):
+    """The journal was in the folder at the look. A program deletes it before the removal deletes the data."""
+    state, root, consumer = deleter.state, deleter.root, deleter.consumer
+    state["choices"] = ["yes", "yes"]
+    forget = plan.forget_setup
+
+    def after_the_look(owned, **options):
+        # The step after the journal: the uninstall's look found the journal a moment ago.
+        assert deleter.journal()["choice"] == "delete" and not deletes(state)
+        (root / plan.JOURNAL).unlink()
+        state["journal_taken"] = True
+        return forget(owned, **options)
+    monkeypatch.setattr(plan, "forget_setup", after_the_look)
+    monkeypatch.setattr(consumer.sys, "stdout", None)
+    result = deleter.run()
+    # The removal went on as with its journal: the data, the program files and the Windows entries went.
+    assert result["ok"] and result["userDataRetained"] is False and result["kept"] == []
+    assert not any((root / name).exists() for name in top(DATA) | top(PROGRAM) | top(LAST))
+    assert state["registry"] is None and not deleter.folder.exists()
+    # The last step found no journal. It deleted nothing and did not start the step after exit.
+    assert result["afterExit"] is False and result["programLeft"] is None and state["after"] is None
+    assert {path.name for path in root.iterdir()} == {plan.COMPLETE, *top(RUNNING)}
+    (confirmation, _), (leftover, _) = state["notices"]
+    assert confirmation == LAST_MESSAGES["delete"].format(folder=root)
+    assert leftover == LAST_MESSAGES["the last step could not start"].format(folder=root)
+
+
 @pytest.mark.parametrize("foreign", [json.dumps({"schema": 1, "choice": "delete", "token": "f" * 32}), "{"])
 def test_second_uninstall_after_a_replaced_journal_reads_the_other_programs_journal(deleter, foreign):
     """A program replaced the journal, and a step of that removal failed. The next uninstall reads that file."""
@@ -1546,6 +1581,9 @@ def test_second_uninstall_after_a_replaced_journal_reads_the_other_programs_jour
     # The removal went on with the other file, deleted the stored keys and stopped at a data file in use.
     assert stopped.value.step == "data" and not (root / "shared").exists()
     assert (root / plan.JOURNAL).read_text() == foreign
+    # Every Windows entry is still there, and the records that the launcher's own check reads.
+    assert state["registry"] is not None and deleter.folder.exists()
+    assert all((root / name).exists() for name in top(LAST))
     state["held"].clear()
     state.update(questions=[], notices=[])
     if foreign == "{":
@@ -1749,6 +1787,32 @@ def test_uninstall_that_stops_at_its_journal_after_an_earlier_removal_that_its_q
         # The note of the failure is in the folder itself, never in the app's folder, which is being deleted.
         assert json.loads((root / consumer.RECORD).read_text())["step"] == "journal"
         assert not (root / "app/config").exists()
+
+
+def test_question_that_windows_does_not_show_after_another_window_began_a_removal_keeps_its_note_out_of_app(
+        deleter, monkeypatch):
+    """Another window deleted data and stopped while the first question waited. Windows does not show the second."""
+    state, root, consumer = deleter.state, deleter.root, deleter.consumer
+
+    def this_window():
+        state["choices"] = ["yes"]
+        ask = plan.question
+
+        def refuse(text, *, cancel=False):
+            if text.startswith("Delete everything"):
+                raise OSError("The uninstall question could not be displayed.")
+            return ask(text, cancel=cancel)
+        monkeypatch.setattr(plan, "question", refuse)
+    other_window_during_the_first_question(deleter, monkeypatch, this_window)
+    with pytest.raises(consumer.Unfinished) as stopped:
+        deleter.run()
+    # No journal was in the folder when this uninstall began, and one is there now: the other window's.
+    assert stopped.value.step == "questions" and plan.unfinished(root) and not deletes(state)
+    # The text says only what this uninstall did.
+    assert stopped.value.notice == consumer._UNFINISHED["questions"] + "\n\nReference: questions, OSError"
+    # The note of the failure is in the folder itself, never in the app's folder, which is being deleted.
+    assert json.loads((root / consumer.RECORD).read_text())["step"] == "questions"
+    assert not (root / "app/config").exists()
 
 
 @pytest.mark.parametrize("choice,failure", [("delete", "lock"), ("delete", "folder"), ("keep", "lock")])
@@ -2192,8 +2256,8 @@ def test_design_entry_on_the_journal_names_what_the_cases_above_show():
     for stated in (
             # The look, and what a stop at this step leaves open (the four ways of `JOURNAL_WAYS`).
             "looks once, by its name, whether it is in the folder",
-            "Without it this uninstall stops, and it has deleted nothing. What an earlier uninstall deleted stays "
-            "deleted.",
+            "Without it this uninstall stops, and it has deleted nothing in the folder. What an earlier uninstall "
+            "deleted stays deleted.",
             "A stop at this step leaves it open whether a journal is in the folder. This part needs no other program.",
             "The writer can report an error after the journal has its name.",
             "The look answers no for every error, not only for a name that is not there.",
@@ -2203,10 +2267,12 @@ def test_design_entry_on_the_journal_names_what_the_cases_above_show():
             # A journal that a program deletes: also after a removal that stopped (the intro sentence below).
             "A program of this account deletes the journal: during a removal, or at any time after a removal that "
             "stopped.",
-            "a next uninstall asks its questions as for a whole installation",
+            "a next uninstall that reaches its questions asks them as for a whole installation",
             # A journal that a program replaces in the instant of the write.
-            "A removal that goes on to its end without its journal stops when its last step begins, with the "
-            "leftover of the next part less the journal.",
+            # `test_journal_that_a_program_deletes_during_the_removal_stops_it_at_its_last_step`.
+            "A removal whose journal a program deletes after that look goes on as it does with its journal. When "
+            "none of its steps fails and step 9 did not stop the uninstall, its last step finds no journal and "
+            "refuses: the leftover is the one of the next part, without the journal.",
             "A program of this account replaces the journal with its own file in the instant of the write.",
             "reads the journal again through the private-file boundary, before it starts the step after exit.",
             # `test_journal_that_a_program_replaces_in_the_instant_of_the_write_...` and `test_finish_refuses_...`.
@@ -2215,26 +2281,43 @@ def test_design_entry_on_the_journal_names_what_the_cases_above_show():
             # What goes and what is only tried (`remove_program` returns what stayed, and nothing stops there):
             # `test_journal_that_a_program_replaces_..._and_a_program_file_in_use_stays`.
             "The name is there, so the removal goes on as it does with its own journal. When none of its steps "
-            "fails, it deletes the person's data and removes the Windows entries, as the person chose twice. It "
-            "also tries to delete the caches and the other program files; one that Windows does not let go stays.",
-            # A step of it that fails: `test_second_uninstall_after_a_replaced_journal_...` below reads that journal.
-            "If one of that removal's steps fails, a second uninstall reads the other program's journal: one that "
-            "records the delete choice lets the person choose again, twice, and any other one is L4.",
+            "fails, it deletes the person's data and removes the Windows entries that setup recorded, as the "
+            "person chose twice. It also tries to delete the caches and the other program files; one that Windows "
+            "does not let go stays.",
+            # A step of it that fails while the entries exist: `test_second_uninstall_after_a_replaced_journal_...`.
+            "A step of that removal can fail while a Windows entry for an uninstall still exists (a data file in "
+            "use, for example). If the person then uninstalls again, and that uninstall reaches its questions "
+            "with the other program's file still in the folder, it reads that file. A journal that it can read "
+            "and that records the delete choice lets the person choose again, twice. Any other file is L4.",
+            # After the last step's refusal: `test_journal_that_a_program_replaces_..._never_deletes_more_...`
+            # (no Windows entry, and the records that the launcher's own check reads are deleted).
+            "After the last step refused the file, this does not apply: by then the removal has removed the "
+            "Windows entries that setup recorded, so none of them is left to start an uninstall from (L3, and "
+            "Leftovers below).",
+            # When Windows does not show the confirmation, the uninstall stops there (step 9; the cases of a
+            # last message that Windows does not show). With a console no message is shown and the last step runs.
+            "When step 9 did not stop the uninstall, the last step (`windows_uninstall.finish`) then reads the "
+            "journal again through the private-file boundary, before it starts the step after exit.",
             # The message is tried, twice at most: `test_further_message_..._without_a_further_message`.
-            "After the confirmation of step 9 the last step (`windows_uninstall.finish`) reads the journal again "
-            "through the private-file boundary, before it starts the step after exit.",
             "Then `python`, `tools`, that file and setup's completion record stay too, and the uninstall program "
             "tries to show a message that the last program files could not be removed. When Windows does not "
             "show that message, the program tries once more. When Windows does not show it then either, the "
-            "person gets no further message after that confirmation. That is the leftover of L3. A file that "
-            "records",
-            # `test_journal_that_a_program_replaces_with_the_same_choice_and_token_...`.
-            "A file that records the delete choice and this removal's own token passes: every later check takes "
-            "it for this removal's journal, and the removal ends as it does without a replacement. In each case "
-            "nothing more is deleted than the person chose.",
-            "one that records the delete choice lets the person choose again, twice, and any other one is L4",
+            "person gets no message after the confirmation of step 9. That is the leftover of L3. A file that "
+            "the last step can read there as a journal",
+            # `test_journal_that_a_program_replaces_with_the_same_choice_and_token_...` (the last step), and
+            # the three comparisons of the step after exit, asserted below.
+            "A file that the last step can read there as a journal (`schema` 1), and that records the delete "
+            "choice and this removal's own token, passes. The step after exit compares the same values "
+            "(`FINISH_SCRIPT` in "
+            "`windows_removal.py`: schema, choice, token) and refuses a journal that was made after its own "
+            "start. When it accepts the file too, the removal goes on as it does without a replacement. In each "
+            "case nothing more is deleted than the person chose.",
             "It reads the journal again only when its last step begins (`windows_uninstall.finish`)."):
         assert stated in entry, stated
+    # What the step after exit compares in the journal, and the journal that it refuses by its time.
+    for compared in ("$record.schema -eq 1", "$record.choice -ceq $p.choice", "$record.token -ceq $p.token",
+                     "(Later $journal)"):
+        assert compared in removal.FINISH_SCRIPT, compared
     # The two texts as the entry describes them are the texts that the product has for this step.
     first, second = consumer._UNFINISHED["journal"], consumer._UNFINISHED["removal"]
     # Which text: what this uninstall saw (`earlier` in `_delete`), not what is in the folder at the write.
@@ -2251,7 +2334,10 @@ def test_design_entry_on_the_journal_names_what_the_cases_above_show():
             "still counts.") in entry
     # The entry promises no outcome that the program only tries, and says of no program file that it is gone.
     for wrong in ("a message says", "the program files and the Windows entries go", "Amplifier cannot start",
-                  "goes on to its end. The person's data", "data and the Windows entries go"):
+                  "goes on to its end. The person's data", "data and the Windows entries go",
+                  "If one of that removal's steps fails, a second uninstall reads", "every later check takes it",
+                  "ends as it does without a replacement", "it has deleted nothing. What",
+                  "goes on to its end without its journal"):
         assert wrong not in entry, wrong
     # What the native case of a replaced journal accepts (`left <= ... <= left | {"workspace"}`).
     proven = design.split("**Proven", 1)[1]
@@ -2299,13 +2385,17 @@ def test_design_entry_on_the_journal_names_what_the_cases_above_show():
             "deleted and that the last program files were not removed. It is never the message of an uninstall "
             "that changed nothing.",
             "the further message is that last message again",
-            "When Windows does not show the further message either, the person sees no message of that uninstall.",
-            "An uninstall that keeps the folder looks again under the lock, and refuses when that look finds a "
-            "journal (step 1 of the order). When one of its steps fails, it looks too.",
+            "When Windows does not show the further message either, the person gets no message after the questions "
+            "of that uninstall.",
+            "An uninstall that keeps the folder and found no journal at its start looks again under the lock, and "
+            "refuses when that look finds one (step 1 of the order). When one of its steps fails, it looks too.",
             "It looks for the journal's name at two moments: when a step before the write of its own journal "
             "fails, and directly before that write. If the first look finds a journal, the failed step shows a "
             "text of a removal that did not finish, not the text of an uninstall that changed nothing. If the "
             "second look finds one, a failure of that write shows the text of a removal that did not finish too.",
+            # `test_question_that_windows_does_not_show_after_another_window_began_a_removal_...`.
+            "An uninstall also looks when Windows does not show one of its questions; that look chooses only the "
+            "place of the failure note.",
             "They change nothing that uninstall deletes.",
             "Each of these looks, and the launcher's look before it opens Amplifier, asks only whether the "
             "journal's name is in the folder. A look that Windows does not answer counts as \"no journal\". Where "
@@ -2558,6 +2648,9 @@ LAST_MESSAGES = {
     "the last step could not start":
         "Amplifier could not remove its last program files. They are in this folder, and they hold none of your "
         "chats, settings or accounts:\n{folder}\n\nYou can delete that folder.",
+    "the last step could not start, entries that are not Amplifier's":
+        "Amplifier could not remove its last program files. They are in this folder, and they hold none of your "
+        "chats, settings or accounts:\n{folder}",
 }
 
 
@@ -2624,6 +2717,10 @@ def test_every_last_message_and_both_forms_of_the_two_questions_are_exactly_thes
             "delete, Windows did not show the confirmation, entries that are not Amplifier's")
     assert consumer._last_files(root, [], "Amplifier could not remove its last program files.") == text(
         "the last step could not start")
+    # Entries that are not Amplifier's, and a folder that could not be listed: no advice to delete the folder.
+    for foreign in (several, None):
+        assert consumer._last_files(root, foreign, "Amplifier could not remove its last program files.") == text(
+            "the last step could not start, entries that are not Amplifier's")
     two = [b"current root", b"replaced root"]
     for (answer, count), sentence in CERTIFICATE_LEFT.items():
         asked = two if count == 2 else [b"root"]
@@ -2750,6 +2847,9 @@ README_UNINSTALL = [
        "folder stays too.",
        [("confirmation of a delete", "The folder itself stays, because it holds entries that are not Amplifier's. "
                                      "They were not changed: mine.txt")]),
+      # "that last step": the removal of the last program files and then of the folder. It also does not
+      # finish when a program file that another program uses stayed: the folder then stays with that file
+      # (`test_emptied_folder_that_windows_keeps_is_not_data_and_a_program_file_in_use_does_not_stop`).
       ("If that last step does not finish, the folder stays, and some program files can stay in it.",
        [("last step that cannot start", "Amplifier could not remove its last program files. They are in this "
                                         "folder,")])]],
