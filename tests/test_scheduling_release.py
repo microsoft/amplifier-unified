@@ -80,7 +80,7 @@ def test_exact_source_and_built_payload_round_trip(candidate):
 
 
 @pytest.mark.parametrize("component", [None, "worktrees", "status-emitter", "unknown"])
-def test_repository_root_requires_explicit_scheduling_identity(component):
+def test_repository_root_requires_supported_explicit_identity(component):
     selected = {"repository": "bkrabach/amplifier-platform-scheduling", "subdirectory": "."}
     if component is not None:
         selected["component"] = component
