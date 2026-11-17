@@ -1686,7 +1686,9 @@ place of the failure note. They change nothing that uninstall deletes.
 
 Each of these looks, and the launcher's look before it opens Amplifier, asks
 only whether the journal's name is in the folder. A look that Windows does
-not answer counts as "no journal". So the text of a step that failed after a
+not answer counts as "no journal". Where this section says that the launcher
+refuses, or does not open Amplifier, while the journal exists, that is the
+condition: its look finds the journal. So the text of a step that failed after a
 removal began does not say that Amplifier does not open. It tells the person
 not to open Amplifier, because its folder can be partly deleted. The text of
 the launcher's own refusal is not changed: it says that Amplifier does not

@@ -2126,7 +2126,9 @@ def test_design_entry_on_the_journal_names_what_the_cases_above_show():
             "second look finds one, a failure of that write shows the text of a removal that did not finish too.",
             "They change nothing that uninstall deletes.",
             "Each of these looks, and the launcher's look before it opens Amplifier, asks only whether the "
-            "journal's name is in the folder. A look that Windows does not answer counts as \"no journal\". So the "
+            "journal's name is in the folder. A look that Windows does not answer counts as \"no journal\". Where "
+            "this section says that the launcher refuses, or does not open Amplifier, while the journal exists, "
+            "that is the condition: its look finds the journal. So the "
             "text of a step that failed after a removal began does not say that Amplifier does not open. It tells "
             "the person not to open Amplifier, because its folder can be partly deleted. The text of the "
             "launcher's own refusal is not changed: it says that Amplifier does not open until the removal has "
