@@ -29,13 +29,15 @@ See [host browser checks](tests/web/README.md) for affected real-server journeys
 When pytest loads `tests/conftest.py`, the Python tests do not use an Amplifier
 Unified of your machine. A running Amplifier Unified gives environment variables to
 the shells that it starts; a chat's shell tool is such a shell. That file removes
-them, and your provider credentials. It gives the product folders of the test run
-in place of its default folders, and it gives your account a home folder of the
-test run in the account database.
+the ones in its list, and your provider credentials. It gives the product folders
+of the test run in place of its default folders, and it gives your account a home
+folder of the test run in the account database.
 It does not cover a run with `--noconftest`, a program that a test starts (it asks
 the real account database), or tools such as Git and uv, which keep their own files
-below your home folder. Product code that you start by hand reads those variables
-and uses the default folders.
+below your home folder. Its list comes from a shell of an installation on Linux; an
+installation on macOS or Windows sets more variables for its service, and the file
+does not remove those. Product code that you start by hand reads all these
+variables and uses the default folders.
 
 These are development setup commands, not a per-release checklist. For releases,
 use the [Fast Release Guide](docs/validation/release-qualification.md): reuse the

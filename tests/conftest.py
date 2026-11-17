@@ -25,6 +25,10 @@ except ImportError:  # Python has no pwd module on Windows.
 # one (the function is named beside it). A test that inherits one can use the
 # service's component generation or its source store, and can give another
 # result than a run without it. A test that needs one sets it itself.
+# The list comes from a shell of an installation on Linux. An installation on
+# macOS or Windows sets more variables for its service
+# (deployment_service._install_launchd, windows_consumer.environment). They
+# are not in the list: no shell of such an installation was looked at.
 SERVICE_VARIABLES = (
     'AMPLIFIER_UNIFIED_RELEASE',  # updates.selected_release
     'AMPLIFIER_SOURCE_STORE',  # update_sources.store_environment, reset.perform
