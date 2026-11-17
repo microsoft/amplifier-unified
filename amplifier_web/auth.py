@@ -615,6 +615,10 @@ async def login_page(request: web.Request) -> web.Response:
         csrf = new_csrf(secret)
     filename = "windows-login.html" if browser_entry.is_windows() else "login.html"
     page = (Path(__file__).parent / "static" / filename).read_text(encoding="utf-8")
+    if "__REOPEN__" in page:
+        # The page's own place for the next step. First of all: no value of the
+        # request is in the page yet. A page without the mark is not changed.
+        page = page.replace("__REOPEN__", html.escape(browser_entry.next_step(request), quote=True))
     next_path = html.escape(validate_next_path(request.query.get("next")), quote=True)
     error = "Could not sign in. Check your host username and password and try again." if request.query.get("error") else ""
     page = page.replace("__CSRF__", csrf).replace("__NEXT__", next_path).replace("__ERROR__", error)
@@ -626,7 +630,7 @@ async def login_page(request: web.Request) -> web.Response:
 
 async def post_login(request: web.Request) -> web.Response:
     if browser_entry.is_windows():
-        return web.Response(text=browser_entry.reopen(), status=403)
+        return web.Response(text=browser_entry.next_step(request), status=403)
     form = await request.post()
     username, password = str(form.get("username", "")), str(form.get("password", ""))
     bridge = request.app["server_config"].get("host_pam")
