@@ -220,7 +220,7 @@ def prepare(work):
     release = wheel(work)
     uv = shutil.which("uv")
     if not uv:
-        raise RuntimeError("uv is not on this runner.")
+        raise RuntimeError("uv is not on PATH.")
     environment = work / "windows-consumer-app"
     python = environment / "Scripts/python.exe"
     run(uv, "venv", "--python", "3.13", environment, limit=300)

@@ -2962,7 +2962,7 @@ def test_windows_plan_native_check_gives_its_commands_less_time_than_the_step_an
     # Without uv, the preparation ends with a sentence.
     Clock.now = 0.0
     monkeypatch.setattr(fixture.shutil, 'which', lambda name: None)
-    with pytest.raises(RuntimeError, match='^uv is not on this runner\\.$'):
+    with pytest.raises(RuntimeError, match='^uv is not on PATH\\.$'):
         fixture.prepare(tmp_path / 'no-uv')
     # In the check itself: a command passes its time, the check returns 1, and result.json has the reason.
     (tmp_path / 'timeout').mkdir()
