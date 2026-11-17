@@ -572,7 +572,8 @@ def trust_step(tmp_path, monkeypatch):
         return state["held"]
     monkeypatch.setattr(windows_trust, "contains", contains)
     def replaced(home, current):
-        assert home == tmp_path / "app"
+        # The step names the root that it is about to add: that one is never a replaced root.
+        assert home == tmp_path / "app" and current in {b"saved-root", b"root-created-by-this-process"}
         if isinstance(state["replaced"], Exception):
             raise state["replaced"]
         return [der for der in state["replaced"] if der != current]

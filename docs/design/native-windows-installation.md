@@ -539,11 +539,26 @@ a certificate, and the earlier certificate's bytes were gone from disk.
   key-less identity, it adds the root that it replaces to
   `config/tls/replaced-roots.pem` (`windows_tls._remember_replaced`), under the
   TLS lock and through the private-file writer. The file holds public
-  certificates only, oldest first. It must fit in one bounded read (64 KiB),
-  so the oldest goes when it does not: about 50 stay. If the record cannot be
-  written, `force` stops and the identity is as it was. Only this command
-  writes the file. A `force` that stopped part-way records the root that is
-  still in use; a repeated `force` records it once.
+  certificates only, oldest first. If the record cannot be written, `force`
+  stops and the identity is as it was. Only this command writes the file. A
+  `force` that stopped part-way records the root that is still in use; a
+  repeated `force` records it once.
+- **The record never loses a root that Windows may still hold.** Without its
+  exact bytes nothing finds that root again. The record must fit in one
+  bounded read (64 KiB, about 50 certificates). When one more does not fit,
+  `force` asks Windows, read-only, which recorded roots it still holds for the
+  person, and drops the others. When Windows cannot be asked, nothing is
+  dropped. If the record is still full, `force` stops with a plain text and
+  changes nothing (`windows_tls.ReplacedRecord`). A record that is too long to
+  read stops `force` in the same way: Amplifier never writes one of that
+  length, and it does not replace a file that it cannot read. The readers get
+  an empty list from such a file. When `force` writes the record again, it
+  writes only the whole certificates; other text in the file is not kept.
+- **What the person can read.** `setup-tls status` on such a PC prints the
+  SHA-1 thumbprint of the root in use (the form that Windows shows) and the
+  thumbprint of each replaced root that Windows still holds. The guide's steps
+  to delete a certificate by hand use these thumbprints. They never find a
+  certificate by its name.
 - **What counts.** `windows_trust.replaced` returns a recorded root only when
   it has the fixed shape of this product's root (`_shape`: the name,
   self-signed, path length 0, server-authentication use only, critical name
@@ -581,8 +596,12 @@ deletion is launcher code: an installation keeps the launcher of its setup file
 until a launcher refresh. So a PC with an earlier launcher records a replaced
 root and does not delete it; a later launcher deletes it at an uninstall, or at
 the open after the next `force`. A root that was replaced before this change is
-on no record and stays. The deployment guide has the steps to delete such
-roots by hand. Not shown: the Windows deletion question itself on a person's
+on no record and stays; nothing tells it from another installation's root of
+the same name, and the guide says so. The deployment guide has the steps to
+delete a root by hand, by its thumbprint. No launcher-side code, of any
+version, lists the TLS folder, so the new file does not disturb an earlier
+launcher (searched in the history of the TLS, trust, setup and launcher
+modules). Not shown: the Windows deletion question itself on a person's
 own store; a hosted runner cannot answer it. The store calls run there on a
 private store that is not a trust store, and the list and its rule run on the
 real private file store.

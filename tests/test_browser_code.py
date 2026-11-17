@@ -742,6 +742,9 @@ def test_the_next_step_for_a_browser_that_is_not_signed_in_is_true_on_each_platf
     # A PC from the setup file has no `amplifier-unified` on its PATH: its Start-menu entry comes first.
     assert windows == ("Open Amplifier from the Start menu: Amplifier Unified. "
                        "If the Start menu has no such entry, run this: amplifier-unified open.")
+    # The name in the text is the name of the entry that setup makes.
+    from amplifier_web import windows_consumer_shell
+    assert "Amplifier Unified.lnk" in windows_consumer_shell.LINKS
     monkeypatch.setattr(entry, "is_windows", lambda: False)
     other = entry.reopen()
     assert other == "To open Amplifier, run this: amplifier-unified open."

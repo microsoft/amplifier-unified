@@ -90,6 +90,59 @@ def test_forced_renewal_of_a_keyless_windows_identity_says_what_happens_next(
             "Amplifier no longer uses it.\n" in output) is told
 
 
+def test_a_force_that_the_record_stops_ends_with_its_plain_text_and_no_success_line(tmp_path, monkeypatch, capsys):
+    from amplifier_web import tls, windows_tls
+    text = "Amplifier made no new certificate. Nothing was changed.\n\nIts record of earlier certificates is full."
+
+    def stop(home, config, *, force):
+        raise windows_tls.ReplacedRecord(text)
+    monkeypatch.setattr(cli.browser_entry, "is_windows", lambda: True)
+    monkeypatch.setattr(tls, "setup_local_ca", stop)
+    with pytest.raises(SystemExit) as stopped:
+        cli._setup_tls(tmp_path, "force")
+    assert str(stopped.value) == text and capsys.readouterr().out == ""  # Not "Created ...".
+
+
+def test_status_on_windows_shows_the_thumbprints_that_find_amplifiers_certificates(tmp_path, monkeypatch, capsys):
+    from amplifier_web import tls, windows_tls, windows_trust
+    state = {"windows": True, "identity": (b"current", b"leaf"), "earlier": [b"one", b"two"]}
+
+    def read(name):
+        if isinstance(state[name], Exception):
+            raise state[name]
+        return state[name]
+
+    def replaced(home, current):
+        assert home == tmp_path and current == b"current"  # Never the certificate that is in use.
+        return read("earlier")
+    monkeypatch.setattr(cli.browser_entry, "is_windows", lambda: state["windows"])
+    monkeypatch.setattr(tls, "ca_bytes", lambda home: b"certificate")
+    monkeypatch.setattr(tls, "tls_ready", lambda home, config: True)
+    monkeypatch.setattr(tls, "ca_fingerprint", lambda home: "AA:BB")
+    monkeypatch.setattr(windows_tls, "keyless_identity", lambda home: read("identity"))
+    monkeypatch.setattr(windows_trust, "replaced", replaced)
+    monkeypatch.setattr(windows_trust, "thumbprint", lambda der: "print of " + der.decode())
+
+    def status(**change):
+        state.update({"windows": True, "identity": (b"current", b"leaf"), "earlier": [b"one", b"two"], **change})
+        cli._setup_tls(tmp_path, "status")
+        output = capsys.readouterr().out
+        assert "CA SHA-256 fingerprint: AA:BB\n" in output
+        return output.split("CA SHA-256 fingerprint: AA:BB\n", 1)[1]
+    # Windows shows the SHA-1 thumbprint. Each earlier certificate that Windows holds has its own line.
+    assert status() == ("Thumbprint in Windows (SHA-1): print of current\n"
+                        "Earlier certificates that Windows still holds: 2\n  print of one\n  print of two\n")
+    assert status(earlier=[]) == ("Thumbprint in Windows (SHA-1): print of current\n"
+                                  "Earlier certificates that Windows still holds: 0\n")
+    # What cannot be read is said, not counted as none.
+    assert status(earlier=OSError("the record cannot be read")) == (
+        "Thumbprint in Windows (SHA-1): print of current\n"
+        "Earlier certificates that Windows still holds: Amplifier could not read them\n")
+    # An identity with a signing key on disk, or none: Amplifier added nothing to Windows.
+    assert status(identity=None) == "" and status(identity=FileNotFoundError("no certificate")) == ""
+    assert status(windows=False) == ""  # macOS and Linux: unchanged.
+
+
 def test_serve_options_are_top_level_repeatable_and_overlay_nested_tls(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "argv", [
         "amplifier-unified", "--bind", "127.0.0.1", "--bind", "192.0.2.5",

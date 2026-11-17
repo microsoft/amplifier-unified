@@ -233,8 +233,17 @@ def _setup_tls(data_dir: Path, mode: str) -> None:
         print("TLS:", config["tls"]["method"])
         print("TLS listener:", "ready" if tls_ready(data_dir, config) else "not configured or not startable")
         print("CA SHA-256 fingerprint:", ca_fingerprint(data_dir) or "not configured")
+        if browser_entry.is_windows():
+            _windows_roots(data_dir)
         return
-    setup_local_ca(data_dir, config, force=mode == "force")
+    stopped = ()
+    if browser_entry.is_windows():
+        from .windows_tls import ReplacedRecord as stopped
+    try:
+        setup_local_ca(data_dir, config, force=mode == "force")
+    except stopped as stop:
+        # `force` changed nothing: the record of earlier certificates cannot take one more.
+        raise SystemExit(str(stop)) from None
     print("Created app-owned local CA and leaf certificate. Restart the service to use HTTPS.")
     print("CA SHA-256 fingerprint:", ca_fingerprint(data_dir))
     if mode == "force" and browser_entry.is_windows():
@@ -247,6 +256,31 @@ def _setup_tls(data_dir: Path, mode: str) -> None:
             # to delete it; this command cannot know which launcher the PC has.
             print("If Windows also asks whether to delete the earlier certificate, select Yes. "
                   "Amplifier no longer uses it.")
+
+
+def _windows_roots(data_dir: Path) -> None:
+    """`setup-tls status` on Windows: the thumbprints that find Amplifier's certificates in Windows.
+
+    Read-only. Only a key-less identity: for another identity Amplifier added
+    nothing to Windows. Windows shows a certificate's SHA-1 thumbprint, not
+    the SHA-256 fingerprint above.
+    """
+    from . import windows_tls, windows_trust
+    try:
+        identity = windows_tls.keyless_identity(data_dir)
+    except (OSError, ValueError):
+        identity = None
+    if identity is None:
+        return
+    print("Thumbprint in Windows (SHA-1):", windows_trust.thumbprint(identity[0]))
+    try:
+        earlier = windows_trust.replaced(data_dir, identity[0])
+    except (OSError, ValueError, RuntimeError):
+        print("Earlier certificates that Windows still holds: Amplifier could not read them")
+        return
+    print("Earlier certificates that Windows still holds:", len(earlier))
+    for der in earlier:
+        print("  " + windows_trust.thumbprint(der))
 
 
 def _serve(args, data_dir: Path, *, task_runner=None) -> None:

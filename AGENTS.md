@@ -228,8 +228,10 @@ it replaces in `config\tls\replaced-roots.pem`; only that command writes the
 file. The launcher (after the person's Yes to the new root) and uninstall ask
 Windows to delete a recorded root only when it has the fixed shape of the
 product's root and the store holds exactly that certificate
-(`windows_trust.replaced`). Never find a root to delete by its name: another
-installation's root has the same name. Windows asks the person once for each
+(`windows_trust.replaced`). Never find a root to delete by its name, in code
+or in a guide: another installation's root has the same name. The record
+never loses a root that Windows may still hold; a full or unreadable record
+stops `force` with nothing changed. Windows asks the person once for each
 deletion, and no code answers it; say the number of questions before them.
 Task Scheduler expands percent-bearing executable/working-directory paths.
 Reject those paths rather than recording a literal identity that launches a
