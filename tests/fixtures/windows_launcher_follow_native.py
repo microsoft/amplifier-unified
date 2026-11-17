@@ -464,8 +464,9 @@ def run():
                 return {"errorType": type(error).__name__}
 
         def apps_list():
+            # The registry reader gives each value with its type: (text, 1).
             values = shell.registry(root)
-            return values.get("DisplayVersion") if values else None
+            return values["DisplayVersion"][0] if values else None
 
         def set_aside():
             return sorted(path.name for path in root.glob("launcher-*"))
@@ -626,8 +627,10 @@ def run():
             # The manual command's own decision, on this real layout and this real task.
             decision = asyncio.run(refresher.refresh(refresher.TaskService(home), home, check=True))
             assert decision["ok"] and decision["action"] == "refresh" and not decision["changed"], decision
+            # A launcher from before this change lacks files that the list names
+            # now. The comparison reports them, and the launcher differs.
             difference = listed_files.differs(launcher, prefixes[0])
-            assert difference["differs"] is True and not difference["unreadable"], difference
+            assert difference["differs"] is True and difference["files"], difference
             # The app is newer than the launcher and its files differ. No record
             # says that this app version's start was confirmed: nothing starts.
             assert recovery.read(spec) is None
@@ -701,7 +704,13 @@ def run():
             wait("the Apps list shows the confirmed app version", lambda: apps_list() == new["version"], 300)
             assert json.loads((root / shell.FILE).read_text())["registry"]["DisplayVersion"] == new["version"]
             assert shell.listed(root)
-            passed(3, appsList=apps_list(), launcher=launcher_now())
+            # Only the version changed: every other value of the key is as setup wrote it.
+            assert shell.registry(root) == shell._typed_registry(shell.registration_values(root, new["version"]))
+            written = wait("the app has saved what it did with the Apps list",
+                           lambda: follow_state().get("appsList"), 120)
+            assert written == {"settled": None, "result": {
+                "changed": True, "from": old["version"], "to": new["version"]}}, written
+            passed(3, appsList=apps_list(), written=written, launcher=launcher_now())
 
             begin(4)
             asked_at = time.monotonic()
@@ -797,7 +806,7 @@ def run():
             assert apps_list() == new["version"] and shell.listed(root)
             wait("the helper task is removed", lambda: helper_task().get("exists") is False, 240)
             difference = listed_files.differs(launcher, prefixes[2])
-            assert difference["differs"] is False, difference
+            assert difference == {"differs": False, "files": [], "packages": [], "unreadable": []}, difference
             assert calls(root) == ["fail", "hang"]
             done = wait("the app has saved the result", lambda: (lambda value: (
                 value.get("attempt") or {}).get("id") == three["id"] and value)(follow_state()), 120)

@@ -184,9 +184,10 @@ def _facts(manager, follow):
         try:
             from .windows_consumer_shell import settle_version, set_version
             settled = settle_version(root, home=manager.home)
-            follow.shell_result = (settled, set_version(root, app['version'], home=manager.home))
+            follow.shell_result = {'settled': settled,
+                'result': set_version(root, app['version'], home=manager.home)}
         except Exception as error:
-            follow.shell_result = type(error).__name__
+            follow.shell_result = {'errorType': type(error).__name__}
     left, right = version_tuple(old['version']), version_tuple(app['version'])
     return {'launcher': {'version': old['version']}, 'identity': old['identity'],
         'app': app, 'python': str(Path(target['prefix']) / 'Scripts/pythonw.exe'),
@@ -218,6 +219,9 @@ async def _publish(manager, follow, **values):
     value = {**_saved(manager), **values, 'phase': follow.phase}
     if follow.facts:
         value.update(launcher=follow.facts['launcher'], app=follow.facts['app'])
+    if follow.shell_result is not None:
+        # For diagnostics: what this host run did with the Apps-list version.
+        value['appsList'] = follow.shell_result
     if value != _saved(manager):
         await manager.publish(launcherRefresh=value)
 

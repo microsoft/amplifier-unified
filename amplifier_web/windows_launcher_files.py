@@ -61,6 +61,7 @@ FILES = ('amplifier_web/__init__.py',
  'amplifier_web/windows_read_files.py',
  'amplifier_web/windows_removal.py',
  'amplifier_web/windows_service.py',
+ 'amplifier_web/windows_start.py',
  'amplifier_web/windows_task_runtime.py',
  'amplifier_web/windows_tls.py',
  'amplifier_web/windows_trust.py',
@@ -82,7 +83,7 @@ PACKAGES = ('aiohappyeyeballs',
  'yarl')
 
 DYNAMIC = {
-    'amplifier_web/application_generations.py::delegate::-m::os.execv(str(python), exec_arguments([str(python), "-I", "-m", "amplifier_web", *args]))': (),  # Runs the app generation.
+    'amplifier_web/application_generations.py::delegate::-m::hand_over(python, ["-I", "-m", "amplifier_web", *args])': (),  # Runs the app generation.
     'amplifier_web/application_generations.py::delegate::__file__::if not Path(__file__).resolve().is_relative_to(Path(sys.prefix).resolve()):': (),  # Compares the package path.
     "amplifier_web/application_generations.py::verify_candidate::-c::result = subprocess.run([str(python), '-I', '-c', GRAPH_PROBE],": (),  # Reads metadata in the app generation.
     'amplifier_web/cli.py::_parse::-m::command.add_argument("--model", "-m")': (),  # A command-line option, not a program.

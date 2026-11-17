@@ -676,8 +676,15 @@ async def test_apps_list_pass_only_for_confirmed_setup_once_and_failure_is_nonfa
     ops = [row[0] for row in rig.calls if row[0] in {'settle', 'version'}]
     assert ops == ([] if condition in {'unconfirmed', 'not-layout'} else
         ['settle'] if condition == 'failure' else ['settle', 'version'])
+    result = rig.m._launcher_follow.shell_result
+    if condition in {'unconfirmed', 'not-layout'}:
+        assert result is None and 'appsList' not in saved(rig)
+    else:
+        # The result is saved with the launcher state, for diagnostics.
+        assert saved(rig)['appsList'] == result == (
+            {'errorType': 'PermissionError'} if condition == 'failure' else
+            {'settled': {'status': 'settled'}, 'result': {'status': 'settled'}})
     if condition == 'failure':
-        assert rig.m._launcher_follow.shell_result == 'PermissionError'
         assert saved(rig)['phase'] == 'waiting'
 
 
