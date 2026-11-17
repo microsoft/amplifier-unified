@@ -226,29 +226,39 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
         attempt = json.loads((stage / 'profile-attempt.json').read_text(encoding='utf-8'))
         assert (attempt['status'], attempt['errorType']) == ('cancelled', 'CancelledError'), attempt
         assert (attempt['timings'][-1]['phase'], attempt['timings'][-1]['status']) == ('dependency-prepare', 'cancelled')
-        # The app ends the command that it started. What that command started can run on: list it until none is left.
+        def not_admitted():
+            """Nothing admits the stopped attempt: no record in its stage, and no index entry that names it."""
+            return (not (stage / 'validated.json').exists() and not (stage / 'profiles-qualified.json').exists()
+                    and all(json.loads(path.read_text(encoding='utf-8'))['generation'] != stage.name
+                            for path in index.glob('*.json')))
+
+        assert not_admitted()
+        # The app ends the command that it started. What that command started can run on.
         left = of_attempt(await asyncio.to_thread(processes), stage.name, known)
         after = dict(left)
-        while left:
+        # The person sends again at once, while those programs can still run: the lock is free, the stopped stage
+        # is not used, and a new one is prepared beside it.
+        again = asyncio.create_task(runtime_profiles.ensure(home, generation, session, progress=progress))
+        while left:   # list them until none is left
             assert time.monotonic() - at < 900, f'Processes of the stopped preparation still run: {left}'
-            await asyncio.sleep(5)
+            await asyncio.sleep(2)
             left = of_attempt(await asyncio.to_thread(processes), stage.name, known)
         ended = time.monotonic() - at
-        # Nothing admits the stopped attempt, also after its last process: no record in the stage, none in the index.
-        assert not (stage / 'validated.json').exists() and not (stage / 'profiles-qualified.json').exists()
-        assert len(list(index.glob('*.json'))) == len(selected)
-        # Its copy of the keys file stays, and it is still private. Nothing was written into the chat's folder.
-        assert keys_copy(stage) == KEYS
+        # Also after its last process nothing admits the stopped attempt. Its copy of the keys file stays, and it
+        # is still private. Nothing was written into the chat's folder.
+        assert not_admitted() and keys_copy(stage) == KEYS
         assert native.update_stage_probe.created(folder) == kept[label], label
         stopped[label] = stage.name
+        new = await again
+        assert new != stage.name and {path.name for path in releases.iterdir()} - before == {stage.name, new}
+        assert not_admitted()
         print(f'MEASURED a stop during the preparation ({label}): {len(running)} processes of it ran at the stop '
-              f'({", ".join(sorted(set(running.values())))}); {len(after)} remained directly after the stop '
-              f'({", ".join(sorted(set(after.values()))) or "none"}); none remained after {ended:.0f} s. The attempt '
-              f'is recorded as cancelled, nothing admits it, and its copy of the keys file is private.')
-        # The person sends again: the lock is free, the stopped stage is not used, a new one is prepared.
-        again = await runtime_profiles.ensure(home, generation, session, progress=progress)
-        assert again != stage.name and {path.name for path in releases.iterdir()} - before == {stage.name, again}
-        return again
+              f'({", ".join(sorted(set(running.values())))}); {len(after)} were listed directly after the stop '
+              f'({", ".join(sorted(set(after.values()))) or "none"}); the chat was started again directly after that '
+              f'list; no process of the stopped preparation was listed {ended:.0f} s after the stop. The attempt is '
+              f'recorded as cancelled, nothing admits it, and its copy of the keys file is private. The second '
+              f'start prepared the setup in a new stage.')
+        return new
 
     async def journey():
         await process(uv, 'lock', '--project', str(project), '--python', '3.13', timeout=1200)
@@ -344,6 +354,12 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
         print(f'MEASURED deepest file of the {name}: {deepest} characters below the installation folder '
               f'(the budget states {budget.MEASURED_DEPTHS[name]})')
         assert deepest <= budget.MEASURED_DEPTHS[name], name
+    # The stopped preparation left its project, under the longer name that a preparation has until its freeze.
+    left_project = re.compile(r'app\\runtime\\prepare-' + stopped['folder that a person chose'] + r'\\', re.I)
+    deepest = max(size for size, kind, relative in files if left_project.match(relative)) - len(str(root))
+    print(f'MEASURED deepest file of the project that the stopped preparation left: {deepest} characters below the '
+          f'installation folder (the budget states {budget.PREPARATION_PROJECT_DEPTH})')
+    assert deepest <= budget.PREPARATION_PROJECT_DEPTH
     # The same for the source store: the deepest file that counts as needed, and the deepest file at all.
     store = re.compile(re.escape(budget.SOURCE_FOLDER) + r'\\objects\\[0-9a-f]{16}\\[0-9a-f]{40}\\(.+)', re.I)
     inside = [(len(found.group(1)), budget.needed(relative)) for size, kind, relative in files

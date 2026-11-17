@@ -656,6 +656,13 @@ release 0.105.0 after an in-app update and a chat, and the budget test holds
 the same numbers. The frozen worker environment
 (`app\runtime\q-<32 hex digits>`) is the one that an update or the setup of
 a chat makes. Its deepest file is bytecode; its deepest source file is 180.
+While the app prepares such an environment, and after a preparation that was
+stopped or that failed, the same files are in
+`app\runtime\prepare-<32 hex digits>`. That name is 6 characters longer than
+the frozen one. Its deepest source file is then 186 (245 at 59). A bytecode
+file as deep as the deepest one of the frozen environment is 200 there: 259
+at 59, the limit itself. Python uses the source file when it cannot write
+bytecode.
 Earlier text here gave 162 for the first worker environment (its deepest
 source file) and 68 for the private Git (the earlier, smaller Git).
 
@@ -895,9 +902,15 @@ stopped while its first command runs, as when a person stops the chat. The
 job requires that the attempt is recorded as cancelled, that nothing admits
 it, and that its copy of the keys file is still private. On Windows the app
 ends only the command that it started; a program that this command started
-can run on. The job lists those programs until none is left, and prints how
-many there were and for how long. Then the chat starts again and gets a new
-stage. A second start while such a program still runs is not checked. The
+can run on. The job starts the chat again directly after the stop, and it
+lists those programs until none is left. It prints how many there were and
+after how long none was left. In the run of November 17, 2026, programs of
+the stopped command (Python and Git) ran on for some seconds. On an installed
+PC those programs are in the launcher's kill-on-close Job
+(`contain_current_host` in `amplifier_web/windows_jobs.py`), so they end with
+the app at the latest; that is read from the code and not run in this job. The second
+start gets a new stage and ends well. The stopped stage and its project stay
+on the disk; this change adds nothing that removes them. The
 job reads each stage's copy of the keys file through the app's private-file
 reader, which refuses another owner and a wider access list. It then lists
 every path below the installation

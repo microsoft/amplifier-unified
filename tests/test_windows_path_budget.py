@@ -624,6 +624,12 @@ MEASURED_DEPTHS = {
     'tools': 124,
     'private Git': 90,                  # the full Git for Windows
 }
+# Until its freeze the worker environment of an update or of a chat's setup is in
+# ``app\\runtime\\prepare-<32 hex>``. A stopped or failed preparation leaves it there. That name is
+# longer than the frozen one, so every file in it is this much deeper.
+PREPARATION_PROJECT_EXTRA = len('prepare-' + HEX32) - len('q-' + HEX32)
+PREPARATION_PROJECT_DEPTH = MEASURED_DEPTHS['frozen worker environment'] + PREPARATION_PROJECT_EXTRA
+FROZEN_ENVIRONMENT_SOURCE_DEPTH = 180   # the deepest file of the frozen environment that is not bytecode (measured)
 # The parts that the native tree case builds itself, and where each one is below the installation folder.
 BUILT_BY_THE_TREE_CASE = {
     'frozen worker environment': r'app\\runtime\\q-[0-9a-f]{32}\\',
@@ -642,6 +648,13 @@ def test_measured_application_depths_fit_under_the_longest_root():
     # The deepest part leaves this many characters at the longest folder path, as the document says.
     assert FILE_LIMIT - MAX_ROOT - max(MEASURED_DEPTHS.values()) == 6
     assert re.search(r'longest\s+is\s+253\s+characters,\s+with\s+6\s+to\s+spare', design)
+    # The environment under its longer name during a preparation: bytecode reaches the limit itself.
+    assert (PREPARATION_PROJECT_EXTRA, PREPARATION_PROJECT_DEPTH) == (6, 200)
+    assert MAX_ROOT + PREPARATION_PROJECT_DEPTH == FILE_LIMIT
+    profiles = (ROOT / 'amplifier_web/runtime_profiles.py').read_text(encoding='utf-8')
+    assert 'project = Path(home) / "runtime" / ("prepare-" + selected)' in profiles
+    assert "final = Path(manager.home) / 'runtime' / ('q-' + key)" in (
+        ROOT / 'amplifier_web/runtime_qualification.py').read_text(encoding='utf-8')
     # The source store: module source, and the deepest file that is counted as needed.
     assert (length('s\\objects\\' + 'f' * SOURCE_NAME + '\\' + HEX40 + '\\' + 'm' * STORE_DEPTH),
             length('s\\objects\\' + 'f' * SOURCE_NAME + '\\' + HEX40 + '\\' + 'm' * STORE_TEST_DEPTH)) == (255, 268)
@@ -692,6 +705,12 @@ def test_the_design_document_states_the_numbers_of_this_budget():
     sentences = [
         f'Those fit at {MAX_ROOT} today: the longest is {MAX_ROOT + max(MEASURED_DEPTHS.values())} characters',
         f'every row of that budget fits at {MAX_ROOT};',
+        f'its deepest source file is {FROZEN_ENVIRONMENT_SOURCE_DEPTH}.',
+        f'{PREPARATION_PROJECT_EXTRA} characters longer than the frozen one. Its deepest source file is then '
+        f'{FROZEN_ENVIRONMENT_SOURCE_DEPTH + PREPARATION_PROJECT_EXTRA} '
+        f'({MAX_ROOT + FROZEN_ENVIRONMENT_SOURCE_DEPTH + PREPARATION_PROJECT_EXTRA} at {MAX_ROOT}). A bytecode file as '
+        f'deep as the deepest one of the frozen environment is {PREPARATION_PROJECT_DEPTH} there: '
+        f'{MAX_ROOT + PREPARATION_PROJECT_DEPTH} at {MAX_ROOT}, the limit itself.',
         f'module source is {length(store[SOURCE_OBJECT])} characters at {MAX_ROOT}, and the deepest other file that '
         f'counts as needed is {MAX_ROOT + object_prefix + STORE_DEPTH}.',
         f'sessions have longer IDs** ({HELPER_ID} characters plus the agent name).',
