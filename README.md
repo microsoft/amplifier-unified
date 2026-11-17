@@ -89,8 +89,8 @@ Limits of this preview:
   - **OpenAI API:** in our tests on a PC, we looked after a chat for a file
     or folder with "amplifier" in its name. We looked directly in the usual
     places of the Windows account, such as the profile folder, AppData,
-    Documents and the Desktop. Outside the folder, the only one from
-    Amplifier was its Start-menu entry, which setup makes. We did not look
+    Documents and the Desktop. Outside the folder, the only one that
+    Amplifier made was the Start-menu entry from setup. We did not look
     inside other folders there or on the rest of the disk.
   - **Anthropic API:** up to version 0.106.2, a chat writes one small file
     outside the folder: `%USERPROFILE%\.amplifier\rate-limit-state.json`. We

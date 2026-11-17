@@ -77,7 +77,7 @@ class InstallationGuidanceTests(unittest.TestCase):
                 "- **OpenAI API:** in our tests on a PC, we looked after a chat for a file or folder with "
                 "\"amplifier\" in its name. We looked directly in the usual places of the Windows account, "
                 "such as the profile folder, AppData, Documents and the Desktop. Outside the folder, the only "
-                "one from Amplifier was its Start-menu entry, which setup makes. We did not look inside other "
+                "one that Amplifier made was the Start-menu entry from setup. We did not look inside other "
                 "folders there or on the rest of the disk.",
                 # Both halves were seen on a PC: the file outside the folder with an earlier version, and
                 # the file inside the folder with 0.106.3. The probes of that test read names in the usual
