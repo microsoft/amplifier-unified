@@ -1,0 +1,31 @@
+name: Windows standard account
+# PROBE (temporary): facts of a hosted runner for a standard (non-administrator) account.
+on:
+  push:
+    branches:
+      - windows-ootb/standard-account
+permissions:
+  contents: read
+jobs:
+  windows-standard-account:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13'
+          architecture: x64
+      - name: Probe
+        timeout-minutes: 8
+        shell: pwsh
+        env:
+          AMPLIFIER_CREATE_A_STANDARD_USER_ON_THIS_RUNNER: '1'
+        run: |
+          python -I -B tests/fixtures/windows_standard_account_native.py probe
+          if ($LASTEXITCODE -ne 0) { throw 'The probe failed.' }
