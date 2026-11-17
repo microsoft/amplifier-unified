@@ -314,3 +314,19 @@ async def test_failed_stdout_overflow_does_not_change_allowed_auth_retry(monkeyp
     result = await updates.process('uv', 'sync', '--locked')
     assert result == 'done' and len(calls) == 2
     assert result.diagnostic_facts['commandAttempts'][0]['outputLimitExceeded']
+
+
+async def test_windows_exited_launcher_does_not_wait_for_successor_pipe_eof(monkeypatch):
+    """Windows launch successors are not POSIX process-group descendants."""
+    from unittest.mock import AsyncMock
+    import time
+    child = SimpleNamespace(stdout=asyncio.StreamReader(), stderr=asyncio.StreamReader(),
+                            returncode=0, wait=AsyncMock(return_value=0))
+    monkeypatch.setattr(updates.asyncio, 'create_subprocess_exec', AsyncMock(return_value=child))
+    monkeypatch.setattr(updates, 'os', SimpleNamespace(name='nt', environ={}))
+    monkeypatch.setattr(updates.subprocess, 'CREATE_NO_WINDOW', 0, raising=False)
+    started = time.monotonic()
+    with pytest.raises(CommandTimeout):
+        await updates.process('fixture-launcher', timeout=.05)
+    assert time.monotonic() - started < 1
+    assert child.wait.await_count == 1

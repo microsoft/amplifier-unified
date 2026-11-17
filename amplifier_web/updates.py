@@ -289,14 +289,25 @@ async def process(*args, cwd=None, env=None, timeout=90, raw=False, _redaction_e
             except ProcessLookupError:
                 pass
         terminate()
-        try:
-            await asyncio.wait_for(asyncio.shield(readers), 5)
-        except TimeoutError:
-            terminate(force=True)
+        if os.name == 'nt':
+            # Windows launch handoff can leave a legitimate successor holding
+            # the pipes after our direct child exited. Do not spend a second
+            # drain timeout waiting for that successor or claim to contain it.
+            if proc.returncode is None:
+                try:
+                    await asyncio.wait_for(proc.wait(), 5)
+                except TimeoutError:
+                    terminate(force=True)
+                    await proc.wait()
+        else:
             try:
                 await asyncio.wait_for(asyncio.shield(readers), 5)
             except TimeoutError:
-                pass  # Bound descendants that escaped the existing process group.
+                terminate(force=True)
+                try:
+                    await asyncio.wait_for(asyncio.shield(readers), 5)
+                except TimeoutError:
+                    pass  # Bound descendants that escaped the existing process group.
         readers.cancel()
         await asyncio.gather(readers, return_exceptions=True)
         failure = CommandTimeout(time.monotonic()-started) if isinstance(error, TimeoutError) else error
