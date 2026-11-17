@@ -218,6 +218,9 @@ async def test_a_check_that_is_refused_at_the_owners_lock_does_not_end_the_start
     try:
         await asyncio.wait_for(new.lock.asked.wait(), 10)  # The check passed its first admission and waits.
         state['pendingRelease'] = 'f' * 32  # That operation prepared a component update.
+    except BaseException:
+        await new.close()  # The wait failed. The owner cancels its check; nothing runs on after this case.
+        raise
     finally:
         new.lock.release()  # Also when the wait fails: the check must not stay behind the lock.
     await check
@@ -318,6 +321,7 @@ async def test_a_sequence_that_has_begun_continues_with_automatic_checks_off(man
     manager.service.state['settings']['updates']['autoCheck'] = False
     clock(2 * HOUR)
     new = await host_start(manager)
+    assert new._host_started - state['lastCheck'] >= START_LIMIT  # A start check would be due.
     assert new.check_due() is None
     checks = len(release_checks)
     asked = requests(new)
@@ -330,7 +334,11 @@ async def test_a_sequence_that_has_begun_continues_with_automatic_checks_off(man
 @pytest.mark.parametrize('failure', ['raises', 'reports'])
 async def test_a_start_check_that_fails_is_not_repeated_and_the_next_check_is_one_interval_later(
         manager, clock, monkeypatch, failure):
-    """For example the network is not up yet at the host start. docs/UPDATES.md states this limit."""
+    """For example the network is not up yet at the host start. docs/UPDATES.md states this limit.
+
+    'reports': the look for a release reports that it failed. The real look does that when the network is down.
+    'raises': an error inside the check itself. The owner then publishes the phase 'error'.
+    """
     state = await nothing_newer(manager)
     clock(2 * HOUR)
     new = await host_start(manager)
@@ -347,7 +355,10 @@ async def test_a_start_check_that_fails_is_not_repeated_and_the_next_check_is_on
         await new.tick()
     assert asked == [{'fresh': True, 'automatic': True}] and len(looks) == 1
     assert state['lastAttempt'] >= new._host_started and new.check_due() is None
-    assert (state['phase'] == 'error') == (failure == 'raises')
+    if failure == 'raises':
+        assert state['phase'] == 'error'
+    else:  # The component part of the check still ran. The failed look is in the application's row.
+        assert state['application']['status'] == 'check_failed'
     clock(INTERVAL - 60)  # Before this rule the timed check was due 2 hours after the start.
     await new.tick()
     assert len(asked) == 1 and len(looks) == 1
