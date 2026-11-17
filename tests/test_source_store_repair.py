@@ -178,9 +178,9 @@ def installation(tmp_path, monkeypatch):
         yield SimpleNamespace(root=root, data=root / 'app', store=root / 's', outside=outside, steps=steps,
                               start=start, link=link, lines=lines, source=repository(tmp_path / 'repository'))
     finally:
-        if NATIVE:
-            _clear(root, links)
-            _clear(outside, [])
+        # Foundation sealed the objects. Remove the folders of this case here, so that pytest need not.
+        _clear(root, links)
+        _clear(outside, [])
 
 
 def snapshot(*folders):
@@ -208,14 +208,15 @@ def bytecode(folder):
                   if path.name == '__pycache__' or path.suffix == '.pyc')
 
 
-async def publish(installation):
+async def publish(installation, source=None):
     """Foundation publishes the module's source as an object of the store, as a host of the installation does."""
     from amplifier_foundation.sources.shared import SharedSourceStore
     shared = SharedSourceStore(installation.store)
-    cache = installation.data / 'foundation' / 'cache'
-    await shared.resolve(installation.source, cache)
-    binding, = (cache / '.source-bindings').glob('*.json')
-    record = json.loads(binding.read_text(encoding='utf-8'))
+    cache, source = installation.data / 'foundation' / 'cache', source or installation.source
+    await shared.resolve(source, cache)
+    record, = (value for value in (json.loads(path.read_text(encoding='utf-8'))
+                                   for path in (cache / '.source-bindings').glob('*.json'))
+               if value['git_url'] in source)
     target = shared.checkout(record['git_url'], record['commit'])
     if not NATIVE:
         # Foundation takes the write permission from an object's folders, and POSIX then refuses a new entry.
@@ -242,8 +243,8 @@ def an_earlier_helper_imports(folder):
     return bytecode(folder)
 
 
-async def broken(installation):
-    target = await publish(installation)
+async def broken(installation, source=None):
+    target = await publish(installation, source)
     written = an_earlier_helper_imports(target.folder)
     assert written == [PACKAGE + '/__pycache__', *sorted(
         PACKAGE + '/__pycache__/' + path.name for path in (target.folder / PACKAGE / '__pycache__').iterdir())]
@@ -452,6 +453,9 @@ async def test_a_store_with_no_cache_folder_costs_no_git_and_a_later_start_reads
     before = snapshot(installation.store)
     first = installation.start()
     assert (first['git'], first['with_cache'], first['complete'], first['change']) == (0, 0, True, 0)
+    # The folders of the store that were listed: objects, the source, the object and its one package.
+    # The object's .git is not listed when the object has no cache folder.
+    assert first['listings'] == 4
     assert snapshot(installation.store) == before and target.verify() == 'accepted'
 
     # The same app version again: no lock, no listing, no line in the log.
@@ -600,6 +604,86 @@ async def test_a_git_that_cannot_run_leaves_the_object_for_a_later_start(install
                 0, 1, count == repair.TRIES, {target.key: count})
         assert snapshot(installation.store) == before
     assert installation.start() is None  # Three tries are over for this app version.
+
+
+async def test_a_git_that_ends_with_an_error_is_not_an_empty_answer(installation):
+    target = await broken(installation)
+    index = target.folder / '.git' / 'index'
+    if not NATIVE:
+        index.parent.chmod(0o755)
+    _writable(index)
+    index.write_bytes(b'not an index')
+    before = snapshot(installation.store)
+    result = installation.start()
+    assert (result['git'], result['later'], result['repaired'], result['change'], result['complete']) == (
+        1, 1, 0, 0, False)
+    assert snapshot(installation.store) == before and record(installation)['tries'] == {target.key: 1}
+
+
+async def test_an_object_that_was_left_for_good_is_not_looked_at_again_while_the_pass_is_open(
+        installation, tmp_path):
+    """Two objects: one has a person's file, one has a file in use. The second start costs only the second."""
+    left = await broken(installation)
+    later = await broken(installation, repository(tmp_path / 'another-repository'))
+    assert left.key != later.key
+    _another_file_at_the_top(left, installation)
+    with in_use(installation, later.folder / PACKAGE / '__pycache__' / ('_listing.' + TAG + '.pyc')):
+        first = installation.start()
+        second = installation.start()
+    assert {name: first[name] for name in ('objects', 'with_cache', 'left', 'later', 'git', 'complete')} == {
+        'objects': 2, 'with_cache': 2, 'left': 1, 'later': 1, 'git': 4, 'complete': False}
+    assert {name: second[name] for name in ('objects', 'with_cache', 'left', 'later', 'git', 'complete')} == {
+        'objects': 2, 'with_cache': 1, 'left': 0, 'later': 1, 'git': 2, 'complete': False}
+    assert record(installation)['tries'] == {left.key: repair.TRIES, later.key: 2}
+    assert len(bytecode(left.folder)) == 3
+
+
+async def test_one_object_that_this_code_cannot_handle_does_not_stop_the_others(installation, monkeypatch, tmp_path):
+    one = await broken(installation)
+    two = await broken(installation, repository(tmp_path / 'another-repository'))
+    odd, good = sorted((one, two), key=lambda target: target.key)
+    real = repair._object
+
+    def object_(api, parent, name, folder, *rest):
+        if Path(folder).parent.name == odd.folder.parent.name:  # The two commits can have one name.
+            raise RuntimeError('something that this code did not expect')
+        return real(api, parent, name, folder, *rest)
+    monkeypatch.setattr(repair, '_object', object_)
+    result = installation.start()
+    assert (result['repaired'], result['later'], record(installation)['tries']) == (1, 1, {odd.key: 1})
+    assert good.verify() == 'accepted' and len(bytecode(odd.folder)) == 3
+
+
+def test_the_listing_notes_only_the_plain_files_of_a_cache_folder_and_never_enters_a_link(installation):
+    tree = installation.store / 'tree'
+    (tree / 'pkg' / '__pycache__' / 'folder.pyc').mkdir(parents=True)
+    (tree / 'pkg' / '__pycache__' / 'a.pyc').write_bytes(b'x')
+    (tree / 'pkg' / '__pycache__' / 'notes.txt').write_bytes(b'x')
+    (tree / 'pkg' / 'plain').mkdir()
+    (tree / '.git' / '__pycache__').mkdir(parents=True)
+    (tree / '__pycache__').mkdir()
+    api = repair._steps()
+
+    def walk():
+        with repair._held(api, str(installation.store)) as top:
+            with repair._entry(api, top, 'tree') as handle:
+                return repair._walk(api, handle, repair._Budget(time.monotonic))
+    # The folder with the name of a bytecode file is not a file. The cache folder below .git is not listed.
+    assert walk() == ({('pkg', '__pycache__'): {'a.pyc', 'notes.txt'}, ('__pycache__',): set()},
+                      False, sorted_as_listed(tree))
+    installation.link(installation.outside, tree / 'pkg' / '__pycache__' / 'link.pyc')
+    caches, link, _ = walk()
+    assert link is True and caches[('pkg', '__pycache__')] == {'a.pyc', 'notes.txt'}
+    if installation.steps:
+        assert not any(installation.outside in (path, *path.parents) for path in installation.steps.listed)
+
+
+def sorted_as_listed(tree):
+    """The real folders at the top of a tree, in the order of the listing. .git is one of them."""
+    api = repair._steps()
+    with repair._held(api, str(tree.parent)) as top:
+        with repair._entry(api, top, tree.name) as handle:
+            return [name for name, attributes in api.children(handle) if attributes & 0x10 and not attributes & 0x400]
 
 
 SLOW = 6  # Seconds that the program which stands for Git keeps running.
@@ -894,9 +978,11 @@ def test_the_two_git_commands_and_the_exception_are_foundations_own():
 
 
 @pytest.mark.parametrize('others', [b'pkg/__pycache__/\xff.pyc\0', b'pkg/__pycache__/a.pyc\0../b/__pycache__/c.pyc\0',
-                                    b'__pycache__\0', b'a.pyc\0', b'pkg/__pycache__/a.pyo\0', b'nested/\0'])
+                                    b'__pycache__\0', b'a.pyc\0', b'pkg/__pycache__/a.pyo\0', b'nested/\0',
+                                    b'pkg/other/b.pyc\0', b'pkg/__pycache__/unlisted.pyc\0'])
 def test_a_name_from_git_that_is_not_listed_bytecode_leaves_the_object(others):
-    caches = {('pkg', '__pycache__'): {'a.pyc', 'a.pyo'}}
+    # Also when a listing had the name: it must be directly in a folder with the name __pycache__.
+    caches = {('pkg', '__pycache__'): {'a.pyc', 'a.pyo'}, ('pkg', 'other'): {'b.pyc'}, (): {'a.pyc', '__pycache__'}}
     with pytest.raises(repair._Leave):
         repair._decide(others, caches)
 

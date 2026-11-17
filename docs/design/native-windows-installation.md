@@ -1329,7 +1329,9 @@ open while Git runs. What is deleted is checked again on handles.
 started, only on the store of the installation that the host belongs to, in
 `cli._serve` before the host takes its own lock. It takes the data folder's
 host lock alone, without a wait; every host holds that lock shared while it
-serves. This host has started nothing yet. A worker or a helper of an earlier
+serves. This host has started no worker, helper or update stage yet (only the
+holder of its hidden console, which reads nothing of the store). A worker or a
+helper of an earlier
 host ends with that host (a kill-on-close Job), and the task's launcher starts
 the next host only when the earlier host's process tree is empty.
 
@@ -1352,8 +1354,9 @@ reads that file and does nothing more. The first start of an app version
 lists every folder of every object outside `.git` and starts no Git on a store
 with no `__pycache__` folder; an object that has one costs two Git commands.
 One run has these bounds: 20,000 listings, 400,000 entries, 3 seconds of
-search, 5 seconds for one Git command, 8 seconds in all. At its limit the step
-ends the Git program that it started and stops waiting; the installation's
+search, 5 seconds for one Git command, 8 seconds in all (ending a Git that
+passed its limit can add one second). At its limit the step ends the Git
+program that it started and stops waiting; the installation's
 `git\cmd\git.exe` is Git's starter program, so the Git program behind it can
 run on until its read ends. It only reads, and that object is left. A bound
 reached ends the run and a later start goes on; an object that alone passes a bound, or

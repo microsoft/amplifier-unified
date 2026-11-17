@@ -37,7 +37,7 @@ It runs only on Windows, only in the host that the start-at-sign-in task
 started, only on the store of the installation that this host belongs to, and
 only while it holds the data folder's host lock exclusively: no other host of
 this data folder is inside its serving part, and this host has started
-nothing yet. Three cases are not excluded; each needs a host that a person
+no worker, helper or update stage yet. Three cases are not excluded; each needs a host that a person
 started by hand (docs/design/native-windows-installation.md, "Repair of a
 source store object"). A process of an app version before 0.106.6 in them
 can write new bytecode; that object is then refused again until the next app
@@ -274,7 +274,7 @@ def _git(program, folder, budget, *words):
             process.kill()
             for last in (process.communicate, process.wait):
                 try:
-                    last(timeout=1)
+                    last(timeout=0.5)  # So a Git that passed its limit adds at most one second.
                 except (subprocess.TimeoutExpired, OSError, ValueError):
                     pass
             raise _Later() from None
@@ -439,10 +439,14 @@ def _run(api, store, data_dir, record, clock, log):
                     else:
                         record["next"] = key
                     raise
+                except _Stop:
+                    raise
                 except _Leave:
                     tries[key] = TRIES
                     count["left"] += 1
-                except (_Later, OSError):
+                except Exception:
+                    # A file in use, a Git failure, or anything that this code did not
+                    # expect of one object. The object stays; the others are still looked at.
                     tries[key] = tries.get(key, 0) + 1
                     count["later"] += 1
                 first = False
