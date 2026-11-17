@@ -703,6 +703,7 @@ try{
   assert.equal((await state()).view.draft,'Retain the Canvas test draft');return {saved:30,open:1,recoveredVersion:2};
  });
  await check('Auto uses measured outer width AND height with hysteresis and defers active navigation',async()=>{
+  for(const id of ids.slice(18))await action('canvas.select',{id});
   await action('view.update',{patch:{canvasFocused:true,canvasControlsExpanded:false}});
   await navigation('auto');
   const resize=async(width,height)=>{
@@ -722,17 +723,30 @@ try{
   await resize(850,740);await expect(panel).toHaveAttribute('data-navigation','tabs');
   await expect(menu.getByRole('combobox',{name:'Canvas navigation',exact:true})).toBeVisible();
   await page.keyboard.press('Escape');await expect(menu).not.toHaveAttribute('open','');
-  await expect(panel).toHaveAttribute('data-navigation','tabs');
-  await toggle.focus();await expect(panel).toHaveAttribute('data-navigation','compact');
+  await expect(panel).toHaveAttribute('data-navigation','compact');
   await documents().click();await expect(dialog).toBeVisible();
   await resize(1100,740);await expect(panel).toHaveAttribute('data-navigation','compact');
   await expect(dialog.getByRole('searchbox',{name:'Find an open document'})).toBeFocused();
   await page.keyboard.press('Escape');await expect(documents()).toBeFocused();
+  await expect(panel).toHaveAttribute('data-navigation','tabs');
+  const focusedDocument=strip.getByRole('tab',{name:titles[29],exact:true});
+  await focusedDocument.focus();await resize(850,740);
+  const burst=[],started=Date.now();
+  for(let step=0;step<9;step++){
+   await page.keyboard.press('Shift');await page.waitForTimeout(100);
+   burst.push({elapsed:Date.now()-started,mode:await panel.getAttribute('data-navigation'),focused:await focusedDocument.evaluate(el=>el===document.activeElement)});
+  }
+  assert.ok(burst.every(sample=>sample.mode==='tabs'&&sample.focused),'A continuing key burst defers switching beyond one quiet interval');
   await expect(panel).toHaveAttribute('data-navigation','compact');
-  await toggle.focus();await expect(panel).toHaveAttribute('data-navigation','tabs');
-  await overviewTab.focus();await resize(850,740);
-  await expect(overviewTab).toBeFocused();await expect(panel).toHaveAttribute('data-navigation','tabs');
-  await toggle.focus();await expect(panel).toHaveAttribute('data-navigation','compact');
+  await expect(documents()).toBeFocused();
+  report.focusedNavigationBurst=burst;
+  await resize(1100,740);await toggle.focus();await expect(panel).toHaveAttribute('data-navigation','tabs');
+  const right=panel.getByRole('button',{name:'Scroll document tabs right',exact:true});
+  await expect(right).toBeEnabled();await right.focus();await expect(right).toBeFocused();
+  await resize(850,740);
+  await expect(panel).toHaveAttribute('data-navigation','compact');
+  await expect(documents(),'An idle focused scroll arrow hands focus to the stable picker, never hidden chrome').toBeFocused();
+  assert.equal(await page.evaluate(()=>!!document.activeElement?.closest('[hidden],[inert]')),false);
   await capture('auto-narrow-tall');
   await navigation('tabs');await expect(strip).toBeVisible();
   await resize(1100,520);await expect(panel).toHaveAttribute('data-navigation','tabs');

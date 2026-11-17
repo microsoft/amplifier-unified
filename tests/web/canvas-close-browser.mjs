@@ -64,7 +64,7 @@ try{
   await capture((observe?'before':'after')+'-'+width);
   report.geometry.push({width,controls:await panel.locator('button').evaluateAll(nodes=>nodes.filter(el=>el.getClientRects().length).map(el=>{const r=el.getBoundingClientRect();return {label:el.getAttribute('aria-label'),text:el.textContent,role:el.getAttribute('role'),x:r.x,y:r.y,width:r.width,height:r.height}}))});
   if(observe){
-   await panel.getByRole('button',{name:'Open documents, 2 open',exact:true}).click();
+   await panel.locator('button.a-open-documents').click();
    await expect(page.getByRole('dialog',{name:'Open documents',exact:true})).toBeVisible();
    await capture('before-open-documents-'+width);
    await context.close();continue;
@@ -97,16 +97,16 @@ try{
   });
   const reachable=async(locator,settle=false)=>{
    let box=await targetGeometry(locator);
-   const minimum=width<500?44:24;
-   if(settle&&!(box.width>=minimum&&box.height>=minimum&&box.hit)){
+   const minimum=width<500?{width:44,height:44}:await locator.evaluate(el=>el.classList.contains('a-canvas-dismiss')?{width:32,height:32}:{width:28,height:30});
+   if(settle&&!(box.width>=minimum.width&&box.height>=minimum.height&&box.hit)){
     const initial=box;
     // Native strip scrolling changes the Overview width for 140ms. Wait on
     // the exact same corner-hit invariant, never click through an obstruction.
-    await expect.poll(async()=>{box=await targetGeometry(locator);return box.width>=minimum&&box.height>=minimum&&box.hit},
-     {timeout:1500,message:'Close control must have an unclipped '+minimum+'px hit target: '+JSON.stringify(initial)}).toBe(true);
+    await expect.poll(async()=>{box=await targetGeometry(locator);return box.width>=minimum.width&&box.height>=minimum.height&&box.hit},
+     {timeout:1500,message:'Close control must have an unclipped hit target: '+JSON.stringify({minimum,initial})}).toBe(true);
     (report.settledTargets??=[]).push({width,initial,settled:box});
    }
-   assert.ok(box.width>=minimum&&box.height>=minimum&&box.hit,'Close control must have an unclipped '+minimum+'px hit target');
+   assert.ok(box.width>=minimum.width&&box.height>=minimum.height&&box.hit,'Close control must have an unclipped hit target '+JSON.stringify(minimum));
   };
   const use=async locator=>{await reachable(locator,true);if(width<500)await locator.tap();else await locator.click()};
   const headerContained=async()=>{
@@ -147,13 +147,14 @@ try{
    // Preserve layout/scroll position: this negative removes discoverability,
    // not width. display:none would also clamp the document strip's scroll.
    const hidden=await page.addStyleTag({content:'.a-canvas-tab-close,.a-canvas-dismiss{visibility:hidden!important}'});
-   await assert.rejects(()=>reachable(closeTab('Beta report')),/unclipped 24px/);
-   await assert.rejects(()=>reachable(dismiss),/unclipped 24px/);
+   await assert.rejects(()=>reachable(closeTab('Beta report')),/unclipped hit target/);
+   await assert.rejects(()=>reachable(dismiss),/unclipped hit target/);
    await hidden.evaluate(el=>el.remove());
    await reachable(dismiss);await reachable(closeTab('Beta report'));
    report.checks.push({name:'Missing visible close controls rejected by the same oracle',status:'passed'});
   }
   await use(closeTab('Beta report'));
+  await expect.poll(async()=>(await artifactRows()).find(row=>row.id===second.id).tabOpen).toBe(false);
   await expect(panel.getByRole('tab',{name:'Beta report',exact:true})).toHaveCount(0);
   assert.equal((await state()).canvas.id,first.id);
   await expect(panel).toBeVisible();await preserved();
@@ -163,6 +164,7 @@ try{
   await beta.focus();await page.keyboard.press('Tab');
   await expect(closeTab('Beta report')).toBeFocused();await reachable(closeTab('Beta report'));
   await page.keyboard.press('Enter');
+  await expect.poll(async()=>(await artifactRows()).find(row=>row.id===second.id).tabOpen).toBe(false);
   if(layout==='tabs'){await expect(beta).toHaveCount(0);await expect(panel.getByRole('tab',{name:'Alpha report',exact:true})).toBeFocused()}
   else{await expect(beta).toBeFocused();await expect(beta).toContainText('Alpha report')}
   await reopen('Beta report');
@@ -176,6 +178,7 @@ try{
    await use(close);await page.keyboard.press('Escape');
   }
   assert.equal((await state()).canvas.id,second.id);
+  await expect.poll(async()=>(await artifactRows()).find(row=>row.id===first.id).tabOpen).toBe(false);
   await expect(panel.getByRole('tab',{name:'Alpha report',exact:true})).toHaveCount(0);
   await preserved();await reopen('Alpha report');
   // Keyboard traversal, not programmatic focus on the target close control.

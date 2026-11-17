@@ -62,7 +62,8 @@ print(root)
     (harness / '.venv').symlink_to(python.parent.parent, target_is_directory=True)
     scenarios = []
     for name in args.scenario:
-        assert name in {'compact-composer', 'markdown-composer', 'composer-return-host', 'layout-spacing-host', 'conversation-error-host', 'settings-mobile',
+        assert name in {'canvas-chrome', 'canvas-dirty', 'canvas-close', 'canvas-refresh-catchup',
+                        'compact-composer', 'markdown-composer', 'composer-return-host', 'layout-spacing-host', 'conversation-error-host', 'settings-mobile',
                         'layout-pass2-settings', 'layout-pass2-work', 'layout-pass2-priority'}
         target = output / name
         scenarios.append({'id': name, 'command': ['node', f'tests/web/{name}-browser.mjs'], 'env': {

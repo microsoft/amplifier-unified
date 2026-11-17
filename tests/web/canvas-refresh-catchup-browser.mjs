@@ -44,16 +44,16 @@ try{
  assert.equal((await publish('session.select',{id:sessionId})).accepted,true);
  const panel=page.locator('#workspace-canvas');
  const refresh=()=>{
-  const run=async()=>{
+  const run=async method=>{
    const details=panel.getByRole('button',{name:'Canvas details',exact:true});
    const expanded=await details.getAttribute('aria-expanded')==='true';
-   if(!expanded)await details.click();
-   await page.getByRole('region',{name:'Canvas details',exact:true}).getByRole('button',{name:'Refresh document',exact:true}).click();
+   if(!expanded)await details[method]();
+   await page.getByRole('region',{name:'Canvas details',exact:true}).getByRole('button',{name:'Refresh document',exact:true})[method]();
    // Secondary Refresh lives in Details. Its pending/error/retained/unknown
    // feedback must remain outside the closed inspector when consequential.
-   if(!expanded)await page.getByRole('button',{name:'Close canvas details',exact:true}).click();
+   if(!expanded)await page.getByRole('button',{name:'Close canvas details',exact:true})[method]();
   };
-  return {click:run,tap:run};
+  return {click:()=>run('click'),tap:()=>run('tap')};
  };
  const frame=()=>page.frameLocator('[data-canvas-view="primary"] iframe');
  const sample=async()=>({view:await view(),executed:await frame().locator('#executed').textContent(),input:await frame().getByLabel('Local unfinished input').inputValue()});
@@ -104,6 +104,8 @@ try{
   // File details and its fresh download metadata must use the running v1, while
   // v2 remains available only through the existing explicit Load control.
   assert.equal(after.view.runningVersion,1);assert.equal(after.view.latestVersion,2);
+  await expect(panel.getByRole('button',{name:'Choose artifact version',exact:true})).not.toContainText('Latest');
+  await expect(panel.getByRole('button',{name:'Choose artifact version',exact:true})).toContainText(/v1/);
   const metadata=(await action('canvas.versions.inspect',{id,sessionId,version:after.view.runningVersion})).result;
   assert.equal(metadata.version,1);assert.equal(metadata.revision,2);assert.equal(metadata.source,undefined);
   const clientId=(await state()).client.id;
@@ -221,7 +223,10 @@ try{
     const file=join(output,'narrow-running-v2.html');await download.saveAs(file);
     const bytes=await readFile(file);assert.deepEqual(bytes,Buffer.from(html(2)));
     row.observed.feedbackDownload={file:'narrow-running-v2.html',bytes:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex')};
-    await expect(toolbar.locator('.a-saved-file-download>[role="status"]')).toHaveText('Download started. Check your browser’s downloads.');
+   const detailsToggle=panel.getByRole('button',{name:'Canvas details',exact:true});
+   await detailsToggle.click();
+   await expect(page.getByRole('region',{name:'Canvas details',exact:true}).getByText('Download started. Check your browser’s downloads.',{exact:true})).toBeVisible();
+   await page.getByRole('button',{name:'Close canvas details',exact:true}).click();
     const after=await sample();assert.equal(after.executed,dirty.executed);assert.equal(after.input,dirty.input);
     assert.deepEqual(target(after.view),target(dirty.view));assert.equal(after.view.runningVersion,2);
    }finally{clearTimeout(timer);page.off('download',receive);expire()}
@@ -242,13 +247,12 @@ try{
      ['version','[aria-label="Choose artifact version"]'],['download','.a-saved-file-download>button'],
      ['details','.a-canvas-details']
     ].map(([name,selector])=>[name,inspect(bar.querySelector(selector))]));
-    const freshness=panel.querySelector('.a-canvas-freshness'),status=bar.querySelector('.a-saved-file-download>[role="status"]');
+    const freshness=panel.querySelector('.a-canvas-freshness');
     const r=rect(bar),style=getComputedStyle(bar),freshStyle=getComputedStyle(freshness);
     return {toolbar:r,contentLeft:r.left+parseFloat(style.borderLeftWidth)+parseFloat(style.paddingLeft),
      contentRight:r.right-parseFloat(style.borderRightWidth)-parseFloat(style.paddingRight),
      viewport:{width:innerWidth,height:innerHeight},overflow:bar.scrollWidth>bar.clientWidth+1,controls,
      freshness:{...inspect(freshness),paddingLeft:parseFloat(freshStyle.paddingLeft),paddingRight:parseFloat(freshStyle.paddingRight)},
-     feedback:status.textContent?inspect(status):null,
      decorationPointerEvents:[...bar.querySelectorAll('.a-saved-file-download>button *')].map(el=>getComputedStyle(el).pointerEvents)};
    });
    narrow.push({width,box,layout}); // Keep the measurement even if an assertion fails.
@@ -256,7 +260,7 @@ try{
    assert.equal(layout.overflow,false);
    assert.ok(layout.toolbar.left>=0&&layout.toolbar.right<=layout.viewport.width,'Toolbar must fit the narrow viewport');
    for(const [name,r] of Object.entries(layout.controls)){
-    assert.equal(r.tag,'BUTTON',name);assert.ok(r.width>=32&&r.height>=32,name+' compact mouse target');
+    assert.equal(r.tag,'BUTTON',name);assert.ok(r.width>=44&&r.height>=44,name+' coarse pointer target');
     assert.ok(r.visible&&!r.inert&&r.hit&&!r.clipped,name);
     assert.ok(r.left>=layout.contentLeft-1&&r.right<=layout.contentRight+1&&r.top>=0&&r.bottom<=layout.viewport.height,name);
    }
@@ -268,10 +272,9 @@ try{
    assert.ok(fresh.visible&&!fresh.inert&&!fresh.clipped&&fresh.top>=Math.max(version.bottom,download.bottom,details.bottom));
    assert.ok(fresh.left>=0&&fresh.right<=layout.viewport.width&&fresh.bottom<=layout.viewport.height,'Retained-preview consequences remain visible outside Details');
    assert.ok(box.width>=44&&box.height>=44&&box.inside&&box.hit,'Explicit Load retains its 44px consequence target');
-   if(kind==='html'){
-    const feedback=layout.feedback;assert.ok(feedback?.visible&&!feedback.inert&&!feedback.clipped);
-    assert.ok(feedback.bottom<=fresh.top||feedback.top>=fresh.bottom,'Download feedback must not overlap freshness/Load');
-    assert.ok(feedback.left>=0&&feedback.right<=layout.viewport.width&&feedback.bottom<=layout.viewport.height,'Download feedback remains bounded');
+   const previewSource=panel.locator('.a-canvas-view-choice').getByRole('button');
+   for(const control of await previewSource.all()){
+    const bounds=await control.boundingBox();assert.ok(bounds.width>=44&&bounds.height>=44,'Preview/Source keeps 44px coarse targets');
    }
    await capture(kind+'-retained-'+width);
   }
@@ -355,7 +358,8 @@ try{
      const feedback=details?page.locator('#canvas-options').getByRole('alert'):panel.getByRole('alert');
      await expect(feedback).toContainText('Load v2 was accepted');
      if(details){
-      await expect(feedback).toContainText('Close Canvas details to use Refresh');
+      await expect(feedback).not.toContainText('Close Canvas details to use Refresh');
+      await expect(page.getByRole('region',{name:'Canvas details',exact:true}).getByRole('button',{name:'Refresh document',exact:true})).toBeEnabled();
       await expect(page.getByRole('combobox',{name:'Artifact version',exact:true})).toBeDisabled();
       assert.equal(await feedback.evaluate(el=>!!el.closest('[inert],[aria-hidden="true"]')),false,'Details feedback is accessible in the active narrow sheet');
      }
