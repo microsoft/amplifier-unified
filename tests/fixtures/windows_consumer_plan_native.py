@@ -75,7 +75,10 @@ def left(limit):
 
 
 def started(name, arguments, limit, **options):
-    """Run one command with a time limit and give its result. A command that passes the limit is ended."""
+    """Run one command with a time limit and give its result.
+
+    At the limit, Python ends the command's own process. It does not end a program that the command started.
+    """
     seconds = left(limit)
     try:
         return subprocess.run([*map(str, arguments)], capture_output=True, text=True, encoding="utf-8",
