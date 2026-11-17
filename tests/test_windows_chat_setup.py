@@ -499,7 +499,7 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
     if not REQUIRED:
         pytest.skip('Downloads the worker dependencies and the default components; the CI job opts in.')
     from fixtures.manual_app_handoff_native import token_user_default_owner
-    from amplifier_web import runtime_profiles, update_diagnostics, updates
+    from amplifier_web import runtime_profiles, update_diagnostics, update_storage, updates
     from amplifier_web.deployment import write_private
     from amplifier_web.runtime_environment import prepare_project, project_path, receipt_directory
     from amplifier_web.updates import process
@@ -631,10 +631,23 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
         stage = releases / next(iter(made))
         attempt = json.loads((stage / 'profile-attempt.json').read_text(encoding='utf-8'))
         assert (attempt['status'], attempt['phase']) == ('preparing', 'dependency-prepare'), attempt
+        # While the preparation runs, its stage holds a copy of the keys file. (Not opened here: a program of
+        # the preparation can read it at this moment.)
+        copy = stage / 'shared-config' / 'keys.env'
+        assert copy.is_file()
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
         at = time.monotonic()
+        # The stop removes that copy (runtime_profiles._profile_attempt). The app made the stage and its
+        # shared-config folder with an ordinary mkdir and the copy with an ordinary copy; the removal goes
+        # through the private-file boundary from the app's home folder down. A copy that is still there
+        # stays for idle maintenance. This case does not show why a copy is still there: Windows refuses
+        # the removal while a program has the file open, and programs of the stopped command run at this
+        # moment, but the case sees only that the file exists. That a stop removes the copy from such a
+        # stage is required, with no program in the way, in tests/test_update_stage_keys.py (the native
+        # cases of a chat's own setup).
+        removed_at_the_stop = not copy.exists()
         attempt = json.loads((stage / 'profile-attempt.json').read_text(encoding='utf-8'))
         assert (attempt['status'], attempt['errorType']) == ('cancelled', 'CancelledError'), attempt
         assert (attempt['timings'][-1]['phase'], attempt['timings'][-1]['status']) == ('dependency-prepare', 'cancelled')
@@ -657,9 +670,15 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
             await asyncio.sleep(2)
             left = of_attempt(await asyncio.to_thread(processes), stage.name, known)
         ended = time.monotonic() - at
-        # Also after its last process nothing admits the stopped attempt. Its copy of the keys file stays, and it
-        # is still private. Nothing was written into the chat's folder.
-        assert not_admitted() and keys_copy(stage) == KEYS
+        # Also after its last process nothing admits the stopped attempt, and its copy of the keys file is gone.
+        # When the stop removed it, this shows that no program of the stopped command made it again. When
+        # the copy was still there at the stop, the same removal must work now (idle maintenance makes it
+        # for a stage whose record says "cancelled"); the case then shows only that this removal works.
+        # Nothing was written into the chat's folder.
+        if not removed_at_the_stop:
+            reason = update_storage.remove_stage_keys(home, stage)
+            assert reason is None, f'After the last process the removal of the stage\'s copy answered {reason!r}.'
+        assert not_admitted() and not copy.exists()
         assert native.update_stage_probe.created(folder) == kept[label], label
         stopped[label] = stage.name
         new = await again
@@ -670,7 +689,9 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
               f'({", ".join(sorted(set(after.values()))) or "none"}); the chat was started again directly after that '
               f'list; the list (a sample) held no process of the stopped preparation {ended:.0f} s after the stop. '
               f'The attempt is '
-              f'recorded as cancelled, nothing admits it, and its copy of the keys file is private. The second '
+              f'recorded as cancelled, nothing admits it, and its copy of the keys file is gone ('
+              f'{"the stop removed it" if removed_at_the_stop else "it was still there at the stop; this case removed it after the last process"}'
+              f'). The second '
               f'start prepared the setup in a new stage.')
         return new
 
