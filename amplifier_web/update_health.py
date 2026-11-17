@@ -17,13 +17,28 @@ DETERMINISTIC = RUNTIME_SOURCE_REASONS - {'runtime-source-changed'} | {
     'host-component-conflict', 'missing-configured-environment', 'incompatible-conversation-loop'}
 
 PREPARED_WAITING = 'Application release validated. Waiting for work to finish before restarting.'
-PREPARED_STARTING = 'Application release validated. No work is running. Amplifier now installs the update and restarts.'
+PREPARED_STARTING = 'Application release validated. No work is running. Amplifier installs the update and restarts by itself.'
+
+# Attempt IDs of the app replacements that THIS process executes at this moment.
+# Never saved. `updates.activation` in saved or restored state is a copy for
+# readers. It is never the evidence that hides a replacement marker.
+_EXECUTING = set()
+
+
+def claim_replacement(attempt):
+    _EXECUTING.add(attempt)
+
+
+def release_replacement(attempt):
+    """Synchronous and total. The owner calls it before any wait when it ends."""
+    _EXECUTING.discard(attempt)
 
 
 def _replacing(state):
-    """The saved state of a replacement that still runs. The live owner is not in it."""
+    """A replacement that this process executes now, in a state that still says so."""
     marker = state.get('pendingReplacement')
-    return bool(isinstance(marker, dict) and marker.get('attemptId')
+    return bool(isinstance(marker, dict) and isinstance(marker.get('attemptId'), str)
+                and marker['attemptId'] in _EXECUTING
                 and state.get('phase') == 'activating' and not state.get('error')
                 and not state.get('pendingRestart'))
 
@@ -36,32 +51,40 @@ def _prepared(state):
                 and (state.get('application') or {}).get('canInstall') is not False)
 
 
-def activation(manager):
-    """Derive live app progress from resident state, never from saved ownership."""
-    state = manager.service.state['updates']
-    if _replacing(state):
-        # Only the process that executes this exact attempt may call it running.
-        return ('installing' if state['pendingReplacement']['attemptId'] == getattr(manager, '_replacing', None)
-                else None)
-    if not _prepared(state):
-        return None
-    if state.get('blockers'):
-        return 'waiting'
+def _starting(state):
+    """A prepared app that the owner's next pass activates by itself."""
+    if not _prepared(state) or state.get('blockers'):
+        return False
     from .update_readiness import valid_update_intent
     from .updates import UpdateManager
     # Match the saved holds before tick/app reach activation. Operation locks
     # themselves are not a hold: staging publishes while it owns that lock.
-    if (getattr(manager, 'closed', False)
-            or getattr(manager, '_manual_handoff_commit_unknown', False)
-            or not valid_update_intent(state.get('applicationIntent'))
+    # A prepared state excludes every branch of awaiting_restart(): it has no
+    # marker, no pending restart and no error phase.
+    if (not valid_update_intent(state.get('applicationIntent'))
             or (state.get('pendingSmartTools') and not UpdateManager.independent_tool_results(state)
                 and (state.get('applicationIntent') or {}).get('scope') != 'app')):
-        return None
+        return False
     drain = state.get('drain') or {}
-    if (drain.get('phase') in {'draining', 'replacing', 'releasing'}
-            or drain.get('phase') == 'waiting' and any(
-                not row.get('ready') and not row.get('suppressed')
-                for row in drain.get('workers', {}).values())):
+    return not (drain.get('phase') in {'draining', 'replacing', 'releasing'}
+                or drain.get('phase') == 'waiting' and any(
+                    not row.get('ready') and not row.get('suppressed')
+                    for row in drain.get('workers', {}).values()))
+
+
+def activation(manager):
+    """Derive live app progress from resident state, never from saved ownership."""
+    state = manager.service.state['updates']
+    if _replacing(state):
+        return 'installing'
+    if not _prepared(state):
+        return None
+    if state.get('blockers'):
+        return 'waiting'
+    # A closed manager and an unreadable handoff commit are facts of this
+    # process. The saved state does not hold them.
+    if (getattr(manager, 'closed', False) or getattr(manager, '_manual_handoff_commit_unknown', False)
+            or not _starting(state)):
         return None
     return 'starting'
 
@@ -74,9 +97,10 @@ def browser_view(updates):
     Remove this view when the page reads updates.activation itself.
 
     `activation` is derived at the manager's own publications. Other owners
-    publish `updates` too, so the view also requires the state that the claim
-    describes. A claim that the state no longer supports changes nothing:
-    the page then gets the real marker, phase and error.
+    publish `updates` too, so the field alone is never enough. `installing`
+    also needs this process to execute that exact attempt (_EXECUTING), and
+    `starting` needs every saved condition that allowed it. A claim that fails
+    this changes nothing: the page then gets the real marker, phase and error.
 
     The page offers "Interrupt work and restart" whenever it gets
     `forceRestartTarget`. It gets none when no work delays the update, and none
@@ -85,7 +109,7 @@ def browser_view(updates):
     """
     claim = updates.get('activation')
     live = bool(claim == 'installing' and _replacing(updates)
-                or claim == 'starting' and _prepared(updates) and not updates.get('blockers'))
+                or claim == 'starting' and _starting(updates))
     if not live and (updates.get('forceRestartTarget') is None or sys.platform != 'win32'):
         return updates
     view = {**updates, 'forceRestartTarget': None}
@@ -498,7 +522,12 @@ def failure_events(state):
 
 
 def current(state, evidence=None, *, manual_verified=None, explicit_retry=False, connection=None):
-    """Pure projection of operation/desired/active state; no IO and no read flags."""
+    """Pure projection of operation/desired/active state; no IO and no read flags.
+
+    One fact is not in the state: whether this process executes the app
+    replacement that a marker names (_EXECUTING). Without it the marker reads
+    as an unconfirmed outcome.
+    """
     evidence = evidence or {}
     connection = connection or {}
     seq = state.get('sequence') or {}
@@ -515,6 +544,14 @@ def current(state, evidence=None, *, manual_verified=None, explicit_retry=False,
             detail += ' Amplifier checked the sources again before this attempt.'
         if status == 'current' and retry_check.get('result') == 'nothing-to-install':
             detail += ' Amplifier checked the sources again. Nothing is left to install.'
+        if (status in {'action-required', 'protected'} and failure and failure.get('kind') == 'ecosystem'
+                and type(retry_check.get('at')) in {int, float} and type(failure.get('at')) in {int, float}
+                and retry_check['at'] > failure['at']):
+            # The earlier record keeps its priority. Say what the later request did.
+            if retry_check.get('result') == 'nothing-to-install':
+                detail += ' Amplifier checked the sources again. Nothing is left to install.'
+            elif retry_check.get('result') == 'not-started':
+                detail += ' Amplifier checked the sources again. No new attempt started.'
         if (failure and failure.get('kind') == 'ecosystem' and connection.get('needed')
                 and (failure.get('reason') or (failure.get('probe') or {}).get('reason')) != 'ai-connection-needed'):
             # A record of this exact refusal carries the same guidance already.
@@ -559,7 +596,7 @@ def current(state, evidence=None, *, manual_verified=None, explicit_retry=False,
             return result('action-required', 'Update needs attention',
                           'Automatic restart is paused because Amplifier cannot confirm earlier work has finished. The current app is kept.',
                           action='diagnostics')
-        if state.get('activation') == 'starting' and _prepared(state) and not state.get('blockers'):
+        if state.get('activation') == 'starting' and _starting(state):
             return result('working', 'Updating Amplifier', PREPARED_STARTING)
         return result('action-required' if state.get('error') else 'waiting',
                       'Update needs attention' if state.get('error') else 'Update ready; waiting for work',

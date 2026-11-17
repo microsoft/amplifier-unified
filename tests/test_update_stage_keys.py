@@ -236,6 +236,38 @@ async def test_activation_revalidation_has_current_keys_only_during_validate(app
     assert_preserved(stage)
 
 
+@pytest.mark.parametrize('reason', ['refused', 'io'])
+@pytest.mark.parametrize('rollback', [False, True])
+async def test_a_refused_refresh_does_not_fail_the_activation(app, repo, monkeypatch, reason, rollback):
+    """Validation then runs with what the stage holds, as before the refresh existed."""
+    import json
+    manager, _ = await prepare(app, repo)
+    stage = stage_at(manager.home)
+    (stage / 'validated.json').write_text(json.dumps({'hostVersion': 'old-app', 'sources': 1}))
+    legacy = (stage / 'shared-config/keys.env').read_bytes()
+    state = app.state['updates']
+    state.update(phase='staged', pendingRelease=stage.name)
+    if rollback:
+        (manager.directory / 'active.json').write_text(json.dumps({'current': None, 'previous': stage.name}))
+        state.pop('pendingRelease')
+    app.state['sessions'][0]['status'] = 'working'  # Stop after validation, before replacement.
+    asked = []
+    def refuse(home, target, source):
+        asked.append((home, target))
+        return reason
+    monkeypatch.setattr(storage, 'refresh_stage_keys', refuse)
+    seen = []
+    async def validate(target, release):
+        seen.append((stage / 'shared-config/keys.env').read_bytes())
+    monkeypatch.setattr(manager, 'validate', validate)
+    await manager.activate(rollback=rollback)
+    assert asked == [(manager.home, stage)] and seen == [legacy]
+    # The validation counted: the stage is marked for this app version, and its copy is gone.
+    assert json.loads((stage / 'validated.json').read_text())['hostVersion'] == __import__('amplifier_web').__version__
+    assert not (stage / 'shared-config/keys.env').exists()
+    assert_preserved(stage)
+
+
 @pytest.mark.parametrize('part', ['source', 'stage', 'shared-config', 'keys.env'])
 def test_refresh_refuses_symlinks(tmp_path, part):
     stage = stage_at(tmp_path)
@@ -249,6 +281,80 @@ def test_refresh_refuses_symlinks(tmp_path, part):
     path.symlink_to(saved, target_is_directory=part != 'keys.env')
     assert storage.refresh_stage_keys(tmp_path, stage, source)
     assert path.is_symlink()
+
+
+@pytest.mark.parametrize('kind', ['symlink', 'hardlink'])
+def test_refresh_reads_the_live_file_that_the_products_own_reader_reads(tmp_path, kind):
+    """A person's keys file can be a link to a file elsewhere. The stage snapshot copies it too."""
+    stage = stage_at(tmp_path)
+    source = tmp_path / 'live'
+    source.mkdir()
+    real = tmp_path / 'elsewhere.env'
+    real.write_bytes(b'FIXTURE_KEY=fake-current\n')
+    if kind == 'symlink':
+        (source / 'keys.env').symlink_to(real)
+    else:
+        os.link(real, source / 'keys.env')
+    assert storage.refresh_stage_keys(tmp_path, stage, source) is None
+    target = stage / 'shared-config/keys.env'
+    assert target.read_bytes() == b'FIXTURE_KEY=fake-current\n'
+    # The stage gets its own private regular file, never the link.
+    assert not target.is_symlink() and target.stat().st_nlink == 1
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    assert real.read_bytes() == b'FIXTURE_KEY=fake-current\n'
+
+
+@pytest.mark.parametrize('kind', ['directory', 'fifo', 'dangling-symlink'])
+def test_refresh_refuses_a_live_entry_that_is_no_file(tmp_path, kind):
+    stage = stage_at(tmp_path)
+    before = (stage / 'shared-config/keys.env').read_bytes()
+    source = tmp_path / 'live'
+    source.mkdir()
+    if kind == 'directory':
+        (source / 'keys.env').mkdir()
+    elif kind == 'fifo':
+        os.mkfifo(source / 'keys.env')
+    else:
+        (source / 'keys.env').symlink_to(tmp_path / 'absent')
+    result = storage.refresh_stage_keys(tmp_path, stage, source)
+    if kind == 'dangling-symlink':
+        # Nothing to read is "the person has no keys file": the old copy must not stand in.
+        assert result is None and not (stage / 'shared-config/keys.env').exists()
+    else:
+        assert result and (stage / 'shared-config/keys.env').read_bytes() == before
+
+
+def test_a_home_below_a_linked_folder_works_as_the_product_resolves_it(tmp_path):
+    """The server resolves its data folder at start (auth.validated_data_dir). No link is left in it."""
+    from amplifier_web.auth import validated_data_dir
+    tmp_path = tmp_path.resolve()
+    (tmp_path / 'real').mkdir()
+    (tmp_path / 'link').symlink_to(tmp_path / 'real', target_is_directory=True)
+    home = validated_data_dir(tmp_path / 'link/app', create=True)
+    assert home == tmp_path / 'real/app'
+    stage = stage_at(home)
+    source = tmp_path / 'real/live'
+    source.mkdir()
+    (source / 'keys.env').write_bytes(b'FIXTURE_KEY=fake-current\n')
+    assert storage.refresh_stage_keys(home, stage, source) is None
+    assert (stage / 'shared-config/keys.env').read_bytes() == b'FIXTURE_KEY=fake-current\n'
+    assert storage.remove_stage_keys(home, stage) is None
+    assert not (stage / 'shared-config/keys.env').exists()
+    # The same folder named through the link is still refused: the walk follows no link.
+    (stage / 'shared-config/keys.env').write_bytes(b'FIXTURE_KEY=fake-old\n')
+    assert storage.remove_stage_keys(tmp_path / 'link/app', tmp_path / 'link/app/updates/releases' / stage.name)
+    assert (stage / 'shared-config/keys.env').is_file()
+
+
+def test_remove_refuses_a_stage_that_is_no_longer_the_one_that_was_checked(tmp_path):
+    stage = stage_at(tmp_path)
+    shared = stage / 'shared-config'
+    real = {stage: (stage.stat().st_dev, stage.stat().st_ino), shared: (shared.stat().st_dev, shared.stat().st_ino)}
+    for changed in (stage, shared):
+        assert storage.remove_stage_keys(tmp_path, stage, expected={**real, changed: (0, 0)}) == 'refused'
+        assert (shared / 'keys.env').is_file()
+    assert storage.remove_stage_keys(tmp_path, stage, expected=real) is None
+    assert not (shared / 'keys.env').exists()
 
 
 def test_refresh_absent_live_file_writes_nothing(tmp_path):
@@ -363,6 +469,22 @@ async def test_retire_storage_scrubs_even_when_code_cleanup_disabled(app, monkey
     await manager.retire_storage()
     assert checked == [True]
     assert_preserved(stage)
+
+
+async def test_scrub_makes_progress_when_its_time_is_used_up_at_once(app, monkeypatch):
+    """A slow folder: each look at the clock is past the limit. Every stage is still reached."""
+    from types import SimpleNamespace
+    manager = app.update_manager
+    stages = [stage_at(manager.home, name * 32, validated=True) for name in 'abc']
+    clock = iter(range(0, 10 ** 6, 2))  # Each call is 2 s later; the limit is 1 s.
+    monkeypatch.setattr(storage, 'time', SimpleNamespace(monotonic=lambda: next(clock), time=time.time))
+    left = []
+    for _ in range(6):
+        await storage.scrub_stage_keys(manager)
+        left.append(sum((stage / 'shared-config/keys.env').exists() for stage in stages))
+    # One stage per pass, never the same place twice in a row, and the scan starts again after the end.
+    assert left[:3] == [2, 1, 0], left
+    assert all(stage.is_dir() for stage in stages)
 
 
 async def test_a_failed_key_scrub_does_not_defer_the_other_maintenance(app, monkeypatch):

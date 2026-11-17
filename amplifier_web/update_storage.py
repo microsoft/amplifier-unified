@@ -130,9 +130,13 @@ def refresh_stage_keys(home, stage, source):
                     content = pinned.read_private('keys.env', limit=1024 * 1024)
             else:
                 with _posix_directory(source) as (fd, check):
-                    key = os.open('keys.env', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+                    # Read what the product's own reader and the stage snapshot
+                    # read: a link to a regular file too (a person's own keys
+                    # file). Only the stage side is written, and it stays strict.
+                    key = os.open('keys.env', os.O_RDONLY | os.O_NONBLOCK, dir_fd=fd)
                     with os.fdopen(key, 'rb') as stream:
-                        _regular_key(os.fstat(stream.fileno()))
+                        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                            raise ValueError('Not a regular credential file')
                         content = stream.read(1024 * 1024 + 1)
                         if len(content) > 1024 * 1024:
                             raise ValueError('Credential file exceeds private-file bound')
@@ -179,6 +183,8 @@ async def scrub_stage_keys(manager):
 
     At most eight key-removal attempts and one second of metadata traversal per
     pass. The scan offset rotates over later entries on subsequent idle passes.
+    Entries before the offset are only counted. Each pass handles at least one
+    entry after the offset, so a slow folder cannot hold the scan at one place.
     """
     from .update_health import pending_preparation
     from .update_retention import maintenance_blocked
@@ -208,11 +214,13 @@ async def scrub_stage_keys(manager):
             deadline, attempts = time.monotonic() + 1, 0
             try:
                 with os.scandir(root) as entries:
+                    progressed = False
                     for index, entry in enumerate(entries):
-                        if time.monotonic() >= deadline:
-                            return
                         if index < offset:
                             continue
+                        if progressed and time.monotonic() >= deadline:
+                            return
+                        progressed = True
                         manager._stage_keys_offset = index + 1
                         if not re.fullmatch('[a-f0-9]{32}', entry.name) or entry.name in protected:
                             continue

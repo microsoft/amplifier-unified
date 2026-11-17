@@ -481,9 +481,14 @@ async def _activate_serialized(manager, *, force=None):
             manager.wakeup.set()
             return
         selected = pending.get('featureSelection')
+        revoked = None
         try:
             with ExitStack() as holds:
-                await _activate(manager, force=force, holds=holds)
+                try:
+                    await _activate(manager, force=force, holds=holds)
+                finally:
+                    # Before the handlers below wait for anything.
+                    revoked = _end_replacement(manager)
         except Exception as error:
             from .update_restart import RestartRejected
             if isinstance(error, RestartRejected):
@@ -505,18 +510,39 @@ async def _activate_serialized(manager, *, force=None):
                     detail='The running host and previous candidate evidence were preserved.')
             raise
         finally:
-            if getattr(manager, '_replacing', None) is not None:
-                # This process no longer executes the attempt. A publication
-                # can fail after the marker is in memory, and a scheduling tick
-                # returns early on a marker: derive here, so that an unconfirmed
-                # marker is never left with this host's live claim.
-                manager._replacing = None
+            if revoked is not None:
                 try:
                     async with manager.service.lock:
-                        if manager._derive_state():
+                        if manager._derive_state() or revoked:
                             manager.service._publish_changes(globals={'updates'})
                 except Exception:
-                    pass  # The fields are right in memory; the next publication carries them.
+                    # The claim is withdrawn already, in memory. Only the saved
+                    # copy can lag, and a new host derives the claim again.
+                    pass
+
+
+def _end_replacement(manager):
+    """This process no longer executes a replacement. Synchronous: it waits for nothing.
+
+    None: no replacement began. Otherwise whether the published claim changed.
+    A cancellation, a failed state write or a failed derivation after this
+    cannot leave an unconfirmed marker shown as a running update.
+    """
+    attempt, manager._replacing = getattr(manager, '_replacing', None), None
+    if attempt is None:
+        return None
+    from .update_health import release_replacement, publish as publish_health
+    release_replacement(attempt)
+    state = manager.service.state['updates']
+    if state.get('activation') != 'installing':
+        return False
+    state['activation'] = None
+    try:
+        publish_health(manager)
+    except Exception:
+        pass
+    return True
+
 
 async def installed_target():
     """Only replace the uv tool environment that owns this running host."""
@@ -799,8 +825,12 @@ async def _activate(manager, *, force=None, holds=None):
         if force is None:
             from .update_drain import begin_replacement
             begin_replacement(manager, release)
+        from .update_health import claim_replacement
         manager._replacing = replacement['attemptId']
-        manager.service.state['updates'].update(phase='activating',pendingReplacement=replacement,detail='Installing the app update and restarting…')
+        claim_replacement(manager._replacing)
+        # Final admission passed. An earlier pause text (a hold that could not
+        # be confirmed, then could) no longer describes this attempt.
+        manager.service.state['updates'].update(phase='activating',pendingReplacement=replacement,error=None,detail='Installing the app update and restarting…')
         manager._derive_state()
         manager.service._publish_changes(globals={'updates'})
         if recovery is not None:

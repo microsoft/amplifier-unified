@@ -296,8 +296,9 @@ before effects. The action returns a request ID; a queued rejection is reported
 in `updates.forceRestartResult` for that request, without an automatic retry.
 Force is available only for an immutable qualified application generation, not
 an in-place legacy installation or an ecosystem-only update. On Windows a forced
-restart is not available: the request is refused before it is recorded, and the
-prepared update stays as it is and continues when work has finished.
+restart is not available. `update_restart.require` refuses it: at dispatch,
+before the request is recorded, and again before activation reaches its own
+Windows check. The update state stays as it is.
 
 Candidate and serving-component validation still run. At final admission the
 normal durable replacement fence blocks new work, then the owned runtime is
@@ -407,11 +408,14 @@ Component qualification uses a temporary `shared-config/keys.env` copy.
 The manager removes only that file after qualification succeeds or a handled
 preparation failure. Settings and routing stay. Cancellation keeps the copy.
 Later activation or rollback qualification uses fresh credentials from the live
-shared home, then removes the copy again unless interrupted.
+shared home, then removes the copy again unless interrupted. A refresh that is
+refused is not an update failure: that qualification runs with what the stage
+holds.
 Idle maintenance also scrubs at most eight stage copies per pass, even when
 unused-code cleanup is off. A validated stage qualifies immediately. An
 unvalidated stage qualifies only when both its folder and `shared-config` are
-older than 24 hours and it is not an unresolved preparation candidate.
+older than 24 hours, it is not an unresolved preparation candidate, and it holds
+no `profile-attempt.json` (a chat's own setup owns that stage).
 Unsafe paths or removal refusals keep the copy for a later pass.
 Failed stage folders stay; this credential cleanup deletes no folder.
 
@@ -456,10 +460,13 @@ verification** and disables additional installs while this outcome is unknown.
 It does not show that warning for this host's running installation:
 `updates.activation` is `installing` only while this process executes the exact
 replacement attempt. The browser shows **Updating Amplifier** instead. The saved
-marker and the complete state read by agents remain unchanged. The claim ends
-with the attempt: an error, a cancellation, a restart handoff or a failed state
-write each leave the marker with its warning, and a new host never inherits
-the claim.
+marker and the complete state read by agents remain unchanged. The field is a
+copy for readers and is never the evidence: the page's view and update health
+also require that this process executes that attempt at this moment (a set in
+memory that is never saved). The owner withdraws from that set first, before
+any wait, when it ends. So an error, a cancellation, a restart handoff, a failed
+state write or a cancelled cleanup each leave the marker with its warning, and
+a new host or a restored state never inherits the claim.
 
 A failed probe after immutable generation promotion can recover without a second
 installation or restart. For an ordinary app update (not a forced shutdown or
@@ -660,7 +667,13 @@ availability discovery, not retry intent. Saved legacy backoff records retain
 the same unchanged-input hold; no timer replays the whole failed preparation.
 After a failed component preparation, Try update again checks sources again before
 installing what the new check finds. If that check fails or finds nothing to
-install, no installation starts. The page identifies the rechecked attempt.
+install, no installation starts. `updates.retryCheck.result` is `retried` (with
+the ID of the attempt that this request started), `not-started` (checked, and no
+attempt started, for example while no AI connection is set up),
+`nothing-to-install`, or `check-failed` (the new check ended with an error or
+could not run). The page identifies the rechecked
+attempt. When the earlier failure record keeps its priority, its text says that
+the sources were checked again.
 Interrupted or unknown effects retain their separate inspection fence.
 Pinned and exact checked-revision mismatches retain a typed source-policy reason
 and sanitized package identity; they are not transient transport failures.

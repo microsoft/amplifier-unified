@@ -20,15 +20,15 @@ def target(manager):
             **{key: release[key] for key in ('revision', 'generation', 'attemptId')}}
 
 
-WINDOWS_REFUSAL = ('Amplifier on Windows cannot interrupt work to restart. '
-                   'The update continues by itself when work has finished.')
+WINDOWS_REFUSAL = 'Amplifier on Windows cannot interrupt work to restart. The update was not changed.'
 
 
 def require(manager, args):
     if sys.platform == 'win32':
         # Windows activation refuses every forced restart (app_updates._activate),
-        # and that refusal ends the automatic update with an error. Refuse here,
-        # before the request is recorded: the prepared update then stays as it is.
+        # and that refusal ends the automatic update with an error. Refuse here:
+        # dispatch calls this before it records the request, and activation
+        # calls it before its Windows check. The update state then stays as it is.
         raise RestartRejected(WINDOWS_REFUSAL)
     expected = target(manager)
     if (not expected or args.get('confirm') is not True

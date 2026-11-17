@@ -20,13 +20,34 @@ from test_update_current_health import acknowledged_app_with_old_component_histo
 
 
 WAITING = 'Application release validated. Waiting for work to finish before restarting.'
-STARTING = 'Application release validated. No work is running. Amplifier now installs the update and restarts.'
+STARTING = 'Application release validated. No work is running. Amplifier installs the update and restarts by itself.'
 CONNECTION = ' No AI connection is set up yet. A component update starts only after you set one up in Settings.'
 WORK = {'kind': 'conversation', 'sessionId': 'busy'}
 
 
 def manager_for(state, **attributes):
     return SimpleNamespace(service=SimpleNamespace(state={'updates': state}), **attributes)
+
+
+@pytest.fixture(autouse=True)
+def no_claim_outlives_its_test():
+    """Every path of an activation must withdraw its claim, also a failed or a cancelled one."""
+    yield
+    assert not health._EXECUTING
+
+
+@pytest.fixture
+def executing():
+    """Say that this process executes an attempt, as app_updates does at the marker write."""
+    claimed = []
+
+    def claim(attempt):
+        health.claim_replacement(attempt)
+        claimed.append(attempt)
+
+    yield claim
+    for attempt in claimed:
+        health.release_replacement(attempt)
 
 
 def prepared(**values):
@@ -111,18 +132,41 @@ def test_manager_that_cannot_continue_does_not_claim_starting(attribute):
     ({'error': 'failed'}, 'attempt', None),
     ({'pendingRestart': {'attemptId': 'restart'}}, 'attempt', None),
 ])
-def test_installing_requires_exact_live_in_memory_attempt(change, replacing, expected):
+def test_installing_requires_exact_live_in_memory_attempt(executing, change, replacing, expected):
     state = {'phase': 'activating', 'pendingReplacement': {'attemptId': 'attempt'}, **change}
     manager = manager_for(state)
     if replacing is not None:
-        manager._replacing = replacing
+        executing(replacing)
     before = copy.deepcopy(state)
     assert health.activation(manager) == expected
     assert state == before
 
 
+@pytest.mark.parametrize('executes', [None, 'another-attempt'])
+def test_a_saved_installing_claim_without_this_process_executing_it_hides_nothing(executing, executes):
+    """The field is a copy for readers. A restored state or a cancelled cleanup can leave it behind."""
+    if executes:
+        executing(executes)
+    state = {'activation': 'installing', 'phase': 'activating', 'pendingApp': {'revision': 'a' * 40},
+             'pendingReplacement': {'attemptId': 'attempt'}, 'forceRestartTarget': None}
+    before = copy.deepcopy(state)
+    assert health.browser_view(state) is state
+    assert health.current(state)['status'] == 'unverified'
+    assert health.activation(manager_for(state)) is None
+    assert state == before
+
+
+@pytest.mark.parametrize('identity', [None, 7, ['attempt'], {'attempt': 1}, ''])
+def test_a_marker_identity_that_is_not_text_is_never_live(executing, identity):
+    executing('attempt')
+    state = {'activation': 'installing', 'phase': 'activating', 'pendingReplacement': {'attemptId': identity}}
+    assert health.browser_view(state) is state
+    assert health.current(state)['status'] == 'unverified'
+
+
 @pytest.mark.parametrize('detail', [None, 'Installing the app update and restarting…'])
-def test_installing_health_precedes_the_unknown_marker(detail):
+def test_installing_health_precedes_the_unknown_marker(executing, detail):
+    executing('attempt')
     state = {'activation': 'installing', 'phase': 'activating',
              'pendingReplacement': {'attemptId': 'attempt'}, 'detail': detail}
     assert health.current(state) == {
@@ -142,13 +186,18 @@ def test_starting_health_and_blocker_attention_order():
 
 @pytest.mark.parametrize('change', [{'phase': 'error'}, {'phase': 'interrupted'}, {'error': 'failed'},
                                     {'pendingReplacement': {'unqualified': True}}])
-def test_a_stale_installing_claim_keeps_the_unknown_marker_health(change):
+def test_a_stale_installing_claim_keeps_the_unknown_marker_health(executing, change):
+    executing('attempt')
     state = {'activation': 'installing', 'phase': 'activating', 'pendingReplacement': {'attemptId': 'attempt'},
              **change}
     assert health.current(state)['status'] == 'unverified'
 
 
-@pytest.mark.parametrize('change', [{'blockers': [WORK]}, {'application': {'canInstall': False}}])
+@pytest.mark.parametrize('change', [
+    {'blockers': [WORK]}, {'application': {'canInstall': False}},
+    {'applicationIntent': {}}, {'pendingSmartTools': [{'id': 'active'}]},
+    {'drain': {'phase': 'replacing'}}, {'drain': {'phase': 'waiting', 'workers': {'busy': {'ready': False}}}},
+])
 def test_a_stale_starting_claim_does_not_say_that_the_update_starts(change):
     result = health.current(prepared(activation='starting', **change))
     assert (result['status'], result['title']) == ('waiting', 'Update ready; waiting for work')
@@ -222,7 +271,8 @@ def live(activation):
 
 
 @pytest.mark.parametrize('activation', ['starting', 'installing'])
-def test_browser_view_is_shallow_and_does_not_change_saved_state(activation):
+def test_browser_view_is_shallow_and_does_not_change_saved_state(executing, activation):
+    executing('live')
     state = live(activation)
     before = copy.deepcopy(state)
     view = health.browser_view(state)
@@ -249,12 +299,19 @@ def test_other_browser_views_are_identical_objects_and_keep_real_failure_marker(
     ('starting', {'error': 'failed'}), ('starting', {'pendingRestart': {'attemptId': 'restart'}}),
     ('starting', {'pendingReplacement': {'attemptId': 'unknown'}}), ('starting', {'pendingApp': None}),
     ('starting', {'application': {'canInstall': False}}),
+    # Every saved condition that allowed the claim, and the exact attempt.
+    ('installing', {'pendingReplacement': {'attemptId': 'another'}}),
+    ('starting', {'applicationIntent': {}}), ('starting', {'pendingSmartTools': [{'id': 'active'}]}),
+    ('starting', {'drain': {'phase': 'draining'}}), ('starting', {'drain': {'phase': 'replacing'}}),
+    ('starting', {'drain': {'phase': 'releasing'}}),
+    ('starting', {'drain': {'phase': 'waiting', 'workers': {'busy': {'ready': False}}}}),
 ])
-def test_a_claim_that_the_state_no_longer_supports_changes_nothing(activation, change):
+def test_a_claim_that_the_state_no_longer_supports_changes_nothing(executing, activation, change):
     """Other owners publish `updates` without deriving `activation` again.
 
     A stale claim must never hide a marker, an error or a failed phase from the page.
     """
+    executing('live')
     state = {**live(activation), **change}
     before = copy.deepcopy(state)
     assert health.browser_view(state) is state
@@ -265,7 +322,8 @@ TARGET = {'hostInstanceId': 'host', 'revision': 'a' * 40, 'generation': 'b' * 32
 
 
 @pytest.mark.parametrize('activation', ['starting', 'installing'])
-def test_the_page_gets_no_interrupt_offer_while_the_update_runs_by_itself(activation):
+def test_the_page_gets_no_interrupt_offer_while_the_update_runs_by_itself(executing, activation):
+    executing('live')
     state = {**live(activation), 'forceRestartTarget': dict(TARGET)}
     before = copy.deepcopy(state)
     assert health.browser_view(state)['forceRestartTarget'] is None
@@ -291,31 +349,67 @@ def test_windows_without_a_target_keeps_the_identical_object(monkeypatch):
     assert health.browser_view(state) is state
 
 
-async def test_windows_refuses_a_forced_restart_before_it_changes_the_update(managed, monkeypatch):
-    """A stale page can still send the request. The prepared update must stay as it is."""
+async def windows_with_work(managed, monkeypatch):
+    """A prepared app, a working chat, and every module that asks says Windows."""
+    from unittest.mock import Mock
     from amplifier_web import update_restart
     service, manager = managed.service, managed.manager
     service._session()['status'] = 'working'
     await stage_replacement(managed, 'app')
     args = {**update_restart.target(manager), 'confirm': True}
-    before = copy.deepcopy(service.state['updates'])
-    events = len(manager.diagnostics.state.get('events', []))
-    monkeypatch.setattr(update_restart, 'sys', SimpleNamespace(platform='win32'))
-    with pytest.raises(update_restart.RestartRejected, match='cannot interrupt work'):
-        update_restart.require(manager, args)
-    await manager.command('forceRestart', args, 'stale-page-request')
-    state = service.state['updates']
-    assert state['forceRestartResult'] == {'requestId': 'stale-page-request', 'status': 'rejected',
-                                           'detail': update_restart.WINDOWS_REFUSAL}
+    windows = SimpleNamespace(platform='win32')
+    monkeypatch.setattr(update_restart, 'sys', windows)
+    # Without the early refusal, activation reaches its own Windows check: it
+    # asks for the update owner, records a failure and publishes phase `error`.
+    monkeypatch.setattr(app_updates, 'sys', windows)
+    owner = Mock(return_value=None)
+    monkeypatch.setattr('amplifier_web.windows_service.update_owner', owner)
+    return args, owner
+
+
+def unchanged(manager, before, events):
+    state = manager.service.state['updates']
     assert (state['phase'], state.get('error'), state['pendingApp']) == ('app-staged', None, before['pendingApp'])
     assert state['activation'] == 'waiting' and not state.get('pendingReplacement')
     assert len(manager.diagnostics.state.get('events', [])) == events
     assert state['currentStatus'] == before['currentStatus']
 
 
+async def test_windows_refuses_a_forced_restart_before_it_changes_the_update(managed, monkeypatch):
+    """A stale page can still send the request. The prepared update must stay as it is."""
+    from amplifier_web import update_restart
+    service, manager = managed.service, managed.manager
+    args, owner = await windows_with_work(managed, monkeypatch)
+    before = copy.deepcopy(service.state['updates'])
+    events = len(manager.diagnostics.state.get('events', []))
+    with pytest.raises(update_restart.RestartRejected, match='cannot interrupt work'):
+        update_restart.require(manager, args)
+    await manager.command('forceRestart', args, 'stale-page-request')
+    state = service.state['updates']
+    assert state['forceRestartResult'] == {'requestId': 'stale-page-request', 'status': 'rejected',
+                                           'detail': update_restart.WINDOWS_REFUSAL}
+    owner.assert_not_called()
+    unchanged(manager, before, events)
+
+
+async def test_windows_refuses_a_forced_restart_at_dispatch_before_it_is_recorded(managed, monkeypatch):
+    from amplifier_web.errors import AppError
+    service, manager = managed.service, managed.manager
+    args, owner = await windows_with_work(managed, monkeypatch)
+    before = copy.deepcopy(service.state['updates'])
+    events = len(manager.diagnostics.state.get('events', []))
+    with pytest.raises(AppError, match='cannot interrupt work') as refused:
+        await service.dispatch('updates.forceRestart', args, 'ui', 'c' * 32)
+    assert refused.value.status == 409
+    assert 'forceRestartResult' not in service.state['updates']
+    owner.assert_not_called()
+    unchanged(manager, before, events)
+
+
 @pytest.mark.parametrize('page', ['updates', 'ai-connections'])
 @pytest.mark.parametrize('activation', ['starting', 'installing', None])
-def test_browser_demand_uses_the_same_view_before_page_filter(page, activation):
+def test_browser_demand_uses_the_same_view_before_page_filter(executing, page, activation):
+    executing('live')
     state = live(activation or 'installing')
     state['activation'] = activation
     before = copy.deepcopy(state)
@@ -359,7 +453,7 @@ async def test_real_app_stage_through_restart_never_claims_attention_or_waiting(
         if replacement_install(args, kwargs):
             marker = copy.deepcopy(service.state['updates']['pendingReplacement'])
             assert saved_updates(service)['pendingReplacement'] == marker
-            durable.append((marker, getattr(manager, '_replacing', None)))
+            durable.append((marker, getattr(manager, '_replacing', None), set(health._EXECUTING)))
         if app_updates.PROBE in args:
             return successful_probe()
         return await original(*args, **kwargs)
@@ -375,7 +469,7 @@ async def test_real_app_stage_through_restart_never_claims_attention_or_waiting(
     assert all(row[4] and not row[5] and row[6] == 'activating' for row in journey)
     assert journey[0][1] == 'starting' and journey[0][7] == STARTING
     assert any(row[1] == 'installing' for row in journey)
-    assert durable[0][1] == durable[0][0]['attemptId']
+    assert durable[0][1] == durable[0][0]['attemptId'] and durable[0][2] == {durable[0][1]}
     assert service.state['updates']['pendingRestart']
     assert not getattr(manager, '_replacing', None)
     managed.restart.assert_awaited_once_with(manager)
@@ -442,6 +536,135 @@ async def test_failed_marker_publication_does_not_leave_a_live_claim(managed, mo
     assert saved_updates(service)['activation'] is None
     await manager.tick()
     assert state['activation'] is None and state['currentStatus']['status'] == 'unverified'
+
+
+async def test_cancelled_cleanup_after_a_failed_marker_publication_keeps_the_marker_visible(managed, monkeypatch):
+    """The owner ends, and the wait for the state lock in its cleanup is cancelled."""
+    service, manager = managed.service, managed.manager
+    await stage_replacement(managed, 'app')
+    publish = service._publish_changes
+    original = service.lock
+
+    class Held:
+        """A state lock that another owner holds for the whole case."""
+        def __init__(self):
+            self.wanted = asyncio.Event()
+
+        async def __aenter__(self):
+            self.wanted.set()
+            await asyncio.Event().wait()
+
+        async def __aexit__(self, *error):
+            return False
+
+        def locked(self):
+            return True
+
+    held = Held()
+    claims = []
+
+    def fail(*args, **kwargs):
+        state = service.state['updates']
+        if state.get('pendingReplacement') and not claims:
+            claims.append((state['activation'], set(health._EXECUTING)))
+            service.lock = held  # The activation leaves its own lock; the cleanup then meets this one.
+            raise OSError('synthetic state write failure')
+        return publish(*args, **kwargs)
+
+    monkeypatch.setattr(service, '_publish_changes', fail)
+    task = asyncio.create_task(app_updates.activate(manager))
+    try:
+        await asyncio.wait_for(held.wanted.wait(), 5)
+        state = service.state['updates']
+        attempt = state['pendingReplacement']['attemptId']
+        assert claims == [('installing', {attempt})]
+        # Already true while the cleanup still waits: nothing has to finish first.
+        assert not health._EXECUTING and state['activation'] is None
+        assert health.browser_view(state) is state
+        assert state['currentStatus']['status'] == 'unverified'
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        service.lock = original
+    state = service.state['updates']
+    assert state['pendingReplacement'] and state['phase'] == 'activating'
+    assert not health._EXECUTING and not getattr(manager, '_replacing', None)
+    assert state['activation'] is None and health.activation(manager) is None
+    assert health.browser_view(state) is state
+    assert state['currentStatus']['status'] == 'unverified'
+
+
+async def test_an_earlier_pause_text_does_not_follow_the_update_into_its_installation(managed, monkeypatch):
+    """A hold could not be confirmed once. The next pass confirms it and installs."""
+    from amplifier_web import update_blockers
+    service, manager = managed.service, managed.manager
+    await stage_replacement(managed, 'app')
+    retain = update_blockers.retain_operation_holds
+    refusals = []
+
+    def once(*args, **kwargs):
+        if not refusals:
+            refusals.append(True)
+            raise RuntimeError('synthetic unconfirmed hold')
+        return retain(*args, **kwargs)
+
+    monkeypatch.setattr(update_blockers, 'retain_operation_holds', once)
+    await app_updates.activate(manager)
+    state = service.state['updates']
+    assert state['phase'] == 'app-staged' and state['error'].startswith('Automatic restart is paused')
+    assert state['currentStatus']['status'] == 'action-required' and not state.get('pendingReplacement')
+    records = record_publications(service, monkeypatch)
+    original = app_updates.process
+
+    async def process(*args, **kwargs):
+        return successful_probe() if app_updates.PROBE in args else await original(*args, **kwargs)
+
+    monkeypatch.setattr(app_updates, 'process', process)
+    await app_updates.activate(manager)
+    assert state['pendingRestart'] and not state.get('error')
+    assert records and any(row[1] == 'installing' for row in records)
+    assert all(row[2] not in {'unverified', 'action-required', 'protected'} for row in records)
+    assert all(not row[5] for row in records)  # The page never got the marker.
+
+
+async def test_the_owners_next_pass_installs_the_app_that_claims_starting(managed, monkeypatch):
+    """The text says that Amplifier installs the update by itself. One pass of the owner does it."""
+    import time
+    service, manager = managed.service, managed.manager
+    await stage_replacement(managed, 'app')
+    state = service.state['updates']
+    # Automatic installation controls staging, not the activation of this validated app.
+    service.state['settings']['updates']['autoInstall'] = False
+    now = time.time()
+    state.update(pendingAppCheckAt=now, lastCheck=now)  # No check is due in this pass.
+    manager._storage_last_pass = now                     # No storage maintenance is due.
+    manager._update_health_initial = False
+    await manager.publish()
+    assert state['activation'] == 'starting' and state['detail'] == STARTING
+    assert not state.get('pendingRestart')
+    original = app_updates.process
+
+    async def process(*args, **kwargs):
+        return successful_probe() if app_updates.PROBE in args else await original(*args, **kwargs)
+
+    monkeypatch.setattr(app_updates, 'process', process)
+    await manager.tick()
+    assert state['pendingRestart'] and not state.get('pendingReplacement') and not state.get('error')
+    managed.restart.assert_awaited_once_with(manager)
+
+
+async def test_a_prepared_app_never_waits_for_an_earlier_restart_check(managed):
+    """`starting` needs no rule for awaiting_restart(): a prepared state excludes each of its branches."""
+    service, manager = managed.service, managed.manager
+    await stage_replacement(managed, 'app')
+    manager.readiness_task = asyncio.get_running_loop().create_future()  # A check that still runs.
+    try:
+        assert not manager.awaiting_restart()
+        assert health.activation(manager) == 'starting'
+    finally:
+        manager.readiness_task.cancel()
+        manager.readiness_task = None
 
 
 @pytest.mark.parametrize('legacy', [False, True])

@@ -11,6 +11,7 @@ from test_update_ai_connection import PROVIDER, manager, providers
 
 RETRIED = ' Amplifier checked the sources again before this attempt.'
 NOTHING = ' Amplifier checked the sources again. Nothing is left to install.'
+NOT_STARTED = ' Amplifier checked the sources again. No new attempt started.'
 
 
 async def failed_component(manager):
@@ -256,7 +257,14 @@ async def test_retry_still_waits_for_an_ai_connection_without_an_attempt(manager
     check.assert_awaited_once_with(fresh=True)
     assert len(manager.stages) == 1
     assert manager.diagnostics.state['lastFailure'] == old
-    assert manager.service.state['updates']['retryCheck']['attemptId'] is None
+    state = manager.service.state['updates']
+    # The record does not say "retried": this request started no attempt.
+    assert {key: state['retryCheck'][key] for key in ('attemptId', 'result')} == {
+        'attemptId': None, 'result': 'not-started'}
+    assert state['retryCheck']['at'] > old['at']
+    # The earlier record keeps its priority, and the page says what the request did.
+    assert state['currentStatus']['title'] == 'Update could not finish'
+    assert NOT_STARTED in state['currentStatus']['detail']
 
 
 @pytest.mark.parametrize('reason,status', [('runtime-source-changed', 'action-required'),
@@ -276,6 +284,34 @@ def test_current_failure_sentence_is_bound_to_the_selected_attempt(reason, statu
     assert projected == {**baseline, 'detail': baseline['detail'] + (RETRIED if annotated else '')}
     assert projected['status'] == status
     assert state == before
+
+
+@pytest.mark.parametrize('result,at,sentence', [
+    ('nothing-to-install', 11, NOTHING), ('not-started', 11, NOT_STARTED),
+    # A record that is not newer than the failure says nothing about it.
+    ('nothing-to-install', 10, ''), ('not-started', 9, ''), ('not-started', None, ''),
+    ('check-failed', 11, ''), ('retried', 11, ''),
+])
+@pytest.mark.parametrize('reason,status', [('runtime-source-changed', 'action-required'),
+                                           ('runtime-resolution-mismatch', 'protected')])
+def test_an_earlier_failure_that_keeps_its_priority_says_what_the_later_request_did(reason, status, result, at, sentence):
+    failure = {'kind': 'ecosystem', 'status': 'failed', 'phase': 'ecosystem-validation',
+               'attemptId': 'earlier', 'at': 10, 'reason': reason}
+    state = {'phase': 'checked', 'diagnostics': {'lastFailure': failure},
+             'retryCheck': {'at': at, 'attemptId': None, 'result': result}}
+    before = copy.deepcopy(state)
+    baseline = health.current({**state, 'retryCheck': None})
+    projected = health.current(state)
+    assert projected == {**baseline, 'detail': baseline['detail'] + sentence}
+    assert projected['status'] == status
+    assert state == before
+
+
+def test_a_failure_of_another_kind_gets_no_recheck_sentence():
+    failure = {'kind': 'application', 'status': 'failed', 'attemptId': 'earlier', 'at': 10}
+    state = {'phase': 'error', 'error': 'Fixture failure.', 'diagnostics': {'lastFailure': failure},
+             'retryCheck': {'at': 11, 'attemptId': None, 'result': 'not-started'}}
+    assert health.current(state) == health.current({**state, 'retryCheck': None})
 
 
 @pytest.mark.parametrize('evidence', [{'setupRecord': True}, {'verifiedAt': 20}])

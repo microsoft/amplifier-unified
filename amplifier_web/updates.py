@@ -789,8 +789,9 @@ class UpdateManager:
                             batch = self.diagnostics.state.get('batch', {})
                             attempt = batch.get('attemptId') if (batch.get('kind') == 'ecosystem'
                                 and batch.get('attemptId') != prior_attempt) else None
+                            # 'retried' only names an attempt that this request started.
                             await self.publish(retryCheck={'at': time.time(), 'attemptId': attempt,
-                                'result': 'retried'})
+                                'result': 'retried' if attempt else 'not-started'})
             else:
                 await getattr(self, action)()
         except asyncio.CancelledError: raise
@@ -1572,8 +1573,10 @@ class UpdateManager:
                     from .update_storage import refresh_stage_keys, remove_stage_keys
                     target_stage = self.directory / 'releases' / target
                     try:
-                        if refresh_stage_keys(self.home, target_stage, amplifier_home()):
-                            raise ValueError('Could not refresh component qualification credentials.')
+                        # A refusal is not an update failure. Validation then
+                        # runs with what the stage holds, as it did before this
+                        # refresh existed.
+                        refresh_stage_keys(self.home, target_stage, amplifier_home())
                         await self.validate(target_stage, target)
                     except asyncio.CancelledError:
                         raise  # Qualification may still have a reader; keep the copy.
