@@ -178,8 +178,8 @@ def test_interrupted_swap_restores_original_selection(selected, monkeypatch):
     assert (root / delivery.RECORD).read_bytes() == record
 
 
-@pytest.fixture
-def worktrees_selection(tmp_path):
+@pytest.fixture(params=["monorepo", "repository-root"])
+def worktrees_selection(tmp_path, request):
     root, revision, dist, _ = make_candidate(tmp_path, "worktrees")
     wheel = next(dist.glob("*.whl"))
     with zipfile.ZipFile(wheel) as archive:
@@ -192,6 +192,15 @@ def worktrees_selection(tmp_path):
             archive.writestr(name, raw)
     (dist / "worktrees-source.json").unlink(); (dist / "SHA256SUMS").unlink()
     release.seal(root, revision, dist, component="worktrees")
+    if request.param == "repository-root":
+        path = dist / "worktrees-source.json"
+        receipt = json.loads(path.read_bytes())
+        receipt.update(repository="bkrabach/amplifier-platform-worktrees",
+                       component="worktrees", subdirectory=".")
+        path.write_text(json.dumps(receipt, indent=2) + "\n")
+        (dist / "SHA256SUMS").write_text("".join(
+            f"{release.sha((dist / name).read_bytes())}  {name}\n"
+            for name in (*release.artifact_names(receipt), "worktrees-source.json")))
     (root / "pyproject.toml").write_text(
         '[project]\nname="amplifier-unified"\nversion="1.0.0"\n'
         'dependencies=["filelock>=4.2.1,<5"]\n'
@@ -217,6 +226,18 @@ def test_worktrees_artifact_remains_selected_without_author_or_git(worktrees_sel
         '"filelock>=4.2.1,<5"', '"filelock>=4.2.1,<6"'))
     with pytest.raises(ValueError, match="runtime requirement"):
         delivery.verify(plain, component="worktrees")
+
+
+def test_worktrees_public_receipt_can_restore_original_selection(worktrees_selection):
+    root, revision, dist, _ = worktrees_selection
+    original_runtime = delivery.inventory(root / "components/worktrees-delivery")
+    (dist / "worktrees-source.json").unlink(); (dist / "SHA256SUMS").unlink()
+    original = release.seal(root, revision, dist, component="worktrees")
+    checksum = delivery.sha((dist / "worktrees-source.json").read_bytes())
+    delivery.select(root, dist, revision, checksum, component="worktrees")
+    assert delivery.verify(root, component="worktrees")["source"] == original
+    assert original["subdirectory"] == "components/worktrees"
+    assert delivery.inventory(root / "components/worktrees-delivery") == original_runtime
 
 
 @pytest.fixture

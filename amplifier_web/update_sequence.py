@@ -142,6 +142,16 @@ def classify(home, rows, *, selection=None):
     if selection is not None:
         sources = selection['sources']
     required = {source_key(row['url'], row['ref']) for row in sources}
+    generation = active_release(home).get('current')
+    project = project_path(home, generation)
+    lock = receipt_directory(home, generation) / 'runtime.lock'
+    environment = (project / 'uv.lock').exists() or lock.exists()
+    # With a worker environment and no component generation, a conversation
+    # fetches a declared source itself at its first use. Until then the source
+    # is absent, and no component update is needed to get it. A generation is
+    # immutable, so there an update must add the source; with no environment
+    # the first update prepares everything.
+    fetched_at_first_use = generation is None and environment
     seen = set()
     for row in rows:
         if row.get('kind') == 'smart tool':
@@ -161,6 +171,7 @@ def classify(home, rows, *, selection=None):
         key = source_key(source['url'], source['ref'])
         if key in seen:continue
         seen.add(key)
+        if fetched_at_first_use:continue
         from .updates import pinned
         rows.append({**source, 'id': 'included:' + hashlib.sha256(str(key).encode()).hexdigest()[:20],
                      'label': safe_label(source['url']), 'kind': 'included source', 'updateTier': 'included',
@@ -168,10 +179,7 @@ def classify(home, rows, *, selection=None):
                      'eligible': not pinned(source['ref']), 'missing': True,
                      **({'appSelection': selection['witness']} if selection is not None else {}),
                      'usage': 'configured', 'usageEvidence': ['Included with Amplifier Unified']})
-    generation = active_release(home).get('current')
-    project = project_path(home, generation)
-    lock = receipt_directory(home, generation) / 'runtime.lock'
-    if packages and not (project / 'uv.lock').exists() and not lock.exists() and not any(row.get('id') == 'runtime:environment' for row in rows):
+    if packages and not environment and not any(row.get('id') == 'runtime:environment' for row in rows):
         rows.insert(0, {'id': 'runtime:environment', 'label': 'Conversation worker environment',
                        'kind': 'runtime environment', 'updateTier': 'included', 'status': 'update',
                        'eligible': True, 'missing': True, 'current': None, 'latest': 'required',
