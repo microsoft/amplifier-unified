@@ -10,6 +10,13 @@ never written, so nothing can sign under that root afterwards. Its ca.crt
 carries critical name constraints; that is how it differs from a partial pair.
 Its server certificate cannot be reissued, so `force` replaces the whole
 identity with a new one. windows_trust.py owns asking Windows to trust a root.
+
+`force` first writes the root that it replaces into replaced-roots.pem, in the
+same private folder. Windows can still hold that root for the person, and only
+its exact bytes find it there. So the record never loses a root that Windows
+may still hold: `force` stops instead. This module changes nothing in the
+Windows store. It asks the store one read-only question, and only when the
+record is full: which recorded roots Windows still holds.
 """
 from __future__ import annotations
 
@@ -27,11 +34,24 @@ from . import windows_files as files
 
 _LIMIT = 65536
 _LOCK = ".tls.lock"
+# Public certificates only, oldest first. The whole record must stay inside
+# one bounded read: about 50 certificates, at about 1.3 KiB each.
+_REPLACED = "replaced-roots.pem"
+_REPLACED_GUIDE = ("https://github.com/microsoft/amplifier-unified/blob/main/docs/DEPLOYMENT.md"
+                   "#certificates-that-setup-tls-force-replaced")
+_BLOCK = re.compile(rb"-----BEGIN CERTIFICATE-----\r?\n[A-Za-z0-9+/=\r\n]+?-----END CERTIFICATE-----")
 _LAYOUT = {"cert": "config/tls/leaf.crt", "key": "config/tls/leaf.key"}
 # Windows shows this name three times in its confirmation; it is the only
 # product text there.
 ROOT_NAME = "Amplifier Unified (this PC only)"
 LIFETIME = timedelta(days=825)
+
+
+class ReplacedRecord(ValueError):
+    """`force` stopped before any change: the record cannot take the root that is in use.
+
+    The message is for the person. Nothing was written when this is raised.
+    """
 
 
 class _OVERLAPPED(C.Structure):
@@ -388,6 +408,121 @@ def _publish_pair(pinned, prefix, cert, key, *, replace=False):
             "No CA regeneration, destination deletion or rollback was attempted") from exc
 
 
+def _certificates(content):
+    """Every complete certificate (DER) in this text, in its order, each one once.
+
+    The rest is ignored: the record only names candidates. windows_trust
+    checks each one, and asks Windows about none that the store does not hold.
+    """
+    from cryptography import x509
+    from cryptography.hazmat.primitives import serialization
+    found = []
+    for block in _BLOCK.findall(content):
+        try:
+            der = x509.load_pem_x509_certificate(block).public_bytes(serialization.Encoding.DER)
+        except (ValueError, TypeError):
+            continue
+        if der not in found:
+            found.append(der)
+    return found
+
+
+def _recorded(pinned, *, strict=False):
+    """Certificates (DER) of the replaced-roots record, oldest first.
+
+    For the readers. No record gives an empty list. So does a record that is
+    too long to read: nothing is removed on a guess. With `strict` such a
+    record raises ValueError instead. For this fixed name and limit the
+    private-file read raises ValueError only for that length; a refused
+    owner or ACL is an OSError and is never read as "no record".
+    """
+    try:
+        return _certificates(pinned.read_private(_REPLACED, limit=_LIMIT))
+    except FileNotFoundError:
+        return []
+    except ValueError:
+        if strict:
+            raise
+        return []
+
+
+def _encoded(roots):
+    from cryptography import x509
+    from cryptography.hazmat.primitives import serialization
+    return b"".join(x509.load_der_x509_certificate(value).public_bytes(serialization.Encoding.PEM)
+                    for value in roots)
+
+
+def _held(der):
+    """Can Windows still hold this root for the person?
+
+    False only for Windows' own answer "not found". A store that cannot be
+    opened and a search that failed are no answer: the root can be there.
+    """
+    from . import windows_trust
+    try:
+        return windows_trust.contains(der)
+    except (OSError, RuntimeError):
+        return True
+
+
+def _remember_replaced(pinned, certificate_bytes):
+    """Add the root that `force` is about to replace to the record.
+
+    This comes before the first new file. A failure here leaves the identity
+    as it was. A repeated `force` after a partial publication finds the same
+    root again and records it once.
+
+    The record never loses a root that Windows may still hold: without its
+    exact bytes nothing finds that root again. A record that is too long to
+    read stops `force`. A full record first drops the roots that Windows no
+    longer holds for the person. If it is still full, `force` stops.
+    """
+    from cryptography import x509
+    from cryptography.hazmat.primitives import serialization
+    der = x509.load_pem_x509_certificate(certificate_bytes).public_bytes(serialization.Encoding.DER)
+    unchanged = "Amplifier made no new certificate. Nothing was changed.\n\n"
+    try:
+        content = pinned.read_private(_REPLACED, limit=_LIMIT)
+    except FileNotFoundError:
+        content = None
+    except ValueError:
+        raise ReplacedRecord(
+            unchanged + "Its record of earlier certificates is too long to read:\n"
+            + str(pinned.path / _REPLACED) + "\n\n"
+            "Amplifier does not write a record of that length. Move the file to another folder, then run "
+            "setup-tls force again. Amplifier then no longer knows the earlier certificates, and Windows "
+            "keeps the ones that it holds. Nobody can use them: no signing key exists for them. More:\n"
+            + _REPLACED_GUIDE) from None
+    kept = _certificates(content) if content is not None else []
+    if der in kept:
+        return
+    kept.append(der)
+    if len(_encoded(kept)) > _LIMIT:
+        # Full. A root that Windows no longer holds needs no record.
+        kept = [value for value in kept if value == der or _held(value)]
+        if len(_encoded(kept)) > _LIMIT:
+            raise ReplacedRecord(
+                unchanged + "Its record of earlier certificates is full. A certificate leaves the record "
+                "only when Windows no longer holds it.\n\n"
+                "Delete earlier certificates in Windows, then run setup-tls force again. "
+                "This command shows their thumbprints: amplifier-unified setup-tls status\n"
+                "The steps:\n" + _REPLACED_GUIDE)
+    # Like the other files here: a first publication never replaces a file.
+    pinned.publish_private(_REPLACED, _encoded(kept), replace=content is not None)
+
+
+def replaced_roots(data_dir, *, strict=False):
+    """Roots (DER) that `setup-tls force` replaced in this installation, oldest first.
+
+    Only public certificates are read. The list can name a root that Windows
+    never held, and the current root after a `force` that stopped part-way.
+    `strict`: a record that is too long to read raises ValueError (see _recorded).
+    """
+    with _storage(data_dir) as pinned:
+        return _recorded(pinned, strict=strict)
+
+
 def setup(data_dir, config, *, force=False):
     from .deployment import save_server_config
     with _storage(data_dir, create=True) as pinned:
@@ -414,6 +549,8 @@ def setup(data_dir, config, *, force=False):
                 # No key can reissue the server certificate. The owner's
                 # explicit request replaces the whole identity; Windows must
                 # confirm the new root, and other devices must import it.
+                # First keep the replaced root: Windows may still trust it.
+                _remember_replaced(pinned, contents["ca.crt"])
                 _publish_identity(pinned, config, {name: value is not None for name, value in contents.items()})
                 configured = {**config, "tls": {"method": "ca", **_LAYOUT}}
                 save_server_config(data_dir, configured)

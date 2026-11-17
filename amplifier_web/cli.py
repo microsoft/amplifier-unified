@@ -229,12 +229,22 @@ def _setup_tls(data_dir: Path, mode: str) -> None:
     from .deployment import load_server_config
     config = load_server_config(data_dir)
     if mode == "status":
-        print("Local CA:", "configured" if ca_bytes(data_dir) else "not configured")
+        configured = bool(ca_bytes(data_dir))
+        print("Local CA:", "configured" if configured else "not configured")
         print("TLS:", config["tls"]["method"])
         print("TLS listener:", "ready" if tls_ready(data_dir, config) else "not configured or not startable")
         print("CA SHA-256 fingerprint:", ca_fingerprint(data_dir) or "not configured")
+        if browser_entry.is_windows():
+            _windows_roots(data_dir, configured)
         return
-    setup_local_ca(data_dir, config, force=mode == "force")
+    stopped = ()
+    if browser_entry.is_windows():
+        from .windows_tls import ReplacedRecord as stopped
+    try:
+        setup_local_ca(data_dir, config, force=mode == "force")
+    except stopped as stop:
+        # `force` changed nothing: the record of earlier certificates cannot take one more.
+        raise SystemExit(str(stop)) from None
     print("Created app-owned local CA and leaf certificate. Restart the service to use HTTPS.")
     print("CA SHA-256 fingerprint:", ca_fingerprint(data_dir))
     if mode == "force" and browser_entry.is_windows():
@@ -243,6 +253,41 @@ def _setup_tls(data_dir: Path, mode: str) -> None:
             # No key can reissue this installation's certificate, so force made a new one.
             print("This is a new certificate. Windows asks you to confirm it the next time you open "
                   "Amplifier on this PC. Other devices must import it again (setup-tls export).")
+            # Windows can still hold the replaced root. The launcher asks Windows
+            # to delete it; this command cannot know which launcher the PC has.
+            print("If Windows also asks whether to delete an earlier certificate, select Yes. "
+                  "It asks once for each earlier certificate that it still holds. "
+                  "Amplifier no longer uses them.")
+
+
+def _windows_roots(data_dir: Path, configured: bool) -> None:
+    """`setup-tls status` on Windows: the thumbprints that find Amplifier's certificates in Windows.
+
+    Read-only. Only a key-less identity: for another identity Amplifier added
+    nothing to Windows. Windows shows a certificate's SHA-1 thumbprint, not
+    the SHA-256 fingerprint above. What cannot be read is said, never shown
+    as "none": a person deletes a certificate in Windows by these lines.
+    """
+    from . import windows_tls, windows_trust
+    try:
+        identity = windows_tls.keyless_identity(data_dir)
+    except (OSError, ValueError) as error:
+        # No certificate at all is said above ("Local CA: not configured").
+        if configured or not isinstance(error, FileNotFoundError):
+            print("Thumbprint in Windows (SHA-1): Amplifier could not read its certificate")
+        return
+    if identity is None:
+        return
+    print("Thumbprint in Windows (SHA-1):", windows_trust.thumbprint(identity[0]))
+    try:
+        # Strict: a record that is too long to read is not "no earlier certificate".
+        earlier = windows_trust.replaced(data_dir, identity[0], strict=True)
+    except (OSError, ValueError, RuntimeError):
+        print("Earlier certificates that Windows still holds: Amplifier could not read them")
+        return
+    print("Earlier certificates that Windows still holds:", len(earlier))
+    for der in earlier:
+        print("  " + windows_trust.thumbprint(der))
 
 
 def _serve(args, data_dir: Path, *, task_runner=None) -> None:
@@ -426,9 +471,9 @@ def _open_browser(args, data_dir, config, *, wait=0.0):
         opened = webbrowser.open(url)
     except Exception:
         # Some browser backends include the URL (and grant) in exceptions.
-        raise browser_entry.BrowserEntryUnavailable("Could not open the browser. " + browser_entry.REOPEN) from None
+        raise browser_entry.BrowserEntryUnavailable("Could not open the browser. " + browser_entry.reopen()) from None
     if not opened:
-        raise browser_entry.BrowserEntryUnavailable("The browser did not accept the open request. " + browser_entry.REOPEN)
+        raise browser_entry.BrowserEntryUnavailable("The browser did not accept the open request. " + browser_entry.reopen())
 
 
 def _code_origin(config, given):
@@ -701,7 +746,7 @@ def main():
             # update. Wait for it, then open the browser once.
             _open_browser(args, data_dir, config, wait=browser_entry.HOST_WAIT)
         except (OSError, ValueError):
-            raise SystemExit("Cannot open the owned host. " + browser_entry.REOPEN) from None
+            raise SystemExit("Cannot open the owned host. " + browser_entry.reopen()) from None
         except browser_entry.BrowserEntryUnavailable as exc:
             raise SystemExit(str(exc)) from None
         if not args.no_open:
