@@ -45,15 +45,25 @@ refused again until the next app version. Nothing outside the rule above is
 deleted in any of them.
 
 The record ``<data>\\updates\\source-store-repair.json`` holds the app version,
-whether the pass is complete, a change number, and for each object that was
-left its number of tries. After a complete pass a start of the same app
-version reads the record and does nothing more. Every run that finds a file
-to delete raises the change number and writes the record before its first
-deletion; when that write fails, the run deletes nothing. The number is an
-input of the update check's scan signature (``update_inventory_index``), so
-the check after a repair asks Foundation again.
+whether the pass is complete, a change mark, the tries of each object that was
+left, and the counts and milliseconds of the last run. It holds no path and
+no time of day. A run writes the record before it looks at the store; a
+record that cannot be written means that the store is not looked at. After a
+complete pass a start of the same app version reads the record and does
+nothing more. Every run that finds a file to delete writes a new change mark
+(32 random hexadecimal digits) before its first deletion; when that write
+fails, the run deletes nothing. The mark is an input of the update check's
+scan signature (``update_inventory_index``), so the check after a repair asks
+Foundation again. A mark is random and not a count: a record that was lost
+or could not be read can then never give a mark that an earlier check saw.
 
-``at_host_start`` never raises.
+The limits of a run are checked between operations: before each listing,
+before each Git command, and in a deletion before each file and before the
+last listing of each folder. One operation of the file system has no time
+limit of its own, and neither has the lookup of Git in the folders of PATH.
+
+``at_host_start`` raises no error into the host's start. A stop of the
+process (``KeyboardInterrupt``, ``SystemExit``) passes through it.
 """
 from __future__ import annotations
 
@@ -62,6 +72,7 @@ import json
 import os
 from pathlib import Path
 import re
+import secrets
 import subprocess
 import time
 
@@ -132,31 +143,50 @@ def _path(data_dir):
     return Path(data_dir) / "updates" / RECORD
 
 
+COUNTS = ("objects", "with_cache", "repaired", "files", "folders", "left", "later")
+MEASURES = (*COUNTS, "listings", "entries", "git", "ms")
+
+
 def _new():
-    return {"schema": 1, "version": None, "complete": False, "change": 0, "runs": 0, "tries": {}, "next": None}
+    return {"schema": 1, "version": None, "complete": False, "change": None, "runs": 0, "tries": {},
+            "next": None, "last": None}
+
+
+def _whole(value):
+    return type(value) is int and value >= 0
 
 
 def read(data_dir):
     """The saved record. An absent record, or one that cannot be read, is an empty record."""
+    return _read(_path(data_dir))
+
+
+def _read(path):
     try:
-        with _path(data_dir).open("rb") as stream:
+        with path.open("rb") as stream:
             value = json.loads(stream.read(1_000_001))
         if (not isinstance(value, dict) or value.get("schema") != 1
                 or not isinstance(value.get("version"), str) or type(value.get("complete")) is not bool
-                or type(value.get("change")) is not int or value["change"] < 0
-                or type(value.get("runs")) is not int or value["runs"] < 0
-                or not isinstance(value.get("tries"), dict)
-                or any(not isinstance(key, str) or type(count) is not int for key, count in value["tries"].items())
-                or not (value.get("next") is None or isinstance(value["next"], str))):
+                or not (value.get("change") is None
+                        or isinstance(value["change"], str) and re.fullmatch(r"[0-9a-f]{32}", value["change"]))
+                or not _whole(value.get("runs")) or not isinstance(value.get("tries"), dict)
+                or any(not isinstance(key, str) or not _whole(count) for key, count in value["tries"].items())
+                or not (value.get("next") is None or isinstance(value["next"], str))
+                or not (value.get("last") is None or isinstance(value["last"], dict)
+                        and set(value["last"]) == set(MEASURES) and all(map(_whole, value["last"].values())))):
             return _new()
         return {name: value[name] for name in _new()}
     except (OSError, ValueError):
         return _new()
 
 
-def change_number(data_dir):
-    """The number that a run raises before its first deletion. 0 when there is no record."""
-    return read(data_dir)["change"]
+def change(updates):
+    """The mark that a run writes before its first deletion. None when no run has deleted anything.
+
+    ``updates`` is the folder ``<data>\\updates``: the record is beside the
+    update check's own index file.
+    """
+    return _read(Path(updates) / RECORD)["change"]
 
 
 def _save(data_dir, record):
@@ -200,6 +230,11 @@ class _Budget:
         if left <= 0:
             raise _Bound()
         return min(GIT_SECONDS, left)
+
+    def deadline(self):
+        """Between two operations of a deletion: the limit of the whole step."""
+        if self.elapsed() >= TOTAL_SECONDS:
+            raise _Bound()
 
 
 def _walk(api, handle, budget, *, top=True, trail=()):
@@ -302,8 +337,13 @@ def _decide(others, caches):
     return sorted(files)
 
 
-def _remove(api, handle, files, count):
-    """Delete each file through its handle, then a folder that this run emptied. True when no file stayed."""
+def _remove(api, handle, files, count, budget):
+    """Delete each file through its handle, then a folder that this run emptied. True when no file stayed.
+
+    The limit of the whole step is checked before each file and before the
+    last listing of each folder. At the limit the deletion stops where it is:
+    what is deleted stays deleted, and a later start takes the rest.
+    """
     folders, whole = {}, True
     for parts in files:
         folders.setdefault(parts[:-1], []).append(parts[-1])
@@ -326,6 +366,7 @@ def _remove(api, handle, files, count):
                 parent = child
             removed = 0
             for name in names:
+                budget.deadline()
                 try:
                     file = api.open(parent, name, enter=False)
                     try:
@@ -335,9 +376,10 @@ def _remove(api, handle, files, count):
                     finally:
                         api.close(file)
                     removed += 1
+                    count["files"] += 1
                 except OSError:
                     whole = False  # In use, or changed. It stays.
-            count["files"] += removed
+            budget.deadline()
             if removed and deletable and not api.children(parent):
                 try:
                     api.delete(parent)
@@ -376,29 +418,43 @@ def _object(api, parent, name, folder, budget, before_delete, count):
                 return
             before_delete()
             with budget.aside():
-                if not _remove(api, handle, files, count):
+                if not _remove(api, handle, files, count, budget):
                     raise _Later()
     count["repaired"] += 1
 
 
 def _run(api, store, data_dir, record, clock, log):
     budget = _Budget(clock)
-    count = dict.fromkeys(("objects", "with_cache", "repaired", "files", "folders", "left", "later"), 0)
+    count = dict.fromkeys(COUNTS, 0)
     tries, announced = record["tries"], []
-    record["runs"] += 1
+    if record["runs"] >= RUNS:
+        record["complete"] = True  # Also when each of those runs was cut before its end.
+    else:
+        record["runs"] += 1
+    try:
+        # First of all: the record of this run. A record that cannot be written
+        # means that the store is not looked at.
+        _save(data_dir, record)
+    except Exception as error:
+        log("Source store repair: the record could not be written (" + type(error).__name__
+            + "); the store was not looked at.")
+        return None
+    if record["complete"]:
+        log(f"Source store repair: {RUNS} runs for this app version did not complete; it does not look again.")
+        return None
 
     def before_delete():
         if announced:
             return
-        record["change"] += 1
+        earlier, record["change"] = record["change"], secrets.token_hex(16)
         try:
             _save(data_dir, record)
         except Exception as error:
-            record["change"] -= 1
+            record["change"] = earlier
             raise _Stop() from error
         announced.append(True)
 
-    reason = ""
+    reason, refused = "", False
     try:
         with ExitStack() as stack:
             top = stack.enter_context(_held(api, store))
@@ -413,10 +469,14 @@ def _run(api, store, data_dir, record, clock, log):
                 for source, attributes in budget.children(api, objects):
                     if not SOURCE.fullmatch(source) or attributes & _LINK or not attributes & _DIRECTORY:
                         continue
-                    with _entry(api, objects, source) as folder:
-                        if api.kind(folder) == "folder":
-                            ids += [source + "/" + commit for commit, attributes in budget.children(api, folder)
-                                    if COMMIT.fullmatch(commit) and attributes & _DIRECTORY and not attributes & _LINK]
+                    try:
+                        with _entry(api, objects, source) as folder:
+                            if api.kind(folder) == "folder":
+                                ids += [source + "/" + commit for commit, attributes in budget.children(api, folder)
+                                        if COMMIT.fullmatch(commit) and attributes & _DIRECTORY
+                                        and not attributes & _LINK]
+                    except OSError:
+                        refused = True  # The other sources are still looked at. The pass stays open.
             ids.sort()
             count["objects"] = len(ids)
             for key in set(tries) - set(ids):
@@ -452,7 +512,7 @@ def _run(api, store, data_dir, record, clock, log):
                     count["later"] += 1
                 first = False
             record["next"] = None
-            record["complete"] = all(value >= TRIES for value in tries.values())
+            record["complete"] = not refused and all(value >= TRIES for value in tries.values())
     except _Bound:
         reason = " A bound was reached."
     except _Stop:
@@ -460,18 +520,19 @@ def _run(api, store, data_dir, record, clock, log):
     except Exception as error:
         # A store folder that is refused, or anything else. It still counts as a run.
         reason = " Stopped (" + type(error).__name__ + "); nothing more was changed."
+    if refused:
+        reason += " A source folder could not be opened."
     if record["runs"] >= RUNS:
         record["complete"] = True  # The last run for this app version.
+    record["last"] = {**count, "listings": budget.listings, "entries": budget.entries, "git": budget.git,
+                      "ms": int(budget.elapsed() * 1000)}
     try:
         _save(data_dir, record)
     except Exception as error:
         reason += " The record was not saved (" + type(error).__name__ + ")."
     log("Source store repair: complete=" + str(record["complete"]).lower()
-        + "".join(f" {name}={value}" for name, value in count.items())
-        + f" listings={budget.listings} entries={budget.entries} git={budget.git}"
-        + f" ms={int(budget.elapsed() * 1000)}." + reason)
-    return {**count, "complete": record["complete"], "change": record["change"],
-            "listings": budget.listings, "git": budget.git}
+        + "".join(f" {name}={record['last'][name]}" for name in MEASURES) + "." + reason)
+    return {**record["last"], "complete": record["complete"], "change": record["change"]}
 
 
 def _at_host_start(data_dir, clock, log):
@@ -491,7 +552,7 @@ def _at_host_start(data_dir, clock, log):
             or same(store) not in {same(root / SOURCE_STORE), same(root / EARLIER_SOURCE_STORE)}):
         return None  # Not an installation from the setup file, or a store elsewhere: never touched.
     if record["version"] != __version__:
-        record.update(version=__version__, complete=False, runs=0, tries={}, next=None)
+        record.update(version=__version__, complete=False, runs=0, tries={}, next=None)  # The mark stays.
     from .reset import repair_lock
     with ExitStack() as stack:
         try:
@@ -503,7 +564,11 @@ def _at_host_start(data_dir, clock, log):
 
 
 def at_host_start(data_dir, *, clock=time.monotonic, log=print):
-    """For the host that the start-at-sign-in task started, before it takes its own lock. Never raises."""
+    """For the host that the start-at-sign-in task started, before it takes its own lock.
+
+    It raises no error. The task's host has its output in its private log
+    (``windows_service._serve_host``), so the one line of a run goes there.
+    """
     try:
         return _at_host_start(Path(data_dir), clock, log)
     except Exception as error:

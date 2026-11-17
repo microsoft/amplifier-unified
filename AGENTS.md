@@ -387,9 +387,12 @@ its own lock, with that lock held alone; do not call it later in the start or
 from another process. Its limits are stated in the setup design ("Repair of a
 source store object that holds bytecode"). It imports `_Native` from
 `windows_removal` and does not copy it: a change of those steps must keep
-`tests/test_source_store_repair_native.py`. The record's change number is an
-input of `update_inventory_index.signature`; it goes up before the first
-deletion of a run, and a record that cannot be written means no deletion.
+`tests/test_source_store_repair_native.py`. The record's change mark is an
+input of `update_inventory_index.signature`. A run writes the record first; a
+record that cannot be written means that the store is not looked at. A run
+writes a new mark before its first deletion; a mark that cannot be written
+means no deletion. Keep the mark random: a count repeats after a lost record,
+and the update check then keeps its saved rows.
 A hosted runner cannot make the state through the product, so the cases plant
 it with a real import.
 

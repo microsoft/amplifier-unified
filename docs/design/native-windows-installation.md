@@ -1354,27 +1354,40 @@ Nothing outside the rule above is deleted in any of them. The repair keeps no
 list of running programs.
 
 **Cost and record.** `<data>\updates\source-store-repair.json` holds the app
-version, whether the pass is complete, a change number, and the tries of each
-object that was left. After a complete pass a start of the same app version
-reads that file and does nothing more. The first start of an app version
-lists every folder of every object outside `.git` and starts no Git on a store
-with no `__pycache__` folder; an object that has one costs two Git commands.
-One run has these bounds: 20,000 listings, 400,000 entries, 3 seconds of
-search, 5 seconds for one Git command, 8 seconds in all (ending a Git that
-passed its limit can add one second). At its limit the step ends the Git
-program that it started and stops waiting; the installation's
-`git\cmd\git.exe` is Git's starter program, so the Git program behind it can
-run on until its read ends. It only reads, and that object is left. A bound
-reached ends the run and a later start goes on; an object that alone passes a bound, or
-that could not be decided (a file in use, a Git failure), gets at most three
-tries for one app version, and one app version gets at most ten runs. Every
-run that finds a file to delete raises the change number and writes the record
-before its first deletion; a record that cannot be written means no deletion.
-The number is an input of the update check's scan signature
+version, whether the pass is complete, a change mark, the tries of each object
+that was left, and the counts and milliseconds of the last run. It holds no
+path and no time of day. A run writes the record before it looks at the
+store; a record that cannot be written means that the store is not looked at.
+After a complete pass a start of the same app version reads that file and does
+nothing more. The first start of an app version lists every folder of every
+object outside `.git` and starts no Git on a store with no `__pycache__`
+folder; an object that has one costs two Git commands. One run has these
+bounds: 20,000 listings, 400,000 entries, 3 seconds of search, 5 seconds for
+one Git command, 8 seconds in all (ending a Git that passed its limit can add
+one second). The bounds are checked between operations: before each listing,
+before each Git command, and in a deletion before each file and before the
+last listing of a folder. One operation of the file system has no time limit
+of its own, and neither has the lookup of Git in the folders of PATH. At its
+limit the step ends the Git program that it started and stops waiting; the
+installation's `git\cmd\git.exe` is Git's starter program, so the Git program
+behind it can run on until its read ends. It only reads, and that object is
+left. A bound reached ends the run and a later start goes on; an object that
+alone passes a bound, or that could not be decided (a file in use, a Git
+failure), gets at most three tries for one app version. One app version gets
+at most ten runs, also when a run is cut before its end (the count is written
+first). A source folder that cannot be opened leaves the pass open; the other
+sources are still looked at.
+
+Every run that finds a file to delete writes a new change mark, 32 random
+hexadecimal digits, before its first deletion; a mark that cannot be written
+means no deletion. The mark is an input of the update check's scan signature
 (`update_inventory_index.signature`), so the check after a repair asks
-Foundation again and the saved "could not be checked" row goes. The step never
-raises into the host's start. One line with the counts and the milliseconds
-goes to the host's log.
+Foundation again and the saved "could not be checked" row goes. The mark is
+random and not a count: a record that was lost or could not be read can then
+never give a mark that an earlier check saw. The step raises no error into the
+host's start; a stop of the process passes through it. One line with the
+counts and the milliseconds goes to the host's private log
+(`config\services\task-output.log`).
 
 Not shown on a PC when this was written: the Updates page texts after a
 repair, whether a chat's saved discovery failure goes without "Refresh this
