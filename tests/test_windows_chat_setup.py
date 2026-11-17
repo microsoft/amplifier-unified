@@ -159,23 +159,27 @@ def of_attempt(listed, identity, known):
     ``listed`` is what ``processes()`` returned. A process belongs to the preparation when the preparation's
     ID is in its command line (the app's commands name the stage, ``--profiles <stage>\\profiles.json``, and
     the project, ``--project ...\\prepare-<ID>``), or when it descends from such a process. ``known`` keeps
-    every member that an earlier list had, so a process is still found after its parent ended.
+    the members that the lists before this one gave, so a process is still found after its parent ended.
 
     Windows keeps the ID of a process's parent after that parent ended, and it gives the ID of an ended
     process to a new one. So an equal ID does not make a member. Microsoft's text for ``ParentProcessId`` of
     ``Win32_Process`` says to use the creation time to tell whether the process with that ID was created
-    after the process that names it. ``known`` holds each member by its ID and its creation time. Its value
-    is ``None`` when the newest list holds the member. Otherwise it is a time at which the member had ended:
-    the earliest of the times at which a list without it was read, and of the creation times of the
-    later processes that a list showed with its ID.
+    after the process that names it. ``known`` is {(ID, creation time): (parent's ID, ended)}. The parent's
+    ID is ``None`` for a member by its command line. ``ended`` is ``None``, or a time before which the
+    member ended.
 
-    - A process is a member of an earlier list only with that ID and that creation time.
+    - A member is the same process in a later list only with that ID and that creation time.
+    - A list shows that a member ended only when it holds another process with the member's ID. The member
+      then ended before that process was created. A list without the member shows nothing about it.
     - A process is a child of a member only when the member had the parent's ID at the moment at which the
-      process was created: the process was not created before the member, and for a member that ended it
-      was created before the time that ``known`` holds.
+      process was created: the process was not created before the member, and it was created before the
+      member's ``ended``, when there is one.
+    - Each list decides again for every process. A process that an earlier list took for a child of a
+      member is no member, and what descends from it is none, from the list that shows another process
+      with the member's ID that was created at or before it.
     - A creation time that Windows did not give (0) excludes no process. A process without one, with the ID
       of a member as its parent's ID, counts as a child, and its name gets "(creation time not known)". A
-      member without one takes every process that names its ID and was created before the member ended.
+      member without one takes every process that names its ID and was created before its ``ended``.
 
     What stays open:
 
@@ -188,32 +192,35 @@ def of_attempt(listed, identity, known):
       the child.
     """
     snapshot, read = listed
-    for (pid, created), ended in list(known.items()):
+    for (pid, created), (parent, ended) in list(known.items()):
         holder = snapshot.get(pid)   # the process that has the member's ID in this list
-        if holder is None or holder[3] != created:
-            # This list does not hold the member. It ended before the list was read, and before the process
-            # that has its ID now was created. An earlier time from an earlier list stays.
-            known[pid, created] = min(moment for moment in (
-                ended, read, holder[3] if holder is not None and holder[3] > created else None)
-                if moment is not None)
+        if holder is not None and holder[3] != created:
+            # Another process has the ID. The member ended before that process was created. A creation time
+            # that is not later than the member's gives no such time: then, before this list was read.
+            moment = holder[3] if holder[3] > created else read
+            known[pid, created] = parent, moment if ended is None else min(ended, moment)
+    ended = {key: value[1] for key, value in known.items()}
+    parents = {key: value[0] for key, value in known.items()}
+    parents.update({(pid, created): parent for pid, (parent, name, line, created) in snapshot.items()})
+    by_line = {key for key, value in known.items() if value[0] is None} | {
+        (pid, created) for pid, (parent, name, line, created) in snapshot.items() if identity in line}
 
     def child_of_a_member(parent, created):
         return any(member == parent and (not created or since <= created)
-                   and (ended is None or created < ended)
-                   for (member, since), ended in known.items())
+                   and (ended.get((member, since)) is None or created < ended[member, since])
+                   for member, since in members)
 
-    members = {pid for pid, (parent, name, line, created) in snapshot.items()
-               if identity in line or (pid, created) in known}
+    members = set(by_line)
     while True:
-        for pid in members:
-            known[pid, snapshot[pid][3]] = None   # the newest list holds this member
-        more = {pid for pid, (parent, name, line, created) in snapshot.items()
-                if pid not in members and child_of_a_member(parent, created)}
+        more = {key for key, parent in parents.items()
+                if key not in members and child_of_a_member(parent, key[1])}
         if not more:
             break
         members |= more
-    return {pid: snapshot[pid][1] + ('' if snapshot[pid][3] else ' (creation time not known)')
-            for pid in sorted(members)}
+    known.clear()
+    known.update({key: (None if key in by_line else parents[key], ended.get(key)) for key in members})
+    return {pid: row[1] + ('' if row[3] else ' (creation time not known)')
+            for pid, row in sorted(snapshot.items()) if (pid, row[3]) in members}
 
 
 def session_programs(listed):
@@ -230,7 +237,7 @@ def session_programs(listed):
             if holder is None:
                 has = 'no process'
             elif 0 in (created, holder[3]):
-                has = f'{holder[1]}, and a creation time is not known'
+                has = f'{holder[1]}, and one of the two creation times is not known'
             elif holder[3] <= created:
                 has = f'{holder[1]}, not created after it'
             else:
@@ -239,6 +246,17 @@ def session_programs(listed):
                    else 'creation time not known')
             lines.append(f'{name} {pid}, {age}, parent ID {parent}: {has}')
     return lines
+
+
+def first_line(program, seconds):
+    """The first line that ``program`` prints. '' when it printed none in ``seconds``, and when its output
+    ended before a line."""
+    import threading
+    lines = []
+    reader = threading.Thread(target=lambda: lines.append(program.stdout.readline()), daemon=True)
+    reader.start()
+    reader.join(seconds)
+    return lines[0].decode(errors='replace').strip() if lines else ''
 
 
 ATTEMPT = 'c0ffee0123456789c0ffee0123456789'   # the ID of a made-up preparation
@@ -279,9 +297,10 @@ def test_the_line_of_a_session_program_says_what_has_its_parents_id_now():
         'csrss.exe 640, created 998 s before this list, parent ID 500: smss.exe, not created after it',
         'csrss.exe 7656, created 900 s before this list, parent ID 7600: python.exe, created 805 s after it',
         'winlogon.exe 7720, created 899 s before this list, parent ID 7604: no process',
-        'csrss.exe 8120, creation time not known, parent ID 7600: python.exe, and a creation time is not known',
-        'winlogon.exe 8168, created 896 s before this list, parent ID 9000: smss.exe, and a creation time is '
-        'not known']
+        'csrss.exe 8120, creation time not known, parent ID 7600: python.exe, and one of the two creation times '
+        'is not known',
+        'winlogon.exe 8168, created 896 s before this list, parent ID 9000: smss.exe, and one of the two creation '
+        'times is not known']
 
 
 def test_a_program_that_gets_the_id_of_an_ended_member_is_not_that_member_and_what_it_starts_is_no_member():
@@ -291,7 +310,7 @@ def test_a_program_that_gets_the_id_of_an_ended_member_is_not_that_member_and_wh
     # Another program has the ID now. The same name does not make it the member. It starts a program.
     other, started = (4010, 600, 'python.exe', 1015, 'python -m another_program'), (5000, 4010, 'conhost.exe', 1016)
     assert of_attempt(made_up(1020, other, started), ATTEMPT, known) == {}
-    # Also after the other program ended: the member was gone before that program was created.
+    # Also after the other program ended: a list showed that the member ended before 1015.
     assert of_attempt(made_up(1030, started), ATTEMPT, known) == {}
 
 
@@ -301,8 +320,10 @@ def test_a_child_of_the_program_that_has_the_id_now_is_not_a_child_of_the_member
     # Between two lists the member ended, another program got its ID (created 1006) and started a program (1007).
     started = (5000, 4010, 'conhost.exe', 1007)
     assert of_attempt(made_up(1010, (4010, 600, 'cmd.exe', 1006), started), ATTEMPT, known) == {}
-    # Also after that other program ended: a list showed that the member had ended before 1006.
+    # Also after that other program ended: a list showed that the member ended before 1006.
     assert of_attempt(made_up(1020, started), ATTEMPT, known) == {}
+    # And when a third program has the ID (created 1025): the earliest time stays.
+    assert of_attempt(made_up(1030, (4010, 700, 'git.exe', 1025), started), ATTEMPT, known) == {}
 
 
 def test_a_program_with_the_creation_time_of_the_program_that_got_the_members_id_is_not_a_child_of_the_member():
@@ -313,24 +334,30 @@ def test_a_program_with_the_creation_time_of_the_program_that_got_the_members_id
                       ATTEMPT, known) == {}
 
 
-def test_a_later_list_can_show_that_the_member_ended_earlier_than_the_first_list_without_it_showed():
+def test_a_program_that_a_list_took_for_a_child_is_no_member_when_a_later_list_shows_what_had_the_id():
     known = {}
     assert of_attempt(made_up(1000, (4010, 4000, 'python.exe', 905, PROBE)), ATTEMPT, known) == {4010: 'python.exe'}
-    # A list is not read in one moment. This one, read at 1010, held neither the member nor the two programs
-    # that were created while it was read: the one that got the member's ID (1008) and what that one started.
-    assert of_attempt(made_up(1010), ATTEMPT, known) == {}
-    assert of_attempt(made_up(1020, (4010, 600, 'cmd.exe', 1008), (5000, 4010, 'conhost.exe', 1009)),
-                      ATTEMPT, known) == {}
+    # This list has no process with the member's ID. Nothing shows that the two programs are not the member's.
+    taken, below = (5000, 4010, 'conhost.exe', 1009), (5100, 5000, 'cmd.exe', 1011)
+    assert of_attempt(made_up(1012, taken, below), ATTEMPT, known) == {5000: 'conhost.exe', 5100: 'cmd.exe'}
+    # The next list holds another program with that ID, created before those two: the member ended before 1008.
+    assert of_attempt(made_up(1020, (4010, 600, 'cmd.exe', 1008), taken, below), ATTEMPT, known) == {}
+    assert of_attempt(made_up(1030, taken, below), ATTEMPT, known) == {}
 
 
-def test_a_member_that_one_list_did_not_hold_is_a_member_again_and_what_it_starts_later_is_found():
-    known = {}
+def test_a_list_without_a_member_does_not_show_that_the_member_ended():
     member, child = (4010, 4000, 'uv.exe', 905, PROBE), (5000, 4010, 'python.exe', 906, 'python setup.py')
+    known = {}
     assert of_attempt(made_up(1000, member, child), ATTEMPT, known) == {4010: 'uv.exe', 5000: 'python.exe'}
-    assert of_attempt(made_up(1010, member), ATTEMPT, known) == {4010: 'uv.exe'}   # the list missed the child
+    assert of_attempt(made_up(1010, member), ATTEMPT, known) == {4010: 'uv.exe'}   # the list did not hold the child
     # The child runs, and it started a program after that list was read.
     assert of_attempt(made_up(1020, member, child, (5100, 5000, 'git.exe', 1015)), ATTEMPT, known) == {
         4010: 'uv.exe', 5000: 'python.exe', 5100: 'git.exe'}
+    # The same, and the member and the child end before the next list.
+    known = {}
+    assert of_attempt(made_up(1000, member, child), ATTEMPT, known) == {4010: 'uv.exe', 5000: 'python.exe'}
+    assert of_attempt(made_up(1010, member), ATTEMPT, known) == {4010: 'uv.exe'}
+    assert of_attempt(made_up(1020, (5100, 5000, 'git.exe', 1015)), ATTEMPT, known) == {5100: 'git.exe'}
 
 
 def test_a_creation_time_that_windows_did_not_give_excludes_no_process():
@@ -350,6 +377,36 @@ def test_a_creation_time_that_windows_did_not_give_excludes_no_process():
     assert of_attempt(made_up(1010), ATTEMPT, known) == {}
     assert of_attempt(made_up(1020, (4010, 600, 'cmd.exe', 1015), (5000, 4010, 'conhost.exe', 1016)),
                       ATTEMPT, known) == {}
+
+
+def test_another_process_with_the_members_id_and_no_later_creation_time_shows_that_the_member_ended_before_the_read():
+    known = {}
+    member, child = (4010, 4000, 'uv.exe', 905, PROBE), (5000, 4010, 'python.exe', 950)
+    assert of_attempt(made_up(1000, member, child), ATTEMPT, known) == {4010: 'uv.exe', 5000: 'python.exe'}
+    # Another process has the member's ID, and Windows gives no creation time for it. The member's child stays.
+    other = (4010, 600, 'cmd.exe', 0)
+    assert of_attempt(made_up(1010, other, child), ATTEMPT, known) == {5000: 'python.exe'}
+    # What names that ID and was created after that list was read is no child of the member.
+    assert of_attempt(made_up(1020, other, child, (5100, 4010, 'conhost.exe', 1015)), ATTEMPT, known) == {
+        5000: 'python.exe'}
+
+
+def test_the_wait_for_the_first_line_of_a_program_ends_when_the_program_prints_none():
+    def start(code):
+        return subprocess.Popen([sys.executable, '-c', code], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+
+    prints, ends, silent = (start('import sys; print(7, flush=True); sys.stdin.read()'), start('pass'),
+                            start('import sys; sys.stdin.read()'))
+    try:
+        assert first_line(prints, 120) == '7'
+        assert first_line(ends, 120) == ''   # it ended and printed nothing
+        started = time.monotonic()
+        assert first_line(silent, 1) == '' and time.monotonic() - started < 60   # it runs on and prints nothing
+    finally:
+        for program in (prints, ends, silent):
+            program.stdin.close()
+            program.wait(120)
+            program.stdout.close()
 
 
 def test_a_process_of_the_preparation_is_still_found_after_its_parent_ended():
@@ -372,16 +429,17 @@ def test_a_process_of_the_preparation_is_still_found_after_its_parent_ended():
 def test_the_real_list_has_the_creation_time_of_each_process_and_finds_what_a_started_program_starts():
     """The real list of this PC, with a program that this case starts. That program starts a second one,
     which has nothing of the first one in its command line: it is found only as a descendant. Both run until
-    their input ends. This case ends that input."""
+    their input ends. This case ends that input. Only the first program has the pipe to this case."""
     token = uuid.uuid4().hex
     second = 'import sys; sys.stdin.read()'
     first = ("import subprocess, sys; "
-             f"started = subprocess.Popen([sys.executable, '-c', {second!r}], stdin=sys.stdin); "
-             "print(started.pid, flush=True); sys.stdin.read()")
+             f"started = subprocess.Popen([sys.executable, '-c', {second!r}], stdin=sys.stdin, "
+             "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); "
+             "print(started.pid, flush=True); sys.stdin.read(); started.wait()")
     program = subprocess.Popen([sys.executable, '-c', first, token], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
     try:
-        answer = program.stdout.readline().strip()   # the first program prints the ID of the second one
-        assert answer.isdigit(), f'The first program did not start the second one: {answer!r}'
+        answer = first_line(program, 120)   # the first program prints the ID of the second one
+        assert answer.isdigit(), f'The first program did not print the ID of a second one in 120 s: {answer!r}'
         descendant = int(answer)
         known, deadline = {}, time.monotonic() + 600
         while True:
@@ -391,6 +449,7 @@ def test_the_real_list_has_the_creation_time_of_each_process_and_finds_what_a_st
                 break
             assert time.monotonic() < deadline, f'No list held the second program {descendant}: {found}'
             time.sleep(1)
+        assert program.pid in snapshot, f'The list with the second program did not hold the first one: {found}'
         mine, started = snapshot[os.getpid()], snapshot[program.pid]
         # The program names this process as its parent. It was created after this process and before the read.
         assert started[0] == os.getpid() and token in started[2], started
@@ -416,7 +475,7 @@ def test_the_real_list_has_the_creation_time_of_each_process_and_finds_what_a_st
         print('MEASURED the programs of the sign-in sessions of this PC: '
               + '; '.join(session_programs((snapshot, read))))
     finally:
-        program.stdin.close()   # the input of both programs ends
+        program.stdin.close()   # the input of both programs ends; the first one waits for the second one
         try:
             program.wait(60)
         except subprocess.TimeoutExpired:
