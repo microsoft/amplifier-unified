@@ -310,68 +310,110 @@ class Reads:
         return self.status
 
 
-def accept(case, tmp_path, reads, started=STARTED, task=TASK, status=STATUS):
+def accept(case, tmp_path, reads, started=STARTED, task=TASK, status=STATUS, text="The start failed",
+           save_fails_at=None):
+    """One call of the check: its text (None when the start is accepted), the saved record, and the steps."""
     steps = case.Steps(tmp_path / "report.json", ("one",))
     steps.begin("one")
+    if save_fails_at:
+        real, calls = steps.save, []
+
+        def save():
+            calls.append(1)
+            if len(calls) == save_fails_at:
+                raise OSError("There is not enough space on the disk")
+            real()
+        steps.save = save
     try:
         case.accept_start(steps, "theStart", reads, tmp_path / "app", tmp_path, started, task, status,
-                          "The start failed", wait=reads.wait)
-        text = None
+                          text, wait=reads.wait)
+        said = None
     except AssertionError as error:
-        text = str(error)
-    return text, json.loads((tmp_path / "report.json").read_text(encoding="utf-8")).get("theStart")
+        said = str(error)
+    return said, json.loads((tmp_path / "report.json").read_text(encoding="utf-8")).get("theStart"), steps
+
+
+def detail_of(text):
+    head, _, detail = text.partition(": {")
+    return head, json.loads("{" + detail)
 
 
 def test_a_start_with_the_three_required_answers_is_accepted_and_its_answers_are_saved(case, start_rules, tmp_path):
     reads = Reads(start_rules)
-    text, saved = accept(case, tmp_path, reads)
+    text, saved, _ = accept(case, tmp_path, reads)
     assert text is None
     assert saved == {"launcher": STARTED, "task": TASK, "serviceStatus": STATUS}
     assert reads.calls == []  # No wait and no second read.
 
 
+# What the rule of the status reads, in a status that is as required.
+GOOD = {"exitCode": 0, "ok": True, "processVerified": True, "responding": True}
+ASKED = dict(STATUS["json"])
 WRONG = [
-    ("the launcher", {"started": {**STARTED, "exitCode": 1}}),
-    ("the launcher", {"started": {**STARTED, "json": {**SAID, "background": False}}}),
-    ("the launcher", {"started": {**STARTED, "json": None}}),
-    ("Task Scheduler", {"task": {**TASK, "managed": False}}),
-    ("Task Scheduler", {"task": {**TASK, "state": "stopped"}}),
-    ("Task Scheduler", {"task": {**TASK, "instances": 0}}),
-    ("Task Scheduler", {"task": {**TASK, "instances": 2}}),
-    ("the app's status", {"status": {**STATUS, "exitCode": 1}}),
-    ("the app's status", {"status": {**STATUS, "json": {**STATUS["json"], "ok": False}}}),
-    ("the app's status", {"status": {**STATUS, "json": {**STATUS["json"], "processVerified": False}}}),
-    ("the app's status", {"status": {**STATUS, "json": {**STATUS["json"], "responding": False}}}),
-    ("the app's status", {"status": {**STATUS, "json": None}}),
+    ("the launcher", {"started": {**STARTED, "exitCode": 1}}, {"exitCode": 1, "background": True}),
+    ("the launcher", {"started": {**STARTED, "json": {**SAID, "background": False}}},
+     {"exitCode": 0, "background": False}),
+    ("the launcher", {"started": {**STARTED, "json": None}}, {"exitCode": 0, "json": None}),
+    ("Task Scheduler", {"task": {**TASK, "managed": False}}, {"managed": False, "state": "running", "instances": 1}),
+    ("Task Scheduler", {"task": {**TASK, "state": "stopped"}}, {"managed": True, "state": "stopped", "instances": 1}),
+    ("Task Scheduler", {"task": {**TASK, "instances": 0}}, {"managed": True, "state": "running", "instances": 0}),
+    ("Task Scheduler", {"task": {**TASK, "instances": 2}}, {"managed": True, "state": "running", "instances": 2}),
+    ("the app's status", {"status": {**STATUS, "exitCode": 1}}, {**GOOD, "exitCode": 1}),
+    ("the app's status", {"status": {**STATUS, "json": {**ASKED, "ok": False}}}, {**GOOD, "ok": False}),
+    ("the app's status", {"status": {**STATUS, "json": {**ASKED, "processVerified": False}}},
+     {**GOOD, "processVerified": False}),
+    ("the app's status", {"status": {**STATUS, "json": {**ASKED, "responding": False}}},
+     {**GOOD, "responding": False}),
+    ("the app's status", {"status": {**STATUS, "json": None}}, {"exitCode": 0, "json": None}),
 ]
 
 
-@pytest.mark.parametrize("part, answers", WRONG)
-def test_a_start_names_the_one_answer_that_was_not_as_required(case, start_rules, tmp_path, part, answers):
-    reads = Reads(start_rules)
-    text, saved = accept(case, tmp_path, reads, **answers)
-    head, _, detail = text.partition(": {")
+@pytest.mark.parametrize("part, answers, values", WRONG)
+def test_a_start_names_the_one_answer_that_was_not_as_required_and_the_values_that_its_rule_reads(
+        case, start_rules, tmp_path, part, answers, values):
+    text, saved, _ = accept(case, tmp_path, Reads(start_rules), **answers)
+    head, detail = detail_of(text)
     assert head == "The start failed. Not as required: " + part
-    detail = json.loads("{" + detail)
-    assert list(detail) == [part, "fiveSecondsLater"]
-    # The text holds the answer of that part. The whole three answers are in the saved report.
+    assert list(detail) == [part, "fiveSecondsLater", "more"]  # In this order: the values come first.
+    assert detail[part] == values
+    # Then more of that answer: Task Scheduler's whole answer; of a command its JSON and the end of what it printed.
     given = {"started": STARTED, "task": TASK, "status": STATUS, **answers}
-    expected = {"the launcher": given["started"], "Task Scheduler": given["task"], "the app's status": given["status"]}
-    answer = expected[part]
-    assert detail[part] == (answer if part == "Task Scheduler" else
-                            {"exitCode": answer["exitCode"], "json": answer["json"], "stderr": ""})
+    whole = {"the launcher": given["started"], "Task Scheduler": given["task"], "the app's status": given["status"]}[part]
+    assert detail["more"] == {part: whole if part == "Task Scheduler" else {
+        "json": whole["json"], **({} if whole["json"] else {"stdout": whole["stdout"][-300:]}), "stderr": ""}}
+    # The report holds the three answers as the case got them.
     assert {name: saved[name] for name in ("launcher", "task", "serviceStatus")} == {
         "launcher": given["started"], "task": given["task"], "serviceStatus": given["status"]}
 
 
 def test_a_start_names_every_answer_that_was_not_as_required_in_one_text(case, start_rules, tmp_path):
-    text, _ = accept(case, tmp_path, Reads(start_rules), started={**STARTED, "exitCode": 1},
-                     task={**TASK, "instances": 0}, status={**STATUS, "exitCode": 1})
-    assert text.startswith("The start failed. Not as required: the launcher, Task Scheduler, the app's status: {")
+    text, _, _ = accept(case, tmp_path, Reads(start_rules), started={**STARTED, "exitCode": 1},
+                        task={**TASK, "instances": 0}, status={**STATUS, "exitCode": 1})
+    head, detail = detail_of(text)
+    assert head == "The start failed. Not as required: the launcher, Task Scheduler, the app's status"
+    assert list(detail) == ["the launcher", "Task Scheduler", "the app's status", "fiveSecondsLater", "more"]
+    assert list(detail["more"]) == ["the launcher", "Task Scheduler", "the app's status"]
     # The failure of November 17: the launcher said that the start worked. The text now says which read did not.
-    text, _ = accept(case, tmp_path, Reads(start_rules), task={**TASK, "state": "stopped", "instances": 0})
-    assert text.startswith("The start failed. Not as required: Task Scheduler: {")
-    assert '"state": "stopped"' in text and '"instances": 0' in text
+    text, _, _ = accept(case, tmp_path, Reads(start_rules), task={**TASK, "state": "stopped", "instances": 0})
+    assert text.startswith('The start failed. Not as required: Task Scheduler: '
+                           '{"Task Scheduler": {"managed": true, "state": "stopped", "instances": 0}, ')
+
+
+@pytest.mark.parametrize("part, answers, values", [
+    ("the launcher", {"started": {**STARTED, "json": [1, 2]}}, {"exitCode": 0, "json": "[1, 2]"}),
+    ("the launcher", {"started": {**STARTED, "json": "started"}}, {"exitCode": 0, "json": "started"}),
+    ("the app's status", {"status": {**STATUS, "json": [1, 2]}}, {"exitCode": 0, "json": "[1, 2]"}),
+    ("Task Scheduler", {"task": {**TASK, "instances": "1"}}, {"managed": True, "state": "running", "instances": "1"}),
+    ("Task Scheduler", {"task": {**TASK, "state": "s" * 100}},
+     {"managed": True, "state": "'" + "s" * 59, "instances": 1}),
+])
+def test_an_answer_that_its_rule_cannot_read_or_that_is_long_is_not_as_required_and_its_values_are_short(
+        case, start_rules, tmp_path, part, answers, values):
+    # A rule that raises does not accept the start, and its error does not replace the step's text.
+    text, _, _ = accept(case, tmp_path, Reads(start_rules), **answers)
+    head, detail = detail_of(text)
+    assert head == "The start failed. Not as required: " + part
+    assert detail[part] == values
 
 
 @pytest.mark.parametrize("later_task, later_status, expected", [
@@ -382,35 +424,112 @@ def test_a_start_names_every_answer_that_was_not_as_required_in_one_text(case, s
 def test_the_reads_five_seconds_later_are_saved_and_never_make_the_step_pass(
         case, start_rules, tmp_path, later_task, later_status, expected):
     reads = Reads(start_rules, task=later_task, status=later_status)
-    text, saved = accept(case, tmp_path, reads, task={**TASK, "state": "stopped"})
+    text, saved, _ = accept(case, tmp_path, reads, task={**TASK, "state": "stopped"})
     # Also when both later answers are as required, the step fails with the first answer.
-    assert text.startswith("The start failed. Not as required: Task Scheduler: {")
-    assert json.loads(text[text.index("{"):])["fiveSecondsLater"] == expected
+    head, detail = detail_of(text)
+    assert head == "The start failed. Not as required: Task Scheduler"
+    assert detail["Task Scheduler"] == {"managed": True, "state": "stopped", "instances": 1}
+    assert detail["fiveSecondsLater"] == expected
     assert saved["fiveSecondsLater"] == {"task": later_task, "serviceStatus": later_status}
     # One wait of five seconds, then the same two reads as before.
     assert reads.calls == [("wait", 5), ("task", tmp_path / "app"), ("cli", tmp_path, "service", "status", "--json")]
 
 
 def test_a_later_read_that_fails_keeps_the_first_answers_as_the_steps_text(case, start_rules, tmp_path):
-    import subprocess
-    reads = Reads(start_rules, fails=subprocess.TimeoutExpired("amplifier-unified.exe", 120))
-    text, saved = accept(case, tmp_path, reads, status={**STATUS, "exitCode": 1, "stderr": "x" * 500 + "the end"})
-    assert text.startswith("The start failed. Not as required: the app's status: {")
-    detail = json.loads(text[text.index("{"):])
-    assert detail["the app's status"]["stderr"] == "x" * 293 + "the end"  # The end of a long text.
-    assert detail["fiveSecondsLater"]["errorType"] == "TimeoutExpired"
-    assert saved["fiveSecondsLater"]["errorType"] == "TimeoutExpired"
+    reads = Reads(start_rules, fails=RuntimeError("no answer " + "x" * 400 + " the end"))
+    text, saved, _ = accept(case, tmp_path, reads, status={**STATUS, "exitCode": 1, "stderr": "x" * 500 + "the end"})
+    head, detail = detail_of(text)
+    assert head == "The start failed. Not as required: the app's status"
+    assert detail["the app's status"] == {**GOOD, "exitCode": 1}
+    assert detail["more"]["the app's status"]["stderr"] == "x" * 293 + "the end"  # The end of a long text.
+    error = {"errorType": "RuntimeError", "error": "x" * 292 + " the end"}  # Its last 300 characters.
+    assert detail["fiveSecondsLater"] == error and saved["fiveSecondsLater"] == error
+
+
+def test_a_later_answer_that_its_rule_cannot_read_is_saved_and_the_text_holds_the_error(case, start_rules, tmp_path):
+    later = {**STATUS, "json": [1, 2]}
+    text, saved, _ = accept(case, tmp_path, Reads(start_rules, status=later), task={**TASK, "instances": 0})
+    head, detail = detail_of(text)
+    assert head == "The start failed. Not as required: Task Scheduler"
+    assert detail["fiveSecondsLater"]["errorType"] == "AttributeError"
+    assert saved["fiveSecondsLater"] == {"task": TASK, "serviceStatus": later}
 
 
 def test_a_start_that_is_not_accepted_saves_the_end_of_the_tasks_output(case, start_rules, tmp_path):
-    text, saved = accept(case, tmp_path, Reads(start_rules), task={**TASK, "instances": 0})
+    wrong = {**TASK, "instances": 0}
+    text, saved, _ = accept(case, tmp_path, Reads(start_rules), task=wrong)
     assert text is not None and saved["taskOutput"] is None  # No file: said, not invented.
     log = tmp_path / "app/config/services/task-output.log"
     log.parent.mkdir(parents=True)
     log.write_text("\n".join(f"line {number}" for number in range(1, 101)) + "\n", encoding="utf-8")
-    text, saved = accept(case, tmp_path, Reads(start_rules), task={**TASK, "instances": 0})
+    text, saved, _ = accept(case, tmp_path, Reads(start_rules), task=wrong)
     assert saved["taskOutput"].splitlines() == [f"line {number}" for number in range(61, 101)]
     assert "line 100" not in text  # The output is in the report, not in the step's text.
+    # Of 40 long lines: the last 6000 characters.
+    long = [f"{number:03}" + "y" * 397 for number in range(1, 101)]
+    log.write_text("\n".join(long) + "\n", encoding="utf-8")
+    text, saved, _ = accept(case, tmp_path, Reads(start_rules), task=wrong)
+    assert saved["taskOutput"] == "\n".join(long[-40:])[-6000:] and len(saved["taskOutput"]) == 6000
+
+
+def test_a_tasks_output_that_cannot_be_read_does_not_replace_the_steps_text(case, start_rules, tmp_path):
+    # The name exists, and a read of it fails: it is a folder.
+    (tmp_path / "app/config/services/task-output.log").mkdir(parents=True)
+    text, saved, _ = accept(case, tmp_path, Reads(start_rules), task={**TASK, "instances": 0})
+    head, detail = detail_of(text)
+    assert head == "The start failed. Not as required: Task Scheduler"
+    assert detail["Task Scheduler"] == {"managed": True, "state": "running", "instances": 0}
+    assert detail["fiveSecondsLater"] == {"Task Scheduler": True, "the app's status": True}
+    # The report says that the output was not read, and it still holds the later answers.
+    assert set(saved["taskOutput"]) == {"errorType", "error"}
+    assert saved["taskOutput"]["errorType"] in ("IsADirectoryError", "PermissionError")  # Linux and macOS; Windows.
+    assert saved["fiveSecondsLater"] == {"task": TASK, "serviceStatus": STATUS}
+
+
+def test_a_report_that_cannot_be_saved_the_second_time_does_not_replace_the_steps_text(case, start_rules, tmp_path):
+    wrong = {**TASK, "instances": 0}
+    text, saved, steps = accept(case, tmp_path, Reads(start_rules), task=wrong, save_fails_at=2)
+    head, detail = detail_of(text)
+    assert head == "The start failed. Not as required: Task Scheduler"
+    assert list(detail) == ["Task Scheduler", "fiveSecondsLater", "notSavedInTheReport", "more"]
+    assert detail["Task Scheduler"] == {"managed": True, "state": "running", "instances": 0}
+    assert detail["notSavedInTheReport"] == {"errorType": "OSError", "error": "There is not enough space on the disk"}
+    # The first save holds the three answers. The later answers wait in the report for its next save.
+    assert saved == {"launcher": STARTED, "task": wrong, "serviceStatus": STATUS}
+    assert steps.report["theStart"]["fiveSecondsLater"] == {"task": TASK, "serviceStatus": STATUS}
+    # A second save that works adds nothing to the text.
+    text, _, _ = accept(case, tmp_path, Reads(start_rules), task=wrong)
+    assert "notSavedInTheReport" not in text
+
+
+def test_a_report_that_cannot_be_saved_before_the_check_fails_the_step_with_that_error(case, start_rules, tmp_path):
+    reads = Reads(start_rules)
+    with pytest.raises(OSError, match="There is not enough space on the disk"):
+        accept(case, tmp_path, reads, save_fails_at=1)  # Three answers that are as required.
+    assert reads.calls == []
+
+
+@pytest.mark.parametrize("said", ["The second start failed", "The start after the uninstall failed"])
+def test_the_text_of_a_start_keeps_its_start_when_the_answers_are_long(case, start_rules, tmp_path, said):
+    started = {**STARTED, "json": {**SAID, "background": False, "note": "n" * 5000}}
+    task = {"managed": False, "errorType": "RuntimeError", "error": "e" * 1000}  # Task Scheduler gave no answer.
+    status = {**STATUS, "json": {**ASKED, "ok": False, "message": "m" * 5000}}
+    text, _, steps = accept(case, tmp_path, Reads(start_rules), started=started, task=task, status=status, text=said)
+    values = json.dumps({"the launcher": {"exitCode": 0, "background": False},
+                         "Task Scheduler": {"managed": False, "state": None, "instances": None},
+                         "the app's status": {**GOOD, "ok": False},
+                         "fiveSecondsLater": {"Task Scheduler": True, "the app's status": True}})[:-1]
+    start = (said + ". Not as required: the launcher, Task Scheduler, the app's status: " + values
+             + ', "more": {"the launcher": {"json": {')
+    assert text.startswith(start) and len(text) == 2900  # Cut at its end.
+    # The report keeps the last 3000 characters of a step's text, and a line the first 1500 of that.
+    steps.failed(AssertionError(text))
+    report = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
+    assert report["steps"][0]["reason"] == "AssertionError: " + text
+    assert case.lines(report)[0].startswith("FAILED: one -- AssertionError: " + start)
+    # The whole answers are in the report.
+    assert report["theStart"]["launcher"] == started and report["theStart"]["task"] == task
+    assert report["theStart"]["serviceStatus"] == status
 
 
 def test_each_later_start_is_accepted_through_the_check_that_names_the_answer():

@@ -1497,40 +1497,85 @@ def accept_start(steps, key, again, home, root, started, state, status, text, *,
     """Require one start of the launcher, and say which answer was not as required.
 
     A start has three answers: the launcher's own, Task Scheduler's, and the
-    app's status. All three are saved before the check. When one is not as
-    required, the step fails. Its text names that part and holds its answer.
+    app's status. The report gets all three before the check. When that save
+    fails, the step fails with its error. The rules are those of the
+    start-again case. A step fails when an answer is not as its rule requires,
+    and also when the rule cannot read the answer.
 
-    Task Scheduler and the status are then read once more after five seconds,
-    and that pair is saved too. It never makes the step pass. It only says
-    whether an answer changed in that time.
+    The text of such a step has this order: the names of those parts; for each
+    part the values that its rule reads; whether Task Scheduler and the status
+    were as required five seconds later; then more of each answer. A value
+    that is not short is given as the first 60 characters of its Python form.
+    The text is cut at 2900 characters, at its end. So it keeps its start,
+    also in the report, which keeps the last 3000 characters of a step's text.
+    The report holds the three answers as the case got them.
+
+    The read five seconds later never makes the step pass. It, the read of the
+    task's output and the second save of the report can each fail. The step
+    then keeps its text, and the text or the report holds that error.
 
     One run of this case failed at a start with only the launcher's answer in
     its text, and the launcher had said that the start worked (run 44149453625,
-    November 17, 2026). This keeps the two other answers.
+    November 17, 2026). That run does not say which other answer was wrong.
     """
     record = steps.report[key] = {"launcher": started, "task": state, "serviceStatus": status}
     steps.save()
-    brief = lambda result: {"exitCode": result.get("exitCode"), "json": result.get("json"),
-                            "stderr": (result.get("stderr") or "")[-300:]}
-    parts = {"the launcher": (started["exitCode"] == 0 and (started["json"] or {}).get("background") is True,
-                              brief(started)),
-             "Task Scheduler": (again.running(state), state),
-             "the app's status": (again.healthy(status), brief(status))}
-    wrong = {name: answer for name, (good, answer) in parts.items() if not good}
-    if wrong:
+
+    def attempt(read):
         try:
-            wait(5)
-            later = {"task": again.task_facts(home), "serviceStatus": again.cli(root, "service", "status", "--json")}
-            wrong["fiveSecondsLater"] = {"Task Scheduler": again.running(later["task"]),
-                                         "the app's status": again.healthy(later["serviceStatus"])}
-        except Exception as error:  # The first answers stay the step's text.
-            later = {"errorType": type(error).__name__, "error": str(error)[-300:]}
-            wrong["fiveSecondsLater"] = later
+            return read()
+        except Exception as error:
+            return {"errorType": type(error).__name__, "error": str(error)[-300:]}
+
+    rules = {"the launcher": lambda: started["exitCode"] == 0 and (started["json"] or {}).get("background") is True,
+             "Task Scheduler": lambda: again.running(state),
+             "the app's status": lambda: again.healthy(status)}
+    wrong = [name for name, rule in rules.items() if attempt(rule) is not True]
+    if not wrong:
+        return
+    answers = {"the launcher": (started, ("background",)),
+               "the app's status": (status, ("ok", "processVerified", "responding"))}
+
+    def short(value):
+        plain = value is None or isinstance(value, (bool, int, str)) and len(str(value)) <= 60
+        return value if plain else repr(value)[:60]
+
+    def values(name):
+        if name == "Task Scheduler":
+            return {field: short(state.get(field)) for field in ("managed", "state", "instances")}
+        result, fields = answers[name]
+        said = result.get("json")
+        return {"exitCode": short(result.get("exitCode")),
+                **({field: short(said.get(field)) for field in fields} if isinstance(said, dict)
+                   else {"json": short(said)})}
+
+    def more(name):
+        if name == "Task Scheduler":
+            return state
+        result = answers[name][0]
+        printed = {} if isinstance(result.get("json"), dict) else {"stdout": str(result.get("stdout") or "")[-300:]}
+        return {"json": result.get("json"), **printed, "stderr": str(result.get("stderr") or "")[-300:]}
+
+    def later():
+        wait(5)
+        pair = {"task": again.task_facts(home), "serviceStatus": again.cli(root, "service", "status", "--json")}
+        record["fiveSecondsLater"] = pair
+        return {"Task Scheduler": again.running(pair["task"]), "the app's status": again.healthy(pair["serviceStatus"])}
+
+    def output():
         log = home / "config/services/task-output.log"
-        record.update(fiveSecondsLater=later, taskOutput="\n".join(
-            log.read_text(encoding="utf-8", errors="replace").splitlines()[-40:])[-6000:] if log.exists() else None)
-        steps.save()
-    need(not wrong, text + ". Not as required: " + ", ".join(name for name in parts if name in wrong), wrong)
+        return ("\n".join(log.read_text(encoding="utf-8", errors="replace").splitlines()[-40:])[-6000:]
+                if log.exists() else None)
+
+    then = attempt(later)
+    record.setdefault("fiveSecondsLater", then)
+    record["taskOutput"] = attempt(output)
+    unsaved = attempt(steps.save)
+    detail = {**{name: attempt(lambda: values(name)) for name in wrong}, "fiveSecondsLater": then,
+              **({"notSavedInTheReport": unsaved} if unsaved else {}),
+              "more": {name: attempt(lambda: more(name)) for name in wrong}}
+    raise AssertionError((text + ". Not as required: " + ", ".join(wrong) + ": "
+                          + json.dumps(detail, default=str))[:2900])
 
 
 def installation_folder():
