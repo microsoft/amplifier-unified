@@ -10,6 +10,10 @@ never written, so nothing can sign under that root afterwards. Its ca.crt
 carries critical name constraints; that is how it differs from a partial pair.
 Its server certificate cannot be reissued, so `force` replaces the whole
 identity with a new one. windows_trust.py owns asking Windows to trust a root.
+
+`force` first writes the root that it replaces into replaced-roots.pem, in the
+same private folder. Windows can still hold that root for the person, and only
+its exact bytes find it there. This module never opens the Windows store.
 """
 from __future__ import annotations
 
@@ -27,6 +31,11 @@ from . import windows_files as files
 
 _LIMIT = 65536
 _LOCK = ".tls.lock"
+# Public certificates only, oldest first. The newest 32 are kept: each one is
+# about 1.3 KiB, and the whole record must stay inside one bounded read.
+_REPLACED = "replaced-roots.pem"
+_REPLACED_MAX = 32
+_BLOCK = re.compile(rb"-----BEGIN CERTIFICATE-----\r?\n[A-Za-z0-9+/=\r\n]+?-----END CERTIFICATE-----")
 _LAYOUT = {"cert": "config/tls/leaf.crt", "key": "config/tls/leaf.key"}
 # Windows shows this name three times in its confirmation; it is the only
 # product text there.
@@ -388,6 +397,62 @@ def _publish_pair(pinned, prefix, cert, key, *, replace=False):
             "No CA regeneration, destination deletion or rollback was attempted") from exc
 
 
+def _recorded(pinned):
+    """Certificates (DER) of the replaced-roots record, oldest first.
+
+    Every complete certificate is read and the rest is ignored: the record
+    only names candidates. windows_trust checks each one, and asks Windows
+    about none that the store does not hold. No record, or one that is too
+    long to read, gives an empty list.
+    """
+    from cryptography import x509
+    from cryptography.hazmat.primitives import serialization
+    try:
+        content = pinned.read_private(_REPLACED, limit=_LIMIT)
+    except (FileNotFoundError, ValueError):
+        return []
+    found = []
+    for block in _BLOCK.findall(content):
+        try:
+            der = x509.load_pem_x509_certificate(block).public_bytes(serialization.Encoding.DER)
+        except (ValueError, TypeError):
+            continue
+        if der not in found:
+            found.append(der)
+    return found
+
+
+def _remember_replaced(pinned, certificate_bytes):
+    """Add the root that `force` is about to replace to the record.
+
+    This comes before the first new file. A failure here leaves the identity
+    as it was. A repeated `force` after a partial publication finds the same
+    root again and records it once.
+    """
+    from cryptography import x509
+    from cryptography.hazmat.primitives import serialization
+    der = x509.load_pem_x509_certificate(certificate_bytes).public_bytes(serialization.Encoding.DER)
+    kept = [value for value in _recorded(pinned) if value != der] + [der]
+    kept = kept[-_REPLACED_MAX:]
+    while True:
+        content = b"".join(x509.load_der_x509_certificate(value).public_bytes(serialization.Encoding.PEM)
+                           for value in kept)
+        if len(content) <= _LIMIT or len(kept) == 1:
+            break
+        kept = kept[1:]
+    pinned.publish_private(_REPLACED, content, replace=True)
+
+
+def replaced_roots(data_dir):
+    """Roots (DER) that `setup-tls force` replaced in this installation, oldest first.
+
+    Only public certificates are read. The list can name a root that Windows
+    never held, and the current root after a `force` that stopped part-way.
+    """
+    with _storage(data_dir) as pinned:
+        return _recorded(pinned)
+
+
 def setup(data_dir, config, *, force=False):
     from .deployment import save_server_config
     with _storage(data_dir, create=True) as pinned:
@@ -414,6 +479,8 @@ def setup(data_dir, config, *, force=False):
                 # No key can reissue the server certificate. The owner's
                 # explicit request replaces the whole identity; Windows must
                 # confirm the new root, and other devices must import it.
+                # First keep the replaced root: Windows may still trust it.
+                _remember_replaced(pinned, contents["ca.crt"])
                 _publish_identity(pinned, config, {name: value is not None for name, value in contents.items()})
                 configured = {**config, "tls": {"method": "ca", **_LAYOUT}}
                 save_server_config(data_dir, configured)
