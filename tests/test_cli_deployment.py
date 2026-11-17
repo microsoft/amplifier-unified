@@ -85,6 +85,9 @@ def test_forced_renewal_of_a_keyless_windows_identity_says_what_happens_next(
     # A new certificate needs a new Windows confirmation and a new import elsewhere.
     assert ("Windows asks you to confirm it" in output) is told
     assert ("Other devices must import it again" in output) is told
+    # Windows can still hold the replaced certificate, and asks about it at the same open.
+    assert ("If Windows also asks whether to delete the earlier certificate, select Yes. "
+            "Amplifier no longer uses it.\n" in output) is told
 
 
 def test_serve_options_are_top_level_repeatable_and_overlay_nested_tls(tmp_path, monkeypatch):

@@ -629,7 +629,16 @@ def test_several_replaced_roots_are_counted_in_the_message_and_all_are_asked_abo
     assert text.startswith("Windows will now ask 4 questions.") and "Then, 3 times:" in text
     assert "Select Yes each time." in text
     assert all("print of " + name in text for name in ("saved-root", "one", "two", "three"))
-    assert ("forget", [b"one", b"two", b"three"]) in events
+    assert ("forget", [b"one", b"two", b"three"]) in events and "more" not in text
+    # A long list stays on the screen: five thumbprints and the number of the others. All are asked about.
+    events.clear()
+    many = [f"root-{index}".encode() for index in range(8)]
+    state.update(replaced=many, ready=[False, True])
+    assert run() is True
+    text = events[2][1]
+    assert text.startswith("Windows will now ask 9 questions.") and "Then, 8 times:" in text
+    assert text.endswith("print of root-4\nand 3 more") and "print of root-5" not in text
+    assert ("forget", many) in events
 
 
 @pytest.mark.parametrize("add", ["declined", "blocked", "present"])

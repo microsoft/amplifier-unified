@@ -377,10 +377,14 @@ With a LAN address, run the command of step 3 of
    ```
 
 4. Start Amplifier and open it on the PC. If Amplifier was set up with the
-   Windows setup file, Amplifier shows a message about the new certificate,
-   and Windows then asks one question about it. Select **Yes**. With another
-   kind of installation no question shows: the certificate authority stays
-   the same. Do not continue past a certificate warning in the browser.
+   Windows setup file, Amplifier shows a message about the new certificate.
+   Windows then asks whether to install it. Select **Yes**. Windows then asks
+   whether to delete the earlier certificate, which Amplifier no longer uses.
+   Select **Yes** there too. If Windows does not ask the second question, see
+   [Certificates that `setup-tls force` replaced](#certificates-that-setup-tls-force-replaced).
+   With another kind of installation no question shows: the certificate
+   authority stays the same. Do not continue past a certificate warning in
+   the browser.
 5. Add the Tailscale forwarding rule.
 
    ```
@@ -462,8 +466,56 @@ for one device. More: [Sign out all browsers](#sign-out-all-browsers).
 The certificate still names the Tailscale address. That gives nothing to
 anyone: Amplifier refuses the address. For a certificate without it, stop
 Amplifier, run `amplifier-unified setup-tls force` and start Amplifier. On a PC
-that was set up with the Windows setup file, Windows then asks its one question
-again.
+that was set up with the Windows setup file, Windows then asks about the
+certificates again, as in step 4 of
+[Turn remote access on](#turn-remote-access-on).
+
+### Certificates that `setup-tls force` replaced
+
+This is for a PC that was set up with the Windows setup file. Each
+`amplifier-unified setup-tls force` there makes a new certificate named
+"Amplifier Unified (this PC only)". Windows keeps the earlier one in your list
+of trusted root certificates until it is deleted. Nobody can use an earlier
+certificate: no signing key exists for it, and it names only addresses of this
+PC.
+
+- `setup-tls force` saves the certificate that it replaces in the file
+  `replaced-roots.pem`, in the folder `app\config\tls` of the installation.
+  The file holds certificates only, no key.
+- When you open Amplifier after `setup-tls force`, Windows asks one question
+  for the new certificate and one question for each earlier certificate that
+  it still holds. That is normally two questions. Amplifier's message before
+  them gives the number and each thumbprint.
+- **No** to a deletion keeps that certificate. Windows asks about it again
+  when you open Amplifier after the next `setup-tls force`, and at an
+  uninstall. It does not ask at another time.
+- When you uninstall Amplifier, Windows asks one question for each of
+  Amplifier's certificates that it holds: the current one and each earlier one.
+  That is normally one question. Amplifier's first question gives the number.
+- Amplifier asks Windows to delete only a certificate that this file names,
+  that has the fixed form of Amplifier's own certificate, and that Windows
+  holds exactly. It never asks about another certificate.
+
+Three kinds of earlier certificate stay, because nothing recorded them or
+because the Start-menu entry of that PC cannot delete them:
+
+- one that a version before this change replaced;
+- one on a PC whose Start-menu entry is from a setup file before this change
+  (Windows then asks only the first question);
+- one after more than 32 uses of `setup-tls force`: the file keeps the newest
+  32.
+
+To delete them yourself:
+
+1. Press the Windows key and **R**, type `certmgr.msc` and press Enter.
+2. Open **Trusted Root Certification Authorities**, then **Certificates**.
+3. Delete each certificate named "Amplifier Unified (this PC only)". Windows
+   asks you to confirm each deletion.
+4. Open Amplifier from the Start menu. Windows asks whether to install the
+   certificate that Amplifier uses now. Select **Yes**.
+
+A second Amplifier installation of the same account, in another folder, uses a
+certificate of the same name. Open it again afterwards in the same way.
 
 ### LAN without Tailscale
 
@@ -504,7 +556,9 @@ again.
 
 Not measured: these steps from start to end on a PC that was set up with the
 Windows setup file; a real phone; a Windows restart with the forwarding rule in
-place; a tailnet with MagicDNS off; the LAN steps.
+place; a tailnet with MagicDNS off; the LAN steps; the Windows question about
+an earlier certificate on a real PC (a test computer cannot answer it; the
+calls behind it are measured on a private test list of certificates).
 
 - Never use Tailscale Funnel. It puts the address on the public internet.
 - `tailscale cert` is not used. It publishes the name of the PC in a public

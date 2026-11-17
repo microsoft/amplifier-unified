@@ -217,7 +217,8 @@ def review_browser_trust(root, urls, pin, *, fresh=None):
     replaced. The same message says so, and after the person's Yes to the new
     root Windows asks once for each replaced root whether to delete it. Only
     then: with a No to the new root, or on a later open, nothing is asked. A
-    replaced root that stays is asked about again at an uninstall.
+    replaced root that stays is asked about again after the next `force` and
+    at an uninstall.
 
     A host that is restarting is waited for. If it stays away, the message
     says that, and never says that the PC does not trust the connection.
@@ -267,7 +268,9 @@ def review_browser_trust(root, urls, pin, *, fresh=None):
                f"Then, {len(earlier)} times: whether to delete an earlier certificate of the same name. "
                "Amplifier made a new certificate and no longer uses the earlier ones. Select Yes each time.\n\n"
                "Thumbprints in those Windows messages:\n")
-            + "\n".join(windows_trust.thumbprint(der) for der in earlier))
+            # At most five lines of them: the message must stay on the screen.
+            + "\n".join(windows_trust.thumbprint(der) for der in earlier[:5])
+            + (f"\nand {len(earlier) - 5} more" if len(earlier) > 5 else ""))
     outcome = windows_trust.add_root(certificate)
     if outcome == "added" and earlier:
         # Only after the person's Yes to the new root. A No to a deletion is

@@ -507,14 +507,15 @@ Consequences and limits:
   currently configured names (root published last, so an interrupted renewal
   never serves and can be repeated). The next open then shows the Amplifier
   message and the one Windows confirmation for the new root, and every other
-  device must import the new root. Run it while the host is stopped. The earlier
-  root stays in the Windows store and is inert. Renewal before day 825 is this
-  same command; nothing reminds the owner yet.
+  device must import the new root. Run it while the host is stopped. Windows
+  can still hold the earlier root; see "Roots that `setup-tls force` replaced"
+  below. Renewal before day 825 is this same command; nothing reminds the owner
+  yet.
 - The step runs in the launcher that setup installs. An in-app update does not
   replace that launcher, so only a setup file built from this change has it.
-- `windows_trust.remove_root` is the removal call for uninstall. Windows asks
-  again there, and its default button is No, so "declined" is an ordinary
-  outcome: the root stays and is inert.
+- `windows_trust.remove_root` is the removal call. Windows asks again there,
+  and its default button is No, so "declined" is an ordinary outcome: the root
+  stays and is inert.
 - The launcher's check uses OpenSSL with the Windows roots. It does not prove
   that a browser accepts the certificate. The `windows-local-connection` job
   of the focused Windows workflow asks the Windows chain builder about the
@@ -525,6 +526,63 @@ Consequences and limits:
   acceptance.
 - The retained prototype launcher is unchanged: it keeps the earlier CA with a
   key on disk and the person's own certificate-viewer action.
+
+#### Roots that `setup-tls force` replaced
+
+Seen in clean-room Run G: three uses of `setup-tls force` left three roots
+named "Amplifier Unified (this PC only)" in the person's store, and an
+uninstall removed only the current one. Nothing knew the earlier roots: the
+store can be searched by name, but a name does not show which installation made
+a certificate, and the earlier certificate's bytes were gone from disk.
+
+- **The record.** Before `setup-tls force` writes the first file of a new
+  key-less identity, it adds the root that it replaces to
+  `config/tls/replaced-roots.pem` (`windows_tls._remember_replaced`), under the
+  TLS lock and through the private-file writer. The file holds public
+  certificates only, oldest first, at most 32. If the record cannot be
+  written, `force` stops and the identity is as it was. Only this command
+  writes the file. A `force` that stopped part-way records the root that is
+  still in use; a repeated `force` records it once.
+- **What counts.** `windows_trust.replaced` returns a recorded root only when
+  it has the fixed shape of this product's root (`_shape`: the name,
+  self-signed, path length 0, server-authentication use only, critical name
+  constraints with no exclusion), when the store holds exactly that
+  certificate, and when it is not the current root. The period of validity and
+  the names are not compared: a replaced root can be expired, and it names an
+  earlier configuration. The record names candidates; it is no proof. A
+  program of the same account can write the file, and it can also ask Windows
+  for the same deletion itself. The shape rule keeps a changed record from
+  making Amplifier ask about a certificate that is not of this product.
+- **At the next open.** The launcher's trust step reads the list before its
+  message. With no replaced root the message and the one Windows question are
+  as before. With N replaced roots the one message says that Windows asks N+1
+  questions, and gives the thumbprint of each certificate. After Windows added
+  the new root (the person's Yes), the launcher asks Windows to delete each
+  replaced root (`windows_trust.forget_roots`): one Windows question for each,
+  default No. A No to the new root, a refusal, or a root that was already in
+  the store asks about no replaced root. The normal case is two questions
+  after one `force`: install the new root, delete the earlier one.
+- **After a No.** A replaced root that the person keeps is not asked about at
+  an ordinary later open: the trust step runs only when the connection is not
+  trusted. Nothing saves a No, so the open after the next `force` asks about
+  it again, and so does an uninstall. The message lists at most five
+  thumbprints of replaced roots and gives the number of the others.
+- **At an uninstall.** `windows_trust.held_roots` lists the current root and
+  each replaced root that the store holds. Uninstall asks Windows once for
+  each (`_trusted_root` and `_forget_root` in `windows_consumer.py`), and its
+  first question says how many questions Windows asks. The normal case is one.
+  The result is `declined` or `blocked` when Windows kept at least one.
+
+Limits. The record is written by app code, which an in-app update brings. The
+deletion is launcher code: an installation keeps the launcher of its setup file
+until a launcher refresh. So a PC with an earlier launcher records a replaced
+root and does not delete it; a later launcher deletes it at an uninstall, or at
+the open after the next `force`. A root that was replaced before this change is
+on no record and stays. The deployment guide has the steps to delete such
+roots by hand. Not shown: the Windows deletion question itself on a person's
+own store; a hosted runner cannot answer it. The store calls run there on a
+private store that is not a trust store, and the list and its rule run on the
+real private file store.
 
 ### Saved local address
 
@@ -953,12 +1011,14 @@ So the order is:
 5. Remove the Apps-list entry, then the shortcuts ("Uninstall Amplifier" last),
    then the emptied Start-menu folder.
 6. If Windows trusts this installation's own key-less certificate for this
-   person, ask Windows once to delete it (`windows_trust.remove_root`). Windows
-   itself asks the person; its default answer is No. The first question
-   announces this. Every outcome finishes the uninstall: a certificate that
-   stays has no signing key anywhere and names only this PC. There is no
-   second attempt, no elevation and no Local Machine store. An identity from
-   an earlier setup added nothing and is not touched.
+   person, ask Windows to delete it, and each root that `setup-tls force`
+   replaced and Windows still holds (`windows_trust.forget_roots`): one
+   Windows question for each, normally one in all. Windows itself asks the
+   person; its default answer is No. The first question announces this, with
+   the number when it is more than one. Every outcome finishes the uninstall:
+   a certificate that stays has no signing key anywhere and names only this
+   PC. There is no second attempt, no elevation and no Local Machine store. An
+   identity from an earlier setup added nothing and is not touched.
 7. One message says that uninstall is complete. It says so when Windows kept
    the certificate.
 
@@ -1183,7 +1243,7 @@ does.
    Uninstall then deletes nothing, because it could not truthfully say that
    the person's data is gone.
 4. Check and pin the Windows entries; stop the app; remove its sign-in task;
-   ask Windows once about the certificate. A failure up to here leaves the
+   ask Windows about each certificate. A failure up to here leaves the
    installation whole, with the messages of an uninstall that keeps the folder.
 5. Write the journal `unified-uninstall.json` (`schema` 1, `choice`, a random
    `token`) with the private atomic writer, then look whether it is in the
@@ -2693,6 +2753,15 @@ reused for this; they carry broader authority.
   request. It is sent with `Referrer-Policy: same-origin`, not `no-referrer`:
   from a `no-referrer` page a browser posts the form with `Origin: null`, and
   the redeem check refuses that. The redeem reply is `no-store`, `no-referrer`.
+  The field and **Sign in** come directly after the heading and the error
+  text; the help follows them. In clean-room Run G the help stood before the
+  field, and with the error text **Sign in** was below the window edge at
+  300 % scale. Measured with Chromium and the page's own stylesheet, in CSS
+  pixels: in that window (1272 x 512) **Sign in** ended at 565 before and ends
+  at 372 now; at 320 x 480 it ends at 384. With the error text, a window lower
+  than 372 CSS pixels still needs scrolling. The page has no style of its own:
+  the stylesheet belongs to the web client, and the page's policy allows no
+  inline style.
 - **The session.** The signed cookie from a code is marked remote
   (`"via": "remote"`), so that a rule for remote sessions only is possible
   later. Local cookies do not change. The lifetime is the configured one.
