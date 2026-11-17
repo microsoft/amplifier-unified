@@ -65,9 +65,13 @@ class _Follow:
     health: dict | None = None
     projection: dict | None = None
     shell_result: object = None
+    announce: dict | None = None
     launch_pending: bool = False
     hold_pending: bool = False
     reopen_pending: bool = False
+    remove_tries: int = 0
+    remove_after: float = 0
+    unsaved: bool = False
 
 
 def _state(manager):
@@ -163,8 +167,8 @@ def fenced(manager) -> bool:
 
 
 def _facts(manager, follow):
-    """Read fixed installation facts once; Scheduler may not be listening yet."""
-    from . import windows_service, windows_task_runtime as runtime, windows_app_recovery
+    """Read the facts that one host run cannot change; Scheduler may not be listening yet."""
+    from . import windows_service, windows_task_runtime as runtime
     from . import application_generations as generations, windows_launcher_refresh as refresh
     from .windows_launcher_files import differs
     from .app_updates import version_tuple
@@ -182,11 +186,32 @@ def _facts(manager, follow):
     old = refresh.launcher_facts(prefix)
     validated = json.loads((Path(target['folder']) / 'validated.json').read_text())
     app = {**_target(target), 'version': validated['version']}
-    recovery = windows_app_recovery.read(spec) or {}
+    left, right = version_tuple(old['version']), version_tuple(app['version'])
+    return {'launcher': {'version': old['version']}, 'identity': old['identity'],
+        'app': app, 'python': str(Path(target['prefix']) / 'Scripts/pythonw.exe'),
+        'root': refresh._consumer(manager.home, prefix), 'confirmed': None,
+        'behind': bool(left and right and right > left and differs(prefix, target['prefix'])['differs'])}
+
+
+def _confirmed(manager, follow):
+    """Is the start of this app version confirmed? None: not decided yet.
+
+    After an app update this same host writes the confirmation, and it does
+    that after it listens. So a record that still says `prepared` for this
+    app version is no answer: the next pass reads it again. Every other
+    state stays as it is for as long as this host runs.
+    """
+    from . import windows_app_recovery
+    app = follow.facts['app']
+    recovery = windows_app_recovery.read(follow.spec) or {}
     restart = (recovery.get('restart') or {}).get('target') or {}
-    confirmed = recovery.get('status') == 'acknowledged' and all(
-        restart.get(key) == app[key] for key in ('revision', 'generation'))
-    if confirmed and (root := refresh._consumer(manager.home, prefix)):
+    if not all(restart.get(key) == app[key] for key in ('revision', 'generation')):
+        return False
+    if recovery.get('status') == 'prepared':
+        return None
+    if recovery.get('status') != 'acknowledged':
+        return False
+    if root := follow.facts['root']:
         try:
             from .windows_consumer_shell import settle_version, set_version
             settled = settle_version(root, home=manager.home)
@@ -194,11 +219,7 @@ def _facts(manager, follow):
                 'result': set_version(root, app['version'], home=manager.home)}
         except Exception as error:
             follow.shell_result = {'errorType': type(error).__name__}
-    left, right = version_tuple(old['version']), version_tuple(app['version'])
-    return {'launcher': {'version': old['version']}, 'identity': old['identity'],
-        'app': app, 'python': str(Path(target['prefix']) / 'Scripts/pythonw.exe'),
-        'offer': bool(left and right and right > left
-                      and differs(prefix, target['prefix'])['differs'] and confirmed)}
+    return True
 
 
 def _idle(manager):
@@ -228,8 +249,12 @@ async def _publish(manager, follow, **values):
     if follow.shell_result is not None:
         # For diagnostics: what this host run did with the Apps-list version.
         value['appsList'] = follow.shell_result
-    if value != _saved(manager):
+    if value != _saved(manager) or follow.unsaved:
+        # publish() changes the state in memory before it saves. When the save
+        # failed, the state already equals `value`: save it at the next call.
+        follow.unsaved = True
         await manager.publish(launcherRefresh=value)
+        follow.unsaved = False
 
 
 def _attempt(manager, follow, identity, result=None, step=None):
@@ -243,21 +268,33 @@ async def _begin(manager, follow):
     from . import windows_launcher_refresh as refresh
     identity = uuid.uuid4().hex
     attempt = _attempt(manager, follow, identity)
+    step = None
     try:
         selected = await asyncio.to_thread(lambda: refresh.plan(refresh.TaskService(manager.home), manager.home))
         refused = selected.get('action') != 'refresh'
     except refresh.Refused:
         refused = True
+    except Exception as error:
+        # Nothing outside this process has started. A check that cannot run is
+        # one counted attempt, not a fence that every pass sets again.
+        refused, step = True, 'plan'
+        _error(manager, error)
     if refused:
         follow.fence, follow.phase = False, 'failed-unchanged'
-        await _publish(manager, follow, attempt={**attempt, 'result': 'refused'}, requested=None)
+        await _publish(manager, follow, attempt={**attempt, 'result': 'refused', 'step': step}, requested=None)
         return
-    follow.phase = 'waiting'
+    follow.phase, follow.announce = 'waiting', attempt
+    await _announce(manager, follow)
+
+
+async def _announce(manager, follow):
+    """Save the attempt before any effect outside this process. A save that failed is done again here."""
+    attempt = follow.announce
     await _publish(manager, follow, attempt=attempt, requested=None)
-    request = {'schema': 1, 'id': identity, 'registration': follow.spec.registration_id,
+    request = {'schema': 1, 'id': attempt['id'], 'registration': follow.spec.registration_id,
         'launcher': follow.facts['identity'], 'target': follow.facts['app'],
         'status': 'open', 'result': None, 'hold': None, 'repair': False, 'at': attempt['at']}
-    follow.request, follow.opened_here, follow.launch_pending = request, True, True
+    follow.request, follow.opened_here, follow.launch_pending, follow.announce = request, True, True, None
     await _launch(manager, follow)
 
 
@@ -302,7 +339,8 @@ async def _finish(manager, follow, result, step=None):
         await _release(manager)
     # Do not retain the refresh lock during publication or Scheduler calls.
     follow.request, follow.fence = None, False
-    follow.reopened, follow.held_at, follow.remove_pending = False, None, True
+    follow.reopened, follow.held_at = False, None
+    follow.remove_pending, follow.remove_tries, follow.remove_after = True, 0, 0
     attempt = _saved(manager).get('attempt') or {}
     if attempt.get('id') != request['id']:
         attempt = {'id': request['id'], 'at': request['at'],
@@ -321,8 +359,11 @@ def _result_phase(result):
 
 async def _remove(manager, follow):
     from .windows_launcher_task import remove_task
-    if follow.remove_pending:
+    if follow.remove_pending and time.time() >= follow.remove_after:
+        # A task that Windows keeps: ten passes ask for it, then one pass an hour.
+        follow.remove_tries += 1
         follow.remove_pending = not await asyncio.to_thread(remove_task, manager.home)
+        follow.remove_after = time.time() + 3600 if follow.remove_tries >= 10 else 0
 
 
 async def _go(manager, follow, *, repair=False):
@@ -434,8 +475,12 @@ async def _consider(manager, follow):
     if follow.remove_pending:
         await _remove(manager, follow)
     if follow.hold_pending:
-        await _commit_hold(manager, follow)
-        return
+        if follow.held_at is None or time.time() - follow.held_at < 600:
+            await _commit_hold(manager, follow)
+            return
+        # The same bound as for a hold that was saved: admission does not stay
+        # closed for a hold that could not be saved. _reopen writes "no hold".
+        follow.hold_pending, follow.reopen_pending = False, True
     if follow.reopen_pending:
         await _reopen(manager, follow)
         await _publish(manager, follow)
@@ -443,6 +488,15 @@ async def _consider(manager, follow):
     if follow.facts is None and follow.owner_tries < 10:
         follow.owner_tries += 1
         follow.facts = await asyncio.to_thread(_facts, manager, follow)
+    if follow.facts and follow.facts['confirmed'] is None:
+        try:
+            follow.facts['confirmed'] = await asyncio.to_thread(_confirmed, manager, follow)
+        except Exception as error:
+            # Not decided. An open request must still get its steps in this pass.
+            _error(manager, error)
+    if follow.announce:
+        await _announce(manager, follow)
+        return
     if follow.launch_pending:
         await _launch(manager, follow)
         return
@@ -462,7 +516,7 @@ async def _consider(manager, follow):
     generation = facts['app']['generation']
     attempt = saved.get('attempt') or {}
     counted = attempt.get('generation') == generation and attempt.get('result') != 'withdrawn'
-    offer = facts['offer']
+    offer = facts['behind'] and facts['confirmed'] is True
     if offer:
         from . import windows_launcher_refresh as refresh
         kind = refresh.journal_kind(manager.home, follow.spec.registration_id)

@@ -16,6 +16,9 @@ The fixture's own part:
   record, the launch record, and the record that the new app's start was
   confirmed. The hand-over that writes them has its own native workflow.
   Three prepared generations of that app version stand for three app updates.
+  In check 3 the app starts with the hand-over's record as an update leaves
+  it (`prepared`), as after a real update; the fixture then confirms the
+  start, in the place of the app's own readiness check.
 - For the two failure cases it puts a program in the place of setup's private
   uv. That program fails, or waits, when it is asked to install a tool into
   the launcher's folder. Every other call goes to the real uv.
@@ -60,7 +63,7 @@ STABLE = 130
 CHECKS = (
     "1. Earlier launcher: setup's records, its own audit, its Windows entries",
     "2. The earlier launcher starts the app version; before that version is confirmed, nothing starts by itself",
-    "3. The app version is confirmed: the Apps list shows it",
+    "3. The app version is confirmed after the app started: only then the Apps list shows it",
     "4. Forced failure: the app asks by itself, the helper rolls back, the app runs on the earlier launcher",
     "5. An app that starts after the failure makes no second attempt for the same app version",
     "6. The helper is ended part-way: Task Scheduler's timed trigger puts the earlier launcher back",
@@ -647,7 +650,7 @@ def run():
             passed(2, seconds=first["seconds"], port=port, health=started, decision=decision["message"],
                    difference=difference, compared=compared, decided=decided, appState=app_state(home))
 
-            def update(index, uv_mode):
+            def update(index, uv_mode, status="acknowledged"):
                 """What an app update leaves, written with the app stopped. Then the launcher's own start."""
                 host_run = runtime.read(spec)
                 assert host_run and host_run["phase"] == "listening", host_run
@@ -664,8 +667,8 @@ def run():
                     "bootstrap": bootstrap, "installation": bootstrap,
                     "identity": {"version": old["version"], "revision": old["revision"],
                                  "instanceId": uuid.uuid4().hex},
-                    "graph": old_graph, "extras": [], "artifact": old_artifact, "status": "acknowledged"})
-                assert recovery.read(spec)["status"] == "acknowledged"
+                    "graph": old_graph, "extras": [], "artifact": old_artifact, "status": status})
+                assert recovery.read(spec)["status"] == status
                 again_started = launcher_command("--no-open")
                 if again_started["exitCode"]:
                     # The launcher waits 60 seconds for the app. A first start of a
@@ -700,7 +703,16 @@ def run():
                 return helper, now
 
             begin(3)
-            confirmed = update(0, "fail")
+            # As after a real update: the app starts, and the record does not say yet
+            # that this start is confirmed. The app must not take that for an answer.
+            confirmed = update(0, "fail", status="prepared")
+            undecided = settle("before the app's start is confirmed")
+            assert recovery.read(spec)["status"] == "prepared"
+            assert apps_list() == old["version"] and not follow_state().get("appsList"), follow_state()
+            assert record(refresher.REQUEST) is None and helper_task().get("exists") is False
+            assert not follow_state().get("attempt") and not calls(root)
+            assert recovery.acknowledge(spec, {
+                key: validated[0][key] for key in ("revision", "generation", "attemptId")})
             wait("the Apps list shows the confirmed app version", lambda: apps_list() == new["version"], 300)
             assert json.loads((root / shell.FILE).read_text())["registry"]["DisplayVersion"] == new["version"]
             assert shell.listed(root)
@@ -710,7 +722,7 @@ def run():
                            lambda: follow_state().get("appsList"), 120)
             assert written == {"settled": None, "result": {
                 "changed": True, "from": old["version"], "to": new["version"]}}, written
-            passed(3, appsList=apps_list(), written=written, launcher=launcher_now())
+            passed(3, appsList=apps_list(), written=written, launcher=launcher_now(), undecided=undecided)
 
             begin(4)
             asked_at = time.monotonic()

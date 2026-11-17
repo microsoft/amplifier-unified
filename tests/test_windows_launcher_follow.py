@@ -143,6 +143,12 @@ def rig(tmp_path, monkeypatch):
         calls.append(('main',))
         return {}, config.owner
 
+    def recovery(spec):
+        calls.append(('recovery',))
+        if isinstance(config.recovery, Exception):
+            raise config.recovery
+        return config.recovery
+
     def shell(operation, *args, **kwargs):
         calls.append((operation, *args))
         if config.shell_error:
@@ -162,7 +168,7 @@ def rig(tmp_path, monkeypatch):
         'windows_service': SimpleNamespace(_read=main_read, update_owner=owner),
         'windows_task_runtime': SimpleNamespace(read=lambda spec: copy.deepcopy(run),
             stop_requested=lambda spec, row, name='stop': config.stop == name, RECOVERY_STOP='recovery-stop'),
-        'windows_app_recovery': SimpleNamespace(read=lambda spec: config.recovery),
+        'windows_app_recovery': SimpleNamespace(read=recovery),
         'application_generations': SimpleNamespace(active=lambda home: config.target),
         'windows_launcher_files': SimpleNamespace(differs=lambda *a: {'differs': config.differs}),
         'windows_consumer_shell': SimpleNamespace(settle_version=lambda *a, **kw: shell('settle', *a, **kw),
@@ -689,14 +695,157 @@ async def test_apps_list_pass_only_for_confirmed_setup_once_and_failure_is_nonfa
 
 
 @pytest.mark.asyncio
-async def test_non_cancel_exception_keeps_fence_and_is_retried(rig):
+async def test_a_check_that_cannot_run_counts_once_and_does_not_keep_the_fence(rig):
+    # Nothing outside the host has started. A fence that every pass sets again
+    # would stop every update for as long as the check fails.
     rig.config.plan = PermissionError()
     await two_passes(rig)
-    assert follow.fenced(rig.m)
+    assert not follow.fenced(rig.m)
     assert saved(rig)['error'] == 'PermissionError'
+    attempt = saved(rig)['attempt']
+    assert (attempt['result'], attempt['step'], attempt['automatic']) == ('refused', 'plan', True)
+    assert saved(rig)['phase'] == 'failed-unchanged' and 'request' not in rig.records
     rig.config.plan = 'refresh'
+    for _ in range(3):
+        await follow.consider(rig.m)
+    assert sum(row[0] == 'plan' for row in rig.calls) == 1
+    assert not follow.fenced(rig.m) and 'request' not in rig.records
+
+
+@pytest.mark.asyncio
+async def test_confirmation_that_this_host_writes_later_is_read_again(rig):
+    # After an app update the host listens first and confirms its start afterwards.
+    c = rig.config
+    c.layout, c.recovery = rig.m.home, {**c.recovery, 'status': 'prepared'}
+    for _ in range(3):
+        await follow.consider(rig.m)
+    assert rig.calls.count(('owner',)) == 1 and rig.calls.count(('recovery',)) == 3
+    assert not [row for row in rig.calls if row[0] in {'plan', 'settle', 'version'}]
+    assert saved(rig)['app']['generation'] == rig.target['generation']
+    assert saved(rig).get('phase') is None and 'appsList' not in saved(rig)
+    assert rig.m._launcher_follow.owner_tries == 1
+    c.recovery = {**c.recovery, 'status': 'acknowledged'}
     await follow.consider(rig.m)
-    assert rig.records['request']['status'] == 'open'
+    assert [row[0] for row in rig.calls if row[0] in {'settle', 'version'}] == ['settle', 'version']
+    assert saved(rig)['appsList'] == {'settled': {'status': 'settled'}, 'result': {'status': 'settled'}}
+    await follow.consider(rig.m)
+    assert rig.records['request']['status'] == 'open' and follow.fenced(rig.m)
+    assert sum(row[0] == 'plan' for row in rig.calls) == 1
+    # Decided: the record is not read again, and the Apps list is written once.
+    assert rig.calls.count(('recovery',)) == 4
+    assert [row[0] for row in rig.calls if row[0] in {'settle', 'version'}] == ['settle', 'version']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('state', ['none', 'restoring', 'restored', 'other-generation', 'acknowledged'])
+async def test_every_other_confirmation_state_is_read_once(rig, state):
+    c = rig.config
+    c.recovery = (None if state == 'none' else
+        {'status': 'prepared', 'restart': {'target': {**rig.target, 'generation': 'other'}}}
+        if state == 'other-generation' else {**c.recovery, 'status': state})
+    rig.m.busy = True
+    for _ in range(3):
+        await follow.consider(rig.m)
+    assert rig.calls.count(('recovery',)) == 1
+    assert (saved(rig).get('phase') == 'waiting') == (state == 'acknowledged')
+
+
+@pytest.mark.asyncio
+async def test_unreadable_confirmation_is_not_a_decision_and_keeps_the_request_steps(rig):
+    request(rig, mine=True)
+    record(rig, 'settled', result='rolled-back', step='installing the launcher')
+    good, rig.config.recovery = rig.config.recovery, ValueError()
+    await follow.consider(rig.m)
+    assert saved(rig)['error'] == 'ValueError'
+    assert saved(rig)['attempt']['result'] == 'rolled-back' and not follow.fenced(rig.m)
+    assert rig.m._launcher_follow.facts['confirmed'] is None
+    rig.config.recovery = good
+    await follow.consider(rig.m)
+    assert rig.m._launcher_follow.facts['confirmed'] is True
+
+
+@pytest.mark.asyncio
+async def test_attempt_whose_save_failed_resumes_with_the_same_identity(rig):
+    """The state in memory already has the attempt when the save fails."""
+    publish, failed = rig.m.publish, []
+
+    async def flaky(**values):
+        attempt = (values.get('launcherRefresh') or {}).get('attempt') or {}
+        if not failed and attempt.get('id') and attempt.get('result') is None:
+            failed.append(attempt['id'])
+            rig.m.state.update(copy.deepcopy(values))
+            raise PermissionError()
+        await publish(**values)
+    rig.m.publish = flaky
+    await two_passes(rig)
+    assert failed and saved(rig)['attempt'] == {**saved(rig)['attempt'], 'id': failed[0], 'result': None}
+    assert saved(rig)['error'] == 'PermissionError' and follow.fenced(rig.m)
+    assert 'request' not in rig.records
+    assert not [row for row in rig.calls if row[0] in {'ensure', 'start'}]
+    saves = len(rig.m.published)
+    await follow.consider(rig.m)
+    # The attempt is saved again, and only then the request and the task follow.
+    assert rig.m.published[saves]['launcherRefresh']['attempt']['id'] == failed[0]
+    assert rig.records['request']['id'] == failed[0] and rig.records['request']['status'] == 'open'
+    assert [row[0] for row in rig.calls if row[0] in {'ensure', 'start'}] == ['ensure', 'start']
+    assert sum(row[0] == 'plan' for row in rig.calls) == 1
+    record(rig, 'settled', result='refreshed')
+    await follow.consider(rig.m)
+    assert saved(rig)['attempt']['result'] == 'refreshed' and not follow.fenced(rig.m)
+
+
+@pytest.mark.asyncio
+async def test_result_whose_save_failed_is_saved_at_the_next_pass(rig):
+    rig.config.plan = 'none'
+    publish, fail = rig.m.publish, [True]
+
+    async def flaky(**values):
+        if fail[0] and ((values.get('launcherRefresh') or {}).get('attempt') or {}).get('result') == 'refused':
+            fail[0] = False
+            rig.m.state.update(copy.deepcopy(values))
+            raise PermissionError()
+        await publish(**values)
+    rig.m.publish = flaky
+    await two_passes(rig)
+    assert not follow.fenced(rig.m) and rig.m._launcher_follow.unsaved
+    rig.m.published.clear()
+    await follow.consider(rig.m)
+    assert not rig.m._launcher_follow.unsaved
+    assert rig.m.published[-1]['launcherRefresh']['attempt']['result'] == 'refused'
+
+
+@pytest.mark.asyncio
+async def test_task_that_windows_keeps_is_asked_for_ten_passes_then_once_an_hour(rig):
+    request(rig, mine=True)
+    record(rig, 'settled', result='rolled-back')
+    rig.config.remove = False
+    for _ in range(14):
+        await follow.consider(rig.m)
+    assert rig.calls.count(('remove', False)) == 10
+    assert rig.m._launcher_follow.remove_pending
+    rig.now[0] += 3600
+    await two_passes(rig)
+    assert rig.calls.count(('remove', False)) == 11
+    rig.config.remove = True
+    rig.now[0] += 3600
+    await follow.consider(rig.m)
+    assert rig.calls.count(('remove', False)) == 12 and not rig.m._launcher_follow.remove_pending
+
+
+def test_a_forced_restart_is_refused_while_the_launcher_request_is_open(rig):
+    """The command passes the first fence test; its own target has the fence."""
+    from amplifier_web import update_restart
+    from amplifier_web.updates import UpdateManager
+    m = rig.m
+    m.awaiting_restart = lambda: UpdateManager.awaiting_restart(m)
+    m.state.update(phase='app-staged', application={},
+        pendingApp={'revision': 'a' * 40, 'generation': 'b' * 32, 'attemptId': 'attempt'})
+    args = {**update_restart.target(m), 'confirm': True}
+    assert update_restart.require(m, args)
+    m._launcher_follow.fence = True
+    assert update_restart.target(m) is None
+    with pytest.raises(update_restart.RestartRejected):
+        update_restart.require(m, args)
 
 
 @pytest.mark.asyncio
@@ -959,6 +1108,30 @@ async def test_failed_hold_write_retries_without_losing_closed_admission(rig, mo
 
 
 @pytest.mark.asyncio
+async def test_hold_that_cannot_be_saved_reaches_the_same_bound(rig, monkeypatch):
+    await two_passes(rig)
+    record(rig, 'ready')
+    write = rig.refresh.write_json
+
+    def refuses_a_hold(home, name, value):
+        if name == 'request' and value.get('hold'):
+            raise PermissionError()
+        write(home, name, value)
+    monkeypatch.setattr(rig.refresh, 'write_json', refuses_a_hold)
+    for _ in range(3):
+        await follow.consider(rig.m)
+    assert rig.m._launcher_follow.hold_pending and update_drain.held(rig.m.service)
+    assert rig.records['request']['hold'] is None and not rig.released
+    rig.now[0] += 600
+    await follow.consider(rig.m)
+    f = rig.m._launcher_follow
+    assert not f.hold_pending and not f.reopen_pending and f.reopened
+    assert not update_drain.held(rig.m.service) and follow.fenced(rig.m)
+    assert rig.records['request']['hold'] is None and rig.records['request']['status'] == 'open'
+    assert saved(rig)['phase'] == 'needs-repair' and not rig.lock[0]
+
+
+@pytest.mark.asyncio
 async def test_bound_release_failure_retries_under_lock_and_stays_fenced(rig, monkeypatch):
     request(rig, mine=True, started=True)
     record(rig, 'waiting')
@@ -1109,3 +1282,42 @@ def test_the_texts_name_the_install_button_as_the_bundled_page_labels_it():
     named = [row for row in follow._TEXT.values() if row[3] == 'install']
     assert len(named) == 3 and 'Update Amplifier' not in json.dumps(follow._TEXT)
     assert follow._BUTTON in follow._TEXT['ready'][2]
+
+
+@pytest.mark.asyncio
+async def test_messages_saved_during_a_launcher_restart_are_sent_by_the_real_release(tmp_path, monkeypatch):
+    """The real admission gate, saved messages and release, across a host restart. Only the transport is a stand-in."""
+    from amplifier_web.service import AppService
+    from amplifier_web.updates import UpdateManager
+    from test_service import Runtime
+    monkeypatch.setattr(follow, '_WINDOWS', True)
+    identity = 'launcher-' + 'c' * 32
+    target = {'generation': 'b' * 32, 'revision': 'a' * 40, 'version': '2.0.0'}
+    service = AppService(tmp_path / 'app', Runtime(), workspace=tmp_path)
+    await service.dispatch('session.create', {'title': 'Work'})
+    service.update_manager = UpdateManager(service)
+    update_drain.hold_for_restart(service, identity, target)
+    for text in ('first', 'second'):
+        result = await service.dispatch('conversation.send', {'sessionId': service._session()['id'],
+            'text': text}, command_id=text, include_state=False)
+        assert result['delivery'] == 'queued_for_update', result
+    assert service.runtime.sent == []
+    sid, home, workspace = service._session()['id'], service.data_dir, service._session()['workspace']
+    await service.close()
+    restored = AppService(home, Runtime(), workspace=workspace)
+    restored.update_manager = UpdateManager(restored)
+    try:
+        # The returning host closes admission again for the same request (rule H case 2).
+        update_drain.hold_for_restart(restored, identity, target)
+        users = lambda: [m for m in restored._session(sid)['messages'] if m.get('role') == 'user']
+        assert [m['delivery']['status'] for m in users()] == ['queued_for_update'] * 2
+        assert update_drain.held(restored) and restored.runtime.sent == []
+        await follow._release(restored.update_manager)
+        assert [row[2] for row in restored.runtime.sent] == ['first', 'second']
+        assert all(m['delivery']['status'] == 'accepted' for m in users())
+        assert restored.state['updates']['drain']['phase'] == 'released'
+        assert not update_drain.held(restored)
+        await follow._release(restored.update_manager)
+        assert len(restored.runtime.sent) == 2
+    finally:
+        await restored.close()

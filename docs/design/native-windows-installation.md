@@ -333,7 +333,11 @@ must hold:
   20 releases. An update that changes no listed file causes no refresh.
 - The active app version is confirmed: the update's own record says that the
   new app started (`acknowledged`) for exactly this generation. A new task
-  registration has no such record until the next app update.
+  registration has no such record until the next app update. After an update
+  the new host writes that confirmation itself, and it does so after it
+  listens. So a record that still says `prepared` for the running generation
+  is no answer: the host reads it again at each pass. Every other state of
+  the record is read once for one host run.
 - Nothing runs: no chat turn, no worker, no update check, stage, installation
   or activation, and the update state is the same as at the pass before.
 - "Keep Amplifier up to date" is on, or the person selected the install button
@@ -400,7 +404,12 @@ setting off no refresh starts. A person's own "Stop Amplifier" is not part of
 this: it stops the app at once, as before.
 
 **What brings the app back.** The helper that sees its own failure rolls back
-and starts the app in the same process. A helper that was ended leaves its
+and starts the app in the same process. For that it stops the app only with
+the hold of the host that runs then (the stop rule). A host that started on
+the new launcher gives that hold before it listens. A host that hangs before
+that point gives none: the helper then stops nothing, and each trigger waits
+again, until a person selects "Stop Amplifier"; the next trigger then puts
+the earlier launcher back. A helper that was ended leaves its
 journal and the task; the timed trigger starts the helper again, and it puts
 the earlier launcher back from the journal and starts the app. A sign-out, a
 restart of the PC or a power loss is settled at the next sign-in. The recovery
@@ -410,7 +419,8 @@ one part of the update still needs a repair, and tries that repair about once
 an hour when no work runs. Until then Amplifier checks for no updates.
 
 **Bounded.** One counted automatic attempt for one app version: a refusal, a
-helper that did not become ready, or any settled result except "withdrawn"
+check that could not run, a helper that did not become ready, or any settled
+result except "withdrawn"
 (the app was busy at "go", or the setting was turned off). The next automatic
 attempt comes with the next app update. The page's install button tries once
 more for each press.
@@ -460,7 +470,8 @@ Evidence and limits. `windows-launcher-follow.yml` runs on a Windows runner
 with a published earlier release (0.105.0) as the launcher in setup's layout
 and with the real Task Scheduler, supervisor, host, helper task, helper, uv
 and Apps-list key. It requires, with no skipped check: nothing starts before
-the app version is confirmed; then the Apps list shows the app's version; a
+the app version is confirmed; an app that started while the record still said
+`prepared` writes the Apps list after the confirmation comes; a
 forced installation failure is rolled back, the app runs on the earlier
 launcher and saves the failure; an app that starts afterwards makes no second
 attempt; a helper that is ended after the launcher folder was moved aside is
@@ -468,14 +479,16 @@ repaired by Task Scheduler's timed trigger with no other action; then the
 launcher follows, at the same path and on the same port, and the listed files
 do not differ any more; the new launcher starts and uninstalls; a helper task
 that was left with no main task removes itself. The fixture writes the records
-that an app update leaves; the update hand-over has its own workflow.
+that an app update leaves, and it writes the confirmation in the place of the
+app's own readiness check; the update hand-over has its own workflow.
 Measured there (run 44162025757): 75 seconds from the app's request to the
 settled rollback of the forced failure; 241 seconds from the end of the helper
 to the repair by the timed trigger; 134 seconds from the request to the
 settled refresh. Not shown there: the setup file, a standard account, a sign-out or a restart of
 the PC, the Updates page in a browser and its button, a message that is sent
 while Amplifier restarts, a count of console windows, a helper that is ended
-after it started the app, and an installation that setup did not make.
+after it started the app, a real update hand-over that the refresh follows,
+and an installation that setup did not make.
 Portable cases cover the decision, each rule, the helper's cases, the button
 and the texts.
 

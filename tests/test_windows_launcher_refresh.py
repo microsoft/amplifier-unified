@@ -903,7 +903,7 @@ def test_rule_s_requires_an_exact_hold_for_every_stop(installed, monkeypatch, ca
         refresher.write_json(installed.home, refresher.REQUEST, {**request, "hold": service.run()})
 
     monkeypatch.setattr(refresher.time, "sleep", go)
-    guarded = refresher._HeldService(service, installed.home, request, 1 if case == "arrives" else 0)
+    guarded = refresher._HeldService(service, installed.home, request, 1 if case == "arrives" else 0, 0.25)
     with refresher.try_lock(installed.home) as held:
         assert held
         if case in {"none", "wrong", "no run", "closed", "void", "handover"}:
@@ -912,7 +912,39 @@ def test_rule_s_requires_an_exact_hold_for_every_stop(installed, monkeypatch, ca
         else:
             guarded.stop()
     assert len(service.exact_stops) == (1 if case == "arrives" else 0)
-    assert waits == ([0.5] if case == "arrives" else [])
+    assert waits == ([0.25] if case == "arrives" else [])
+
+
+def test_the_helper_looks_at_the_app_once_in_five_seconds_while_it_waits(installed, monkeypatch):
+    """Each look is a Task Scheduler query, a PowerShell process. A wait can last 10 minutes."""
+    import inspect
+    assert inspect.signature(refresher.automatic).parameters["poll"].default == 5.0
+    assert inspect.signature(refresher._HeldService.__init__).parameters["poll"].default == 5.0
+    service = Service(installed.root)
+    request = request_for(installed, service, hold=False)
+    looks, waits = [], []
+    run = service.run
+
+    def counted():
+        looks.append(1)
+        return run()
+
+    service.run = counted
+    clock = [0.0]
+    monkeypatch.setattr(refresher.time, "monotonic", lambda: clock[0])
+
+    def sleep(seconds):
+        waits.append(seconds)
+        clock[0] += seconds
+
+    monkeypatch.setattr(refresher.time, "sleep", sleep)
+    guarded = refresher._HeldService(service, installed.home, request, 90)
+    with refresher.try_lock(installed.home) as held:
+        assert held
+        with pytest.raises(refresher.NoHold):
+            guarded.stop()
+    assert waits == [5.0] * 18 and len(looks) == 19
+    assert service.exact_stops == []
 
 
 @pytest.mark.parametrize("boundary", ["before journal", "after journal"])

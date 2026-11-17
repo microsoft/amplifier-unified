@@ -216,7 +216,11 @@ that makes the launcher load another file fails
 `tests/test_windows_launcher_files.py`: run
 `scripts/windows_launcher_files.py --write` and decide each new `DYNAMIC`
 entry. The Apps-list version is the confirmed app version; the host writes it
-(`windows_consumer_shell.set_version`), not the refresh. In
+(`windows_consumer_shell.set_version`), not the refresh. A host that an update
+started confirms its own start after it listens: the hand-over record still
+says `prepared` when the update loop first runs. Never keep that reading as a
+decision for the host run; read the record again until it says something else.
+A fixture that writes `acknowledged` before the start hides this. In
 `windows-launcher-follow.yml` the app is built as a version above every
 release: a host that is behind a public release updates itself in the middle
 of a case.

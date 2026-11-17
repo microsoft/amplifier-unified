@@ -777,8 +777,9 @@ def _matches_request(selected, request):
 class _HeldService:
     """Every automatic stop needs the hold of the exact host that it stops."""
 
-    def __init__(self, service, home, request, stop_wait):
+    def __init__(self, service, home, request, stop_wait, poll=5.0):
         self.service, self.home, self.request, self.stop_wait = service, home, request, stop_wait
+        self.poll = poll
 
     def __getattr__(self, name):
         return getattr(self.service, name)
@@ -797,7 +798,7 @@ class _HeldService:
             left = deadline - time.monotonic()
             if left <= 0:
                 raise NoHold("No running host gave permission for this stop.")
-            time.sleep(min(0.5, left))
+            time.sleep(min(self.poll, left))
 
 
 async def _recovery_hold(service, home, request, recover_wait, poll):
@@ -914,8 +915,12 @@ def _keep_previous(home, launcher, previous):
 
 
 async def automatic(home, request_id, *, service, wait=180, process=None,
-                    hold_wait=300, recover_wait=600, stop_wait=90, poll=1.0):
-    """Run or recover one host request, with all decisions under the refresh lock."""
+                    hold_wait=300, recover_wait=600, stop_wait=90, poll=5.0):
+    """Run or recover one host request, with all decisions under the refresh lock.
+
+    Each look at the app is a Task Scheduler query, and that is a PowerShell
+    process. A wait can last 10 minutes: one look in 5 seconds, not one a second.
+    """
     home, deadline = Path(home), time.monotonic() + 15
     result = {}
     while True:
@@ -938,7 +943,7 @@ async def automatic(home, request_id, *, service, wait=180, process=None,
                         return _automatic_record(home, request, state="settled", result="refused",
                                                  step="an unfinished manual refresh")
                     return record
-                guarded = _HeldService(service, home, request, stop_wait)
+                guarded = _HeldService(service, home, request, stop_wait, poll)
                 if journal:
                     result = await _recover_automatic(guarded, home, request, journal, record,
                                                       wait, recover_wait, poll)
