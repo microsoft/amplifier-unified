@@ -426,9 +426,9 @@ def _open_browser(args, data_dir, config, *, wait=0.0):
         opened = webbrowser.open(url)
     except Exception:
         # Some browser backends include the URL (and grant) in exceptions.
-        raise browser_entry.BrowserEntryUnavailable("Could not open the browser. " + browser_entry.REOPEN) from None
+        raise browser_entry.BrowserEntryUnavailable("Could not open the browser. " + browser_entry.reopen()) from None
     if not opened:
-        raise browser_entry.BrowserEntryUnavailable("The browser did not accept the open request. " + browser_entry.REOPEN)
+        raise browser_entry.BrowserEntryUnavailable("The browser did not accept the open request. " + browser_entry.reopen())
 
 
 def _code_origin(config, given):
@@ -701,7 +701,7 @@ def main():
             # update. Wait for it, then open the browser once.
             _open_browser(args, data_dir, config, wait=browser_entry.HOST_WAIT)
         except (OSError, ValueError):
-            raise SystemExit("Cannot open the owned host. " + browser_entry.REOPEN) from None
+            raise SystemExit("Cannot open the owned host. " + browser_entry.reopen()) from None
         except browser_entry.BrowserEntryUnavailable as exc:
             raise SystemExit(str(exc)) from None
         if not args.no_open:

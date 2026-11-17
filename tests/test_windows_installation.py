@@ -549,7 +549,7 @@ def test_bounded_wait_ends_when_the_listener_answers_and_never_waits_on_an_answe
 def trust_step(tmp_path, monkeypatch):
     """The key-less trust step with every Windows effect recorded."""
     from amplifier_web import windows_trust
-    state = {"ready": [False, True], "candidate": b"saved-root", "add": "added", "policy": False}
+    state = {"ready": [False, True], "candidate": b"saved-root", "add": "added", "policy": False, "replaced": []}
     events = []
     def settled(urls, pin):
         events.append(("check", urls, pin))
@@ -563,6 +563,13 @@ def trust_step(tmp_path, monkeypatch):
     monkeypatch.setattr(windows_trust, "user_roots_disabled", lambda: state["policy"])
     monkeypatch.setattr(windows_trust, "add_root", lambda der: events.append(("add", der)) or state["add"])
     monkeypatch.setattr(windows_trust, "thumbprint", lambda der: "71A44501 61589BA0 7236E01B 8BF48F15 5B4A7606")
+    def replaced(home, current):
+        assert home == tmp_path / "app"
+        if isinstance(state["replaced"], Exception):
+            raise state["replaced"]
+        return [der for der in state["replaced"] if der != current]
+    monkeypatch.setattr(windows_trust, "replaced", replaced)
+    monkeypatch.setattr(windows_trust, "forget_roots", lambda roots: events.append(("forget", roots)) or "removed")
     monkeypatch.setattr(setup, "_export_certificate", lambda root: events.append(("export", root)))
     monkeypatch.setattr(setup, "owner_notice", lambda text, **kw: events.append(("notice", text, kw)) or True)
     run = lambda fresh=None: setup.review_browser_trust(tmp_path, ["verified-url"], "private-pin", fresh=fresh)
@@ -590,6 +597,56 @@ def test_trust_step_explains_then_windows_asks_once_for_the_exact_fresh_root(tru
     assert "only for the private connection between your browser and Amplifier on this PC" in text
     assert "71A44501 61589BA0 7236E01B 8BF48F15 5B4A7606" in text
     assert len(text) < 520
+
+
+def test_after_force_one_message_names_both_questions_and_windows_is_asked_to_delete_the_replaced_root(
+        trust_step, monkeypatch):
+    from amplifier_web import windows_trust
+    state, events, run = trust_step
+    monkeypatch.setattr(windows_trust, "thumbprint", lambda der: "print of " + der.decode())
+    state["replaced"] = [b"earlier-root"]
+    assert run() is True
+    # The deletion comes after the person's Yes to the new root, and before the browser opens.
+    assert [event[0] for event in events] == ["check", "candidate", "notice", "add", "forget", "check"]
+    assert events[3] == ("add", b"saved-root") and events[4] == ("forget", [b"earlier-root"])
+    text, options = events[2][1:]
+    assert options == {}  # Still one Amplifier message with one OK.
+    assert text.startswith("Windows will now ask 2 questions.") and "one question" not in text
+    assert 'First: whether to install a certificate named "Amplifier Unified (this PC only)". Select Yes.' in text
+    assert ("Then: whether to delete the earlier certificate of the same name. Amplifier made a new "
+            "certificate and no longer uses the earlier one. Select Yes.") in text
+    # Each thumbprint stands with its own question.
+    assert text.index("print of saved-root") < text.index("Then:") < text.index("print of earlier-root")
+
+
+def test_several_replaced_roots_are_counted_in_the_message_and_all_are_asked_about(trust_step, monkeypatch):
+    from amplifier_web import windows_trust
+    state, events, run = trust_step
+    monkeypatch.setattr(windows_trust, "thumbprint", lambda der: "print of " + der.decode())
+    state["replaced"] = [b"one", b"two", b"three"]
+    assert run() is True
+    text = events[2][1]
+    assert text.startswith("Windows will now ask 4 questions.") and "Then, 3 times:" in text
+    assert "Select Yes each time." in text
+    assert all("print of " + name in text for name in ("saved-root", "one", "two", "three"))
+    assert ("forget", [b"one", b"two", b"three"]) in events
+
+
+@pytest.mark.parametrize("add", ["declined", "blocked", "present"])
+def test_a_replaced_root_is_deleted_only_after_windows_added_the_new_one(trust_step, add):
+    state, events, run = trust_step
+    state.update(add=add, replaced=[b"earlier-root"], ready=[False, False])
+    run()
+    # No to the new root, a refusal, or no question at all: the earlier root is not touched.
+    assert "add" in [event[0] for event in events] and "forget" not in [event[0] for event in events]
+
+
+def test_a_record_that_cannot_be_read_does_not_stop_the_trust_step(trust_step):
+    state, events, run = trust_step
+    state["replaced"] = OSError("the record cannot be read")
+    assert run() is True
+    assert [event[0] for event in events] == ["check", "candidate", "notice", "add", "check"]
+    assert "Windows will now ask one question" in events[2][1]
 
 
 def test_no_keeps_the_app_running_and_the_next_open_asks_again(trust_step, tmp_path):

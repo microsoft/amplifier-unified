@@ -6,6 +6,13 @@ shows its own confirmation for every add and removal; nothing here answers it.
 Only the signed-in person's Current User store is used, never Local Machine,
 elevation or policy.
 
+`setup-tls force` replaces the identity, and Windows can still hold the root
+that it replaced. windows_tls records each replaced root. A recorded root is
+removed only when it has the fixed shape of this product's root and the store
+holds exactly that certificate: after the person's Yes to the new root
+(replaced), and at an uninstall (held_roots, forget_roots). Windows asks the
+person once for each removal.
+
 Outside what this protects: changed app code, or any other program that runs
 as the same person, can ask Windows for the same confirmation itself.
 """
@@ -37,6 +44,31 @@ def thumbprint(der):
     return " ".join(value[index:index + 8] for index in range(0, 40, 8))
 
 
+def _shape(root):
+    """Permitted names of a certificate with the fixed shape of this product's root.
+
+    Raises ValueError for every other certificate. The shape is what
+    windows_tls._new_root makes: the product's name, self-signed, a CA that
+    can sign only server certificates, with critical name constraints. The
+    period of validity and the names are the caller's to check.
+    """
+    from cryptography import x509
+    from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, ROOT_NAME)])
+    basic = root.extensions.get_extension_for_class(x509.BasicConstraints)
+    usage = root.extensions.get_extension_for_class(x509.KeyUsage).value
+    purposes = root.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value
+    constraints = root.extensions.get_extension_for_class(x509.NameConstraints)
+    if (root.subject != name or root.issuer != name
+            or not basic.critical or not basic.value.ca or basic.value.path_length != 0
+            or not usage.key_cert_sign or list(purposes) != [ExtendedKeyUsageOID.SERVER_AUTH]
+            or not constraints.critical or constraints.value.excluded_subtrees
+            or not constraints.value.permitted_subtrees):
+        raise ValueError("root is not this installation's local-only shape")
+    root.verify_directly_issued_by(root)
+    return constraints.value.permitted_subtrees
+
+
 def check(root_der, leaf_der, config):
     """Raise ValueError unless this is exactly a key-less identity's root.
 
@@ -46,28 +78,17 @@ def check(root_der, leaf_der, config):
     """
     from cryptography import x509
     from cryptography.exceptions import InvalidSignature
-    from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
     from .windows_tls import LIFETIME, local_names
     try:
         root = x509.load_der_x509_certificate(root_der)
         leaf = x509.load_der_x509_certificate(leaf_der)
-        name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, ROOT_NAME)])
-        basic = root.extensions.get_extension_for_class(x509.BasicConstraints)
-        usage = root.extensions.get_extension_for_class(x509.KeyUsage).value
-        purposes = root.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value
-        constraints = root.extensions.get_extension_for_class(x509.NameConstraints)
+        permitted = _shape(root)
         now = datetime.now(UTC)
-        if (root.subject != name or root.issuer != name
-                or not basic.critical or not basic.value.ca or basic.value.path_length != 0
-                or not usage.key_cert_sign or list(purposes) != [ExtendedKeyUsageOID.SERVER_AUTH]
-                or not constraints.critical or constraints.value.excluded_subtrees
-                or not constraints.value.permitted_subtrees
-                or not root.not_valid_before_utc <= now < root.not_valid_after_utc
+        if (not root.not_valid_before_utc <= now < root.not_valid_after_utc
                 or root.not_valid_after_utc - root.not_valid_before_utc > LIFETIME + timedelta(days=1)):
-            raise ValueError("root is not this installation's local-only shape")
-        root.verify_directly_issued_by(root)
+            raise ValueError("root is not valid now, or it is valid for too long")
         hosts, addresses = set(), set()
-        for subtree in constraints.value.permitted_subtrees:
+        for subtree in permitted:
             if isinstance(subtree, x509.DNSName):
                 hosts.add(subtree.value)
             elif (isinstance(subtree, x509.IPAddress) and isinstance(
@@ -305,3 +326,73 @@ def remove_root(der, *, store="ROOT"):
     except OSError:
         return "blocked"
     return outcome
+
+
+def _own_shape(der):
+    """Does this certificate have the fixed shape of this product's root?
+
+    For a replaced root. Its period of validity and its names are not
+    compared: it can be expired, and it names an earlier configuration.
+    """
+    from cryptography import x509
+    from cryptography.exceptions import InvalidSignature
+    try:
+        _shape(x509.load_der_x509_certificate(der))
+    except (ValueError, TypeError, x509.ExtensionNotFound, InvalidSignature):
+        return False
+    return True
+
+
+def replaced(home, current=None, *, store="ROOT"):
+    """Roots (DER) that this installation replaced and that Windows still holds for this person.
+
+    Only `setup-tls force` writes the record, and the record only names
+    candidates. One is returned only when it has the fixed shape of this
+    product's root and the store holds exactly that certificate. `current`
+    is never returned: a `force` that stopped part-way records the root that
+    is still in use. Oldest first. Read-only; Windows asks nothing here.
+    """
+    from .windows_tls import replaced_roots
+    return [der for der in replaced_roots(home)
+            if der != current and _own_shape(der) and contains(der, store=store)]
+
+
+def held_roots(home, *, store="ROOT"):
+    """This installation's roots (DER) that Windows holds for this person. Never raises.
+
+    The current root of a key-less identity comes first, then the replaced
+    ones. An identity with a signing key on disk added nothing and is not
+    listed. What cannot be read is left out: nothing is removed on a guess.
+    """
+    from .windows_tls import keyless_identity
+    current, found = None, []
+    try:
+        identity = keyless_identity(home)
+        if identity is not None:
+            current = identity[0]
+            if contains(current, store=store):
+                found.append(current)
+    except (OSError, ValueError, RuntimeError):
+        pass
+    try:
+        found += replaced(home, current, store=store)
+    except (OSError, ValueError, RuntimeError):
+        pass
+    return found
+
+
+def forget_roots(roots, *, store="ROOT"):
+    """Ask Windows to delete each of these roots: one Windows question for each. Never raises.
+
+    Returns `none` when there is nothing to delete. Otherwise `declined` or
+    `blocked` when Windows kept at least one root, else `removed`, else
+    `absent`. Every root is asked about, also after a No: each answer is the
+    person's own, and a root that stays has no signing key anywhere.
+    """
+    outcomes = set()
+    for der in roots or ():
+        try:
+            outcomes.add(remove_root(der, store=store))
+        except (OSError, ValueError, RuntimeError):
+            outcomes.add("blocked")
+    return next((outcome for outcome in ("declined", "blocked", "removed", "absent") if outcome in outcomes), "none")

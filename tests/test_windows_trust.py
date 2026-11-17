@@ -273,6 +273,93 @@ def test_remove_reports_each_outcome_and_handles_the_default_no(store):
     assert trust.remove_root(b"root") == "blocked"
 
 
+def test_a_replaced_root_counts_only_with_the_fixed_shape_of_the_products_root():
+    root = identity()[0]
+    assert trust._own_shape(root.public_bytes(DER))
+    # The names of an earlier configuration, and a period that check() refuses, are still this shape.
+    assert trust._own_shape(variant_root(permitted=[x509.DNSName("pc.example.ts.net")], days=1000)[0].public_bytes(DER))
+    for change in ({"name": "Another CA"}, {"path_length": None}, {"purposes": ()}, {"constrained": False},
+                   {"constraints_critical": False}, {"excluded": [x509.DNSName("example.com")]}):
+        assert not trust._own_shape(variant_root(**change)[0].public_bytes(DER)), change
+    assert not trust._own_shape(b"not a certificate")
+    # The ordinary local CA of an installation with a signing key on disk.
+    assert not trust._own_shape(wt._new_ca()[0].public_bytes(DER))
+    # The product's name and shape, but signed with another key.
+    other = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    copy = (x509.CertificateBuilder().subject_name(root.subject).issuer_name(root.subject)
+            .public_key(root.public_key()).serial_number(root.serial_number)
+            .not_valid_before(root.not_valid_before_utc).not_valid_after(root.not_valid_after_utc))
+    for extension in root.extensions:
+        copy = copy.add_extension(extension.value, critical=extension.critical)
+    assert not trust._own_shape(copy.sign(other, hashes.SHA256()).public_bytes(DER))
+
+
+def test_replaced_names_only_recorded_roots_of_the_products_shape_that_windows_holds(store, monkeypatch):
+    fake = store()
+    held, gone, current = (identity()[0].public_bytes(DER) for _ in range(3))
+    foreign = wt._new_ca()[0].public_bytes(DER)  # Not the product's shape, and Windows holds it.
+    monkeypatch.setattr(wt, "replaced_roots", lambda home: [held, gone, foreign, current, b"not a certificate"])
+    fake.held.update({held, foreign, current, b"not a certificate"})
+    assert trust.replaced("home", current) == [held]
+    # Read-only: Windows asked nothing, and the store was never opened for a change.
+    assert fake.questions == [] and fake.opens and not any(write for _, write in fake.opens)
+    # Without a known current root the answer still never names a certificate of another shape.
+    assert trust.replaced("home") == [held, current]
+
+
+def test_held_roots_lists_the_current_root_first_and_never_raises(store, monkeypatch):
+    fake = store()
+    current, older = (identity()[0].public_bytes(DER) for _ in range(2))
+    state = {"identity": (current, b"leaf"), "record": [older]}
+
+    def read(name):
+        if isinstance(state[name], Exception):
+            raise state[name]
+        return state[name]
+    monkeypatch.setattr(wt, "keyless_identity", lambda home: read("identity"))
+    monkeypatch.setattr(wt, "replaced_roots", lambda home: read("record"))
+    fake.held.update({current, older})
+    assert trust.held_roots("home") == [current, older]
+    # The person answered No to the new root, or did not open Amplifier after `force`.
+    fake.held.discard(current)
+    assert trust.held_roots("home") == [older]
+    fake.held.add(current)
+    state["record"] = [older, current]  # A `force` that stopped part-way: the current root is listed once.
+    assert trust.held_roots("home") == [current, older]
+    state["record"] = OSError("the record cannot be read")
+    assert trust.held_roots("home") == [current]
+    state.update(identity=ValueError("the identity cannot be read"), record=[older])
+    assert trust.held_roots("home") == [older]
+    state["identity"] = None  # A signing key on disk: setup never added that root.
+    assert trust.held_roots("home") == [older]
+    fake.held.clear()
+    assert trust.held_roots("home") == []
+    assert fake.questions == [] and not any(write for _, write in fake.opens)
+
+
+def test_forget_roots_asks_windows_once_for_each_root_and_goes_on_after_a_no(store, monkeypatch):
+    fake = store()
+    assert trust.forget_roots([]) == "none" and trust.forget_roots(None) == "none" and fake.questions == []
+    fake.held.update({b"a", b"b"})
+    assert trust.forget_roots([b"a", b"b", b"c"]) == "removed"  # Windows does not hold c: no question for it.
+    assert fake.questions == ["delete", "delete"] and not fake.held
+    assert trust.forget_roots([b"c"]) == "absent"
+    answers = {b"a": "declined", b"b": "removed", b"c": OSError("store"), b"d": "absent"}
+    asked = []
+
+    def remove(der, *, store="ROOT"):
+        asked.append(der)
+        if isinstance(answers[der], Exception):
+            raise answers[der]
+        return answers[der]
+    monkeypatch.setattr(trust, "remove_root", remove)
+    # A No to one root does not stop the question about the next one.
+    assert trust.forget_roots([b"a", b"b"]) == "declined" and asked == [b"a", b"b"]
+    assert trust.forget_roots([b"b", b"c"]) == "blocked"
+    assert trust.forget_roots([b"c", b"a"]) == "declined"
+    assert trust.forget_roots([b"b", b"d"]) == "removed"
+
+
 def test_store_calls_require_native_windows(monkeypatch):
     monkeypatch.setattr(trust.os, "name", "posix")
     assert trust.user_roots_disabled() is False
@@ -300,6 +387,32 @@ def test_native_store_add_find_remove_on_a_private_throwaway_store():
         assert trust.remove_root(other, store=name) == "absent"
         assert trust.remove_root(der, store=name) == "removed"
         assert trust.contains(der, store=name) is False
+    finally:
+        crypt32 = ctypes.WinDLL("crypt32", use_last_error=True)
+        crypt32.CertUnregisterSystemStore.argtypes = [ctypes.c_wchar_p, ctypes.c_ulong]
+        crypt32.CertUnregisterSystemStore(name, 0x00010000 | 0x10)  # Current user; delete.
+
+
+@native
+def test_native_replaced_roots_are_found_and_removed_in_a_private_throwaway_store(monkeypatch):
+    """The real crypt32 calls for replaced roots, on a store that is not a trust store (no question)."""
+    name = "AmplifierUnifiedTest" + uuid.uuid4().hex
+    current, first, second, never_added = (identity()[0].public_bytes(DER) for _ in range(4))
+    foreign = wt._new_ca()[0].public_bytes(DER)  # Not the product's shape; the store holds it.
+    monkeypatch.setattr(wt, "keyless_identity", lambda home: (current, b"leaf"))
+    monkeypatch.setattr(wt, "replaced_roots", lambda home: [first, second, never_added, foreign, current])
+    try:
+        for der in (current, first, second, foreign):
+            assert trust.add_root(der, store=name) == "added"
+        assert trust.replaced("home", current, store=name) == [first, second]
+        assert trust.held_roots("home", store=name) == [current, first, second]
+        assert trust.forget_roots([first, second], store=name) == "removed"
+        assert trust.replaced("home", current, store=name) == []
+        # The current root stays, and so does a certificate that is not this product's.
+        assert trust.contains(current, store=name) and trust.contains(foreign, store=name)
+        assert trust.held_roots("home", store=name) == [current]
+        assert trust.forget_roots(trust.held_roots("home", store=name), store=name) == "removed"
+        assert trust.held_roots("home", store=name) == [] and trust.contains(foreign, store=name)
     finally:
         crypt32 = ctypes.WinDLL("crypt32", use_last_error=True)
         crypt32.CertUnregisterSystemStore.argtypes = [ctypes.c_wchar_p, ctypes.c_ulong]

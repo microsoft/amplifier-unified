@@ -213,6 +213,12 @@ def review_browser_trust(root, urls, pin, *, fresh=None):
     and the next open asks again. An identity with a signing key on disk is
     never added; the person can review it in the Windows certificate viewer.
 
+    After `setup-tls force` Windows can still hold the root that the new one
+    replaced. The same message says so, and after the person's Yes to the new
+    root Windows asks once for each replaced root whether to delete it. Only
+    then: with a No to the new root, or on a later open, nothing is asked. A
+    replaced root that stays is asked about again at an uninstall.
+
     A host that is restarting is waited for. If it stays away, the message
     says that, and never says that the PC does not trust the connection.
     """
@@ -237,14 +243,36 @@ def review_browser_trust(root, urls, pin, *, fresh=None):
         _export_certificate(root)
         owner_notice(blocked)
         return False
-    owner_notice(
-        "Windows will now ask one question: whether to install a certificate named \""
-        + windows_trust.ROOT_NAME + "\". Select Yes.\n\n"
-        "Amplifier uses this certificate only for the private connection between your "
-        "browser and Amplifier on this PC. It does not work for any website. Windows "
-        "shows the same security warning for every certificate of this kind.\n\n"
-        "Thumbprint in the Windows message:\n" + windows_trust.thumbprint(certificate))
+    try:
+        # Read-only. Roots that `setup-tls force` replaced and Windows still holds.
+        earlier = windows_trust.replaced(root / "app", certificate)
+    except (OSError, ValueError, RuntimeError):
+        earlier = []  # The record cannot be read now. An uninstall asks about them.
+    purpose = ("Amplifier uses this certificate only for the private connection between your "
+               "browser and Amplifier on this PC. It does not work for any website. Windows "
+               "shows the same security warning for every certificate of this kind.\n\n"
+               "Thumbprint in the Windows message:\n" + windows_trust.thumbprint(certificate))
+    if not earlier:
+        owner_notice(
+            "Windows will now ask one question: whether to install a certificate named \""
+            + windows_trust.ROOT_NAME + "\". Select Yes.\n\n" + purpose)
+    else:
+        owner_notice(
+            f"Windows will now ask {len(earlier) + 1} questions.\n\n"
+            "First: whether to install a certificate named \"" + windows_trust.ROOT_NAME + "\". Select Yes.\n\n"
+            + purpose + "\n\n"
+            + ("Then: whether to delete the earlier certificate of the same name. Amplifier made a new "
+               "certificate and no longer uses the earlier one. Select Yes.\n\n"
+               "Thumbprint in that Windows message:\n" if len(earlier) == 1 else
+               f"Then, {len(earlier)} times: whether to delete an earlier certificate of the same name. "
+               "Amplifier made a new certificate and no longer uses the earlier ones. Select Yes each time.\n\n"
+               "Thumbprints in those Windows messages:\n")
+            + "\n".join(windows_trust.thumbprint(der) for der in earlier))
     outcome = windows_trust.add_root(certificate)
+    if outcome == "added" and earlier:
+        # Only after the person's Yes to the new root. A No to a deletion is
+        # respected: that root stays, and it has no signing key anywhere.
+        windows_trust.forget_roots(earlier)
     if outcome == "declined":
         owner_notice(
             "Amplifier is running, but it cannot open in your browser until Windows trusts "

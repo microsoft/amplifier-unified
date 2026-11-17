@@ -259,8 +259,10 @@ def test_force_replaces_a_keyless_identity_with_a_new_one_for_the_configured_nam
     count = len(state["publications"])
     configured = tls.setup_local_ca(root, wider, force=True)
     # ... and the owner's explicit force makes a whole new identity, root last.
-    assert state["publications"][count:] == [("leaf.key", True), ("leaf.crt", True), ("ca.crt", True)]
-    assert sorted(p.name for p in pinned.path.iterdir()) == ["ca.crt", "leaf.crt", "leaf.key"]
+    # Before the first new file it records the root that it replaces.
+    assert state["publications"][count:] == [
+        (wt._REPLACED, True), ("leaf.key", True), ("leaf.crt", True), ("ca.crt", True)]
+    assert sorted(p.name for p in pinned.path.iterdir()) == ["ca.crt", "leaf.crt", "leaf.key", wt._REPLACED]
     new, leaf = wt.keyless_identity(root)
     assert new != old and (pinned.path / "leaf.crt").read_bytes() != old_leaf
     saved = (pinned.path / "ca.crt").read_bytes()
@@ -287,6 +289,77 @@ def test_force_heals_a_keyless_identity_left_partial_by_a_failed_renewal(simulat
     state["fail"] = None
     tls.setup_local_ca(root, sample[0], force=True)
     handshake(tls.ssl_context(root, configured), (pinned.path / "ca.crt").read_bytes(), strict=True)
+
+
+def test_force_records_each_root_that_it_replaces_before_it_writes_a_new_file(simulated, sample):
+    root, pinned, state = simulated
+    first = wt.create_identity(root, sample[0])
+    # A new installation has replaced nothing: no record, and no error.
+    assert wt.replaced_roots(root) == [] and not (pinned.path / wt._REPLACED).exists()
+    count = len(state["publications"])
+    tls.setup_local_ca(root, sample[0], force=True)
+    assert state["publications"][count] == (wt._REPLACED, True)
+    second = wt.keyless_identity(root)[0]
+    assert second != first and wt.replaced_roots(root) == [first]
+    tls.setup_local_ca(root, sample[0], force=True)
+    assert wt.replaced_roots(root) == [first, second]              # Oldest first.
+    assert wt.keyless_identity(root)[0] not in wt.replaced_roots(root)
+    saved = (pinned.path / wt._REPLACED).read_bytes()
+    # Public certificates only.
+    assert saved.count(b"-----BEGIN CERTIFICATE-----") == 2 and b"PRIVATE KEY" not in saved
+
+
+def test_a_record_that_cannot_be_written_stops_force_and_leaves_the_identity_as_it_was(simulated, sample):
+    root, pinned, state = simulated
+    wt.create_identity(root, sample[0])
+    before = {p.name: p.read_bytes() for p in pinned.path.iterdir()}
+    state["fail"] = wt._REPLACED
+    with pytest.raises(OSError):
+        tls.setup_local_ca(root, sample[0], force=True)
+    # No new certificate without a record of the one that Windows may still trust.
+    assert {p.name: p.read_bytes() for p in pinned.path.iterdir()} == before
+    assert not state["saves"][1:]
+
+
+def test_a_repeated_force_after_a_partial_publication_records_the_same_root_once(simulated, sample):
+    root, pinned, state = simulated
+    first = wt.create_identity(root, sample[0])
+    state["fail"] = "ca.crt"  # The new server certificate landed; the new root did not.
+    with pytest.raises(OSError, match="may be partial"):
+        tls.setup_local_ca(root, sample[0], force=True)
+    # The record names the root that is still this installation's own ...
+    assert wt.replaced_roots(root) == [first]
+    assert x509.load_pem_x509_certificate((pinned.path / "ca.crt").read_bytes()).public_bytes(
+        serialization.Encoding.DER) == first
+    state["fail"] = None
+    tls.setup_local_ca(root, sample[0], force=True)
+    assert wt.replaced_roots(root) == [first]  # ... and the repeated request records it once.
+
+
+def test_the_record_keeps_only_whole_certificates_and_only_the_newest(simulated, sample, monkeypatch):
+    root, pinned, state = simulated
+    wt.create_identity(root, sample[0])
+    monkeypatch.setattr(wt, "_REPLACED_MAX", 2)
+    replaced = []
+    for _ in range(3):
+        replaced.append(wt.keyless_identity(root)[0])
+        tls.setup_local_ca(root, sample[0], force=True)
+    assert wt.replaced_roots(root) == replaced[-2:]
+    path = pinned.path / wt._REPLACED
+    record = path.read_bytes()
+    # Other text names nothing, also inside certificate marks; a whole certificate beside it still counts.
+    path.write_bytes(b"-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\nother text\n" + record
+                     + sample[1]["ca.key"] + record)
+    assert wt.replaced_roots(root) == replaced[-2:]
+    path.write_bytes(b"x" * (wt._LIMIT + 1))  # Too long for the bounded read: no candidate, and no error.
+    assert wt.replaced_roots(root) == []
+
+
+def test_force_on_an_identity_with_a_signing_key_replaces_no_root_and_records_none(simulated, sample):
+    root, pinned, state = seed(simulated, sample)
+    tls.setup_local_ca(root, sample[0], force=True)  # Only the server certificate is made again.
+    assert (pinned.path / "ca.crt").read_bytes() == sample[1]["ca.crt"]
+    assert wt.replaced_roots(root) == [] and not (pinned.path / wt._REPLACED).exists()
 
 
 def test_keyless_identity_survives_a_renamed_computer(simulated, sample, monkeypatch):
@@ -755,19 +828,29 @@ def test_native_keyless_identity_has_no_signing_key_file_and_serves_tls(native_r
     # The launcher's candidate: the exact in-memory root for a new identity,
     # the owner-only store on a later start.
     pin = SimpleNamespace(fingerprint=hashlib.sha256(peer).digest())
+    assert wt.replaced_roots(native_root) == []  # Nothing is replaced yet: no record file, and no error.
     assert windows_trust.candidate(native_root, pin, der) is der
     assert windows_trust.candidate(native_root, pin) == der
     with pytest.raises(ValueError, match="changed"):
         windows_trust.candidate(native_root, SimpleNamespace(fingerprint=b"\0" * 32))
     # The owner's force replaces the whole identity on the real private store.
     tls.setup_local_ca(native_root, configured, force=True)
-    assert sorted(p.name for p in path.iterdir()) == [".tls.lock", "ca.crt", "leaf.crt", "leaf.key"]
+    assert sorted(p.name for p in path.iterdir()) == [
+        ".tls.lock", "ca.crt", "leaf.crt", "leaf.key", "replaced-roots.pem"]
     renewed, renewed_leaf = wt.keyless_identity(native_root)
     assert renewed != der and renewed_leaf != peer
+    # The real private store holds the record of the replaced root: the exact
+    # certificate that Windows can still trust, and no key.
+    assert wt.replaced_roots(native_root) == [der]
+    assert b"PRIVATE KEY" not in (path / "replaced-roots.pem").read_bytes()
     assert handshake(tls.ssl_context(native_root, configured), tls.exported_ca_bytes(native_root),
                      hostname="127.0.0.1", strict=True) == renewed_leaf
     with pytest.raises(ValueError, match="changed"):  # The earlier root is not the candidate now.
         windows_trust.candidate(native_root, SimpleNamespace(fingerprint=hashlib.sha256(renewed_leaf).digest()), der)
+    # A second force replaces the record file itself on the real private store.
+    tls.setup_local_ca(native_root, configured, force=True)
+    assert wt.replaced_roots(native_root) == [der, renewed]
+    assert wt.keyless_identity(native_root)[0] not in (der, renewed)
 
 
 def test_native_identity_with_a_signing_key_is_never_a_trust_candidate(native_root):

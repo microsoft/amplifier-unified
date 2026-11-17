@@ -116,14 +116,18 @@ def uninstaller(model, monkeypatch):
     state.update(notices=[], answers=[], working=None, task="running", task_failure=None,
                  certificate=None, windows_answer="removed")
     from amplifier_web import windows_trust
-    monkeypatch.setattr(consumer, "_trusted_root", lambda value: state["certificate"])
-    def remove_root(der):
+    # `certificate`: one root (bytes) or a list of roots that Windows holds, else None.
+    # `windows_answer`: one answer for every question, or a list with one answer for each.
+    held = lambda: [state["certificate"]] if isinstance(state["certificate"], bytes) else state["certificate"]
+    monkeypatch.setattr(consumer, "_trusted_root", lambda value: held())
+    def remove_root(der, store="ROOT"):
         # Windows asks last: the app has stopped and every entry is gone.
-        assert der == state["certificate"] and state["task"] == "absent" and state["registry"] is None
+        assert der in held() and store == "ROOT" and state["task"] == "absent" and state["registry"] is None
         state["calls"].append(("certificate",))
-        if isinstance(state["windows_answer"], Exception):
-            raise state["windows_answer"]
-        return state["windows_answer"]
+        answer = state["windows_answer"].pop(0) if isinstance(state["windows_answer"], list) else state["windows_answer"]
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
     monkeypatch.setattr(windows_trust, "remove_root", remove_root)
     monkeypatch.setattr(consumer, "installation", lambda value: (value, {}))
     monkeypatch.setattr(consumer, "environment", lambda *a: {})
@@ -445,21 +449,69 @@ def test_unfinished_uninstall_keeps_the_certificate_that_the_app_still_needs(uni
     assert ("certificate",) not in state["calls"]
 
 
-def test_only_a_keyless_identity_that_windows_trusts_counts_as_this_installations_certificate(tmp_path, monkeypatch):
+def test_only_roots_that_windows_trusts_for_this_installation_count_as_its_certificates(tmp_path, monkeypatch):
     from amplifier_web import windows_consumer as consumer, windows_tls, windows_trust
-    state = {"identity": (b"root", b"leaf"), "trusted": True}
+    state = {"identity": (b"root", b"leaf"), "trusted": {b"root"}, "record": []}
     monkeypatch.setattr(windows_tls, "keyless_identity", lambda home: state["identity"])
-    def contains(der):
-        assert der == b"root"
+    monkeypatch.setattr(windows_tls, "replaced_roots", lambda home: state["record"])
+    monkeypatch.setattr(windows_trust, "_own_shape", lambda der: der != b"another shape")
+    def contains(der, *, store="ROOT"):
         if isinstance(state["trusted"], Exception):
             raise state["trusted"]
-        return state["trusted"]
+        return der in state["trusted"]
     monkeypatch.setattr(windows_trust, "contains", contains)
-    assert consumer._trusted_root(tmp_path) == b"root"
-    for change in ({"trusted": False}, {"trusted": OSError("store unavailable")}, {"identity": None}):
-        state.update({"identity": (b"root", b"leaf"), "trusted": True, **change})
+    assert consumer._trusted_root(tmp_path) == [b"root"]
+    for change in ({"trusted": set()}, {"trusted": OSError("store unavailable")}, {"identity": None}):
+        state.update({"identity": (b"root", b"leaf"), "trusted": {b"root"}, **change})
         assert consumer._trusted_root(tmp_path) is None  # Never asked, never removed.
     assert consumer._forget_root(None) == "none"
+    # A root that `setup-tls force` replaced and that Windows still holds is this installation's too.
+    state.update(identity=(b"root", b"leaf"), record=[b"replaced", b"not held", b"another shape", b"root"],
+                 trusted={b"root", b"replaced", b"another shape", b"not on the record"})
+    assert consumer._trusted_root(tmp_path) == [b"root", b"replaced"]
+    asked = []
+    monkeypatch.setattr(windows_trust, "remove_root", lambda der, store="ROOT": asked.append(der) or "removed")
+    # Windows is asked once for each of them, and for nothing else.
+    assert consumer._forget_root([b"root", b"replaced"]) == "removed" and asked == [b"root", b"replaced"]
+    monkeypatch.setattr(windows_trust, "forget_roots", lambda roots: (_ for _ in ()).throw(OSError("store")))
+    assert consumer._forget_root([b"root"]) == "blocked"  # Never an error of the uninstall.
+
+
+@pytest.mark.parametrize("answers,outcome,kept", [
+    (["removed", "removed"], "removed", False), (["removed", "declined"], "declined", True),
+    (["declined", "removed"], "declined", True), (["absent", "removed"], "removed", False),
+    ([OSError("store"), "removed"], "blocked", True)])
+def test_uninstall_asks_windows_once_for_each_certificate_that_windows_holds(
+        uninstaller, monkeypatch, answers, outcome, kept):
+    from amplifier_web.windows_trust import ROOT_NAME
+    state, consumer = uninstaller.state, uninstaller.consumer
+    # The current certificate, and one that `setup-tls force` replaced and the person kept.
+    state["certificate"], state["windows_answer"] = [b"current root", b"replaced root"], list(answers)
+    monkeypatch.setattr(consumer.sys, "stdout", None)
+    result = uninstaller.run()
+    assert result["ok"] and result["certificate"] == outcome
+    # Two attempts, one for each, after the stop, the task and every entry. A No does not stop the second.
+    assert state["calls"][-2:] == [("certificate",), ("certificate",)] and state["calls"].count(("certificate",)) == 2
+    (question, _), (confirmation, _) = state["notices"]
+    assert (f'At the end, Windows asks 2 times whether to delete a certificate named "{ROOT_NAME}". '
+            "Windows holds 2 of them. Select Yes each time to remove them.") in question
+    assert "Amplifier is uninstalled" in confirmation
+    assert (f'Windows kept the certificate "{ROOT_NAME}"' in confirmation) is kept
+
+
+def test_the_uninstall_question_says_how_often_windows_asks():
+    from amplifier_web import windows_consumer as consumer
+    from amplifier_web.windows_trust import ROOT_NAME
+    assert consumer._certificate_sentence(None, at_the_end=True) == ""
+    assert consumer._certificate_sentence([b"a"], at_the_end=True) == (
+        f'\n\nAt the end, Windows asks whether to delete the certificate "{ROOT_NAME}". '
+        "Select Yes there to remove it.")
+    assert consumer._certificate_sentence([b"a"], at_the_end=False) == (
+        f'\n\nDuring the uninstall, Windows asks whether to delete the certificate "{ROOT_NAME}". '
+        "That is a separate question.")
+    assert consumer._certificate_sentence([b"a", b"b", b"c"], at_the_end=False) == (
+        f'\n\nDuring the uninstall, Windows asks 3 times whether to delete a certificate named "{ROOT_NAME}". '
+        "Windows holds 3 of them. Those are separate questions.")
 
 
 def saved_record(root):
