@@ -259,8 +259,10 @@ def test_force_replaces_a_keyless_identity_with_a_new_one_for_the_configured_nam
     count = len(state["publications"])
     configured = tls.setup_local_ca(root, wider, force=True)
     # ... and the owner's explicit force makes a whole new identity, root last.
-    assert state["publications"][count:] == [("leaf.key", True), ("leaf.crt", True), ("ca.crt", True)]
-    assert sorted(p.name for p in pinned.path.iterdir()) == ["ca.crt", "leaf.crt", "leaf.key"]
+    # Before the first new file it records the root that it replaces.
+    assert state["publications"][count:] == [
+        (wt._REPLACED, False), ("leaf.key", True), ("leaf.crt", True), ("ca.crt", True)]
+    assert sorted(p.name for p in pinned.path.iterdir()) == ["ca.crt", "leaf.crt", "leaf.key", wt._REPLACED]
     new, leaf = wt.keyless_identity(root)
     assert new != old and (pinned.path / "leaf.crt").read_bytes() != old_leaf
     saved = (pinned.path / "ca.crt").read_bytes()
@@ -287,6 +289,244 @@ def test_force_heals_a_keyless_identity_left_partial_by_a_failed_renewal(simulat
     state["fail"] = None
     tls.setup_local_ca(root, sample[0], force=True)
     handshake(tls.ssl_context(root, configured), (pinned.path / "ca.crt").read_bytes(), strict=True)
+
+
+def test_force_records_each_root_that_it_replaces_before_it_writes_a_new_file(simulated, sample, monkeypatch):
+    root, pinned, state = simulated
+    # While the record has room, nothing leaves it and Windows is not asked.
+    monkeypatch.setattr(wt, "_held", lambda der: pytest.fail("Windows is asked only when the record is full"))
+    first = wt.create_identity(root, sample[0])
+    # A new installation has replaced nothing: no record, and no error.
+    assert wt.replaced_roots(root) == [] and not (pinned.path / wt._REPLACED).exists()
+    count = len(state["publications"])
+    tls.setup_local_ca(root, sample[0], force=True)
+    assert state["publications"][count] == (wt._REPLACED, False)   # The first record replaces no file.
+    second = wt.keyless_identity(root)[0]
+    assert second != first and wt.replaced_roots(root) == [first]
+    count = len(state["publications"])
+    tls.setup_local_ca(root, sample[0], force=True)
+    assert state["publications"][count] == (wt._REPLACED, True)    # A later one replaces the record.
+    assert wt.replaced_roots(root) == [first, second]              # Oldest first.
+    assert wt.keyless_identity(root)[0] not in wt.replaced_roots(root)
+    saved = (pinned.path / wt._REPLACED).read_bytes()
+    # Public certificates only.
+    assert saved.count(b"-----BEGIN CERTIFICATE-----") == 2 and b"PRIVATE KEY" not in saved
+
+
+def test_a_record_that_cannot_be_written_stops_force_and_leaves_the_identity_as_it_was(simulated, sample):
+    root, pinned, state = simulated
+    wt.create_identity(root, sample[0])
+    before = {p.name: p.read_bytes() for p in pinned.path.iterdir()}
+    state["fail"] = wt._REPLACED
+    with pytest.raises(OSError):
+        tls.setup_local_ca(root, sample[0], force=True)
+    # No new certificate without a record of the one that Windows may still trust.
+    assert {p.name: p.read_bytes() for p in pinned.path.iterdir()} == before
+    assert not state["saves"][1:]
+
+
+def test_a_repeated_force_after_a_partial_publication_records_the_same_root_once(simulated, sample):
+    root, pinned, state = simulated
+    first = wt.create_identity(root, sample[0])
+    state["fail"] = "ca.crt"  # The new server certificate landed; the new root did not.
+    with pytest.raises(OSError, match="may be partial"):
+        tls.setup_local_ca(root, sample[0], force=True)
+    # The record names the root that is still this installation's own ...
+    assert wt.replaced_roots(root) == [first]
+    assert x509.load_pem_x509_certificate((pinned.path / "ca.crt").read_bytes()).public_bytes(
+        serialization.Encoding.DER) == first
+    state["fail"] = None
+    count = len(state["publications"])
+    tls.setup_local_ca(root, sample[0], force=True)
+    assert wt.replaced_roots(root) == [first]  # ... and the repeated request records it once:
+    assert wt._REPLACED not in [name for name, _ in state["publications"][count:]]  # it is not written again.
+    assert (pinned.path / wt._REPLACED).read_bytes().count(b"-----BEGIN CERTIFICATE-----") == 1
+
+
+def test_the_record_counts_only_whole_certificates_and_the_next_force_keeps_each_of_them(simulated, sample):
+    root, pinned, state = simulated
+    wt.create_identity(root, sample[0])
+    replaced = []
+    for _ in range(2):
+        replaced.append(wt.keyless_identity(root)[0])
+        tls.setup_local_ca(root, sample[0], force=True)
+    path = pinned.path / wt._REPLACED
+    record = path.read_bytes()
+    # Other text names nothing, also inside certificate marks; a whole certificate beside it still counts.
+    path.write_bytes(b"-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\nother text\n" + record
+                     + sample[1]["ca.key"] + record)
+    assert wt.replaced_roots(root) == replaced
+    # The next force keeps every whole certificate, and writes nothing else back.
+    third = wt.keyless_identity(root)[0]
+    tls.setup_local_ca(root, sample[0], force=True)
+    assert wt.replaced_roots(root) == replaced + [third]
+    saved = path.read_bytes()
+    assert saved.count(b"-----BEGIN CERTIFICATE-----") == 3
+    assert b"PRIVATE KEY" not in saved and b"other text" not in saved and b"AAAA\n" not in saved
+
+
+def small_record(monkeypatch, pinned):
+    """Room for two certificates in one bounded read, not for three."""
+    one = len((pinned.path / "ca.crt").read_bytes())
+    monkeypatch.setattr(wt, "_LIMIT", 2 * one + one // 2)
+    assert max(len(p.read_bytes()) for p in pinned.path.iterdir()) <= wt._LIMIT
+
+
+def test_a_full_record_drops_only_the_roots_that_windows_no_longer_holds(simulated, sample, monkeypatch):
+    root, pinned, state = simulated
+    wt.create_identity(root, sample[0])
+    small_record(monkeypatch, pinned)
+    replaced = []
+    for _ in range(2):
+        replaced.append(wt.keyless_identity(root)[0])
+        tls.setup_local_ca(root, sample[0], force=True)
+    assert wt.replaced_roots(root) == replaced
+    # The record is full now. Windows still holds the first root, and no longer the second.
+    asked = []
+    monkeypatch.setattr(wt, "_held", lambda der: asked.append(der) or der == replaced[0])
+    third = wt.keyless_identity(root)[0]
+    tls.setup_local_ca(root, sample[0], force=True)
+    # The oldest root stays on the record: Windows may still trust it, and only its bytes find it.
+    assert wt.replaced_roots(root) == [replaced[0], third]
+    assert asked == replaced  # Windows is not asked about the root that is being recorded.
+    # So the launcher and an uninstall still find it for its removal.
+    from amplifier_web import windows_trust
+    monkeypatch.setattr(windows_trust, "contains", lambda der, store="ROOT": der == replaced[0])
+    assert windows_trust.replaced(root, wt.keyless_identity(root)[0]) == [replaced[0]]
+
+
+def test_a_full_record_of_roots_that_windows_may_still_hold_stops_force_and_changes_nothing(
+        simulated, sample, monkeypatch):
+    from amplifier_web import windows_trust
+    root, pinned, state = simulated
+    wt.create_identity(root, sample[0])
+    small_record(monkeypatch, pinned)
+    for _ in range(2):
+        tls.setup_local_ca(root, sample[0], force=True)
+    recorded = wt.replaced_roots(root)
+    before = {p.name: p.read_bytes() for p in pinned.path.iterdir()}
+    publications, saves = len(state["publications"]), len(state["saves"])
+
+    def unreadable(der, **options):
+        raise OSError("the Windows store cannot be opened")
+    # Windows holds them; or Windows cannot be asked, and then nothing is dropped on a guess.
+    for contains in (lambda der, **options: True, unreadable):
+        monkeypatch.setattr(windows_trust, "contains", contains)
+        with pytest.raises(wt.ReplacedRecord) as stopped:
+            tls.setup_local_ca(root, sample[0], force=True)
+        text = str(stopped.value)
+        assert text.startswith("Amplifier made no new certificate. Nothing was changed.\n\n")
+        assert "Its record of earlier certificates is full." in text
+        assert "This command shows their thumbprints: amplifier-unified setup-tls status\n" in text
+        assert text.endswith("The steps:\n" + wt._REPLACED_GUIDE)
+        # No new certificate, no changed record, no saved configuration.
+        assert {p.name: p.read_bytes() for p in pinned.path.iterdir()} == before
+        assert len(state["publications"]) == publications and len(state["saves"]) == saves
+    # The person deleted the oldest one in Windows: the same command works again.
+    monkeypatch.setattr(windows_trust, "contains", lambda der, **options: der != recorded[0])
+    current = wt.keyless_identity(root)[0]
+    tls.setup_local_ca(root, sample[0], force=True)
+    assert wt.replaced_roots(root) == [recorded[1], current]
+
+
+def test_a_search_of_the_windows_store_that_fails_keeps_every_root_on_a_full_record(simulated, sample, monkeypatch):
+    """Windows returns nothing for "not found" and for a search that failed. Only the first drops a root."""
+    from amplifier_web import windows_trust
+    root, pinned, state = simulated
+    wt.create_identity(root, sample[0])
+    small_record(monkeypatch, pinned)
+    for _ in range(2):
+        tls.setup_local_ca(root, sample[0], force=True)
+    recorded = wt.replaced_roots(root)
+    before = {p.name: p.read_bytes() for p in pinned.path.iterdir()}
+    last, answer, searched = [0], {"error": 5}, []
+
+    @contextmanager
+    def opened(der, store, *, write):
+        assert store == "ROOT" and write is False  # The person's own store, read-only.
+        yield SimpleNamespace(CertFreeCertificateContext=lambda context: True), "store", der
+
+    def find(api, handle, context):
+        searched.append(context)
+        last[0] = answer["error"]
+        return None
+    monkeypatch.setattr(windows_trust, "_open", opened)
+    monkeypatch.setattr(windows_trust, "_find", find)
+    monkeypatch.setattr(windows_trust.C, "get_last_error", lambda: last[0], raising=False)
+    monkeypatch.setattr(windows_trust.C, "set_last_error", lambda value: last.__setitem__(0, value), raising=False)
+    # Access denied is no answer: no root leaves the record, force stops, and nothing is changed.
+    with pytest.raises(wt.ReplacedRecord, match="Its record of earlier certificates is full"):
+        tls.setup_local_ca(root, sample[0], force=True)
+    assert searched == recorded
+    assert {p.name: p.read_bytes() for p in pinned.path.iterdir()} == before
+    assert wt.replaced_roots(root) == recorded
+    # Windows' own answer "not found": those roots need no record.
+    answer["error"] = 0x80092004
+    current = wt.keyless_identity(root)[0]
+    tls.setup_local_ca(root, sample[0], force=True)
+    assert wt.replaced_roots(root) == [current]
+
+
+def test_status_reads_the_real_record_and_says_when_it_is_too_long_to_read(simulated, sample, monkeypatch, capsys):
+    from amplifier_web import cli, windows_trust
+    root, pinned, state = simulated
+    first = wt.create_identity(root, sample[0])
+    monkeypatch.setattr(windows_trust, "contains", lambda der, store="ROOT": True)
+    tls.setup_local_ca(root, sample[0], force=True)
+    current = wt.keyless_identity(root)[0]
+    cli._windows_roots(root, True)
+    assert capsys.readouterr().out == (
+        "Thumbprint in Windows (SHA-1): " + windows_trust.thumbprint(current) + "\n"
+        "Earlier certificates that Windows still holds: 1\n  " + windows_trust.thumbprint(first) + "\n")
+    (pinned.path / wt._REPLACED).write_bytes(b"x" * (wt._LIMIT + 1))
+    cli._windows_roots(root, True)
+    # Not "0": Amplifier did not read the record.
+    assert capsys.readouterr().out == (
+        "Thumbprint in Windows (SHA-1): " + windows_trust.thumbprint(current) + "\n"
+        "Earlier certificates that Windows still holds: Amplifier could not read them\n")
+    with pytest.raises(ValueError):
+        wt.replaced_roots(root, strict=True)
+    # The launcher and an uninstall get no candidate from such a record, and no error.
+    assert windows_trust.replaced(root, current) == [] and windows_trust.held_roots(root) == [current]
+
+
+def test_a_record_that_is_too_long_to_read_stops_force_and_is_never_replaced(simulated, sample):
+    root, pinned, state = simulated
+    wt.create_identity(root, sample[0])
+    path = pinned.path / wt._REPLACED
+    path.write_bytes(b"x" * (wt._LIMIT + 1))
+    before = {p.name: p.read_bytes() for p in pinned.path.iterdir()}
+    publications = len(state["publications"])
+    with pytest.raises(wt.ReplacedRecord) as stopped:
+        tls.setup_local_ca(root, sample[0], force=True)
+    text = str(stopped.value)
+    assert text.startswith("Amplifier made no new certificate. Nothing was changed.\n\n")
+    assert "Its record of earlier certificates is too long to read:\n" + str(path) + "\n" in text
+    assert "Move the file to another folder, then run setup-tls force again." in text
+    # No promise of steps that delete them: without the record nothing finds them.
+    assert ("Amplifier then no longer knows the earlier certificates, and Windows keeps the ones that it holds. "
+            "Nobody can use them: no signing key exists for them. More:\n" + wt._REPLACED_GUIDE) in text
+    assert text.endswith(wt._REPLACED_GUIDE)
+    assert {p.name: p.read_bytes() for p in pinned.path.iterdir()} == before
+    assert len(state["publications"]) == publications
+    assert wt.replaced_roots(root) == []  # The readers get no candidate from it, and no error.
+    path.unlink()  # The person moved the file away.
+    current = wt.keyless_identity(root)[0]
+    tls.setup_local_ca(root, sample[0], force=True)
+    assert wt.replaced_roots(root) == [current]
+
+
+def test_the_stop_texts_name_a_section_that_the_guide_has():
+    guide = (Path(__file__).resolve().parents[1] / "docs" / "DEPLOYMENT.md").read_text(encoding="utf-8")
+    assert "\n### Certificates that `setup-tls force` replaced\n" in guide
+    assert wt._REPLACED_GUIDE.endswith("/docs/DEPLOYMENT.md#certificates-that-setup-tls-force-replaced")
+
+
+def test_force_on_an_identity_with_a_signing_key_replaces_no_root_and_records_none(simulated, sample):
+    root, pinned, state = seed(simulated, sample)
+    tls.setup_local_ca(root, sample[0], force=True)  # Only the server certificate is made again.
+    assert (pinned.path / "ca.crt").read_bytes() == sample[1]["ca.crt"]
+    assert wt.replaced_roots(root) == [] and not (pinned.path / wt._REPLACED).exists()
 
 
 def test_keyless_identity_survives_a_renamed_computer(simulated, sample, monkeypatch):
@@ -755,19 +995,55 @@ def test_native_keyless_identity_has_no_signing_key_file_and_serves_tls(native_r
     # The launcher's candidate: the exact in-memory root for a new identity,
     # the owner-only store on a later start.
     pin = SimpleNamespace(fingerprint=hashlib.sha256(peer).digest())
+    assert wt.replaced_roots(native_root) == []  # Nothing is replaced yet: no record file, and no error.
     assert windows_trust.candidate(native_root, pin, der) is der
     assert windows_trust.candidate(native_root, pin) == der
     with pytest.raises(ValueError, match="changed"):
         windows_trust.candidate(native_root, SimpleNamespace(fingerprint=b"\0" * 32))
     # The owner's force replaces the whole identity on the real private store.
     tls.setup_local_ca(native_root, configured, force=True)
-    assert sorted(p.name for p in path.iterdir()) == [".tls.lock", "ca.crt", "leaf.crt", "leaf.key"]
+    assert sorted(p.name for p in path.iterdir()) == [
+        ".tls.lock", "ca.crt", "leaf.crt", "leaf.key", "replaced-roots.pem"]
     renewed, renewed_leaf = wt.keyless_identity(native_root)
     assert renewed != der and renewed_leaf != peer
+    # The real private store holds the record of the replaced root: the exact
+    # certificate that Windows can still trust, and no key.
+    assert wt.replaced_roots(native_root) == [der]
+    assert b"PRIVATE KEY" not in (path / "replaced-roots.pem").read_bytes()
     assert handshake(tls.ssl_context(native_root, configured), tls.exported_ca_bytes(native_root),
                      hostname="127.0.0.1", strict=True) == renewed_leaf
     with pytest.raises(ValueError, match="changed"):  # The earlier root is not the candidate now.
         windows_trust.candidate(native_root, SimpleNamespace(fingerprint=hashlib.sha256(renewed_leaf).digest()), der)
+    # A second force replaces the record file itself on the real private store.
+    tls.setup_local_ca(native_root, configured, force=True)
+    assert wt.replaced_roots(native_root) == [der, renewed]
+    assert wt.keyless_identity(native_root)[0] not in (der, renewed)
+
+
+def test_native_full_record_asks_the_real_store_read_only_and_a_stop_changes_nothing(native_root, monkeypatch):
+    config = deployment.load_server_config(native_root)
+    first = wt.create_identity(native_root, config)
+    configured = deployment.load_server_config(native_root)
+    path = tls.tls_dir(native_root)
+    one = len((path / "ca.crt").read_bytes())
+    monkeypatch.setattr(wt, "_LIMIT", 2 * one + one // 2)  # Room for two certificates, not for three.
+    tls.setup_local_ca(native_root, configured, force=True)
+    second = wt.keyless_identity(native_root)[0]
+    tls.setup_local_ca(native_root, configured, force=True)
+    assert wt.replaced_roots(native_root) == [first, second]
+    files = lambda: {p.name: p.read_bytes() for p in path.iterdir() if p.name != ".tls.lock"}
+    before = files()
+    # The record is full. While Windows may hold its roots, force stops, and the real private store is unchanged.
+    with monkeypatch.context() as scoped:
+        scoped.setattr(wt, "_held", lambda der: True)
+        with pytest.raises(wt.ReplacedRecord, match="Its record of earlier certificates is full"):
+            tls.setup_local_ca(native_root, configured, force=True)
+    assert files() == before
+    # Now the real, read-only question to this account's root store: it holds none of these test roots.
+    third = wt.keyless_identity(native_root)[0]
+    tls.setup_local_ca(native_root, configured, force=True)
+    assert wt.replaced_roots(native_root) == [third]
+    assert wt.keyless_identity(native_root)[0] != third
 
 
 def test_native_identity_with_a_signing_key_is_never_a_trust_candidate(native_root):

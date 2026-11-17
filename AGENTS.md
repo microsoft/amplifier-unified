@@ -222,6 +222,17 @@ step works with paths. Its paths are safe only because it inherits two open
 files that the uninstall program created through handles; do not give it a
 tree walk, a file that it creates or opens by a path, or a rule that rests on
 its current folder.
+`setup-tls force` on a key-less identity makes a new root, and Windows can
+still hold the earlier one for the person. The command records each root that
+it replaces in `config\tls\replaced-roots.pem`; only that command writes the
+file. The launcher (after the person's Yes to the new root) and uninstall ask
+Windows to delete a recorded root only when it has the fixed shape of the
+product's root and the store holds exactly that certificate
+(`windows_trust.replaced`). Never find a root to delete by its name, in code
+or in a guide: another installation's root has the same name. The record
+never loses a root that Windows may still hold; a full or unreadable record
+stops `force` with nothing changed. Windows asks the person once for each
+deletion, and no code answers it; say the number of questions before them.
 Task Scheduler expands percent-bearing executable/working-directory paths.
 Reject those paths rather than recording a literal identity that launches a
 different program. Task registration/state is not authenticated host health.
@@ -283,6 +294,17 @@ short project name in `session_files.project_slug`, add its rows to
 `tests/test_windows_path_budget.py`, and run its real writer in
 `tests/test_windows_long_paths_off.py`. A folder that a person chose keeps its
 name.
+A module can build a file path from the person's home folder and ignore
+`AMPLIFIER_HOME`. On an installation from the setup file that file is outside
+the installation folder, and uninstall leaves it (the Anthropic provider's
+`rate-limit-state.json`, seen in `%USERPROFILE%\.amplifier`).
+`provider_state_files` gives such a module paths in the shared Amplifier home
+when Core loads it, and in the probes that construct a provider for a model
+call. Never write such a path into a mount plan: a plan is saved, hashed,
+compared and exported, so a schedule or a queued change of an earlier version
+would then be refused. Add a module to `STATE_FILES` only after reading its
+source; `tests/test_provider_state_files.py` runs the real module and fails
+when a later version adds a file or changes a name.
 
 ## Keep agent context and coordination useful
 

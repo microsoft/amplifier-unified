@@ -1,6 +1,6 @@
 [project]
 name = "amplifier-unified"
-version = "0.106.1"
+version = "0.106.3"
 description = "A local voice-first Amplifier workspace with a shared user and agent interface"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -76,8 +76,6 @@ exclude = [
     "/components/kernels/build/**", "/components/kernels/dist/**",
     "/components/kernels/.venv/**", "/components/kernels/*.egg-info/**",
     "/.ci/**",
-    "/components/operations/build/**", "/components/operations/dist/**",
-    "/components/operations/.venv/**", "/components/operations/*.egg-info/**",
     "/components/publishing/build/**", "/components/publishing/dist/**",
     "/components/publishing/.venv/**", "/components/publishing/*.egg-info/**",
     "/components/worktrees/build/**", "/components/worktrees/dist/**",
