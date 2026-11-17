@@ -936,7 +936,10 @@ menu. Both start the stable launcher (`windows_consumer --uninstall`). A person
 must never be left with a running app and no entry to open, stop or remove it.
 So the order is:
 
-1. One question. No changes nothing.
+1. One question. For a folder without setup's completion record it has two
+   buttons, and No changes nothing. For a folder that setup completed it also
+   offers to delete the folder; see "Uninstall can delete the installation
+   folder" below. This order is the path that keeps the folder.
 2. If the running app reports that a chat is working, a second question names
    that. Yes stops the work through the app's normal stop. No keeps Amplifier
    installed. The launcher asks the app over the same pinned private HTTPS
@@ -1045,8 +1048,12 @@ that it could not add the entries, and starts the app.
 `.github/workflows/windows-start-again.yml` runs this path on a Windows
 runner with the product's own commands in setup's order: entries, first
 start, an AI account configured without a key, the product's uninstall
-function (called in the test's process, with its question answered Yes),
-entries again, second start. Task Scheduler, the host that the task starts and the
+function (called in the test's process, with its one question answered No:
+uninstall and keep the folder), entries again, second start. The test's
+folder holds setup's completion record, written where setup writes it, so the
+uninstall asks the question of an installed PC (see "Uninstall can delete the
+installation folder"); the test never answers Yes to it. Task Scheduler, the
+host that the task starts and the
 runtime preparation are real there. It requires that `runtime status` reports
 a prepared runtime with the account configured, and that the second start
 succeeds with a new host process on the same port. It also requires that a
@@ -1115,15 +1122,462 @@ replace it. A new installation gets this behavior from its setup file. An
 earlier installation gets it only when its launcher is refreshed. The count
 in step 2 comes from the running app, which in-app updates do replace.
 
-Not in this change: uninstall still keeps the program files and the person's
-data. A changed shortcut or Apps-list entry still makes
-uninstall refuse. The Apps list still shows the version that setup installed.
+Unless the person chooses to delete the folder (next section), uninstall
+keeps the program files and the person's data. A changed shortcut or Apps-list
+entry still makes uninstall refuse. The Apps list still shows the version that
+setup installed.
 The native check in the `windows-local-connection` job uses the real
 shortcuts, the real registry transaction, private files and NTFS sharing on a
 Windows runner. It holds the throwaway installation folder open without write
 sharing to get the same refusal, and it uses a stand-in for Task Scheduler,
 because a runner cannot register the sign-in task. A real stop with a live
 conversation worker remains clean-room acceptance.
+
+### Uninstall can delete the installation folder
+
+Deleting a person's folder cannot be undone. So uninstall deletes only what
+belongs to this installation, only after the person chose that twice, and in
+an order in which every interruption is safe. The order and its reasons are in
+`windows_uninstall.remove`; the link-safe walk and the step after exit are in
+`windows_removal`.
+
+**The questions.** The delete choice is offered only when setup's private
+completion record `unified-setup-complete.json` is in the folder.
+
+- Question 1 has three buttons; the default is No. No uninstalls and keeps the
+  whole folder, exactly as before. Cancel changes nothing. Yes leads to
+  question 2.
+- Question 2 has the warning icon; the default is No. It names the folder and
+  says that chats, settings, saved accounts and stored keys are deleted and
+  that this cannot be undone. No changes nothing: Amplifier stays installed.
+- Then the question about a working chat, as before.
+
+**The order.** Steps 1 to 4 delete nothing. A step that fails there writes
+only the private note of the failure, as an uninstall that keeps the folder
+does.
+
+1. One start or removal at a time for one installation: a named mutex whose
+   name comes from the folder path, in the name space that all sign-in
+   sessions of this PC share. A mutex has no count, and only the thread that
+   took it can release it. It is created as this person's own, with no
+   access for another account, and one that another account made is refused.
+   So another account that is signed in at the same time can make Amplifier
+   refuse to open or uninstall while its program runs, and can never hold or
+   release the lock. Opening Amplifier takes it around
+   its start step, and an uninstall that keeps the folder takes it too. When
+   it is taken, the second window says so and changes nothing. An uninstall
+   that keeps the folder looks for the journal again under the lock: if
+   another window began to delete the folder after the question, it refuses
+   and leaves the Windows entries for the second uninstall.
+2. The process leaves the folder (its current folder was the installation's
+   workspace) and stops saving compiled modules.
+3. Prove and pin the folder. Proof: the command runs from this folder's own
+   launcher (`installation`), setup's completion record is read through the
+   private-file boundary, and the folder is opened once and checked on that
+   handle (a real folder, exact spelling, this person's own, no access for
+   another account). The handle stays open and shares read and write but not
+   delete, so no program can rename or replace the folder meanwhile. A
+   top-level entry whose name differs from one of this installation's names
+   only by case (`App` for `app`) refuses here. Windows opens it under the
+   installation's name, but it is not the entry that the installation made.
+   Uninstall then deletes nothing, because it could not truthfully say that
+   the person's data is gone.
+4. Check and pin the Windows entries; stop the app; remove its sign-in task;
+   ask Windows once about the certificate. A failure up to here leaves the
+   installation whole, with the messages of an uninstall that keeps the folder.
+5. Write the journal `unified-uninstall.json` (`schema` 1, `choice`, a random
+   `token`) with the private atomic writer, then look whether it is in the
+   folder. Nothing is deleted before it exists.
+6. Delete setup's mark of unfinished work. Setup can leave that mark in a
+   finished installation; with the mark and without the completion record, a
+   later setup run would treat a folder without data as its own unfinished
+   work and empty it. Setup's completion record stays for as long as anything
+   is left in the folder: with it, setup installs and removes nothing there.
+   Only the step after exit deletes the record, immediately before the
+   journal. Uninstall never writes either file.
+7. Delete the person's data: `shared` (stored keys) first, then `app`,
+   `capture`, `ownership`, `import`, `workspace`, `export`. A closing program
+   gets up to 15 seconds. An emptied folder that Windows still keeps (the
+   launcher's start program has `workspace` as its current folder) is not
+   data. If anything of the data stays, uninstall stops here. The Windows
+   entries and the launcher are whole, so the person can uninstall again.
+8. Delete caches and program files, then remove the Apps-list entry and the
+   shortcuts, then delete what the launcher's own check needs (`git`, `uv`,
+   the receipts). So a second uninstall can still start for as long as an
+   entry for it exists.
+9. One message. It says only what was observed: the data is deleted; the last
+   program files go when the message is closed; anything that is not
+   Amplifier's is named and stays.
+10. The last step (`windows_uninstall.finish`), under the lock and with the
+    folder proven and pinned again: create the flat folder
+    `unified-uninstall-last` and two kept files, one in the installation
+    folder and one in the flat folder, through handles; start the step after
+    exit, which inherits both files open; delete `python` and `tools` through
+    handles, and move the few files that this running program has mapped
+    into the flat folder. Then the process ends.
+
+**Only exact names.** Uninstall deletes a top-level entry only when its name
+is, with its exact case, one that setup, the launcher or the launcher refresh
+creates (`windows_uninstall.sort`), or has one of a few exact forms (the
+release file, a launcher folder that the refresh kept, the private writer's
+temporary file, setup's notes about a failed helper). Names come from the
+listing of the pinned handle. Everything else is not Amplifier's: it stays,
+and then the folder stays. A test reads setup's source and fails when setup
+creates a top-level name that this list does not know. The journal is in no
+delete list.
+
+The source store has one of two names (see the path budget above). An
+earlier setup file named it `source-store`. From release 0.98.5 setup names
+it `s`.
+
+- `source-store` is a program folder by its name in every installation, as
+  before. The launcher uses a folder of that name as its store whenever one
+  exists.
+- `s` is a program folder only in an installation that setup made with that
+  name. Uninstall reads this from setup's own private completion record:
+  `version` there is the release of the setup file
+  (`windows_uninstall.short_store`). A release from 0.98.5 answers yes. Every
+  other answer is no: an earlier release, a record without a release in the
+  form of three numbers, a record that cannot be read.
+
+"Delete everything" removes the installation's store with the caches, and
+"keep" leaves it. In an installation that an earlier setup file made, a
+folder `s` is not Amplifier's. It stays with everything in it, the message
+names it, and then the folder stays. That holds also when something removed
+that installation's `source-store`, and for a second uninstall after an
+interruption: only setup writes its completion record, an update and the
+launcher refresh do not change it (read in their source), and uninstall
+keeps it until the step after exit.
+
+A removal decides this once, under the lock and with the folder pinned,
+before it deletes anything, and its last step gets that answer handed on. So
+a record that changes during a removal does not change what that removal
+deletes.
+
+Another spelling of an own name refuses, as for `App`: `Source-Store` in
+every installation, and `S` in an installation whose store is `s`. In an
+earlier installation `S` is only one more entry that is not Amplifier's.
+
+What this rule does not cover, stated:
+
+- A program of this account can rewrite setup's completion record (a private
+  file of this person) so that it names a release from 0.98.5. After the two
+  Yes answers, a folder `s` in that earlier installation then goes with the
+  program files. Such a program can delete that folder itself. This is the
+  known limit G1 below.
+- A `source-store` folder that something added to a new installation is
+  deleted by its name, as before this change. The launcher uses such a
+  folder as the store from its next start.
+- A setup file that was built from this source with a release number below
+  0.98.5 makes a folder `s` that uninstall treats as not Amplifier's: it
+  stays, and the folder stays. No public setup file is like that: the
+  release names the setup file's release from the app release that it
+  installs (read in `scripts/windows_consumer_release.py` and setup's
+  check of its plan), and release 0.98.5 is the first whose setup source
+  names the store `s` (read at the tags `v0.98.4` and `v0.98.5`).
+
+**While the journal exists** the folder can be partly deleted. Open, Stop and
+Status refuse with one message that tells the person to select Uninstall
+Amplifier. Only these launcher commands look at the journal; a program file
+that a person starts by hand from the folder does not. A second uninstall
+reads the journal through the private-file boundary in place of setup's
+record. The journal is not proof of the person's choice (a program of this
+account can write it), so the person chooses again, twice. Then the whole
+order runs again, including the stop, with a new token. A journal that is damaged, or
+that records another choice, proves nothing: uninstall then offers only to
+keep the folder.
+
+**No link is followed.** In the process, every entry is opened relative to
+its parent's handle as the entry itself, judged on its own handle and deleted
+through it. A link of any kind is removed as a link. No attribute is changed.
+While the walk holds an entry, the entry does not share delete, so no program
+can move it out of the folder before it is deleted. An entry that a program
+renames only by case after the check counts as still there, from the same
+listing that looks for its exact name: uninstall stops, never deletes setup's
+completion record past it, and never says that the data is deleted. Until the
+entry has its own name again, a second uninstall refuses at its first check;
+data that was deleted before the renamed entry stays deleted.
+
+**The step after exit.** A running program cannot delete the files that it
+runs from (its `.exe`, a loaded `.dll` or `.pyd`). It can move them. So the
+uninstall program deletes `python` and `tools` itself, through handles, and
+moves those few files, through their handles, into one flat folder that it
+created and holds. Only they are left for a step after exit: one static
+Windows PowerShell 5.1 script, found in the system folder, with the folder
+path and the token as JSON on standard input, outside the launcher's Job,
+with a temporary folder outside the installation.
+
+The step works with paths, so it deletes a file only while its path cannot
+lead anywhere else. It walks no tree. One fact carries this: a folder cannot
+be replaced while it holds a file that a program keeps open without any
+sharing. Nobody can delete or move that file, so the folder is never empty;
+Windows turns only an empty folder into a link; and Windows refuses to rename
+a folder with an open file below it. The same holds for every folder above.
+
+- The kept files. The uninstall program creates two files named
+  `<token>.hold` through handles, relative to the folders that it holds: one
+  in the installation folder, one in the flat folder. The create refuses an
+  existing entry of that name, also a link, so nothing is created elsewhere.
+  Nobody else can open these files, and Windows deletes each when its last
+  handle closes.
+- Hand-over. The step inherits both open handles when it is created, so
+  there is no moment in which nobody holds them. It takes them over, checks
+  that both files are in their folders, and only then answers. The uninstall
+  program goes on, and lets its own handles go, only after that answer.
+- While both files are open, the step deletes the parked files directly in
+  the flat folder: plain files whose name is a number. It never uses
+  `-Force`: a read-only, hidden or system file stays, and no attribute of
+  any file is changed. Anything else there stays. It removes the named
+  folders of the installation that are empty by then.
+- Still while both are open, and only when a fresh listing shows nothing but
+  the flat folder, the kept files and the two records: the step deletes the
+  journal, and then, if nothing appeared meanwhile, setup's completion
+  record. Both records are checked before anything of the end happens; a
+  record that is a link, a folder or a read-only file is refused. A plain
+  delete of a path removes a link as a link.
+- The step closes the flat folder's file and removes the flat folder while
+  the installation folder's file is still open. Then, if everything was
+  deleted and the folder above holds something else, it closes that last
+  file and removes the installation folder. Every folder goes by
+  RemoveDirectory only: an empty folder goes, a link goes as a link, a
+  folder with entries refuses.
+- The step creates no file and opens no existing file. It reads the whole
+  journal record before every pass and every named folder, and stops when
+  the record is missing or different. An entry that was created after the
+  step started stays.
+
+The step does not delete other files in the installation folder. A file of
+the installation that is still there at the end (a program uses it) stays,
+and then the folder stays with both records.
+
+Four earlier forms of this step were given up after review. The first walked
+`python` and `tools` by path: a program of the same account could swap a
+folder for a link between the look and the delete. The second deleted in a
+flat folder that could be empty, and the third relied on the step's current
+folder: Windows lets a program turn an empty folder into a link in place,
+without a rename, also when it is another program's current folder. The
+fourth let the step create its kept file by a path: Windows follows a
+dangling file link of that name and creates the file at the link's target.
+
+**Known limits.** Two reviewers examined this design in eight passes (pull
+request 2110). These limits stayed. They are stated, not solved. The numbers
+are the review's; a number that is not in the list was closed before the last
+pass. G1 is from the later review of the store rule, and the entry without a
+number is from the last review. Except for L3, L4, L14 and L15, each needs a
+program that runs as the same person. For G1 that program can act at any time
+before the uninstall. For the others it must act in the moment of the
+uninstall.
+
+One reviewer rated L12, L13 and G1 as blocking, the other as not blocking.
+The owner accepted L12 and L13 on November 15, 2026. On November 17, 2026,
+with G1 stated to him, he ordered the merge. Both reviewers rated every other
+limit as not blocking.
+
+- **L12 (accepted).** A program can put files into the installation folder
+  between the step's last listing and its deletion of setup's completion
+  record (one command), and a file with the name of setup's mark of
+  unfinished work among them. The folder then stays without setup's record,
+  and a later setup run empties it, including that program's files. What can
+  be lost is a file that this program put there in that instant: the
+  person's data is already deleted by then (the person chose that), and the
+  listing showed nothing else. No order of commands closes this while the
+  folder is removed: Windows cannot remove a folder together with its last
+  file in one step. Such a program can delete those files, and setup's
+  record, without us.
+- **L13 (accepted).** The last command removes the installation folder by its
+  path after the last kept file is closed. It can remove only an empty
+  folder. It runs only when the folder above holds something else, so that
+  folder cannot be emptied and turned into a link unless a program removes
+  those other entries in that instant. If a program renames the folder above
+  in that instant and puts a link in its place, the command removes an empty
+  folder named `Amplifier` at the link's target, if one exists. What can be
+  lost is one empty folder: no file, and no folder with entries. Windows
+  refuses to rename a folder while a program has a file open below it. The
+  product installs only into `%LOCALAPPDATA%\Amplifier`, and that folder
+  always holds files that are in use (general knowledge about Windows; not
+  measured in this work). To close this, uninstall would have to
+  keep a file in the folder above, which is outside the installation folder;
+  uninstall changes nothing there.
+- **G1 (the owner ordered the merge with this limit stated).** Uninstall
+  takes the folder `s` for program files when
+  setup's completion record names a release from 0.98.5 (see "Only exact
+  names"). That record is a private file of this person, so a program that
+  runs as this person can rewrite it, at any time before the uninstall. In
+  an installation that an earlier setup file made, a folder `s` that is not
+  Amplifier's is then deleted with the program files after the two Yes
+  answers. What can be lost is that one folder with its entries, inside the
+  installation folder. Such a program can delete the folder itself. No code
+  closes this while the store folder of a new installation is still deleted:
+  every record that could prove who made `s` is a file of this person. The
+  design already rests on the same record: without it there is no delete
+  choice at all.
+- **L2.** The step tells a parked file from a later entry by its creation
+  time. A plain file with a number as its name and an older creation time,
+  which a program moves into the flat folder while the step runs, is deleted
+  with the parked files. That folder is inside the folder that the person
+  chose to delete.
+- **L3.** After a power loss in the last seconds, or when the step after exit
+  cannot run, program files and both records stay (see Leftovers below). They
+  hold none of the person's data, Amplifier cannot start from that folder,
+  and setup installs and deletes nothing in it. But setup's messages there
+  say that Amplifier is already installed, and that the person's chats and
+  settings are in the folder or are kept. That is not true for this
+  leftover. Nothing in the product removes it: the person deletes the folder
+  by hand.
+- **L4.** A journal that is damaged, or that records another choice, proves
+  nothing. Uninstall then deletes nothing and offers only to keep the
+  folder. Afterwards Amplifier does not open from that folder.
+- **L5.** After a program renamed an entry only by case during the removal,
+  uninstall stops with the journal in place. A second uninstall refuses at
+  its first check until the entry has its own name again.
+- **L9.** A program that can control another program of the same person
+  (close its handles, change its memory, end it) can end every hold. Such a
+  program can do anything that this person can do.
+- **L10.** The step after exit reads the journal by its path, after it looked
+  at the entry. A program that swaps a link in between makes the step read
+  another file. The step compares that text with its token and stops when it
+  differs. Nothing is written or deleted through that path.
+- **L14.** A step after exit whose answer came too late keeps the two files
+  open and waits. The uninstall program has then moved nothing into the flat
+  folder and has not deleted `python` and `tools`. So the step deletes no
+  file; it can remove a named folder of the installation that is already
+  empty. It stops at its deadline.
+- **L15.** The two kept files' handles can be inherited only in the moment in
+  which the step after exit is created, and the step is created with an
+  exact list of handles. A process that another thread of the uninstall
+  program started in that same moment, with handle inheritance and without
+  such a list, would also get the two handles. The uninstall program starts
+  no other process then.
+- **The journal is not held open.** The uninstall program writes the journal
+  and then looks once whether it is in the folder; without it the removal
+  stops with nothing deleted. (The private-file writer reports a publication
+  as done also when the file lost its name directly afterwards, since pull
+  request 2247; before, the writer itself stopped the removal then.) After
+  that the uninstall program holds no handle on the journal and does not look
+  for it again while it deletes. A program of this account that deletes the
+  journal during a removal takes away what the journal does: if that removal
+  then stops before its end, the launcher's commands do not refuse, and
+  Amplifier can open on a folder that is partly deleted. The step after exit
+  reads the journal's token before every pass and stops without it. Such a
+  program can delete the person's data itself.
+
+Under PowerShell constrained language mode the step stops before it answers
+and changes nothing; the parked files and both records stay.
+
+**Rule for setup.** An installation must never be made in a folder that holds
+`unified-uninstall.json`. Today's setup keeps this rule without a change:
+while anything is left in the folder, setup's completion record is there too,
+and with that record setup installs and removes nothing. The step after exit
+deletes the journal and then the record, when nothing else is left. A second
+setup run can add the Start-menu and Apps-list entries again and start the
+launcher (see Leftovers). The launcher does not open Amplifier while the
+journal exists.
+
+**Leftovers.** If the step after exit cannot run, the parked program files
+and both records stay; they hold none of the person's data, and the message
+says that the folder can be deleted. The same leftover stays when the PC
+loses power in the last seconds, after the Windows entries are gone and
+before the step after exit has run; then no message was shown and no entry
+exists to uninstall again. If something that is not Amplifier's is in the
+folder, that entry and both records stay.
+
+A later setup run finds its completion record in such a folder. It installs
+nothing and deletes nothing. When the launcher's start program is gone, setup
+says that a program file is missing. When it is still there (a removal that
+stopped before its last step), setup asks, and on Yes it lets the
+installation's own program add the Start-menu and Apps-list entries again,
+and then it starts the launcher. That program adds the entries only when the
+installation's own records are whole and no entry exists, and it does not
+look for the journal. The launcher then does not open Amplifier:
+
+- While the installation's own records are whole, the launcher finds the
+  journal, and its message tells the person to select Uninstall Amplifier.
+  With the entries back, the person can do that, and the second uninstall
+  finishes the removal.
+- When those records are already deleted (a removal that stopped in its last
+  seconds), no entry is added, and the launcher's own check of the
+  installation fails before it looks for the journal. Its message says that
+  Amplifier could not start and names the setup file again. Like setup's
+  message, that is not true for this leftover (L3).
+
+This is read from the source of both programs; the combination was not run.
+In none of these states can Amplifier start, and in none of them does setup
+delete anything.
+
+The program that adds the entries again does not take the installation's
+lock. So a second setup run that the person answers with Yes in the seconds
+between an uninstall's removal of its entries and its deletion of the
+launcher's records can leave Start-menu and Apps-list entries for an
+installation that is then deleted. No file of the person is involved. Not
+changed here.
+
+**A second setup run after an uninstall.** What the delete choice changes:
+
+- After No (keep the folder): nothing. The folder is whole, with setup's
+  completion record. A second setup run asks, and on Yes it adds the entries
+  again and starts Amplifier with its chats and settings, as described under
+  "Uninstall stops the app before it removes an entry".
+- After Yes and Yes, when the folder is gone: setup finds no folder and makes
+  a new installation. Nothing of the earlier installation is left to bring
+  back.
+- After Yes and Yes, when the folder is still there (it held something that
+  is not Amplifier's, or the step after exit could not run): the leftover
+  above. Setup installs nothing there and deletes nothing, and Amplifier does
+  not start from that folder. A new installation is possible only after the
+  person deleted that folder, or moved what is theirs out of it and deleted
+  it.
+
+The first is shown on a Windows runner (`windows-start-again.yml`, without
+the setup file). The second and the third are clean-room acceptance.
+
+**Which installations get it.** This is launcher code: a new installation from
+a setup file of a release that has it, and an earlier installation after a
+launcher refresh.
+
+**Proven on a Windows runner** (`windows-local-connection` job; a skipped case
+fails that lane): the whole order on a throwaway installation folder with its
+real shortcuts and Apps-list entry, each command as a new process behind a
+real start program with the workspace as its current folder. The running
+start program and a loaded DLL cannot be deleted and are moved into the flat
+folder (same bytes there); when the process ends, the folder holds only the
+flat folder, the journal and the emptied workspace; the step after exit
+removes them and the folder is gone; an outside folder behind junctions is
+unchanged. One case deletes the Python that it runs from (interpreter,
+standard library and the installed package inside the folder) and still ends
+cleanly. While the step waits, a rename of the installation folder, of the
+folder above it and of the flat folder is refused, and Windows refuses to
+turn the flat folder or the installation folder into a link in place (error
+145); the same call
+works on an empty folder that nobody holds. A folder with an open file in it,
+and the folder above it, can be neither turned into a link nor renamed. The
+delete choice runs once on a folder whose setup record names release 0.98.5
+and whose store is `s`, and once on a folder whose record names 0.98.4 and
+whose store is `source-store` (the test writes the record and the store; no
+setup file runs there). The keep choice leaves either store with every other
+entry. The second kind of folder, when it also holds a folder `s`, keeps that
+folder with its file, and then the installation folder stays. A
+link under the kept file's name is refused and nothing is created at its
+target (the same create by a path does create the target). After the
+uninstall program let go, the two kept files stay with the process that
+inherited them: no other program can delete, move or read them, and both are
+gone when that process has ended. With nothing else in the folder above, the
+emptied installation folder stays. A plain delete of a path that has become a
+link removes the link or nothing, never anything behind it. In the flat folder a junction, a
+folder, a file link, a file in use, a read-only file, a hard link to an
+outside read-only file and a later entry all stay. A data file in use stops the removal with the entries and the
+journal in place; Open, Status and Stop refuse; a second window refuses while
+the lock is held; a second uninstall finishes; a file that is not Amplifier's
+stays. Stand-ins: Task Scheduler, the check of an installed release, and the
+dialogs.
+
+**Not proven:** the dialogs on screen; a real stop with live conversation
+workers followed by the deletion; uv's own start program (the check uses a
+venv start program); PowerShell constrained language mode; the lock between
+two sign-in sessions of one person; a second setup run on a folder whose
+removal did not finish; a complete
+uninstall of an installed build. These remain clean-room acceptance. Not
+built: "keep my chats, remove the program". The launcher refresh command does
+not look at the journal.
 
 ## Process-local Proactor cleanup backport
 
@@ -2548,7 +3002,9 @@ commands. The README offers the consumer setup file
 for Windows 11 as an unsigned preview and states its limits: one stable
 download link, the browser's hold on the unsigned file, Windows 11 on an Intel
 or AMD processor, one Windows account, the installation folder, and an
-uninstall that leaves that folder. `tests/test_installation_guidance.py` keeps
+uninstall that asks whether to keep or to delete that folder (the two
+questions, the three buttons of the first one, and the earlier question,
+which always keeps the folder). `tests/test_installation_guidance.py` keeps
 that section and the product's own names in agreement. Qualified native Windows
 support is not claimed. Earlier results below
 are historical evidence for their exact candidates, not current release acceptance.
