@@ -2805,13 +2805,16 @@ def test_windows_plan_native_check_passes_only_with_one_acceptance_and_two_refus
     with pytest.raises(RuntimeError, match='Change OTHER'):
         fixture.cases(tmp_path / 'same-commit', path, records)
     # No sentence covers an installation whose record is at the other commit already. The check then fails:
-    # the control is refused, because that record differs from the plan.
+    # the tool refuses the control, and its output names that record's commit.
     path.write_text(json.dumps({'schema': 1, 'graph': [APP_ROW, *rows]}))
-    result = fixture.cases(tmp_path / 'record-at-other', path, [install_record(row) for row in component_rows(fixture.OTHER)])
+    at_other = [install_record(row) for row in changed(rows, 'amplifier-foundation', revision=fixture.OTHER)]
+    result = fixture.cases(tmp_path / 'record-at-other', path, at_other)
     assert result['ok'] is False and result['cases'][0]['passed'] is False and result['cases'][0]['returncode'] != 0
+    assert (f'The Windows setup file has amplifier-foundation at {QUALIFIED}. {TESTS_HAVE} at {fixture.OTHER}.'
+            in result['cases'][0]['output'])
 
 
-def test_windows_plan_native_check_keeps_no_download_with_another_digest_and_does_not_start_without_the_ci_setting(tmp_path, monkeypatch):
+def test_windows_plan_native_check_keeps_no_download_with_another_digest_and_refuses_to_prepare_without_the_ci_setting(tmp_path, monkeypatch):
     fixture = native_plan_check()
     requested = []
 
@@ -2834,7 +2837,7 @@ def test_windows_plan_native_check_keeps_no_download_with_another_digest_and_doe
     assert list(tmp_path.iterdir()) == []
     # Without the setting GITHUB_ACTIONS=true, the preparation ends with a sentence before any download.
     # That guards against accidental use. It does not prove that the machine is a runner of CI.
-    refusal = '^GITHUB_ACTIONS is not "true"\\. This check installs a wheel and runs a compiler; it starts only with that setting\\.$'
+    refusal = '^GITHUB_ACTIONS is not "true"\\. This check installs a wheel and runs a compiler; it does neither without that setting\\.$'
     monkeypatch.delenv('GITHUB_ACTIONS', raising=False)
     with pytest.raises(RuntimeError, match=refusal):
         fixture.prepare(tmp_path)
@@ -2850,14 +2853,14 @@ def test_windows_plan_native_check_requires_the_plan_of_its_release_with_a_compo
     records = [install_record(row) for row in rows]
     version, revision = fixture.RELEASE['version'], fixture.RELEASE['revision']
     release = {'schema': 1, 'version': version, 'source': revision}
-    ours = f" This check's release is {version} at {revision}."
+    ours = f" This check's release has version {version} and revision {revision}."
     for name, plan, error in (
             ('control', {**release, 'graph': [APP_ROW, *rows]}, None),
             ('version', {**release, 'version': '0.0.1', 'graph': [APP_ROW, *rows]},
-             f'The plan is for version 0.0.1 at {revision}.' + ours),
+             f'The plan has version 0.0.1 and source {revision}.' + ours),
             ('source', {**release, 'source': 'b' * 40, 'graph': [APP_ROW, *rows]},
-             f"The plan is for version {version} at {'b' * 40}." + ours),
-            ('neither', {'schema': 1, 'graph': [APP_ROW, *rows]}, 'The plan is for version None at None.' + ours),
+             f"The plan has version {version} and source {'b' * 40}." + ours),
+            ('neither', {'schema': 1, 'graph': [APP_ROW, *rows]}, 'The plan has version None and source None.' + ours),
             ('flat', {**release, 'graph': [APP_ROW, *rows[:2]]},
              'The plan has no component in a subdirectory of its repository.')):
         temporary = tmp_path / name
@@ -2869,7 +2872,8 @@ def test_windows_plan_native_check_requires_the_plan_of_its_release_with_a_compo
         copy = temporary / 'consumer-plan-evidence/windows-consumer-plan.json'
         result_file = temporary / 'consumer-plan-evidence/result.json'
         if error is None:
-            # The control: with the plan of the check's release, the whole check passes and keeps the plan.
+            # The control: with a plan that has the release's version and source, main() returns 0 and keeps
+            # the plan. The preparation is replaced here; the three runs of the tool are real.
             assert fixture.main() == 0
             result = json.loads(result_file.read_text())
             assert result['ok'] is True and result['stage'] == 'complete' and 'error' not in result

@@ -216,7 +216,7 @@ def prepare(work):
     # of CI. The producer requires Windows.
     if os.environ.get("GITHUB_ACTIONS") != "true":
         raise RuntimeError('GITHUB_ACTIONS is not "true". This check installs a wheel and runs a compiler; '
-                           "it starts only with that setting.")
+                           "it does neither without that setting.")
     release = wheel(work)
     uv = shutil.which("uv")
     if not uv:
@@ -242,8 +242,9 @@ def main():
         raw = plan_path.read_bytes()
         plan = json.loads(raw)
         if (plan.get("version"), plan.get("source")) != (RELEASE["version"], RELEASE["revision"]):
-            raise RuntimeError(f"The plan is for version {plan.get('version')} at {plan.get('source')}. "
-                               f"This check's release is {RELEASE['version']} at {RELEASE['revision']}.")
+            raise RuntimeError(f"The plan has version {plan.get('version')} and source {plan.get('source')}. "
+                               f"This check's release has version {RELEASE['version']} and revision "
+                               f"{RELEASE['revision']}.")
         # The control must cover a component that is in a subdirectory of its repository.
         if not any(row.get("subdirectory") for row in plan["graph"]):
             raise RuntimeError("The plan has no component in a subdirectory of its repository.")
