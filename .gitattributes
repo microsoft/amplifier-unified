@@ -140,13 +140,8 @@ package-lock.json source-context=locks
 /scripts/files1318_integrated_checks.py source-context=evidence linguist-generated=true
 /scripts/scale_runtime_browser.mjs source-context=evidence linguist-generated=true
 /scripts/scale_runtime_workspace_browser.mjs source-context=evidence linguist-generated=true
-/components/operations/*.py source-context=source
-/components/operations/tests/** source-context=tests
-/components/operations/MANIFEST.in source-context=configuration
-/components/operations/.gitignore source-context=configuration
-/components/operations/LICENSE source-context=documentation
 
-# Preserve the installed/isolated worker path; authoring lives under components.
+# Preserve installed/isolated worker paths; selected snapshots are not authoring owners.
 /components/operations.source.json source-context=configuration
 /amplifier_operations/** source-context=generated linguist-vendored=true linguist-generated=true -text
 /components/kernels/*.py source-context=source

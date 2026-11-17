@@ -73,7 +73,9 @@ Workspace metadata is authored in public
 Its generated selection uses `workspace-metadata-delivery` and
 `workspace-metadata.source.json`; follow the
 [selection guide](../components/README.md#select-a-workspace-metadata-artifact).
-Operations is authored in `components/operations`; its generated selection stays
+Operations is authored in public
+[amplifier-platform-operations](https://github.com/bkrabach/amplifier-platform-operations);
+its generated selection stays
 at top-level `amplifier_operations` to preserve editable and isolated-worker import
 paths. `components/operations.source.json` records its published artifact.
 Use `--all --under amplifier_operations` to inspect that selected runtime.
