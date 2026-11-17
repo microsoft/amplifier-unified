@@ -167,8 +167,15 @@ class SurfaceDelivery:
             metadata['contextAnchorToolCalls'] = sorted({
                 retained_calls[k] for k in retained if k in self.images
                 and self.images[k] is pixels[0] and retained_calls.get(k)})
+        from .host.media import record_request_only
+        observed_epoch = self.epoch
+        focused_until = self.focus['until'] if pixels and self.focus else None
+        def current_image():
+            return (self.epoch_available and self.epoch == observed_epoch
+                    and (focused_until is None or time.monotonic() < focused_until))
         result = request.model_copy(update={'messages': [*request.messages,
-            Message(role='user', content=blocks, metadata=metadata)]})
+            record_request_only(Message(role='user', content=blocks, metadata=metadata),
+                                validate=current_image)]})
         if commit:
             self.commit(result)
         return result
@@ -191,12 +198,34 @@ class SurfaceDelivery:
             self.focus['remaining'] -= 1
 
 
+class _ClosingMediaStream:
+    """Also release a counted candidate when a never-started stream is closed."""
+    def __init__(self, iterator, release):
+        self.iterator, self.release = iterator, release
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        return await anext(self.iterator)
+
+    async def aclose(self):
+        try:
+            await self.iterator.aclose()
+        finally:
+            self.release()
+
+
 class SurfaceProvider:
     """Same augmentation for budget checks, complete and streaming protocols."""
     def __init__(self, original, delivery, *, coordinator=None):
         self.original, self.delivery = original, delivery
         self.coordinator = coordinator
         self.prepared = []
+        self._media = {}
+        cleanup = getattr(coordinator, 'register_cleanup', None)
+        if callable(cleanup):
+            cleanup(self.close_media)
         self._capture_tickets = []
         self.refused = []
         self.refusal_overflow = False
@@ -208,9 +237,47 @@ class SurfaceProvider:
             self._prepare = time_preparation(coordinator, 'surface.prepare', self._prepare)
             self.refit_request = time_preparation(coordinator, 'provider.refit', self.refit_request)
 
+    def release_media_request(self, canonical, *, request_options=None):
+        row = self._media.get(id(canonical))
+        if row is None or row[0] is not canonical:
+            return False
+        from .host.media import effective_options
+        if row[1].options != effective_options(canonical, request_options):
+            return False
+        self._release_media(canonical)
+        self.prepared = [entry for entry in self.prepared if entry[0] is not canonical]
+        return True
+
+    def has_prepared_media_request(self, canonical):
+        row = self._media.get(id(canonical))
+        return row is not None and row[0] is canonical
+
+    def _release_media(self, canonical):
+        row = self._media.pop(id(canonical), None)
+        if row is not None and row[0] is canonical:
+            row[1].release()
+            self.prepared = [entry for entry in self.prepared if entry[0] is not canonical]
+
+    async def close_media(self):
+        for canonical, _ in list(self._media.values()):
+            self._release_media(canonical)
+
     async def _prepare(self, request, commit=False, *, explicit_budget=False, refit_binding=None,
-                       projection_out=None):
+                       projection_out=None, request_options=None):
         entry = next((row for row in self.prepared if row[0] is request), None)
+        media_row = self._media.get(id(request))
+        if media_row is not None:
+            from .host.media import effective_options
+            try:
+                if getattr(media_row[1], 'provider', self.original) is not self.original:
+                    raise ValueError('Fitted media execution provider changed')
+                if media_row[1].options != effective_options(request, request_options):
+                    raise ValueError('Fitted image request options changed; prepare a new request')
+                media_row[1].validate()
+            except BaseException:
+                self._release_media(request)
+                self.prepared = [row for row in self.prepared if row[0] is not request]
+                raise
         refused = any(row[0] is request for row in self.refused) or (entry is None and self.refusal_overflow)
         if refused and not explicit_budget:
             raise ValueError("The request was refused before transport; a new explicit budget/refit is required.")
@@ -227,16 +294,43 @@ class SurfaceProvider:
                             raise ValueError('Computer projection owner changed')
                         source_validate()
             refit = getattr(self.delivery, 'prepare_refit', None)
-            cached = (await refit(prepared_input, self.original, binding=refit_binding)
-                      if refit_binding is not None and callable(refit)
-                      else await self.delivery.prepare(prepared_input, self.original))
-            if refused and hasattr(self.delivery, "revalidate"):
-                # Stabilize revoked visual/context warnings BEFORE the new
-                # measurement. Never replace fitted bytes during transport.
-                cached = await self.delivery.revalidate(cached)
+            from .host.media import request_only_scope, RequestOnlyRegistry
+            registry = self.coordinator.get_capability('web.media.request_only') if self.coordinator is not None else None
+            registry = registry if type(registry) is RequestOnlyRegistry else None
+            with request_only_scope() as issued:
+                cached = (await refit(prepared_input, self.original, binding=refit_binding)
+                          if refit_binding is not None and callable(refit)
+                          else await self.delivery.prepare(prepared_input, self.original))
+                if refused and hasattr(self.delivery, "revalidate"):
+                    # Stabilize revoked visual/context warnings BEFORE the new
+                    # measurement. Never replace fitted bytes during transport.
+                    cached = await self.delivery.revalidate(cached)
+                if registry is not None:
+                    registry.bind(cached, issued)
             boundary = hasattr(self.delivery, "finalize_work")
+            binding = self.delivery.work_request(cached) if boundary else None
+            from .host.media import prepare_media
+            try:
+                media = await prepare_media(self.coordinator, self.original, cached, request_options=request_options)
+            except BaseException:
+                if registry is not None:
+                    registry.release(cached)
+                raise
+            if media is not None:
+                media.bind_canonical(request)
+                cached = media.request
+                self._media[id(request)] = (request, media)
+                previous_validate = projection_validate
+                def projection_validate():
+                    if getattr(media, 'provider', self.original) is not self.original:
+                        raise ValueError('Fitted media execution provider changed')
+                    if previous_validate is not None:
+                        previous_validate()
+                    media.validate()
+            elif registry is not None:
+                registry.release(cached)
             entry = (request, cached, cached.model_dump_json() if boundary or projection_validate is not None else None,
-                     self.delivery.work_request(cached) if boundary else None,
+                     binding,
                      projection_validate)
             if refit_binding is not None:
                 from .request_refit import RequestFitChanged
@@ -247,13 +341,17 @@ class SurfaceProvider:
                 if (not same_scope or (not same_required
                         and not self.delivery.current_full(refit_binding['executionScope']))):
                     self.delivery.discard_work(current)
+                    self._release_media(request)
                     unavailable = not current or current.get('required', {}).get('status') != 'available'
                     raise RequestFitChanged('authority_unavailable' if unavailable else 'authority_changed')
                 if not same_required:
                     # Retain the Full reliance across awaited budget work, even
                     # when the new observation itself is unavailable.
                     current['assuranceUnavailable'] = True
+            evicted = (self.prepared + [entry])[:-4]
             self.prepared = (self.prepared + [entry])[-4:]
+            for old in evicted:
+                self._release_media(old[0])
             self.refused = [row for row in self.refused if row[0] is not request]
         _, cached, fitted, binding = entry[:4]
         if projection_out is not None:
@@ -271,6 +369,7 @@ class SurfaceProvider:
                 if isinstance(error, RequestFitChanged):
                     error.local_refusal = True
                 self.prepared = [row for row in self.prepared if row[0] is not request]
+                self._release_media(request)
                 # Revalidation can remove unavailable optional observations.
                 # Refit that reduced request rather than reintroducing the
                 # same pixels/memory and racing their checks a second time.
@@ -357,7 +456,7 @@ class SurfaceProvider:
                     owner=self.original)
             return recover
         if name == 'stream' and callable(method):
-            async def stream(request, **kwargs):
+            async def streamed(request, **kwargs):
                 original_request = request
                 self._overflow_feedback.forget(request)
                 from . import provider_capture as capture
@@ -365,14 +464,17 @@ class SurfaceProvider:
                 trace = capture.observe(capture.describe_take, self, request, ticket)
                 projection = []
                 try:
-                    request = await self._prepare(request, commit=True, projection_out=projection)
+                    request = await self._prepare(request, commit=True, projection_out=projection,
+                                                  request_options=kwargs)
                 except BaseException:
+                    self._release_media(original_request)
                     if ticket is not None:ticket.close()
                     raise
                 from .coordination_delivery import WORK_ATTEMPT
                 try:
                     attempt = self.delivery.begin_work(request, streaming=True) if hasattr(self.delivery, 'begin_work') else None
                 except BaseException:
+                    self._release_media(original_request)
                     if ticket is not None:ticket.close()
                     raise
                 async def within_attempt(operation):
@@ -417,6 +519,10 @@ class SurfaceProvider:
                         if attempt:
                             self.delivery.close_work_stream(attempt)
                         if ticket is not None:ticket.close()
+                        self._release_media(original_request)
+            def stream(request, **kwargs):
+                return _ClosingMediaStream(streamed(request, **kwargs),
+                                           lambda: self._release_media(request))
             return stream
         if name == 'request_budget' and callable(method):
             async def budget(request, *, request_options=None, **kwargs):
@@ -424,7 +530,8 @@ class SurfaceProvider:
                 from . import provider_capture as capture
                 capture.observe(capture.invalidate, self, request)
                 original_request = request
-                request = await self._prepare(request, explicit_budget=True)
+                request = await self._prepare(request, explicit_budget=True,
+                    request_options={**(request_options or {}), **kwargs})
                 ticket = capture.observe(capture.begin_fit, self, original_request, request, request_options, kwargs)
                 actual = self._budget
                 if self.timing_coordinator is not None:
@@ -436,6 +543,8 @@ class SurfaceProvider:
                     capture.finish_fit(ticket, decision)
                     return decision
                 except BaseException:
+                    self._release_media(original_request)
+                    self.prepared = [row for row in self.prepared if row[0] is not original_request]
                     if ticket is not None:ticket.close()
                     raise
             return budget
@@ -449,14 +558,17 @@ class SurfaceProvider:
         trace = capture.observe(capture.describe_take, self, request, ticket)
         projection = []
         try:
-            request = await self._prepare(request, commit=True, projection_out=projection)
+            request = await self._prepare(request, commit=True, projection_out=projection,
+                                          request_options=kwargs)
         except BaseException:
+            self._release_media(original_request)
             if ticket is not None:ticket.close()
             raise
         from .coordination_delivery import WORK_ATTEMPT
         try:
             attempt = self.delivery.begin_work(request) if hasattr(self.delivery, 'begin_work') else None
         except BaseException:
+            self._release_media(original_request)
             if ticket is not None:ticket.close()
             raise
         token = WORK_ATTEMPT.set((self.delivery, attempt) if attempt else None)
@@ -477,3 +589,4 @@ class SurfaceProvider:
         finally:
             WORK_ATTEMPT.reset(token)
             if ticket is not None:ticket.close()
+            self._release_media(original_request)

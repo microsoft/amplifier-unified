@@ -234,7 +234,8 @@ async def install_app_access(coordinator, bridge, *, execution_role):
         for name, tool in list(tools.items()):
             # AppControl carries its witness into service-owned synchronous
             # action admission. Avoid consuming that execution twice.
-            tools[name] = wrapped(name, tool)
+            from .host.media import replace_adapter
+            replace_adapter(coordinator, 'tools', name, tool, wrapped(name, tool))
     coordinator.register_capability('web.work_guard_tools', guard_tools)
     original_mount = coordinator.mount
     async def guarded_mount(mount_point, module, name=None):
@@ -370,12 +371,13 @@ async def install_app_access(coordinator, bridge, *, execution_role):
         delivery.observe_nested_pre(data)
         return HookResult()
 
-    await coordinator.mount('tools', AppControl(), name='app_control')
+    from .host.media import registration_coordinator, registration_hooks
+    await registration_coordinator(coordinator).mount('tools', AppControl(), name='app_control')
     delivery.install_dispatch(coordinator)
     guard_tools()
-    coordinator.hooks.register('tool:pre', bind_nested_pre, priority=-200, name='web-work-nested-origin')
-    coordinator.hooks.register('provider:request', guidance, name='web-canvas-guidance')
-    coordinator.hooks.register('tool:post', bind_image_pair, name='web-image-pair-receipt')
+    registration_hooks(coordinator).register('tool:pre', bind_nested_pre, priority=-200, name='web-work-nested-origin')
+    registration_hooks(coordinator).register('provider:request', guidance, name='web-canvas-guidance')
+    registration_hooks(coordinator).register('tool:post', bind_image_pair, name='web-image-pair-receipt')
     async def ui_host(operation, args):
         return await bridge('ui.use', {'operation': operation, 'args': args})
     coordinator.register_capability('ui.use.host', ui_host)

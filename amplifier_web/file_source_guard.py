@@ -269,7 +269,13 @@ async def install_file_source_guard(coordinator, directory=None):
     for name, tool in list((coordinator.get('tools') or {}).items()):
         kind = _KNOWN.get((type(tool).__module__, type(tool).__name__))
         if kind:
-            await coordinator.mount('tools', GuardedFileTool(tool, guard, kind), name=name)
+            wrapped = GuardedFileTool(tool, guard, kind)
+            from .host.media import registration_coordinator
+            registration = registration_coordinator(coordinator)
+            if registration is coordinator:
+                await coordinator.mount('tools', wrapped, name=name)
+            else:
+                await registration.mount_adapter('tools', wrapped, previous=tool, name=name)
         elif (type(tool).__module__, type(tool).__name__) in IMAGES:
             await coordinator.mount('tools', PolicyImageTool(tool, coordinator), name=name)
     coordinator.register_capability('web.file_source_guard', guard)
