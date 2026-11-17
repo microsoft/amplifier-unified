@@ -314,6 +314,7 @@ async def prepare_background(root, launcher, environment, *, port=None, identity
     raises AddressUnavailable; only the owner's confirmed repair changes it.
     """
     from . import windows_ports, windows_service
+    from .update_diagnostics import CommandFailure
     from .updates import process
 
     if port is not None and (type(port) is not int or not 1 <= port <= 65535):
@@ -325,6 +326,14 @@ async def prepare_background(root, launcher, environment, *, port=None, identity
 
     async def command(*args, timeout=90):
         return await process(*scope, *args, env=environment, cwd=root, timeout=timeout)
+
+    async def not_ready(failed=None):
+        # The test bind is not ownership. If another owner took the port before
+        # this host's listener did, say so instead of a generic failure.
+        conflict = await asyncio.to_thread(_conflict, home)
+        if conflict is not None:
+            raise conflict
+        raise RuntimeError("The owned background host is not ready; retain its status and private logs.") from failed
 
     step = progress or (lambda name: None)
     preparation = None
@@ -342,7 +351,12 @@ async def prepare_background(root, launcher, environment, *, port=None, identity
             if kind != "free":
                 raise RuntimeError("The existing task is not in a safe start/reopen state.")
             step("task")
-            await command("service", "start")
+            try:
+                await command("service", "start")
+            except CommandFailure as failed:
+                # `service start` waits for the host and ends with a failure
+                # status when the host is not healthy.
+                await not_ready(failed)
         elif task.get("instances") != 1 or task.get("state") != 4:
             raise RuntimeError("The existing task is not in a safe start/reopen state.")
     else:
@@ -383,14 +397,13 @@ async def prepare_background(root, launcher, environment, *, port=None, identity
         await command("service", "install")
 
     step("ready")
-    health = json.loads(await command("service", "status", "--wait", "60", "--json"))
+    try:
+        health = json.loads(await command("service", "status", "--wait", "60", "--json"))
+    except CommandFailure as failed:
+        # The command ends with a failure status when the host is not healthy.
+        await not_ready(failed)
     if not (health.get("ok") is True and health.get("processVerified") is True
             and health.get("responding") is True):
-        # The test bind is not ownership. If another owner took the port before
-        # this host's listener did, say so instead of a generic failure.
-        conflict = await asyncio.to_thread(_conflict, home)
-        if conflict is not None:
-            raise conflict
-        raise RuntimeError("The owned background host is not ready; retain its status and private logs.")
+        await not_ready()
     return {"background": True, "created": spec is None, "health": health,
             "runtime": preparation}

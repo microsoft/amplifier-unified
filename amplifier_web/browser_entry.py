@@ -30,8 +30,9 @@ _CODE = re.compile(f"[{CODE_ALPHABET}]{{{CODE_LENGTH}}}")
 REOPEN = "Open from the owner launcher again: amplifier-unified open."
 # The line that `amplifier-unified open` prints after the browser accepted the
 # address. The Windows launcher reads it, because the exit status says nothing
-# there: a command that an app generation takes over ends with status 0 for its
-# caller, whatever it did. The launcher is the code that setup installed and an
+# to a launcher from a setup file before pull request 2270: there a command
+# that an app generation takes over ends with status 0 for its caller, whatever
+# it did. The launcher is the code that setup installed and an
 # update cannot change it, so this text must stay as it is.
 OPENED = "Amplifier opened in your browser."
 # How long `open` waits for this installation's host. The host restarts to

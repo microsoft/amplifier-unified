@@ -35,6 +35,10 @@ def installation(tmp_path, monkeypatch):
         action = args[5:]
         calls.append(action)
         state["events"].append(("command", action))
+        if action[:2] in state.get("failing", ()):
+            # The command ended with a failure status, as its caller gets it.
+            from amplifier_web.update_diagnostics import CommandFailure
+            raise CommandFailure({"exitCode": 1})
         if action[:2] == ("runtime", "status"):
             assert kwargs["timeout"] == 90
             if isinstance(state["status"], Exception):
@@ -210,6 +214,35 @@ def test_own_host_outside_its_task_is_not_another_program(installation):
     with pytest.raises(RuntimeError, match="safe start") as refused:
         run()
     assert not isinstance(refused.value, setup.AddressUnavailable) and calls == []
+
+
+@pytest.mark.parametrize("kind,typed", [("in-use", True), ("reserved", True), ("own", False), ("free", False)])
+@pytest.mark.parametrize("failing,commands", [
+    # `service start` waits for the host. It ends with a failure status when the host is not healthy.
+    (("service", "start"), [("service", "start")]),
+    (("service", "status"), [("service", "start"), ("service", "status", "--wait", "60", "--json")]),
+])
+def test_a_start_or_status_command_that_fails_names_a_taken_address_and_else_says_not_ready(
+        installation, monkeypatch, kind, typed, failing, commands):
+    """The launcher gets the real exit status of its commands, also of one that an app version took over.
+
+    A host that is not healthy makes `service start` and `service status`
+    end with a failure status. That is the same state as a status report
+    that says "not ready": a taken address is named, and nothing else runs.
+    """
+    owned(installation, state=3, instances=0)
+    _, value, calls, run = installation
+    value["failing"] = {failing}
+    answers = iter(["free", kind])
+    monkeypatch.setattr(setup, "address_kind", lambda port, spec=None: next(answers))
+    with pytest.raises(RuntimeError) as failed:
+        run()
+    assert isinstance(failed.value, setup.AddressUnavailable) is typed
+    if typed:
+        assert (failed.value.kind, failed.value.port) == (kind, 8942)
+    else:
+        assert "not ready" in str(failed.value)
+    assert calls == commands
 
 
 @pytest.mark.parametrize("kind,typed", [("in-use", True), ("reserved", True), ("own", False), ("free", False)])

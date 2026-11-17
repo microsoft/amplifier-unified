@@ -177,10 +177,11 @@ def environment(root, value):
 async def browser_opened(command, env, *, limit=None):
     """Run the owner's `open` command once; True only when it confirmed the browser.
 
-    The confirmation is a line of its output, never its exit status. On
-    Windows a command that an app generation takes over ends with status 0 for
-    this caller, whatever it did; a first start that updates the app is such a
-    case. The command is never run a second time.
+    The confirmation is a line of its output, never its exit status. This
+    launcher gets the real status of a command that an app generation takes
+    over (application_generations.hand_over). The line is kept as the one
+    proof: it says that the browser accepted the address, and a status 0 says
+    only that the command ended. The command is never run a second time.
 
     `open` itself waits for a host that is restarting, and needs about 10
     seconds more for its last two requests. The limit here adds 50 seconds
@@ -188,7 +189,8 @@ async def browser_opened(command, env, *, limit=None):
     over has its own limit of 30 seconds) and for the browser call.
 
     False means "not confirmed", not "not opened": after the limit, a command
-    that a generation took over still runs and can open the browser later.
+    that a generation took over still runs and can open the browser later
+    (the limit ends the launcher's own process, not the app's).
     """
     from . import browser_entry
     from .updates import process
