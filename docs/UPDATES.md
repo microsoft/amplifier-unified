@@ -476,11 +476,26 @@ switches versions, when a check for updates runs while no update is prepared,
 or when a prepared app update starts to install.
 A qualification that runs there and fails is recorded and shown like any other
 failed update step; the old copy is gone then too.
+Time alone does not repeat a qualification at activation that failed. The
+update owner's pass runs it again for a prepared update only when something
+that can change its result has changed: another prepared update, the runtime
+settings or the component selection (the same witness that holds a failed
+preparation), or the live keys file (its time and size; its content is not
+read for this). An Install request of a person runs it again in every case.
+So does the first pass after a start of the app: the hold is in memory and is
+never saved. While the hold is in force the update stays prepared, the page
+says "Update needs attention" with the failure, and the count of failed
+attempts does not grow. As before, no check for updates runs while an update
+is prepared. A refused keys refresh is not such a failure: the owner's pass
+still tries that again by itself. It also ends a hold: a request that stops
+at that refusal validated nothing, so the owner's pass comes back and
+validates when the refusal is over. A rollback has no hold: only a request
+starts one, and it neither makes nor ends the hold of a prepared update.
 Idle maintenance also scrubs at most eight stage copies per pass, even when
 unused-code cleanup is off. A validated stage qualifies immediately. An
-unvalidated stage qualifies only when both its folder and `shared-config` are
-older than 24 hours, it is not an unresolved preparation candidate, and it holds
-no `profile-attempt.json`.
+unvalidated stage that holds no `profile-attempt.json` qualifies only when both
+its folder and `shared-config` are older than 24 hours and it is not an
+unresolved preparation candidate.
 A chat's own setup makes the same copy in a stage of its own and records the
 attempt there in `profile-attempt.json`. When that preparation fails or is
 stopped, it removes the copy itself; settings and routing stay. A successful
