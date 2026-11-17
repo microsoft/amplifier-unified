@@ -81,25 +81,27 @@ class InstallationGuidanceTests(unittest.TestCase):
         texts = [plain(block) for block in blocks]
         # The steps use Microsoft Edge's names, and the section says so before the first step.
         steps = next(index for index, text in enumerate(texts) if text.startswith("1. Download the setup file:"))
-        self.assertTrue(texts[steps - 1].endswith(" The steps below describe Microsoft Edge."), texts[steps - 1])
+        self.assertIn("The steps below describe Microsoft Edge.", " ".join(texts[:steps]))
         self.assertIn(" 2. Microsoft Edge holds the download ", texts[steps])
         # Below the steps and above the limits: three stops. The list is the one that follows this sentence.
-        lead = "In three cases, setup or the first start does not finish. A message says what to do:"
+        lead, limits = ("In these cases, setup or the first start does not finish. A message says what to do:",
+                        "Limits of this preview:")
         self.assertIn(lead, texts)
+        self.assertIn(limits, texts)
         self.assertLess(steps, texts.index(lead))
-        self.assertLess(texts.index(lead), texts.index("Limits of this preview:"))
+        self.assertLess(texts.index(lead), texts.index(limits))
         setup = source("scripts/windows_bootstrap_native.cs")
         limit = re.search(r"internal const int MaxRootLength=(\d+);", setup).group(1)
         cases = blocks[texts.index(lead) + 1]
         self.assertEqual([plain(text) for text in re.findall(r"^- (.*(?:\n  .*)*)", cases, re.M)], [
-            '**Administrator sign-in.** Setup says: "This Windows sign-in runs every program as administrator." '
+            'Setup says: "This Windows sign-in runs every program as administrator." '
             "Sign in to Windows with a standard account, or turn User Account Control on, and then run setup again.",
-            '**Long folder path.** Setup says that the path of the Amplifier folder "is too long for Windows" '
+            'Setup says that the path of the Amplifier folder "is too long for Windows" '
             f"(the limit is {limit} characters). Use a Windows account with a shorter name.",
-            "**Certificate step.** In step 4, Amplifier says that "
+            "In step 4, Amplifier says that "
             "\"this PC's security settings do not let it finish setting up its private connection to your "
             'browser". If your organization manages this PC, ask its IT support to trust the certificate '
-            "named in the message for your account."])
+            "file named in the message for your account."])
         # Setup: its message says that setup did not finish, and shows a stop's next step below "What to do:".
         self.assertIn('"Setup did not finish.\\n\\nWhat happened:\\n"+text[0]+"\\n\\nWhat to do:\\n"+text[1]', setup)
         self.assertIn("if(stop!=null) return new[]{stop.Message,stop.Next};", setup)
@@ -130,6 +132,7 @@ class InstallationGuidanceTests(unittest.TestCase):
         self.assertIn('saved = str(root / "export" / "local-ca.cer")', first_start)
         self.assertIn('"certificate for your account:\\n" + saved)', first_start)
         self.assertIn('"setting up its private connection to your browser.\\n\\n" + support + "\\n\\n"', first_start)
+        self.assertIn("owner_notice(blocked)", first_start)
         # The design's list of what the README states names the three stops too.
         self.assertIn("three stops that setup or the first start explains by itself",
                       plain(source("docs/design/native-windows-installation.md")))
