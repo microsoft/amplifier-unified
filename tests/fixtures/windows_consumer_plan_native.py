@@ -137,8 +137,7 @@ def cases(work, plan_path, records, tool=TOOL):
         results.append({"case": label, "required": "accepted" if refusal is None else "refused: " + refusal,
                         "returncode": result.returncode, "passed": passed,
                         "output": (result.stdout + result.stderr)[-3000:]})
-    return {"gitComponents": installed, "cases": results,
-            "ok": len(results) == 3 and all(item["passed"] is True for item in results)}
+    return {"gitComponents": installed, "cases": results, "ok": all(item["passed"] is True for item in results)}
 
 
 def run(*arguments, **options):

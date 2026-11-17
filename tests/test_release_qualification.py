@@ -2706,7 +2706,15 @@ def test_windows_plan_native_check_passes_only_with_one_acceptance_and_two_refus
     assert tool.count(equal) == 1
     refuses.write_text(tool.replace(equal, '    if False:\n'))
     result = fixture.cases(tmp_path / 'refuses', path, records, tool=refuses)
-    assert result['ok'] is False and result['cases'][0]['passed'] is False
+    # Its third refusal names the host resolution, not the runtime graph: the exact text is required.
+    assert result['ok'] is False and [case['passed'] for case in result['cases']] == [False, True, False]
+    # A gate that prints the acceptance and then ends with an error must fail the control.
+    fails = tmp_path / 'fails.py'
+    assert tool.count('    return checked\n') == 1
+    fails.write_text(tool.replace('    return checked\n', '    raise SystemExit(3)\n'))
+    result = fixture.cases(tmp_path / 'fails', path, records, tool=fails)
+    assert result['ok'] is False and [case['passed'] for case in result['cases']] == [False, True, True]
+    assert result['cases'][0]['returncode'] == 3
     # The other commit must differ from the installed one, or a refusal would show nothing.
     path.write_text(json.dumps({'schema': 1, 'graph': [APP_ROW, *component_rows(fixture.OTHER)]}))
     with pytest.raises(RuntimeError, match='Change OTHER'):
