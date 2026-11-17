@@ -250,7 +250,7 @@ def deleter(uninstaller, monkeypatch):
         return state["choices"].pop(0)
     monkeypatch.setattr(plan, "question", question)
 
-    def remove_root(der):
+    def remove_root(der, store="ROOT"):
         # Windows asks while the installation is still whole: the app has
         # stopped, every entry exists, and nothing in the folder was deleted.
         assert der == state["certificate"] and state["task"] == "absent" and state["registry"] is not None

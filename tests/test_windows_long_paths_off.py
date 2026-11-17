@@ -477,6 +477,156 @@ def test_the_real_update_probe_completes_in_a_stage_with_long_paths_off(stage, m
     assert files <= longest and folders <= budget.FOLDER_LIMIT
 
 
+def test_a_persons_folder_is_refused_exactly_where_windows_refuses_a_file_of_the_chat(installation, base):
+    """The app's answer for a folder that a person chose, against what Windows really does, one character apart.
+
+    Such a folder keeps the CLI project name, which is as long as its path. The
+    app answers with a plain sentence when a file that keeping the chat needs
+    would pass the limit (``session_files.chat_folder_too_long``).
+    """
+    from amplifier_web import session_files
+    install = installation()
+    assert session_files.windows_refuses_long_paths() is True   # this PC's own setting, read from Windows
+    identity = str(uuid.uuid4())
+    parent = base / ('p' + uuid.uuid4().hex[:7])
+    parent.mkdir()
+
+    def named(size):
+        return parent / ('d' * (size - len(str(parent)) - 1))
+
+    try:
+        fits = max(size for size in range(len(str(parent)) + 2, 200)
+                   if session_files.chat_folder_too_long(named(size), identity) is None)
+        # Installation folder path + \shared\projects\<name>\sessions (26 + the folder's own path length)
+        # + the session ID (37) + the temporary file of the saved view (59) = 259.
+        assert fits == budget.FILE_LIMIT - budget.MAX_ROOT - 26 - 37 - 59 == 78
+        # The longest folder that the app accepts: every file that keeping a chat needs is really written.
+        folder = named(fits)
+        folder.mkdir()
+        session = save_session(install.root / 'app', folder, identity)
+        view = write_view(session)
+        assert len(str(view.with_name('.presentation-' + budget.HEX32 + '.tmp'))) == budget.FILE_LIMIT
+        capture = capture_events(folder, identity)
+        assert session.parent.parent.name == capture.parents[2].name == update_stage_probe.cli_name(folder)
+        # One character more: the app answers, and Windows refuses the write that the answer is about.
+        longer = named(fits + 1)
+        longer.mkdir()
+        assert session_files.chat_folder_too_long(longer, identity) == (
+            f"This chat's folder has a path that is too long for Windows: {longer} ({fits + 1} characters; at most "
+            f'{fits} fit here). Move the folder to a shorter path, or start a chat in another folder.')
+        session = save_session(install.root / 'app', longer, identity)   # the history itself still fits
+        assert len(str(session / 'unified' / ('.presentation-' + budget.HEX32 + '.tmp'))) == budget.FILE_LIMIT + 1
+        assert refused_for_length(lambda: write_view(session))
+        assert not (session / 'unified' / 'view.json').exists()
+        # The default workspace folder of the installation is inside the measure at the longest folder path.
+        assert session_files.chat_folder_too_long(install.root / 'workspace', identity) is None
+        print(f'MEASURED installation folder {budget.MAX_ROOT}: a folder that a person chose is accepted up to a path '
+              f'of {fits} characters (the saved view\'s temporary file is then {budget.FILE_LIMIT}); at {fits + 1} '
+              f'the app answers with its sentence and Windows refuses that file')
+    finally:
+        remove_tree(EXTENDED + str(parent))
+
+
+# A chat with its own setup (a saved plan, as a fork has; a bundle that is not
+# offered; dependency overrides of its folder) is checked in a stage too. The
+# probe then gets the chat's folder as its workspace, with the same stage
+# settings (``runtime_profiles.ensure``). The folders of a person: the app's
+# default workspace folder ``<folder>\workspace``, and a folder somewhere else.
+CHOSEN_FOLDER = 150   # the path length of the other folder: longer than any installation path
+
+
+@pytest.fixture
+def chosen_folder(base, long_paths_off):
+    """A folder that a person chose, outside the installation, with a long path of its own."""
+    parent = base / ('p' + uuid.uuid4().hex[:7])
+    folder = parent / ('d' * (CHOSEN_FOLDER - len(str(parent)) - 1))
+    folder.mkdir(parents=True)
+    assert len(str(folder)) == CHOSEN_FOLDER <= budget.FOLDER_LIMIT
+    (folder / 'notes.txt').write_text('mine', encoding='utf-8')
+    yield folder
+    remove_tree(EXTENDED + str(parent))
+
+
+def chat_folders(install, chosen):
+    """The folders in which a chat can be: the default workspace folder, a person's own, the app's chat folder."""
+    from amplifier_web.windows_files import directory
+    workspace = install.root / 'workspace'
+    with directory(workspace, owned_root=install.root, create=True):   # setup makes it
+        pass
+    return {'default workspace folder': workspace, 'folder that a person chose': chosen,
+            'app chat folder': install.chat()[1]}
+
+
+@pytest.mark.parametrize('size', [CLEAN_ROOM_ROOT, budget.MAX_ROOT])
+def test_the_setup_check_of_a_chat_fails_under_the_cli_name_of_a_persons_folder(stage, chosen_folder, size):
+    """The failure that the stage name removes, with the app's real probe and the names it used before.
+
+    Before, a folder that a person chose kept the CLI name inside the stage.
+    For the default workspace folder that name repeats the installation path:
+    the probe's session folder is twice the installation folder path plus 134.
+    """
+    install, made = stage(size)
+    folders = chat_folders(install, chosen_folder)
+    for label in ('default workspace folder', 'folder that a person chose'):
+        folder = folders[label]
+        name = update_stage_probe.cli_name(folder)
+        session = made.shared / 'projects' / name / 'sessions' / str(uuid.uuid4())
+        temporary = session / ('.history-' + budget.HEX32 + '.tmp')
+        if label == 'default workspace folder':
+            assert name == budget.cli_project(size, 'workspace').replace('-C-' + 'u' * (size - 3), name[:size])
+            assert len(str(session)) == 2 * size + 134 and len(str(temporary)) == 2 * size + 180
+            if size == budget.MAX_ROOT:
+                assert len(str(session)) == 252 > budget.FOLDER_LIMIT
+        # At every supported folder path a file that the probe must write passes the limit.
+        assert len(str(temporary)) > budget.FILE_LIMIT
+        result = run_probe(install, update_stage_probe.for_chat(made, folder), before_the_fix=True)
+        assert result.returncode == 1 and result.facts, result.stdout + result.stderr
+        assert result.facts.get('ok') is False and result.facts.get('stage') != 'complete', result.facts
+        assert result.facts.get('errorType') in ('FileNotFoundError', 'OSError'), result.facts
+        print(f'MEASURED installation folder {size}, {label} ({len(str(folder))} characters): under the CLI name '
+              f'the session folder would be {len(str(session))} (limit {budget.FOLDER_LIMIT}) and its history '
+              f'temporary {len(str(temporary))} (limit {budget.FILE_LIMIT}); the real probe ended with exit code '
+              f'{result.returncode} and {json.dumps(result.facts, sort_keys=True)}')
+        assert (folder / 'notes.txt').exists() == (label == 'folder that a person chose')
+
+
+@pytest.mark.parametrize('size', [CLEAN_ROOM_ROOT, budget.MAX_ROOT])
+def test_the_setup_check_of_a_chat_completes_in_a_stage_whatever_the_chats_folder_is(stage, chosen_folder, size):
+    install, made = stage(size)
+    longest = budget.STAGE_LONGEST[1] - (budget.MAX_ROOT - size)
+    sessions = set()
+    for label, folder in chat_folders(install, chosen_folder).items():
+        before = update_stage_probe.created(folder)
+        update_stage_probe.passed(run_probe(install, update_stage_probe.for_chat(made, folder)))
+        # One project name in the stage, whatever the folder is: the stage's own.
+        assert os.listdir(made.shared / 'projects') == [PROJECT], label
+        assert os.listdir(install.root / 'capture') == [PROJECT], label
+        new = {path.name for path in (made.shared / 'projects' / PROJECT / 'sessions').iterdir()
+               if path.is_dir()} - sessions
+        assert len(new) == 1, label
+        session = new.pop()
+        sessions.add(session)
+        folder_of_session = made.shared / 'projects' / PROJECT / 'sessions' / session
+        capture = install.root / 'capture' / PROJECT / 'sessions' / session / 'context-intelligence'
+        rows = {name: budget.length(relative, size) for name, kind, relative in budget.update_stage(PROJECT, session)}
+        assert len(str(folder_of_session)) == rows['probe session folder']
+        assert len(str(folder_of_session / 'live-jobs' / 'owner.lock')) == rows['probe job-store lock']
+        assert (len(str(capture)), len(str(capture / 'events.jsonl'))) == (
+            rows['probe capture folder'], rows['probe event log'])
+        assert (folder_of_session / 'transcript.jsonl').is_file() and (capture / 'events.jsonl').is_file()
+        # The probe wrote nothing into the chat's folder.
+        assert update_stage_probe.created(folder) == before, label
+        files, folders = install.longest()
+        assert files <= longest <= budget.FILE_LIMIT and folders <= budget.FOLDER_LIMIT
+        print(f'MEASURED installation folder {size}, {label} ({len(str(folder))} characters): the real probe '
+              f'completed under the project name {PROJECT}; session folder {len(str(folder_of_session))}, '
+              f'capture folder {len(str(capture))}, longest file that exists {files}, longest folder {folders}')
+    # Nothing else in the installation changed: the person's shared home, the ownership store, the source store.
+    for name in ('shared', 'ownership', budget.SOURCE_FOLDER):
+        assert os.listdir(install.root / name) == []
+    assert (chosen_folder / 'notes.txt').read_text(encoding='utf-8') == 'mine'
+
+
 # The deepest module source file of the default bundles, by its real name (125
 # characters), and a file as deep as the deepest file of any default repository.
 MODULE_FILE = ('modules/tool-context-intelligence-transcript/'
