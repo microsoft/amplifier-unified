@@ -58,10 +58,34 @@ class InstallationGuidanceTests(unittest.TestCase):
         plain = " ".join(section.split())
         for limit in ("This is a preview.", "not signed yet", "Windows 11 with an Intel or AMD processor",
                       "ARM processors are not supported yet", "your own Windows account only",
-                      "Settings > Apps > Installed apps",
-                      "`%USERPROFILE%\\.amplifier\\rate-limit-state.json`. Uninstall does not remove that file"):
+                      "Settings > Apps > Installed apps"):
             with self.subTest(limit=limit):
                 self.assertIn(limit, plain)
+        # Folder: one statement for each AI connection that the app offers, and no more than is known.
+        folder = " ".join(section.split("\n- **Folder:**", 1)[1].split("\n- **Uninstall:**", 1)[0].split())
+        self.assertTrue(folder.startswith(
+            "Amplifier installs into `%LOCALAPPDATA%\\Amplifier` and keeps your chats, settings and accounts there. "
+            "What a chat writes outside that folder depends on the AI connection:"), folder)
+        import json
+        offered = [row["name"] for row in json.loads(source("amplifier_web/ai_services.json"))]
+        self.assertEqual(sorted(re.findall(r"\*\*([^*]+?):?\*\*", folder)), sorted(offered))
+        for statement in (
+                "- **OpenAI API** and **Anthropic API:** in our tests, a chat wrote no file outside the folder.",
+                "- **GitHub Copilot Subscription:** its component makes two folders, "
+                "`%USERPROFILE%\\.amplifier-provider-github-copilot` and "
+                "`%LOCALAPPDATA%\\amplifier-provider-github-copilot`. We read this in its source code. "
+                "We have not tested it on a PC.",
+                "- **ChatGPT Subscription**, **Google Gemini API** and **OpenAI Compatible API:** "
+                "we have not tested this.",
+                # An installation that ran an earlier version can hold this file. Nothing deletes it.
+                "Earlier versions of this preview wrote one small file with an Anthropic connection: "
+                "`%USERPROFILE%\\.amplifier\\rate-limit-state.json`. Amplifier does not use that file any more. "
+                "Uninstall does not remove it. You can delete it."):
+            with self.subTest(statement=statement):
+                self.assertIn(statement, folder)
+        # The file name is the one that the host now puts into the installation folder.
+        from amplifier_web.provider_state_files import STATE_FILES
+        self.assertEqual(STATE_FILES["provider-anthropic"]["rate_limit_state_path"], "rate-limit-state.json")
         # Uninstall: the questions and the three buttons are the product's own, and each answer has its result.
         # A sentence of the product can continue in the next string of its source.
         consumer = re.sub(r'"\s*\n\s*"', "", source("amplifier_web/windows_consumer.py"))

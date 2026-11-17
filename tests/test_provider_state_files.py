@@ -334,10 +334,12 @@ async def test_the_readiness_check_of_a_transfer_gets_the_paths(folders, monkeyp
 
     monkeypatch.setattr(portability_probe, 'provider_class', lambda module: Provider)
     result = await portability_probe.probe({
-        'module': ANTHROPIC, 'config': {'api_key': 'k'}, 'model': 'selected-model',
+        'module': ANTHROPIC, 'config': {'api_key': 'k', 'fallback_state_path': ''}, 'model': 'selected-model',
         'readinessPolicy': readiness_policy(ANTHROPIC, 'anthropic', 'selected-model', 'high')})
     assert result['accountVerified'] is True
-    assert constructed == [{}, {'api_key': 'k', **paths(folders.shared)}]  # The first reads the schema only.
+    # The first instance reads the schema only. A configured value stays.
+    assert constructed == [{}, {'api_key': 'k', 'fallback_state_path': '',
+                                'rate_limit_state_path': str(folders.shared / RATE)}]
 
 
 # The real module: the cause, and the fix.

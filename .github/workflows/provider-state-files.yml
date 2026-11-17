@@ -1,0 +1,97 @@
+name: Provider state files
+# The Anthropic provider module keeps two small files of its own. It builds
+# their default paths from the person's home folder, which is outside a Windows
+# installation from the setup file. The host gives the module paths in the
+# shared Amplifier home (amplifier_web/provider_state_files.py).
+#
+# Both jobs load the real module from the locked test dependencies through
+# Core's own session initialization, and the module talks to an HTTP server on
+# the runner. Nothing goes to a model and no key is needed. Without the host's
+# step the files appear below the profile; with it they are in the shared home
+# and the profile stays empty. A skipped case fails here.
+#
+# It is not setup-file or clean-account acceptance: no installation, no app
+# and no chat.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/provider-state-files.yml
+      - amplifier_web/provider_state_files.py
+      - amplifier_web/host/initialization.py
+      - amplifier_web/host/session.py
+      - amplifier_web/host/children.py
+      - amplifier_web/provider_probe.py
+      - amplifier_web/portability_probe.py
+      - amplifier_web/provider_environment.py
+      - amplifier_web/session_files.py
+      - amplifier_web/windows_consumer.py
+      - amplifier_web/ai_services.json
+      - README.md
+      - tests/test_provider_state_files.py
+      - tests/test_installation_guidance.py
+      - tests/test_windows_path_budget.py
+      # A dependency change can bring a module version with another file or name.
+      - pyproject.toml
+      - uv.lock
+permissions:
+  contents: read
+jobs:
+  windows:
+    name: Provider state files on native Windows
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUTF8: '1'
+      UV_PYTHON_DOWNLOADS: never
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13'
+          architecture: x64
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      - name: Install the locked application and test dependencies (CI setup only)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          uv sync --locked --group dev --no-install-project --python (Get-Command python).Source
+          if ($LASTEXITCODE -ne 0) { throw 'Locked dependency installation failed.' }
+      # -rA prints every case by name. A skipped native case would hide the answer.
+      - name: Require the real module's files in the shared home and none in the profile, with no skip
+        shell: pwsh
+        env:
+          AMPLIFIER_REQUIRE_PROVIDER_STATE_FILES: '1'
+        run: |
+          .\.venv\Scripts\python.exe -B -m pytest -q -rA -p no:cacheprovider tests/test_provider_state_files.py | Tee-Object -Variable report
+          if ($LASTEXITCODE -ne 0) { throw 'A provider state file is not in the shared home on native Windows.' }
+          $summary = ($report | Select-Object -Last 1)
+          if (-not ($summary -match '\d+ passed') -or ($summary -match 'skipped|deselected')) { throw "A case did not run; on this lane every case must run: $summary" }
+  linux:
+    name: Provider state files, the README item and the probes
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13'
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      - run: uv sync --locked --group dev
+      - name: Require every state-file case with no skip
+        env:
+          AMPLIFIER_REQUIRE_PROVIDER_STATE_FILES: '1'
+        run: |
+          uv run --no-sync pytest -q -rA tests/test_provider_state_files.py | tee report.txt
+          tail -n 1 report.txt | grep -E '[0-9]+ passed' | grep -vqE 'skipped|deselected'
+      # The README item "Folder" names every AI connection that the app offers.
+      - name: Check the README item and the tests around the changed code
+        run: >-
+          uv run --no-sync pytest -q -ra tests/test_installation_guidance.py tests/test_provider_environment.py
+          tests/test_portability_probe.py tests/test_ephemeral_mcp.py tests/test_host_children.py
+          tests/test_image_setup.py tests/test_catalog_review_boundaries.py
