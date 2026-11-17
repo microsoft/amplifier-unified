@@ -233,6 +233,17 @@ or in a guide: another installation's root has the same name. The record
 never loses a root that Windows may still hold; a full or unreadable record
 stops `force` with nothing changed. Windows asks the person once for each
 deletion, and no code answers it; say the number of questions before them.
+Windows has no exec: `os.execv` starts a new process there and ends the
+caller at once with exit status 0, before the command's output is complete.
+The launcher hands a command to the active app generation with
+`application_generations.hand_over`, which waits on Windows and ends with the
+app's status. Do not use `os.execv` on Windows where a caller reads the
+output or the status. A launcher from a setup file before that change still
+returns 0 at once, so the confirmation line of `open` stays the launcher's
+proof that the browser opened. The Start-menu start shows `windows_start.sign`
+and holds `windows_start.only`; both must end before the launcher's own last
+message, which sends the person back to the Start menu. While the start holds
+that lock, a second click does nothing and shows nothing.
 Task Scheduler expands percent-bearing executable/working-directory paths.
 Reject those paths rather than recording a literal identity that launches a
 different program. Task registration/state is not authenticated host health.

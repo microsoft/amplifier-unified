@@ -35,6 +35,10 @@ def installation(tmp_path, monkeypatch):
         action = args[5:]
         calls.append(action)
         state["events"].append(("command", action))
+        if action[:2] in state.get("failing", ()):
+            # The command ended with a failure status, as its caller gets it.
+            from amplifier_web.update_diagnostics import CommandFailure
+            raise CommandFailure({"exitCode": 1})
         if action[:2] == ("runtime", "status"):
             assert kwargs["timeout"] == 90
             if isinstance(state["status"], Exception):
@@ -210,6 +214,63 @@ def test_own_host_outside_its_task_is_not_another_program(installation):
     with pytest.raises(RuntimeError, match="safe start") as refused:
         run()
     assert not isinstance(refused.value, setup.AddressUnavailable) and calls == []
+
+
+def test_a_start_command_that_ends_with_a_failure_status_leaves_the_decision_to_the_status_step(installation):
+    """The launcher gets the real exit status of its commands, also of one that an app version took over.
+
+    `service start` waits up to a minute for the host itself and ends with a
+    failure status when the host is not healthy then. Before the launcher
+    got that status, it went on to the status step, which waits again. A
+    host that needs longer keeps that time: the status step decides.
+    """
+    owned(installation, state=3, instances=0)
+    _, value, calls, run = installation
+    value["failing"] = {("service", "start")}
+    result = run()  # The status step finds the host healthy.
+    assert result["health"] == {"ok": True, "responding": True, "processVerified": True}
+    assert calls == [("service", "start"), ("service", "status", "--wait", "60", "--json")]
+
+
+@pytest.mark.parametrize("kind,typed", [("in-use", True), ("reserved", True), ("own", False), ("free", False)])
+@pytest.mark.parametrize("failing", [{("service", "status")}, {("service", "start"), ("service", "status")}],
+                         ids=["status fails", "start and status fail"])
+def test_a_status_command_that_ends_with_a_failure_status_names_a_taken_address_and_else_says_not_ready(
+        installation, monkeypatch, kind, typed, failing):
+    """A host that is not healthy makes `service status` end with a failure status.
+
+    That is the same state as a status report that says "not ready": a taken
+    address is named, and nothing else runs.
+    """
+    owned(installation, state=3, instances=0)
+    _, value, calls, run = installation
+    value["failing"] = failing
+    answers = iter(["free", kind])
+    monkeypatch.setattr(setup, "address_kind", lambda port, spec=None: next(answers))
+    with pytest.raises(RuntimeError) as failed:
+        run()
+    assert isinstance(failed.value, setup.AddressUnavailable) is typed
+    if typed:
+        assert (failed.value.kind, failed.value.port) == (kind, 8942)
+    else:
+        assert "not ready" in str(failed.value)
+    assert calls == [("service", "start"), ("service", "status", "--wait", "60", "--json")]
+
+
+def test_an_install_command_that_fails_ends_the_first_start_and_asks_nothing_about_the_address(installation, monkeypatch):
+    """`service install` registers the task, asks Windows to start it, and does not wait for the host.
+
+    Its failure ends the start. No status step follows, and the question
+    about a taken address is not asked: the host's address had no part.
+    """
+    from amplifier_web.update_diagnostics import CommandFailure
+    _, value, calls, run = installation  # No task yet: the first start of an installation.
+    value["failing"] = {("service", "install")}
+    monkeypatch.setattr(setup, "_conflict", lambda home: pytest.fail("A failed install command is not a taken address."))
+    with pytest.raises(CommandFailure):
+        run()
+    assert calls[-1] == ("service", "install")
+    assert not any(action[:2] == ("service", "status") for action in calls)
 
 
 @pytest.mark.parametrize("kind,typed", [("in-use", True), ("reserved", True), ("own", False), ("free", False)])
