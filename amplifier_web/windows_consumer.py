@@ -264,7 +264,9 @@ async def launch(root, *, open_browser=True, progress=None):
     return result
 
 
-_UNCHANGED = "Amplifier was not uninstalled, and nothing was changed. You can keep using it.\n\n"
+# What an uninstall knows before its first change. It does not say that the person can keep using
+# Amplifier: with a journal in the folder Amplifier does not open, and Open can need what failed here.
+_UNCHANGED = "Amplifier was not uninstalled, and nothing was changed.\n\n"
 _STOPPED = "To keep using Amplifier, open it from the Start menu."
 _UNFINISHED = {
     # Before the first step: nothing was asked yet, or the question itself failed.
@@ -306,12 +308,21 @@ _UNFINISHED.update({
     "folder": _UNCHANGED + "Amplifier could not check its own folder, so it deleted nothing. "
               "Restart this PC, then uninstall again. If this message returns, select No in the first "
               "question: Amplifier is then uninstalled, and its folder stays.",
+    # The step `journal` failed. This program does not know whether a journal is in the folder now: the
+    # write can fail before or after the file has its name, a program can take the name away, and Windows
+    # can refuse the look for it. With a journal Amplifier does not open; without one it opens. So neither
+    # text of this step says that Amplifier opens, and neither says that it does not.
     "journal": "Amplifier has stopped and no longer starts when you sign in, but it could not begin to delete "
                "its folder. Nothing in the folder was deleted.\n\n"
-               "Wait a minute or restart this PC, then uninstall again. " + _STOPPED,
+               "Wait a minute or restart this PC, then uninstall again. Amplifier might not open until then.",
+    # The same step in an uninstall that goes on with an earlier removal: files can already be deleted.
+    "journal-again": "Amplifier could not finish its removal from this PC.\n\n"
+                     "Close other programs or restart this PC. Then uninstall Amplifier again to finish. "
+                     "Do not open Amplifier before that: its folder can be partly deleted.",
     "data": "Amplifier has stopped, but some of your chats, settings or saved accounts could not be deleted. "
             "A program may still use them.\n\n" + _AGAIN,
-    # Every other failure after the deletion began, and every failure of a second uninstall.
+    # Every other failure after the deletion began, and every other failure of an uninstall that found a
+    # journal in the folder. This program saw the journal: at its start, or directly after it wrote it.
     "removal": "Amplifier could not finish its removal from this PC.\n\n" + _AGAIN,
 })
 
@@ -543,7 +554,11 @@ async def _uninstall(root):
             "Uninstall Amplifier?\n\n"
             "Amplifier will stop and will no longer start when you sign in. Its entries in the "
             "Start menu and the Apps list will be removed.\n\n"
-            "Your chats, settings, accounts and the program files stay in this folder:\n" + str(root)
+            # A journal that proves no delete choice is in the folder: an earlier removal can have
+            # deleted files. This program does not know what is left, so it says only what it does.
+            + ("This uninstall deletes none of your chats, settings, accounts or program files in this folder:\n"
+               if unfinished else
+               "Your chats, settings, accounts and the program files stay in this folder:\n") + str(root)
             + (f'\n\nAt the end, Windows asks whether to delete the certificate "{ROOT_NAME}". '
                "Select Yes there to remove it." if certificate else ""),
             confirm=True):
@@ -597,7 +612,9 @@ async def _uninstall(root):
             raise  # Another window starts or removes this installation; nothing was changed.
         except (OSError, ValueError, RuntimeError, TimeoutError) as error:
             if result is None:
-                raise Unfinished(at[0], error) from error
+                # A journal that proves no delete choice is in the folder (see `_uninstall`): Amplifier does
+                # not open, and a step's own text can say that it does.
+                raise Unfinished(at[0], error, "removal" if unfinished else None) from error
             result.setdefault("receiptError", error)  # Everything was removed; only tidying failed.
         return result
 
@@ -617,7 +634,10 @@ async def _uninstall(root):
         # No advice to delete the folder by hand: it holds the person's chats,
         # and File Explorer can refuse its longest paths.
         owner_notice("Amplifier is uninstalled. It no longer runs, and it no longer starts when you sign in.\n\n"
-                     "Your chats, settings, accounts and the program files are still in this folder:\n" + str(root)
+                     + ("This uninstall deleted none of your chats, settings, accounts or program files in "
+                        "this folder:\n" if unfinished else
+                        "Your chats, settings, accounts and the program files are still in this folder:\n")
+                     + str(root)
                      + (f'\n\nWindows kept the certificate "{ROOT_NAME}". It works only for Amplifier on this PC.'
                         if trust in {"declined", "blocked"} else ""))
     return {"ok": True, "operation": "uninstall", "userDataRetained": True,
@@ -670,8 +690,11 @@ async def _delete(root, certificate, *, resumed):
             raise Refused("busy", busy) from None
         except (OSError, ValueError, RuntimeError, TimeoutError) as error:
             begun = at[0] in windows_uninstall.AFTER_JOURNAL
-            raise Unfinished(at[0], error, "data" if at[0] == "data" else
-                             "removal" if begun or resumed else None) from error
+            if at[0] == "journal":
+                text = "journal-again" if resumed else None  # The two texts of this step say why.
+            else:
+                text = "data" if at[0] == "data" else "removal" if begun or resumed else None
+            raise Unfinished(at[0], error, text) from error
 
     try:
         done = await asyncio.to_thread(remove)
