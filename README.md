@@ -89,11 +89,32 @@ Limits of this preview:
   Uninstall does not remove that file.
 - **Uninstall:** open **Settings > Apps > Installed apps**, find
   **Amplifier Unified (unsigned preview)**, select **More options (…)**, then
-  **Uninstall**, then **Uninstall** again. Amplifier asks you to confirm;
-  select **Yes**. Windows then asks whether to delete the certificate; select
-  **Yes**. In this version, uninstall stops Amplifier and removes it from the
-  Start menu and the Apps list. It leaves the folder with your chats, settings
-  and accounts, and the program files (1.4 GB to 1.9 GB in our tests).
+  **Uninstall**, then **Uninstall** again. Amplifier first asks: "Do you also
+  want to delete your chats, settings and saved accounts?"
+  - **No** uninstalls Amplifier and keeps the folder. Your chats, settings and
+    accounts stay there, together with the program files (1.4 GB to 1.9 GB in
+    our tests).
+  - **Yes** leads to a second question: "Delete everything that Amplifier keeps
+    in this folder?" **Yes** there uninstalls Amplifier and deletes your chats,
+    settings, saved accounts and stored keys, the files that Amplifier or you
+    saved in its workspace folder, and the program files. This cannot be
+    undone. **No** there changes nothing.
+  - **Cancel** changes nothing. Amplifier stays installed.
+
+  If Amplifier is working on a chat, it asks before it stops that work. An
+  uninstall stops Amplifier and removes it from the Start menu and the Apps
+  list. If Windows asks whether to delete the certificate, select **Yes**.
+
+  After a delete, Amplifier says "Amplifier is uninstalled." When you close
+  that message, it starts to remove its last program files and then the
+  folder. A file or folder directly in the Amplifier folder whose name
+  Amplifier does not use stays, and then the folder stays too. If Amplifier
+  says that it could not finish, close other programs or restart the PC, then
+  uninstall again. Until then Amplifier does not open.
+
+  Amplifier can also ask only "Uninstall Amplifier?" with **Yes** and **No**,
+  for example in an installation from an earlier setup file. There, **Yes**
+  uninstalls and leaves the folder, and **No** changes nothing.
 
 The [native Windows design and status](docs/design/native-windows-installation.md)
 records what is tested.

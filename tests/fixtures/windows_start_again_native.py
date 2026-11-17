@@ -4,7 +4,8 @@ Real on a Windows runner: the candidate installed with uv in setup's private
 layout, the product's own entry and launcher commands in setup's order
 (entries, then start), runtime preparation from the network, Task Scheduler,
 the host that the task starts, the product's uninstall function (called in
-this process, with its question answered Yes), and the second start.
+this process, with its one question answered No: uninstall, and keep the
+folder), and the second start.
 
 Not shown: the setup file and its window, a clean ordinary account (the
 runner's account is elevated), the certificate question and the browser (the
@@ -234,31 +235,52 @@ def guard_refuses(message_function):
 
 
 def uninstall(root, notices):
-    from amplifier_web import windows_consumer, windows_installation
-    original = windows_installation.owner_notice
+    """The product's uninstall, with the choice that keeps the folder.
 
-    def yes(message, *, confirm=False):
-        notices.append({"confirm": confirm, "message": message})
+    A finished installation has setup's completion record. The product then
+    asks one question with three buttons (`windows_uninstall.question`): Yes
+    leads to the deletion of the folder, No uninstalls and keeps the folder,
+    Cancel changes nothing. This case answers No. It never answers Yes to
+    that question, so it cannot delete the folder. Any other message is
+    recorded and answered Yes, as before.
+    """
+    from amplifier_web import windows_consumer, windows_installation, windows_uninstall
+    message, question = windows_installation.owner_notice, windows_uninstall.question
+
+    def yes(text, *, confirm=False):
+        notices.append({"kind": "message", "confirm": confirm, "message": text})
         return True
 
+    def keep(text, *, cancel=False):
+        notices.append({"kind": "question", "cancel": cancel, "answer": "no", "message": text})
+        return "no"
+
     with no_message_box():
-        assert guard_refuses(original), "The guard did not refuse the product's message box"
-        windows_installation.owner_notice = yes
+        assert guard_refuses(message), "The guard did not refuse the product's message box"
+        assert guard_refuses(question), "The guard did not refuse the product's question"
+        windows_installation.owner_notice, windows_uninstall.question = yes, keep
         try:
             return asyncio.run(windows_consumer.maintenance(root, "uninstall"))
         finally:
-            windows_installation.owner_notice = original
+            windows_installation.owner_notice, windows_uninstall.question = message, question
 
 
 def kept_folder_question(notices):
-    """Exactly the one question of an uninstall that keeps the folder.
+    """Exactly the one question of an uninstall, answered with the choice that keeps the folder.
 
-    The test answers Yes to what it is asked. Another question, or one more,
-    is another case: it must fail here and not pass with a changed meaning.
+    Required: one question and no message; three buttons; the first line of
+    the uninstall question; the sentence that says what No does; the sentence
+    that says what Cancel does. A message, a second question, a question
+    with two buttons, or a question without those sentences is another case:
+    it fails here. The whole text is not compared: Amplifier adds a
+    sentence about the certificate when Windows trusts it.
     """
-    return (len(notices) == 1 and notices[0]["confirm"] is True
+    return (len(notices) == 1 and notices[0]["kind"] == "question" and notices[0]["cancel"] is True
+            and notices[0]["answer"] == "no"
             and notices[0]["message"].startswith("Uninstall Amplifier?")
-            and "stay in this folder" in notices[0]["message"])
+            and "Select No to keep them. They stay in this folder, together with the program files:"
+            in notices[0]["message"]
+            and "Select Cancel to keep Amplifier installed." in notices[0]["message"])
 
 
 def releases(root):
@@ -339,6 +361,7 @@ def run():
         from amplifier_web import app_component_graph as components
         from amplifier_web import installation_runtime, windows_consumer as consumer
         from amplifier_web import windows_consumer_shell as shell, windows_installation, windows_service
+        from amplifier_web import windows_uninstall
         from amplifier_web.deployment import write_private
         from amplifier_web.updates import process
         with shared().helpers().token_user_default_owner():
@@ -352,6 +375,13 @@ def run():
             # The fixture earns setup's proof; it does not forge one.
             report["audit"] = consumer.audit(root)
             assert report["audit"]["ok"]
+            # Setup's completion record, where setup writes it: after the audit
+            # and before the entries. Only with it does the uninstall offer its
+            # choice, as on an installed PC. Without it the product asks the
+            # question of a folder that setup did not complete.
+            write_private(root / windows_uninstall.COMPLETE,
+                          json.dumps({"schema": 1, "version": prepared["version"]}), owned_root=root)
+            assert windows_uninstall.completed(root)
             assert not windows_service._read()[0]["exists"], "A pre-existing task must not be changed"
             begin(1)
             # Setup's order: the entries first, then the start.
@@ -418,6 +448,8 @@ def run():
             assert not status["json"].get("responding", False) and not shell.listed(root)
             assert not asyncio.run(listener_answers(home)), "The HTTPS listener still answers"
             assert json.loads((root / shell.FILE).read_text())["status"] == "removed"
+            # The keep choice began no removal of the folder, and setup's record is in place.
+            assert not windows_uninstall.unfinished(root) and windows_uninstall.completed(root)
             assert root.is_dir() and hashlib.sha256(marker.read_bytes()).hexdigest() == digest
             folders = releases(root)
             passed(5, uninstall=removed, notices=notices, task=state, serviceStatus=status,
