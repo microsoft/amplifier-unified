@@ -26,11 +26,11 @@ runs client units; `npm test --prefix tests/web` runs Unified's integration/prod
 units. Built-asset checks use `npm run test:artifact-assets --prefix .build/web-client`.
 See [host browser checks](tests/web/README.md) for affected real-server journeys.
 
-The Python tests give the same results as CI in a shell that a running Amplifier
-Unified started, such as a chat's shell tool: `tests/conftest.py` removes the names
-that such a shell inherits from the service. This holds under pytest only. Product
-code that you start by hand in such a shell still reads those names, and so uses
-the service's folders.
+The Python tests do not use an Amplifier Unified of your machine. `tests/conftest.py`
+removes the names that a shell inherits from a running one, such as a chat's shell
+tool, and gives the product folders of the test run in place of the folders below
+your home folder. This holds under pytest only. Product code that you start by hand
+still reads those names and uses those folders.
 
 These are development setup commands, not a per-release checklist. For releases,
 use the [Fast Release Guide](docs/validation/release-qualification.md): reuse the
