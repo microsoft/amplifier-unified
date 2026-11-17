@@ -1,5 +1,6 @@
 """Keep manual interpreter selection aligned with the executable installer."""
 
+import ast
 from pathlib import Path
 import re
 import shlex
@@ -57,10 +58,74 @@ class InstallationGuidanceTests(unittest.TestCase):
         plain = " ".join(section.split())
         for limit in ("This is a preview.", "not signed yet", "Windows 11 with an Intel or AMD processor",
                       "ARM processors are not supported yet", "your own Windows account only",
-                      "Settings > Apps > Installed apps", "It leaves the folder with your chats",
+                      "Settings > Apps > Installed apps",
                       "`%USERPROFILE%\\.amplifier\\rate-limit-state.json`. Uninstall does not remove that file"):
             with self.subTest(limit=limit):
                 self.assertIn(limit, plain)
+        # Uninstall: the questions and the three buttons are the product's own, and each answer has its result.
+        # A sentence of the product can continue in the next string of its source.
+        consumer = re.sub(r'"\s*\n\s*"', "", source("amplifier_web/windows_consumer.py"))
+        item = section.split("\n- **Uninstall:**", 1)[1].split("\n\nThe [native Windows design", 1)[0]
+        opening, *bullets = re.split(r"\n  - \*\*", item)
+        bullets[-1], rest = bullets[-1].split("\n\n", 1)
+        answers = {bullet.split("**", 1)[0]: " ".join(bullet.split("**", 1)[1].split()) for bullet in bullets}
+        opening, rest = " ".join(opening.split()), " ".join(rest.split())
+        self.assertEqual(list(answers), ["No", "Yes", "Cancel"])  # The three buttons of the first question.
+        first = re.search(r'(Do you also want to delete [^"\\]+\?)', consumer).group(1)
+        second = re.search(r'(Delete everything that Amplifier keeps in this folder\?)', consumer).group(1)
+        self.assertTrue(opening.endswith(f'Amplifier first asks: "{first}"'), opening)
+        for button, product, results in (
+                ("No", ("Select No to keep them.",),
+                 ("uninstalls Amplifier and keeps the folder.",
+                  "Your chats, settings and accounts stay there, together with the program files")),
+                ("Yes", ("Select Yes to delete them, together with the program files.",
+                         "Amplifier asks you once more before it deletes anything.", "your stored keys.",
+                         "files that Amplifier or you saved in its workspace", "This cannot be undone.",
+                         "Select No to change nothing. Amplifier stays installed."),
+                 (f'leads to a second question: "{second}"',
+                  "**Yes** there uninstalls Amplifier and deletes your chats, settings, saved accounts and stored keys, "
+                  "the files that Amplifier or you saved in its workspace folder, and the program files.",
+                  "This cannot be undone.", "**No** there changes nothing.")),
+                ("Cancel", ("Select Cancel to keep Amplifier installed.",),
+                 ("changes nothing. Amplifier stays installed.",))):
+            with self.subTest(button=button):
+                for sentence in product:
+                    self.assertIn(sentence, consumer)
+                self.assertTrue(answers[button].startswith(results[0]), answers[button])
+                for result in results[1:]:
+                    self.assertIn(result, answers[button])
+        # A delete is said only under Yes.
+        for button in ("No", "Cancel"):
+            self.assertNotIn("delete", answers[button])
+        for product, stated in (
+                ("Select Yes to stop that work and uninstall now.",
+                 "If Amplifier is working on a chat, it asks before it stops that work."),
+                ("Its entries in the Start menu and the Apps list will be removed.",
+                 "An uninstall stops Amplifier and removes it from the Start menu and the Apps list."),
+                # Windows asks only when it trusts the certificate.
+                ("Windows asks whether to delete the certificate",
+                 "If Windows asks whether to delete the certificate, select **Yes**."),
+                ("Amplifier is uninstalled. It no longer runs, and it no longer starts when you sign in.",
+                 'After a delete, Amplifier says "Amplifier is uninstalled."'),
+                ("When you close this message, Amplifier starts to remove its last program files.",
+                 "When you close that message, it starts to remove its last program files and then the folder."),
+                # A delete that stopped: the person's next step, and that Amplifier stays closed.
+                ("Close other programs or restart this PC. Then uninstall Amplifier again to finish. "
+                 "Until then Amplifier does not open.",
+                 "If Amplifier says that it could not finish, close other programs or restart the PC, then uninstall "
+                 "again. Until then Amplifier does not open."),
+                ("The folder itself stays, because it holds entries that are not Amplifier's.",
+                 "A file or folder directly in the Amplifier folder whose name Amplifier does not use stays, and then "
+                 "the folder stays too."),
+                # The earlier question: an earlier launcher, or a folder without setup's record.
+                ("Your chats, settings, accounts and the program files stay in this folder:",
+                 'Amplifier can also ask only "Uninstall Amplifier?" with **Yes** and **No**, for example in an '
+                 "installation from an earlier setup file. There, **Yes** uninstalls and leaves the folder, and **No** "
+                 "changes nothing.")):
+            with self.subTest(stated=stated):
+                self.assertIn(product, consumer)
+                self.assertIn(stated, rest)
+        self.assertNotIn("It leaves the folder with your chats", plain)
         self.assertNotIn("Native Windows is not yet supported", readme)
         # The design stays a record of what is tested, not a support claim.
         self.assertIn("(docs/design/native-windows-installation.md)", section)
@@ -68,6 +133,82 @@ class InstallationGuidanceTests(unittest.TestCase):
         self.assertIn("**not a native Windows support claim**", design)
         self.assertIn("Qualified native Windows support is not claimed.", " ".join(design.split()))
 
+    def test_windows_preview_names_its_browser_and_three_stops(self):
+        def source(path):
+            return (ROOT / path).read_text(encoding="utf-8")
+
+        def plain(text):
+            return " ".join(text.split())
+
+        section = source("README.md").split("\n### Windows 11 (preview)\n", 1)[1].split("\n## ", 1)[0]
+        blocks = [block.strip("\n") for block in re.split(r"\n[ \t]*\n", section) if block.strip()]
+        texts = [plain(block) for block in blocks]
+        # The steps use Microsoft Edge's names, and the section says so before the first step.
+        steps = next(index for index, text in enumerate(texts) if text.startswith("1. Download the setup file:"))
+        self.assertIn("The steps below describe Microsoft Edge.", " ".join(texts[:steps]))
+        numbered = " ".join(texts[steps:])
+        self.assertIn(" 2. Microsoft Edge holds the download ", numbered)
+        # "In step 4" below: step 4 is the step with the certificate question.
+        self.assertRegex(numbered, r" 4\. (?:(?! 5\. ).)*whether to install a certificate named ")
+        # Below the steps and above the limits: three stops. The list is the one that follows this sentence.
+        lead, limits = ("In these cases, setup or the first start does not finish. A message says what to do:",
+                        "Limits of this preview:")
+        self.assertIn(lead, texts)
+        self.assertIn(limits, texts)
+        self.assertLess(steps, texts.index(lead))
+        self.assertLess(texts.index(lead), texts.index(limits))
+        setup = source("scripts/windows_bootstrap_native.cs")
+        limit = re.search(r"internal const int MaxRootLength=(\d+);", setup).group(1)
+        cases = blocks[texts.index(lead) + 1]
+        self.assertEqual([plain(text) for text in re.findall(r"^- (.*(?:\n  .*)*)", cases, re.M)], [
+            'Setup says: "This Windows sign-in runs every program as administrator." '
+            "Sign in to Windows with a standard account, or turn User Account Control on, and then run setup again.",
+            'Setup says that the path of the Amplifier folder "is too long for Windows" '
+            f"(the limit is {limit} characters). Use a Windows account with a shorter name.",
+            "In step 4, Amplifier says that "
+            "\"this PC's security settings do not let it finish setting up its private connection to your "
+            'browser". If your organization manages this PC, ask its IT support to trust the certificate '
+            "file named in the message for your account."])
+        # Each quoted text is a part of the text that the program shows for that case.
+        first_start = source("amplifier_web/windows_installation.py")
+        shown_texts = [node.value for node in ast.walk(ast.parse(first_start))
+                       if isinstance(node, ast.Constant) and isinstance(node.value, str)]
+        quoted = re.findall(r'"([^"]+)"', plain(cases))
+        self.assertEqual(len(quoted), 3, quoted)
+        self.assertIn('"' + quoted[0] + " User Account Control is off,", setup)
+        self.assertIn('", and that path ' + quoted[1] + ' ("+', setup)
+        self.assertIn("Amplifier is running, but " + quoted[2] + ".\n\n", shown_texts)
+        # Setup: its message says that setup did not finish, and shows a stop's next step below "What to do:".
+        self.assertIn('"Setup did not finish.\\n\\nWhat happened:\\n"+text[0]+"\\n\\nWhat to do:\\n"+text[1]', setup)
+        self.assertIn("if(stop!=null) return new[]{stop.Message,stop.Next};", setup)
+        # Setup: each cause and its next step are one stop, in these words.
+        for cause, next_step in (
+                ('"This Windows sign-in runs every program as administrator. ',
+                 '"Sign in to Windows with a standard account, or turn User Account Control on. '
+                 'Then run setup again.")'),
+                ('", and that path is too long for Windows ("+',
+                 '" characters; the limit is "+MaxRootLength.ToString(CultureInfo.InvariantCulture)+").",'),
+                ('" characters; the limit is "+MaxRootLength.ToString(CultureInfo.InvariantCulture)+").",',
+                 '"Use a Windows account with a shorter name.")')):
+            with self.subTest(cause=cause):
+                self.assertEqual(setup.count(cause), 1)
+                between = setup.split(cause, 1)[1]
+                self.assertIn(next_step, between)
+                self.assertNotIn("SetupStop", between.split(next_step, 1)[0])
+        # The first start: the message, the request to IT support, and the certificate file that the message names.
+        for shown in ("Amplifier is running, but this PC's security settings do not let it finish "
+                      "setting up its private connection to your browser.\n\n",
+                      "If your organization manages this PC, ask its IT support to trust this "
+                      "certificate for your account:\n"):
+            with self.subTest(shown=shown):
+                self.assertIn(shown, shown_texts)
+        self.assertIn('saved = str(root / "export" / "local-ca.cer")', first_start)
+        self.assertIn('"certificate for your account:\\n" + saved)', first_start)
+        self.assertIn('"setting up its private connection to your browser.\\n\\n" + support + "\\n\\n"', first_start)
+        self.assertIn("owner_notice(blocked)", first_start)
+        # The design's list of what the README states names the three stops too.
+        self.assertIn("three stops that setup or the first start explains by itself",
+                      plain(source("docs/design/native-windows-installation.md")))
 
 if __name__ == "__main__":
     unittest.main()
