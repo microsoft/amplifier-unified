@@ -337,6 +337,11 @@ jobs:
         with:
           name: windows-consumer
           path: dist
+      # The Windows job installs the wheel without pins, after the host graph and
+      # the runtime tests. Its plan becomes the setup file's package list.
+      - name: Require this run's qualified Git commits in the Windows consumer plan
+        if: hashFiles('scripts/windows_consumer_release.py') != ''
+        run: python "$RUNNER_TEMP/release-tools/release_qualification.py" verify-consumer --evidence "$RUNNER_TEMP/host-resolution" --candidate "$RELEASE_CANDIDATE" --plan dist/windows-consumer-plan.json --receipts "$RUNNER_TEMP/qualification"
       - name: Publish immutable tag and release
         env:
           GH_TOKEN: ${{ github.token }}

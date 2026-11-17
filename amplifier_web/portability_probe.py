@@ -176,7 +176,10 @@ async def _probe(request):
         schema = await config_schema(schema_provider)
     finally:
         await _strict_close(schema_provider)
-    config = materialize_provider_config(request["config"], schema)
+    # This check is a model call. The provider's own state files belong in the
+    # shared home, as in a chat. AMPLIFIER_HOME names that home again here.
+    from amplifier_web.provider_state_files import with_state_files
+    config = with_state_files(request["module"], materialize_provider_config(request["config"], schema))
     previous_copilot = os.environ.get("COPILOT_AGENT_TOKEN")
     copilot = request["module"] == "provider-github-copilot" and config.get("github_token")
     if copilot:

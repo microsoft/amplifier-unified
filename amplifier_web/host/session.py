@@ -1258,7 +1258,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
             session = constructing
         initialization = initialization_hooks(isolation=isolation, decision_accounts=decision_accounts,
                                               routing=routing, retain=retain_session,
-                                              ephemeral_servers=ephemeral_mcp_servers)
+                                              ephemeral_servers=ephemeral_mcp_servers,
+                                              providers=prepared.mount_plan.get('providers', []))
         with startup_timing.phase('manager.session.create'):
             session = await prepared.create_session(session_id=runtime.session_id,
                 session_cwd=execution_workspace, approval_system=approvals, is_resumed=messages is not None,

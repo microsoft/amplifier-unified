@@ -29,6 +29,9 @@ _READ_ONLY_WAIT_ACTIONS = frozenset({
     "operations.wait", "recall.wait",
 })
 
+_ICON_RENDER_LIMIT = 4
+_ICON_PENDING_LIMIT = 64
+
 
 def _set_response_headers(response: web.StreamResponse, request: web.Request) -> web.StreamResponse:
     path = request.path
@@ -835,19 +838,62 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     static = Path(__file__).parent / "static"
     manifest_path = static / 'manifest.webmanifest'
     manifest_template = json.loads(manifest_path.read_text(encoding='utf-8')) if manifest_path.exists() else None
+    icon_encodes = asyncio.Semaphore(_ICON_RENDER_LIMIT)
+    icon_pending = 0
 
     async def instance_manifest(request):
         if manifest_template is None:
             raise AppError("Frontend assets are missing. Build frontend before packaging.", 503)
-        return web.json_response(service.instance_branding.manifest(manifest_template),
+        accents = request.query.getall('accent', [])
+        accent = accents[0] if len(accents) == 1 else None
+        return web.json_response(service.instance_branding.manifest(manifest_template, accent),
                                  content_type='application/manifest+json')
 
     async def instance_icon(request):
+        nonlocal icon_pending
+        from functools import partial
         from .instance_branding import SIZES
         size = int(request.match_info['size'])
         if size not in SIZES:
             raise web.HTTPNotFound()
-        content = await asyncio.to_thread(service.instance_branding.icon, size)
+        accents = request.query.getall('accent', [])
+        accent = accents[0] if len(accents) == 1 else None
+        # v is a cache buster, not an immutable version: installed clients can
+        # retain old URLs. Cache hits need neither an executor nor a render slot.
+        content = service.instance_branding.cached_icon(size, accent)
+        if content is not None:
+            return web.Response(body=content, content_type='image/png')
+        # Queue ordinary multi-tab bursts without submitting unbounded executor
+        # work, but cap public waiting requests during a sustained flood.
+        if icon_pending >= _ICON_PENDING_LIMIT:
+            raise web.HTTPServiceUnavailable(headers={'Retry-After': '1'})
+        icon_pending += 1
+        try:
+            await icon_encodes.acquire()
+        finally:
+            icon_pending -= 1
+        try:
+            content = service.instance_branding.cached_icon(size, accent)
+            if content is None:
+                future = asyncio.get_running_loop().run_in_executor(
+                    None, partial(service.instance_branding.icon, size, accent))
+        except BaseException:
+            icon_encodes.release()
+            raise
+        if content is not None:
+            icon_encodes.release()
+            return web.Response(body=content, content_type='image/png')
+
+        def finished(future):
+            # Keep the slot until the thread actually finishes even if its
+            # HTTP waiter was cancelled; a waiting request can then proceed.
+            icon_encodes.release()
+            # Retrieve any exception if the original HTTP waiter was cancelled.
+            if not future.cancelled():
+                future.exception()
+
+        future.add_done_callback(finished)
+        content = await asyncio.shield(future)
         return web.Response(body=content, content_type='image/png')
 
     app.router.add_get('/manifest.webmanifest', instance_manifest)

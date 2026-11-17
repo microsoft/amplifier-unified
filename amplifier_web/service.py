@@ -3122,6 +3122,13 @@ class AppService:
                     session = self._new_session({**args, 'workspace': prepared_workspace} if prepared_workspace else args,
                                                 new_root=True)
                     if args.get('id') or prepared_identity: session['id'] = args.get('id') or prepared_identity
+                    # A folder whose path Windows cannot hold in the chat's saved files. Answer here, before
+                    # anything is made: the session store could not even create its folder for this chat.
+                    from .session_files import chat_files_identity, chat_folder_too_long
+                    too_long = None if session.get('externalAgent') else chat_folder_too_long(
+                        session.get('workspace'), chat_files_identity(session))
+                    if too_long:
+                        raise ValueError(too_long + ' No chat was started.')
                     handoff = self.handoffs.execution(action, args, origin, command_id, caller_session_id)
                     if handoff is not None and handoff['mode'] == 'full':
                         # Input attribution applies to every direct handoff;

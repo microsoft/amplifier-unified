@@ -10,14 +10,16 @@ imports and database formats; the database includes durable explicit notes and
 receipts, not only rebuildable search data. Do not coinstall the standalone
 distribution with Unified or create a second writable runtime copy.
 
-`components/workspaces/` is the temporary authoring home for the independently
-buildable `amplifier_workspace_metadata` package. Its registration and query
-mechanism tests belong here; Unified retains initialization, filesystem effects,
+Author `amplifier_workspace_metadata` and its registration/query tests in
+[amplifier-platform-workspaces](https://github.com/bkrabach/amplifier-platform-workspaces).
+Unified retains initialization, filesystem effects,
 history, authority and persistence. Unified consumes only the published artifact
 selected into `workspace-metadata-delivery/` by `workspace-metadata.source.json`,
 as the sole installed owner; do not coinstall the standalone distribution. Never
 edit that generated copy by hand. Author edits and publication do not refresh the
-app selection. This metadata boundary is not the whole workspace domain.
+app selection. Do not restore a second author copy here. Follow the
+[selection instructions](README.md#select-a-workspace-metadata-artifact).
+This metadata boundary is not the whole workspace domain.
 
 `components/outputs/` is temporarily authored here as an independently buildable
 Python project. Preserve `amplifier_outputs` imports and its saved-body formats.
@@ -65,13 +67,16 @@ distribution with Unified, which remains the sole installed owner. Follow
 [the selection instructions](README.md#select-a-scheduling-artifact); host admission,
 authorization, Stop and execution remain in Unified.
 
-`operations/` is the temporary authoring project for `amplifier_operations`.
-Its SQLite operation observations and bounded delivery/cursor tests belong here;
+[bkrabach/amplifier-platform-operations](https://github.com/bkrabach/amplifier-platform-operations)
+is the sole authoring owner for `amplifier_operations`.
+Its SQLite operation observations and bounded delivery/cursor tests belong there;
 Unified retains admission, authority, Stop and execution. The top-level
 `amplifier_operations/` is the generated runtime snapshot selected by
 `operations.source.json`, preserving the installed and isolated-worker import path.
-Never edit that snapshot by hand or coinstall the standalone distribution with
-Unified. Independent author edits/publication do not refresh the app selection.
+Unified remains the sole installed owner. Never restore an author copy here,
+edit that snapshot by hand or coinstall the standalone distribution with Unified.
+Independent author edits/publication do not refresh the app selection. Follow
+the [selection instructions](README.md#select-an-operations-artifact).
 
 `kernels/` is the temporary authoring project for `amplifier_kernels`, including
 its Python and Node runners and real-process mechanism tests. Unified consumes

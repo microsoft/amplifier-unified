@@ -58,10 +58,44 @@ class InstallationGuidanceTests(unittest.TestCase):
         plain = " ".join(section.split())
         for limit in ("This is a preview.", "not signed yet", "Windows 11 with an Intel or AMD processor",
                       "ARM processors are not supported yet", "your own Windows account only",
-                      "Settings > Apps > Installed apps",
-                      "`%USERPROFILE%\\.amplifier\\rate-limit-state.json`. Uninstall does not remove that file"):
+                      "Settings > Apps > Installed apps"):
             with self.subTest(limit=limit):
                 self.assertIn(limit, plain)
+        # Folder: one statement for each AI connection that the app offers, and no more than is known.
+        folder = " ".join(section.split("\n- **Folder:**", 1)[1].split("\n- **Uninstall:**", 1)[0].split())
+        self.assertTrue(folder.startswith(
+            "Amplifier installs into `%LOCALAPPDATA%\\Amplifier` and keeps your chats, settings and accounts there. "
+            "What a chat writes outside that folder depends on the AI connection:"), folder)
+        import json
+        offered = [row["name"] for row in json.loads(source("amplifier_web/ai_services.json"))]
+        self.assertEqual(sorted(re.findall(r"\*\*([^*]+?):?\*\*", folder)), sorted(offered))
+        statements = (
+                "- **OpenAI API:** in our test on a PC, a chat wrote no file outside the folder.",
+                # Seen on a PC with an earlier version. An installation that ran one can hold this file,
+                # and nothing deletes it.
+                "- **Anthropic API:** in our test on a PC, a chat wrote one small file outside the folder: "
+                "`%USERPROFILE%\\.amplifier\\rate-limit-state.json`. "
+                "Versions after 0.106.2 keep that file in the folder. We have not tested this on a PC yet. "
+                "A file that an earlier version wrote stays where it is. "
+                "Later versions do not use it, and uninstall does not remove it. You can delete it.",
+                "- **GitHub Copilot Subscription:** its component makes two folders, "
+                "`%USERPROFILE%\\.amplifier-provider-github-copilot` and "
+                "`%LOCALAPPDATA%\\amplifier-provider-github-copilot`. We read this in its source code. "
+                "We have not tested it on a PC.",
+                "- **ChatGPT Subscription**, **Google Gemini API** and **OpenAI Compatible API:** "
+                "we have not tested this.")
+        # The item is these sentences and nothing else: it must not say that nothing is outside the folder.
+        self.assertEqual(folder.split(" depends on the AI connection: ", 1)[1], " ".join(statements))
+        # "Versions after 0.106.2 keep that file in the folder" is the host's rule, with that file name.
+        # 0.106.2 is the last release without the rule. This check refuses only a version that does not exist
+        # yet. It cannot see a release: whoever merges a change of this sentence checks, directly before the
+        # merge, that the named version is the latest release.
+        from amplifier_web.provider_state_files import STATE_FILES
+        self.assertEqual(STATE_FILES["provider-anthropic"]["rate_limit_state_path"], "rate-limit-state.json")
+        self.assertIn('"AMPLIFIER_HOME": "shared"', source("amplifier_web/windows_consumer.py"))
+        named, = re.findall(r"Versions after (\d+\.\d+\.\d+) keep", folder)
+        current = re.search(r'^version = "(\d+\.\d+\.\d+)"$', source("pyproject.toml"), re.M).group(1)
+        self.assertLessEqual(tuple(map(int, named.split("."))), tuple(map(int, current.split("."))))
         # Uninstall: the questions and the three buttons are the product's own, and each answer has its result.
         # A sentence of the product can continue in the next string of its source.
         consumer = re.sub(r'"\s*\n\s*"', "", source("amplifier_web/windows_consumer.py"))

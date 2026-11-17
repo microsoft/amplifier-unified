@@ -166,6 +166,13 @@ def selected(manifests, *, distributions=None, environment=None, prepared_local_
 
 async def refresh(manager, stage, project, selected):
     """Advance only proven generated entries in an unpublished candidate."""
+    selected = {name: row for name, row in selected.items()
+                if row.get('sourceKind') == 'dependency' and row.get('status') != 'explicit-pin'}
+    await refresh_generated_sources(manager, stage, project, selected)
+
+
+async def refresh_generated_sources(manager, stage, project, selected):
+    """Replace exact generated entries after the caller proves selected policy."""
     from .deployment import write_private
     from .runtime_environment import package_name, toml_value, locked_sources, verify_resolution
     from .staged_sources import owned_path
@@ -173,8 +180,6 @@ async def refresh(manager, stage, project, selected):
     import shutil
     from pathlib import Path
 
-    selected = {name: row for name, row in selected.items()
-                if row.get('sourceKind') == 'dependency' and row.get('status') != 'explicit-pin'}
     if not selected:
         return
     project, stage = Path(project), Path(stage)
