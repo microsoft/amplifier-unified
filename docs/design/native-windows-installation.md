@@ -715,6 +715,15 @@ table with `python tests/test_windows_path_budget.py`.
   folder (`<folder>\workspace`) is the folder path plus 10 characters. A chat
   there is always kept. Its background-job records fit only up to a folder
   path of 51, and its request diagnostics up to 42.
+  A helper (sub-agent) session has less room too. Its ID is 34 characters plus
+  the agent's name, and its history is saved under the same project name as
+  the chat's. With the longest folder that the app accepts, the history of a
+  helper fits up to an agent name of 15 characters. In the default workspace
+  folder it fits up to a name of 24 characters at a folder path of 59, of 40
+  at 51 and of 74 at 34. In an app chat folder it fits up to 72 at 59. The
+  app's answer measures the chat and not a helper. This is arithmetic from
+  the names. What a person sees when the history of a helper does not fit has
+  not been run.
 - **Not covered:** an installation made by an earlier setup file (folder
   path of 74 characters plus the account name) has no budget; new chats there
   get the short name, which is necessary and not always sufficient. A chat

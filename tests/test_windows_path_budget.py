@@ -249,6 +249,45 @@ def test_a_persons_folder_limits_are_stated_not_hidden():
     assert 2 * MAX_ROOT + len('\\workspace') <= KEPT_CHAT_ROOM   # and a chat there is always kept
 
 
+# Stated limit, not fixed here: a helper (sub-agent) session has the ID
+# ``<16 hex>-<16 hex>_<agent name>`` (34 characters plus the agent's name), and
+# the app saves its history in the same project folder as the chat's
+# (``host/children.py`` uses the chat's store). Under a CLI name that history
+# has less room than the chat's own. Each number is the longest agent name
+# with which every history row of a helper fits. The app's answer
+# (``session_files.chat_folder_too_long``) measures the chat, not a helper.
+HELPER_HISTORY = ('session folder', 'transcript backup', 'pending transcript append', 'history temporary',
+                  'metadata lock beside the folder')
+HELPER_ID = 34
+HELPER_NAME_AT_THE_LONGEST_ACCEPTED_FOLDER = 15
+HELPER_NAME_IN_THE_DEFAULT_WORKSPACE_FOLDER = {34: 74, 51: 40, 59: 24}   # by installation folder path
+HELPER_NAME_IN_AN_APP_CHAT_FOLDER = 72
+
+
+def helper_name(project, root=None):
+    """The longest agent name with which the history of a helper session fits under this project name."""
+    return max(size for size in range(1, 222) if all(
+        fits(kind, relative, root) for name, kind, relative in session_store(project, 'i' * (HELPER_ID + size))
+        if name in HELPER_HISTORY))
+
+
+def test_a_helper_session_has_less_room_under_a_cli_name():
+    from amplifier_foundation import tracing
+    identity = tracing.generate_sub_session_id(agent_name='a' * 15, parent_session_id=ROOT_ID)
+    assert re.fullmatch(r'[0-9a-f]{16}-[0-9a-f]{16}_a{15}', identity) and len(identity) == HELPER_ID + 15
+    assert 'self.store.save(identity, messages' in (ROOT / 'amplifier_web/host/children.py').read_text(encoding='utf-8')
+    # The longest folder of a person that the app accepts, at every installation folder path.
+    for root in (34, 51, MAX_ROOT):
+        assert helper_name('-' + 'p' * (KEPT_CHAT_ROOM - root - 1), root) == HELPER_NAME_AT_THE_LONGEST_ACCEPTED_FOLDER
+    assert {root: helper_name(cli_project(root, 'workspace'), root)
+            for root in (34, 51, MAX_ROOT)} == HELPER_NAME_IN_THE_DEFAULT_WORKSPACE_FOLDER
+    assert helper_name(CHAT_PROJECT) == HELPER_NAME_IN_AN_APP_CHAT_FOLDER
+    # The row that decides is the temporary file of the history writer.
+    assert HELPER_NAME_AT_THE_LONGEST_ACCEPTED_FOLDER == (
+        PERSONS_FOLDER_ROOM['history temporary'] - KEPT_CHAT_ROOM + len(ROOT_ID) - HELPER_ID)
+    assert HELPER_NAME_IN_AN_APP_CHAT_FOLDER == LONGEST_SESSION_ID['history temporary'] - HELPER_ID
+
+
 # Update stage. An in-app component update, and a setup run on a PC that
 # already has an AI connection, prepare the components in the stage folder
 # ``<root>\app\updates\releases\<32 hex>``. The compatibility probe then runs
@@ -540,8 +579,9 @@ STORE_TEST_DEPTH = 140
 # What setup and the app install below the installation folder: the deepest
 # file of each part, in characters below the folder. Measured in a clean-room
 # installation (release 0.105.0, after an in-app update and a chat). The
-# design document states the same numbers. The native tree case fails when a
-# part that it builds is deeper than its number here.
+# design document states the same numbers. The native tree case
+# (``tests/test_windows_chat_setup.py``) builds the parts of BUILT_BY_THE_TREE_CASE
+# and fails when one of them is deeper than its number here.
 MEASURED_DEPTHS = {
     'frozen worker environment': 194,   # app\runtime\q-<32 hex>\.venv\...: bytecode; the source file is 180
     'uv cache': 189,                    # cache\git-v1\checkouts\...: a copy of the fixture above
@@ -550,6 +590,12 @@ MEASURED_DEPTHS = {
     'private Python': 142,
     'tools': 124,
     'private Git': 90,                  # the full Git for Windows
+}
+# The parts that the native tree case builds itself, and where each one is below the installation folder.
+BUILT_BY_THE_TREE_CASE = {
+    'frozen worker environment': r'app\\runtime\\q-[0-9a-f]{32}\\',
+    'first worker environment': r'app\\runtime\\[0-9a-f]{16}\\',
+    'uv cache': r'cache\\',
 }
 
 
@@ -569,6 +615,125 @@ def test_measured_application_depths_fit_under_the_longest_root():
     assert MODULE_DEPTH <= STORE_DEPTH < STORE_TEST_DEPTH
     for number in ('255', '268', '267', '254'):
         assert re.search(rf'\b{number}\b', design), number
+
+
+def test_the_design_document_states_the_numbers_of_this_budget():
+    """Each number in the document's budget section is the number that this file computes.
+
+    A sentence is built from the computed number and must be in the document.
+    So a wrong number in the document fails here, and so does a number that
+    changes here while the document keeps the old one.
+    """
+    design = (ROOT / 'docs/design/native-windows-installation.md').read_text(encoding='utf-8')
+    # From the measured depths (the paragraph before the budget section) to the end of the budget section.
+    start = re.search(r'Worst\s+observed depths below the folder', design).start()
+    budget = design.index('### Path budget below the installation folder', start)
+    section = ' '.join(design[start:design.index('\n### ', budget + 1)].split())
+    chat_files = f'app\\chats\\{ROOT_ID}\\files'
+    session = {name: relative for name, kind, relative in session_store(CHAT_PROJECT, ROOT_ID)}
+    root_rows = session_store(CHAT_PROJECT, ROOT_ID) + capture_store(CHAT_PROJECT, ROOT_ID) + ownership_store(ROOT_ID)
+    stage = {name: relative for name, kind, relative in update_stage()}
+    store = {name: relative for name, kind, relative in source_store()}
+    earlier = {name: relative for name, kind, relative in source_store(folder=EARLIER_SOURCE_FOLDER)}
+    object_prefix = length(f'{SOURCE_FOLDER}\\objects\\{"f" * SOURCE_NAME}\\{HEX40}\\') - MAX_ROOT
+    build_prefix = length(f'{SOURCE_FOLDER}\\builds\\{"f" * SOURCE_NAME}\\') - MAX_ROOT
+    fixture = MAX_ROOT + object_prefix + STORE_TEST_DEPTH          # ...\context-intelligence\metadata.json
+    check_name = len(cli_project(MAX_ROOT, CHECK_FOLDER)) - MAX_ROOT
+
+    def under_the_cli_name(root, tail=''):
+        return length(f'{STAGE}\\shared-config\\projects\\{cli_project(root, CHECK_FOLDER)}{tail}', root)
+
+    def without_the_stage_name(root):
+        return max(size for size in range(1, 200) if all(
+            fits(kind, relative, root) for name, kind, relative in update_stage('-' + 'p' * (size - 1))
+            if name not in STAGE_NEVER_WRITTEN))
+
+    limits, person, workspace = LONGEST_SESSION_ID, PERSONS_FOLDER_ROOM, DEFAULT_WORKSPACE_LONGEST_ROOT
+    before = WITHOUT_THE_STAGE_NAME_DEFAULT_WORKSPACE_LONGEST_ROOT
+    helper = HELPER_NAME_IN_THE_DEFAULT_WORKSPACE_FOLDER
+    sentences = [
+        f'module source is {length(store[SOURCE_OBJECT])} characters at {MAX_ROOT}, and the deepest other file that '
+        f'counts as needed is {MAX_ROOT + object_prefix + STORE_DEPTH}.',
+        f'a file path of at most {FILE_LIMIT} characters and creates a folder of at most {FOLDER_LIMIT}.',
+        # The app's own chat folders.
+        f'is the folder path plus {len(cli_project(MAX_ROOT, chat_files)) - MAX_ROOT} characters',
+        f'was {length(session_store(cli_project(51, chat_files), ROOT_ID)[5][2], 51)} characters with an '
+        f'18-character account name',
+        f'`chat-<16 hex digits>` ({len(CHAT_PROJECT)} characters)',
+        f'at {MAX_ROOT}: the longest path is {max(length(relative) for name, kind, relative in root_rows)}.',
+        # Worker sessions in an app chat folder.
+        f'At {MAX_ROOT} every path shape holds an ID of {WORKER_ID} characters.',
+        f'the request observation ({limits["request observation"]}, root sessions only)',
+        f'diagnostic copy ({limits["oversized-request copy"]};',
+        f'background-job records ({limits["background-job record"]}), the saved view ({limits["view temporary"]}).',
+        # A folder that a person chose.
+        f'may be at most {KEPT_CHAT_ROOM} characters.',
+        f'a path of {KEPT_CHAT_ROOM - MAX_ROOT} characters at {MAX_ROOT}, and of {KEPT_CHAT_ROOM - 34} at 34.',
+        f'background-job records ({person["background-job record"]} in place of {KEPT_CHAT_ROOM}) and request '
+        f'diagnostics ({person["request observation"]}).',
+        f'is the folder path plus {len(chr(92) + "workspace")} characters.',
+        f'fit only up to a folder path of {workspace["background-job record"]}, and its request diagnostics up to '
+        f'{workspace["request observation"]}.',
+        f'Its ID is {HELPER_ID} characters plus the agent\'s name',
+        f'fits up to an agent name of {HELPER_NAME_AT_THE_LONGEST_ACCEPTED_FOLDER} characters.',
+        f'up to a name of {helper[MAX_ROOT]} characters at a folder path of {MAX_ROOT}, of {helper[51]} at 51 and of '
+        f'{helper[34]} at 34.',
+        f'In an app chat folder it fits up to {HELPER_NAME_IN_AN_APP_CHAT_FOLDER} at {MAX_ROOT}.',
+        # The update stage.
+        f'(folder path + {length(STAGE) - MAX_ROOT}).',
+        f'The CLI name of that folder is the folder path plus {check_name} characters',
+        f'is twice the folder path plus {under_the_cli_name(MAX_ROOT, chr(92) + "sessions") - 2 * MAX_ROOT}, which '
+        f'Windows creates only up to a folder path of '
+        f'{max(root for root in range(1, 99) if under_the_cli_name(root, chr(92) + "sessions") <= FOLDER_LIMIT)}.',
+        f'fits only up to '
+        f'{max(r for r in range(1, 99) if under_the_cli_name(r, f"{chr(92)}sessions{chr(92)}{ROOT_ID}") <= FOLDER_LIMIT)})',
+        f'({under_the_cli_name(51)} characters at a folder path of 51;',
+        f'({len(UPDATE_PROJECT)} characters).',
+        f'create is {STAGE_LONGEST[1]}, with {STAGE_SPARE} characters to spare; the probe\'s session folder is '
+        f'{length(stage["probe session folder"])}.',
+        f'(folder {length(stage["probe capture folder"])} at {MAX_ROOT}).',
+        f'(the saved view, {length(stage["probe view temporary"])}, and a background-job record, '
+        f'{length(stage["probe background-job record"])})',
+        f'(longest path {length(BASELINE + chr(92) + "runtime-install-overrides.txt")}).',
+        # A chat with its own setup.
+        f'adds only shorter paths ({max(length(row[2]) for row in chat_setup_stage()[len(update_stage()):])} at '
+        f'{MAX_ROOT}).',
+        f'was twice the folder path plus {length(update_stage(cli_project(MAX_ROOT, "workspace"))[7][2]) - 2 * MAX_ROOT}'
+        f' ({length(update_stage(cli_project(MAX_ROOT, "workspace"))[7][2])} at {MAX_ROOT})',
+        f'only up to a folder path of {before["probe history temporary"]}.',
+        f'at most {without_the_stage_name(MAX_ROOT)} characters at {MAX_ROOT}, {without_the_stage_name(51)} at 51 and '
+        f'{without_the_stage_name(34)} at 34.',
+        # The source store.
+        f'path + {object_prefix} (`\\s\\objects\\<16>\\<40>\\`)',
+        f'is {MODULE_DEPTH} characters (measured), so the path is folder path + {object_prefix + MODULE_DEPTH}: '
+        f'**{length(store[SOURCE_OBJECT])} at {MAX_ROOT}**, with {FILE_LIMIT - length(store[SOURCE_OBJECT])} characters '
+        f'to spare.',
+        f'more than {FILE_LIMIT - length(store[SOURCE_OBJECT])} characters deeper',
+        f'is {len(HEX64) - SOURCE_NAME} characters longer.',
+        f'`metadata.json` is {fixture} characters, `events.jsonl` is {fixture - 1}, and the folder is '
+        f'{fixture - len(chr(92) + "metadata.json")}.',
+        f'Their depth in the repository is {STORE_TEST_DEPTH}.',
+        f'At a folder path of 51 the two `metadata.json` files are {fixture - MAX_ROOT + 51}',
+        f'is {object_prefix - build_prefix} characters shorter ({fixture - object_prefix + build_prefix}).',
+        f'(depth {STORE_DEPTH}): {MAX_ROOT + object_prefix + STORE_DEPTH} at {MAX_ROOT}, with '
+        f'{FILE_LIMIT - MAX_ROOT - object_prefix - STORE_DEPTH} characters to spare.',
+        f'`source-store`, {len(EARLIER_SOURCE_FOLDER) - len(SOURCE_FOLDER)} characters longer.',
+        f'path + {length(earlier[SOURCE_OBJECT]) - MAX_ROOT}.',
+        f'a folder path of **{EARLIER_SOURCE_STORE_LONGEST_ROOT[SOURCE_OBJECT]}** and is '
+        f'{length(earlier[SOURCE_OBJECT])} at {MAX_ROOT}.',
+        f'limit of {EARLIER_SOURCE_STORE_LONGEST_ROOT[SOURCE_OBJECT]}.',
+        # The native check.
+        f'opens at a folder path of {MAX_ROOT} ({length(store[SOURCE_OBJECT])} characters).',
+        f'it is refused at {MAX_ROOT} ({length(earlier[SOURCE_OBJECT])}) and opens at '
+        f'{EARLIER_SOURCE_STORE_LONGEST_ROOT[SOURCE_OBJECT]} '
+        f'({length(earlier[SOURCE_OBJECT], EARLIER_SOURCE_STORE_LONGEST_ROOT[SOURCE_OBJECT])}).',
+        f'at {MAX_ROOT} a folder path of {KEPT_CHAT_ROOM - MAX_ROOT} characters keeps a chat, and at '
+        f'{KEPT_CHAT_ROOM - MAX_ROOT + 1} Windows refuses the saved view.',
+    ]
+    assert session['view temporary'] == session_store(CHAT_PROJECT, ROOT_ID)[5][2]   # the row that index 5 names
+    assert update_stage()[7][0] == 'probe session folder'                            # the row that index 7 names
+    missing = [sentence for sentence in sentences if sentence not in section]
+    assert not missing, missing
 
 
 # The table above is only as true as the names in the code. Each check below

@@ -30,6 +30,7 @@ import asyncio
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import uuid
 
@@ -218,6 +219,13 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
         longest.setdefault((area(relative), kind, budget.needed(relative)), (size, relative))
     for (name, kind, needed), (size, relative) in sorted(longest.items(), key=lambda item: -item[1][0]):
         print(f'LONGEST {size:3} {kind:6} {"needed" if needed else "not needed":10} {name}: {relative}')
+    # The parts that this case builds are not deeper than the budget's measured depths, which the design
+    # document states. A deeper file fails here: decide then, and change the number and the document together.
+    for name, place in budget.BUILT_BY_THE_TREE_CASE.items():
+        deepest = max(size for size, kind, relative in files if re.match(place, relative, re.I)) - len(str(root))
+        print(f'MEASURED deepest file of the {name}: {deepest} characters below the installation folder '
+              f'(the budget states {budget.MEASURED_DEPTHS[name]})')
+        assert deepest <= budget.MEASURED_DEPTHS[name], name
     # No path that the app or a chat needs passes the limit. Windows refused nothing above: every step ended well.
     assert [row for row in over if budget.needed(row[2])] == []
     # What happens to each path over the limit. The source store wrote it, through the extended-length form.
