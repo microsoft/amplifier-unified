@@ -1603,6 +1603,51 @@ class Integration(unittest.IsolatedAsyncioTestCase):
             configure(manager, {**args, 'effort': None}, self.root, 'global')
         probe.assert_not_called()
 
+    async def test_real_shared_management_catalog_validates_global_effort_before_write_without_probe(self):
+        from amplifier_web.management import Management
+        from amplifier_web.setup import SetupManager
+        from amplifier_web.provider_catalog import model_key
+        # Exercise an early headless read too: later normal app assembly must
+        # bind the same existing utility manager to Management's shared owner.
+        early = self.app.prompt_suggestions.manager
+        self.app.management = Management(self.app)
+        shared = self.app.management.provider_catalog
+        ordinary = SetupManager(self.app.data_dir, catalog=shared, global_only=True)
+        ordinary.store.update(self.root, 'global', lambda value: value.update(config={'providers': [{
+            'id': 'saved', 'module': 'provider-openai',
+            'source': 'git+https://github.com/microsoft/amplifier-module-provider-openai@main',
+            'config': {'api_key': 'synthetic-key', 'default_model': 'foreground-model'}}]}))
+        key = model_key(ordinary.catalog_key({'id': 'saved'}, str(self.app.data_dir)))
+        shared.put(key, {'models': [{'id': 'utility'}], 'modelsProvenance': 'provider-api',
+                         'providerMetadata': {'configSchema': {'fields': [{
+                             'id': 'reasoning_effort', 'choices': ['low', 'high']}]}}})
+        args = {'enabled': True, 'provider': 'saved', 'model': 'utility',
+                'transcriptMode': 'last_n', 'humanTurns': 6, 'scope': 'global',
+                'configurationTarget': {'kind': 'global'}}
+        with patch.object(SetupManager, 'probe', AsyncMock(side_effect=AssertionError('no discovery'))) as probe:
+            accepted = await self.app.dispatch('providers.configureSuggestions', {**args, 'effort': 'low'},
+                                               include_state=False)
+            self.assertEqual(accepted['result']['suggestionModels']['effort'], 'low')
+            before = copy.deepcopy(ordinary.config(self.root).settings)
+            revision = self.app.state['configurationRevision']
+            with patch.object(early.store, 'update', wraps=early.store.update) as write:
+                with self.assertRaisesRegex(Exception, 'reasoning effort is unavailable'):
+                    await self.app.dispatch('providers.configureSuggestions', {**args, 'effort': 'unadvertised'},
+                                            include_state=False)
+                write.assert_not_called()
+            self.assertEqual(ordinary.config(self.root).settings, before)
+            self.assertEqual(self.app.state['configurationRevision'], revision)
+            self.assertIs(self.app.prompt_suggestions.manager, early)
+            self.assertIs(early.catalog, shared)
+            # Utility teardown owns its finite probes/logins, not shared
+            # discovery tasks or their lifetime.
+            with patch.object(shared, 'close', AsyncMock()) as close:
+                await self.app.prompt_suggestions.close()
+                close.assert_not_called()
+            self.assertEqual(shared.peek(key)['models'][0]['id'], 'utility')
+        probe.assert_not_called()
+        await ordinary.close()
+
     async def test_effective_prompt_constants_change_revision_even_with_custom_saved_prompt(self):
         manager = self.app.prompt_suggestions.manager
         configure(manager, {'enabled': False, 'transcriptMode': 'last_n', 'humanTurns': 6,

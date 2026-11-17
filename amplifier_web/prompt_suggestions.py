@@ -55,9 +55,15 @@ class PromptSuggestions:
 
     @property
     def manager(self):
+        catalog = getattr(getattr(self.service, 'management', None), 'provider_catalog', None)
         if self._manager is None:
             from .setup import SetupManager
-            self._manager = SetupManager(self.service.data_dir, global_only=True)
+            self._manager = SetupManager(self.service.data_dir, global_only=True, catalog=catalog)
+        elif catalog is not None:
+            # Early headless settings reads can precede Management assembly.
+            # Borrow its real app-wide discovery owner once available; closing
+            # this utility manager never closes a catalog supplied by its host.
+            self._manager.catalog = catalog
         return self._manager
 
     def settings(self):
