@@ -226,8 +226,15 @@ async def scrub_stage_keys(manager):
                                 validated = stat.S_ISREG((stage / 'validated.json').lstat().st_mode)
                             except FileNotFoundError:
                                 validated = False
-                            if not validated and max(stage_info.st_mtime, shared_info.st_mtime) >= time.time() - 86400:
-                                continue
+                            if not validated:
+                                try:
+                                    (stage / 'profile-attempt.json').lstat()
+                                except FileNotFoundError:
+                                    pass
+                                else:
+                                    continue  # Another preparation owner; age is not settlement.
+                                if max(stage_info.st_mtime, shared_info.st_mtime) >= time.time() - 86400:
+                                    continue
                             # Already-scrubbed stages do not consume the effect budget.
                             (shared / 'keys.env').lstat()
                             attempts += 1

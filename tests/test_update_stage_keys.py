@@ -299,6 +299,29 @@ async def test_scrub_age_preparation_bound_and_no_folder_deletion(app):
     assert all(s.is_dir() for s in more)
 
 
+@pytest.mark.parametrize('validated', [False, True])
+@pytest.mark.parametrize('entry', ['file', 'directory', 'dangling-symlink'])
+async def test_scrub_profile_attempt_entry_protects_only_unvalidated_stage(app, validated, entry):
+    manager = app.update_manager
+    stage = stage_at(manager.home, validated=validated)
+    attempt = stage / 'profile-attempt.json'
+    if entry == 'file':
+        attempt.write_text('{"status": "preparing"}')
+    elif entry == 'directory':
+        attempt.mkdir()
+    else:
+        attempt.symlink_to(stage / 'absent-attempt-target')
+    # Creating the entry changes stage mtime: age both folders afterwards so
+    # this cannot pass merely through the existing recent-stage exclusion.
+    old = time.time() - 25 * 3600
+    for folder in (stage, stage / 'shared-config'):
+        os.utime(folder, (old, old))
+    await storage.scrub_stage_keys(manager)
+    assert (stage / 'shared-config/keys.env').exists() is (not validated)
+    assert_preserved(stage)
+    assert attempt.lstat()  # No attempt entry, including a dangling link, was removed.
+
+
 @pytest.mark.parametrize('blocker', ['lock', 'checking', 'staging', 'validating', 'activating',
                                     'pendingRestart', 'pendingReplacement', 'pendingRelease',
                                     'pendingApp', 'pendingRollback', 'check-task', 'closed'])
@@ -385,3 +408,70 @@ def test_native_windows_stage_keys_private_removal(hold_open):
     finally:
         if home.exists():
             shutil.rmtree(home)
+
+
+@pytest.fixture
+async def native_product_stage_keys(monkeypatch):
+    """Use the real setup writer, manager directory call and install snapshot."""
+    from types import SimpleNamespace
+    from amplifier_web import setup, windows_files as wf
+    from amplifier_web.host import config
+
+    # Only the setup writer's environment/cache side effects are isolated.
+    # Every directory/ACL/file write, copy, refresh and read is the real product.
+    monkeypatch.setattr(setup, 'os', SimpleNamespace(environ={}))
+    monkeypatch.setattr(config, '_KEY_FILE_VALUES', {})
+    home = wf.address(Path.home() / ('.a9-product-' + uuid.uuid4().hex))
+    updates = home / 'updates'
+    live = home / 'live-shared'
+    stage = updates / 'releases' / ('a' * 32)
+    owner = SimpleNamespace(store=SimpleNamespace(shared_home=live))
+    try:
+        # UpdateManager.__init__ uses this exact private-directory boundary.
+        with wf.directory(updates, owned_root=home, create=True):
+            pass
+        # SetupManager._keys is the provider setup's real shared keys writer
+        # (setup.py), including its private directory, lock and publication.
+        setup.SetupManager._keys(owner, {'FIXTURE_A9_PRODUCT_KEY': 'synthetic-original'})
+        config.write_private(live / 'settings.yaml', '{}\n', owned_root=live)
+        # install() deliberately uses ordinary mkdir; do not replace this with
+        # a private-directory writer or directly publish the staged key.
+        stage.mkdir(parents=True, mode=0o700)
+        proof = {'candidate': stage.name, 'activeBefore': None,
+                 'directoryIdentity': [stage.stat().st_dev, stage.stat().st_ino],
+                 'boundary': 'copy-only', 'copySettled': True}
+        await storage.snapshot_shared_config(proof, live, stage / 'shared-config')
+        assert proof['copySettled'] is True, 'The real snapshot copy did not settle'
+        assert (stage / 'shared-config/keys.env').is_file(), 'The product snapshot did not copy keys'
+        yield home, live, stage, owner
+    finally:
+        if home.exists():
+            shutil.rmtree(home)
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='requires native Windows product snapshot ACLs')
+async def test_native_windows_stage_keys_product_snapshot_removal(native_product_stage_keys):
+    home, live, stage, owner = native_product_stage_keys
+    reason = storage.remove_stage_keys(home, stage)
+    assert reason is None, f'Product mkdir/copy2 stage key removal returned {reason!r}'
+    assert not (stage / 'shared-config/keys.env').exists(), 'Product snapshot key was retained'
+    assert (stage / 'shared-config/settings.yaml').read_text() == '{}\n'
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='requires native Windows product refresh and reader')
+async def test_native_windows_stage_keys_product_refresh_readback(native_product_stage_keys):
+    from amplifier_web import setup
+    from amplifier_web.host.config import _read_keys
+
+    home, live, stage, owner = native_product_stage_keys
+    current = {'FIXTURE_A9_PRODUCT_KEY': 'synthetic-current'}
+    setup.SetupManager._keys(owner, current)
+    reason = storage.refresh_stage_keys(home, stage, live)
+    assert reason is None, f'Product mkdir/copy2 stage key refresh returned {reason!r}'
+    # This is the private-file/parser reader used by _load_keys/load_config in
+    # qualification. It reads only our synthetic file, not process environment.
+    assert _read_keys(stage / 'shared-config/keys.env') == current, 'Qualification reader did not see current synthetic keys'
+    reason = storage.remove_stage_keys(home, stage)
+    assert reason is None, f'Refreshed product stage key removal returned {reason!r}'
+    assert not (stage / 'shared-config/keys.env').exists(), 'Refreshed product key was retained'
+    assert (stage / 'shared-config/settings.yaml').read_text() == '{}\n'
