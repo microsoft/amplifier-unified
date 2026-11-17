@@ -892,7 +892,9 @@ The rule:
   is not a hardlink, not an alias, and it is never accepted. The reader closes
   it, checks the pinned folders again, opens the name again and validates
   everything again. The limits are 8 opens of one name and no new open after 2
-  seconds; the waits between the opens are 0.162 seconds in total.
+  seconds. The time limit is tested immediately before each new open, after
+  the wait and the pin check; a Windows call that already runs is not
+  interrupted. The waits between the opens are at most 0.162 seconds in total.
 - A file that another process replaces during each of those attempts gives
   `PrivateFileUnsettled`. Its text says that the file did not settle.
 - A read returns the complete earlier file (validated before the replacement)
@@ -901,9 +903,17 @@ The rule:
   point, a wrong type, another path or spelling of an object that still has a
   name, foreign ownership, a DACL that grants foreign access, another volume.
   File sharing is unchanged.
-- A publication that another publisher replaces before the first publisher's
-  last check is not a failure. Only the name check is left out for that object
-  without a name; its ACL check stays.
+- A publication whose object loses its name after the successful rename (a
+  later publication or a removal) is not reported as a failed publication.
+  Only the name check is left out for that object; its ACL check stays.
+  Nothing is known or accepted there about a file that has the name now.
+
+A reader that meets a removal (not a replacement) finds no file. While another
+handle still keeps the removed file, Windows can instead refuse the new open
+with "Access is denied" until that handle closes; this is as before, and the
+native case `test_file_removed_while_a_third_handle_keeps_it` prints which
+answer a runner gives. The reopening blocks its thread for the waits and for
+one pin check per further open.
 
 Both new errors are `PermissionError` subclasses, so each earlier handler of a
 refusal still catches them. A handle that passed validation can lose its name

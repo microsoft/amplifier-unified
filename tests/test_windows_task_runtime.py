@@ -452,12 +452,13 @@ assert marker.read_text() == 'cleaned'
 
 _WRITING_HOST = """
 import sys, time
+from pathlib import Path
 from types import SimpleNamespace
 from amplifier_web import windows_task_runtime as runtime
 spec = SimpleNamespace(data_dir=sys.argv[1], registration_id="a" * 32, supervised=False)
 runner = runtime.Runner(spec)
 runner.phase("listening")
-print("ready", flush=True)
+Path(sys.argv[1], "host-ready").write_text("ready")
 count, deadline = 0, time.monotonic() + 60
 while time.monotonic() < deadline:
     # The real host writes a phase twice at a stop. This one writes without a
@@ -494,7 +495,13 @@ def test_stop_reads_the_receipt_while_the_host_writes_its_phases():
                             cwd=Path(__file__).resolve().parents[1],
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     try:
-        assert host.stdout.readline().strip() == "ready", host.communicate(timeout=30)[1]
+        started = time.monotonic() + 60
+        while not (Path(root) / "host-ready").exists():
+            if host.poll() is not None:
+                pytest.fail("the writing host ended at its start: " + host.communicate(timeout=30)[1])
+            if time.monotonic() >= started:
+                pytest.fail("the writing host did not start within 60 seconds")
+            time.sleep(0.01)
         reads, failures, deadline = 0, [], time.monotonic() + 8
         while reads < 2000 and time.monotonic() < deadline:
             try:

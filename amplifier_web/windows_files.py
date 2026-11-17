@@ -474,14 +474,24 @@ class PinnedDirectory:
 
         The returned handle was valid at its last check. It can lose its name
         later; it then still holds the complete file that was validated.
+
+        This call blocks its thread for the waits (at most 0.162 seconds in
+        total) and for one pin check per further open. Only a file that is
+        replaced again during each attempt reaches those limits.
         """
         deadline = time.monotonic() + _REPLACED_SECONDS
         for attempt in range(_REPLACED_ATTEMPTS):
             if attempt:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                time.sleep(min(0.001 * 2 ** attempt, 0.05, remaining))
+                self._check()
+                # The wait and the pin check take time too. No open of the
+                # name starts at or after the limit. A Windows call that
+                # already runs is not interrupted.
                 if time.monotonic() >= deadline:
                     break
-                time.sleep(min(0.001 * 2 ** attempt, 0.05))
-                self._check()
             try:
                 return self._validated(name)
             except PrivateFileUnlinked as error:
@@ -594,9 +604,11 @@ class PinnedDirectory:
                 try:
                     self._api.info(handle, self.path / name, directory=False)
                 except PrivateFileUnlinked:
-                    # Published, and another publisher replaced it before this
-                    # check. That publisher checks the file that has the name
-                    # now; this object can only be closed.
+                    # The rename succeeded, and this object lost its name
+                    # afterwards (a later publication or a removal). Nothing
+                    # is known here about a file that has the name now, and
+                    # nothing of it is accepted. This object can only be
+                    # closed; its ACL is still checked below.
                     pass
                 self._api.validate_acl(handle, private=True)
             except BaseException as exc:

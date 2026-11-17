@@ -354,6 +354,7 @@ class PublicationTests(unittest.TestCase):
             self.discard_error = None
             self.post_error = False
             self.superseded = False
+            self.acl_error_after_rename = False
             self.existing_unlinked = 0
             self.renamed = False
             self.bytes = bytearray()
@@ -370,6 +371,8 @@ class PublicationTests(unittest.TestCase):
 
         def validate_acl(self, handle, *, private):
             self.events.append(("acl", handle))
+            if self.acl_error_after_rename and self.renamed:
+                raise PermissionError("Windows private-file DACL grants foreign access")
 
         def info(self, handle, path, *, directory):
             if self.post_error and self.renamed:
@@ -535,6 +538,14 @@ class PublicationTests(unittest.TestCase):
         self.assertFalse(any(event[0] == "discard" for event in api.events))
         self.assertIn(("close", 10), api.events)
 
+    def test_acl_failure_of_a_publication_that_lost_its_name_is_still_reported(self):
+        api = self.API()
+        api.present = api.superseded = api.acl_error_after_rename = True
+        with self.assertRaisesRegex(OSError, "published; post-publication verification failed") as failed:
+            self.pinned(api).publish_private("task-failure.json", b"mine", replace=True)
+        self.assertIn("DACL", str(failed.exception.__cause__))
+        self.assertFalse(any(event[0] == "discard" for event in api.events))
+
     def test_existing_file_check_of_a_publication_opens_a_replaced_name_again(self):
         api = self.API()
         api.present, api.existing_unlinked = True, 2
@@ -578,8 +589,16 @@ class ReplacedObjectTests(unittest.TestCase):
         self.links, self.finals = list(links), list(finals)
 
         def information(handle, reference):
-            reference._obj.attributes, reference._obj.links = attributes, self.links.pop(0)
+            links = self.links.pop(0)
+            if links is None:  # the query itself fails; Windows fills nothing in
+                return 0
+            reference._obj.attributes, reference._obj.links = attributes, links
             return 1
+
+        def ok(result):
+            if not result:
+                raise OSError("the Windows query failed")
+        api.ok = ok
 
         def final_path(handle, buffer, size, flags):
             value = self.finals.pop(0)
@@ -621,6 +640,14 @@ class ReplacedObjectTests(unittest.TestCase):
     def test_name_lost_between_the_two_queries_is_not_an_alias(self):
         self.refused(self.api([1, 0], [self.DELETED]), wf.PrivateFileUnlinked)
         self.refused(self.api([1, 0], [None]), wf.PrivateFileUnlinked)
+
+    def test_failed_second_query_is_an_error_and_not_a_replaced_object(self):
+        # An empty answer has 0 links. It must not be read as "replaced",
+        # which would open the name again in place of a refusal.
+        for final in (self.DELETED, None):
+            error = self.refused(self.api([1, None], [final]), OSError)
+            self.assertIs(type(error), OSError)
+            self.assertIn("query failed", str(error))
 
     def test_other_path_of_a_linked_object_stays_refused(self):
         for final in (self.DELETED, r"C:\private\TASK-RUNTIME.JSON", r"C:\PRIVAT~1\task-runtime.json"):
@@ -701,19 +728,66 @@ class ReplacedObjectTests(unittest.TestCase):
         self.assertIn("did not settle", str(unsettled.exception))
         self.assertIsInstance(unsettled.exception.__cause__, wf.PrivateFileUnlinked)
         waits = [call.args[0] for call in sleep.call_args_list]
-        self.assertEqual(len(waits), wf._REPLACED_ATTEMPTS - 1)
-        self.assertLessEqual(max(waits), 0.05)
+        self.assertEqual(waits, [0.002, 0.004, 0.008, 0.016, 0.032, 0.05, 0.05])
+        self.assertAlmostEqual(sum(waits), 0.162)  # the number in the design record
         self.assertLess(sum(waits), wf._REPLACED_SECONDS)
         self.assertLessEqual(wf._REPLACED_ATTEMPTS, 8)
         self.assertLessEqual(wf._REPLACED_SECONDS, 2)
 
-    def test_no_open_after_the_time_bound(self):
+    def clocked(self, *, open_takes=0.0, check_takes=0.0):
+        """A reader on a clock that only its own steps move: (read, opens, waits, now).
+
+        `opens` holds the time at which each open of the name started.
+        """
         api = self.API(*["replaced at the second check"] * wf._REPLACED_ATTEMPTS)
-        clock = iter([100.0, 100.0 + wf._REPLACED_SECONDS - 0.001, 100.0 + wf._REPLACED_SECONDS])
-        with patch.object(wf.time, "sleep"), patch.object(wf.time, "monotonic", lambda: next(clock)), \
-                self.assertRaises(wf.PrivateFileUnsettled):
-            self.pinned(api).read_private("task-runtime.json", limit=64)
-        self.assertEqual(api.handles, [30, 31])
+        now, opens, waits, real_open = [0.0], [], [], api.open
+
+        def opened(path, **options):
+            opens.append(now[0])
+            now[0] += open_takes
+            return real_open(path, **options)
+
+        def wait(seconds):
+            self.assertGreater(seconds, 0, "a wait of no time or less")
+            waits.append(seconds)
+            now[0] += seconds
+
+        def check():
+            now[0] += check_takes
+        api.open = opened
+        pinned = self.pinned(api)
+        pinned._check = check
+        for patcher in (patch.object(wf.time, "monotonic", lambda: now[0]),
+                        patch.object(wf.time, "sleep", wait)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+        def read():
+            with self.assertRaises(wf.PrivateFileUnsettled):
+                pinned.read_private("task-runtime.json", limit=64)
+        return read, opens, waits, now
+
+    def test_no_open_starts_at_or_after_the_time_limit(self):
+        read, opens, waits, now = self.clocked(open_takes=0.7)
+        read()
+        self.assertEqual(len(opens), 3)  # not the 8 that the count alone permits
+        self.assertTrue(all(start < opens[0] + wf._REPLACED_SECONDS for start in opens), opens)
+
+    def test_pin_check_that_passes_the_time_limit_ends_the_attempts(self):
+        read, opens, waits, now = self.clocked(check_takes=1.5)
+        read()
+        # The second pin check ends after the limit: no third open.
+        self.assertEqual(len(opens), 2)
+        self.assertTrue(all(start < opens[0] + wf._REPLACED_SECONDS for start in opens), opens)
+        self.assertGreater(now[0], opens[0] + wf._REPLACED_SECONDS)
+
+    def test_wait_is_never_longer_than_the_remaining_time(self):
+        left = 1 / 1024  # exact in binary; shorter than the first wait of 0.002
+        read, opens, waits, now = self.clocked(open_takes=wf._REPLACED_SECONDS - left)
+        read()
+        self.assertEqual(waits, [left])
+        self.assertEqual(now[0], opens[0] + wf._REPLACED_SECONDS)
+        self.assertEqual(len(opens), 1)
 
     def test_real_refusal_is_not_opened_again(self):
         for refusal in (PermissionError("private-file path is a reparse point, hardlink, or wrong type"),
@@ -1145,6 +1219,53 @@ with w.directory(root / "config/auth", owned_root=root) as p:
 """
 
 
+class _Child:
+    """Another process whose output lines are read with a time limit.
+
+    A wait for a line that never comes ends at the limit. Errors of the child
+    arrive on the same stream, so a failure message can show them.
+    """
+
+    def __init__(self, arguments):
+        import queue
+        import threading
+        self.process = subprocess.Popen(arguments, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                        stderr=subprocess.STDOUT, text=True)
+        self.lines = queue.Queue()
+
+        def pump():
+            for line in self.process.stdout:
+                self.lines.put(line.rstrip("\n"))
+            self.lines.put(None)
+        threading.Thread(target=pump, daemon=True).start()
+
+    def line(self, seconds=30):
+        """The next line; None at the end of the output or at the limit."""
+        import queue
+        try:
+            line = self.lines.get(timeout=seconds)
+        except queue.Empty:
+            return None
+        if line is None:
+            self.lines.put(None)  # the end stays the end
+        return line
+
+    def stop(self):
+        """End the child. Return the lines that nobody read."""
+        if self.process.poll() is None:
+            self.process.kill()
+        self.process.wait(timeout=10)
+        unread = []
+        while (line := self.line(10)) is not None:
+            unread.append(line)
+        for stream in (self.process.stdin, self.process.stdout):
+            try:
+                stream.close()
+            except OSError:
+                pass
+        return "\n".join(unread)
+
+
 @unittest.skipUnless(os.name == "nt", "requires native Windows local NTFS and profile ACLs")
 class ReplacedWhileReadNativeTests(unittest.TestCase):
     """The real reader against another process that replaces the same file.
@@ -1158,26 +1279,22 @@ class ReplacedWhileReadNativeTests(unittest.TestCase):
     setUp, cleanup = NativeTests.setUp, NativeTests.cleanup
 
     def writer(self, mode):
-        process = subprocess.Popen(
-            [sys.executable, "-I", "-S", "-B", "-c", _REPLACING_WRITER,
-             str(SOURCE), str(self.root), self.NAME, mode],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        child = _Child([sys.executable, "-I", "-S", "-B", "-c", _REPLACING_WRITER,
+                        str(SOURCE), str(self.root), self.NAME, mode])
+        self.addCleanup(child.stop)
+        self.expect(child, "ready")
+        return child
 
-        def settle():
-            if process.poll() is None:
-                process.kill()
-            process.communicate(timeout=10)
-        self.addCleanup(settle)
-        if process.stdout.readline().strip() != "ready":
-            self.fail("replacing writer did not start: " + process.communicate(timeout=10)[1])
-        return process
+    def expect(self, child, text):
+        line = child.line()
+        if line != text:
+            self.fail(f"replacing writer: expected {text!r} within 30 seconds, got {line!r}. " + child.stop())
 
-    def replace(self, process, content):
+    def replace(self, child, content):
         """Another process renames one complete file over the name, now."""
-        process.stdin.write(content + "\n")
-        process.stdin.flush()
-        if process.stdout.readline().strip() != "done":
-            self.fail("replacing writer failed: " + process.communicate(timeout=10)[1])
+        child.process.stdin.write(content + "\n")
+        child.process.stdin.flush()
+        self.expect(child, "done")
 
     def forced(self, pinned, point, replacements):
         """Run one replacement each time the reader reaches `point` with the file open.
@@ -1278,13 +1395,56 @@ class ReplacedWhileReadNativeTests(unittest.TestCase):
             pinned.publish_private(self.NAME, b"old")
             replacements = [lambda: self.replace(writer, "new")] * (wf._REPLACED_ATTEMPTS + 3)
             opens = self.forced(pinned, "between-checks", replacements)
-            with self.assertRaises(wf.PrivateFileUnsettled) as unsettled:
+            # Only the count limit acts here: a slow runner must not end the
+            # attempts earlier through the time limit.
+            with patch.object(wf, "_REPLACED_SECONDS", 600.0), \
+                    self.assertRaises(wf.PrivateFileUnsettled) as unsettled:
                 pinned.read_private(self.NAME, limit=64)
             self.assertNotIn("hardlink", str(unsettled.exception))
             self.assertEqual(len(opens), wf._REPLACED_ATTEMPTS)
             self.assertEqual(len(replacements), 3)
             del replacements[:]
             self.assertEqual(pinned.read_private(self.NAME, limit=64), b"new")
+
+    def test_no_new_open_after_the_time_limit(self):
+        writer = self.writer("step")
+        with wf.directory(self.path, owned_root=self.root) as pinned:
+            pinned.publish_private(self.NAME, b"old")
+            opens = self.forced(pinned, "between-checks", [lambda: self.replace(writer, "new")] * 3)
+            with patch.object(wf, "_REPLACED_SECONDS", 0.0), self.assertRaises(wf.PrivateFileUnsettled):
+                pinned.read_private(self.NAME, limit=64)
+            self.assertEqual(len(opens), 1)
+
+    def test_file_removed_while_a_third_handle_keeps_it(self):
+        # Not a replacement, and not changed by the reopening: this case
+        # records what the reader gets while another handle keeps a removed
+        # file. Windows either has no such name, or refuses the open until
+        # that handle closes ("Access is denied", error 5).
+        import hashlib
+        api = wf._API()
+        with wf.directory(self.path, owned_root=self.root) as pinned, \
+                wf.directory(self.path, owned_root=self.root) as remover:
+            pinned.publish_private(self.NAME, b"old")
+            digest = hashlib.sha256(b"old").hexdigest()
+            third = api.open(self.path / self.NAME)
+            try:
+                opens = self.forced(pinned, "between-checks",
+                                    [lambda: remover.remove_private(self.NAME, digest)])
+                with patch.object(wf.time, "sleep") as sleep, self.assertRaises(OSError) as outcome:
+                    pinned.read_private(self.NAME, limit=64)
+                error = outcome.exception
+                print(f"FACT removed-file-kept-by-a-third-handle reader={type(error).__name__} "
+                      f"winerror={getattr(error, 'winerror', None)} opens={len(opens)}")
+                self.assertNotIsInstance(error, (wf.PrivateFileUnlinked, wf.PrivateFileUnsettled))
+                self.assertNotIn("hardlink", str(error))
+                self.assertTrue(isinstance(error, FileNotFoundError) or error.winerror == 5, repr(error))
+                # One open found the removed object, one more open met Windows' answer. No loop.
+                self.assertEqual((len(opens), sleep.call_count), (2, 1))
+            finally:
+                api.close(third)
+            with self.assertRaises(FileNotFoundError):
+                pinned.read_private(self.NAME, limit=64)
+            self.assertEqual(list(self.path.iterdir()), [])
 
     def test_refused_files_are_refused_at_the_first_open(self):
         with wf.directory(self.path, owned_root=self.root) as pinned:
@@ -1365,12 +1525,14 @@ class ReplacedWhileReadNativeTests(unittest.TestCase):
                     reads += 1
             finally:
                 (self.root / "stop").write_text("stop")
-            output, error = writer.communicate(timeout=30)
+            replacements = writer.line()
+            if replacements is None or not replacements.isdigit():
+                self.fail(f"replacing writer did not finish: {replacements!r}. " + writer.stop())
             from collections import Counter
             print(f"FACT free-running reads={reads} opens={opens[0]} (opens above reads: the name was "
-                  f"opened again) replacements={output.strip()} failures={len(failures)} "
+                  f"opened again) replacements={replacements} failures={len(failures)} "
                   f"kinds={dict(Counter(failures))}")
-            self.assertEqual(writer.returncode, 0, error)
+            self.assertEqual(writer.process.wait(timeout=30), 0)
             self.assertEqual(failures[:3], [])
 
 
