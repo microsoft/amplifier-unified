@@ -248,6 +248,18 @@ task on a hosted runner and renames that runner's account domain. Its fixture
 changes the machine's security policy: it runs only with the workflow's opt-in
 in a hosted runner's environment. That guard stops accidental use and does not
 prove the machine; never run the fixture on a machine that is kept.
+`windows-standard-account.yml` runs the consumer journey as a standard user
+(not a member of Administrators) on a hosted runner. Its fixture creates one
+local user and signs it in through Remote Desktop to the same computer
+(`127.0.0.2`): Task Scheduler starts a task that runs with a person's own
+sign-in only in a desktop session of that person. The fixture creates a
+Windows user, changes a Remote Desktop setting of the runner's account and
+deletes that user's installation folder. The same guard and the same rule
+apply: only a hosted runner with the workflow's opt-in, never a machine that
+is kept. No hosted runner runs the setup file, because setup refuses Windows
+Server. The case compares the product's texts of the Stop question, the
+uninstall questions and the certificate message; change them together with
+the fixture.
 Python on Windows accepts only root certificates that the Windows store holds
 at that moment, and aiohttp builds its default list once at import. A new PC's
 store lacks many public roots (seen in Windows Sandbox: the package registry's

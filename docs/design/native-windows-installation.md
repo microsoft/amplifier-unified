@@ -521,9 +521,12 @@ Consequences and limits:
   of the focused Windows workflow asks the Windows chain builder about the
   shape and about a name outside the constraints, and asks Edge the same two
   questions on a disposable runner (with the test root in the machine store,
-  which the product never uses). The Windows confirmation, and Edge on an
-  ordinary PC with the root in the person's own store, are clean-room
-  acceptance.
+  which the product never uses). A person's own answer to the Windows
+  confirmation, and Edge on an ordinary PC with the root in the person's own
+  store, are clean-room acceptance. The standard-account case (see "A standard
+  Windows account") runs this step as a standard user: it records the text of
+  the Windows confirmation, answers it in the test, and requires that the
+  launcher's check then reads the connection as trusted.
 - The retained prototype launcher is unchanged: it keeps the earlier CA with a
   key on disk and the person's own certificate-viewer action.
 
@@ -1305,7 +1308,10 @@ use the setup file or a clean
 ordinary account (the runner's account is elevated). The launcher runs there
 with a console Python and `--no-open`, so the certificate question and the
 browser are not part of it. It has no chat, and no sign-out and sign-in: the
-task starts because it was registered, not because a person signed in.
+task starts because it was registered, not because a person signed in. The
+standard-account case (see "A standard Windows account") runs the same
+commands as a standard user in that user's own profile, with the certificate
+step, a sign-out and a new sign-in.
 
 A runner does not show the state after a chat: a chat installs further parts
 into the same runtime. That state was shown once on a real installation
@@ -1819,6 +1825,188 @@ removal did not finish; a complete
 uninstall of an installed build. These remain clean-room acceptance. Not
 built: "keep my chats, remove the program". The launcher refresh command does
 not look at the journal.
+
+The standard-account case (next section) runs the delete choice once on an
+installation that was started, stopped and started again, with the real task
+and the Windows question about the certificate. Its start program is the one
+that `uv tool install` made (the runner's uv, not the uv that setup
+downloads). Afterwards the folder is gone. That is one run on a folder that
+the test made. It is not an installed build, and it has no chat.
+
+### A standard Windows account
+
+A standard account is not a member of Administrators. Many work PCs give the
+person such an account. Every clean-room run until November 17, 2026 used
+Windows Sandbox. Its user is a member of Administrators, so those runs showed
+"no administrator rights" only as "no elevation prompt appeared". The account
+of a hosted runner is the built-in Administrator.
+
+`.github/workflows/windows-standard-account.yml` runs the consumer journey as
+a standard user on a hosted Windows runner
+(`tests/fixtures/windows_standard_account_native.py`). The job creates one
+local user with a random password that is never printed. The user is a member
+of Users and of Remote Desktop Users; the second group gives only the right to
+sign in through Remote Desktop. The user signs in with its name and password
+through Remote Desktop to the same computer (address `127.0.0.2`). Windows
+gives it a desktop session of its own. The test requires what Windows says
+about its own token there: this user, not a member of Administrators, one
+token with no administrator token beside it, not elevated, medium integrity,
+a sign-in of the user itself, and a desktop session that is not the runner's.
+A helper task of that user starts the test in that session. The program that
+runs as the user refuses unless the run's account record names this user,
+belongs to the administrators group, and cannot be changed by this user. It
+reads the record's text, its owner and its permissions from one open file,
+and Windows itself computes from the permissions whether this user could
+change the file or its folder. A person without administrator rights cannot
+make such a record.
+
+The job's cleanup step (the step before the one that keeps the results) runs
+in every case, also after a failure. It has these parts. In every case: end
+the Remote Desktop viewers that the run recorded, delete the saved sign-in,
+restore the one setting that the job changed. For the run's account: sign the
+user out, try to ask Windows to end the programs of the user, remove the
+user's tasks, its profile and the account. A part can fail. The next
+paragraphs say what the step does then, and which parts it leaves out.
+
+The job records the account's name before Windows creates the account, with a
+mark that Windows keeps as the account's comment. It records the account's
+SID before it signs the user in. When the job recorded no account, the step
+has only the three parts of every case. A record without a name or without a
+mark fails the step, and the step touches no account. Before the cleanup step
+removes anything of the account, it reads whether the account with that name
+has that mark. When the name belongs to another account, or Windows does not
+answer, the step removes nothing of that account and fails. When Windows has
+no account with the recorded name, the step sends no request to end programs
+and deletes no account; it does the other parts with the recorded name and
+the recorded SID. Windows names the user's Amplifier task and its profile by
+the account's SID. When the step has no SID (the job did not record it, and
+Windows does not give it or has no account with the recorded name), it counts
+the task and the profile as not read, does the other parts, and fails. It
+concludes nothing from an account that is absent. Apart from these cases, a
+part that fails does not stop the parts after it, and the step fails when one
+of these parts is not done: the recorded viewers, the saved sign-in, the
+setting, the user's session, the tasks, the profile, the account.
+
+The step decides that from Windows. A recorded viewer is one process: its
+number and the time at which Windows created it. The step opens the process
+that has that number once. When its creation time is the recorded one and the
+process still runs, the step asks Windows to end it and waits up to 20
+seconds for its end, through that same open process. A viewer that still runs
+then counts as left. When no process has the number, or the process with the
+number has another creation time, the viewer is gone, and the step ends
+nothing. A viewer that the run started and did not record is not ended by
+this step. Before the job creates the user, it requires three things on the
+runner, with a program of the test: the recorded creation time is the time of
+the program's start (within two seconds); under another creation time the
+program is left alone; and its own record ends it. For the user's session,
+the tasks, the profile, the account and the setting, the step reads what
+Windows lists after the part. A list that Windows does not give is a failed
+part. For the saved sign-in the step takes Windows' answer to the deletion.
+
+For the run's account, the step tries once to ask Windows to end the programs
+that run under the user's name (`taskkill`). When the request cannot be sent,
+the result says so, and the step does not fail for that. The step does not
+read whether a program of the user is left, and that does not decide whether
+the step passes. The step also copies the user's reports to the results and
+saves its own result; neither decides whether the step passes. The step does
+not delete this case's folders in the runner's temporary folder; no file
+there holds the password. If GitHub ends the job at its time limit, the step
+may not finish. A hosted runner is deleted after its job.
+
+The sign-in is needed. A program that another account starts with the user's
+name and password (`CreateProcessWithLogonW`) can register the user's task,
+but Task Scheduler does not start it: a task that runs with a person's own
+sign-in starts only in a desktop session of that person (state Ready, result
+0x41303, measured on a hosted runner).
+
+As that user, in `%LOCALAPPDATA%\Amplifier` of its own profile, the case has
+18 steps. Each step is one line of the result: passed as a standard user, or
+failed with the exact text. A failed step fails the job, and nothing in the
+job can skip.
+
+1. Setup's own code, compiled from the setup sources. Its checks before any
+   question read no elevation and stop only at setup's platform check: the
+   Windows version or the processor. The runner is Windows Server on an x64
+   processor; the case does not tell the two apart. A folder that a program
+   of the user made reads as the user's own. The sign-in task reads as
+   absent. The program of these checks is made by setup's compiler with
+   setup's options. Its file is a 64-bit program that asks Windows for the
+   rights of the person who starts it (`asInvoker`), and it starts for this
+   user.
+2. The installation in setup's layout. The test makes it, not the setup file:
+   setup's two uv commands for a private Python, `uv tool install` of the
+   candidate wheel (without the component list of a release), and a copy of
+   the runner's Git.
+3. Setup's two commands of its step "Checking the installation", and setup's
+   completion record. Then the Start-menu and Apps-list entries, in the
+   user's own profile.
+4. The first start (the launcher with a console Python and `--no-open`): the
+   task is registered, the launcher finishes, and the host that Task
+   Scheduler starts answers. Status. "Stop Amplifier" (the product's
+   function, with its one question answered in the test). A second start: a
+   new host on the same port.
+5. The launcher's certificate step (`review_browser_trust`). Before it,
+   Windows does not trust the connection. Amplifier shows its one message.
+   Windows asks its one question. The test requires that its text is the
+   install question, names the certificate and shows the thumbprint as
+   Amplifier's message shows it. The test selects Yes with a window message,
+   once. Then the launcher's check reads the connection as trusted, and
+   Windows' own list of the user's root certificates holds the certificate.
+   A dialog of this program that is not this question, and a second question,
+   get no answer. When such a dialog stays open for 90 seconds, the step
+   fails with what the dialog shows, and the program ends.
+6. Setup's own code reads the installation as installed, with its sign-in
+   task. A second setup run would open it.
+7. A sign-out and a new sign-in. After the sign-out the task exists and does
+   not run. After the sign-in the task's own trigger starts a new host on the
+   same port, with no launcher command, and Windows still trusts the
+   connection.
+8. Uninstall with the choice that keeps the folder. Windows asks whether to
+   delete the certificate; the test selects No, and the certificate stays in
+   Windows' own list. Then the entries again and a start, as setup's second
+   run does them.
+9. Uninstall with the choice that deletes the folder (Yes, and Yes again).
+   The test selects Yes at the Windows question. Afterwards the user has no
+   installation folder, no sign-in task, no Start-menu entry and no Apps-list
+   entry, Windows' own list of the user's root certificates no longer holds
+   the certificate, and setup's own code reads an account without an
+   installation.
+
+First result (November 17, 2026): every step passed. In these steps the case
+found nothing that a standard account cannot do.
+
+The case does not show these parts. The result names each of them with its
+reason.
+
+- The setup file: its windows and its question, its Windows 11 check with the
+  answer yes, and its downloads of uv, Python and Git. The setup file refuses
+  Windows Server, and every hosted x64 runner is Windows Server. Read from
+  the published setup file of release 0.105.0, without a run: it is a 64-bit
+  program, and its one manifest level is `asInvoker`. Windows asks for an
+  administrator when a manifest says so, or, for a 32-bit program without a
+  level, when the file name looks like a setup program. Neither is the case
+  here, so a standard user should get no administrator question at the
+  start. No check reads the setup file of a new release for this.
+- A person's own answer to the Windows certificate question, and that the
+  question is in front of other windows. No person is present. The test
+  answers the question from the program that asked it.
+- The browser. The launcher runs with `--no-open`, and nothing in the case
+  reads a browser window.
+- A click on a Start-menu or Apps-list entry, and the messages of the
+  windowless launcher. A message waits for a person. The case runs the same
+  launcher commands with the console Python, and answers the product's
+  questions in the test.
+- A chat and a model request. No AI account is connected.
+- Windows 11, and a sign-in at the PC's own screen. The runner is Windows
+  Server, and the user signs in through Remote Desktop.
+
+Also not shown anywhere: a standard account on a PC that an organization
+manages (rules for programs, a policy that disables a person's own
+certificates, limits on Task Scheduler); a Microsoft, domain or Entra account
+(the case's user is a local account); and a standard user who starts setup
+with "Run as administrator" and gives an administrator's name and password.
+Setup then runs as that other account. Read from source: it stops with one of
+its administrator texts and installs nothing.
 
 ## Process-local Proactor cleanup backport
 
