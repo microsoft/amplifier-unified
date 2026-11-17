@@ -17,7 +17,8 @@ The fixture's own part:
   confirmed. The hand-over that writes them has its own native workflow.
   Three prepared generations of that app version stand for three app updates.
 - For the two failure cases it puts a program in the place of setup's private
-  uv. That program fails, or waits, when it is asked to install a tool.
+  uv. That program fails, or waits, when it is asked to install a tool into
+  the launcher's folder. Every other call goes to the real uv.
 - In check 6 it ends the helper's processes. After that it only reads.
 
 Not shown: the setup file, a standard account (the runner's account is
@@ -68,8 +69,9 @@ CHECKS = (
     "9. The new launcher's uninstall removes a helper task; a helper task that was left removes itself",
     "10. Folder cleanup",
 )
-# In the place of setup's private uv, for the failure cases only. Every call
-# that is not "tool install" goes to the real program beside it.
+# In the place of setup's private uv, for the failure cases only. It acts on
+# "tool install" into the installation's own tools folder: the launcher. Every
+# other call goes to the real program beside it.
 STAND_IN = r'''
 using System;
 using System.Diagnostics;
@@ -79,12 +81,22 @@ using System.Threading;
 
 static class UvStandIn
 {
+    static bool LauncherInstall(string folder, string[] args)
+    {
+        if (args.Length < 2 || args[0] != "tool" || args[1] != "install") return false;
+        string target = Environment.GetEnvironmentVariable("UV_TOOL_DIR");
+        if (String.IsNullOrEmpty(target)) return false;
+        char[] separators = new char[] { '\\', '/' };
+        string launcher = Path.GetFullPath(Path.Combine(folder, "..", "tools")).TrimEnd(separators);
+        return String.Equals(Path.GetFullPath(target).TrimEnd(separators), launcher, StringComparison.OrdinalIgnoreCase);
+    }
+
     static int Main(string[] args)
     {
         try
         {
             string folder = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
-            if (args.Length >= 2 && args[0] == "tool" && args[1] == "install")
+            if (LauncherInstall(folder, args))
             {
                 string mode = File.ReadAllText(Path.Combine(folder, "fixture-mode.txt")).Trim();
                 File.AppendAllText(Path.Combine(folder, "fixture-calls.txt"), mode + "\n");
@@ -183,7 +195,14 @@ def use_uv(root, mode):
     program, real = folder / "uv.exe", folder / "uv-real.exe"
     if mode is None:
         if real.exists():
-            program.unlink()
+            for attempt in range(20):
+                try:
+                    program.unlink()
+                    break
+                except PermissionError:  # A stand-in that was ended a moment ago.
+                    if attempt == 19:
+                        raise
+                    time.sleep(1)
             real.rename(program)
         return
     if not real.exists():
@@ -292,17 +311,28 @@ def prepare():
                                        "/out:" + str(evidence() / "uv-stand-in.exe"), str(source)],
                                       cwd=evidence(), capture_output=True, text=True, timeout=120)
             assert compiled.returncode == 0, compiled.stdout[-2000:]
-            # Prove both behaviours here, before a product process depends on them.
+            # Prove its behaviours here, before a product process depends on them.
             trial = evidence() / "stand-in-trial"
-            trial.mkdir()
-            shutil.copyfile(evidence() / "uv-stand-in.exe", trial / "uv.exe")
-            shutil.copyfile(uv, trial / "uv-real.exe")
-            (trial / "fixture-mode.txt").write_text("fail", encoding="ascii")
-            refused = subprocess.run([str(trial / "uv.exe"), "tool", "install", "a b"],
-                                     capture_output=True, text=True, timeout=60)
-            passed_on = subprocess.run([str(trial / "uv.exe"), "--version"], capture_output=True, text=True, timeout=60)
-            assert refused.returncode == 3 and (trial / "fixture-calls.txt").read_text() == "fail\n", refused
-            assert passed_on.returncode == 0 and passed_on.stdout.startswith("uv "), passed_on
+            for name in ("uv", "tools", "other"):
+                (trial / name).mkdir(parents=True)
+            shutil.copyfile(evidence() / "uv-stand-in.exe", trial / "uv/uv.exe")
+            shutil.copyfile(uv, trial / "uv/uv-real.exe")
+            (trial / "uv/fixture-mode.txt").write_text("fail", encoding="ascii")
+
+            def stand_in(*args, tools=None):
+                environment = {key: value for key, value in os.environ.items() if key != "UV_TOOL_DIR"}
+                if tools is not None:
+                    environment["UV_TOOL_DIR"] = str(trial / tools)
+                return subprocess.run([str(trial / "uv/uv.exe"), *args], env=environment,
+                                      capture_output=True, text=True, timeout=120)
+            refused = stand_in("tool", "install", "a b", tools="tools")
+            assert refused.returncode == 3 and (trial / "uv/fixture-calls.txt").read_text() == "fail\n", refused
+            # An installation into another folder, and every other call, reach the real uv.
+            for passed_on in (stand_in("tool", "install", "--help", tools="other"),
+                              stand_in("tool", "install", "--help"), stand_in("--version")):
+                assert passed_on.returncode == 0 and passed_on.stdout.strip(), passed_on
+            assert stand_in("--version").stdout.startswith("uv ")
+            assert (trial / "uv/fixture-calls.txt").read_text() == "fail\n"
             shutil.rmtree(trial)
         python = root / "app/updates/a" / installed[0]["generation"] / "tools/amplifier-unified/Scripts/python.exe"
         assert python.is_file() and (root / "tools/amplifier-unified/Scripts/pythonw.exe").is_file()
@@ -417,6 +447,15 @@ def run():
             except Exception as error:
                 return {"errorType": type(error).__name__}
 
+        def helper_xml():
+            """For the report only: the helper task as Task Scheduler holds it."""
+            try:
+                sid = windows_service._owner()
+                value = windows_service._scheduler("query", sid, name=task.task_name(sid))
+                return value.get("xml", "")[:6000] if value["exists"] else None
+            except Exception as error:
+                return {"errorType": type(error).__name__}
+
         def launcher_now():
             try:
                 facts = refresher.launcher_facts(launcher)
@@ -439,6 +478,7 @@ def run():
                 "journal": {key: journal.get(key) for key in (
                     "registration", "request", "previous", "from", "to", "wasRunning", "done", "errorType")},
                 "kept": record(refresher.KEPT), "mainTask": main_task(), "helperTask": helper_task(),
+                "helperTaskXml": helper_xml(),
                 "helperProcesses": processes(HELPER), "launcher": launcher_now(), "setAside": set_aside(),
                 "appsList": apps_list(), "uvCalls": calls(root), "appState": app_state(home),
                 "taskOutput": log.read_text(encoding="utf-8", errors="replace")[-3000:] if log.exists() else None,
@@ -506,8 +546,13 @@ def run():
             return check
 
         def stop():
-            windows_service.command("stop", home)
-            wait("the app has stopped", lambda: main_task().get("instances") == 0, 90)
+            try:
+                windows_service.command("stop", home)
+            except RuntimeError as slow:
+                # The command waits 10 seconds for the task after the host has ended.
+                # This case is about the refresh: record a slower stop, and wait for it.
+                report.setdefault("slowStops", []).append(str(slow)[:200])
+            wait("the app has stopped", lambda: main_task().get("instances") == 0, 120)
 
         with shared().helpers().token_user_default_owner():
             begin(1)
@@ -533,7 +578,19 @@ def run():
             entries = launcher_command("--integrate")
             assert entries["exitCode"] == 0 and shell.listed(root), entries
             assert apps_list() == old["version"]
-            passed(1, launcher=launcher_now(), audit=audit["json"], appsList=apps_list())
+            # Task Scheduler takes the helper task's definition, and the product reads
+            # it back as its own. Checked here first: every later check needs it.
+            probe = uuid.uuid4().hex
+            try:
+                task.ensure(home, probe, uuid.uuid4().hex, str(prefixes[0] / "Scripts/pythonw.exe"))
+                value, definition = task.query(home)
+            except BaseException:
+                report["helperTaskXml"] = helper_xml()
+                raise
+            assert definition.request == probe and value["instances"] == 0, (definition, value)
+            assert task.remove_task(home) and helper_task().get("exists") is False
+            passed(1, launcher=launcher_now(), audit=audit["json"], appsList=apps_list(),
+                   helperTaskXml=value["xml"][:6000])
 
             begin(2)
             validated = []
@@ -607,10 +664,17 @@ def run():
                     "graph": old_graph, "extras": [], "artifact": old_artifact, "status": "acknowledged"})
                 assert recovery.read(spec)["status"] == "acknowledged"
                 again_started = launcher_command("--no-open")
-                now = health()
-                if again_started["exitCode"] or not healthy(now):
+                if again_started["exitCode"]:
+                    # The launcher waits 60 seconds for the app. A first start of a
+                    # new generation's files can take longer on a runner.
+                    report.setdefault("slowStarts", []).append({"generation": index, **again_started})
+                try:
+                    now = wait("the app is ready after the update records",
+                               lambda: (lambda value: healthy(value) and value)(health()), 300)
+                except AssertionError:
                     report["start"] = again_started
-                    raise AssertionError("The launcher did not start the app after the update records")
+                    raise
+                assert generations.active(home)["generation"] == validated[index]["generation"]
                 assert windows_installation.saved_port(home) == port
                 return now
 

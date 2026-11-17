@@ -184,5 +184,7 @@ def test_the_stand_in_for_uv_is_put_in_place_and_taken_away(fixture, tmp_path, m
     fixture.use_uv(tmp_path, None)
     assert program.read_bytes() == b"real" and not (tmp_path / "uv/uv-real.exe").exists()
     assert fixture.calls(tmp_path) == ["fail", "hang"]
-    # The stand-in refuses or waits only for a tool installation.
-    assert 'args[0] == "tool" && args[1] == "install"' in fixture.STAND_IN and "uv-real.exe" in fixture.STAND_IN
+    # The stand-in refuses or waits only for a tool installation into the launcher's folder.
+    assert 'args[0] != "tool" || args[1] != "install"' in fixture.STAND_IN
+    assert 'GetEnvironmentVariable("UV_TOOL_DIR")' in fixture.STAND_IN and 'Path.Combine(folder, "..", "tools")' in fixture.STAND_IN
+    assert "uv-real.exe" in fixture.STAND_IN and "TrimEnd(separators)" in fixture.STAND_IN
