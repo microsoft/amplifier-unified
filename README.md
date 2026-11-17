@@ -102,24 +102,25 @@ Limits of this preview:
   - **Cancel** changes nothing. Amplifier stays installed.
 
   These are the results of an uninstall that finishes. If Amplifier is working
-  on a chat, it asks before it stops that work. An uninstall stops Amplifier
-  and removes it from the Start menu and the Apps list. If Windows asks whether
-  to delete the certificate, select **Yes**.
+  on a chat when you answer, it asks before it stops that work. An uninstall
+  stops Amplifier and removes it from the Start menu and the Apps list. If
+  Windows asks whether to delete the certificate, select **Yes**.
 
   After a delete, Amplifier says "Amplifier is uninstalled." When you close
   that message, it starts to remove its last program files and then the
   folder. A file or folder directly in the Amplifier folder whose name
-  Amplifier does not use stays, and then the folder stays too.
+  Amplifier does not use stays, and then the folder stays too. The folder also
+  stays if that last step does not finish.
 
   An uninstall can stop before its end. Amplifier then says what happened and
   what to do next. If it says that it "could not begin to delete its folder",
-  nothing in the folder was deleted. If it says that it "could not finish its
-  removal from this PC", or that some of your chats, settings or saved accounts
-  "could not be deleted", a part of the folder can already be deleted: do not
-  open Amplifier until you have uninstalled again. At that next uninstall, the
-  first question can be another one: "The removal of Amplifier from this PC did
-  not finish." **Yes** there leads to the second question above, and **No**
-  changes nothing.
+  that uninstall deleted nothing in the folder. If it says that it "could not
+  finish its removal from this PC", or that some of your chats, settings or
+  saved accounts "could not be deleted", a part of the folder can already be
+  deleted: do not open Amplifier until you have uninstalled again. At that next
+  uninstall, the first question can be another one: "The removal of Amplifier
+  from this PC did not finish." **Yes** there leads to the second question
+  above, and **No** changes nothing.
 
   Amplifier can also ask only "Uninstall Amplifier?" with **Yes** and **No**,
   for example in an installation from an earlier setup file. There, **Yes**

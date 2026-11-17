@@ -407,8 +407,8 @@ def test_certificate_answer_never_stops_the_removal_and_is_said_in_the_confirmat
     ("task-read", "task-read", "nothing was changed"),
     ("stop", "stop", "Nothing was removed"),
     ("task-remove", "task-remove", "nothing else was removed"),
-    ("journal", "journal", "Nothing in the folder was deleted"),
-    ("journal-lost", "journal", "Nothing in the folder was deleted")])
+    ("journal", "journal", "This uninstall deleted nothing in the folder"),
+    ("journal-lost", "journal", "This uninstall deleted nothing in the folder")])
 def test_nothing_in_the_folder_changes_before_the_journal(deleter, monkeypatch, failure, step, phrase):
     state, root, consumer = deleter.state, deleter.root, deleter.consumer
     state["choices"], state["certificate"] = ["yes", "yes"], b"this installation's root"
@@ -1384,7 +1384,7 @@ def test_first_uninstall_that_stops_at_the_journal_does_not_say_whether_amplifie
     assert after.pop("app/config/services/" + consumer.RECORD)
     present = after.pop(plan.JOURNAL, None) is not None
     assert after == before and state["registry"] == registration
-    assert "Nothing in the folder was deleted" in stopped.value.notice
+    assert "This uninstall deleted nothing in the folder." in stopped.value.notice
     # The same text appears with a journal in the folder and without one.
     assert present is (way in {"published", "unseen"}) and plan.unfinished(root) is present
     # With the journal Open refuses; without it Open starts. So the text promises neither.
@@ -1422,7 +1422,7 @@ def test_second_uninstall_that_stops_at_the_journal_does_not_say_that_amplifier_
     error = {"refused": "PermissionError"}.get(way, "OSError")
     assert stopped.value.notice == consumer._UNFINISHED["journal-again"] + "\n\nReference: journal, " + error
     # Never the text of a first uninstall: files of this folder are already deleted.
-    assert "Nothing in the folder was deleted" not in stopped.value.notice
+    assert "deleted nothing" not in stopped.value.notice
     after = snapshot(root)
     assert json.loads(after.pop(consumer.RECORD))["step"] == "journal" and before.pop(consumer.RECORD)
     now = after.pop(plan.JOURNAL, None)
@@ -1535,11 +1535,84 @@ def test_uninstall_that_cannot_check_its_installation_does_not_say_that_amplifie
     assert "keep using" not in stopped.value.notice and "open" not in stopped.value.notice
 
 
+def test_uninstall_after_a_journal_that_a_program_deleted_says_only_what_this_uninstall_deleted(
+        deleter, monkeypatch):
+    """An earlier uninstall deleted data and stopped. Its journal is gone, so this one looks like a first one."""
+    state, root, consumer = deleter.state, deleter.root, deleter.consumer
+    state["choices"], state["held"] = ["yes", "yes"], {"app/chats/one/message.txt"}
+    with pytest.raises(consumer.Unfinished):
+        deleter.run()
+    assert not (root / "shared").exists()
+    (root / plan.JOURNAL).unlink()  # A program of this account (the design's limit "the journal is not held open").
+    state["held"].clear()
+    state.update(choices=["yes", "yes"], questions=[])
+    state["calls"].clear()
+    journal_stops(deleter, monkeypatch, "refused")
+    with pytest.raises(consumer.Unfinished) as stopped:
+        deleter.run()
+    # Nothing shows this program the earlier removal: it asks the questions of a whole installation.
+    assert "Do you also want to delete your chats, settings and saved accounts?" in state["questions"][0][0]
+    assert stopped.value.step == "journal" and not deletes(state)
+    assert stopped.value.notice == consumer._UNFINISHED["journal"] + "\n\nReference: journal, PermissionError"
+    # The stored keys went earlier. So the text speaks of this uninstall, not of the folder.
+    assert "This uninstall deleted nothing in the folder." in stopped.value.notice
+    assert "Nothing in the folder was deleted" not in stopped.value.notice
+
+
+def test_design_entry_on_the_journal_names_what_the_cases_above_show():
+    """The entry "The journal is not held open" of the design, against the product's two texts of that step."""
+    from amplifier_web import windows_consumer as consumer
+    design = " ".join((REPOSITORY / "docs/design/native-windows-installation.md").read_text(encoding="utf-8").split())
+    limits = design.split("**Known limits.**", 1)[1].split("**Rule for setup.**", 1)[0]
+    entry = limits.split("- **The journal is not held open.**", 1)[1].split("Under PowerShell constrained", 1)[0]
+    for stated in (
+            # The look, and what a stop at this step leaves open (the four ways of `JOURNAL_WAYS`).
+            "looks once, by its name, whether it is in the folder",
+            "Without it this uninstall stops, and it has deleted nothing. What an earlier uninstall deleted stays "
+            "deleted.",
+            "A stop at this step leaves it open whether a journal is in the folder. This part needs no other program.",
+            "The writer can report an error after the journal has its name.",
+            "The look answers no for every error, not only for a name that is not there.",
+            "With a journal Amplifier does not open; without one it opens. So the two texts of this step say neither.",
+            # A journal that a program deletes: also after a removal that stopped (the intro sentence below).
+            "A program of this account deletes the journal: during a removal, or at any time after a removal that "
+            "stopped.",
+            "a next uninstall asks its questions as for a whole installation",
+            # A journal that a program replaces in the instant of the write.
+            "A program of this account replaces the journal with its own file in the instant of the write.",
+            "The launcher's commands still refuse.",
+            "refuses a journal whose token is not its own, before it starts the step after exit",
+            "So `python`, `tools` and both records stay, and a message says that the last program files could not "
+            "be removed. That is the leftover of L3. Nothing more is deleted than the person chose."):
+        assert stated in entry, stated
+    # The two texts as the entry describes them are the texts that the product has for this step.
+    first, second = consumer._UNFINISHED["journal"], consumer._UNFINISHED["journal-again"]
+    assert "In a first uninstall the text says that this uninstall deleted nothing in the folder, and that " \
+           "Amplifier might not open until the next uninstall." in entry
+    assert "This uninstall deleted nothing in the folder." in first and first.endswith(
+        "then uninstall again. Amplifier might not open until then.")
+    assert "In a second uninstall the text says not to open Amplifier, because its folder can be partly " \
+           "deleted." in entry
+    assert second.endswith("Do not open Amplifier before that: its folder can be partly deleted.")
+    for text in (first, second):
+        assert "does not open" not in text and "Start menu" not in text and "keep using" not in text
+    # When a program must act: not only "in the moment of the uninstall" for this entry.
+    assert ("Except for L3, L4, L14, L15 and the first part of the entry without a number, each needs a program "
+            "that runs as the same person.") in limits
+    assert ("For the entry without a number it can act during the uninstall, or at any time after an uninstall "
+            "that stopped. For the others it must act in the moment of the uninstall.") in limits
+    # L4: what an uninstall says that found a journal which proves no delete choice.
+    assert ("The question and the messages of that uninstall say what it does, not what the folder holds: an "
+            "earlier removal can have deleted files. A step of it that fails gets the text of a removal that did "
+            "not finish, which says that Amplifier does not open.") in limits
+    assert consumer._UNFINISHED["removal"].endswith("Until then Amplifier does not open.")
+
+
 def shown_by_the_product(deleter, monkeypatch):
     """Every question and message that the README item speaks about, as the public uninstall shows it.
 
     One installation, in the order of a person's journey: the questions with answers that change nothing,
-    a delete that stops three times, a second uninstall, and the delete that finishes.
+    a delete that stops three times, a second uninstall, and the delete whose last step cannot start.
     """
     state, root, consumer = deleter.state, deleter.root, deleter.consumer
     monkeypatch.setattr(consumer.sys, "stdout", None)
@@ -1589,11 +1662,12 @@ def shown_by_the_product(deleter, monkeypatch):
     state["commit_conflict"] = True
     shown["stop after the data"] = run("yes", "yes")
     state["commit_conflict"] = False
-    # The delete finishes. One entry in the folder is not Amplifier's.
+    # The delete goes to its end. One entry in the folder is not Amplifier's. The last step cannot start.
     (root / "mine.txt").write_text("not Amplifier's")
+    state["after_failure"] = OSError("Cannot locate Windows PowerShell.")
     assert run("yes", "yes") is None
-    (shown["confirmation of a delete"], confirm), = state["notices"]
-    assert not confirm and all(isinstance(text, str) and text for text in shown.values())
+    (shown["confirmation of a delete"], confirm), (shown["last step that cannot start"], plain) = state["notices"]
+    assert not confirm and not plain and all(isinstance(text, str) and text for text in shown.values())
     return {name: " ".join(text.split()) for name, text in shown.items()}
 
 
@@ -1631,7 +1705,8 @@ README_UNINSTALL = [
          ("Amplifier stays installed.", [("first question", "Select Cancel to keep Amplifier installed.")])],
     ],
     [[("These are the results of an uninstall that finishes.", ABOUT),
-      ("If Amplifier is working on a chat, it asks before it stops that work.",
+      # The program looks once, after the answers to its questions.
+      ("If Amplifier is working on a chat when you answer, it asks before it stops that work.",
        [("working question", "Amplifier is working on a chat right now."),
         ("working question", "Select Yes to stop that work and uninstall now.")]),
       ("An uninstall stops Amplifier and removes it from the Start menu and the Apps list.",
@@ -1649,7 +1724,10 @@ README_UNINSTALL = [
       ("A file or folder directly in the Amplifier folder whose name Amplifier does not use stays, and then the "
        "folder stays too.",
        [("confirmation of a delete", "The folder itself stays, because it holds entries that are not Amplifier's. "
-                                     "They were not changed: mine.txt")])]],
+                                     "They were not changed: mine.txt")]),
+      ("The folder also stays if that last step does not finish.",
+       [("last step that cannot start", "Amplifier could not remove its last program files. They are in this "
+                                        "folder,")])]],
     [[("An uninstall can stop before its end.", ABOUT),
       ("Amplifier then says what happened and what to do next.",
        [("stop at the journal", "Wait a minute or restart this PC, then uninstall again."),
@@ -1657,8 +1735,9 @@ README_UNINSTALL = [
         ("stop after the data", "Close other programs or restart this PC. Then uninstall Amplifier again to finish."),
         ("next uninstall stops at the journal",
          "Close other programs or restart this PC. Then uninstall Amplifier again to finish.")]),
-      ('If it says that it "could not begin to delete its folder", nothing in the folder was deleted.',
-       [("stop at the journal", "it could not begin to delete its folder. Nothing in the folder was deleted.")]),
+      ('If it says that it "could not begin to delete its folder", that uninstall deleted nothing in the folder.',
+       [("stop at the journal", "it could not begin to delete its folder. This uninstall deleted nothing in the "
+                                "folder.")]),
       ('If it says that it "could not finish its removal from this PC", or that some of your chats, settings or '
        'saved accounts "could not be deleted", a part of the folder can already be deleted: do not open Amplifier '
        "until you have uninstalled again.",
@@ -1713,11 +1792,14 @@ def test_readme_uninstall_item_is_sentence_for_sentence_what_the_product_shows(d
     assert used == set(shown)
     # 3. The three buttons of the first question, each once and in the order of the question.
     assert [part.split("**")[1] for part in readme_uninstall_item()[0][1:]] == ["No", "Yes", "Cancel"]
+    #    The earlier question has the buttons Yes and No: `owner_notice(confirm=True)` adds MB_YESNO (0x4).
+    assert "0x51040 | (0x4 if confirm else 0)" in (REPOSITORY / "amplifier_web" / "windows_installation.py").read_text(
+        encoding="utf-8")
     # 4. What the README says about a stop is true in the cases that it names.
-    #    "nothing in the folder was deleted" is said only of the stop at the journal of a first uninstall.
-    assert "Nothing in the folder was deleted" in shown["stop at the journal"]
+    #    "deleted nothing in the folder" is said only of the stop at the journal of a first uninstall.
+    assert "This uninstall deleted nothing in the folder." in shown["stop at the journal"]
     for case in ("stop at the data", "stop after the data", "next uninstall stops at the journal"):
-        assert "Nothing in the folder was deleted" not in shown[case]
+        assert "deleted nothing" not in shown[case]
     #    The README does not say whether Amplifier opens after a stop: the product does not always know it.
     stops = " ".join(sentence for sentence, _ in README_UNINSTALL[3][0])
     assert "does not open" not in stops and "Start menu" not in stops
@@ -1885,7 +1967,7 @@ def test_launcher_and_launcher_refresh_names_are_known_and_exact():
 NATIVE_COMMAND = r"""
 import asyncio, ctypes, hashlib, json, os, sys
 from pathlib import Path
-repository, packages, folder, evidence, report, operation, answers, settle = sys.argv[1:9]
+repository, packages, folder, evidence, report, operation, answers, settle, instant = sys.argv[1:10]
 sys.path[:0] = [repository, packages]
 from amplifier_web import installation_health, windows_consumer as consumer, windows_consumer_shell as shell
 from amplifier_web import windows_files, windows_installation, windows_removal, windows_service
@@ -1908,8 +1990,31 @@ def uninstall(home, *, progress):
     events.append("stop")
 windows_service.uninstall = uninstall
 async def prepare(*values, **options):
-    raise AssertionError("Amplifier must not start from this folder.")
+    if instant != "start-expected":
+        raise AssertionError("Amplifier must not start from this folder.")
+    events.append("start")
+    return {"background": True}
 windows_installation.prepare_background = prepare
+if instant in ("journal-lost", "journal-replaced"):
+    # Another program acts in the instant after the real writer renamed the journal into place and
+    # before the writer's own checks: it deletes the journal, or it publishes its own file under that name.
+    rename, once = windows_files._API.move, [instant]
+    def move(self, handle, destination, *, replace):
+        rename(self, handle, destination, replace=replace)
+        if Path(str(destination)).name != plan.JOURNAL or not once:
+            return
+        way = once.pop()
+        try:
+            if way == "journal-lost":
+                os.unlink(str(destination))
+            else:
+                with windows_files.directory(root, owned_root=root) as other:
+                    other.publish_private(plan.JOURNAL, json.dumps(
+                        {"schema": 1, "choice": "delete", "token": "f" * 32}).encode(), replace=True)
+            events.append(way)
+        except Exception as error:
+            events.append(way + " failed: " + type(error).__name__ + " " + str(error)[:200])
+    windows_files._API.move = move
 def question(text, *, cancel=False):
     events.append("question")
     return answers.pop(0)
@@ -2015,15 +2120,20 @@ def native_installation(tmp_path, request):
         assert plan.short_store(root) == (store == "s")
         packages = sysconfig.get_paths()["purelib"]
 
-        def run(operation, answers=(), *, settle=15):
-            """Returns what the process observed. Its exit is awaited; the step after exit is not."""
+        def run(operation, answers=(), *, settle=15, instant=""):
+            """Returns what the process observed. Its exit is awaited; the step after exit is not.
+
+            `instant`: `journal-lost` or `journal-replaced` lets another program act once inside the real
+            writer, directly after it renamed the journal into place. `start-expected`: Open may reach its
+            start step, and the process records that; otherwise a start fails the process.
+            """
             evidence = tmp_path / f"evidence-{uuid.uuid4().hex[:8]}.json"
             environment = os.environ.copy()
             environment.update(TEMP=str(root / "temp"), TMP=str(root / "temp"))
             process = subprocess.run(
                 [str(root / "tools" / "amplifier-unified" / "Scripts" / "python.exe"), "-I", "-c", NATIVE_COMMAND,
                  str(REPOSITORY), packages, str(root), str(evidence), str(tmp_path / "after-exit.json"),
-                 operation, json.dumps(list(answers)), str(settle)],
+                 operation, json.dumps(list(answers)), str(settle), instant],
                 cwd=root / "workspace", env=environment, capture_output=True, timeout=180)
             assert process.returncode == 0, process.stderr.decode("utf-8", errors="replace")[-3000:]
             return json.loads(evidence.read_text())
@@ -2348,6 +2458,83 @@ def test_native_interrupted_removal_refuses_to_start_and_a_second_uninstall_fini
     assert resumed["choice"] == "delete" and resumed["token"] != journal["token"]
     _outside_unchanged(native["outside"])
     print("UNINSTALL_RESUME " + json.dumps({"process": done, "afterExit": report}, separators=(",", ":")))
+
+
+@pytest.mark.skipif(os.name != "nt", reason="The real private writer, a real rename and the real look for the journal")
+def test_native_journal_that_loses_its_name_or_is_replaced_in_the_instant_of_its_write(native_installation):
+    """Inside the real writer, directly after its rename: a program deletes the journal, or replaces it.
+
+    Deleted: the writer reports the journal as written, the look does not find it, and the uninstall stops
+    before it deletes anything. A first uninstall and a second one show their own text. No journal is in the
+    folder then, so Open reaches its start step. Replaced: the name is there, the removal goes on to its
+    end, and its last step refuses the journal that is not its own.
+    """
+    from amplifier_web import windows_consumer as consumer
+    native, root = native_installation, native_installation["root"]
+    whole = set(_tree(root))
+    note = Path("app") / "config" / "services" / consumer.RECORD
+
+    def reaches_its_start_step():
+        opened = native["run"]("open", instant="start-expected")
+        assert _finished(opened) == {"background": True} and opened["events"] == ["start"], opened
+
+    # A first uninstall.
+    first = native["run"]("uninstall", ["yes", "yes"], instant="journal-lost")
+    assert first["events"] == ["question", "question", "stop", "journal-lost"], first
+    assert (first["step"], first["error"], first["refused"], first["code"]) == ("journal", "OSError", False, None), first
+    assert first["detail"] == "The removal's journal is not in the folder after it was written."
+    assert first["notice"] == consumer._UNFINISHED["journal"] + "\n\nReference: journal, OSError"
+    assert "This uninstall deleted nothing in the folder." in first["notice"]
+    assert not plan.unfinished(root) and plan.pending(root) is None
+    # Nothing is gone. New: only the private note of the failure, beside the app's other service records.
+    now = set(_tree(root))
+    assert whole <= now and {name for name in now - whole if Path(name).parts[0] != "temp"} == {
+        str(note), str(note.parent), str(note.parent.parent)}, sorted(now - whole)
+    assert shell.registry(root) == native["registration"]
+    assert {path.name for path in native["entries"].iterdir()} == set(shell.LINKS)
+    # The text says that Amplifier might not open. Here no journal is in the folder: Open goes on.
+    reaches_its_start_step()
+
+    # A second uninstall. The earlier one deleted the stored keys and stopped at a data file in use.
+    busy = open(root / "app" / "busy.db", "w")
+    try:
+        stopped = native["run"]("uninstall", ["yes", "yes"], settle=2)
+        assert (stopped["step"], stopped["error"]) == ("data", "Held"), stopped
+        earlier = plan.pending(root)
+        assert earlier is not None and earlier["choice"] == "delete" and not (root / "shared").exists()
+        partly = _tree(root)
+        second = native["run"]("uninstall", ["yes", "yes"], settle=2, instant="journal-lost")
+    finally:
+        busy.close()
+    assert second["events"] == ["question", "question", "stop", "journal-lost"], second
+    assert (second["step"], second["error"], second["refused"]) == ("journal", "OSError", False), second
+    assert second["notice"] == consumer._UNFINISHED["journal-again"] + "\n\nReference: journal, OSError"
+    assert "deleted nothing" not in second["notice"] and "does not open" not in second["notice"]
+    # This uninstall deleted nothing more. Its write took the earlier journal's place, and that journal is gone.
+    assert sorted(set(partly) - {plan.JOURNAL}) == _tree(root)
+    assert not plan.unfinished(root) and (root / "app" / "busy.db").exists()
+    assert shell.registry(root) == native["registration"]
+    # The design's limit, on a real folder: without the journal Open goes on, on a folder that is partly deleted.
+    reaches_its_start_step()
+
+    # The next uninstall finds no journal, so it is a first one again. A program replaces its journal.
+    done = native["run"]("uninstall", ["yes", "yes"], instant="journal-replaced")
+    assert done["events"] == ["question", "question", "stop", "journal-replaced"], done
+    # The removal went on to its end: the data, the program files and the Windows entries are gone.
+    assert _finished(done) == {"ok": True, "operation": "uninstall", "userDataRetained": False,
+                               "certificate": "none", "kept": [], "afterExit": False, "programLeft": None}
+    assert shell.registry(root) is None and not native["entries"].exists()
+    # Its last step refused the journal that is not its own: no flat folder, no kept file, no step after exit.
+    left = {plan.JOURNAL, plan.COMPLETE, "python", "tools"}
+    assert left <= set(done["left"]) <= left | {"workspace"}, done["left"]
+    assert set(os.listdir(root)) == set(done["left"]) and not native["report"].exists()
+    assert plan.pending(root) == {"schema": 1, "choice": "delete", "token": "f" * 32}
+    # The name is there: Open refuses.
+    refused = native["run"]("open")
+    assert (refused["step"], refused["refused"]) == ("removing", True) and not refused["events"], refused
+    _outside_unchanged(native["outside"])
+    print("UNINSTALL_JOURNAL_INSTANT " + json.dumps({"first": first, "second": second, "replaced": done},
+                                                    separators=(",", ":")))
 
 
 @pytest.mark.skipif(os.name != "nt", reason="A real case-only rename on NTFS and the real folder listing")

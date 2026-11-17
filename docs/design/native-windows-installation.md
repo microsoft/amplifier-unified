@@ -1363,10 +1363,12 @@ dangling file link of that name and creates the file at the link's target.
 request 2110). These limits stayed. They are stated, not solved. The numbers
 are the review's; a number that is not in the list was closed before the last
 pass. G1 is from the later review of the store rule, and the entry without a
-number is from the last review. Except for L3, L4, L14 and L15, each needs a
-program that runs as the same person. For G1 that program can act at any time
-before the uninstall. For the others it must act in the moment of the
-uninstall.
+number is from the last review. Except for L3, L4, L14, L15 and the first
+part of the entry without a number, each needs a program that runs as the
+same person. For G1 that program can act at any time before the uninstall.
+For the entry without a number it can act during the uninstall, or at any
+time after an uninstall that stopped. For the others it must act in the
+moment of the uninstall.
 
 One reviewer rated L12, L13 and G1 as blocking, the other as not blocking.
 The owner accepted L12 and L13 on November 15, 2026. On November 17, 2026,
@@ -1426,7 +1428,11 @@ limit as not blocking.
   by hand.
 - **L4.** A journal that is damaged, or that records another choice, proves
   nothing. Uninstall then deletes nothing and offers only to keep the
-  folder. Afterwards Amplifier does not open from that folder.
+  folder. Afterwards Amplifier does not open from that folder. The question
+  and the messages of that uninstall say what it does, not what the folder
+  holds: an earlier removal can have deleted files. A step of it that fails
+  gets the text of a removal that did not finish, which says that Amplifier
+  does not open.
 - **L5.** After a program renamed an entry only by case during the removal,
   uninstall stops with the journal in place. A second uninstall refuses at
   its first check until the entry has its own name again.
@@ -1449,17 +1455,42 @@ limit as not blocking.
   such a list, would also get the two handles. The uninstall program starts
   no other process then.
 - **The journal is not held open.** The uninstall program writes the journal
-  and then looks once whether it is in the folder; without it the removal
-  stops with nothing deleted. (The private-file writer reports a publication
-  as done also when the file lost its name directly afterwards, since pull
+  and then looks once, by its name, whether it is in the folder. Without it
+  this uninstall stops, and it has deleted nothing. What an earlier uninstall
+  deleted stays deleted. (The private-file writer reports a publication as
+  done also when the file lost its name directly afterwards, since pull
   request 2247; before, the writer itself stopped the removal then.) After
-  that the uninstall program holds no handle on the journal and does not look
-  for it again while it deletes. A program of this account that deletes the
-  journal during a removal takes away what the journal does: if that removal
-  then stops before its end, the launcher's commands do not refuse, and
-  Amplifier can open on a folder that is partly deleted. The step after exit
-  reads the journal's token before every pass and stops without it. Such a
-  program can delete the person's data itself.
+  that look the uninstall program holds no handle on the journal and does not
+  look for it again while it deletes. Three things follow.
+  - A stop at this step leaves it open whether a journal is in the folder.
+    This part needs no other program. The writer can report an error after
+    the journal has its name. The look answers no for every error, not only
+    for a name that is not there. With a journal Amplifier does not open;
+    without one it opens. So the two texts of this step say neither. In a
+    first uninstall the text says that this uninstall deleted nothing in the
+    folder, and that Amplifier might not open until the next uninstall. In a
+    second uninstall the text says not to open Amplifier, because its folder
+    can be partly deleted.
+  - A program of this account deletes the journal: during a removal, or at
+    any time after a removal that stopped. That takes away what the journal
+    does. If the removal did not finish, the launcher's commands do not
+    refuse because of a journal, Amplifier can open on a folder that is
+    partly deleted, and a next uninstall asks its questions as for a whole
+    installation. The step after exit reads the journal's token before every
+    pass and stops without it.
+  - A program of this account replaces the journal with its own file in the
+    instant of the write. The name is there, so the removal goes on to its
+    end under a journal that is not its own. The person's data, the program
+    files and the Windows entries go, as the person chose twice. The
+    launcher's commands still refuse. The last step
+    (`windows_uninstall.finish`) refuses a journal whose token is not its
+    own, before it starts the step after exit. So `python`, `tools` and both
+    records stay, and a message says that the last program files could not
+    be removed. That is the leftover of L3. Nothing more is deleted than the
+    person chose.
+
+  Such a program runs as the person and can delete the person's data itself.
+  That closes nothing; it is why this limit is stated and not solved.
 
 Under PowerShell constrained language mode the step stops before it answers
 and changes nothing; the parked files and both records stay.
@@ -1567,15 +1598,25 @@ folder, a file link, a file in use, a read-only file, a hard link to an
 outside read-only file and a later entry all stay. A data file in use stops the removal with the entries and the
 journal in place; Open, Status and Stop refuse; a second window refuses while
 the lock is held; a second uninstall finishes; a file that is not Amplifier's
-stays. Stand-ins: Task Scheduler, the check of an installed release, and the
-dialogs.
+stays. A journal that the test deletes inside the real writer, directly after
+the writer renamed it into place, stops a first and a second uninstall before
+they delete anything, each with its own text; no journal is in the folder
+then, and Open reaches its start step, the second time on a folder that is
+partly deleted. A journal that the test replaces in that instant lets the
+removal go on to its end, and the last step refuses it: `python`, `tools` and
+both records stay, no step after exit starts, and Open refuses. Stand-ins:
+Task Scheduler, the check of an installed release, the start step of Open,
+and the dialogs.
 
 **Not proven:** the dialogs on screen; a real stop with live conversation
 workers followed by the deletion; uv's own start program (the check uses a
 venv start program); PowerShell constrained language mode; the lock between
 two sign-in sessions of one person; a second setup run on a folder whose
 removal did not finish; a complete
-uninstall of an installed build. These remain clean-room acceptance. Not
+uninstall of an installed build. These remain clean-room acceptance. Shown
+only with stand-ins, not on a Windows runner: a look for the journal that
+Windows does not answer, and an error of the writer after the journal has its
+name. Not
 built: "keep my chats, remove the program". The launcher refresh command does
 not look at the journal.
 

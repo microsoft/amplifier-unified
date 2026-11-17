@@ -311,9 +311,10 @@ _UNFINISHED.update({
     # The step `journal` failed. This program does not know whether a journal is in the folder now: the
     # write can fail before or after the file has its name, a program can take the name away, and Windows
     # can refuse the look for it. With a journal Amplifier does not open; without one it opens. So neither
-    # text of this step says that Amplifier opens, and neither says that it does not.
+    # text of this step says that Amplifier opens, and neither says that it does not. The first says what
+    # this uninstall deleted, not what the folder holds: a program can have deleted an earlier journal.
     "journal": "Amplifier has stopped and no longer starts when you sign in, but it could not begin to delete "
-               "its folder. Nothing in the folder was deleted.\n\n"
+               "its folder. This uninstall deleted nothing in the folder.\n\n"
                "Wait a minute or restart this PC, then uninstall again. Amplifier might not open until then.",
     # The same step in an uninstall that goes on with an earlier removal: files can already be deleted.
     "journal-again": "Amplifier could not finish its removal from this PC.\n\n"
