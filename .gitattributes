@@ -23,11 +23,6 @@
 /components/status/.gitignore source-context=configuration
 /components/status-emitter.source.json source-context=configuration
 /scripts/**/tests/** source-context=tests
-/components/recall/amplifier_recall/** source-context=source
-/components/recall/tests/** source-context=tests
-/components/recall/MANIFEST.in source-context=configuration
-/components/recall/.gitignore source-context=configuration
-/components/recall/LICENSE source-context=documentation
 /components/recall.source.json source-context=configuration
 /components/recall-delivery/** source-context=generated linguist-vendored=true linguist-generated=true -text
 /components/scheduling.source.json source-context=configuration

@@ -1,14 +1,16 @@
 # Component ownership
 
-`recall/` authors the independently buildable `amplifier_recall` storage package.
-Its SQLite mechanism tests belong here; Unified retains source access, scope,
-authorization, model execution and memory policy. Unified consumes only the published
+Author `amplifier_recall` and its SQLite mechanism tests in
+[amplifier-platform-recall](https://github.com/bkrabach/amplifier-platform-recall).
+Unified retains source access, scope, authorization, opt-ins, context assembly,
+model execution, Stop and memory policy. Unified consumes only the published
 artifact selected into `recall-delivery/` by `recall.source.json`, as the sole
 installed owner. Never edit that generated copy by hand; author changes and
-publication do not refresh the app selection. Preserve existing
-imports and database formats; the database includes durable explicit notes and
-receipts, not only rebuildable search data. Do not coinstall the standalone
-distribution with Unified or create a second writable runtime copy.
+publication do not refresh the app selection. Preserve existing imports and
+database formats; the database includes durable explicit notes, versions, settings
+and receipts, not only rebuildable search data. Do not coinstall the standalone
+distribution with Unified or restore a second author copy here. Follow the
+[selection instructions](README.md#select-a-recall-artifact).
 
 Author `amplifier_workspace_metadata` and its registration/query tests in
 [amplifier-platform-workspaces](https://github.com/bkrabach/amplifier-platform-workspaces).

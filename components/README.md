@@ -14,14 +14,15 @@ import and CLI remain distinct from standalone `amplifier_status` and
 `amplifier-status`, preserving coinstallation and uninstall isolation. Author
 edits and publication do not refresh the app's selected bytes or enable emission.
 
-[`recall/`](recall/README.md) prepares the existing conversation search and
-versioned-memory storage package for independent development and installed tests.
+[amplifier-platform-recall](https://github.com/bkrabach/amplifier-platform-recall)
+owns conversation search, versioned-memory storage and its direct SQLite tests.
 Unified consumes the published artifact selected into `recall-delivery/`, recorded
 by `recall.source.json`; author edits and publication do not refresh this generated
-copy. Source access, authorization, opt-ins,
-context assembly and model execution stay in the host. Existing imports and
-database formats are unchanged, including durable explicit notes and receipts.
-Do not coinstall the standalone distribution with Unified.
+copy. Source access, authorization, opt-ins, context assembly, model execution and
+Stop stay in the host. Existing imports and database formats are unchanged,
+including durable explicit notes, versions, settings and receipts. Unified is the
+sole installed owner; do not coinstall the standalone distribution or restore an
+author copy here. Follow the [selection instructions](#select-a-recall-artifact).
 
 [amplifier-platform-workspaces](https://github.com/bkrabach/amplifier-platform-workspaces)
 owns the independently buildable workspace registration metadata package and its
@@ -85,6 +86,29 @@ Unified consumes the explicitly selected published wheel through the generated
 Author changes and component publication do not change that app default. The app
 remains the sole installed distribution owner; this is artifact assembly, not a
 separately updatable pip dependency. Do not restore a second author copy here.
+
+## Select a Recall artifact
+
+The public Recall repository publishes `amplifier-recall` under `recall-vX.Y.Z`,
+preserving the `amplifier_recall` import and existing SQLite formats. Download the
+original wheel, source archive, `recall-source.json` and `SHA256SUMS` from one
+accepted release. Verify the receipt and assets, then select that exact public
+receipt through the existing assembler:
+
+```sh
+python scripts/scheduling_delivery.py select --component recall \
+  --dist /path/to/verified-recall-assets --revision FULL_SOURCE_SHA \
+  --receipt-sha256 ORIGINAL_PUBLIC_RECEIPT_SHA256
+python scripts/scheduling_delivery.py verify --component recall
+```
+
+The generated `recall-delivery/` and `recall.source.json` travel together. Qualify
+the packaged, editable and source-archive builds before the normal Unified
+release; component publication alone does not change the app's selected code.
+Unified remains the sole installed owner. Historical monorepo receipts remain
+valid for explicit selection and ordinary app rollback, without migrating or
+deleting durable notes, versions, settings, command receipts or suppression
+records. This handoff does not replace Foundation's separate optional Recall API.
 
 ## Select an Outputs artifact
 
