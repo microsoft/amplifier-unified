@@ -449,8 +449,10 @@ async def _stage(manager, *, selected=None, extras):
     manager.diagnostics.clear_failure()
     manager.diagnostics.record('stage','succeeded',observedVersion=installed)
     intent = manager.service.state['updates'].get('applicationIntent')
+    # The publication derives the text: with no work running it says that the update starts now.
+    from .update_health import PREPARED_WAITING
     await manager.publish(phase='app-staged',pendingApp={**release,'attemptId':manager.diagnostics.state['attemptId'],'generation':generation,'extras':extras,
-        **({'updateIntent': copy.deepcopy(intent)} if intent is not None else {})},detail='Application release validated. Waiting for work to finish before restarting.')
+        **({'updateIntent': copy.deepcopy(intent)} if intent is not None else {})},detail=PREPARED_WAITING)
     if selected:
         from .app_features import record
         await record(manager, selected['requestId'], 'qualified', selection=selected,
@@ -503,7 +505,18 @@ async def _activate_serialized(manager, *, force=None):
                     detail='The running host and previous candidate evidence were preserved.')
             raise
         finally:
-            manager._replacing = None
+            if getattr(manager, '_replacing', None) is not None:
+                # This process no longer executes the attempt. A publication
+                # can fail after the marker is in memory, and a scheduling tick
+                # returns early on a marker: derive here, so that an unconfirmed
+                # marker is never left with this host's live claim.
+                manager._replacing = None
+                try:
+                    async with manager.service.lock:
+                        if manager._derive_state():
+                            manager.service._publish_changes(globals={'updates'})
+                except Exception:
+                    pass  # The fields are right in memory; the next publication carries them.
 
 async def installed_target():
     """Only replace the uv tool environment that owns this running host."""

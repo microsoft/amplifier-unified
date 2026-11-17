@@ -316,7 +316,9 @@ A component update qualifies the selected conversation profile, and a profile
 with no provider cannot qualify. While the app's own profile is selected and no
 AI connection is set up, the update owner starts no component candidate and
 records no attempt. Settings says that components update after an AI connection
-is set up, and that nothing failed. The published status is `waiting` with
+is set up, and that nothing failed. When the application release check failed,
+the text says that instead of "nothing failed", and that the component update
+waits for another reason. The published status is `waiting` with
 `action: connect`; it requires no attention. This holds for the automatic update of a new
 installation and for a person's own Update request, on every platform. The
 update starts after the first connection: a connection changes the checked
@@ -344,8 +346,12 @@ refusal covered every incomplete selected profile, so the record cannot prove
 that only a connection was missing. It keeps its priority as component attention
 until a later component update completes; a separate application success does
 not resolve that attempt. The
-existing rule for an older preparation failure then makes it history. On such
+existing rule for an older preparation failure then makes it history. While no
+AI connection is set up, the record's text also names the missing connection,
+because a retry cannot start without one; a record of `ai-connection-needed`
+says that already. On such
 an installation the person sets up an AI connection; the update then starts
+when a component update is available
 (by itself, or at the person's Update request when automatic installation is
 off). A new installation never gets such a record, because no attempt starts.
 
@@ -446,7 +452,10 @@ verification** and disables additional installs while this outcome is unknown.
 It does not show that warning for this host's running installation:
 `updates.activation` is `installing` only while this process executes the exact
 replacement attempt. The browser shows **Updating Amplifier** instead. The saved
-marker and the complete state read by agents remain unchanged.
+marker and the complete state read by agents remain unchanged. The claim ends
+with the attempt: an error, a cancellation, a restart handoff or a failed state
+write each leave the marker with its warning, and a new host never inherits
+the claim.
 
 A failed probe after immutable generation promotion can recover without a second
 installation or restart. For an ordinary app update (not a forced shutdown or

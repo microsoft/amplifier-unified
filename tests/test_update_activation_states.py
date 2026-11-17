@@ -123,7 +123,8 @@ def test_installing_requires_exact_live_in_memory_attempt(change, replacing, exp
 
 @pytest.mark.parametrize('detail', [None, 'Installing the app update and restarting…'])
 def test_installing_health_precedes_the_unknown_marker(detail):
-    state = {'activation': 'installing', 'pendingReplacement': {'attemptId': 'attempt'}, 'detail': detail}
+    state = {'activation': 'installing', 'phase': 'activating',
+             'pendingReplacement': {'attemptId': 'attempt'}, 'detail': detail}
     assert health.current(state) == {
         'status': 'working', 'title': 'Updating Amplifier',
         'detail': detail or 'Installing the app update and restarting…',
@@ -137,6 +138,20 @@ def test_starting_health_and_blocker_attention_order():
     assert (result['status'], result['title'], result['detail']) == ('working', 'Updating Amplifier', STARTING)
     state['blockers'] = [{'kind': 'checkout-handoff'}]
     assert health.current(state)['title'] == 'Update needs attention'
+
+
+@pytest.mark.parametrize('change', [{'phase': 'error'}, {'phase': 'interrupted'}, {'error': 'failed'},
+                                    {'pendingReplacement': {'unqualified': True}}])
+def test_a_stale_installing_claim_keeps_the_unknown_marker_health(change):
+    state = {'activation': 'installing', 'phase': 'activating', 'pendingReplacement': {'attemptId': 'attempt'},
+             **change}
+    assert health.current(state)['status'] == 'unverified'
+
+
+@pytest.mark.parametrize('change', [{'blockers': [WORK]}, {'application': {'canInstall': False}}])
+def test_a_stale_starting_claim_does_not_say_that_the_update_starts(change):
+    result = health.current(prepared(activation='starting', **change))
+    assert (result['status'], result['title']) == ('waiting', 'Update ready; waiting for work')
 
 
 @pytest.mark.parametrize('activation', [None, 'waiting', 'starting'])
@@ -156,7 +171,7 @@ def test_connection_wait_distinguishes_failed_application_check(status):
     assert (result['status'], result['title'], result['action']) == (
         'waiting', 'Components update after you set up an AI connection', 'connect')
     assert result['detail'] == (
-        'The application release could not be checked. That is a separate matter. Amplifier checks new components together with an AI connection, and none is set up yet. Set up an AI connection in Settings. The component update can then start.'
+        'The application release could not be checked. The component update waits for another reason. Amplifier checks new components together with an AI connection, and none is set up yet. Set up an AI connection in Settings. The component update can then start.'
         if status == 'check_failed' else
         'Nothing failed. Amplifier checks new components together with an AI connection, and none is set up yet. Set up an AI connection in Settings. The update can then start.')
 
@@ -180,6 +195,17 @@ def test_component_failure_keeps_its_result_and_names_missing_connection(title, 
     assert state == before
 
 
+@pytest.mark.parametrize('where', ['reason', 'probe'])
+def test_a_record_that_names_the_connection_itself_is_not_told_twice(where):
+    failure = {'kind': 'ecosystem', 'status': 'failed', 'phase': 'ecosystem-stage', 'at': 1}
+    failure.update({'reason': 'ai-connection-needed'} if where == 'reason'
+                   else {'probe': {'reason': 'ai-connection-needed'}})
+    state = {'diagnostics': {'lastFailure': failure}}
+    result = health.current(state, connection={'needed': True})
+    assert result == health.current(state)
+    assert result['detail'].startswith('This update needs an AI connection') and CONNECTION not in result['detail']
+
+
 @pytest.mark.parametrize('reason', [None, 'runtime-source-conflict'])
 def test_noncomponent_failure_does_not_get_missing_connection_suffix(reason):
     failure = {'kind': 'application', 'status': 'failed', 'at': 1, 'reason': reason}
@@ -187,9 +213,17 @@ def test_noncomponent_failure_does_not_get_missing_connection_suffix(reason):
     assert health.current(state, connection={'needed': True}) == health.current(state)
 
 
+def live(activation):
+    """The saved state that each live claim describes."""
+    if activation == 'installing':
+        return {'phase': 'activating', 'pendingApp': {'revision': 'a' * 40}, 'blockers': [],
+                'pendingReplacement': {'attemptId': 'live'}, 'activation': 'installing'}
+    return prepared(activation=activation)
+
+
 @pytest.mark.parametrize('activation', ['starting', 'installing'])
 def test_browser_view_is_shallow_and_does_not_change_saved_state(activation):
-    state = prepared(activation=activation, pendingReplacement={'attemptId': 'live'})
+    state = live(activation)
     before = copy.deepcopy(state)
     view = health.browser_view(state)
     assert view is not state and view['phase'] == 'activating'
@@ -205,10 +239,33 @@ def test_other_browser_views_are_identical_objects_and_keep_real_failure_marker(
     assert 'pendingReplacement' in health.browser_view(state)
 
 
+@pytest.mark.parametrize('activation,change', [
+    ('installing', {'phase': 'error'}), ('installing', {'phase': 'interrupted'}),
+    ('installing', {'phase': 'app-staged'}), ('installing', {'error': 'failed'}),
+    ('installing', {'pendingRestart': {'attemptId': 'restart'}}),
+    ('installing', {'pendingReplacement': None}), ('installing', {'pendingReplacement': {}}),
+    ('installing', {'pendingReplacement': {'unqualified': True}}), ('installing', {'pendingReplacement': []}),
+    ('starting', {'blockers': [WORK]}), ('starting', {'phase': 'error'}), ('starting', {'phase': 'activating'}),
+    ('starting', {'error': 'failed'}), ('starting', {'pendingRestart': {'attemptId': 'restart'}}),
+    ('starting', {'pendingReplacement': {'attemptId': 'unknown'}}), ('starting', {'pendingApp': None}),
+    ('starting', {'application': {'canInstall': False}}),
+])
+def test_a_claim_that_the_state_no_longer_supports_changes_nothing(activation, change):
+    """Other owners publish `updates` without deriving `activation` again.
+
+    A stale claim must never hide a marker, an error or a failed phase from the page.
+    """
+    state = {**live(activation), **change}
+    before = copy.deepcopy(state)
+    assert health.browser_view(state) is state
+    assert state == before
+
+
 @pytest.mark.parametrize('page', ['updates', 'ai-connections'])
 @pytest.mark.parametrize('activation', ['starting', 'installing', None])
 def test_browser_demand_uses_the_same_view_before_page_filter(page, activation):
-    state = prepared(activation=activation, pendingReplacement={'attemptId': 'live'})
+    state = live(activation or 'installing')
+    state['activation'] = activation
     before = copy.deepcopy(state)
     result = browser_demand.project({'updates': state, 'view': {'panel': 'settings', 'settingsExpanded': [page]}})
     assert state == before
@@ -217,7 +274,7 @@ def test_browser_demand_uses_the_same_view_before_page_filter(page, activation):
         assert 'pendingReplacement' not in result['updates']
     else:
         assert result['updates']['pendingReplacement'] == state['pendingReplacement']
-        assert result['updates']['phase'] == 'app-staged'
+        assert result['updates']['phase'] == 'activating'
 
 
 def record_publications(service, monkeypatch):
@@ -304,6 +361,35 @@ async def test_real_cancelled_replacement_keeps_marker_visible_and_health_unveri
     assert health.browser_view(state) is state and state['pendingReplacement']
     assert state['currentStatus']['status'] == 'unverified'
     assert not getattr(managed.manager, '_replacing', None)
+
+
+async def test_failed_marker_publication_does_not_leave_a_live_claim(managed, monkeypatch):
+    """The marker is in memory, its publication fails, and a tick returns early on a marker."""
+    service, manager = managed.service, managed.manager
+    await stage_replacement(managed, 'app')
+    publish = service._publish_changes
+    failed = []
+
+    def fail_once(*args, **kwargs):
+        if service.state['updates'].get('pendingReplacement') and not failed:
+            failed.append(service.state['updates']['activation'])
+            raise OSError('synthetic state write failure')
+        return publish(*args, **kwargs)
+
+    monkeypatch.setattr(service, '_publish_changes', fail_once)
+    with pytest.raises(OSError):
+        await app_updates.activate(manager)
+    state = service.state['updates']
+    assert failed == ['installing']
+    assert state['pendingReplacement'] and state['phase'] == 'activating'
+    assert not getattr(manager, '_replacing', None)
+    assert state['activation'] is None
+    assert state['currentStatus']['status'] == 'unverified'
+    assert health.browser_view(state) is state
+    # The corrected fields were also saved, not only kept in memory.
+    assert saved_updates(service)['activation'] is None
+    await manager.tick()
+    assert state['activation'] is None and state['currentStatus']['status'] == 'unverified'
 
 
 @pytest.mark.parametrize('legacy', [False, True])

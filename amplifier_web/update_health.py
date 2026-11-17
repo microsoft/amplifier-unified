@@ -19,18 +19,30 @@ PREPARED_WAITING = 'Application release validated. Waiting for work to finish be
 PREPARED_STARTING = 'Application release validated. No work is running. Amplifier now installs the update and restarts.'
 
 
+def _replacing(state):
+    """The saved state of a replacement that still runs. The live owner is not in it."""
+    marker = state.get('pendingReplacement')
+    return bool(isinstance(marker, dict) and marker.get('attemptId')
+                and state.get('phase') == 'activating' and not state.get('error')
+                and not state.get('pendingRestart'))
+
+
+def _prepared(state):
+    """The saved state of a validated app that nothing has started to install."""
+    return bool(state.get('pendingApp') and state.get('phase') == 'app-staged'
+                and not state.get('error') and not state.get('pendingRestart')
+                and state.get('pendingReplacement') is None
+                and (state.get('application') or {}).get('canInstall') is not False)
+
+
 def activation(manager):
     """Derive live app progress from resident state, never from saved ownership."""
     state = manager.service.state['updates']
-    marker = state.get('pendingReplacement')
-    if (isinstance(marker, dict) and marker.get('attemptId')
-            and marker['attemptId'] == getattr(manager, '_replacing', None)
-            and state.get('phase') == 'activating' and not state.get('error')
-            and not state.get('pendingRestart')):
-        return 'installing'
-    if (not state.get('pendingApp') or state.get('phase') != 'app-staged'
-            or state.get('error') or state.get('pendingRestart') or marker is not None
-            or (state.get('application') or {}).get('canInstall') is False):
+    if _replacing(state):
+        # Only the process that executes this exact attempt may call it running.
+        return ('installing' if state['pendingReplacement']['attemptId'] == getattr(manager, '_replacing', None)
+                else None)
+    if not _prepared(state):
         return None
     if state.get('blockers'):
         return 'waiting'
@@ -59,8 +71,15 @@ def browser_view(updates):
     The page reads any replacement marker as an unconfirmed outcome and any
     prepared app as waiting for work. The server knows these two states better.
     Remove this view when the page reads updates.activation itself.
+
+    `activation` is derived at the manager's own publications. Other owners
+    publish `updates` too, so the view also requires the state that the claim
+    describes. A claim that the state no longer supports changes nothing:
+    the page then gets the real marker, phase and error.
     """
-    if updates.get('activation') not in {'starting', 'installing'}:
+    live = updates.get('activation')
+    if not (live == 'installing' and _replacing(updates)
+            or live == 'starting' and _prepared(updates) and not updates.get('blockers')):
         return updates
     view = {**updates, 'phase': 'activating'}
     view.pop('pendingReplacement', None)
@@ -487,7 +506,9 @@ def current(state, evidence=None, *, manual_verified=None, explicit_retry=False,
             detail += ' Amplifier checked the sources again before this attempt.'
         if status == 'current' and retry_check.get('result') == 'nothing-to-install':
             detail += ' Amplifier checked the sources again. Nothing is left to install.'
-        if failure and failure.get('kind') == 'ecosystem' and connection.get('needed'):
+        if (failure and failure.get('kind') == 'ecosystem' and connection.get('needed')
+                and (failure.get('reason') or (failure.get('probe') or {}).get('reason')) != 'ai-connection-needed'):
+            # A record of this exact refusal carries the same guidance already.
             detail += ' No AI connection is set up yet. A component update starts only after you set one up in Settings.'
         value = {'status': status, 'title': title, 'detail': detail,
                 'actionRequired': status in {'action-required', 'protected', 'unverified'},
@@ -507,7 +528,7 @@ def current(state, evidence=None, *, manual_verified=None, explicit_retry=False,
                 if source in selected:
                     value[target] = selected[source]
         return value
-    if state.get('activation') == 'installing':
+    if state.get('activation') == 'installing' and _replacing(state):
         return result('working', 'Updating Amplifier',
                       state.get('detail') or 'Installing the app update and restarting…')
     if state.get('pendingReplacement') is not None:
@@ -529,7 +550,7 @@ def current(state, evidence=None, *, manual_verified=None, explicit_retry=False,
             return result('action-required', 'Update needs attention',
                           'Automatic restart is paused because Amplifier cannot confirm earlier work has finished. The current app is kept.',
                           action='diagnostics')
-        if state.get('activation') == 'starting':
+        if state.get('activation') == 'starting' and _prepared(state) and not state.get('blockers'):
             return result('working', 'Updating Amplifier', PREPARED_STARTING)
         return result('action-required' if state.get('error') else 'waiting',
                       'Update needs attention' if state.get('error') else 'Update ready; waiting for work',
@@ -674,7 +695,7 @@ def current(state, evidence=None, *, manual_verified=None, explicit_retry=False,
         # selected conversation profile, which has no provider yet. Application
         # and Smart Tool updates do not wait.
         return result('waiting', 'Components update after you set up an AI connection',
-                      'The application release could not be checked. That is a separate matter. Amplifier checks new components together with an AI connection, and none is set up yet. Set up an AI connection in Settings. The component update can then start.'
+                      'The application release could not be checked. The component update waits for another reason. Amplifier checks new components together with an AI connection, and none is set up yet. Set up an AI connection in Settings. The component update can then start.'
                       if app.get('status') == 'check_failed' else
                       'Nothing failed. Amplifier checks new components together with an AI connection, and none is set up yet. Set up an AI connection in Settings. The update can then start.',
                       action='connect')
