@@ -336,8 +336,9 @@ must hold:
   registration has no such record until the next app update.
 - Nothing runs: no chat turn, no worker, no update check, stage, installation
   or activation, and the update state is the same as at the pass before.
-- "Keep Amplifier up to date" is on, or the person selected "Update Amplifier"
-  while the Updates page offered the launcher for this app version.
+- "Keep Amplifier up to date" is on, or the person selected the install button
+  of the Updates page while that page offered the launcher for this app
+  version.
 - No counted attempt exists for this app version, or the button was selected.
 - No request is open and no refresh is unfinished.
 
@@ -411,8 +412,8 @@ an hour when no work runs. Until then Amplifier checks for no updates.
 **Bounded.** One counted automatic attempt for one app version: a refusal, a
 helper that did not become ready, or any settled result except "withdrawn"
 (the app was busy at "go", or the setting was turned off). The next automatic
-attempt comes with the next app update. "Update Amplifier" tries once more
-for each press.
+attempt comes with the next app update. The page's install button tries once
+more for each press.
 
 **What a person sees.** The server puts the text into the update status
 (`updates.launcherRefresh`, shown through `currentStatus`): before the
@@ -421,9 +422,12 @@ of the update is ready" with the button; then "Amplifier is restarting";
 afterwards a sentence with the new version, or "Amplifier is running. One
 part of the update did not finish." with the earlier version and the button.
 While a request is open its text replaces the health text, because no update
-runs then. During the outage the page shows the web client's own reconnect
-text. The helper never shows a message box: a waiting box would hold the task
-and block the timed trigger.
+runs then. The texts name the install button as the bundled page labels it for
+such a status: "Retry installation". The page also adds its own sentence about
+"retained components" there, which does not fit the launcher; a label and a
+sentence of its own for this state are web-client work. During the outage the
+page shows the web client's own reconnect text. The helper never shows a
+message box: a waiting box would hold the task and block the timed trigger.
 
 **The Apps list.** It shows the version of the app that is installed and
 confirmed, which is the version that the Updates page shows. The app host
@@ -464,8 +468,11 @@ repaired by Task Scheduler's timed trigger with no other action; then the
 launcher follows, at the same path and on the same port, and the listed files
 do not differ any more; the new launcher starts and uninstalls; a helper task
 that was left with no main task removes itself. The fixture writes the records
-that an app update leaves; the update hand-over has its own workflow. Not
-shown there: the setup file, a standard account, a sign-out or a restart of
+that an app update leaves; the update hand-over has its own workflow.
+Measured there (run 44162025757): 75 seconds from the app's request to the
+settled rollback of the forced failure; 241 seconds from the end of the helper
+to the repair by the timed trigger; 134 seconds from the request to the
+settled refresh. Not shown there: the setup file, a standard account, a sign-out or a restart of
 the PC, the Updates page in a browser and its button, a message that is sent
 while Amplifier restarts, a count of console windows, a helper that is ended
 after it started the app, and an installation that setup did not make.

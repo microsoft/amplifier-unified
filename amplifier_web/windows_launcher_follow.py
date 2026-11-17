@@ -12,13 +12,19 @@ import uuid
 _WINDOWS = sys.platform == 'win32'
 _POLL_SECONDS = 45
 
+# The label that the bundled page gives its install button when the status
+# has the action 'install'. The texts below name the button, so they change
+# together with that label (tests/test_windows_launcher_follow.py reads it
+# from the bundled page).
+_BUTTON = 'Retry installation'
+
 # These are server text, not a second update-health policy.
 _TEXT = {
     'waiting': ('waiting', 'Amplifier needs one more restart',
         'One part of the update remains: the program that starts Amplifier still has version {X}. '
         'Amplifier waits until your work is finished. Then it restarts. This can take a few minutes.', None),
     'ready': ('available', 'One part of the update is ready',
-        'The program that starts Amplifier still has version {X}. To update it, select Update Amplifier. '
+        'The program that starts Amplifier still has version {X}. To update it, select ' + _BUTTON + '. '
         'Amplifier then restarts when your work is finished. This can take a few minutes.', 'install'),
     'restarting': ('working', 'Amplifier is restarting',
         'Amplifier is replacing the program that starts it. This can take a few minutes. During that time '
@@ -514,8 +520,8 @@ def project(manager) -> None:
         status, title, detail, action = _TEXT[phase]
         detail = detail.format(X=X, Y=Y)
         if phase in {'failed', 'failed-unchanged'}:
-            detail += (' Amplifier tries again after the next app update. To try now, select Update Amplifier.'
-                if _automatic(manager) else ' To try again, select Update Amplifier.')
+            detail += (f' Amplifier tries again after the next app update. To try now, select {_BUTTON}.'
+                if _automatic(manager) else f' To try again, select {_BUTTON}.')
         row = dict(base)
         if phase == 'done':
             if base.get('status') == 'current':

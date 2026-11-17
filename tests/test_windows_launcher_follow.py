@@ -738,7 +738,7 @@ TEXTS = {
         'One part of the update remains: the program that starts Amplifier still has version 1.0.0. '
         'Amplifier waits until your work is finished. Then it restarts. This can take a few minutes.', None),
     'ready': ('available', 'One part of the update is ready',
-        'The program that starts Amplifier still has version 1.0.0. To update it, select Update Amplifier. '
+        'The program that starts Amplifier still has version 1.0.0. To update it, select Retry installation. '
         'Amplifier then restarts when your work is finished. This can take a few minutes.', 'install'),
     'restarting': ('working', 'Amplifier is restarting',
         'Amplifier is replacing the program that starts it. This can take a few minutes. During that time '
@@ -780,8 +780,8 @@ def test_each_exact_text_and_setting_and_open_request_precedence(rig, phase, aut
     row = projection(rig, phase, health, open_request=open_request)
     status, title, detail, action = TEXTS[phase]
     if phase in {'failed', 'failed-unchanged'}:
-        detail += (' Amplifier tries again after the next app update. To try now, select Update Amplifier.'
-            if automatic else ' To try again, select Update Amplifier.')
+        detail += (' Amplifier tries again after the next app update. To try now, select Retry installation.'
+            if automatic else ' To try again, select Retry installation.')
     assert row == {'status': status, 'title': title, 'detail': detail, 'action': action,
         'actionRequired': phase == 'needs-repair', 'component': None}
     follow.project(rig.m)
@@ -1083,3 +1083,29 @@ async def test_go_with_real_publish_saves_drain_and_phase_before_hold_without_de
     assert rig.records['request']['hold'] == rig.run
     assert published[-1]['drain']['phase'] == 'replacing'
     assert published[-1]['launcherRefresh']['phase'] == 'restarting'
+
+
+def test_the_texts_name_the_install_button_as_the_bundled_page_labels_it():
+    # The page chooses the label of its install button itself. With the status
+    # action 'install' (which the launcher's offers need, or the page shows no
+    # install button) the label is not "Update Amplifier". A text that names
+    # another button than the one on the page sends the person nowhere.
+    import re
+    assets = sorted((Path(amplifier_web.__file__).parent / 'static/assets').glob('app-*.js'),
+        key=lambda path: path.stat().st_size)
+    assert assets, 'The bundled page is not built.'
+    script = assets[-1].read_text(encoding='utf-8')
+    button = script[script.index('"data-action":"updates.install"'):][:700]
+    choice = re.search(r'createElement\("span",null,(\w+)\?"([^"]+)":.{0,60}?\?"([^"]+)":"([^"]+)"\)', button)
+    changed = ('The bundled page labels its install button in another way now. Read the new rule, and change '
+               'windows_launcher_follow._BUTTON and the texts that name the button together with it.')
+    assert choice, changed
+    condition, first, second, third = choice.groups()
+    # The first label is for exactly the status action that the launcher's offers set.
+    assert re.search(r'[,;{ ]' + condition + r'=\(\(\w+=\w+\.current\)==null\?void 0:\w+\.action\)==="install"',
+        script), changed
+    assert follow._BUTTON == first, changed
+    assert (second, third) == ('Try update again', 'Update Amplifier'), changed
+    named = [row for row in follow._TEXT.values() if row[3] == 'install']
+    assert len(named) == 3 and 'Update Amplifier' not in json.dumps(follow._TEXT)
+    assert follow._BUTTON in follow._TEXT['ready'][2]
