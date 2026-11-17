@@ -798,9 +798,10 @@ table with `python tests/test_windows_path_budget.py`.
 - **Source store, the files beyond the limit:** the store stages whole
   repositories, with their Git data and their tests. Measured on native
   Windows with long paths off at a folder path of 59, after the app prepared
-  the default components (39,356 files and 6,218 folders below the folder):
-  4 files and 2 folders pass the limit. All six are test fixtures of one
-  module of the context-intelligence repository
+  the default components (the run of November 17, 2026: 39,356 files and
+  6,218 folders below the folder; a later revision of a component changes
+  these counts): 4 files and 2 folders pass the limit. All six are test
+  fixtures of one module of the context-intelligence repository
   (`modules\tool-context-intelligence-upload\tests\fixtures\ground_truth\<ID>\context-intelligence`,
   for two IDs): `metadata.json` is 268 characters, `events.jsonl` is 267, and
   the folder is 254. Their depth in the repository is 140. At a folder path of
@@ -875,7 +876,8 @@ setup, unchanged (`runtime_profiles.ensure`): real uv, the worker
 dependencies, the default components from their repositories, the freeze and
 both probes. It runs below a folder path of 59 with the folders and settings
 that the installed launcher gives the app, for the default workspace folder
-and for a person's folder. It then lists every path below the installation
+and for a person's folder. Each of the two folders declares a dependency
+override of its own. It then lists every path below the installation
 folder (the list is an artifact of the run) and requires that no path which
 the app or a chat needs passes the limit. That tree holds the worker
 environments, the stages, the source store with the default components, and

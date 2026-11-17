@@ -11,8 +11,8 @@ of the longest path that setup supports, with the folders and settings that
 the installed launcher gives the app. Real uv, the real worker dependencies,
 the app's default components from their repositories, the real freeze and both
 real probes. The chat is in the default workspace folder, and in a folder that
-a person chose somewhere else. No model is called and no conversation worker
-starts.
+a person chose somewhere else. Each of the two folders declares a dependency
+override. No model is called and no conversation worker starts.
 
 It then lists every path below the installation folder. That is the measured
 answer to "which paths pass the Windows limit, and does the app need them":
@@ -44,8 +44,15 @@ from test_windows_long_paths_off import base, chosen_folder, installation, long_
 pytestmark = pytest.mark.skipif(os.name != 'nt', reason='Windows path limits need native Windows')
 REQUIRED = os.environ.get('AMPLIFIER_REQUIRE_CHAT_SETUP') == '1'
 TREE_FILE = os.environ.get('AMPLIFIER_CHAT_SETUP_TREE')
-# A dependency override in the person's folder: the same module from the same place, declared by the folder.
-OVERRIDE = {'sources': {'modules': {'tool-todo': 'git+https://github.com/microsoft/amplifier-module-tool-todo@main'}}}
+# A dependency override that each folder declares: a module of the default bundle, from its own repository, at
+# a fixed revision. The two folders override different modules, so each has a setup of its own.
+OVERRIDES = {
+    'default workspace folder': {'sources': {'modules': {
+        'tool-exec': 'git+https://github.com/microsoft/amplifier-module-tool-exec@f267548ccd1b38a236a46afb96252bb6dd474dcd'}}},
+    'folder that a person chose': {'sources': {'modules': {
+        'tool-filesystem':
+            'git+https://github.com/microsoft/amplifier-module-tool-filesystem@663f26a878ae71e136f439fa73ded52b2eb24174'}}},
+}
 KEYS = 'AMPLIFIER_FIXTURE_VALUE=fixture-not-a-secret\n'
 
 
@@ -106,8 +113,9 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
     }), owned_root=root)
     write_private(shared / 'keys.env', KEYS, owned_root=root)
     folders = {'default workspace folder': root / 'workspace', 'folder that a person chose': chosen_folder}
-    (chosen_folder / '.amplifier').mkdir()
-    (chosen_folder / '.amplifier' / 'settings.yaml').write_text(yaml.safe_dump(OVERRIDE), encoding='utf-8')
+    for label, folder in folders.items():
+        (folder / '.amplifier').mkdir()
+        (folder / '.amplifier' / 'settings.yaml').write_text(yaml.safe_dump(OVERRIDES[label]), encoding='utf-8')
     kept = {label: native.update_stage_probe.created(folder) for label, folder in folders.items()}
 
     # What each command printed, for a failure here only. The app keeps none of it.

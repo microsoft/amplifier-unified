@@ -651,9 +651,29 @@ def test_the_design_document_states_the_numbers_of_this_budget():
     limits, person, workspace = LONGEST_SESSION_ID, PERSONS_FOLDER_ROOM, DEFAULT_WORKSPACE_LONGEST_ROOT
     before = WITHOUT_THE_STAGE_NAME_DEFAULT_WORKSPACE_LONGEST_ROOT
     helper = HELPER_NAME_IN_THE_DEFAULT_WORKSPACE_FOLDER
+    native = (ROOT / 'tests/test_windows_long_paths_off.py').read_text(encoding='utf-8')
+    clean_room_root = int(re.search(r'^CLEAN_ROOM_ROOT = (\d+)', native, re.M).group(1))
+    chosen_folder = int(re.search(r'^CHOSEN_FOLDER = (\d+)', native, re.M).group(1))
+    earlier_longest = EARLIER_SOURCE_STORE_LONGEST_ROOT[SOURCE_OBJECT]
+    account = ROOT_FOR_20_CHARACTER_ACCOUNT - 20     # the earlier folder path without the account's folder name
     sentences = [
+        f'Those fit at {MAX_ROOT} today: the longest is {MAX_ROOT + max(MEASURED_DEPTHS.values())} characters',
+        f'every row of that budget fits at {MAX_ROOT};',
         f'module source is {length(store[SOURCE_OBJECT])} characters at {MAX_ROOT}, and the deepest other file that '
         f'counts as needed is {MAX_ROOT + object_prefix + STORE_DEPTH}.',
+        f'sessions have longer IDs** ({HELPER_ID} characters plus the agent name).',
+        f'`update-<first {len(UPDATE_PROJECT) - len("update-")} hex digits of the stage ID>`',
+        f'At {MAX_ROOT} the longest path that a stage and its probe create is {STAGE_LONGEST[1]}',
+        f'the app\'s real preparation at {MAX_ROOT}:',
+        f'new entries on Windows have {SOURCE_NAME}-digit folder names.',
+        f'under a {len(HEX64)}-digit name stays in use',
+        f'with long paths off at a folder path of {MAX_ROOT}, after the app prepared',
+        f'profile-folder name has {earlier_longest - account + 1} to {MAX_ROOT - account} characters',
+        f'proves in a new process that a {FILE_LIMIT + 1}-character path is refused',
+        f'under a folder path of exactly {MAX_ROOT} characters',
+        f'at folder paths of {clean_room_root} and {MAX_ROOT} (through',
+        f'a person\'s folder with a path of {chosen_folder} characters',
+        f'It runs below a folder path of {MAX_ROOT} with the folders and settings',
         f'a file path of at most {FILE_LIMIT} characters and creates a folder of at most {FOLDER_LIMIT}.',
         # The app's own chat folders.
         f'is the folder path plus {len(cli_project(MAX_ROOT, chat_files)) - MAX_ROOT} characters',
