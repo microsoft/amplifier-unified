@@ -679,8 +679,8 @@ NO_ANSWER = {
     'a-list': lambda attempt: attempt.write_text('["failed"]'),
     'no-json': lambda attempt: attempt.write_text('{"status": "failed"'),
     'not-text': lambda attempt: attempt.write_bytes(b'\xff\xfe{"status": "failed"}'),
-    'over-the-bound': lambda attempt: attempt.write_text(
-        json.dumps({'status': 'failed', 'padding': 'x' * (1024 * 1024)})),
+    # A whole record that says "failed", then spaces: over the bound, although its first part can be read.
+    'over-the-bound': lambda attempt: attempt.write_text(json.dumps({'status': 'failed'}) + ' ' * (1024 * 1024)),
     'directory': lambda attempt: attempt.mkdir(),
     'dangling-symlink': lambda attempt: attempt.symlink_to(attempt.parent / 'absent-attempt-target'),
     'symlink-to-a-failed-record': lambda attempt: (
@@ -1132,6 +1132,49 @@ async def test_native_windows_stage_keys_product_refresh_readback(native_product
     assert reason is None, f'Refreshed product stage key removal returned {reason!r}'
     assert not (stage / 'shared-config/keys.env').exists(), 'Refreshed product key was retained'
     assert (stage / 'shared-config/settings.yaml').read_text() == '{}\n'
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='requires native Windows private files and a product-made stage')
+@pytest.mark.parametrize('hold_open', [False, True])
+async def test_native_windows_chat_setup_stage_keys_at_a_failed_preparation(native_product_stage, hold_open):
+    """A stage as a chat's own setup makes it (runtime_profiles.ensure), with the product's own calls:
+    an ordinary mkdir of the stage and of shared-config, the private writer for the settings and for the
+    record, an ordinary copy of the keys file. The account owns what it makes, as on a person's PC."""
+    from contextlib import ExitStack
+    from amplifier_web import runtime_profiles
+    from amplifier_web.host.config import write_private
+
+    home, live, _, _ = await native_product_stage(ordinary=True)
+    stage = home / 'updates/releases' / ('b' * 32)
+    shared, held = stage / 'shared-config', ExitStack()
+    try:
+        with ordinary_default_owner():
+            stage.mkdir(mode=0o700)
+            with pytest.raises(RuntimeError, match='fixture failure'):
+                async with runtime_profiles._profile_attempt(
+                        home, 'f' * 32, stage.name, stage, home / 'updates/profiles/absent.json'):
+                    shared.mkdir(mode=0o700)
+                    write_private(shared / 'settings.yaml', '{}\n')
+                    shutil.copy2(live / 'keys.env', shared / 'keys.env')
+                    if hold_open:
+                        # Python's ordinary file handle denies delete sharing on Windows: a program of
+                        # the preparation that still has the copy open.
+                        held.enter_context((shared / 'keys.env').open('rb'))
+                    raise RuntimeError('fixture failure')
+        # The attempt ended as failed in both cases: a refused removal changes nothing else.
+        assert json.loads((stage / 'profile-attempt.json').read_text(encoding='utf-8'))['status'] == 'failed'
+        assert storage._ended_without_admission(stage), 'Idle maintenance cannot read the record of this stage'
+        assert not runtime_profiles.owned(stage.name)
+        if hold_open:
+            assert (shared / 'keys.env').is_file(), 'Windows removed a file that another handle held open'
+            held.close()
+            reason = storage.remove_stage_keys(home, stage)   # what idle maintenance does at its next pass
+            assert reason is None, f'The removal after the handle closed returned {reason!r}: {native_refusal(home, stage)}'
+        assert not (shared / 'keys.env').exists(), (
+            f'The failed preparation left its copy of the keys file: {native_refusal(home, stage)}')
+        assert (shared / 'settings.yaml').read_text() == '{}\n' and (live / 'keys.env').is_file()
+    finally:
+        held.close()
 
 
 @pytest.mark.skipif(os.name != 'nt', reason='requires a native Windows process token')

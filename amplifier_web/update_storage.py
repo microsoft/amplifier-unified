@@ -191,7 +191,12 @@ def _ended_without_admission(stage):
     coroutine has ended when the status is ``failed`` or ``cancelled``, and
     nothing uses the stage again. Anything else is no answer, and the caller
     then waits for age: another status, an entry that is no regular file, a
-    record that cannot be read.
+    record that is too long or that cannot be read.
+
+    The record decides only when the stage's copy of the keys file may go,
+    never what is removed. The entry must be a regular file by its name (a link
+    is refused on every platform) and again by the open file; the open neither
+    follows a link nor waits, where the platform has those flags.
     """
     try:
         path = stage / 'profile-attempt.json'
@@ -199,10 +204,17 @@ def _ended_without_admission(stage):
             return False
         record = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)
                          | getattr(os, 'O_NONBLOCK', 0) | getattr(os, 'O_BINARY', 0))
-        with os.fdopen(record, 'rb') as stream:
-            if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+        try:
+            if not stat.S_ISREG(os.fstat(record).st_mode):
                 return False
-            content = stream.read(1024 * 1024 + 1)
+            content = b''
+            while len(content) <= 1024 * 1024:
+                part = os.read(record, 1024 * 1024 + 1 - len(content))
+                if not part:
+                    break
+                content += part
+        finally:
+            os.close(record)
         if len(content) > 1024 * 1024:
             return False
         attempt = json.loads(content)
@@ -258,7 +270,8 @@ async def scrub_stage_keys(manager):
                             return
                         progressed = True
                         manager._stage_keys_offset = index + 1
-                        # A chat's own setup that this process prepares now owns its stage.
+                        # A chat's own setup that this process prepares now owns its stage,
+                        # whatever the clock says about the age of that stage.
                         if (not re.fullmatch('[a-f0-9]{32}', entry.name) or entry.name in protected
                                 or owned(entry.name)):
                             continue
