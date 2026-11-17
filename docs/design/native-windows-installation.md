@@ -1693,7 +1693,9 @@ removal began does not say that Amplifier does not open. It tells the person
 not to open Amplifier, because its folder can be partly deleted. The text of
 the launcher's own refusal is not changed: it says that Amplifier does not
 open until the removal has finished, and the program that shows it has just
-found the journal.
+found the journal. The first question of a second uninstall is not changed
+either: its last sentence says the same, and the program that asks it has
+just read the journal.
 
 **No link is followed.** In the process, every entry is opened relative to
 its parent's handle as the entry itself, judged on its own handle and deleted
@@ -1908,17 +1910,21 @@ limit as not blocking.
     pass and stops without it.
   - A program of this account replaces the journal with its own file in the
     instant of the write. The name is there, so the removal goes on to its
-    end. The person's data, the program files and the Windows entries go, as
-    the person chose twice. The last step (`windows_uninstall.finish`) reads
-    the journal again through the private-file boundary, before it starts
-    the step after exit. It refuses a file that it cannot read there, a file
-    that is not a journal, a journal that records another choice, and a
-    journal with another token. Then `python`, `tools`, that file and
-    setup's completion record stay, and a message says that the last program
-    files could not be removed. That is the leftover of L3: Amplifier cannot
-    start from that folder. A file that records the delete choice and this
-    removal's own token passes: every later check takes it for this
-    removal's journal, and the removal ends as it does without a
+    end. The person's data and the Windows entries go, as the person chose
+    twice. The removal also tries to delete the caches and the other program
+    files; one that Windows does not let go stays. The last step
+    (`windows_uninstall.finish`) reads the journal again through the
+    private-file boundary, before it starts the step after exit. It refuses
+    a file that it cannot read there, a file that is not a journal, a
+    journal that records another choice, and a journal with another token.
+    Then `python`, `tools`, that file and setup's completion record stay
+    too, and the uninstall program tries to show a message that the last
+    program files could not be removed. When Windows does not show that
+    message, the program tries once more. When Windows does not show it then
+    either, the person gets no further message after the confirmation of
+    step 9. That is the leftover of L3. A file that records the delete
+    choice and this removal's own token passes: every later check takes it
+    for this removal's journal, and the removal ends as it does without a
     replacement. In each case nothing more is deleted than the person chose.
     If that removal stops before its end, a second uninstall reads the other
     program's journal: one that records the delete choice lets the person
@@ -2059,10 +2065,10 @@ then, and Open reaches its start step, the second time on a folder that is
 partly deleted. A journal that the test replaces in that instant lets the
 removal go on to its end, and the last step refuses it (the test's journal
 has another token): `python`, `tools`, that journal and setup's completion
-record stay, with the emptied `workspace` (the current folder of the test's
-uninstall process), and no step after exit starts. Stand-ins: Task
-Scheduler, the check of an installed release, the start step of Open, and
-the dialogs.
+record stay, and no step after exit starts. The emptied `workspace` can stay
+too (it is the current folder of the test's uninstall process). Stand-ins:
+Task Scheduler, the check of an installed release, the start step of Open,
+and the dialogs.
 
 **Not proven:** the dialogs on screen; a real stop with live conversation
 workers followed by the deletion; uv's own start program (the check uses a

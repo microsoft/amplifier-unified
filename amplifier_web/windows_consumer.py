@@ -657,12 +657,13 @@ async def _uninstall(root):
         """One question of this uninstall. When Windows does not show it, the uninstall stops and says so.
 
         Every question comes before the first change, so the text of that stop says that this uninstall
-        changed nothing. The note of the failure goes where a failed preparation puts it.
+        changed nothing. With a journal in the folder the note of the failure stays out of the app's own
+        folder: an earlier removal can have deleted that folder.
         """
         try:
             return show(text, **options)
         except (OSError, ValueError, RuntimeError, TimeoutError) as error:
-            _record(root, "uninstall", "questions", error)
+            _record(root, "uninstall", "questions", error, services=not unfinished)
             raise Unfinished("questions", error) from error
     if resumed:
         # A removal began and did not finish. The journal is not proof that
