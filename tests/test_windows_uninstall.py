@@ -1616,11 +1616,14 @@ def test_design_entry_on_the_journal_names_what_the_cases_above_show():
             "stopped.",
             "a next uninstall asks its questions as for a whole installation",
             # A journal that a program replaces in the instant of the write.
+            "A removal that goes on to its end without its journal stops when its last step begins",
             "A program of this account replaces the journal with its own file in the instant of the write.",
-            "The launcher's commands still refuse.",
             "refuses a journal whose token is not its own, before it starts the step after exit",
             "So `python`, `tools` and both records stay, and a message says that the last program files could not "
-            "be removed. That is the leftover of L3. Nothing more is deleted than the person chose."):
+            "be removed. That is the leftover of L3: Amplifier cannot start from that folder. Nothing more is "
+            "deleted than the person chose.",
+            "one that records the delete choice lets the person choose again, twice, and any other one is L4",
+            "It reads the journal again only when its last step begins (`windows_uninstall.finish`)."):
         assert stated in entry, stated
     # The two texts as the entry describes them are the texts that the product has for this step.
     first, second = consumer._UNFINISHED["journal"], consumer._UNFINISHED["journal-again"]
@@ -1742,8 +1745,8 @@ README_UNINSTALL = [
          ("Amplifier stays installed.", [("first question", "Select Cancel to keep Amplifier installed.")])],
     ],
     [[("These are the results of an uninstall that finishes.", ABOUT),
-      # The program looks once, after the answers to its questions.
-      ("If Amplifier is working on a chat when you answer, it asks before it stops that work.",
+      # "finds": the program looks once, after the answers, and not in an uninstall that goes on with a removal.
+      ("If Amplifier finds that it is working on a chat, it asks before it stops that work.",
        [("working question", "Amplifier is working on a chat right now."),
         ("working question", "Select Yes to stop that work and uninstall now.")]),
       ("An uninstall stops Amplifier and removes it from the Start menu and the Apps list.",
@@ -1804,7 +1807,8 @@ def readme_uninstall_item():
     """The item as the README has it: paragraphs, and in each its first part and its list entries."""
     readme = (REPOSITORY / "README.md").read_text(encoding="utf-8")
     section = readme.split("\n### Windows 11 (preview)\n", 1)[1].split("\n## ", 1)[0]
-    (item,) = re.findall(r"\n- \*\*Uninstall:\*\* (.*?)\n\nThe \[native Windows design", section, re.S)
+    # The item ends where the next list item or the next text at the left edge begins.
+    (item,) = re.findall(r"\n- \*\*Uninstall:\*\* (.*?)(?=\n- \*\*|\n\n\S)", section, re.S)
     return [[" ".join(part.split()) for part in paragraph.split("\n  - ")] for paragraph in item.split("\n\n")]
 
 
@@ -2529,8 +2533,7 @@ def test_native_journal_that_loses_its_name_or_is_replaced_in_the_instant_of_its
     assert "This uninstall deleted nothing in the folder." in first["notice"]
     assert not plan.unfinished(root) and plan.pending(root) is None
     # Nothing is gone. New: only the private note of the failure, beside the app's other service records.
-    assert whole <= tree() and tree() - whole == {str(note), str(note.parent), str(note.parent.parent)}, sorted(
-        tree() - whole)
+    assert whole <= tree() and tree() - whole == {str(note)}, sorted(tree() ^ whole)
     assert shell.registry(root) == native["registration"]
     assert {path.name for path in native["entries"].iterdir()} == set(shell.LINKS)
     # The text says that Amplifier might not open. Here no journal is in the folder: Open goes on.
@@ -2570,7 +2573,9 @@ def test_native_journal_that_loses_its_name_or_is_replaced_in_the_instant_of_its
     assert left <= set(done["left"]) <= left | {"workspace"}, done["left"]
     assert set(os.listdir(root)) == set(done["left"]) and not native["report"].exists()
     assert plan.pending(root) == {"schema": 1, "choice": "delete", "token": "f" * 32}
-    # The name is there: Open refuses. (The command of this test starts in the workspace folder.)
+    # The name is there, so the look that Open makes for a journal refuses. (The launcher's check of its
+    # own records is a stand-in in this command; on a real folder that check fails first, because the
+    # removal deleted those records. The command starts in the workspace folder.)
     os.makedirs(root / "workspace", exist_ok=True)
     refused = native["run"]("open")
     assert (refused["step"], refused["refused"]) == ("removing", True) and not refused["events"], refused

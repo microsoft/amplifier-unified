@@ -1460,8 +1460,9 @@ limit as not blocking.
   deleted stays deleted. (The private-file writer reports a publication as
   done also when the file lost its name directly afterwards, since pull
   request 2247; before, the writer itself stopped the removal then.) After
-  that look the uninstall program holds no handle on the journal and does not
-  look for it again while it deletes. Three things follow.
+  that look the uninstall program holds no handle on the journal. It reads
+  the journal again only when its last step begins
+  (`windows_uninstall.finish`). Three things follow.
   - A stop at this step leaves it open whether a journal is in the folder.
     This part needs no other program. The writer can report an error after
     the journal has its name. The look answers no for every error, not only
@@ -1476,21 +1477,25 @@ limit as not blocking.
     does. If the removal did not finish, the launcher's commands do not
     refuse because of a journal, Amplifier can open on a folder that is
     partly deleted, and a next uninstall asks its questions as for a whole
-    installation. The step after exit reads the journal's token before every
-    pass and stops without it.
+    installation. A removal that goes on to its end without its journal
+    stops when its last step begins, with the leftover of the next part. The
+    step after exit reads the journal's token before every pass and stops
+    without it.
   - A program of this account replaces the journal with its own file in the
     instant of the write. The name is there, so the removal goes on to its
     end under a journal that is not its own. The person's data, the program
-    files and the Windows entries go, as the person chose twice. The
-    launcher's commands still refuse. The last step
-    (`windows_uninstall.finish`) refuses a journal whose token is not its
-    own, before it starts the step after exit. So `python`, `tools` and both
-    records stay, and a message says that the last program files could not
-    be removed. That is the leftover of L3. Nothing more is deleted than the
-    person chose.
+    files and the Windows entries go, as the person chose twice. The last
+    step (`windows_uninstall.finish`) refuses a journal whose token is not
+    its own, before it starts the step after exit. So `python`, `tools` and
+    both records stay, and a message says that the last program files could
+    not be removed. That is the leftover of L3: Amplifier cannot start from
+    that folder. Nothing more is deleted than the person chose. If that
+    removal stops before its end, a second uninstall reads the other
+    program's journal: one that records the delete choice lets the person
+    choose again, twice, and any other one is L4.
 
   Such a program runs as the person and can delete the person's data itself.
-  That closes nothing; it is why this limit is stated and not solved.
+  That is the condition of this limit, not a protection against it.
 
 Under PowerShell constrained language mode the step stops before it answers
 and changes nothing; the parked files and both records stay.
@@ -1604,9 +1609,8 @@ they delete anything, each with its own text; no journal is in the folder
 then, and Open reaches its start step, the second time on a folder that is
 partly deleted. A journal that the test replaces in that instant lets the
 removal go on to its end, and the last step refuses it: `python`, `tools` and
-both records stay, no step after exit starts, and Open refuses. Stand-ins:
-Task Scheduler, the check of an installed release, the start step of Open,
-and the dialogs.
+both records stay, and no step after exit starts. Stand-ins: Task Scheduler,
+the check of an installed release, the start step of Open, and the dialogs.
 
 **Not proven:** the dialogs on screen; a real stop with live conversation
 workers followed by the deletion; uv's own start program (the check uses a

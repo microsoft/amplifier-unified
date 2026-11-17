@@ -101,8 +101,8 @@ Limits of this preview:
     undone. **No** there changes nothing.
   - **Cancel** changes nothing. Amplifier stays installed.
 
-  These are the results of an uninstall that finishes. If Amplifier is working
-  on a chat when you answer, it asks before it stops that work. An uninstall
+  These are the results of an uninstall that finishes. If Amplifier finds that
+  it is working on a chat, it asks before it stops that work. An uninstall
   stops Amplifier and removes it from the Start menu and the Apps list. If
   Windows asks whether to delete the certificate, select **Yes**.
 
