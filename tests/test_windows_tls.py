@@ -343,8 +343,16 @@ def test_a_repeated_force_after_a_partial_publication_records_the_same_root_once
     assert (pinned.path / wt._REPLACED).read_bytes().count(b"-----BEGIN CERTIFICATE-----") == 1
 
 
-def test_the_record_counts_only_whole_certificates_and_the_next_force_keeps_each_of_them(simulated, sample):
+@pytest.mark.parametrize("serial_bytes", [20, 19])
+def test_the_record_counts_only_whole_certificates_and_the_next_force_keeps_each_of_them(
+        simulated, sample, monkeypatch, serial_bytes):
     root, pinned, state = simulated
+    # The text of a certificate can hold any letters. So this case compares whole certificates and whole
+    # files, and never looks for letters in the record. It also runs with both lengths of a serial number:
+    # about 1 in 256 takes 19 bytes, not 20. With the names of this configuration, one line of such a root's
+    # PEM text ends with "AAAA", which is also the body of the block below that is no certificate.
+    monkeypatch.setattr(x509, "random_serial_number", lambda: (
+        (1 << (8 * serial_bytes - 2)) + int.from_bytes(os.urandom(serial_bytes - 1), "big")))
     wt.create_identity(root, sample[0])
     replaced = []
     for _ in range(2):
@@ -360,9 +368,12 @@ def test_the_record_counts_only_whole_certificates_and_the_next_force_keeps_each
     third = wt.keyless_identity(root)[0]
     tls.setup_local_ca(root, sample[0], force=True)
     assert wt.replaced_roots(root) == replaced + [third]
-    saved = path.read_bytes()
-    assert saved.count(b"-----BEGIN CERTIFICATE-----") == 3
-    assert b"PRIVATE KEY" not in saved and b"other text" not in saved and b"AAAA\n" not in saved
+    # The whole record, byte for byte: these three certificates as PEM text, oldest first, and nothing else.
+    assert path.read_bytes() == b"".join(
+        x509.load_der_x509_certificate(der).public_bytes(serialization.Encoding.PEM) for der in replaced + [third])
+    # Each of the three has a serial number of the length that this run asks for (n bytes are 8n - 1 bits).
+    assert {x509.load_der_x509_certificate(der).serial_number.bit_length()
+            for der in replaced + [third]} == {8 * serial_bytes - 1}
 
 
 def small_record(monkeypatch, pinned):
