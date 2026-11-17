@@ -10,6 +10,7 @@ admission. A host start is a new update owner on the state that the last one
 saved. The clock of the update owner moves; no saved time is rewritten.
 """
 import asyncio
+import copy
 import time
 
 import pytest
@@ -214,9 +215,11 @@ async def test_a_check_that_is_refused_at_the_owners_lock_does_not_end_the_start
     await new.lock.acquire()  # Another operation of the owner works.
     new.lock.asked.clear()
     check = asyncio.create_task(new.check())
-    await asyncio.wait_for(new.lock.asked.wait(), 10)  # The check passed its first admission and waits.
-    state['pendingRelease'] = 'f' * 32  # That operation prepared a component update.
-    new.lock.release()
+    try:
+        await asyncio.wait_for(new.lock.asked.wait(), 10)  # The check passed its first admission and waits.
+        state['pendingRelease'] = 'f' * 32  # That operation prepared a component update.
+    finally:
+        new.lock.release()  # Also when the wait fails: the check must not stay behind the lock.
     await check
     assert len(release_checks) == checks and state.get('lastAttempt', 0) < new._host_started
     assert new.check_due() == 'start'
@@ -247,7 +250,7 @@ async def test_a_start_check_while_a_component_preparation_is_unresolved_checks_
     manager.installed = MOVED  # A component has a newer revision. It must not be prepared here.
     clock(2 * HOUR)
     new = await host_start(manager)
-    new.diagnostics.state['componentPreparation'] = dict(UNRESOLVED)
+    new.diagnostics.state['componentPreparation'] = copy.deepcopy(UNRESOLVED)
     checks = len(release_checks)
     asked = requests(new)
     for _ in range(3):
@@ -258,14 +261,17 @@ async def test_a_start_check_while_a_component_preparation_is_unresolved_checks_
 
 
 @pytest.mark.parametrize('place', ['application-alone', 'unresolved-preparation'])
-async def test_a_timed_check_keeps_its_saved_answers_at_these_places_too(manager, clock, release_checks, place):
-    """Only a start check asks again. A timed check reuses the answers of its interval, as before."""
+async def test_a_timed_check_does_not_ask_again_at_these_places_too(manager, clock, release_checks, place):
+    """Only a start check asks again. A timed check leaves reuse to the saved answers' own rule, as before.
+
+    The case holds what the owner asks for (fresh=False). It does not observe a saved answer in use.
+    """
     state = await nothing_newer(manager)
     if place == 'application-alone':
         state['applicationIntent'] = dict(APP_ONLY)
         expected = {'fresh': False, 'automatic': True}
     else:
-        manager.diagnostics.state['componentPreparation'] = dict(UNRESOLVED)
+        manager.diagnostics.state['componentPreparation'] = copy.deepcopy(UNRESOLVED)
         expected = {'tier': 'application', 'fresh': False, 'automatic': True}
     checks = len(release_checks)
     asked = requests(manager)
@@ -302,6 +308,53 @@ async def test_a_sequence_that_waits_for_its_next_check_at_a_host_start_runs_fir
     # The check was made after the start. With the corrected clock its saved time is before the start time.
     assert state['lastCheck'] >= new._host_started - ahead
     assert (new._host_started - state['lastCheck'] >= START_LIMIT) == bool(ahead)
+
+
+async def test_a_sequence_that_has_begun_continues_with_automatic_checks_off(manager, clock, release_checks):
+    """Automatic checks off stops the checks that time causes. It does not stop a sequence in the middle."""
+    state = await nothing_newer(manager)
+    await manager.publish(phase='installed',
+                          sequence={**state['sequence'], 'stage': 'included', 'nextStage': 'other', 'install': False})
+    manager.service.state['settings']['updates']['autoCheck'] = False
+    clock(2 * HOUR)
+    new = await host_start(manager)
+    assert new.check_due() is None
+    checks = len(release_checks)
+    asked = requests(new)
+    for _ in range(3):
+        await new.tick()
+    assert asked == [{'tier': 'other', 'install': False, 'fresh': True, 'automatic': True}]
+    assert len(release_checks) == checks and state['sequence']['stage'] == 'complete'
+
+
+@pytest.mark.parametrize('failure', ['raises', 'reports'])
+async def test_a_start_check_that_fails_is_not_repeated_and_the_next_check_is_one_interval_later(
+        manager, clock, monkeypatch, failure):
+    """For example the network is not up yet at the host start. docs/UPDATES.md states this limit."""
+    state = await nothing_newer(manager)
+    clock(2 * HOUR)
+    new = await host_start(manager)
+    looks = []
+
+    async def no_network():
+        looks.append(time.time())
+        if failure == 'raises':
+            raise OSError('Network is unreachable')
+        return {'id': 'application', 'kind': 'app', 'status': 'check_failed'}
+    monkeypatch.setattr(app_updates, 'check', no_network)
+    asked = requests(new)
+    for _ in range(4):
+        await new.tick()
+    assert asked == [{'fresh': True, 'automatic': True}] and len(looks) == 1
+    assert state['lastAttempt'] >= new._host_started and new.check_due() is None
+    assert (state['phase'] == 'error') == (failure == 'raises')
+    clock(INTERVAL - 60)  # Before this rule the timed check was due 2 hours after the start.
+    await new.tick()
+    assert len(asked) == 1 and len(looks) == 1
+    clock(120)
+    for _ in range(3):
+        await new.tick()
+    assert asked[1:] == [{'fresh': False, 'automatic': True}] and len(looks) == 2
 
 
 @pytest.mark.parametrize('keep_up_to_date', [True, False])
