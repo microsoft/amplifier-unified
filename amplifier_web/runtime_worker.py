@@ -873,16 +873,31 @@ class Worker:
             retry = {}
             detail = "Thinking..."
             if event == "context:compaction_started":
-                phase, detail = "compacting", "Making room in the conversation. This can take a few minutes. You can keep sending updates."
+                phase, detail = "compacting", "Making room in the conversation."
                 if data.get("recovery"):
-                    detail = "Preparing recent context from saved history. This can take a few minutes. Older history remains available. You can keep sending updates."
+                    detail = "Preparing recent context from saved history. Older history remains available."
             elif event == "context:compaction_progress":
                 phase = "compacting"
-                completed, remaining = data.get("completed_parts", 0), data.get("remaining_parts", 0)
-                detail = (f"Recovering oversized history · {completed} of {completed + remaining} parts saved. This can take a few minutes."
-                          if remaining else "Conversation context prepared; continuing work.")
+                detail = "Recovering oversized history."
+                completed, remaining = data.get("completed_parts"), data.get("remaining_parts")
+                # Unequal pending segments can split again: these counts are not
+                # a fixed total, percentage or ETA. Ignore malformed optional data.
+                if type(completed) is int and 0 <= completed <= 2**53 - 1:
+                    detail += f" {completed} {'part' if completed == 1 else 'parts'} summarized and saved."
+                if type(remaining) is int and 0 <= remaining <= 2**53 - 1:
+                    if remaining:
+                        detail += (f" {remaining} {'segment' if remaining == 1 else 'segments'} waiting; "
+                                   f"{'it' if remaining == 1 else 'these'} may be split further.")
+                    else:
+                        # The empty summary queue precedes final preparation checks.
+                        detail += " Still preparing conversation context."
             elif event == "context:compaction_finished":
-                detail = "Conversation context prepared; continuing work." if data.get("outcome") == "completed" else "Context preparation " + str(data.get("outcome", "ended")) + "."
+                outcome = data.get("outcome")
+                detail = "Context preparation ended."
+                if outcome == "completed":
+                    detail = "Conversation context prepared; continuing work."
+                elif isinstance(outcome, str) and outcome in {"failed", "cancelled", "superseded"}:
+                    detail = f"Context preparation {outcome}."
             elif event == "provider:retry":
                 phase = "retrying"
                 attempt, maximum = data.get("attempt"), data.get("max_retries")
