@@ -51,6 +51,7 @@ import argparse
 import asyncio
 import base64
 from contextlib import contextmanager
+import copy
 import ctypes as C
 from ctypes import wintypes as W
 import hashlib
@@ -1497,7 +1498,10 @@ class Steps:
 
 
 def attempt(read):
-    """The answer of a read, or what kept it from an answer. A read for the record never fails a step."""
+    """The answer of a read, or what kept it from an answer. An error of a read for the record fails no step.
+
+    Only an error (`Exception`). What ends the program (`KeyboardInterrupt`, `SystemExit`) goes on.
+    """
     try:
         return read()
     except Exception as error:
@@ -1585,9 +1589,11 @@ def observed(steps, home, name, read, good, later=None):
 
     The answer goes back to the step as it is. The step decides with its own
     condition. `good` is that condition for this one answer. It only marks
-    the entry of the record. After a step has failed, a read that was not as
-    required is made once more (`later`, or the same read), in
-    `keep_after_failure`. An error of the read itself goes on to the step.
+    the entry of the record. After a step has failed, `keep_after_failure`
+    makes a read that was not as required once more (`later`, or the same
+    read). Only `journey` and `second` call it, and only while the app folder
+    is safe to read. The certificate program does not make its reads again.
+    An error of the read itself goes on to the step.
     """
     entry = {"read": name, "at": round(time.time(), 3), "hostBefore": attempt(lambda: host_record(home))}
     steps.report.setdefault("reads", []).append(entry)
@@ -1609,7 +1615,10 @@ def cpu_seconds(processes=()):
     """Processor time until now, in seconds: of the whole computer, and of each given process that Windows opens.
 
     `busy` is the time in which the computer's processors worked, `all` is
-    that time plus their idle time; both are sums over the processors.
+    that time plus their idle time; both are sums over the processors. A
+    process has its creation time (`created`, as Windows counts it) beside
+    its seconds (`used`): Windows uses a process number again, and only the
+    number together with the creation time is one process.
     """
     kernel = C.WinDLL("kernel32", use_last_error=True)
     kernel.OpenProcess.argtypes, kernel.OpenProcess.restype = [W.DWORD, W.BOOL, W.DWORD], W.HANDLE
@@ -1628,7 +1637,9 @@ def cpu_seconds(processes=()):
             try:
                 times = [W.FILETIME() for _ in range(4)]
                 if kernel.GetProcessTimes(handle, *[C.byref(value) for value in times]):
-                    used["processes"][str(number)] = seconds(times[2]) + seconds(times[3])
+                    used["processes"][str(number)] = {
+                        "created": (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime,
+                        "used": seconds(times[2]) + seconds(times[3])}
             finally:
                 kernel.CloseHandle(handle)
     return used
@@ -1639,14 +1650,17 @@ def cpu_between(before, after):
 
     `computerBusy` is the share of that time in which the computer's
     processors worked, from 0 to 1. `processes` is the processor time that
-    each process used, in seconds; a process that only one of the reads has
-    is left out. More than the seconds of the clock is possible there: a
-    process can use several processors at once.
+    each process used, in seconds. A process that only one of the reads has
+    is left out. So is a number that the two reads have with different
+    creation times: that is another process with the same number. More than
+    the seconds of the clock is possible there: a process can use several
+    processors at once.
     """
-    whole = after["all"] - before["all"]
+    whole, later = after["all"] - before["all"], after["processes"]
     return {"computerBusy": round((after["busy"] - before["busy"]) / whole, 3) if whole > 0 else None,
-            "processes": {number: round(after["processes"][number] - used, 3)
-                          for number, used in before["processes"].items() if number in after["processes"]}}
+            "processes": {number: round(later[number]["used"] - first["used"], 3)
+                          for number, first in before["processes"].items()
+                          if number in later and later[number]["created"] == first["created"]}}
 
 
 def root_store_read():
@@ -1676,12 +1690,21 @@ class ListenerWatch:
     question that took `slow` seconds or more, at most 40 (`late`). An entry
     says what can make an answer late: how busy the computer was during the
     question, how much processor time the owners of the port used in it, how
-    long the watch itself waited before the question (more than its pause
-    means that this program got no time), and what `after` reads directly
-    afterwards. The watch gives these numbers. It does not decide the cause.
+    long the watch itself waited before the question, and what `after` reads
+    directly afterwards. That wait holds the watch's pause and its read of
+    the processor time; the seconds of a question hold neither. Much more
+    than the pause can mean that this program got no time. The number alone
+    does not say why. The watch gives these numbers. It does not decide the
+    cause.
     The watch opens no file of the installation, it asks without a
     credential, and it decides no step. A watch without a question (`probe`)
     never starts; `reason` then says why.
+
+    The watch's thread and the case's thread change the lists under one lock,
+    and `stop` gives copies that it makes under that lock. So what `stop`
+    gave does not change afterwards, also when the watch's thread still runs.
+    An error of the watch's own code ends the watch, and `stop` then says it
+    (`endedBy`).
     """
 
     def __init__(self, probe=None, owner=None, *, gauge=None, after=None, slow=0.5, every=0.5, limit=400,
@@ -1690,39 +1713,47 @@ class ListenerWatch:
         self.changes, self.questions, self.reason, self.timer = [], 0, None, timer
         self.gauge, self.after, self.slow, self.late = gauge, after, slow, []
         self._halt, self._thread, self._last, self._entry = threading.Event(), None, self, None
-        self._ended = None
+        self._ended, self._lock, self.fault = None, threading.Lock(), None
 
     def look(self):
         """One question to the listener. A change is kept; an error of the question is an answer too."""
-        at, began = round(self.clock(), 3), self.timer()
-        waited = None if self._ended is None else round(began - self._ended, 3)
         owners = self._last[1] if isinstance(self._last, tuple) and isinstance(self._last[1], list) else []
         before = attempt(lambda: self.gauge(owners)) if self.gauge else None
+        # The question begins here. The read of the processor time before it is in `waited`, not in its seconds.
+        at, began = round(self.clock(), 3), self.timer()
+        waited = None if self._ended is None else round(began - self._ended, 3)
         answer = attempt(self.probe)
         took = round(self.timer() - began, 3)
+        late = None
         if self.gauge and took >= self.slow and len(self.late) < 40:
             used = attempt(lambda: self.gauge(owners))
             unread = next((read for read in (before, used) if "errorType" in read), None)  # The gauge's own error.
-            self.late.append({"at": at, "seconds": took, "answer": answer, "waitedBefore": waited,
-                              "used": unread or attempt(lambda: cpu_between(before, used)),
-                              **({"after": attempt(self.after)} if self.after else {})})
+            late = {"at": at, "seconds": took, "answer": answer, "waitedBefore": waited,
+                    "used": unread or attempt(lambda: cpu_between(before, used)),
+                    **({"after": attempt(self.after)} if self.after else {})}
         now = (answer, attempt(self.owner) if self.owner else None)
         self._ended = self.timer()
-        self.questions += 1
-        if now != self._last:
-            # A change that the full list does not keep has no entry: no later time is written to an earlier answer.
-            self._entry = ({"at": at, "answer": now[0], "owner": now[1], "seconds": took}
-                           if len(self.changes) < self.limit else None)
-            if self._entry is not None:
-                self.changes.append(self._entry)
-        elif self._entry is not None and took > self._entry.get("slowest", {}).get("seconds", 0):
-            self._entry["slowest"] = {"at": at, "seconds": took}
-        self._last = now
+        with self._lock:  # Only the lists change here. No question and no read is made under the lock.
+            self.questions += 1
+            if late is not None:
+                self.late.append(late)
+            if now != self._last:
+                # A change that the full list does not keep has no entry: no later time is written to an earlier
+                # answer.
+                self._entry = ({"at": at, "answer": now[0], "owner": now[1], "seconds": took}
+                               if len(self.changes) < self.limit else None)
+                if self._entry is not None:
+                    self.changes.append(self._entry)
+            elif self._entry is not None and took > self._entry.get("slowest", {}).get("seconds", 0):
+                self._entry["slowest"] = {"at": at, "seconds": took}
+            self._last = now
 
     def start(self):
         def run():
             while not self._halt.is_set():
-                self.look()
+                self.fault = attempt(self.look)  # An error of the watch's own code ends the watch. `stop` says it.
+                if self.fault:
+                    return
                 self._halt.wait(self.every)
         if self.probe is not None and self._thread is None:
             self._thread = threading.Thread(target=run, name="listener-watch", daemon=True)
@@ -1731,17 +1762,20 @@ class ListenerWatch:
 
     def mark(self, text):
         """What the case does now, in the same list as the changes."""
-        self.changes.append({"at": round(self.clock(), 3), "mark": text})
+        with self._lock:
+            self.changes.append({"at": round(self.clock(), 3), "mark": text})
 
     def stop(self, wait=10):
         """End the watch and give what it kept. `ended` is false when its thread still runs after `wait` seconds."""
         self._halt.set()
         if self._thread is not None:
             self._thread.join(wait)
+        with self._lock:  # Copies: a thread that still runs changes its own lists, never what this gave.
+            kept = {"questions": self.questions, "changes": copy.deepcopy(self.changes),
+                    **({"late": copy.deepcopy(self.late)} if self.gauge else {}),
+                    **({"endedBy": self.fault} if self.fault else {})}
         return {"started": self._thread is not None, "ended": self._thread is None or not self._thread.is_alive(),
-                "questions": self.questions, "changes": list(self.changes),
-                **({"late": list(self.late)} if self.gauge else {}),
-                **({"notStarted": self.reason} if self.reason else {})}
+                **kept, **({"notStarted": self.reason} if self.reason else {})}
 
 
 def watch_listener(home):
@@ -1803,10 +1837,13 @@ def accept_start(steps, key, again, home, root, started, state, status, text, *,
     """Require one start of the launcher, and say which answer was not as required.
 
     A start has three answers: the launcher's own, Task Scheduler's, and the
-    app's status. The report gets all three before the check. When that save
-    fails, the step fails with its error. The rules are those of the
-    start-again case. A step fails when an answer is not as its rule requires,
-    and also when the rule cannot read the answer.
+    app's status. The report gets all three before the check. That save is
+    for the record: when it fails, its error is kept with the answers
+    (`notSavedBeforeTheCheck`), and it fails no step and replaces no text.
+    Task Scheduler's rule and the status's rule are those of the start-again
+    case. The launcher's rule is this case's own, as before. A step fails
+    when an answer is not as its rule requires, and also when the rule cannot
+    read the answer.
 
     The text of such a step has this order: the names of those parts; for each
     part the values that its rule reads; whether Task Scheduler and the status
@@ -1826,7 +1863,9 @@ def accept_start(steps, key, again, home, root, started, state, status, text, *,
     November 17, 2026). That run does not say which other answer was wrong.
     """
     record = steps.report[key] = {"launcher": started, "task": state, "serviceStatus": status}
-    steps.save()
+    unsaved_first = attempt(steps.save)
+    if unsaved_first:
+        record["notSavedBeforeTheCheck"] = unsaved_first
 
     rules = {"the launcher": lambda: started["exitCode"] == 0 and (started["json"] or {}).get("background") is True,
              "Task Scheduler": lambda: again.running(state),
@@ -1868,6 +1907,7 @@ def accept_start(steps, key, again, home, root, started, state, status, text, *,
     record["taskOutput"] = attempt(lambda: host_output(home))
     unsaved = attempt(steps.save)
     detail = {**{name: attempt(lambda: values(name)) for name in wrong}, "fiveSecondsLater": then,
+              **({"notSavedBeforeTheCheck": unsaved_first} if unsaved_first else {}),
               **({"notSavedInTheReport": unsaved} if unsaved else {}),
               "more": {name: attempt(lambda: more(name)) for name in wrong}}
     raise AssertionError((text + ". Not as required: " + ", ".join(wrong) + ": "
@@ -2116,6 +2156,9 @@ def journey(stage, exchange, account, token):
                          again.running)
         status = observed(steps, home, "the app's status after the second start",
                           lambda: again.cli(root, "service", "status", "--json"), again.healthy)
+        # As before this record: the report must hold the three answers, or the step fails with the save's error.
+        steps.report["secondStart"] = {"launcher": again_started, "task": state, "serviceStatus": status}
+        steps.save()
         accept_start(steps, "secondStart", again, home, root, again_started, state, status, "The second start failed")
         need(again.process_identity(status["json"]) != again.process_identity(started["json"]["health"])
              and windows_installation.saved_port(home) == port,
@@ -2297,7 +2340,8 @@ def second(stage, exchange, account, token):
         note_updates(steps, home, "after the start that follows the uninstall")
 
         steps.begin(SECOND[3])
-        # The watch ends here, and from here nothing reads the installation for the record: its folder goes.
+        # The watch is stopped here (`stop` waits up to 10 seconds for its thread), and from here nothing reads
+        # the installation for the record: its folder goes. A thread that still runs then opens no file of it.
         steps.report["listener"], steps.evidence = attempt(watch.stop), None
         notices, asked = [], []
         with answering(steps, asked, "delete", "yes", marks):

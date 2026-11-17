@@ -496,11 +496,28 @@ def test_a_report_that_cannot_be_saved_the_second_time_does_not_replace_the_step
     assert "notSavedInTheReport" not in text
 
 
-def test_a_report_that_cannot_be_saved_before_the_check_fails_the_step_with_that_error(case, start_rules, tmp_path):
+def test_a_report_that_cannot_be_saved_before_the_check_fails_no_start_and_replaces_no_text(case, start_rules, tmp_path):
+    no_space = {"errorType": "OSError", "error": "There is not enough space on the disk"}
+    # Three answers that are as required: the start is accepted. The report keeps the error for its next save.
     reads = Reads(start_rules)
-    with pytest.raises(OSError, match="There is not enough space on the disk"):
-        accept(case, tmp_path, reads, save_fails_at=1)  # Three answers that are as required.
-    assert reads.calls == []
+    text, saved, steps = accept(case, tmp_path, reads, save_fails_at=1)
+    assert text is None and reads.calls == [] and saved is None  # The file does not hold this start yet.
+    assert steps.report["theStart"] == {"launcher": STARTED, "task": TASK, "serviceStatus": STATUS,
+                                        "notSavedBeforeTheCheck": no_space}
+    # An answer that is not as required: the step's text names it, and says that the first save failed.
+    wrong = {**TASK, "instances": 0}
+    text, saved, _ = accept(case, tmp_path, Reads(start_rules), task=wrong, save_fails_at=1)
+    head, detail = detail_of(text)
+    assert head == "The start failed. Not as required: Task Scheduler"
+    assert list(detail) == ["Task Scheduler", "fiveSecondsLater", "notSavedBeforeTheCheck", "more"]
+    assert detail["Task Scheduler"] == {"managed": True, "state": "running", "instances": 0}
+    assert detail["notSavedBeforeTheCheck"] == no_space
+    # The second save worked: the file holds the answers, the error of the first save and the later pair.
+    assert saved["task"] == wrong and saved["notSavedBeforeTheCheck"] == no_space
+    assert saved["fiveSecondsLater"] == {"task": TASK, "serviceStatus": STATUS}
+    # A first save that works adds nothing.
+    text, saved, _ = accept(case, tmp_path, Reads(start_rules), task=wrong)
+    assert "notSavedBeforeTheCheck" not in text and "notSavedBeforeTheCheck" not in saved
 
 
 @pytest.mark.parametrize("said", ["The second start failed", "The start after the uninstall failed"])
@@ -723,11 +740,52 @@ def test_the_watch_keeps_how_long_a_question_took_and_the_slowest_one_while_noth
 
 
 def test_the_processor_time_between_two_reads_says_how_busy_the_computer_and_each_process_were(case):
-    before = {"busy": 100.0, "all": 400.0, "processes": {"4500": 2.0, "77": 1.0}}
-    after = {"busy": 103.0, "all": 404.0, "processes": {"4500": 3.25, "88": 9.0}}
+    before = {"busy": 100.0, "all": 400.0, "processes": {
+        "4500": {"created": 11, "used": 2.0}, "77": {"created": 12, "used": 1.0}, "900": {"created": 13, "used": 50.0}}}
+    after = {"busy": 103.0, "all": 404.0, "processes": {
+        "4500": {"created": 11, "used": 3.25}, "88": {"created": 14, "used": 9.0}, "900": {"created": 15, "used": 0.5}}}
     # 4 processor-seconds passed (four processors, one second); 3 of them were work. Process 77 ended, 88 is new.
+    # Number 900 has another creation time in the second read: Windows used the number again for another process.
     assert case.cpu_between(before, after) == {"computerBusy": 0.75, "processes": {"4500": 1.25}}
-    assert case.cpu_between(before, before) == {"computerBusy": None, "processes": {"4500": 0.0, "77": 0.0}}
+    assert case.cpu_between(before, before) == {"computerBusy": None,
+                                                "processes": {"4500": 0.0, "77": 0.0, "900": 0.0}}
+
+
+def test_the_processor_time_of_a_process_is_read_with_its_creation_time(case, monkeypatch):
+    class Call:
+        """A stand-in for a function of kernel32: the fixture sets its argument types, then calls it."""
+
+        def __init__(self, act):
+            self.act = act
+
+        def __call__(self, *arguments):
+            return self.act(*arguments)
+
+    def fill(reference, value):  # Write a FILETIME through the reference that the fixture passed.
+        reference._obj.dwHighDateTime, reference._obj.dwLowDateTime = value >> 32, value & 0xFFFFFFFF
+    created, opened, closed = 134394144230336231, [], []
+
+    def system_times(idle, kernel, user):  # In units of 100 nanoseconds. Windows' kernel time holds the idle time.
+        for reference, seconds in ((idle, 300), (kernel, 340), (user, 60)):
+            fill(reference, seconds * 10 ** 7)
+        return 1
+
+    def open_process(access, inherit, number):
+        opened.append((access, inherit, number))
+        return 9 if number == 4500 else None  # Windows opens only process 4500.
+
+    def process_times(handle, creation, ended, kernel, user):
+        for reference, value in ((creation, created), (ended, 0), (kernel, 125 * 10 ** 5), (user, 75 * 10 ** 5)):
+            fill(reference, value)
+        return 1
+
+    class Kernel:
+        GetSystemTimes, OpenProcess = Call(system_times), Call(open_process)
+        GetProcessTimes, CloseHandle = Call(process_times), Call(lambda handle: closed.append(handle) or 1)
+    monkeypatch.setattr(case.C, "WinDLL", lambda name, use_last_error=False: Kernel, raising=False)
+    assert case.cpu_seconds([4500, 77]) == {
+        "busy": 100.0, "all": 400.0, "processes": {"4500": {"created": created, "used": 2.0}}}
+    assert opened == [(0x1000, False, 4500), (0x1000, False, 77)] and closed == [9]
 
 
 def gauged(case, seconds, answers=None, **more):
@@ -742,7 +800,7 @@ def gauged(case, seconds, answers=None, **more):
     def gauge(owners):
         asked.append(list(owners))
         number = next(counts)
-        return {"busy": 10.0 + number, "all": 20.0 + 4 * number, "processes": {str(pid): number / 2 for pid in owners}}
+        return {"busy": 10.0 + number, "all": 20.0 + 4 * number, "processes": {str(pid): {"created": 7, "used": number / 2} for pid in owners}}
     times = iter(range(100, 1000))
     watch = case.ListenerWatch(probe, lambda: [4500], gauge=gauge, clock=lambda: next(times),
                                timer=lambda: now[0], **more)
@@ -866,6 +924,86 @@ def test_a_watch_whose_thread_does_not_end_says_so(case):
     release.set()
     watch._thread.join(10)
     assert watch.stop()["ended"] is True
+
+
+def test_the_seconds_of_a_question_do_not_hold_the_read_of_the_processor_time_before_it(case):
+    now = [0.0]
+
+    def gauge(owners):  # A slow read of the processor time.
+        now[0] += 0.6
+        return {"busy": 0, "all": 0, "processes": {}}
+
+    def question(seconds):
+        def probe():
+            now[0] += seconds
+            return "trusted"
+        return probe
+    quick = case.ListenerWatch(question(0.1), gauge=gauge, timer=lambda: now[0])
+    quick.look()
+    quick.look()
+    # 0.6 second for the read and 0.1 second for the question: the question was not late.
+    assert quick.changes[0]["seconds"] == 0.1 and quick.late == []
+    slow = case.ListenerWatch(question(0.7), gauge=gauge, timer=lambda: now[0])
+    slow.look()
+    slow.look()
+    assert [entry["seconds"] for entry in slow.late] == [0.7, 0.7]
+    # The read before a question is in the time that the watch waited before it. A slow read shows there.
+    assert [entry["waitedBefore"] for entry in slow.late] == [None, 0.6]
+
+
+def test_what_a_stopped_watch_gave_does_not_change_while_its_thread_still_asks(case):
+    import copy
+    asking, release, count = case.threading.Event(), case.threading.Event(), [0]
+
+    def probe():  # The second question does not come back before the test lets it.
+        count[0] += 1
+        if count[0] == 2:
+            asking.set()
+            release.wait(30)
+        return "trusted"
+    watch = case.ListenerWatch(probe, every=0.01).start()
+    assert asking.wait(10)
+    kept = watch.stop(wait=0.05)
+    assert kept["ended"] is False and [change["answer"] for change in kept["changes"]] == ["trusted"]
+    assert "slowest" not in kept["changes"][0]
+    given = copy.deepcopy(kept)
+    release.set()
+    watch._thread.join(10)
+    # The second question had the same answer and took longer: the watch's own entry now has it as the slowest.
+    assert watch.questions == 2 and "slowest" in watch.changes[0]
+    # What the stop gave is as it was. The report that holds it can be saved while the thread still asks.
+    assert kept == given and kept["changes"][0] is not watch.changes[0]
+    assert watch.stop()["changes"][0]["slowest"]["seconds"] > 0
+
+
+def test_the_watch_changes_and_copies_its_lists_under_one_lock(case):
+    watch, done = case.ListenerWatch(lambda: "trusted"), []
+
+    def waits_for_the_lock(act):
+        """True when `act` waits while this test holds the watch's lock, and ends when the lock is free."""
+        thread = case.threading.Thread(target=lambda: done.append(act()), daemon=True)
+        with watch._lock:
+            thread.start()
+            thread.join(0.2)
+            waited = thread.is_alive()
+        thread.join(10)
+        return waited and not thread.is_alive()
+    assert waits_for_the_lock(watch.look) and watch.questions == 1
+    assert waits_for_the_lock(lambda: watch.mark("a mark"))
+    assert waits_for_the_lock(watch.stop)
+    assert [change.get("mark") or change["answer"] for change in done[-1]["changes"]] == ["trusted", "a mark"]
+
+
+def test_an_error_of_the_watchs_own_code_ends_the_watch_and_the_stop_says_it(case):
+    # A read of the processor time that gives no record: the watch's own code fails at the late answer.
+    ticks = iter([0.0, 3.0, 3.5])
+    watch = case.ListenerWatch(lambda: "trusted", gauge=lambda owners: 5, timer=lambda: next(ticks), every=0.01)
+    watch.start()._thread.join(10)
+    kept = watch.stop()
+    assert kept["started"] is True and kept["ended"] is True and kept["questions"] == 0 and kept["changes"] == []
+    assert kept["endedBy"]["errorType"] == "TypeError"
+    # A watch without such an error has no such entry.
+    assert "endedBy" not in case.ListenerWatch(lambda: "trusted").stop()
 
 
 def test_a_watch_without_a_question_never_starts_and_says_why(case, tmp_path, monkeypatch):
@@ -1092,9 +1230,17 @@ def test_each_later_start_is_accepted_through_the_check_that_names_the_answer():
     assert source.count("        accept_start(steps, ") == 2  # The two calls; the definition is not indented.
     # No later start is accepted with a text that holds only the launcher's answer.
     assert "start failed. The launcher said" not in source
-    # Each call follows the two reads of its start directly.
+    # Each call follows the two reads of its start. The second start keeps the save that it had before the record:
+    # a report that cannot be saved there fails the step with the save's error. The start after the uninstall never
+    # had such a save, and it has none.
     reads = '                          lambda: again.cli(root, "service", "status", "--json"), again.healthy)\n'
-    assert reads + "        accept_start(steps, " in journey and reads + "        accept_start(steps, " in second
+    required = ("        # As before this record: the report must hold the three answers, or the step fails with "
+                "the save's error.\n"
+                '        steps.report["secondStart"] = {"launcher": again_started, "task": state, '
+                '"serviceStatus": status}\n'
+                "        steps.save()\n")
+    assert reads + required + "        accept_start(steps, " in journey
+    assert reads + "        accept_start(steps, " in second and 'steps.report["startAfterUninstall"]' not in source
 
 
 def test_every_read_after_a_host_start_is_made_through_the_record_and_keeps_its_condition():
@@ -1102,12 +1248,22 @@ def test_every_read_after_a_host_start_is_made_through_the_record_and_keeps_its_
     journey = phase(source, "journey", "def trust_targets(home):")
     certificate = phase(source, "certificate", "def second(stage, exchange, account, token):")
     second = phase(source, "second", "def delete_everything(")
-    # Each start: Task Scheduler's answer and the app's status.
+    # Each start: Task Scheduler's answer and the app's status, each with its read and with the rule of its step.
+    # The line breaks of a call do not count here.
+    waiting = ('lambda: again.cli(root, "service", "status", "--wait", "120", "--json", timeout=180), again.healthy, '
+               'later=lambda: again.cli(root, "service", "status", "--json"))')
     for part, starts in ((journey, ("the first start", "the second start")),
                          (second, ("the sign-in", "the start that follows the uninstall"))):
+        flat = " ".join(part.split())
         for start in starts:
-            assert f'observed(steps, home, "Task Scheduler after {start}"' in part
-            assert f'observed(steps, home, "the app\'s status after {start}"' in part
+            assert (f'observed(steps, home, "Task Scheduler after {start}", lambda: again.task_facts(home), '
+                    "again.running)") in flat
+            status = waiting if start == "the sign-in" else (
+                'lambda: again.cli(root, "service", "status", "--json"), again.healthy)')
+            assert f'observed(steps, home, "the app\'s status after {start}", {status}' in flat
+    # No further read of the status or of Task Scheduler: those of the record, and one pair after each stop.
+    assert journey.count('again.cli(root, "service", "status"') == 3 and journey.count("again.task_facts(home)") == 3
+    assert second.count('again.cli(root, "service", "status"') == 4 and second.count("again.task_facts(home)") == 3
     assert 'observed(steps, home, "the launcher\'s status", lambda: again.launcher(root, "--status"),' in journey
     # Each read of trust, with the answer that its step requires.
     for part, name, required in ((certificate, "trust before the Windows question", "untrusted"),
