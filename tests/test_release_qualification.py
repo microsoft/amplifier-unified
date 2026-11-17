@@ -2766,9 +2766,10 @@ def test_windows_plan_native_check_passes_only_with_one_acceptance_and_two_refus
     assert tool.count(equal) == 1
     refuses.write_text(tool.replace(equal, '    if False:\n'))
     result = fixture.cases(tmp_path / 'refuses', path, records, tool=refuses)
-    # Its refusals have more lines than the one difference that each case made: the exact text is required.
+    # Its refusals have more lines than the one difference that each case made. The check requires that
+    # one difference line directly before the last line.
     assert result['ok'] is False and [case['passed'] for case in result['cases']] == [False, False, False]
-    # A gate that refuses and names the wrong graph must fail the check: the exact text is required.
+    # A gate that refuses and names the wrong graph must fail the check: the required line names the graph.
     wrong = tmp_path / 'wrong.py'
     assert tool.count('name in tested, TESTS)') == 1
     wrong.write_text(tool.replace('name in tested, TESTS)', 'name in tested, HOST)'))
@@ -2925,8 +2926,9 @@ def test_windows_plan_native_check_gives_its_commands_less_time_than_the_step_an
             made.append(self)
 
     monkeypatch.setattr(fixture.subprocess, 'Popen', Recorded)
-    # A command that passes its own limit. The error is a sentence, not a traceback of the timeout. The
-    # command would sleep 10 minutes: its process has an exit status, and not the 0 of a sleep that ended.
+    # A command that passes its own limit. The error is the check's sentence, not Python's TimeoutExpired
+    # text. The command would sleep 10 minutes: its process has an exit status, and not the 0 of a sleep
+    # that ended.
     sleeps = (sys.executable, '-c', 'import time; time.sleep(600)')
     Clock.now = 0.0
     with pytest.raises(RuntimeError, match=r'^python[\w.]* -c did not end in 1 second\.$'):
