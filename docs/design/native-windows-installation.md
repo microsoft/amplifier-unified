@@ -1611,8 +1611,19 @@ gives it a desktop session of its own. The test requires what Windows says
 about its own token there: this user, not a member of Administrators, one
 token with no administrator token beside it, not elevated, medium integrity,
 a sign-in of the user itself, and a desktop session that is not the runner's.
-A helper task of that user starts the test in that session. The job removes
-the user's tasks, its profile and the account in every case.
+A helper task of that user starts the test in that session. The program that
+runs as the user refuses unless the run's account record names this user,
+belongs to the administrators group, and cannot be changed by this user. A
+person without administrator rights cannot make such a record.
+
+The last step of the job runs in every case, also after a failure. It signs
+the user out and removes the user's tasks, its profile, the account and the
+saved sign-in, and it restores the one setting that the job changed. Each part
+runs also when another part failed, and the step fails when one of them is
+left. The job records the account before Windows creates it, with a mark that
+Windows keeps as the account's comment; the step removes only the account
+with that mark. If GitHub ends the job at its time limit, the step may not
+finish. A hosted runner is deleted after its job.
 
 The sign-in is needed. A program that another account starts with the user's
 name and password (`CreateProcessWithLogonW`) can register the user's task,
@@ -1626,12 +1637,14 @@ failed with the exact text. A failed step fails the job, and nothing in the
 job can skip.
 
 1. Setup's own code, compiled from the setup sources. Its checks before any
-   question read no elevation and stop only at the Windows version (the
-   runner is Windows Server). A folder that a program of the user made reads
-   as the user's own. The sign-in task reads as absent. The program of these
-   checks is made by setup's compiler with setup's options. Its file is a
-   64-bit program that asks Windows for the rights of the person who starts
-   it (`asInvoker`), and it starts for this user.
+   question read no elevation and stop only at setup's platform check: the
+   Windows version or the processor. The runner is Windows Server on an x64
+   processor; the case does not tell the two apart. A folder that a program
+   of the user made reads as the user's own. The sign-in task reads as
+   absent. The program of these checks is made by setup's compiler with
+   setup's options. Its file is a 64-bit program that asks Windows for the
+   rights of the person who starts it (`asInvoker`), and it starts for this
+   user.
 2. The installation in setup's layout. The test makes it, not the setup file:
    setup's two uv commands for a private Python, `uv tool install` of the
    candidate wheel (without the component list of a release), and a copy of
@@ -1646,9 +1659,13 @@ job can skip.
    new host on the same port.
 5. The launcher's certificate step (`review_browser_trust`). Before it,
    Windows does not trust the connection. Amplifier shows its one message.
-   Windows asks its one question, and its text names the certificate and
-   shows the thumbprint of Amplifier's message. The test selects Yes with a
-   window message. Then the launcher's check reads the connection as trusted.
+   Windows asks its one question. The test requires that its text is the
+   install question, names the certificate and shows the thumbprint as
+   Amplifier's message shows it. The test selects Yes with a window message,
+   once. Then the launcher's check reads the connection as trusted, and
+   Windows' own list of the user's root certificates holds the certificate.
+   Another dialog, or a second question, gets no answer: the step then fails
+   with the dialog's text after 90 seconds.
 6. Setup's own code reads the installation as installed, with its sign-in
    task. A second setup run would open it.
 7. A sign-out and a new sign-in. After the sign-out the task exists and does
@@ -1656,13 +1673,15 @@ job can skip.
    same port, with no launcher command, and Windows still trusts the
    connection.
 8. Uninstall with the choice that keeps the folder. Windows asks whether to
-   delete the certificate; the test selects No, and the certificate stays.
-   Then the entries again and a start, as setup's second run does them.
+   delete the certificate; the test selects No, and the certificate stays in
+   Windows' own list. Then the entries again and a start, as setup's second
+   run does them.
 9. Uninstall with the choice that deletes the folder (Yes, and Yes again).
-   The test selects Yes at the Windows question, and the certificate is
-   removed. Afterwards the user has no installation folder, no sign-in task,
-   no Start-menu entry and no Apps-list entry, and setup's own code reads an
-   account without an installation.
+   The test selects Yes at the Windows question. Afterwards the user has no
+   installation folder, no sign-in task, no Start-menu entry and no Apps-list
+   entry, Windows' own list of the user's root certificates no longer holds
+   the certificate, and setup's own code reads an account without an
+   installation.
 
 First result (November 17, 2026): every step passed. In these steps the case
 found nothing that a standard account cannot do.

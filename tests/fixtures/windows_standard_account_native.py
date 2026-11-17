@@ -32,7 +32,8 @@ Windows 11, and a sign-in at the PC's own screen.
 
 The delete choice removes the folder %LOCALAPPDATA%\\Amplifier of the account
 that runs it. Here that is only the user that this run created: `standard`
-refuses every other account.
+refuses every other account. It reads that from the run's account record, a
+file of the administrators group that the user cannot change.
 
 The password is made in the `run` process. It goes to Windows for the new
 user and, for each sign-in, to the credential store of the runner's own logon,
@@ -76,6 +77,8 @@ USERS, ADMINISTRATORS, REMOTE_DESKTOP_USERS = "S-1-5-32-545", "S-1-5-32-544", "S
 # screen session. Another loopback address reaches the same computer.
 DESKTOP, DESKTOP_TARGET = "127.0.0.2", "TERMSRV/127.0.0.2"
 HELPER = "AmplifierStandardAccountCheck"
+# The comment of the account that a run creates, with that run's own number.
+MARK = "Amplifier standard-account check, run "
 FILES = ("tests/fixtures/windows_standard_account_native.py", "tests/fixtures/windows_start_again_native.py",
          "amplifier_web/windows_files.py")
 # One line for each step. FIRST runs after the first sign-in, SECOND after the
@@ -105,7 +108,7 @@ SECOND = (
     "certificate is removed)",
 )
 THIRD = (
-    "After the delete choice: no folder, no sign-in task, no Start-menu entry, no Apps-list entry",
+    "After the delete choice: no folder, no sign-in task, no Start-menu entry, no Apps-list entry, no certificate",
 )
 JOURNEY = FIRST[3:]
 CERTIFICATE = JOURNEY[8]
@@ -132,7 +135,7 @@ NOT_SHOWN = (
 )
 
 
-def require_disposable_runner(environ=None, platform=None):
+def require_disposable_runner(environ=None, platform=None, interpreter=None):
     """Refuse before any effect unless this is the hosted workflow, with its opt-in.
 
     A guard against accidental use. It reads the environment that GitHub sets
@@ -144,8 +147,29 @@ def require_disposable_runner(environ=None, platform=None):
             and environ.get("RUNNER_ENVIRONMENT") == "github-hosted" and environ.get(OPT_IN) == "1"):
         raise SystemExit("Refused: this check creates a Windows user and changes a Remote Desktop setting. "
                          f"It runs only on a GitHub-hosted runner, with {OPT_IN}=1.")
-    if sys.version_info[:2] != (3, 13) or sys.maxsize <= 2 ** 32:
+    if (interpreter or (sys.version_info[:2], sys.maxsize > 2 ** 32)) != ((3, 13), True):
         raise SystemExit("Refused: this check needs 64-bit CPython 3.13.")
+
+
+HOSTED_FACTS = ("GITHUB_ACTIONS", "RUNNER_ENVIRONMENT", OPT_IN)
+
+
+def admit_standard(account, token, owner, writable, platform=None, interpreter=None):
+    """Refuse unless this program is the standard user of one run of the hosted workflow.
+
+    `standard` runs as the new user, which has no workflow environment. The
+    account record of the run takes its place. The record counts only when an
+    administrator wrote it: its file belongs to the administrators group, and
+    this user cannot write it. A person without administrator rights cannot
+    make such a file. The record names the user that the run created. It also
+    carries the workflow's facts, for the same check as on the runner's account.
+    """
+    if token["sid"] != account.get("sid") or token["memberOfAdministrators"]:
+        raise SystemExit("Refused: this program runs only as the standard user that this run created.")
+    if writable or owner != ADMINISTRATORS:
+        raise SystemExit("Refused: the account record of this run is not a file of the administrators group "
+                         "that this user cannot change.")
+    require_disposable_runner(account.get("hosted") or {}, platform, interpreter)
 
 
 def load(name, path):
@@ -213,11 +237,11 @@ def execution_level(program):
     return x64, [level.decode("ascii") for level in levels]
 
 
-def powershell(script, value):
+def powershell(script, value, timeout=120):
     """Static source only. JSON is data on stdin, never text in the command."""
     return execute([system("WindowsPowerShell/v1.0/powershell.exe"), "-NoLogo", "-NoProfile", "-NonInteractive",
                     "-EncodedCommand", base64.b64encode(script.encode("utf-16-le")).decode("ascii")],
-                   stdin=json.dumps(value))
+                   stdin=json.dumps(value), timeout=timeout)
 
 
 # ---- Windows accounts and tokens.
@@ -272,6 +296,32 @@ def sid_name(text):
     return name.value
 
 
+def file_owner(path):
+    """The SID of the owner of a file, as Windows records it."""
+    owner, descriptor = C.c_void_p(), C.c_void_p()
+    _adv.GetNamedSecurityInfoW.argtypes = [W.LPCWSTR, C.c_int, W.DWORD, C.POINTER(C.c_void_p), C.POINTER(C.c_void_p),
+                                           C.POINTER(C.c_void_p), C.POINTER(C.c_void_p), C.POINTER(C.c_void_p)]
+    _adv.GetNamedSecurityInfoW.restype = W.DWORD
+    # SE_FILE_OBJECT; OWNER_SECURITY_INFORMATION.
+    status = _adv.GetNamedSecurityInfoW(str(path), 1, 1, C.byref(owner), None, None, None, C.byref(descriptor))
+    if status:
+        raise C.WinError(status)
+    try:
+        return sid_text(owner)
+    finally:
+        _kernel.LocalFree.argtypes = [C.c_void_p]
+        _kernel.LocalFree(descriptor)
+
+
+def can_write(path):
+    """True when this account can open the file for writing. Nothing is written."""
+    try:
+        with open(path, "r+b"):
+            return True
+    except OSError:
+        return False
+
+
 class _UserInfo1(C.Structure):
     _fields_ = [("name", W.LPWSTR), ("password", W.LPWSTR), ("password_age", W.DWORD),
                 ("privilege", W.DWORD), ("home", W.LPWSTR), ("comment", W.LPWSTR),
@@ -302,17 +352,35 @@ def join(name, group):
         raise OSError(f"NetLocalGroupAddMembers failed with status {status}")
 
 
-def create_user(name, password):
-    """One new local user. An existing name is refused by Windows, never adopted."""
+def create_user(name, password, mark):
+    """One new local user, with this run's mark as its comment. An existing name is refused by Windows, never adopted."""
     net = C.WinDLL("netapi32")
     net.NetUserAdd.argtypes = [W.LPCWSTR, W.DWORD, C.c_void_p, C.POINTER(W.DWORD)]
     net.NetUserAdd.restype = W.DWORD
     # USER_PRIV_USER; UF_SCRIPT | UF_DONT_EXPIRE_PASSWD.
-    info = _UserInfo1(name, password, 0, 1, None, "Amplifier standard-account check (one run)", 0x1 | 0x10000, None)
+    info = _UserInfo1(name, password, 0, 1, None, mark, 0x1 | 0x10000, None)
     status = net.NetUserAdd(None, 1, C.byref(info), C.byref(W.DWORD()))
     if status:
         raise OSError(f"NetUserAdd failed with status {status}")
     return sid_text(account_sid(name))
+
+
+def account_comment(name):
+    """The comment of a local account; None when Windows knows no such account."""
+    net = C.WinDLL("netapi32")
+    buffer = C.c_void_p()
+    net.NetUserGetInfo.argtypes = [W.LPCWSTR, W.LPCWSTR, W.DWORD, C.POINTER(C.c_void_p)]
+    net.NetUserGetInfo.restype = W.DWORD
+    status = net.NetUserGetInfo(None, name, 1, C.byref(buffer))
+    if status == 2221:  # No such user.
+        return None
+    if status:
+        raise OSError(f"NetUserGetInfo failed with status {status}")
+    try:
+        return C.cast(buffer, C.POINTER(_UserInfo1)).contents.comment
+    finally:
+        net.NetApiBufferFree.argtypes = [C.c_void_p]
+        net.NetApiBufferFree(buffer)
 
 
 def local_groups(name):
@@ -444,8 +512,12 @@ def remember(user, password):
 
 
 def forget():
+    """Delete the saved sign-in. "absent" when Windows has none afterwards; else the failure."""
     _adv.CredDeleteW.argtypes = [W.LPCWSTR, W.DWORD, W.DWORD]
-    return bool(_adv.CredDeleteW(DESKTOP_TARGET, 1, 0))
+    _adv.CredDeleteW.restype = W.BOOL
+    if _adv.CredDeleteW(DESKTOP_TARGET, 1, 0) or C.get_last_error() == 1168:  # Deleted, or Windows had none.
+        return "absent"
+    return f"left: CredDeleteW failed with error {C.get_last_error()}"
 
 
 def windows_of(pid):
@@ -665,13 +737,23 @@ def dialogs(own=True):
     return found
 
 
-def names_certificate(dialog, marks):
-    """True when the dialog's text has one of the marks of this installation's certificate.
+# What Windows asks about a root certificate of the person's own store, as a
+# hosted runner shows it (English).
+QUESTIONS = {"install": "Do you want to install this certificate?",
+             "delete": "Do you want to DELETE the following certificate from the Root Store?"}
 
-    Spaces and letter case do not count: Windows groups a thumbprint in its own way.
+
+def is_question(dialog, operation, marks):
+    """True when the dialog is the Windows question about this installation's certificate.
+
+    It must show all three: the question of this operation, the certificate's
+    name and its thumbprint. The name alone is not enough: every Amplifier
+    installation has a certificate with this name. Spaces and letter case do
+    not count: Windows groups a thumbprint in its own way.
     """
     plain = "".join((dialog["title"] + dialog["text"]).split()).casefold()
-    return any("".join(mark.split()).casefold() in plain for mark in marks if mark.strip())
+    wanted = [QUESTIONS[operation], *marks]
+    return len(marks) == 2 and all(mark.strip() and "".join(mark.split()).casefold() in plain for mark in wanted)
 
 
 def button_for(dialog, answer):
@@ -684,47 +766,73 @@ def button_for(dialog, answer):
 
 
 @contextmanager
-def answering(steps, asked, answer, marks):
-    """While the block runs, answer the Windows question about this installation's certificate.
+def answering(steps, asked, operation, answer, marks, *, limit=90, end=os._exit):
+    """While the block runs, answer the one Windows question about this installation's certificate.
 
     Windows asks in a dialog when a program adds a root certificate to the
     person's own store, or deletes one. A person reads it and selects Yes or
     No. No person is present here: this thread records the text and gives the
-    answer in the person's place, with a window message. It answers only a
-    dialog of this process that names this installation's certificate
-    (`marks`: its name and its thumbprint). Any other dialog is recorded and
-    never answered; the step then ends at its time limit, with that text.
-    """
-    done, answered, recorded = threading.Event(), set(), set()
-    _user.PostMessageW.argtypes = [W.HWND, W.UINT, W.WPARAM, W.LPARAM]
+    answer in the person's place, with a window message.
 
-    def record(entry, own=True):
-        key = json.dumps(entry, sort_keys=True)
-        if key not in recorded:
-            recorded.add(key)
+    It answers one dialog, once: a dialog of this process that `is_question`
+    accepts. Each dialog window is one entry of `asked`, so two questions with
+    the same text are two entries. Any other dialog, and a second question, is
+    recorded and never answered. Nothing else would end that wait. So after
+    `limit` seconds without an answer this thread fails the step with the
+    dialog's text and ends the program.
+    """
+    done, entries, posted, waiting = threading.Event(), {}, {}, {}
+    _user.PostMessageW.argtypes = [W.HWND, W.UINT, W.WPARAM, W.LPARAM]
+    _user.PostMessageW.restype = W.BOOL
+
+    def record(key, entry, own=True):
+        earlier = entries.get(key)
+        if earlier == entry:
+            return
+        if earlier is None:
+            entries[key] = entry
             if own:
                 asked.append(entry)
             steps.report.setdefault("windowsQuestions", []).append(entry)
-            steps.save()
+        else:  # The same window with another text: still one entry.
+            earlier.clear()
+            earlier.update(entry)
+        steps.save()
+
+    def stop(text, entry):
+        steps.failed(RuntimeError(text + ": " + json.dumps(entry)[-2500:]))
+        steps.finish()
+        done.set()
+        end(1)
 
     def watch():
         started = time.monotonic()
         while not done.wait(0.5):
+            now = time.monotonic()
             for dialog in dialogs():
-                if dialog["window"] in answered or not dialog["text"]:
-                    continue  # Answered already, or Windows has not filled it yet.
-                ours, button = names_certificate(dialog, marks), button_for(dialog, answer)
-                entry = {"title": dialog["title"], "text": dialog["text"][:4000],
+                window = dialog["window"]
+                if not dialog["text"]:
+                    continue  # Windows has not filled it yet.
+                if window in posted:
+                    if now - posted[window] > limit:
+                        return stop("The answer did not close the Windows question", entries[window])
+                    continue
+                ours, button = is_question(dialog, operation, marks), button_for(dialog, answer)
+                entry = {"window": window, "title": dialog["title"], "text": dialog["text"][:4000],
                          "buttons": sorted(label for _, label in dialog["buttons"].values()),
-                         "namesThisCertificate": ours, "answer": answer if ours and button else None}
-                record(entry)
-                if ours and button:
-                    answered.add(dialog["window"])
-                    _user.PostMessageW(dialog["window"], 0x0111, button[0], button[1])  # WM_COMMAND
-            if not answered and time.monotonic() - started > 25:
+                         "theQuestion": ours, "answer": None}
+                # One answer in all. A second question is another case: it stays. An
+                # answer counts only when Windows took the message (WM_COMMAND).
+                if ours and button and not posted and _user.PostMessageW(window, 0x0111, button[0], button[1]):
+                    posted[window], entry["answer"] = now, answer
+                record(window, entry)
+                if window not in posted and now - waiting.setdefault(window, now) > limit:
+                    return stop("A Windows dialog of this program got no answer", entry)
+            if not posted and now - started > 25:
                 # For a failed step: the dialogs of other programs that this program can see.
                 for dialog in dialogs(own=False):
-                    record({"otherProgram": dialog["pid"], "title": dialog["title"], "text": dialog["text"][:2000],
+                    record(("other", dialog["window"]),
+                           {"otherProgram": dialog["pid"], "title": dialog["title"], "text": dialog["text"][:2000],
                             "buttons": sorted(label for _, label in dialog["buttons"].values())}, own=False)
 
     thread = threading.Thread(target=watch, daemon=True)
@@ -744,9 +852,29 @@ def certificate_marks(home):
     return [windows_trust.ROOT_NAME, windows_trust.thumbprint(identity[0])]
 
 
+ROOTS = r"""
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+$p = [Console]::In.ReadToEnd() | ConvertFrom-Json
+$found = @(Get-ChildItem -LiteralPath 'Cert:\CurrentUser\Root' | Where-Object { $_.Thumbprint -eq $p.thumbprint })
+@{found=$found.Count} | ConvertTo-Json -Compress
+"""
+
+
+def windows_root_has(thumbprint):
+    """Windows' own answer: do this user's trusted root certificates hold this thumbprint?
+
+    Windows PowerShell lists the store. No code of the product takes part.
+    """
+    listed = powershell(ROOTS, {"thumbprint": "".join(thumbprint.split()).upper()})
+    need(listed["exitCode"] == 0 and isinstance(listed["json"], dict),
+         "Windows did not list this user's root certificates", listed)
+    return listed["json"]["found"] > 0
+
+
 def one_question(asked, answer):
-    """Exactly one Windows question, about this installation's certificate, with this answer."""
-    return (len(asked) == 1 and asked[0].get("namesThisCertificate") is True and asked[0].get("answer") == answer)
+    """Exactly one dialog window: the question about this installation's certificate, with this answer."""
+    return len(asked) == 1 and asked[0].get("theQuestion") is True and asked[0].get("answer") == answer
 
 
 # ---- As the runner's account.
@@ -826,21 +954,40 @@ def run():
         need(saved("ownership.json") is None, "This runner already has an account of this case")
         name = "amp-std-" + uuid.uuid4().hex[:6]
         need(account_sid(name) is None, "An account with this name exists; it is not adopted")
+        # Recorded before Windows is asked for the account: no record means no
+        # request. The cleanup removes exactly the account that has this name
+        # and this mark as its comment, also when a later line here fails.
+        mark = MARK + uuid.uuid4().hex
+        save("ownership.json", {"user": name, "mark": mark})
         password = new_password()
-        sid = create_user(name, password)
-        # Recorded at once: the cleanup removes exactly this account.
-        save("ownership.json", {"user": name, "sid": sid})
+        sid = create_user(name, password, mark)
+        save("ownership.json", {"user": name, "mark": mark, "sid": sid})
+        need(account_comment(name) == mark, "Windows does not show this run's mark on the new account")
         join(name, USERS)
         join(name, REMOTE_DESKTOP_USERS)  # Only the right to sign in through Remote Desktop.
         groups = local_groups(name)
         need(sorted(groups) == sorted([sid_name(USERS), sid_name(REMOTE_DESKTOP_USERS)]),
              "The user's groups are not those of a standard account", groups)
         report["account"] = {"sid": sid, "localGroups": groups, "runnerAccount": runner}
-        for folder, right in ((stage, "RX"), (exchange, "M")):
-            granted = execute([system("icacls.exe"), folder, "/grant", f"*{sid}:(OI)(CI){right}", "/T", "/Q"])
-            need(granted["exitCode"] == 0, "The user was not given access to this case's folder", granted)
-        (exchange / "account.json").write_text(json.dumps({"sid": sid, "runnerSession": runner["desktopSession"]}),
-                                               encoding="utf-8")
+        # The stage: administrators and Windows change it, the user reads and
+        # runs it, and nothing comes from the folder above. The exchange: the
+        # user's reports.
+        protected = execute([system("icacls.exe"), stage, "/inheritance:r", "/grant:r",
+                             f"*{ADMINISTRATORS}:(OI)(CI)F", "*S-1-5-18:(OI)(CI)F", f"*{sid}:(OI)(CI)RX", "/Q"])
+        need(protected["exitCode"] == 0, "This case's stage folder was not protected", protected)
+        granted = execute([system("icacls.exe"), exchange, "/grant", f"*{sid}:(OI)(CI)M", "/T", "/Q"])
+        need(granted["exitCode"] == 0, "The user was not given access to this case's exchange folder", granted)
+        # Which user this run created, and the workflow's facts. `standard`
+        # accepts it only as a file of the administrators group.
+        record = stage / "account.json"
+        record.write_text(json.dumps({"sid": sid, "runnerSession": runner["desktopSession"],
+                                      "hosted": {fact: os.environ.get(fact) for fact in HOSTED_FACTS}}),
+                          encoding="utf-8")
+        if file_owner(record) != ADMINISTRATORS:
+            execute([system("icacls.exe"), record, "/setowner", f"*{ADMINISTRATORS}", "/Q"])
+        owner = file_owner(record)
+        report["account"]["record"] = {"owner": owner}
+        need(owner == ADMINISTRATORS, "The account record does not belong to the administrators group", owner)
         need(not task("state", "AmplifierUnified-" + sid)["exists"], "The new user already has an Amplifier task")
 
         report["stage"] = "the first sign-in"
@@ -902,50 +1049,117 @@ def run():
     return report["status"] == "PASS"
 
 
+PROFILE = r"""
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+$p = [Console]::In.ReadToEnd() | ConvertFrom-Json
+Get-CimInstance Win32_UserProfile | Where-Object { $_.SID -eq $p.sid } | Remove-CimInstance
+$left = @(Get-CimInstance Win32_UserProfile | Where-Object { $_.SID -eq $p.sid }).Count
+@{left=$left} | ConvertTo-Json -Compress
+"""
+
+
+def remove_profile(sid):
+    """Remove the user's profile. "absent" only when Windows lists none for the user afterwards."""
+    said = None
+    for _ in range(3):
+        removed = powershell(PROFILE, {"sid": sid}, timeout=150)
+        if removed["exitCode"] == 0 and (removed["json"] or {}).get("left") == 0:
+            return "absent"
+        said = removed["stderr"][-300:]
+        time.sleep(5)  # Windows can hold the profile for a moment after the sign-out.
+    return "left: " + str(said)
+
+
+# What each part of the cleanup must report. With an account record: also the account's parts.
+CLEAN = {"credential": ("absent",), "viewerSetting": ("restored", "unchanged")}
+OWNED_CLEAN = {"signedOut": (True,), "helperTask": ("absent",), "amplifierTask": ("absent",),
+               "profile": ("absent",), "account": ("absent",)}
+
+
+def cleaned(result, owned):
+    """True only when nothing of this run is left: every part, not only the account."""
+    wanted = {**CLEAN, **(OWNED_CLEAN if owned else {})}
+    return all(result.get(name) in values for name, values in wanted.items())
+
+
 def cleanup():
-    """Sign the user out and remove its tasks, its processes, its profile and the account itself."""
-    result = {}
-    owned = saved("ownership.json")
-    forget()
-    for pid in saved("viewers.json") or []:
-        execute([system("taskkill.exe"), "/F", "/PID", pid, "/FI", "IMAGENAME eq mstsc.exe"])
-    if owned:
-        name, sid = owned["user"], owned["sid"]
-        result["signedOut"] = sign_out(name, None)
-        execute([system("taskkill.exe"), "/F", "/FI", f"USERNAME eq {name}"])
-        for label, task_name in (("helperTask", HELPER), ("amplifierTask", "AmplifierUnified-" + sid)):
-            try:
-                result[label] = "absent" if not task("remove", task_name)["exists"] else "left"
-            except Exception as error:
-                result[label] = "left: " + type(error).__name__
-        removed = powershell("$p = [Console]::In.ReadToEnd() | ConvertFrom-Json\n"
-                             "Get-CimInstance Win32_UserProfile | Where-Object { $_.SID -eq $p.sid } | "
-                             "Remove-CimInstance -ErrorAction Stop\n", {"sid": sid})
-        result["profile"] = "absent" if removed["exitCode"] == 0 else "left"
-        result["deleteStatus"] = delete_user(name)
-        result["account"] = "absent" if account_sid(name) is None else "left"
-    setting = saved("viewer-setting.json")
-    if setting is not None:
+    """Sign the user out; remove its tasks, its processes, its profile, the account and the saved sign-in.
+
+    Each part runs also when an earlier part failed, and each failure is kept.
+    The step passes only when nothing of this run is left (`cleaned`).
+    """
+    result, owned = {}, saved("ownership.json")
+
+    def part(label, action):
+        try:
+            result[label] = action()
+        except Exception as error:
+            result[label] = "left: " + type(error).__name__ + ": " + str(error)[-300:]
+
+    def viewers():
+        for pid in saved("viewers.json") or []:
+            execute([system("taskkill.exe"), "/F", "/PID", pid, "/FI", "IMAGENAME eq mstsc.exe"])
+        return "ended"
+
+    def gone(task_name):
+        return "absent" if not task("remove", task_name)["exists"] else "left"
+
+    def setting():
+        earlier = saved("viewer-setting.json")
+        if earlier is None:
+            return "unchanged"
         import winreg
         with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Terminal Server Client") as key:
-            if setting["earlier"] is None:
+            if earlier["earlier"] is None:
                 try:
                     winreg.DeleteValue(key, "AuthenticationLevelOverride")
                 except FileNotFoundError:
                     pass
             else:
-                winreg.SetValueEx(key, "AuthenticationLevelOverride", 0, winreg.REG_DWORD, setting["earlier"])
-        result["viewerSetting"] = "restored"
-    # The user's own reports, beside the evidence of the runner's account.
-    for name in ("first.json", "journey.json", "certificate.json", "second.json", "third.json"):
-        report = read_json(folders()[1] / name)
-        if report is not None:
-            save("user-" + name, report)
-    save("cleanup.json", result)
+                winreg.SetValueEx(key, "AuthenticationLevelOverride", 0, winreg.REG_DWORD, earlier["earlier"])
+        return "restored"
+
+    def reports():
+        # The user's own reports, beside the evidence of the runner's account.
+        for name in ("first.json", "journey.json", "certificate.json", "second.json", "third.json"):
+            report = read_json(folders()[1] / name)
+            if report is not None:
+                save("user-" + name, report)
+        return "saved"
+
+    part("credential", forget)
+    part("viewers", viewers)
+    if owned:
+        name, sid = owned["user"], owned.get("sid")
+        # Only the account with this run's mark. The record is written before
+        # the account, so the account can be absent. An account that another
+        # program made under this name is not touched.
+        try:
+            comment = account_comment(name)
+            state = "absent" if comment is None else "this run's" if comment == owned["mark"] else "another account"
+            if state == "this run's" and sid is None:
+                sid = sid_text(account_sid(name))  # Created, and the line that records the SID did not run.
+        except Exception as error:
+            state = "not read: " + type(error).__name__
+        result["accountBefore"] = state
+        if state in ("this run's", "absent"):
+            part("signedOut", lambda: sign_out(name, None))
+            part("processes", lambda: execute([system("taskkill.exe"), "/F", "/FI", f"USERNAME eq {name}"])["exitCode"])
+            part("helperTask", lambda: gone(HELPER))
+            part("amplifierTask", lambda: gone("AmplifierUnified-" + sid) if sid else "absent")
+            part("profile", lambda: remove_profile(sid) if sid else "absent")
+            if state == "this run's":
+                part("deleteStatus", lambda: delete_user(name))
+            part("account", lambda: "absent" if account_sid(name) is None else "left")
+        else:
+            result["account"] = "left: " + state
+    part("viewerSetting", setting)
+    part("reports", reports)
+    part("saved", lambda: save("cleanup.json", result) or "yes")
     print(json.dumps(result), flush=True)
-    # The runner is deleted after the job. The account and its tasks must be gone before it ends.
-    return not owned or (result["account"] == "absent" and result["amplifierTask"] == "absent"
-                         and result["helperTask"] == "absent")
+    # The runner is deleted after the job. Everything of this run must be gone before it ends.
+    return cleaned(result, owned)
 
 
 # ---- As the standard user, in the user's own desktop session.
@@ -1267,6 +1481,8 @@ def certificate(stage, exchange, account, token):
         need(before == "untrusted", "Before the question Windows must not trust the connection yet. It read", before)
         need(windows_trust.user_roots_disabled() is False, "This computer's policy disables a person's own certificates")
         marks = certificate_marks(home)
+        need(windows_root_has(marks[1]) is False,
+             "Before the question this user's root certificates already hold this certificate")
         notices, asked = [], []
         original = windows_installation.owner_notice
 
@@ -1274,7 +1490,7 @@ def certificate(stage, exchange, account, token):
             notices.append({"confirm": confirm, "message": message})
             return True
 
-        with again.no_message_box(), answering(steps, asked, "yes", marks):
+        with again.no_message_box(), answering(steps, asked, "install", "yes", marks):
             windows_installation.owner_notice = note
             try:
                 accepted = windows_installation.review_browser_trust(root, urls, pin)
@@ -1285,12 +1501,16 @@ def certificate(stage, exchange, account, token):
              and notices[0]["message"].startswith("Windows will now ask one question:")
              and marks[1] in notices[0]["message"], "Amplifier did not show its one message before the question", notices)
         need(one_question(asked, "yes"), "Windows did not ask its one question about this certificate", asked)
+        # Amplifier tells the person which thumbprint the Windows message shows.
+        need(marks[1] in asked[0]["text"],
+             "The Windows question does not show the thumbprint as Amplifier's message shows it", asked)
         after = windows_installation.trust_state(urls, pin)
         need(accepted is True and after == "trusted",
              "After Yes, Windows does not trust the connection", {"accepted": accepted, "state": after})
+        need(windows_root_has(marks[1]) is True,
+             "After Yes, Windows does not list the certificate among this user's root certificates")
         steps.passed(CERTIFICATE, amplifierMessage=notices[0]["message"], windowsQuestion=asked[0],
-                     # Amplifier tells the person which thumbprint the Windows message shows.
-                     thumbprintInTheSameGrouping=marks[1] in asked[0]["text"], before=before, after=after)
+                     before=before, after=after, windowsListsTheCertificate=True)
     except BaseException as error:
         steps.failed(error)
     return steps.finish()
@@ -1321,12 +1541,15 @@ def second(stage, exchange, account, token):
         marks = certificate_marks(home)
         trusted = windows_installation.trust_state(urls, pin)
         need(trusted == "trusted", "After the new sign-in Windows does not trust the connection. It read", trusted)
+        need(windows_root_has(marks[1]) is True,
+             "After the new sign-in Windows does not list the certificate among this user's root certificates")
+        steps.report["thumbprint"] = marks[1]  # For the check after the delete choice.
         steps.passed(SECOND[0], task=state, host=again.process_identity(status["json"]), port=before["port"],
                      trust=trusted)
 
         steps.begin(SECOND[1])
         notices, asked = [], []
-        with answering(steps, asked, "no", marks):
+        with answering(steps, asked, "delete", "no", marks):
             removed = again.uninstall(root, notices)
         need(again.kept_folder_question(notices), "Uninstall did not ask its one question", notices)
         need("Windows asks whether to delete the certificate" in notices[0]["message"],
@@ -1341,6 +1564,8 @@ def second(stage, exchange, account, token):
              "The uninstall left a part in place", {"result": removed, "task": state, "status": status["json"]})
         need(root.is_dir() and windows_uninstall.completed(root) and not windows_uninstall.unfinished(root),
              "The choice that keeps the folder did not keep the installation as it was")
+        need(windows_root_has(marks[1]) is True,
+             "After No, Windows does not list the certificate among this user's root certificates")
         reads = setup_reads(stage, exchange)
         need(reads.get("folder") == "installed" and reads.get("signInTask") == "absent",
              "After the uninstall setup's own code does not read a kept installation without a sign-in task", reads)
@@ -1363,7 +1588,7 @@ def second(stage, exchange, account, token):
 
         steps.begin(SECOND[3])
         notices, asked = [], []
-        with answering(steps, asked, "yes", marks):
+        with answering(steps, asked, "delete", "yes", marks):
             removed = delete_everything(again, root, notices)
         # From here this program starts nothing from the installation: its files are gone.
         need(delete_questions(notices, root), "Uninstall did not ask its two questions of the delete choice", notices)
@@ -1450,7 +1675,11 @@ def third(stage, exchange, account, token):
         except FileNotFoundError:
             pass  # This account has no Apps-list entry of its own at all.
         need(listed == [], "An Apps-list entry is left", listed)
-        steps.passed(THIRD[0], account=reads, folderExists=False)
+        before = read_json(exchange / "second.json") or {}
+        need(before.get("thumbprint"), "The phase before did not record the certificate's thumbprint")
+        need(windows_root_has(before["thumbprint"]) is False,
+             "After Yes, Windows still lists the certificate among this user's root certificates")
+        steps.passed(THIRD[0], account=reads, folderExists=False, windowsListsTheCertificate=False)
     except BaseException as error:
         steps.failed(error)
     return steps.finish()
@@ -1458,10 +1687,11 @@ def third(stage, exchange, account, token):
 
 def standard(stage, exchange, phase):
     stage, exchange = Path(stage), Path(exchange)
-    account = json.loads((exchange / "account.json").read_text(encoding="utf-8"))
+    # In the stage folder, which this user cannot change. Not in the exchange folder.
+    record = stage / "account.json"
+    account = json.loads(record.read_text(encoding="utf-8"))
     token = token_facts()
-    if token["sid"] != account["sid"] or token["memberOfAdministrators"]:
-        raise SystemExit("Refused: this program runs only as the standard user that this run created.")
+    admit_standard(account, token, file_owner(record), can_write(record))
     # One run for each phase: a second start of the helper task changes nothing.
     try:
         with open(exchange / f"{phase}.started", "x", encoding="utf-8") as marker:

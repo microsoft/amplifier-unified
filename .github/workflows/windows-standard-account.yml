@@ -53,7 +53,7 @@ jobs:
   windows-standard-account:
     name: Consumer journey as a standard user
     runs-on: windows-latest
-    timeout-minutes: 80
+    timeout-minutes: 115
     env:
       PYTHONDONTWRITEBYTECODE: '1'
       PYTHONUTF8: '1'
@@ -84,18 +84,18 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Preparation failed; inspect preparation.json.' }
       # A failed step fails the job. Nothing here can skip.
       - name: Create a standard user, sign it in, and run the journey as that user
-        timeout-minutes: 55
+        timeout-minutes: 75
         shell: pwsh
         run: |
           python -I -B tests/fixtures/windows_standard_account_native.py run
           if ($LASTEXITCODE -ne 0) { throw 'A step failed as a standard user; read the lines above and result.json.' }
-      - name: Sign the user out and remove its tasks, its profile and the account
+      - name: Sign the user out and remove its tasks, its profile, the account and the saved sign-in
         if: always()
-        timeout-minutes: 6
+        timeout-minutes: 12
         shell: pwsh
         run: |
           python -I -B tests/fixtures/windows_standard_account_native.py cleanup
-          if ($LASTEXITCODE -ne 0) { throw 'The account or one of its tasks was not removed.' }
+          if ($LASTEXITCODE -ne 0) { throw 'A part of this run was not removed; read cleanup.json.' }
       - name: Retain the bounded results
         if: always()
         timeout-minutes: 2
