@@ -374,12 +374,19 @@ jobs:
           .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -p no:cacheprovider tests/test_update_new_installation.py | Tee-Object -Variable report
           if ($LASTEXITCODE -ne 0) { throw 'New-installation update listing checks failed.' }
           if (-not ($report -match ' passed') -or ($report -match 'skipped')) { throw 'A native new-installation case did not run; on this lane it must run.' }
-      # First start with an update: the real `open` command, handed over with
-      # os.execv as an app generation is, against this installation's host
-      # while that host restarts as another package version. Real private
-      # files, pinned HTTPS and grant store, in a folder with a space in its
-      # name. A recorder stands in for the browser; Task Scheduler, the update
-      # and the Windows certificate question are not part of this check.
+      # A command that the active app version takes over, and the first start
+      # with an update. First the launcher's real hand-over
+      # (application_generations.hand_over) with real processes: the caller
+      # gets control back when the output is complete, with the real exit
+      # status, and no console window opens. Then the real `open` command
+      # against this installation's host while that host restarts as another
+      # package version, handed over as each of the three launchers on
+      # people's PCs does it: the current one waits for the app, the two
+      # earlier ones use os.execv. Real private files, pinned HTTPS and grant
+      # store. The first two launchers run in a folder with a space in its
+      # name; the earliest one cannot work there. A recorder stands in for the
+      # browser; Task Scheduler, the update and the Windows certificate
+      # question are not part of this check.
       - name: Check that the first start's open step waits for a restarting host and opens the browser once
         shell: pwsh
         run: |
