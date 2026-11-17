@@ -4,10 +4,12 @@ The app starts every command of a preparation through ``updates.process`` (uv,
 Git, the check of a chat's setup). When a person stops the chat,
 ``RuntimeManager.stop`` cancels the preparation, and ``process`` ends the
 command that it started. A timeout takes the same way. On Windows that ends
-one process: a program that the command started runs on. On an installed PC
-the launcher puts the app into a kill-on-close Job before it starts any child
-(``windows_jobs.contain_current_host``), so Windows ends such a program when
-the app process ends.
+one process: a program that the command started runs on. The launcher puts
+the app into a kill-on-close Job before it starts any child
+(``windows_jobs.contain_current_host``, called for the supervised sign-in task
+in ``windows_service.py``), so Windows ends such a program when the app
+process ends. That the installed launcher makes that call is read from the
+code: this file runs the call itself, not the installed launcher.
 
 This file shows both with a controlled command, and the same app without the
 launcher's Job as the control. It does not follow processes by a list of what
@@ -42,12 +44,13 @@ def note(folder, name):
         stream.write(str(os.getpid()))
     os.replace(os.path.join(folder, name + '.tmp'), os.path.join(folder, name))
 '''
-# The command that the app starts. It starts a parent, waits for it, and then runs on.
+# The command that the app starts. It starts a parent, waits until that parent has ended, says so, and runs on.
 COMMAND = 'import os, subprocess, sys, time\n' + NOTE + '''
 folder = sys.argv[1]
 note(folder, 'command.pid')
 subprocess.run([sys.executable, os.path.join(folder, 'parent.py'), folder], stdin=subprocess.DEVNULL,
                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+note(folder, 'parent.ended')
 time.sleep(600)
 '''
 # The parent starts the program and ends at once.
@@ -77,6 +80,9 @@ HOST = '''import asyncio, json, os, sys, threading
 guard = threading.Timer(300, os._exit, (3,))   # never outlive a broken case
 guard.daemon = True
 guard.start()
+with open(os.path.join(sys.argv[1], 'host.pid.tmp'), 'w') as stream:
+    stream.write(str(os.getpid()))
+os.replace(os.path.join(sys.argv[1], 'host.pid.tmp'), os.path.join(sys.argv[1], 'host.pid'))
 from amplifier_web.updates import process
 from amplifier_web.windows_jobs import contain_current_host
 folder, python, contained = sys.argv[1], sys.argv[2], sys.argv[3] == 'contained'
@@ -85,7 +91,8 @@ job = contain_current_host() if contained else None
 
 async def main():
     task = asyncio.create_task(process(python, os.path.join(folder, 'command.py'), folder, timeout=600))
-    while not all(os.path.exists(os.path.join(folder, name)) for name in ('command.pid', 'left.pid', 'count')):
+    while not all(os.path.exists(os.path.join(folder, name))
+                  for name in ('command.pid', 'left.pid', 'count', 'parent.ended')):
         await asyncio.sleep(0.1)
     print('RUNNING ' + json.dumps({'job': job}), flush=True)
     await asyncio.to_thread(sys.stdin.readline)      # the case now holds both processes
@@ -123,8 +130,8 @@ def windows():
 class Program:
     """One process of the controlled command, held by an open handle from the moment it is known."""
 
-    def __init__(self, kernel, folder, name):
-        self.kernel, deadline = kernel, time.monotonic() + 60
+    def __init__(self, kernel, folder, name, wait=60):
+        self.kernel, deadline = kernel, time.monotonic() + wait
         while True:
             try:
                 self.pid = int((folder / name).read_text(encoding='utf-8'))
@@ -146,6 +153,15 @@ class Program:
         if not self.ended():
             self.kernel.TerminateProcess(self.handle, 1)   # the case's own program; it must not outlive the case
         self.kernel.CloseHandle(self.handle)
+
+
+def parent_ended(folder):
+    """True when the command has said that the parent which started the program has ended."""
+    deadline = time.monotonic() + 60
+    while not (folder / 'parent.ended').exists():
+        assert time.monotonic() < deadline, 'The parent that started the program did not end'
+        time.sleep(0.05)
+    return True
 
 
 def counts(folder, seconds=2.0):
@@ -178,27 +194,33 @@ def test_a_stop_and_a_timeout_end_the_command_and_not_a_program_that_it_started(
         for name in ('command.pid', 'left.pid'):
             held.append(await asyncio.to_thread(Program, kernel, folder, name))
         command, left = held
+        # The program has no living parent now, and it runs; so does the command.
+        assert await asyncio.to_thread(parent_ended, folder)
         assert await asyncio.to_thread(counts, folder) and not command.ended() and not left.ended() and not task.done()
         stopped = time.monotonic()
         if kind == 'stop':
             task.cancel()
         with pytest.raises(asyncio.CancelledError if kind == 'stop' else CommandTimeout):
             await task
+        # The app ended the command that it started and waited for that: the command has ended when the
+        # app's call returns. No more time is given.
+        assert command.ended()
         return time.monotonic() - (stopped if kind == 'stop' else began)
 
     try:
         waited = asyncio.run(journey())
         command, left = held
-        # The app ended the command that it started, and it waited for that.
-        assert command.ended(10)
-        assert waited >= limit if kind == 'timeout' else waited < 30
-        # The program that the command started runs on. Nothing of the app ends it.
+        # A time limit is measured from before the app's call, so the start of the command's process is
+        # inside the measured time: a limit that ended earlier than that start took would not be noticed.
+        assert limit <= waited < limit + 15 if kind == 'timeout' else waited < 30
+        # The app does not end the program that the command started: 3 s later it still runs.
         assert not left.ended(3) and counts(folder)
-        print(f'MEASURED a {kind} of a preparation command: the command (process {command.pid}) ended, '
+        print(f'MEASURED a {kind} of a preparation command: the command (process {command.pid}) had ended when '
+              f'the app\'s call returned, '
               + (f'{waited:.1f} s after the stop' if kind == 'stop' else
-                 f'{waited:.1f} s after its start with a time limit of {limit} s')
+                 f'{waited:.1f} s after the call began with a time limit of {limit} s')
               + f'; the program that the command started through a parent that had ended (process {left.pid}) '
-                f'still ran afterwards')
+                f'still ran 3 s later')
     finally:
         for program in held:
             program.close()
@@ -207,37 +229,44 @@ def test_a_stop_and_a_timeout_end_the_command_and_not_a_program_that_it_started(
 @pytest.mark.parametrize('contained', [True, False])
 def test_the_launchers_job_ends_such_a_program_when_the_app_ends(tmp_path, contained):
     """With the launcher's Job the program ends with the app. Without it (the control) the program outlives the app."""
-    kernel, folder, held = windows(), scripts(tmp_path), []
+    kernel, folder, held, app = windows(), scripts(tmp_path), [], []
+    errors = open(folder / 'host.err', 'w', encoding='utf-8')
+    # sys.executable can be the environment's starter, which runs the interpreter as its child. The app is
+    # the process that writes host.pid; the case holds a handle of that one.
     host = subprocess.Popen([sys.executable, '-B', str(folder / 'host.py'), str(folder), PYTHON,
                              'contained' if contained else 'free'], cwd=str(ROOT),
                             env={**os.environ, 'PYTHONPATH': str(ROOT)}, stdin=subprocess.PIPE,
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8')
+                            stdout=subprocess.PIPE, stderr=errors, text=True, encoding='utf-8')
+
     def said(word):
         line = host.stdout.readline()
         if not line.startswith(word + ' '):
-            host.kill()
-            pytest.fail(f'The app did not reach {word}: {line!r} {host.stderr.read()[-4000:]}')
+            errors.flush()
+            text = (folder / 'host.err').read_text(encoding='utf-8', errors='replace')[-4000:]
+            pytest.fail(f'The app did not reach {word}: {line!r} {text}')
         return json.loads(line[len(word) + 1:])
 
     try:
         # The launcher's own Job, made by the launcher's own call, before the app starts any child.
         job = said('RUNNING')['job']
+        app.append(Program(kernel, folder, 'host.pid'))
         assert (job['killOnClose'] is True and job['inheritable'] is False) if contained else job is None
         for name in ('command.pid', 'left.pid'):
             held.append(Program(kernel, folder, name))
         command, left = held
-        assert counts(folder) and not command.ended() and not left.ended()
+        assert parent_ended(folder) and counts(folder) and not command.ended() and not left.ended()
         host.stdin.write('\n')
         host.stdin.flush()
         assert said('STOPPED')['stopped'] is True
-        # As without a Job: the stop ended the command, and the program runs on while the app runs.
-        assert command.ended(10)
-        assert not left.ended(3) and counts(folder) and host.poll() is None
+        # As without a Job: the stop ended the command (it has ended when the app's call returns), and the
+        # program runs on while the app runs.
+        assert command.ended()
+        assert not left.ended(3) and counts(folder) and host.poll() is None and not app[0].ended()
         # The app ends. Nothing ends the program but Windows, which closes the Job with the app's process.
         host.stdin.write('\n')
         host.stdin.close()
         started = time.monotonic()
-        assert host.wait(60) == 0
+        assert host.wait(60) == 0 and app[0].ended(10)
         if contained:
             assert left.ended(30), 'The program outlived the app: the Job did not hold it'
             waited = time.monotonic() - started
@@ -251,11 +280,17 @@ def test_the_launchers_job_ends_such_a_program_when_the_app_ends(tmp_path, conta
             print(f'MEASURED without the launcher\'s Job: the program that the command started (process {left.pid}) '
                   f'still ran 10 s after the app had ended')
     finally:
+        if not app:
+            try:
+                app.append(Program(kernel, folder, 'host.pid', wait=0))   # a case that failed before RUNNING
+            except AssertionError:
+                pass   # the app never wrote its process ID, or it has ended and is gone
         if not host.stdin.closed:
             host.stdin.close()     # the app reads to the end of its input and then ends
+        for program in app + held:
+            program.close()        # ends what still runs: the app first (with its Job), then the two programs
         if host.poll() is None:
             host.kill()
-        for program in held:
-            program.close()
         host.stdout.close()
+        errors.close()
         host.stderr.close()

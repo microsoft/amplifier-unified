@@ -909,9 +909,9 @@ ends well. Whether a program of the stopped command still ran at that moment
 is not required; the job prints what it saw. It reads the list of processes
 every two seconds until it finds no process of the stopped preparation. That
 list is a sample: a program whose parent started and ended between two
-readings is not in it. In the run of November 17, 2026, the list held
+readings is not in it. In the runs of November 17, 2026, the list held
 programs of the stopped command (Python and Git) directly after the stop and
-none 12 seconds later. The stopped stage and its project stay on the disk;
+none some seconds later. The stopped stage and its project stay on the disk;
 this change adds nothing that removes them.
 
 What a stop ends is checked with a command that the test controls
@@ -920,16 +920,20 @@ starts a program through a parent that ends at once, so the program has no
 living parent. The test holds an open handle of that program, and Windows
 signals the handle when the program ends; no list of processes is used. A
 stop and a time limit both go through `updates.process`. Each ends the
-command that the app started, and the app waits for that. The program that
-the command started runs on. Nothing in the app ends it. On an installed PC
-the launcher puts the app into a kill-on-close Job before it starts any
-child (`contain_current_host` in `amplifier_web/windows_jobs.py`). The third
-case runs that same call and the same stop in a process of its own, and then
-lets that process end: Windows ends the program with it. The fourth case is
-the control: the same process without that call ends, and the program still
-runs 10 seconds later. So a program of a stopped preparation can run on while
-the app runs, and it ends with the app at the latest. The first two cases
-run without a Job, as the big preparation case does. The
+command that the app started: the command has ended when the app's call
+returns. The app does not end the program that the command started: 3
+seconds later that program still runs. The launcher puts the app into a
+kill-on-close Job before it starts any child (`contain_current_host` in
+`amplifier_web/windows_jobs.py`, called for the supervised sign-in task in
+`amplifier_web/windows_service.py`). The third case runs that same call and
+the same stop in a process of its own, and then lets that process end:
+Windows ends the program with it. The fourth case is the control: the same
+process without that call ends, and the program still runs 10 seconds later.
+So a program of a stopped preparation can run on while the app runs, and the
+Job ends it with the app at the latest. That the installed launcher makes
+the call is read from the code; these cases run the call, not the installed
+launcher. The first two cases run without a Job, as the big preparation case
+does. The
 job reads each stage's copy of the keys file through the app's private-file
 reader, which refuses another owner and a wider access list. It then lists
 every path below the installation
