@@ -60,6 +60,8 @@ on:
       - amplifier_web/windows_ports.py
       - amplifier_web/windows_consumer.py
       - amplifier_web/windows_consumer_shell.py
+      - amplifier_web/windows_removal.py
+      - amplifier_web/windows_uninstall.py
       - amplifier_web/installation_runtime.py
       - amplifier_web/cli.py
       - amplifier_web/deployment_service.py
@@ -105,6 +107,8 @@ on:
       - tests/test_windows_consumer.py
       - tests/test_windows_first_open.py
       - tests/test_windows_consumer_shell.py
+      - tests/test_windows_removal.py
+      - tests/test_windows_uninstall.py
       - tests/test_installation_runtime.py
       - tests/test_installation_health.py
       - tests/test_cli_deployment.py
@@ -374,6 +378,36 @@ jobs:
         run: |
           .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -p no:cacheprovider tests/test_windows_consumer_shell.py
           if ($LASTEXITCODE -ne 0) { throw 'Windows uninstall entry checks failed.' }
+      # Folder removal for uninstall: a real NTFS tree with a junction, folder
+      # and file links, a hard link to an outside file, a read-only file, a path
+      # of more than 400 characters and a file in use. Nothing outside the
+      # throwaway folder may change. A lane that cannot make links fails.
+      # Mapped program files move through handles into one held flat folder;
+      # the step after exit deletes there and removes only empty named folders.
+      - name: Check that folder removal never follows a link or leaves its folder
+        shell: pwsh
+        env:
+          AMPLIFIER_REQUIRE_LINK_CHECKS: '1'
+        run: |
+          .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -s -p no:cacheprovider tests/test_windows_removal.py
+          if ($LASTEXITCODE -ne 0) { throw 'Windows folder removal checks failed.' }
+      # The delete choice of uninstall, on a throwaway installation folder with
+      # its real Start-menu shortcuts and Apps-list entry. Each Open, Status,
+      # Stop and Uninstall is a new process behind a real start program (a venv
+      # in the folder's `tools`), with the folder's workspace as its current
+      # folder. Real: the lock, the folder proof and pin, the journal, deletion
+      # through handles, junctions that lead out of the folder, a long path, a
+      # data file in use, and the step after exit. Stand-ins: Task Scheduler,
+      # the check of an installed release, and the dialogs with their answers.
+      # One case deletes its own base Python, standard library and installed
+      # package, moves mapped images aside, and must still return and exit cleanly.
+      # A skipped case would hide the answer; on this lane it fails.
+      - name: Check that the delete choice removes only its own folder, survives an interruption and finishes after exit
+        shell: pwsh
+        run: |
+          .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -s -p no:cacheprovider tests/test_windows_uninstall.py | Tee-Object -Variable log
+          if ($LASTEXITCODE -ne 0) { throw 'Windows uninstall delete-choice checks failed.' }
+          if (($log -join "`n") -match '\d+ skipped') { throw 'A native uninstall case was skipped on this lane.' }
   windows-user-trial:
     if: ${{ inputs.storage_only || (!inputs.bootstrap_only && !inputs.foreground_only) }}
     # Candidate-only combined boundary, not a universal suite/release gate.
