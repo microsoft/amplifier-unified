@@ -278,14 +278,19 @@ async def test_a_timed_check_keeps_its_saved_answers_at_these_places_too(manager
     assert asked == [expected] and len(release_checks) == checks + 1
 
 
+@pytest.mark.parametrize('ahead', [0, 2 * HOUR])
 async def test_a_sequence_that_waits_for_its_next_check_at_a_host_start_runs_first_and_is_the_start_check(
-        manager, clock, release_checks):
-    """The continuation is admitted, so it ends the start reason. It looks at components only."""
+        manager, clock, release_checks, ahead):
+    """The continuation is admitted, so it ends the start reason. It looks at components only.
+
+    Also with a clock that was ahead at the host start: the end is the owner's fact, not the saved time.
+    """
     state = await nothing_newer(manager)
     await manager.publish(phase='installed',
                           sequence={**state['sequence'], 'stage': 'included', 'nextStage': 'other', 'install': False})
-    clock(2 * HOUR)
+    clock(2 * HOUR + ahead)
     new = await host_start(manager)
+    clock(-ahead)
     assert new.check_due() == 'start'
     checks = len(release_checks)
     asked = requests(new)
@@ -293,7 +298,10 @@ async def test_a_sequence_that_waits_for_its_next_check_at_a_host_start_runs_fir
         await new.tick()
     assert asked == [{'tier': 'other', 'install': False, 'fresh': True, 'automatic': True}]
     assert len(release_checks) == checks and new.check_due() is None
-    assert state['sequence']['stage'] == 'complete' and state['lastCheck'] >= new._host_started
+    assert state['sequence']['stage'] == 'complete'
+    # The check was made after the start. With the corrected clock its saved time is before the start time.
+    assert state['lastCheck'] >= new._host_started - ahead
+    assert (new._host_started - state['lastCheck'] >= START_LIMIT) == bool(ahead)
 
 
 @pytest.mark.parametrize('keep_up_to_date', [True, False])
