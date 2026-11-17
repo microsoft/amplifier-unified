@@ -226,9 +226,10 @@ def difference(name, shipped, other, known, words):
 
     Else what is known, and whether both are known commits of the same place.
     A Git origin without a recorded commit is never equal to another one.
-    Two sources that are not Git have no commit to compare.
+    Two sources that are not Git have no commit to compare. A graph that
+    does not have the component is a difference.
     """
-    if not shipped and not other:
+    if not shipped and other is None and known:
         return None
     same_place = bool(shipped and other and place(shipped) == place(other))
     if same_place and shipped['revision'] and shipped['revision'] == other['revision']:

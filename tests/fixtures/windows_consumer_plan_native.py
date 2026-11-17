@@ -26,6 +26,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -84,12 +85,17 @@ def receipts(tool, folder, candidate, graph):
 def moved(rows):
     """The same rows with the one row of Amplifier Foundation at the other commit, in either row form."""
     result = json.loads(json.dumps(rows))
+    count = 0
     for row in result:
-        if row["name"] == NAME:
+        # An install record has the name as the package's metadata writes it.
+        if re.sub(r"[-_.]+", "-", row["name"].lower()) == NAME:
             if "direct" in row:
                 row["direct"]["vcs_info"]["commit_id"] = OTHER
             else:
                 row["revision"] = OTHER
+            count += 1
+    if count != 1:
+        raise RuntimeError("The rows do not have exactly one row of amplifier-foundation.")
     return result
 
 

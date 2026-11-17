@@ -2614,6 +2614,17 @@ def test_windows_plan_that_differs_from_both_graphs_names_both(consumer):
                                   + STOP + AGAIN)
 
 
+def test_windows_plan_registry_row_that_the_runtime_tests_lack_is_reported_for_both_graphs(consumer):
+    plan = changed(component_rows(), 'amplifier-foundation', url=None, revision=None)
+    runtime = [install_record(row) for row in component_rows() if row['name'] != 'amplifier-foundation']
+    root, evidence, expected, path, receipts = consumer(component_rows(), plan, runtime)
+    first = 'The Windows setup file has amplifier-foundation from a source that is not Git. '
+    with pytest.raises(ValueError) as refusal:
+        qualification.verify_consumer(root, evidence, expected, path, receipts)
+    assert str(refusal.value) == (first + f'{HOST_HAS} at {QUALIFIED} from {FOUNDATION}.\n'
+                                  + first + f'{TESTS_LACK} amplifier-foundation.' + STOP)
+
+
 def test_windows_plan_with_one_component_twice_is_refused(consumer):
     # Without this, the later row would replace the earlier one in the comparison.
     twice = [{**component_rows(MOVED)[1], 'name': 'Amplifier._Foundation'}, *component_rows()]
@@ -2714,6 +2725,11 @@ def test_windows_plan_native_check_passes_only_with_one_acceptance_and_two_refus
         'accepted',
         f'refused: The Windows setup file has amplifier-foundation at {QUALIFIED}. {HOST_HAS} at {fixture.OTHER}.' + STOP + AGAIN,
         f'refused: The Windows setup file has amplifier-foundation at {QUALIFIED}. {TESTS_HAVE} at {fixture.OTHER}.' + STOP + AGAIN]
+    # A refusal finds the row by its normalized name, and exactly one row must change.
+    renamed = fixture.moved([install_record({**rows[1], 'name': 'Amplifier_Foundation'})])
+    assert renamed[0]['direct']['vcs_info']['commit_id'] == fixture.OTHER
+    with pytest.raises(RuntimeError, match='exactly one row of amplifier-foundation'):
+        fixture.moved([row for row in rows if row['name'] != 'amplifier-foundation'])
     # Each refusal changes the one row of Amplifier Foundation: one difference, and the other component is equal.
     for case in result['cases'][1:]:
         assert len([line for line in case['output'].splitlines() if 'The Windows setup file has' in line]) == 1
