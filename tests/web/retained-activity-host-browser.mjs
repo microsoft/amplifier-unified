@@ -12,6 +12,7 @@ const source=process.env.AMPLIFIER_TEST_CLIENT_SOURCE||fileURLToPath(new URL('..
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||'python',['-u',fileURLToPath(new URL('../fixtures/retained_activity_ui_server.py',import.meta.url))],{stdio:['ignore','pipe','pipe'],env:process.env});
 let logs='',vite,browser,page,primary;
 const proof={scope:'candidate source host/browser; synthetic questions and runtime, not installed/released/live acceptance',checkpoints:[]};
+const errors=[];
 fixture.stderr.on('data',value=>logs+=value);
 const ready=new Promise((resolve,reject)=>{let output='';fixture.stdout.on('data',value=>{output+=value;const line=output.split('\n').find(row=>row.startsWith('{"url":'));if(line)resolve(JSON.parse(line))});fixture.once('error',reject);fixture.once('exit',code=>reject(Error(`Fixture exited ${code}: ${logs}`)))});
 try{
@@ -21,7 +22,7 @@ try{
  await vite.listen();
  browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH?{executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH}:{}),...(process.env.CHROMIUM_SINGLE_PROCESS==='1'?{args:['--single-process','--no-zygote','--no-sandbox']}: {})});
  page=await browser.newPage({viewport:{width:1440,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
- const errors=[];page.on('pageerror',error=>errors.push(error.message));
+ page.on('pageerror',error=>errors.push(error.stack||error.message));
  const shell=async()=>{await page.waitForFunction(()=>window.amplifier?.getShellState()?.snapshots?.chats);return page.evaluate(()=>window.amplifier.getShellState().snapshots.chats)};
  const mode=mode=>page.evaluate(async mode=>{const r=await fetch('/fixture/activity',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode})});if(!r.ok)throw Error('Fixture transition '+r.status);return r.json()},mode);
  await page.goto(vite.resolvedUrls.local[0]);
@@ -71,6 +72,7 @@ try{
  console.log(JSON.stringify(proof,null,2));
 }catch(error){primary=error;proof.status='FAIL';proof.failure=String(error.stack||error);if(page)await page.screenshot({path:out+'/failure.png'}).catch(()=>{});throw error}
 finally{
+ proof.errors=errors;
  if(page)await writeFile(out+'/final.html',await page.content()).catch(()=>{});
  await writeFile(out+'/result.json',JSON.stringify(proof,null,2)+'\n');
  let failure;

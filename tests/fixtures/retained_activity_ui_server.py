@@ -57,13 +57,17 @@ async def main(home):
         held = mode != 'fresh'
         owner.update(status='working', approvals=[], error=None,
             questions=[{'id': 'fixture-question', 'revision': 1, 'prompt': 'Choose the fixture route',
-                        'required': True, 'status': 'pending'}])
+                        'required': True, 'status': 'pending', 'options': [], 'allowFreeText': True,
+                        'dependency': 'Choose a route', 'createdAt': 1, 'updatedAt': 1,
+                        'artifacts': [], 'questionIds': []}])
         if mode not in {'pending', 'initial'}:
-            owner['questions'][0].update(status='answered', delivery={'status':
+            owner['questions'][0].update(status='answered', answer={'text': 'Use the fixture route', 'questionRevision': 1}, delivery={'status':
                 mode if mode in {'unknown', 'rejected'} else 'accepted'})
         if mode == 'multiple':
             owner['questions'].append({'id': 'fixture-second', 'revision': 1,
-                'prompt': 'Another choice', 'required': True, 'status': 'pending'})
+                'prompt': 'Another choice', 'required': True, 'status': 'pending', 'options': [],
+                'allowFreeText': True, 'dependency': 'Choose another route', 'createdAt': 1,
+                'updatedAt': 1, 'artifacts': [], 'questionIds': []})
         service._publish_changes(sessions={owner['id']})
 
     def auth(request):
