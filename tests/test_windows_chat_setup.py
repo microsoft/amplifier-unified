@@ -14,6 +14,11 @@ real probes. The chat is in the default workspace folder, and in a folder that
 a person chose somewhere else. Each of the two folders declares a dependency
 override. No model is called and no conversation worker starts.
 
+Two chats with the same setup start at the same time: one prepares it and the
+other waits for it. One preparation is stopped while its first command runs,
+as when a person stops the chat, and the chat is then started again. The case
+lists the processes of the stopped preparation until none is left.
+
 It then lists every path below the installation folder. That is the measured
 answer to "which paths pass the Windows limit, and does the app need them":
 the worker environments, the update stages, Foundation's source store with the
@@ -27,11 +32,14 @@ It downloads several hundred megabytes, so it runs only where
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
 from pathlib import Path
 import re
 import shutil
+import subprocess
+import time
 import uuid
 
 import pytest
@@ -72,6 +80,37 @@ def tree(root):
                 if folder:
                     pending.append(entry.path)
     return sorted(rows, key=lambda row: (-row[0], row[2]))
+
+
+def processes():
+    """Every process on this PC: {process ID: (parent process ID, name, command line)}."""
+    script = ('[Console]::OutputEncoding = [Text.Encoding]::UTF8; Get-CimInstance Win32_Process | ForEach-Object { '
+              '[pscustomobject]@{ p = [int]$_.ProcessId; q = [int]$_.ParentProcessId; n = [string]$_.Name; '
+              'l = [string]$_.CommandLine } } | ConvertTo-Json -Compress')
+    done = subprocess.run(['powershell', '-NoProfile', '-NonInteractive', '-EncodedCommand',
+                           base64.b64encode(script.encode('utf-16-le')).decode('ascii')],
+                          capture_output=True, timeout=180, check=True)
+    rows = json.loads(done.stdout.decode('utf-8-sig', errors='replace').strip())
+    return {row['p']: (row['q'], row['n'], row['l']) for row in (rows if isinstance(rows, list) else [rows])}
+
+
+def of_attempt(snapshot, identity, known):
+    """The processes of one preparation that run now: {process ID: name}.
+
+    A process belongs to the preparation when the preparation's ID is in its command line (the app's commands
+    name the stage, ``--profiles <stage>\\profiles.json``, and the project, ``--project ...\\prepare-<ID>``),
+    or when it descends from such a process. ``known`` keeps every member that an earlier list had, so a process
+    is still found after its parent ended.
+    """
+    members = {pid for pid, (parent, name, line) in snapshot.items() if identity in line or (pid, name) in known}
+    while True:
+        parents = members | {pid for pid, name in known}
+        more = {pid for pid, (parent, name, line) in snapshot.items() if parent in parents} - members
+        if not more:
+            break
+        members |= more
+    known |= {(pid, snapshot[pid][1]) for pid in members}
+    return {pid: snapshot[pid][1] for pid in sorted(members)}
 
 
 def over_the_limit(rows):
@@ -136,7 +175,80 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
     project = prepare_project(home, generation)
     uv = shutil.which('uv')
     assert uv, 'The check needs uv.'
-    selected, steps = {}, {}
+    selected, steps, stopped = {}, {}, {}
+    releases, index = home / 'updates' / 'releases', home / 'updates' / 'profiles'
+
+    def chat(folder):
+        return {'id': str(uuid.uuid4()), 'workspace': str(folder), 'bundle': 'work'}
+
+    def reporter(target):
+        async def progress(detail):
+            target.append(detail)
+        return progress
+
+    def keys_copy(stage):
+        """The stage's copy of the keys file, read as the app reads it: the private-file reader refuses another
+        owner, a link and a wider access list."""
+        with directory(stage / 'shared-config', owned_root=stage / 'shared-config', create=False) as pinned:
+            return pinned.read_private('keys.env', limit=1024 * 1024).decode('utf-8')
+
+    async def two_chats_at_the_same_time(label, folder):
+        """Two chats with the same setup start together: one prepares it, the other waits and uses it."""
+        before = {path.name for path in releases.iterdir()}
+        reports = ([], [])
+        first, second = await asyncio.gather(*(
+            runtime_profiles.ensure(home, generation, chat(folder), progress=reporter(target)) for target in reports))
+        assert first == second and {path.name for path in releases.iterdir()} - before == {first}
+        steps[label], waited = sorted(reports, key=len, reverse=True)
+        assert waited == ['Checking this chat’s setup…', 'Waiting for this chat’s setup to finish…'], waited
+        return first
+
+    async def stopped_and_started_again(label, folder):
+        """A person stops the chat while the first command of its preparation runs, and then sends again."""
+        before = {path.name for path in releases.iterdir()}
+        steps[label] = []
+        session, progress = chat(folder), reporter(steps[label])
+        task = asyncio.create_task(runtime_profiles.ensure(home, generation, session, progress=progress))
+        running, made, known, deadline = {}, set(), set(), time.monotonic() + 900
+        while not running:
+            assert not task.done() and time.monotonic() < deadline, f'The preparation ended before the stop: {task}'
+            await asyncio.sleep(1)
+            made = {path.name for path in releases.iterdir()} - before
+            if len(made) == 1 and steps[label][-1:] == ['Checking this chat’s tools…']:
+                running = of_attempt(await asyncio.to_thread(processes), next(iter(made)), known)
+        stage = releases / next(iter(made))
+        attempt = json.loads((stage / 'profile-attempt.json').read_text(encoding='utf-8'))
+        assert (attempt['status'], attempt['phase']) == ('preparing', 'dependency-prepare'), attempt
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        at = time.monotonic()
+        attempt = json.loads((stage / 'profile-attempt.json').read_text(encoding='utf-8'))
+        assert (attempt['status'], attempt['errorType']) == ('cancelled', 'CancelledError'), attempt
+        assert (attempt['timings'][-1]['phase'], attempt['timings'][-1]['status']) == ('dependency-prepare', 'cancelled')
+        # The app ends the command that it started. What that command started can run on: list it until none is left.
+        left = of_attempt(await asyncio.to_thread(processes), stage.name, known)
+        after = dict(left)
+        while left:
+            assert time.monotonic() - at < 900, f'Processes of the stopped preparation still run: {left}'
+            await asyncio.sleep(5)
+            left = of_attempt(await asyncio.to_thread(processes), stage.name, known)
+        ended = time.monotonic() - at
+        # Nothing admits the stopped attempt, also after its last process: no record in the stage, none in the index.
+        assert not (stage / 'validated.json').exists() and not (stage / 'profiles-qualified.json').exists()
+        assert len(list(index.glob('*.json'))) == len(selected)
+        # Its copy of the keys file stays, and it is still private. Nothing was written into the chat's folder.
+        assert keys_copy(stage) == KEYS
+        assert native.update_stage_probe.created(folder) == kept[label], label
+        stopped[label] = stage.name
+        print(f'MEASURED a stop during the preparation ({label}): {len(running)} processes of it ran at the stop '
+              f'({", ".join(sorted(set(running.values())))}); {len(after)} remained directly after the stop '
+              f'({", ".join(sorted(set(after.values()))) or "none"}); none remained after {ended:.0f} s. The attempt '
+              f'is recorded as cancelled, nothing admits it, and its copy of the keys file is private.')
+        # The person sends again: the lock is free, the stopped stage is not used, a new one is prepared.
+        again = await runtime_profiles.ensure(home, generation, session, progress=progress)
+        assert again != stage.name and {path.name for path in releases.iterdir()} - before == {stage.name, again}
+        return again
 
     async def journey():
         await process(uv, 'lock', '--project', str(project), '--python', '3.13', timeout=1200)
@@ -144,17 +256,10 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
         # No bundle is offered by this generation, so every chat has its own setup.
         write_private(receipt / 'profiles-qualified.json',
                       json.dumps({'profiles': [], 'configuration': 'synthetic-parent'}), owned_root=home)
-        for label, folder in folders.items():
-            steps[label] = []
-
-            async def progress(detail, label=label):
-                steps[label].append(detail)
-
-            session = {'id': str(uuid.uuid4()), 'workspace': str(folder), 'bundle': 'work'}
-            selected[label] = await runtime_profiles.ensure(home, generation, session, progress=progress)
+        for (label, folder), start in zip(folders.items(), (two_chats_at_the_same_time, stopped_and_started_again)):
+            selected[label] = await start(label, folder)
             # The next chat with the same setup waits for nothing: the prepared setup is found again.
-            again = {'id': str(uuid.uuid4()), 'workspace': str(folder), 'bundle': 'work'}
-            assert await runtime_profiles.ensure(home, generation, again) == selected[label]
+            assert await runtime_profiles.ensure(home, generation, chat(folder)) == selected[label]
 
     try:
         # A hosted runner's account is elevated: a new folder would belong to the Administrators group, and the
@@ -184,13 +289,16 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
         for name in ('validated.json', 'profiles-qualified.json', 'profiles.json', 'runtime-install-overrides.txt'):
             assert (stage / name).is_file(), name
         assert json.loads((stage / 'profiles-qualified.json').read_text(encoding='utf-8'))['profiles'] == ['work']
-        # The copy of the keys file is the person's file, and the check read it through the private-file reader.
-        assert (stage / 'shared-config' / 'keys.env').read_text(encoding='utf-8') == KEYS
+        # The copy of the keys file is the person's file, and it is private. The check read it the same way.
+        assert (stage / 'shared-config' / 'keys.env').read_text(encoding='utf-8') == KEYS == keys_copy(stage)
         # The check saved its one session under the stage's name, in the stage. The folder's path is in no name.
         assert os.listdir(stage / 'shared-config' / 'projects') == [project_name], label
         sessions = [path for path in (stage / 'shared-config' / 'projects' / project_name / 'sessions').iterdir()
                     if path.is_dir()]
         assert len(sessions) == 1 and (sessions[0] / 'transcript.jsonl').is_file()
+        # That session is the check of THIS chat's folder: its record names the folder.
+        record = json.loads((sessions[0] / 'metadata.json').read_text(encoding='utf-8'))
+        assert os.path.normcase(record.get('working_dir') or '') == os.path.normcase(str(folder)), record
         rows = {name: budget.length(relative) for name, kind, relative in budget.update_stage(project_name, sessions[0].name)}
         assert len(str(sessions[0])) == rows['probe session folder'] == 202
         # The worker environment that a chat with this setup starts in.
@@ -205,7 +313,9 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
               f'check session folder {len(str(sessions[0]))}; worker environment {worker.name}')
     # Nothing was saved in the person's own history, and the check's capture is under the stage names only.
     assert not (shared / 'projects').exists()
-    assert sorted(os.listdir(root / 'capture')) == sorted('update-' + value[:12] for value in selected.values())
+    checked = {'update-' + value[:12] for value in selected.values()}
+    assert checked <= set(os.listdir(root / 'capture')) <= checked | {'update-' + value[:12] for value in stopped.values()}
+    assert list(stopped) == ['folder that a person chose']
 
     # Every path below the installation folder, as it now is.
     rows = tree(root)
@@ -234,6 +344,15 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
         print(f'MEASURED deepest file of the {name}: {deepest} characters below the installation folder '
               f'(the budget states {budget.MEASURED_DEPTHS[name]})')
         assert deepest <= budget.MEASURED_DEPTHS[name], name
+    # The same for the source store: the deepest file that counts as needed, and the deepest file at all.
+    store = re.compile(re.escape(budget.SOURCE_FOLDER) + r'\\objects\\[0-9a-f]{16}\\[0-9a-f]{40}\\(.+)', re.I)
+    inside = [(len(found.group(1)), budget.needed(relative)) for size, kind, relative in files
+              if (found := store.match(relative))]
+    deepest_needed, deepest = max(size for size, needed in inside if needed), max(size for size, needed in inside)
+    print(f'MEASURED deepest file of a staged repository: {deepest_needed} characters inside the repository for a '
+          f'file that counts as needed (the budget states {budget.STORE_DEPTH}), {deepest} for any file (the budget '
+          f'states {budget.STORE_TEST_DEPTH})')
+    assert deepest_needed <= budget.STORE_DEPTH and deepest <= budget.STORE_TEST_DEPTH
     # No path that the app or a chat needs passes the limit. Windows refused nothing above: every step ended well.
     assert [row for row in over if budget.needed(row[2])] == []
     # What happens to each path over the limit. The source store wrote it, through the extended-length form.

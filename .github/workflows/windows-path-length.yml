@@ -15,8 +15,10 @@ name: Windows path length
 # A second native job prepares and checks a chat that has its own setup, with
 # the app's real preparation: real uv, the worker dependencies, the default
 # components from their repositories, the freeze and both probes, below the
-# same folder. It then lists every path of that tree and requires that no path
-# which the app or a chat needs passes the limit. The list is an artifact.
+# same folder. Two chats with the same setup start together, and one
+# preparation is stopped while it runs and started again. It then lists every
+# path of that tree and requires that no path which the app or a chat needs
+# passes the limit. The list is an artifact.
 #
 # This is the only native job that installs the locked Amplifier Foundation.
 # So it also holds a real Foundation session ownership, as a live conversation
@@ -192,13 +194,15 @@ jobs:
         run: |
           .\.venv\Scripts\python.exe -B -m pytest -q -rA -p no:cacheprovider tests/test_windows_chat_setup.py
           if ($LASTEXITCODE -ne 0) { throw 'The setup of a chat was not prepared and checked with long paths off, or a needed path passes the limit.' }
+          # A skipped case ends with exit code 0. The case writes the list only after every preparation.
+          if (-not (Test-Path -LiteralPath $env:AMPLIFIER_CHAT_SETUP_TREE)) { throw 'The case did not run: it wrote no list of paths.' }
       - name: Keep the list of every path
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: chat-setup-tree
           path: ${{ runner.temp }}\chat-setup-tree.txt
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 30
       - name: Restore the runner's long-path setting
         if: ${{ always() && steps.long_paths.outputs.original != '' }}

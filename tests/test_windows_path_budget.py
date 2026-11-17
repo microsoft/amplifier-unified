@@ -509,21 +509,53 @@ EARLIER_SOURCE_STORE_LONGEST_ROOT = {SOURCE_OBJECT: 54}
 ROOT_FOR_20_CHARACTER_ACCOUNT = len('C:\\Users\\' + 'u' * 20 + '\\AppData\\Local\\Amplifier')
 
 
-# Paths that neither the app nor a chat opens by an ordinary path. Only these
-# may pass the limit, and the native tree check lists each one that does.
-# - ``.git``: Git's own data in a staged repository. The store reaches it by
-#   extended-length paths, and Git runs with its own long-path setting.
-# - ``tests``, ``test``: the tests of a repository or of an installed package.
-#   No bundle file, module source, context file or skill is there. The build
-#   of a module reads the copy in the build view, which is 42 characters shorter.
-# - ``__pycache__``: bytecode. Python writes it when it can and uses the
-#   source file when it cannot.
-NOT_NEEDED_FOLDERS = frozenset({'.git', 'tests', 'test', '__pycache__'})
+# Places that neither the app nor a chat opens by an ordinary path. Only a path
+# in one of these may pass the limit, and the native tree check lists each one
+# that does. The rule is about the place, not about a folder's name: a folder
+# that is only named ``tests`` anywhere else counts as needed.
+# - In a staged repository of the source store (``s\objects\<name>\<40>``):
+#   Git's own data (``.git`` at the top), the tests of the repository (``tests``
+#   or ``test`` at the top) and the tests of one of its modules
+#   (``modules\<module>\tests``). The store reaches them by extended-length
+#   paths, and Git runs with its own long-path setting. No bundle file, module
+#   source, context file or skill is there. The build of a module reads the
+#   copy in the build view, which is 42 characters shorter.
+# - ``__pycache__`` anywhere: bytecode. Python writes it when it can and uses
+#   the source file when it cannot.
+NOT_NEEDED = re.compile(
+    r'(?:.*\\)?__pycache__(?:\\|$)'
+    r'|' + re.escape(SOURCE_FOLDER) + r'\\objects\\[0-9a-f]{16,64}\\[0-9a-f]{40}\\'
+    r'(?:\.git|tests?|modules\\[^\\]+\\tests?)(?:\\|$)', re.I)
 
 
 def needed(relative):
-    """True unless the path is in a folder that nothing opens by an ordinary path (NOT_NEEDED_FOLDERS)."""
-    return not NOT_NEEDED_FOLDERS & set(relative.lower().split('\\'))
+    """True unless the path is in a place that nothing opens by an ordinary path (NOT_NEEDED)."""
+    return NOT_NEEDED.match(relative) is None
+
+
+def test_only_git_data_tests_of_a_staged_repository_and_bytecode_may_pass_the_limit():
+    store = f'{SOURCE_FOLDER}\\objects\\{"f" * SOURCE_NAME}\\{HEX40}\\'
+    # The six paths that pass the limit at the longest folder path (measured on native Windows).
+    fixture = (store + 'modules\\tool-context-intelligence-upload\\tests\\fixtures\\ground_truth\\'
+               '63cc3feb-564a-40de-9f8b-a7cb5fd510a4\\context-intelligence')
+    assert len(fixture) - len(store) + len('\\metadata.json') == STORE_TEST_DEPTH
+    for relative in (fixture, fixture + '\\metadata.json', fixture + '\\events.jsonl',
+                     store + '.git\\objects\\pack\\pack-' + HEX40 + '.pack', store + 'tests\\fixtures\\a.json',
+                     store + 'test\\a.py', store + 'Tests', store + 'modules\\tool-x\\test\\a.py',
+                     f'app\\runtime\\q-{HEX32}\\.venv\\Lib\\site-packages\\p\\__pycache__\\m.cpython-313.pyc',
+                     store + 'modules\\tool-x\\amplifier_module_tool_x\\__pycache__'):
+        assert not needed(relative), relative
+    for relative in (store + 'modules\\tool-x\\amplifier_module_tool_x\\tests\\data.json',   # in the module's package
+                     store + 'context\\tests\\guide.md', store + 'skills\\test\\SKILL.md', store + 'docs\\tests.md',
+                     store + 'testing\\a.md', store + 'modules\\tests', store + 'behaviors\\tests\\a.yaml',
+                     store + '.github\\workflows\\a.yml', store[:-1],
+                     f'{SOURCE_FOLDER}\\builds\\{"f" * SOURCE_NAME}\\tests\\a.json',      # the copy that a build reads
+                     f'{SOURCE_FOLDER}\\builds\\{"f" * SOURCE_NAME}\\.git\\objects\\a',
+                     'cache\\git-v2\\checkouts\\0123456789abcdef\\fd4d894\\tests\\a.py',
+                     'cache\\git-v2\\checkouts\\0123456789abcdef\\fd4d894\\.git\\objects\\a',
+                     f'app\\runtime\\q-{HEX32}\\.venv\\Lib\\site-packages\\google\\genai\\tests\\a.py',
+                     'shared\\projects\\tests\\sessions', 'workspace\\tests\\a.txt', 'capture\\test\\sessions'):
+        assert needed(relative), relative
 
 
 def test_source_store_limits_are_stated_not_hidden():
@@ -568,13 +600,14 @@ def test_source_store_names_are_the_ones_foundation_writes():
     assert 'sys.path.insert(0, path_str)' in inspect.getsource(activator)
 
 
-# The deepest file of a default repository that is not in ``.git`` or in a
-# ``tests`` folder (measured): a document of the skills repository. Nothing
-# opens it in a chat; it is the longest store path that is counted as needed.
+# The deepest file of a default repository outside the places of NOT_NEEDED
+# (measured): two documents below ``docs\lanes``, one of them in the skills
+# repository. No chat opens them; they are the longest store paths that
+# count as needed.
 STORE_DEPTH = 127
 # The deepest file of a default repository at all (measured): a test fixture of
 # the context-intelligence repository. It passes the limit from an installation
-# folder path of 51. NOT_NEEDED_FOLDERS says why that is accepted.
+# folder path of 51. NOT_NEEDED says why that is accepted.
 STORE_TEST_DEPTH = 140
 # What setup and the app install below the installation folder: the deepest
 # file of each part, in characters below the folder. Measured in a clean-room
@@ -664,7 +697,8 @@ def test_the_design_document_states_the_numbers_of_this_budget():
         f'sessions have longer IDs** ({HELPER_ID} characters plus the agent name).',
         f'`update-<first {len(UPDATE_PROJECT) - len("update-")} hex digits of the stage ID>`',
         f'At {MAX_ROOT} the longest path that a stage and its probe create is {STAGE_LONGEST[1]}',
-        f'the app\'s real preparation at {MAX_ROOT}:',
+        f'with the app\'s real probe at {clean_room_root} and {MAX_ROOT}, under the names from before this rule.',
+        f'whole preparation at {MAX_ROOT} without the rule',
         f'new entries on Windows have {SOURCE_NAME}-digit folder names.',
         f'under a {len(HEX64)}-digit name stays in use',
         f'with long paths off at a folder path of {MAX_ROOT}, after the app prepared',

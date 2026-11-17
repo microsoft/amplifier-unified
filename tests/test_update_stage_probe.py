@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -55,8 +56,12 @@ def test_the_probe_of_a_chats_own_setup_runs_with_the_chats_folder_and_writes_no
     assert probe.left_in_stage(stage, project, session) == probe.STAGE_AFTER_A_PROBE
     assert probe.names(layout.capture, project, session) == probe.CAPTURE_AFTER_A_PROBE
     assert probe.created(chosen) == ['notes.txt'] and (chosen / 'notes.txt').read_text(encoding='utf-8') == 'mine'
+    # The session of the check names the chat's folder, not the stage's check folder.
+    record = json.loads((stage.shared / 'projects' / project / 'sessions' / session / 'metadata.json').read_text())
+    assert os.path.normcase(record['working_dir']) == os.path.normcase(str(chosen))
     profiles = (probe.ROOT / 'amplifier_web/runtime_profiles.py').read_text(encoding='utf-8')
-    assert 'workspace = config.workspace' in profiles and profiles.count('str(workspace),\n            profile,') == 2
+    assert 'workspace = config.workspace' in profiles
+    assert len(re.findall(r'str\(workspace\),\s+profile,', profiles)) == 2   # both probes get the chat's folder
 
 
 def test_the_probe_still_refuses_a_stage_whose_provider_does_not_load(layout):

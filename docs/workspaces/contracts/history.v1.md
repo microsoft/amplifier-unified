@@ -61,9 +61,10 @@ SessionRef is unchanged.
   is not offered) is checked in such a stage too, with the chat's folder. That
   check session is not a saved conversation either, and it is in the stage's
   own store. So on Windows every folder has the stage's project name in a
-  process that runs with a stage as its app home, also a folder that a person
-  chose. The saved conversations of that folder are not in the stage, and
-  their project name is unchanged.
+  process that runs with a stage as its app home and that stage's
+  `shared-config` as its shared home, also a folder that a person chose. The
+  saved conversations of that folder are not in the stage, and their project
+  name is unchanged. With any other shared home every folder keeps its name.
 - A folder that a person chose keeps the path slug, which is as long as the
   folder's path. While Windows long paths are off, the app refuses to create
   or start a chat in a folder whose path is too long for the chat's files. It

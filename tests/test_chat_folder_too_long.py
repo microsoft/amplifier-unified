@@ -7,6 +7,7 @@ really fails. Here: the arithmetic, the sentence, and the way to the chat page.
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import sys
 import uuid
@@ -110,12 +111,21 @@ def test_nothing_is_refused_where_windows_accepts_the_path(short_homes, long_pat
     # Not an ID or a path that this can measure: the ordinary checks answer, as before.
     assert session_files.chat_folder_too_long(folder, 'not/an/id') is None
     assert session_files.chat_folder_too_long('bad\0path', IDENTITY) is None
-    # The app's own chat folder has a short name; its path is never the cause.
-    (tmp_path / 'app').mkdir()
-    assert session_files.chat_folder_too_long(allocate(tmp_path / 'app', IDENTITY, 'receipt'), IDENTITY) is None
-    # A check in an update stage names every folder by the stage.
-    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path / 'app' / 'updates' / 'releases' / budget.HEX32))
+    # The app's own chat folder is never the subject of this answer, whatever its path is: a person cannot move
+    # it. (On Windows it has a short project name. Here it has the CLI name, so the arithmetic alone would refuse.)
+    deep = tmp_path / ('a' * 150) / 'app'
+    deep.mkdir(parents=True)
+    own = Path(allocate(deep, IDENTITY, 'receipt'))
+    assert len(str(own)) > 200 and session_files.chat_folder_too_long(own, IDENTITY) is None
+    assert session_files.chat_folder_too_long(own.with_name('other'), IDENTITY) is not None   # not that folder
+    # A check in an update stage names every folder by the stage: the stage is the app home and its own
+    # shared home is the shared home. With a person's shared home the folder is measured as always.
+    stage, persons = tmp_path / 'app' / 'updates' / 'releases' / budget.HEX32, os.environ['AMPLIFIER_HOME']
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(stage))
+    assert session_files.chat_folder_too_long(folder, IDENTITY) is not None
+    monkeypatch.setenv('AMPLIFIER_HOME', str(stage / 'shared-config'))
     assert session_files.chat_folder_too_long(folder, IDENTITY) is None
+    monkeypatch.setenv('AMPLIFIER_HOME', persons)
     monkeypatch.delenv('AMPLIFIER_WEB_HOME')
     assert session_files.chat_folder_too_long(folder, IDENTITY) is not None
     # Long paths on, another platform, or a setting that cannot be read: Windows decides, as before.
@@ -212,8 +222,13 @@ async def test_send_in_an_existing_chat_gets_the_sentence_keeps_the_message_and_
         await app.dispatch('session.create', {})
         sid = app.state['selectedSessionId']
         monkeypatch.setattr(session_files, 'windows_refuses_long_paths', lambda: True)
+        from amplifier_web import generation_leases
+        reserved, acquire = [], generation_leases.acquire
+        monkeypatch.setattr(generation_leases, 'acquire',
+                            lambda *arguments: reserved.append(arguments) or acquire(*arguments))
         with pytest.raises(AppError) as rejected:
             await app.dispatch('conversation.send', {'text': 'Keep this unsent request'}, command_id='too-long')
+        assert reserved == []   # the answer comes before a component generation is reserved
         text = str(rejected.value)
         assert rejected.value.code == 'worker_startup_failed' and rejected.value.receipt['delivery'] == 'failed'
         assert text.startswith(f'{SENTENCE}{folder} (200 characters')
@@ -242,6 +257,13 @@ async def test_the_start_asks_with_the_folder_and_the_id_of_the_chat_and_then_st
         await runtime.start({'id': str(uuid.uuid4()), 'workspace': str(tmp_path), 'runtimeSessionId': 'native-id'}, emit)
     assert 'too long for Windows' not in str(failure.value) and not isinstance(failure.value, RuntimeStartupError)
     assert seen == [(str(tmp_path), 'native-id')]
+    # One rule for the ID, where a chat is created and where its worker starts.
+    assert session_files.chat_files_identity({'id': 'a', 'nativeIdentity': 'b', 'runtimeSessionId': 'c'}) == 'c'
+    assert session_files.chat_files_identity({'id': 'a', 'nativeIdentity': 'b'}) == 'b'
+    assert session_files.chat_files_identity({'id': 'a', 'runtimeSessionId': None, 'nativeIdentity': ''}) == 'a'
+    for owner in ('service.py', 'runtime.py'):
+        source = (Path(session_files.__file__).with_name(owner)).read_text(encoding='utf-8')
+        assert source.count("session.get('workspace'), chat_files_identity(session))") == 1, owner
     # An external agent keeps no chat files of this kind: it is not asked.
     with pytest.raises(Exception):
         await runtime.start({'id': str(uuid.uuid4()), 'workspace': str(tmp_path), 'externalAgent': {'id': 'x'}}, emit)

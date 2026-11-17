@@ -74,20 +74,27 @@ def stage_project_name():
     A CLI name there repeats the path of the workspace below the stage, so the
     session paths pass the Windows path limit. So every folder gets one name
     in such a process. The name comes from the stage ID in the app home
-    setting alone; no file is read. It starts with neither '-' nor 'chat-', so
+    setting; no file is read. It starts with neither '-' nor 'chat-', so
     it never equals a CLI name or a chat name. Each stage has its own shared
     home, so the session folders of two stages never meet.
+
+    The shared home must be that stage's own ``shared-config`` too. So the
+    name is never used where a person's history is: a process with a stage as
+    its app home and another shared home keeps every name.
 
     In every other process each folder keeps its name: the app and a person's
     own tools never run with a stage as their app home.
     """
-    home = os.environ.get('AMPLIFIER_WEB_HOME')
-    if not home:
+    home, shared = os.environ.get('AMPLIFIER_WEB_HOME'), os.environ.get('AMPLIFIER_HOME')
+    if not home or not shared:
         return None
     stage = Path(home)
     identity = stage.name.lower()
     if (not _STAGE_ID.fullmatch(identity) or stage.parent.name.lower() != 'releases'
             or stage.parent.parent.name.lower() != 'updates'):
+        return None
+    # Names only: both settings come from the code that made the stage.
+    if os.path.normcase(os.path.abspath(shared)) != os.path.normcase(os.path.abspath(stage / 'shared-config')):
         return None
     return 'update-' + identity[:12]
 
@@ -210,6 +217,11 @@ def windows_refuses_long_paths():
         return False  # Not known. Windows decides at the write, as before.
 
 
+def chat_files_identity(session):
+    """The ID under which the files of this chat are saved: the one that its conversation worker runs with."""
+    return session.get('runtimeSessionId') or session.get('nativeIdentity') or session['id']
+
+
 def chat_folder_too_long(workspace, identity):
     """Why Windows cannot keep a chat for a folder that a person chose, in plain words, else None.
 
@@ -222,10 +234,12 @@ def chat_folder_too_long(workspace, identity):
     its capture. A background-job record and the request diagnostics have
     longer names; a folder that fits here can still lose those (the design
     document states the numbers). An app chat folder has a short name and is
-    never refused. The Windows setting is read when this is asked; a process
-    keeps the setting that it started with, so after a change of the setting
-    Windows itself answers until the app starts again. Arithmetic on names;
-    no file below the folder is read.
+    never refused. The Windows setting is read when this is asked, because a
+    conversation worker is a new process and gets the setting of that moment.
+    The app itself keeps the setting that it started with. So after long paths
+    are turned on, the app's own writes for such a chat still fail until the
+    app starts again; this answer is then not given. Arithmetic on names; no
+    file below the folder is read.
     """
     if not workspace or not windows_refuses_long_paths():
         return None

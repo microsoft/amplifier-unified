@@ -271,12 +271,13 @@ short project name in `session_files.project_slug`, add its rows to
 `tests/test_windows_path_budget.py`, and run its real writer in
 `tests/test_windows_long_paths_off.py`. A folder that a person chose keeps its
 name, with one exception: in a process that runs with an update stage as its
-app home, every folder has the stage's name (`session_files.stage_project_name`).
+app home and that stage's `shared-config` as its shared home, every folder has
+the stage's name (`session_files.stage_project_name`).
 The session of such a check is not a saved conversation. A chat's own setup is
 checked there with the chat's folder, and `tests/test_windows_chat_setup.py`
 runs that whole preparation on a hosted runner and lists every path that it
-writes. A path may pass the limit only below the folders of
-`NOT_NEEDED_FOLDERS` in the budget test. When the path of a person's folder is
+writes. A path may pass the limit only in the places of `NOT_NEEDED` in the
+budget test. When the path of a person's folder is
 too long for the chat's files, `session_files.chat_folder_too_long` gives the
 answer; do not give that folder another project name without a change of the
 [history contract](docs/workspaces/contracts/history.v1.md).

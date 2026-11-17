@@ -27,6 +27,30 @@ def test_no_platform_is_refused_a_custom_profile():
     assert 'os.name' not in source and 'sys.platform' not in source and 'unavailable on Windows' not in source
 
 
+async def test_a_chat_without_its_own_setup_is_answered_before_any_effect(tmp_path, monkeypatch):
+    """The first installation and an offered setup make no stage, no lock, no copy and no process."""
+    from amplifier_web.host import config as host_config
+    from amplifier_web.host import bundle_paths
+    home, generation = tmp_path / 'app', 'd' * 32
+    receipt = receipt_directory(home, generation)
+    receipt.mkdir(parents=True)
+    settings = {}
+    descriptor = {'profiles': ['offered'], 'configuration': runtime_profiles.configuration_key(settings, home, receipt)}
+    (receipt / 'profiles-qualified.json').write_text(json.dumps(descriptor))
+    monkeypatch.setattr(host_config, 'read_config', lambda *args, **kwargs:
+                        SimpleNamespace(settings=settings, home=home, workspace=tmp_path))
+    monkeypatch.setattr(bundle_paths, 'canonical_bundle_reference', lambda config, bundle: bundle)
+    monkeypatch.setattr(bundle_paths, 'local_bundle_path', lambda *args: None)
+    monkeypatch.setattr(runtime_profiles, '_local_build_inputs', lambda *args: set())
+    async def forbidden(*args, **kwargs): pytest.fail('a preparation process started')
+    monkeypatch.setattr(updates, 'process', forbidden)
+    assert await runtime_profiles.ensure(home, None, {}) is None
+    offered = {'id': 'offered', 'workspace': str(tmp_path), 'bundle': 'offered'}
+    assert await runtime_profiles.ensure(home, generation, offered) == generation
+    assert not (home / 'updates/profiles').exists()
+    assert list((home / 'updates/releases').iterdir()) == [receipt]
+
+
 @pytest.fixture
 def profile_inputs(tmp_path, monkeypatch):
     from amplifier_foundation.modules import preparation

@@ -502,6 +502,31 @@ def test_outside_a_stage_every_folder_keeps_its_name(chat, stage, windows_rule, 
     assert project_slug(chosen) == cli_name(chosen)
 
 
+def test_a_stage_as_the_app_home_with_another_shared_home_keeps_every_name(
+        chat, stage, windows_rule, tmp_path, monkeypatch):
+    """The stage name is only for the stage's own shared home, where no person has history."""
+    from amplifier_web.session_files import stage_project_name
+    identity, app_chat = chat
+    chosen = tmp_path / 'a folder that a person chose'
+    chosen.mkdir()
+    assert stage_project_name() == STAGE_NAME                      # the settings that a check gets
+    other = stage.parent / ('8dcd8cf0' + 'a' * 24)
+    # A person's shared home, the stage itself, a folder inside its shared home, the shared home of another stage.
+    for shared in (tmp_path / 'shared', stage, stage / 'shared-config' / 'projects', other / 'shared-config'):
+        monkeypatch.setenv('AMPLIFIER_HOME', str(shared))
+        assert stage_project_name() is None
+        for folder in (stage / 'qualification-workspace', chosen):
+            assert project_slug(folder) == cli_name(folder)
+            assert sessions_dir(folder) == (shared / 'projects' / cli_name(folder) / 'sessions').resolve()
+        assert project_slug(app_chat) == short_name(identity)
+    monkeypatch.setenv('AMPLIFIER_HOME', '')
+    assert stage_project_name() is None
+    # History that a person saved under that shared home stays where it is, under its own name.
+    monkeypatch.setenv('AMPLIFIER_HOME', str(tmp_path / 'shared'))
+    saved = history(cli_name(chosen), str(uuid.uuid4()), chosen)
+    assert saved.parent == sessions_dir(chosen)
+
+
 def test_a_stage_needs_the_layout_and_the_id_that_the_updater_makes(tmp_path, chat, windows_rule, monkeypatch):
     identity, app_chat = chat
     for parts in (('updates', 'releases', STAGE_ID[:31]), ('updates', 'releases', STAGE_ID + '0'),
@@ -510,11 +535,13 @@ def test_a_stage_needs_the_layout_and_the_id_that_the_updater_makes(tmp_path, ch
         folder = tmp_path.joinpath('app', *parts)
         (folder / 'qualification-workspace').mkdir(parents=True)
         monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(folder))
+        monkeypatch.setenv('AMPLIFIER_HOME', str(folder / 'shared-config'))   # only the layout is wrong
         assert project_slug(folder / 'qualification-workspace') == cli_name(folder / 'qualification-workspace')
         assert project_slug(app_chat) == short_name(identity)
     # Letter case does not matter on Windows, and the name is always lower case.
     folder = tmp_path / 'App' / 'Updates' / 'Releases' / STAGE_ID.upper()
     monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(folder))
+    monkeypatch.setenv('AMPLIFIER_HOME', str(folder / 'shared-config'))
     assert project_slug(tmp_path) == STAGE_NAME
 
 
