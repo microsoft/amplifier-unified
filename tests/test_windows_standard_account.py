@@ -673,6 +673,7 @@ def test_the_watch_keeps_each_change_of_the_listeners_answer_and_of_the_owners_o
     assert order[:2] == ["clock", "probe"]
     # No answer and no listener; no answer with a listener (the host is there and does not answer); an answer;
     # no answer of the same process; an answer of another process. The mark is in the same list, in the order of time.
+    assert "late" not in kept  # No gauge was given.
     assert kept == {"started": False, "ended": True, "questions": 7, "changes": [
         {"at": 100, "answer": "unreachable", "owner": [], "seconds": 0},
         {"at": 102, "answer": "unreachable", "owner": [4500], "seconds": 0},
@@ -683,9 +684,10 @@ def test_the_watch_keeps_each_change_of_the_listeners_answer_and_of_the_owners_o
 
 
 def test_the_watch_keeps_how_long_a_question_took_and_the_slowest_one_while_nothing_changes(case):
-    # Each question: the timer is read before it and after it. The differences are the seconds of the questions.
+    # Each question: the timer is read before it, after it, and at the end of the look. The difference of the
+    # first two is the seconds of the question.
     seconds = [0.1, 0.09, 1.6, 0.1, 1.2, 2.0, 0.08, 0.5]
-    ticks = iter([value for took in seconds for value in (10.0, 10.0 + took)])
+    ticks = iter([value for took in seconds for value in (10.0, 10.0 + took, 10.0 + took)])
     answers = iter(["trusted"] * 5 + ["unreachable"] + ["trusted"] * 2)
     times = iter(range(100, 200))
     watch = case.ListenerWatch(lambda: next(answers), clock=lambda: next(times), timer=lambda: next(ticks))
@@ -713,11 +715,96 @@ def test_the_watch_keeps_how_long_a_question_took_and_the_slowest_one_while_noth
     timed.look()
     assert timed.changes[0]["seconds"] == 0.25
     # After the limit of the list no entry gets the time of a question that belongs to an answer that is not kept.
-    numbers, ticks = iter([1, 2, 2, 2]), iter([0, 0.1, 0, 0.1, 0, 5.0, 0, 9.0])
+    numbers, ticks = iter([1, 2, 2, 2]), iter([0, 0.1, 0.1, 0, 0.1, 0.1, 0, 5.0, 5.0, 0, 9.0, 9.0])
     full = case.ListenerWatch(lambda: next(numbers), limit=1, timer=lambda: next(ticks))
     for _ in range(4):
         full.look()
     assert [(change["answer"], "slowest" in change) for change in full.changes] == [(1, False)]
+
+
+def test_the_processor_time_between_two_reads_says_how_busy_the_computer_and_each_process_were(case):
+    before = {"busy": 100.0, "all": 400.0, "processes": {"4500": 2.0, "77": 1.0}}
+    after = {"busy": 103.0, "all": 404.0, "processes": {"4500": 3.25, "88": 9.0}}
+    # 4 processor-seconds passed (four processors, one second); 3 of them were work. Process 77 ended, 88 is new.
+    assert case.cpu_between(before, after) == {"computerBusy": 0.75, "processes": {"4500": 1.25}}
+    assert case.cpu_between(before, before) == {"computerBusy": None, "processes": {"4500": 0.0, "77": 0.0}}
+
+
+def gauged(case, seconds, answers=None, **more):
+    """A watch whose questions take the given seconds, with a stand-in for the read of the processor time."""
+    now, counts, took = [50.0], iter(range(1000)), iter(seconds)
+    answers, asked = iter(answers or ["trusted"] * len(seconds)), []
+
+    def probe():
+        now[0] += next(took)  # The timer goes on by the seconds of this question.
+        return next(answers)
+
+    def gauge(owners):
+        asked.append(list(owners))
+        number = next(counts)
+        return {"busy": 10.0 + number, "all": 20.0 + 4 * number, "processes": {str(pid): number / 2 for pid in owners}}
+    times = iter(range(100, 1000))
+    watch = case.ListenerWatch(probe, lambda: [4500], gauge=gauge, clock=lambda: next(times),
+                               timer=lambda: now[0], **more)
+    return watch, asked
+
+
+def test_the_watch_keeps_each_late_answer_with_what_was_busy_during_it(case):
+    watch, asked = gauged(case, [0.1, 0.5, 0.2, 1.7], after=lambda: {"seconds": 0.03, "certificates": 60})
+    for _ in range(4):
+        watch.look()
+    kept = watch.stop()
+    # Only the questions of half a second or more. Each with the processor time during it: one read of the gauge
+    # before the question, and for a late one a second read after it.
+    assert kept["late"] == [
+        {"at": 101, "seconds": 0.5, "answer": "trusted", "waitedBefore": 0.0,
+         "used": {"computerBusy": 0.25, "processes": {"4500": 0.5}}, "after": {"seconds": 0.03, "certificates": 60}},
+        {"at": 103, "seconds": 1.7, "answer": "trusted", "waitedBefore": 0.0,
+         "used": {"computerBusy": 0.25, "processes": {"4500": 0.5}}, "after": {"seconds": 0.03, "certificates": 60}}]
+    # The gauge reads the processes that owned the port at the question before: none at the first question.
+    assert asked == [[], [4500], [4500], [4500], [4500], [4500]]
+
+
+def test_the_time_that_the_watch_waited_before_a_late_question_is_kept(case):
+    # The timer: a question from 10 to 11; its end is read at 11.5; the next question begins at 14 and takes 2.
+    ticks = iter([10.0, 11.0, 11.5, 14.0, 16.0, 16.5])
+    watch = case.ListenerWatch(lambda: "trusted", gauge=lambda owners: {"busy": 0, "all": 0, "processes": {}},
+                               timer=lambda: next(ticks))
+    watch.look()
+    watch.look()
+    first, second = watch.late
+    assert first["waitedBefore"] is None  # Nothing before the first question.
+    assert second["waitedBefore"] == 2.5 and second["seconds"] == 2.0  # 2.5 seconds, where the pause is 0.5.
+    assert second["used"] == {"computerBusy": None, "processes": {}} and "after" not in second
+
+
+def test_the_list_of_late_answers_has_a_limit_and_a_gauge_that_fails_is_kept_as_its_error(case):
+    watch, _ = gauged(case, [1.0] * 45)
+    for _ in range(45):
+        watch.look()
+    assert len(watch.late) == 40 and watch.questions == 45
+
+    def no_gauge(owners):
+        raise OSError("Access is denied")
+
+    def no_store():
+        raise OSError("The store cannot be opened")
+    ticks = iter([0.0, 3.0, 3.5])
+    broken = case.ListenerWatch(lambda: "unreachable", gauge=no_gauge, after=no_store, timer=lambda: next(ticks))
+    broken.look()  # No error: the watch goes on.
+    [entry] = broken.late
+    assert entry["seconds"] == 3.0 and entry["answer"] == "unreachable"
+    assert entry["used"] == {"errorType": "OSError", "error": "Access is denied"}  # The gauge's own error.
+    assert entry["after"] == {"errorType": "OSError", "error": "The store cannot be opened"}
+    # Without a gauge the watch keeps no such list, and its result has none.
+    plain = case.ListenerWatch(lambda: "trusted", timer=iter([0.0, 9.0, 9.5]).__next__)  # A question of 9 seconds.
+    plain.look()
+    assert plain.late == [] and "late" not in plain.stop()
+    # A limit of the seconds that is given is used.
+    strict, _ = gauged(case, [0.3, 0.2], slow=0.25)
+    strict.look()
+    strict.look()
+    assert [entry["seconds"] for entry in strict.late] == [0.3]
 
 
 def test_a_question_of_the_watch_that_fails_is_an_answer_and_the_list_has_a_limit(case):
@@ -806,7 +893,12 @@ def test_the_watch_of_an_installation_asks_its_saved_address_and_reads_the_owner
                         lambda urls, pin: asked.append(("trust", urls, pin)) or "trusted")
     monkeypatch.setattr(windows_task_runtime, "listener_owners",
                         lambda host, port: asked.append(("owners", host, port)) or {4500, 77})
+    gauges = []
+    monkeypatch.setattr(case, "cpu_seconds", lambda owners: gauges.append(owners) or {"busy": 0, "all": 0,
+                                                                                      "processes": {}})
     watch = case.watch_listener(tmp_path)
+    # The watch of an installation reads the processor time and, after a late answer, Windows' root certificates.
+    assert watch.after is case.root_store_read and watch.slow == 0.5
     deadline = time.monotonic() + 10
     while not watch.changes and time.monotonic() < deadline:
         time.sleep(0.01)
@@ -814,6 +906,8 @@ def test_the_watch_of_an_installation_asks_its_saved_address_and_reads_the_owner
     assert kept["started"] is True and kept["ended"] is True
     assert [(change["answer"], change["owner"]) for change in kept["changes"]] == [("trusted", [77, 4500])]
     assert 0 <= kept["changes"][0]["seconds"] < 5
+    assert gauges[0] == [] and kept["late"] == []  # The gauge was asked with each question; no answer was late.
+    assert all(owners == [77, 4500] for owners in gauges[1:])
     assert asked[:2] == [("trust", ["https://127.0.0.1:27595/api/health"], "the pin"), ("owners", "127.0.0.1", 27595)]
 
 
@@ -1138,8 +1232,12 @@ def test_a_file_of_the_running_installation_is_read_only_with_the_products_reade
     # The host's log is read nowhere else, and never with an ordinary open: the host replaces that file.
     assert source.count("task-output.log") == 0
     assert source.count("host_output(home)") == 4  # Its definition, the first start, a later start, a failed step.
-    watch = source[source.index("class ListenerWatch:"):source.index("def note_updates(")]
-    assert "read_text(" not in watch and "open(" not in watch and "directory(" not in watch
+    watch = source[source.index("def cpu_seconds("):source.index("def note_updates(")]
+    assert "read_text(" not in watch and " open(" not in watch and "directory(" not in watch
+    # The read of the processor time opens a process only to ask Windows for its times, and closes it.
+    gauge = source[source.index("def cpu_seconds("):source.index("def cpu_between(")]
+    assert "kernel.OpenProcess(0x1000, False, number)" in gauge and gauge.count("OpenProcess(") == 1
+    assert "finally:\n                kernel.CloseHandle(handle)" in gauge
 
 
 def test_the_steps_are_the_consumer_journey_in_setups_order(case):

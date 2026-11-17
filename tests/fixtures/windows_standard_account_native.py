@@ -1605,6 +1605,58 @@ def observed(steps, home, name, read, good, later=None):
     return answer
 
 
+def cpu_seconds(processes=()):
+    """Processor time until now, in seconds: of the whole computer, and of each given process that Windows opens.
+
+    `busy` is the time in which the computer's processors worked, `all` is
+    that time plus their idle time; both are sums over the processors.
+    """
+    kernel = C.WinDLL("kernel32", use_last_error=True)
+    kernel.OpenProcess.argtypes, kernel.OpenProcess.restype = [W.DWORD, W.BOOL, W.DWORD], W.HANDLE
+    kernel.CloseHandle.argtypes = [W.HANDLE]
+    kernel.GetProcessTimes.argtypes = [W.HANDLE] + [C.POINTER(W.FILETIME)] * 4
+    kernel.GetSystemTimes.argtypes = [C.POINTER(W.FILETIME)] * 3
+    seconds = lambda value: ((value.dwHighDateTime << 32) | value.dwLowDateTime) / 10 ** 7
+    idle, system, user = W.FILETIME(), W.FILETIME(), W.FILETIME()
+    if not kernel.GetSystemTimes(C.byref(idle), C.byref(system), C.byref(user)):
+        raise _failed()
+    used = {"busy": seconds(system) + seconds(user) - seconds(idle), "all": seconds(system) + seconds(user),
+            "processes": {}}
+    for number in processes or ():
+        handle = kernel.OpenProcess(0x1000, False, number)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if handle:
+            try:
+                times = [W.FILETIME() for _ in range(4)]
+                if kernel.GetProcessTimes(handle, *[C.byref(value) for value in times]):
+                    used["processes"][str(number)] = seconds(times[2]) + seconds(times[3])
+            finally:
+                kernel.CloseHandle(handle)
+    return used
+
+
+def cpu_between(before, after):
+    """What two reads of `cpu_seconds` say about the time between them.
+
+    `computerBusy` is the share of that time in which the computer's
+    processors worked, from 0 to 1. `processes` is the processor time that
+    each process used, in seconds; a process that only one of the reads has
+    is left out. More than the seconds of the clock is possible there: a
+    process can use several processors at once.
+    """
+    whole = after["all"] - before["all"]
+    return {"computerBusy": round((after["busy"] - before["busy"]) / whole, 3) if whole > 0 else None,
+            "processes": {number: round(after["processes"][number] - used, 3)
+                          for number, used in before["processes"].items() if number in after["processes"]}}
+
+
+def root_store_read():
+    """How long one read of Windows' root certificates takes now. `trust_state` makes this read before it asks."""
+    import ssl
+    began = time.monotonic()
+    count = sum(1 for _ in ssl.enum_certificates("ROOT"))
+    return {"seconds": round(time.monotonic() - began, 3), "certificates": count}
+
+
 class ListenerWatch:
     """Asks the app's listener for an answer again and again, beside the steps of the case.
 
@@ -1619,22 +1671,43 @@ class ListenerWatch:
     another process owned it afterwards. It also says when the listener
     answered late: a host that is busy for a second shows there, also in a
     run where every read of the case is as required.
+
+    With a read of the processor time (`gauge`), the watch keeps each
+    question that took `slow` seconds or more, at most 40 (`late`). An entry
+    says what can make an answer late: how busy the computer was during the
+    question, how much processor time the owners of the port used in it, how
+    long the watch itself waited before the question (more than its pause
+    means that this program got no time), and what `after` reads directly
+    afterwards. The watch gives these numbers. It does not decide the cause.
     The watch opens no file of the installation, it asks without a
     credential, and it decides no step. A watch without a question (`probe`)
     never starts; `reason` then says why.
     """
 
-    def __init__(self, probe=None, owner=None, *, every=0.5, limit=400, clock=time.time, timer=time.monotonic):
+    def __init__(self, probe=None, owner=None, *, gauge=None, after=None, slow=0.5, every=0.5, limit=400,
+                 clock=time.time, timer=time.monotonic):
         self.probe, self.owner, self.every, self.limit, self.clock = probe, owner, every, limit, clock
         self.changes, self.questions, self.reason, self.timer = [], 0, None, timer
+        self.gauge, self.after, self.slow, self.late = gauge, after, slow, []
         self._halt, self._thread, self._last, self._entry = threading.Event(), None, self, None
+        self._ended = None
 
     def look(self):
         """One question to the listener. A change is kept; an error of the question is an answer too."""
         at, began = round(self.clock(), 3), self.timer()
+        waited = None if self._ended is None else round(began - self._ended, 3)
+        owners = self._last[1] if isinstance(self._last, tuple) and isinstance(self._last[1], list) else []
+        before = attempt(lambda: self.gauge(owners)) if self.gauge else None
         answer = attempt(self.probe)
         took = round(self.timer() - began, 3)
+        if self.gauge and took >= self.slow and len(self.late) < 40:
+            used = attempt(lambda: self.gauge(owners))
+            unread = next((read for read in (before, used) if "errorType" in read), None)  # The gauge's own error.
+            self.late.append({"at": at, "seconds": took, "answer": answer, "waitedBefore": waited,
+                              "used": unread or attempt(lambda: cpu_between(before, used)),
+                              **({"after": attempt(self.after)} if self.after else {})})
         now = (answer, attempt(self.owner) if self.owner else None)
+        self._ended = self.timer()
         self.questions += 1
         if now != self._last:
             # A change that the full list does not keep has no entry: no later time is written to an earlier answer.
@@ -1667,6 +1740,7 @@ class ListenerWatch:
             self._thread.join(wait)
         return {"started": self._thread is not None, "ended": self._thread is None or not self._thread.is_alive(),
                 "questions": self.questions, "changes": list(self.changes),
+                **({"late": list(self.late)} if self.gauge else {}),
                 **({"notStarted": self.reason} if self.reason else {})}
 
 
@@ -1680,7 +1754,8 @@ def watch_listener(home):
         urls, pin = trust_targets(home)
         port = windows_installation.saved_port(home)
         return ListenerWatch(lambda: windows_installation.trust_state(urls, pin),
-                             lambda: sorted(windows_task_runtime.listener_owners("127.0.0.1", port))).start()
+                             lambda: sorted(windows_task_runtime.listener_owners("127.0.0.1", port)),
+                             gauge=cpu_seconds, after=root_store_read).start()
     watch = attempt(start)
     if not isinstance(watch, ListenerWatch):
         watch, reason = ListenerWatch(), watch
