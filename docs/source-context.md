@@ -63,11 +63,21 @@ Scheduling is authored in the public
 repository. Its selected artifact remains in generated `components/scheduling-delivery`,
 bound by `components/scheduling.source.json`; see the
 [selection guide](../components/README.md#select-a-scheduling-artifact).
-Portability, outputs, publishing and Recall artifact snapshots follow the same author/delivery
+Portability and publishing artifact snapshots follow the same author/delivery
 distinction: `components/<name>` is authored, while `components/<name>-delivery`
 is generated and opt-in. Visible `components/<name>.source.json` records the
 selected public wheel. Use `--all --under components/<name>-delivery` to inspect
 it; a new component source edit or publication does not silently refresh the copy.
+Recall storage is authored in public
+[amplifier-platform-recall](https://github.com/bkrabach/amplifier-platform-recall).
+Unified's generated `components/recall-delivery` snapshot and `recall.source.json`
+record preserve `amplifier_recall`; see the
+[selection guide](../components/README.md#select-a-recall-artifact).
+Output mechanisms are authored in public
+[amplifier-platform-resources](https://github.com/bkrabach/amplifier-platform-resources).
+Unified's generated `components/outputs-delivery` snapshot and `outputs.source.json`
+record preserve `amplifier_outputs`; see the
+[selection guide](../components/README.md#select-an-outputs-artifact).
 Worktrees is authored in public
 [amplifier-platform-worktrees](https://github.com/bkrabach/amplifier-platform-worktrees).
 Its generated `components/worktrees-delivery` snapshot and `worktrees.source.json`
@@ -120,7 +130,7 @@ guides remain visible for current direction, reproduction and evidence limits.
 | Browser transport, commands and private view | Author in [amplifier-client-web](https://github.com/microsoft/amplifier-client-web); [exact public source selection](../components/README.md#select-public-client-source): [main](https://github.com/microsoft/amplifier-client-web/blob/main/src/main.jsx), [state stream](https://github.com/microsoft/amplifier-client-web/blob/main/src/state-stream.js), [draft journal](https://github.com/microsoft/amplifier-client-web/blob/main/src/draft-journal.js) | [Client state](../contracts/client-state.v1.md), [client experience](../contracts/client-experience.v1.md); stream, action and optimistic state have distinct causality |
 | Agent instructions and readbacks | [app guidance](../amplifier_web/app_guidance.py), [agent state](../amplifier_web/agent_state.py), [receipts](../amplifier_web/agent_receipts.py) | [Agent results](AGENT-RESULTS.md), client privacy and receipt contracts; optional skill absence does not remove supported actions |
 | Domain capabilities | Relevant `amplifier_web` handler, portable `amplifier_*` package, frontend consumer and domain tests | Domain guide under `docs/`; [component boundaries](../contracts/component-boundaries.v1.md) |
-| Output relationships and review evidence | [portable mechanisms](../components/outputs/README.md), [host outputs](../amplifier_web/outputs.py), [transfer reader](../amplifier_web/portability_data.py) | [Output guide](OUTPUTS.md); host owns authorization, transactions, resource integrity and retention |
+| Output relationships and review evidence | [public mechanisms](https://github.com/bkrabach/amplifier-platform-resources), [host outputs](../amplifier_web/outputs.py), [transfer reader](../amplifier_web/portability_data.py) | [Output guide](OUTPUTS.md); host owns authorization, transactions, resource integrity and retention |
 | Workspace registration and selection | [metadata owner](https://github.com/bkrabach/amplifier-platform-workspaces), [host selection](../amplifier_web/workspace_selection.py), [placement](../amplifier_web/workspace_placement.py) | [Placement](workspaces/contracts/placement.v1.md), [context](workspaces/contracts/context.v1.md); selection preserves native history identity and existing Canvas visibility |
 | Shell, canvas and appearance | [Canvas rendering](../amplifier_web/workspace_canvas.py), [appearance package and CSS validation](../amplifier_web/appearance_packages.py), [shell](shell), [SDK](../packages/shell-sdk), [frontend shell](https://github.com/microsoft/amplifier-client-web/blob/main/src/shell) | Public extension/appearance contracts; saved user skins and independent components remain consumers |
 | Test and release mechanisms | [Python tests](../tests), [browser registry](../tests/web/browser-checks.json), [scripts](../scripts) | [Performance validation](validation/performance.md), [release qualification](validation/release-qualification.md); exact evidence and independent modes remain distinct |

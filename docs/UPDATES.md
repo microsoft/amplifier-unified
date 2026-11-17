@@ -291,6 +291,13 @@ is labeled separately: restarting does not reconcile it or clear its chat fence.
 Ordinary automatic updates wait for idle work. An owner can explicitly yield its
 active objective at a supported native turn boundary as described below.
 
+`updates.activation` describes the prepared app: `waiting` while work blocks it,
+or `starting` when it can continue by itself. When no work runs, the update starts
+by itself and the page offers no interruption. The saved phase stays `app-staged`
+until the replacement marker is written. `updates.forceRestartTarget` stays in
+the saved state in both cases, because `task.waitForUpdate` names it. Only the
+bundled page's view omits it: when no work delays the update, and on Windows.
+
 `updates.forceRestart` requires `confirm: true` and the exact
 `hostInstanceId`, staged `revision`, `generation`, and `attemptId` from
 `updates.forceRestartTarget`. Only user/UI origins may confirm; an agent cannot
@@ -298,7 +305,10 @@ supply its own confirmation. A changed host or candidate rejects the request
 before effects. The action returns a request ID; a queued rejection is reported
 in `updates.forceRestartResult` for that request, without an automatic retry.
 Force is available only for an immutable qualified application generation, not
-an in-place legacy installation or an ecosystem-only update.
+an in-place legacy installation or an ecosystem-only update. On Windows a forced
+restart is not available. `update_restart.require` refuses it: at dispatch,
+before the request is recorded, and again before activation reaches its own
+Windows check. The update state stays as it is.
 
 Candidate and serving-component validation still run. At final admission the
 normal durable replacement fence blocks new work, then the owned runtime is
@@ -321,7 +331,9 @@ A component update qualifies the selected conversation profile, and a profile
 with no provider cannot qualify. While the app's own profile is selected and no
 AI connection is set up, the update owner starts no component candidate and
 records no attempt. Settings says that components update after an AI connection
-is set up, and that nothing failed. The published status is `waiting` with
+is set up, and that nothing failed. When the application release check failed,
+the text says that instead of "nothing failed", and that the component update
+waits for another reason. The published status is `waiting` with
 `action: connect`; it requires no attention. This holds for the automatic update of a new
 installation and for a person's own Update request, on every platform. The
 update starts after the first connection: a connection changes the checked
@@ -349,8 +361,12 @@ refusal covered every incomplete selected profile, so the record cannot prove
 that only a connection was missing. It keeps its priority as component attention
 until a later component update completes; a separate application success does
 not resolve that attempt. The
-existing rule for an older preparation failure then makes it history. On such
+existing rule for an older preparation failure then makes it history. While no
+AI connection is set up, the record's text also names the missing connection,
+because a retry cannot start without one; a record of `ai-connection-needed`
+says that already. On such
 an installation the person sets up an AI connection; the update then starts
+when a component update is available
 (by itself, or at the person's Update request when automatic installation is
 off). A new installation never gets such a record, because no attempt starts.
 
@@ -439,6 +455,35 @@ of the historical Mac resolver failure whose stderr was unavailable.
 
 Local data: `updates/inventory.json` (private source details), `updates/releases/<id>/` (staged sources/configuration), `updates/active.json` (current/previous pointer), and per-generation runtime environments. Previous and referenced generations remain available for rollback and active workers; unreferenced, verified owned generations and environments are reclaimed. Shared source objects are retained pending complete proof that no references remain. State shown to the UI/agent contains credential-safe source labels and commit IDs, not credential-bearing remote URLs.
 
+Component qualification uses a temporary `shared-config/keys.env` copy.
+The manager removes only that file after qualification succeeds or a handled
+preparation failure. Settings and routing stay. Cancellation keeps the copy.
+Later activation or rollback qualification uses fresh credentials from the live
+shared home, then removes the copy again unless interrupted. That qualification
+never reads a copy that its refresh did not write: an old copy never stands in
+for credentials that the person removed or changed. When the live shared home
+has no keys file, the stage's copy is removed. When the refresh is refused for
+any reason, the stage's copy is removed too, and the qualification runs without
+a keys file in the stage; the refused refresh is not an update failure. When
+the copy can be neither replaced nor removed, the qualification does not run.
+No version is switched and no failed attempt is recorded; the page says "Update
+needs attention" with the reason, for an update and for a rollback. The next
+activation or rollback request tries again (the owner's pass does that by
+itself for a prepared update) and takes the text back when the refusal is over.
+After a rollback request nothing tries the rollback again by itself. Its text
+goes when a later activation or rollback request gets past this refusal or
+switches versions, when a check for updates runs while no update is prepared,
+or when a prepared app update starts to install.
+A qualification that runs there and fails is recorded and shown like any other
+failed update step; the old copy is gone then too.
+Idle maintenance also scrubs at most eight stage copies per pass, even when
+unused-code cleanup is off. A validated stage qualifies immediately. An
+unvalidated stage qualifies only when both its folder and `shared-config` are
+older than 24 hours, it is not an unresolved preparation candidate, and it holds
+no `profile-attempt.json` (a chat's own setup owns that stage).
+Unsafe paths or removal refusals keep the copy for a later pass.
+Failed stage folders stay; this credential cleanup deletes no folder.
+
 If a worker dependency resolves differently from the checked update, activation
 stops. The diagnostic receipt identifies the component, checked/resolved commit
 IDs when available, and which fields differ: repository, ref, subdirectory,
@@ -477,6 +522,16 @@ of the displayed error phase. Cancellation, failed replacement verification and
 process exits retain it; a package appearing on disk cannot satisfy installation
 or permit another feature request. Updates shows **Installation needs
 verification** and disables additional installs while this outcome is unknown.
+It does not show that warning for this host's running installation:
+`updates.activation` is `installing` only while this process executes the exact
+replacement attempt. The browser shows **Updating Amplifier** instead. The saved
+marker and the complete state read by agents remain unchanged. The field is a
+copy for readers and is never the evidence: the page's view and update health
+also require that this process executes that attempt at this moment (a set in
+memory that is never saved). The owner withdraws from that set first, before
+any wait, when it ends. So an error, a cancellation, a restart handoff, a failed
+state write or a cancelled cleanup each leave the marker with its warning, and
+a new host or a restored state never inherits the claim.
 
 A failed probe after immutable generation promotion can recover without a second
 installation or restart. For an ordinary app update (not a forced shutdown or
@@ -675,6 +730,17 @@ them transient. Changed source/configuration/application inputs or an explicit
 Install request can re-evaluate through the existing install owner. Check is
 availability discovery, not retry intent. Saved legacy backoff records retain
 the same unchanged-input hold; no timer replays the whole failed preparation.
+After a failed component preparation, Try update again checks sources again before
+installing what the new check finds. If that check fails or finds nothing to
+install, no installation starts. `updates.retryCheck.result` is `retried` (with
+the ID of the component attempt that this request started), `not-started`
+(checked, and no attempt started, for example while no AI connection is set up),
+`other-update` (the request started an update of another kind first, for example
+the application),
+`nothing-to-install`, or `check-failed` (the new check ended with an error or
+could not run). The page identifies the rechecked
+attempt. When the earlier failure record keeps its priority, its text says that
+the sources were checked again.
 Interrupted or unknown effects retain their separate inspection fence.
 Pinned and exact checked-revision mismatches retain a typed source-policy reason
 and sanitized package identity; they are not transient transport failures.

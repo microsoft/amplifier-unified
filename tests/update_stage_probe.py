@@ -24,6 +24,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 import uuid
 
 from amplifier_web import builtin_behaviors
@@ -194,6 +195,102 @@ def run(stage, *, capture_root, source_store, state_home, timeout=300, before_th
     lines = [line[len(PROBE_PREFIX):] for line in completed.stdout.splitlines() if line.startswith(PROBE_PREFIX)]
     return Result(completed.returncode, json.loads(lines[-1]) if lines else None,
                   completed.stdout, completed.stderr)
+
+
+def catalog_helper_call():
+    """How the app starts its decision-catalog helper: the command, and the settings of ``subprocess.run``.
+
+    The probe needs the catalog of decision adapters, as a conversation worker does. The first time, the app
+    starts ``decision_account_catalog.py`` in a new interpreter, with a time limit
+    (``decision_accounts._catalog_snapshot``). That helper loads every entry point of the group
+    ``amplifier.decision_backends``, and so it imports the provider packages of the environment.
+
+    This reads the call from the app's own function. For that one call the name ``subprocess`` in the module
+    ``decision_accounts`` is a recorder: its ``run`` keeps the call and starts nothing, and every other name
+    is the real module's. No other module sees the recorder, and the answer that the app keeps for this
+    process is not touched.
+    """
+    import inspect
+    from unittest import mock
+    from amplifier_web import decision_accounts
+    calls = []
+
+    class Recorder:
+        def __getattr__(self, name):
+            return getattr(subprocess, name)
+
+        def run(self, command, **settings):
+            calls.append((list(command), settings))
+            raise subprocess.SubprocessError('recorded, not started')
+
+    with mock.patch.object(decision_accounts, 'subprocess', Recorder()):
+        value, failure = inspect.unwrap(decision_accounts._catalog_snapshot)()
+    assert value is None and failure['category'] == 'subprocess-error' and len(calls) == 1, (value, failure, calls)
+    command, settings = calls[0]
+    assert command[0] == sys.executable and settings.get('timeout', 0) > 0, (command, settings)
+    # ``catalog_helper_times`` reads the helper's output as bytes from a pipe, as the app does.
+    assert settings.get('stdout') is subprocess.PIPE and not any(
+        settings.get(name) for name in ('text', 'universal_newlines', 'encoding', 'errors')), settings
+    return command, settings
+
+
+def catalog_helper_times(call, python, *, starts=2, limit=300):
+    """Start the app's decision-catalog helper with ``python``; the seconds that each start took.
+
+    ``call`` is ``catalog_helper_call()``. The interpreter and the time limit are the caller's, and the
+    helper's error output is kept. The values of the settings (``PATH`` among them) and the current folder
+    are those of the test process; the app's own start has those of its probe command. In a new
+    environment the first start finds no bytecode of the provider packages. The helper runs with ``-I``, so
+    ``PYTHONDONTWRITEBYTECODE`` does not reach it, and it can write bytecode. A later start can read that
+    bytecode. Each start must print the catalog, a JSON object.
+
+    The seconds are from before the call until the helper has ended. They include the creation of the
+    process. The app's time limit counts from the moment at which the process exists. So a time a little
+    over that limit does not prove that the app's own start would have reached it.
+
+    A start that fails is the test's own start, not a command of the app. The failure says so, with the
+    helper's error output, because a caller can run this inside a step of the app.
+    """
+    command, settings = call
+    seconds = []
+    for _ in range(starts):
+        started = time.monotonic()
+        try:
+            done = subprocess.run([str(python), *command[1:]],
+                                  **{**settings, 'timeout': limit, 'stderr': subprocess.PIPE})
+        except (subprocess.SubprocessError, OSError) as error:
+            output = (getattr(error, 'stderr', None) or b'')[-2000:].decode(errors='replace')
+            raise AssertionError(
+                f"The test's own start of the decision-catalog helper with {python} failed "
+                f'({type(error).__name__}: {error}). It is not a command of the app. '
+                f'Error output of the helper: {output or "none"}') from error
+        seconds.append(time.monotonic() - started)
+        try:
+            catalog = json.loads(done.stdout)
+        except ValueError:
+            catalog = None
+        assert isinstance(catalog, dict), (
+            f"The test's own start of the decision-catalog helper with {python} printed no catalog: "
+            f'{done.stdout[:200]!r}; error output of the helper: {done.stderr[-2000:]!r}')
+    return seconds
+
+
+HELPER_LINE = 'MEASURED the decision-catalog helper'
+HELPER_LONGER = 'LONGER THAN THE TIME LIMIT OF THE APP'
+
+
+def catalog_helper_line(environment, first, second, before, after, limit):
+    """The line that a case prints for its own two starts of the helper in one environment.
+
+    ``before`` and ``after`` are the numbers of bytecode files in the environment's packages before and after
+    the first start. The CI job reads these lines (``.github/workflows/windows-path-length.yml``): it keeps
+    each one on the run's page, and it warns for a line that ends with ``HELPER_LONGER``. The line has that
+    end when the time of the first start, as the line prints it (two decimals), is over the limit.
+    """
+    return (f'{HELPER_LINE} in the new worker environment {environment}: the test\'s first start took '
+            f'{first:.2f} s; {after - before} more bytecode files were there after it ({before} before it); '
+            f'the test\'s second start took {second:.2f} s; the app\'s time limit for one start is {limit} s'
+            + (f'; {HELPER_LONGER}' if round(first, 2) > limit else ''))
 
 
 def for_chat(stage, folder):

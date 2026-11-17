@@ -1070,9 +1070,16 @@ async def test_real_publish_and_configuration_hooks_reapply_projection(rig, monk
     m.service._publish_changes = lambda **kw: None
     m._update_health_seen_revision = 1
     m.service.state['configurationRevision'] = 2
+    # The real method that derives the publication fields: publish() calls it,
+    # and so does every place of app_updates that derives them by itself.
+    m._derive_state = lambda: UpdateManager._derive_state(m)
     monkeypatch.setattr(update_health, 'publish', lambda manager: manager.state.update(currentStatus=Manager.health()))
     monkeypatch.setattr(update_restart, 'target', lambda manager: None)
     await UpdateManager.publish(m, launcherRefresh=m.state['launcherRefresh'])
+    assert m.state['currentStatus']['action'] == 'install'
+    # A second derivation of an unchanged state reports no change: the
+    # launcher's text does not make every pass look like a new publication.
+    assert UpdateManager._derive_state(m) is False
     assert m.state['currentStatus']['action'] == 'install'
     assert UpdateManager.configuration_changed(m)
     assert m.state['currentStatus']['action'] == 'install'
@@ -1247,6 +1254,7 @@ async def test_go_with_real_publish_saves_drain_and_phase_before_hold_without_de
     m.requires_idle = lambda state: False
     published = []
     m.service._publish_changes = lambda **kw: published.append(copy.deepcopy(m.state))
+    m._derive_state = lambda: UpdateManager._derive_state(m)
     monkeypatch.setattr(update_health, 'publish', lambda manager: manager.state.update(currentStatus=Manager.health()))
     monkeypatch.setattr(update_restart, 'target', lambda manager: None)
     m.publish = lambda **values: UpdateManager.publish(m, **values)

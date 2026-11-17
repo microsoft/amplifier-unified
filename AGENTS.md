@@ -384,6 +384,25 @@ compared and exported, so a schedule or a queued change of an earlier version
 would then be refused. Add a module to `STATE_FILES` only after reading its
 source; `tests/test_provider_state_files.py` runs the real module and fails
 when a later version adds a file or changes a name.
+On Windows the host's environment names the shared source store
+(`AMPLIFIER_SOURCE_STORE`, kept in the start-at-sign-in task). A helper of the
+host that prepares a module from a source then imports it from a store object.
+A read-only attribute on a Windows folder does not stop a new entry: a helper
+that writes bytecode puts `__pycache__` into the object, and Foundation refuses
+the object from then on ("Shared source contents changed"). In 0.106.3 the
+connection check of an "OpenAI Compatible API" connection did that; no chat
+with the connection started and the next component update failed. A helper
+prepares a source only through `source_imports.prepare`, which turns bytecode
+writing off for the rest of that process and for a Python process that it
+starts with its environment (a child started with `-E` or `-I` ignores the
+setting). Call it only in a helper process that ends after its one task, never
+in the host. Do not give the setting to every child of the host instead.
+Workers write no bytecode (`update_sources.store_environment`), and no
+installation step was found that compiles the worker environment. A helper
+leaves the bytecode of what it imported from that environment before that call
+for the next process; with a host-wide setting it would leave none.
+`tests/test_source_store_bytecode.py` runs the real connection check against
+Foundation's store on a hosted runner.
 
 ## Keep agent context and coordination useful
 
