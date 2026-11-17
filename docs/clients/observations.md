@@ -213,13 +213,11 @@ restricted device credential now admits precisely these reads and shared display
 receipts; it does not admit the full session collection or broader commands.
 [Native pairing](native-pairing.md) owns approval and revocation.
 
-During the coordinated client rollout only, `/api/companion` remains a temporary
-old-client hold over these queries. It is not a fallback for the new clients.
-Unsupported discovery leaves that service unavailable with an update message;
-clients do not switch feeds or ask for a more powerful credential. Remove the
-adapter route, authorization branch, implementation and obsolete tests/docs once
-both native consumers have adopted the generic path. Acceptance must include a
-host with the adapter absent, not merely an unused compatibility route.
+`/api/companion` is removed. Its route, translation module and authorization
+branch no longer exist. Native consumers use the generalized resources without
+a fallback. Existing `companion-v1` credentials retain their restricted authority;
+that historical scope name does not select an adapter. Unsupported discovery
+leaves a service unavailable with an update message.
 
 The rollout record must distinguish source qualification, service publication,
 actual host adoption, client publication and actual device adoption. Browser

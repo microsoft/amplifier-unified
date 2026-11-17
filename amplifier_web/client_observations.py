@@ -599,19 +599,25 @@ class Observations:
             return web.Response(status=304, headers=headers)
         return web.json_response(value, headers=headers, status=status)
 
+    def read_frame(self, project, *args):
+        # Retain the old adapter's single-request scalar preparation at the
+        # canonical resources. Independent requests still observe fresh facts.
+        directory = getattr(self.service, 'directory', None)
+        return directory.read_frame(project, *args) if directory is not None else project(*args)
+
     async def sessions(self, request):
         self.require_client()
-        return self.response(request, self.page('sessions', request.query))
+        return self.response(request, self.read_frame(self.page, 'sessions', request.query))
 
     async def attention(self, request):
         self.require_client()
-        return self.response(request, self.page('attention', request.query))
+        return self.response(request, self.read_frame(self.page, 'attention', request.query))
 
     async def summary(self, request):
         self.require_client()
         if set(request.query) - {'scope', 'clientId', 'cursor'} or any(len(request.query.getall(k)) != 1 for k in request.query):
             raise AppError('Unsupported activity parameter.')
-        value = self.activity(request.query.get('scope', 'roots'), request.query.get('cursor'))
+        value = self.read_frame(self.activity, request.query.get('scope', 'roots'), request.query.get('cursor'))
         return self.response(request, value, 202 if value['status'] == 'collecting' else 200)
 
 

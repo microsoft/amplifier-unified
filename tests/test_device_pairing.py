@@ -77,7 +77,7 @@ async def test_browser_approval_and_scoped_authority(aiohttp_client, tmp_path):
     attached = await client.post('/api/clients/attach', headers=native,
                                 json={'clientId': 'tempo-test', 'kind': 'native', 'protocolVersion': 1})
     assert attached.status == 200
-    assert (await client.get('/api/companion', headers=native)).status in {200, 503}
+    assert (await client.get('/api/attention', headers=native)).status in {200, 503}
     assert (await client.get('/api/state', headers=native)).status == 403
     assert (await client.get('/devices', headers=native)).status == 403
     assert (await client.get('/api/conversation/detail?part=tools', headers=native)).status == 403
@@ -105,7 +105,7 @@ async def test_browser_approval_and_scoped_authority(aiohttp_client, tmp_path):
     csrf = re.search(r'name="csrf" value="([^"]+)"', listing)[1]
     response = await client.post('/devices', headers=headers, data={'csrf': csrf, 'id': token['deviceID']}, allow_redirects=False)
     assert response.status == 303
-    assert (await client.get('/api/companion', headers={**native, **headers})).status == 401
+    assert (await client.get('/api/attention', headers={**native, **headers})).status == 401
     # Existing terminal registrations retain their established full access.
     grant, _ = app['terminal_setup'].devices.grant('Terminal', '1' * 32)
     legacy = app['terminal_setup'].devices.redeem(grant)
