@@ -281,6 +281,11 @@ is labeled separately: restarting does not reconcile it or clear its chat fence.
 Ordinary automatic updates wait for idle work. An owner can explicitly yield its
 active objective at a supported native turn boundary as described below.
 
+`updates.activation` describes the prepared app: `waiting` while work blocks it,
+or `starting` when it can continue by itself. When no work runs, the update starts
+by itself and the page offers no interruption. The saved phase stays `app-staged`
+until the replacement marker is written.
+
 `updates.forceRestart` requires `confirm: true` and the exact
 `hostInstanceId`, staged `revision`, `generation`, and `attemptId` from
 `updates.forceRestartTarget`. Only user/UI origins may confirm; an agent cannot
@@ -438,6 +443,10 @@ of the displayed error phase. Cancellation, failed replacement verification and
 process exits retain it; a package appearing on disk cannot satisfy installation
 or permit another feature request. Updates shows **Installation needs
 verification** and disables additional installs while this outcome is unknown.
+It does not show that warning for this host's running installation:
+`updates.activation` is `installing` only while this process executes the exact
+replacement attempt. The browser shows **Updating Amplifier** instead. The saved
+marker and the complete state read by agents remain unchanged.
 
 A failed probe after immutable generation promotion can recover without a second
 installation or restart. For an ordinary app update (not a forced shutdown or

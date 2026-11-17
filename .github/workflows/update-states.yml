@@ -1,4 +1,4 @@
-name: Update stage credential lifetime
+name: Update states and stage credential lifetime
 on:
   workflow_dispatch:
   pull_request:
@@ -6,12 +6,17 @@ on:
       - .github/workflows/update-states.yml
       - amplifier_web/update_storage.py
       - amplifier_web/updates.py
+      - amplifier_web/app_updates.py
+      - amplifier_web/update_health.py
+      - amplifier_web/browser_demand.py
       - tests/test_update_stage_keys.py
+      - tests/test_update_activation_states.py
+      - tests/test_update_retry_recheck.py
       - docs/UPDATES.md
 permissions:
   contents: read
 jobs:
-  linux-stage-keys:
+  linux-update-states:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -23,7 +28,7 @@ jobs:
           python-version: '3.13'
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
       - run: uv sync --locked --group dev
-      - run: uv run --no-sync pytest -q -p no:cacheprovider tests/test_update_stage_keys.py
+      - run: uv run --no-sync pytest -q -p no:cacheprovider tests/test_update_stage_keys.py tests/test_update_activation_states.py tests/test_update_retry_recheck.py
   native-windows-private-stage-keys-no-skips:
     runs-on: windows-latest
     timeout-minutes: 10

@@ -187,6 +187,8 @@ RECORDED = {'id': '9fc14bcae44f428f93fc8399421b7cb2', 'attemptId': 'b1766b6a409c
 SETUP_RECORD = {'setupRecord': True, 'packageCount': 5}
 COULD_NOT_FINISH = 'Update could not finish'
 NO_OUTCOME = 'The prior attempt has no applicable verified outcome. Current installation is retained; inspect diagnostics before retrying.'
+# The record keeps its own text. The missing connection is named after it, because a retry cannot start without one.
+NAMES_CONNECTION = ' No AI connection is set up yet. A component update starts only after you set one up in Settings.'
 
 
 def recorded(failure=RECORDED, **changes):
@@ -238,7 +240,10 @@ def test_an_earlier_failure_record_is_not_reclassified(case, today):
 
 def test_the_record_of_0987_reads_as_the_clean_room_showed_it():
     result = health.current(recorded(), SETUP_RECORD, connection=NEEDED)
-    assert (result['title'], result['detail'], result['actionRequired']) == (COULD_NOT_FINISH, NO_OUTCOME, True)
+    assert (result['title'], result['detail'], result['actionRequired']) == (
+        COULD_NOT_FINISH, NO_OUTCOME + NAMES_CONNECTION, True)
+    # With a connection the record reads exactly as that clean room showed it.
+    assert health.current(recorded(), SETUP_RECORD, connection=CONNECTED)['detail'] == NO_OUTCOME
     # A refusal that this release names carries its guidance.
     named = health.current(recorded(NAMED), SETUP_RECORD, connection=OTHER_PROFILE)
     assert named['detail'] == failure_guidance(NAMED)
@@ -537,7 +542,8 @@ async def test_an_installation_with_the_old_record_keeps_it_and_updates_after_a_
     # and the page then said this.
     manager.installed = 'b' * 40
     await manager.check()
-    assert (state['currentStatus']['title'], state['currentStatus']['detail']) == (COULD_NOT_FINISH, NO_OUTCOME)
+    assert (state['currentStatus']['title'], state['currentStatus']['detail']) == (
+        COULD_NOT_FINISH, NO_OUTCOME + NAMES_CONNECTION)
     assert [item['id'] for item in update_attention(manager.service.state)] == ['updates:current']
     # New components and still no connection: no attempt starts, and the record keeps its priority.
     manager.installed = 'a' * 40

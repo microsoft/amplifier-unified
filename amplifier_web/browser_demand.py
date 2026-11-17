@@ -110,7 +110,8 @@ def project(result):
                   or result.get('selectedSessionId') and item.get('sessionId') == result['selectedSessionId']
                   or page and item.get('page') == page
                   or panel == 'feedback' and item.get('requestId')]}
-    updates = result.get('updates', {})
+    from .update_health import browser_view
+    updates = result['updates'] = browser_view(result.get('updates', {}))
     if page != 'updates':
         result['updates'] = pick(updates, ('phase', 'error', 'detail', 'available', 'appAvailable',
             'pendingApp', 'pendingRelease', 'pendingRestart', 'pendingReplacement', 'installedAt',

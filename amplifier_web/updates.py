@@ -530,17 +530,18 @@ class UpdateManager:
         state['canRollback'] = 'previous' in active_release(self.home)
         from .update_diagnostics import UpdateDiagnostics
         self.diagnostics=UpdateDiagnostics(self)
-        from .update_health import publish as publish_health
+        from .update_health import activation, publish as publish_health
         self._active_update_evidence = {}
         self._update_health_initial = True
         self._update_health_seen_revision = service.state.get('configurationRevision')
+        from .update_restart import target
+        state['activation'] = activation(self)
+        state['forceRestartTarget'] = None if state['activation'] in {'starting', 'installing'} else target(self)
         publish_health(self)
         if restart_repair:
             self.diagnostics.record('restart-repair','failed',errorType='ValueError',preserve_last_failure=True)
         else:
             service._save_changes(globals={'updates'})
-        from .update_restart import target
-        state['forceRestartTarget'] = target(self)
 
     async def confirm_readiness(self, health, expected=None):
         from .update_readiness import confirm_readiness
@@ -564,14 +565,25 @@ class UpdateManager:
                     group['displayError'] = values['error']
                 self.diagnostics._pending_failure = None
             self.service.state['updates'].update(values)
-            state = self.service.state['updates']
-            from .update_health import publish as publish_health
-            state['blockers'] = (self.app_blockers() if state.get('pendingApp')
-                                 else self.blockers()) if self.requires_idle(state) else []
-            publish_health(self)
-            from .update_restart import target
-            state['forceRestartTarget'] = target(self)
+            self._derive_state()
             self.service._publish_changes(globals={'updates','settings'})
+
+    def _derive_state(self):
+        """Refresh the publication fields under service.lock; report any change."""
+        state = self.service.state['updates']
+        fields = ('blockers', 'activation', 'detail', 'currentStatus', 'forceRestartTarget')
+        before = tuple(state.get(key) for key in fields)
+        from .update_health import activation, publish as publish_health, PREPARED_STARTING, PREPARED_WAITING
+        state['blockers'] = (self.app_blockers() if state.get('pendingApp')
+                             else self.blockers()) if self.requires_idle(state) else []
+        state['activation'] = activation(self)
+        if (state['activation'] in {'starting', 'waiting'}
+                and state.get('detail') in (PREPARED_STARTING, PREPARED_WAITING)):
+            state['detail'] = PREPARED_STARTING if state['activation'] == 'starting' else PREPARED_WAITING
+        publish_health(self)
+        from .update_restart import target
+        state['forceRestartTarget'] = None if state['activation'] in {'starting', 'installing'} else target(self)
+        return before != tuple(state.get(key) for key in fields)
 
     def configuration_changed(self):
         """Invalidate the current projection on a source-settings publication."""

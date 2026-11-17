@@ -502,6 +502,8 @@ async def _activate_serialized(manager, *, force=None):
                     error='The staged application changed or could not be validated. Install again to prepare a new candidate.',
                     detail='The running host and previous candidate evidence were preserved.')
             raise
+        finally:
+            manager._replacing = None
 
 async def installed_target():
     """Only replace the uv tool environment that owns this running host."""
@@ -656,7 +658,11 @@ async def _activate(manager, *, force=None, holds=None):
             require_preserved_components(graph, host_graph)
     if force is None:
         from .update_drain import prepare
-        if not await prepare(manager, release):return
+        if not await prepare(manager, release):
+            async with manager.service.lock:
+                if manager._derive_state():
+                    manager.service._publish_changes(globals={'updates'})
+            return
         from .update_blockers import operation_holds
         held_configuration = operation_holds(manager.service)
     manager.diagnostics.begin('application',revision,validated.get('attemptId') or release.get('attemptId'),
@@ -738,7 +744,10 @@ async def _activate(manager, *, force=None, holds=None):
         if force is not None:
             from .update_restart import require
             require(manager, force)
-        if force is None and manager.app_busy():return
+        if force is None and manager.app_busy():
+            if manager._derive_state():
+                manager.service._publish_changes(globals={'updates'})
+            return
         state = manager.service.state['updates']
         if state.get('pendingApp') != release or state.get('applicationIntent') != intent:
             return  # External validation did not qualify a replacement target/intent.
@@ -749,8 +758,7 @@ async def _activate(manager, *, force=None, holds=None):
             except (OSError, ValueError, KeyError, TypeError, AttributeError, RuntimeError):
                 state['error'] = ('Automatic restart is paused because Amplifier cannot confirm earlier work has finished. '
                                   'The current app is kept.')
-                from .update_health import publish as publish_health
-                publish_health(manager)
+                manager._derive_state()
                 manager.service._publish_changes(globals={'updates'})
                 return  # No recovery, interruption, candidate discard or effect.
         if selected:
@@ -778,7 +786,9 @@ async def _activate(manager, *, force=None, holds=None):
         if force is None:
             from .update_drain import begin_replacement
             begin_replacement(manager, release)
+        manager._replacing = replacement['attemptId']
         manager.service.state['updates'].update(phase='activating',pendingReplacement=replacement,detail='Installing the app update and restarting…')
+        manager._derive_state()
         manager.service._publish_changes(globals={'updates'})
         if recovery is not None:
             recovery['replacement'] = copy.deepcopy(replacement)
@@ -940,6 +950,7 @@ async def restore_promoted_application(manager, promoted, recovery, bootstrap):
             error='The application update could not be verified. The previous application was verified and restored.',
             detail='The verified previous application was restored and is usable. Review update diagnostics before trying the update again.')
         try:
+            manager._derive_state()
             manager.service._publish_changes(globals={'updates'})
         except BaseException:
             state.clear()
