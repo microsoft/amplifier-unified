@@ -1,0 +1,108 @@
+name: Source store bytecode
+# A helper process must not change an object of the shared source store.
+#
+# Seen on a new Windows installation (0.106.3): after "Save and check
+# connection" for an "OpenAI Compatible API" connection, no chat with it
+# started and the next component update failed. The connection check's helper
+# imported the module from the store object and Python wrote __pycache__ into
+# it; Foundation then refused the object. A read-only attribute on a Windows
+# folder does not stop a new entry, so only Windows shows the files.
+#
+# Both jobs run the real helper file through the product's own start of it,
+# against Foundation's real code and a Git repository on the runner: once on a
+# host that names the store, where the same module is then prepared again with
+# the worker's rule for a provider that fails, and once on a host that names
+# none. Nothing goes to a network after the dependencies are installed. A case that fails, has an
+# error, is skipped, is deselected or is expected to fail fails the job, and so
+# does a run with no case: each step checks the exit status of pytest and its
+# summary line. -vv prints every fact of the case when one differs.
+#
+# It is not setup-file or clean-account acceptance: no installation, no app,
+# no real provider module and no chat.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/source-store-bytecode.yml
+      - amplifier_web/source_imports.py
+      # Every helper file with one of these names, also a new one: the last
+      # case names a helper that prepares a bundle itself.
+      - amplifier_web/*_probe.py
+      - amplifier_web/*_validate.py
+      - amplifier_web/setup.py
+      - amplifier_web/registry.py
+      - amplifier_web/portability.py
+      - amplifier_web/provider_environment.py
+      - amplifier_web/provider_isolation.py
+      - amplifier_web/probe_process.py
+      - amplifier_web/probe_git.py
+      - amplifier_web/runtime_bootstrap.py
+      - amplifier_web/update_sources.py
+      - amplifier_web/host/components.py
+      - amplifier_web/windows_jobs.py
+      - amplifier_web/windows_service.py
+      - amplifier_web/windows_consumer.py
+      - tests/test_source_store_bytecode.py
+      # A dependency change can bring a Foundation with another store rule.
+      - pyproject.toml
+      - uv.lock
+permissions:
+  contents: read
+jobs:
+  windows:
+    name: A connection check leaves the store object unchanged on native Windows
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      PYTHONUTF8: '1'
+      UV_PYTHON_DOWNLOADS: never
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13'
+          architecture: x64
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      - name: Install the locked application and test dependencies (CI setup only)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          uv sync --locked --group dev --no-install-project --python (Get-Command python).Source
+          if ($LASTEXITCODE -ne 0) { throw 'Locked dependency installation failed.' }
+      # -B is for this pytest process only. The helper is a child with the
+      # environment that the host gives it, and the cases take the setting out
+      # of that environment and out of their own process first.
+      - name: Require an unchanged store object after the real helper, with no skip
+        shell: pwsh
+        run: |
+          .\.venv\Scripts\python.exe -B -m pytest -q -vv -rA -p no:cacheprovider tests/test_source_store_bytecode.py | Tee-Object -Variable report
+          if ($LASTEXITCODE -ne 0) { throw 'A source-store case failed on native Windows.' }
+          $summary = [string]($report | Where-Object { $_ } | Select-Object -Last 1)
+          if ($summary -notmatch '^(=+ )?\d+ passed(, \d+ warnings?)? in ') { throw "A case did not pass or did not run; on this lane every case must run: $summary" }
+  linux:
+    name: A connection check leaves the source that it imports from unchanged
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13'
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      - run: uv sync --locked --group dev
+      # "shell: bash" gives pipefail: without it the step would take the status
+      # of tee, not of pytest. The summary line must name passed cases only.
+      - name: Require every source-store case with no skip
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --no-sync pytest -q -vv -rA -p no:cacheprovider tests/test_source_store_bytecode.py | tee report.txt
+          summary=$(grep -v '^$' report.txt | tail -n 1)
+          if ! grep -qE '^(=+ )?[0-9]+ passed(, [0-9]+ warnings?)? in ' <<<"$summary"; then
+            echo "A case did not pass or did not run; on this lane every case must run: $summary" >&2
+            exit 1
+          fi
