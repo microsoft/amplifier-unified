@@ -493,7 +493,18 @@ Idle maintenance also scrubs at most eight stage copies per pass, even when
 unused-code cleanup is off. A validated stage qualifies immediately. An
 unvalidated stage qualifies only when both its folder and `shared-config` are
 older than 24 hours, it is not an unresolved preparation candidate, and it holds
-no `profile-attempt.json` (a chat's own setup owns that stage).
+no `profile-attempt.json`.
+A chat's own setup makes the same copy in a stage of its own and records the
+attempt there in `profile-attempt.json`. When that preparation fails or is
+stopped, it removes the copy itself; settings and routing stay. A successful
+preparation keeps the copy for idle maintenance: its stage is validated. For an
+unvalidated stage that holds such a record, idle maintenance goes by the record
+alone, never by age. A record that says `failed` or `cancelled` qualifies
+immediately, so a removal that was refused is tried again. Any other record
+keeps the copy: age does not prove that the preparation ended. So an app that
+ended during a preparation leaves a record that says `preparing`, and that
+stage keeps its copy. So does a preparation that could neither record its end
+nor remove its copy; its error says that the copy stays.
 Unsafe paths or removal refusals keep the copy for a later pass.
 Failed stage folders stay; this credential cleanup deletes no folder.
 
