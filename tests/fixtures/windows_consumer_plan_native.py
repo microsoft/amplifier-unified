@@ -30,6 +30,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -42,6 +43,11 @@ RELEASE = {"version": "0.106.0", "sha256": "5d89c247b7ba19aa0264516036d17a26e314
 NAME = "amplifier-foundation"
 # Any commit other than the installed one. Nothing installs it; the gate compares text.
 OTHER = "e37a946b64854eb39c09a3857ce2bc366ff297e0"
+# The commands of the check get this time together, so that the check ends with its result file
+# before the workflow step's limit of 15 minutes. Python on Windows waits for a stopped command's
+# output; a program that the command started can hold it open. Then the step's limit ends the check.
+LIMIT = 12 * 60
+STARTED = time.monotonic()
 # The last line of a refusal, after one line for each difference.
 STOP = "\nThis run stops before it publishes. If a branch moved during this run, run all jobs again."
 
@@ -53,10 +59,18 @@ def load(path):
     return module
 
 
+def left(limit):
+    """The seconds that one command may take: its own limit, and never past the limit of the whole check."""
+    remaining = LIMIT - (time.monotonic() - STARTED)
+    if remaining <= 0:
+        raise RuntimeError(f"The check did not end in {LIMIT // 60} minutes.")
+    return min(limit, remaining)
+
+
 def command(tool, *arguments):
     """The release workflow's command line, with the checkout as the working directory."""
     return subprocess.run([sys.executable, str(tool), *map(str, arguments)], cwd=ROOT, capture_output=True,
-                          text=True, encoding="utf-8", errors="replace", timeout=120)
+                          text=True, encoding="utf-8", errors="replace", timeout=left(120))
 
 
 def evidence(tool, folder, resolved):
@@ -105,7 +119,7 @@ def cases(work, plan_path, records, tool=TOOL):
     host = [{key: value for key, value in row.items() if key != "delivery"}
             for row in plan["graph"] if row["name"] != "amplifier-unified"]
     installed = {row["name"]: row["revision"] for row in host if row.get("url")}
-    if installed[NAME] == OTHER:
+    if installed.get(NAME) == OTHER:
         raise RuntimeError("The installed Amplifier Foundation commit is the fixture's other commit. Change OTHER.")
     same = evidence(tool, work / "host-same", host)
     other = evidence(tool, work / "host-other", moved(host))
@@ -139,19 +153,23 @@ def cases(work, plan_path, records, tool=TOOL):
     return {"gitComponents": installed, "cases": results, "ok": all(item["passed"] is True for item in results)}
 
 
-def run(*arguments, **options):
-    result = subprocess.run([*map(str, arguments)], capture_output=True, text=True, encoding="utf-8",
-                            errors="replace", **options)
+def run(*arguments, limit, **options):
+    name = f"{Path(str(arguments[0])).name} {arguments[1]}"
+    seconds = left(limit)
+    try:
+        result = subprocess.run([*map(str, arguments)], capture_output=True, text=True, encoding="utf-8",
+                                errors="replace", timeout=seconds, **options)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"{name} did not end in {int(seconds)} seconds.") from None
     if result.returncode != 0:
-        raise RuntimeError(f"{Path(str(arguments[0])).name} {arguments[1]} failed: "
-                           + (result.stdout + result.stderr)[-3000:])
+        raise RuntimeError(f"{name} failed: " + (result.stdout + result.stderr)[-3000:])
 
 
 def wheel(work):
     """The publisher's release file. Only the bytes with the published digest are kept."""
     path = work / f"amplifier_unified-{RELEASE['version']}-py3-none-any.whl"
     with urllib.request.urlopen(f"{SOURCE}/releases/download/v{RELEASE['version']}/{path.name}",
-                                timeout=120) as response:
+                                timeout=left(120)) as response:
         raw = response.read(64 * 1024 * 1024)
     if hashlib.sha256(raw).hexdigest() != RELEASE["sha256"]:
         raise RuntimeError("The downloaded wheel is not the published release file.")
@@ -165,14 +183,16 @@ def prepare(work):
     assert os.environ.get("GITHUB_ACTIONS") == "true"
     release = wheel(work)
     uv = shutil.which("uv")
+    if not uv:
+        raise RuntimeError("uv is not on this runner.")
     environment = work / "windows-consumer-app"
     python = environment / "Scripts/python.exe"
-    run(uv, "venv", "--python", "3.13", environment, timeout=300)
-    run(uv, "pip", "install", "--python", python, release, timeout=900)
-    run(uv, "pip", "check", "--python", python, timeout=120)
+    run(uv, "venv", "--python", "3.13", environment, limit=300)
+    run(uv, "pip", "install", "--python", python, release, limit=600)
+    run(uv, "pip", "check", "--python", python, limit=120)
     run(sys.executable, ROOT / "scripts/windows_consumer_release.py", "build", "--wheel", release,
         "--python", python, "--revision", RELEASE["revision"], "--output", work / "windows-consumer",
-        cwd=ROOT, timeout=600)
+        limit=300, cwd=ROOT)
     return work / "windows-consumer/windows-consumer-plan.json", load(TOOL).graph(python)
 
 

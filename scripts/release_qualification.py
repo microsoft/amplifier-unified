@@ -189,7 +189,9 @@ def source(row):
         vcs = direct.get('vcs_info') or {}
         if vcs.get('vcs') != 'git':
             return None
-        return {'url': direct.get('url'), 'revision': vcs.get('commit_id'),
+        if not direct.get('url'):
+            raise ValueError(f"{row['name']} has a Git install record without a repository URL")
+        return {'url': direct['url'], 'revision': vcs.get('commit_id'),
                 'subdirectory': direct.get('subdirectory') or ''}
     if not row.get('url'):
         return None

@@ -49,6 +49,7 @@ jobs:
           architecture: x64
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
       - name: Install a published wheel, build its plan, and run the gate three times
+        # The check gives its commands 12 minutes together. It then stops them and writes result.json.
         timeout-minutes: 15
         shell: pwsh
         run: |

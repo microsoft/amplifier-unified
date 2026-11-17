@@ -2625,6 +2625,14 @@ def test_windows_plan_registry_row_that_the_runtime_tests_lack_is_reported_for_b
                                   + first + f'{TESTS_LACK} amplifier-foundation.' + STOP)
 
 
+def test_windows_plan_git_install_record_without_a_url_is_refused_with_a_sentence(consumer):
+    runtime = [install_record(row) for row in component_rows()]
+    del runtime[1]['direct']['url']
+    root, evidence, expected, path, receipts = consumer(component_rows(), component_rows(), runtime)
+    with pytest.raises(ValueError, match='^amplifier-foundation has a Git install record without a repository URL$'):
+        qualification.verify_consumer(root, evidence, expected, path, receipts)
+
+
 def test_windows_plan_with_one_component_twice_is_refused(consumer):
     # Without this, the later row would replace the earlier one in the comparison.
     twice = [{**component_rows(MOVED)[1], 'name': 'Amplifier._Foundation'}, *component_rows()]
@@ -2763,6 +2771,10 @@ def test_windows_plan_native_check_passes_only_with_one_acceptance_and_two_refus
     result = fixture.cases(tmp_path / 'fails', path, records, tool=fails)
     assert result['ok'] is False and [case['passed'] for case in result['cases']] == [False, True, True]
     assert result['cases'][0]['returncode'] == 3
+    # A plan without a row of Amplifier Foundation ends the check with a sentence.
+    path.write_text(json.dumps({'schema': 1, 'graph': [APP_ROW, *[row for row in rows if row['name'] != 'amplifier-foundation']]}))
+    with pytest.raises(RuntimeError, match='exactly one row of amplifier-foundation'):
+        fixture.cases(tmp_path / 'no-foundation', path, records)
     # The other commit must differ from the installed one, or a refusal would show nothing.
     path.write_text(json.dumps({'schema': 1, 'graph': [APP_ROW, *component_rows(fixture.OTHER)]}))
     with pytest.raises(RuntimeError, match='Change OTHER'):
@@ -2795,6 +2807,38 @@ def test_windows_plan_native_check_keeps_only_the_published_wheel_and_installs_o
     with pytest.raises(AssertionError):
         fixture.prepare(tmp_path)
     assert len(requested) == 1
+
+
+def test_windows_plan_native_check_stops_its_commands_before_the_step_limit_and_writes_its_result(tmp_path, monkeypatch):
+    fixture = native_plan_check()
+    workflow = yaml.load((ROOT / '.github/workflows/windows-consumer-plan.yml').read_text(), Loader=yaml.BaseLoader)
+    job = workflow['jobs']['windows-consumer-plan']
+    step = next(step for step in job['steps'] if 'windows_consumer_plan_native.py' in step.get('run', ''))
+    # The step's limit is not raised. The time for the check's commands ends two minutes or more before it.
+    assert step['timeout-minutes'] == '15' and job['timeout-minutes'] == '20'
+    assert fixture.LIMIT <= (int(step['timeout-minutes']) - 2) * 60
+    # One command gets its own limit, and never more than what is left of the whole check.
+    assert fixture.left(30) == 30
+    monkeypatch.setattr(fixture, 'STARTED', fixture.time.monotonic() - fixture.LIMIT + 20)
+    assert 0 < fixture.left(300) <= 20
+    # A command that does not end in its time is a sentence, not a traceback of the timeout.
+    with pytest.raises(RuntimeError, match=r'^python[\w.]* -c did not end in 1 seconds\.$'):
+        fixture.run(sys.executable, '-c', 'import time; time.sleep(30)', limit=1)
+    # When the time of the whole check is used up, the check ends with an error and its result file exists.
+    monkeypatch.setenv('RUNNER_TEMP', str(tmp_path))
+    monkeypatch.setenv('GITHUB_ACTIONS', 'true')
+    monkeypatch.setattr(fixture, 'wheel', lambda work: work / 'app.whl')
+    monkeypatch.setattr(fixture.shutil, 'which', lambda name: '/tools/' + name)
+    monkeypatch.setattr(fixture, 'STARTED', fixture.time.monotonic() - fixture.LIMIT)
+    assert fixture.main() == 1
+    result = json.loads((tmp_path / 'consumer-plan-evidence/result.json').read_text())
+    assert result['ok'] is False and result['stage'] == 'installation'
+    assert result['error'] == 'RuntimeError: The check did not end in 12 minutes.'
+    # A runner without uv ends the check with a sentence.
+    monkeypatch.setattr(fixture, 'STARTED', fixture.time.monotonic())
+    monkeypatch.setattr(fixture.shutil, 'which', lambda name: None)
+    with pytest.raises(RuntimeError, match='^uv is not on this runner\\.$'):
+        fixture.prepare(tmp_path / 'no-uv')
 
 
 def test_windows_plan_native_check_runs_for_changes_of_the_gate_and_cannot_be_skipped():
