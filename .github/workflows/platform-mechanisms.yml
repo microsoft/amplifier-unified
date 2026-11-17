@@ -408,11 +408,16 @@ jobs:
           .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -s -p no:cacheprovider tests/test_windows_start.py | Tee-Object -Variable report
           if ($LASTEXITCODE -ne 0) { throw 'Windows start sign or lock checks failed.' }
           if (($report -join "`n") -match '\d+ skipped') { throw 'A native start case was skipped; on this lane it must run.' }
+      # Also the next step that the sign-in page on the PC names: the host's
+      # own look at the real record of the Start-menu entries through the real
+      # private folder. A skipped case would hide the answer; on this lane it
+      # fails.
       - name: Check sign-out of all browsers and remote sign-in by code (real private store, real HTTPS)
         shell: pwsh
         run: |
-          .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -p no:cacheprovider tests/test_session_sign_out.py tests/test_browser_code.py
+          .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -p no:cacheprovider tests/test_session_sign_out.py tests/test_browser_code.py | Tee-Object -Variable report
           if ($LASTEXITCODE -ne 0) { throw 'Sign-out of all browsers or remote sign-in by code checks failed.' }
+          if (($report -join "`n") -match '\d+ skipped') { throw 'A native sign-in case was skipped; on this lane it must run.' }
       # Uninstall: real Start-menu shortcuts (ShellLink COM), the real HKCU
       # registry transaction, private files and NTFS sharing, in a throwaway
       # installation folder that the test removes. Task Scheduler is a stand-in.
