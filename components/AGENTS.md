@@ -10,14 +10,16 @@ imports and database formats; the database includes durable explicit notes and
 receipts, not only rebuildable search data. Do not coinstall the standalone
 distribution with Unified or create a second writable runtime copy.
 
-`components/workspaces/` is the temporary authoring home for the independently
-buildable `amplifier_workspace_metadata` package. Its registration and query
-mechanism tests belong here; Unified retains initialization, filesystem effects,
+Author `amplifier_workspace_metadata` and its registration/query tests in
+[amplifier-platform-workspaces](https://github.com/bkrabach/amplifier-platform-workspaces).
+Unified retains initialization, filesystem effects,
 history, authority and persistence. Unified consumes only the published artifact
 selected into `workspace-metadata-delivery/` by `workspace-metadata.source.json`,
 as the sole installed owner; do not coinstall the standalone distribution. Never
 edit that generated copy by hand. Author edits and publication do not refresh the
-app selection. This metadata boundary is not the whole workspace domain.
+app selection. Do not restore a second author copy here. Follow the
+[selection instructions](README.md#select-a-workspace-metadata-artifact).
+This metadata boundary is not the whole workspace domain.
 
 `components/outputs/` is temporarily authored here as an independently buildable
 Python project. Preserve `amplifier_outputs` imports and its saved-body formats.

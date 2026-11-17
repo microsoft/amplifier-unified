@@ -72,6 +72,15 @@ changing the app default; source handoff does not rewrite historical selected
 receipts. This does not claim independent pip replacement; returning
 to a prior app uses ordinary app rollback and preserves newer scheduling state.
 
+## Current workspace metadata delivery
+
+[amplifier-platform-workspaces](https://github.com/bkrabach/amplifier-platform-workspaces)
+owns the registration/query mechanism and direct tests. Unified selects its
+published artifact and remains the sole installed owner. Filesystem effects,
+workspace IDs, authority, persistence and conversation history retain their
+existing host owners; this handoff does not extract the full workspace domain.
+Publication and artifact selection remain separate, preserving original receipts.
+
 ## Not in v1
 
 Mandatory microservices or a new central runtime framework; promote only when a

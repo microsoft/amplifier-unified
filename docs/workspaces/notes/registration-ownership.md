@@ -22,11 +22,13 @@ list/search/paging over those rows; the host
 passes the same canonical registrations and retains demand and pinned-scope
 selection. It adds no registry, access decision or persistence owner.
 
-The temporary [`components/workspaces`](../../../components/workspaces/README.md)
-project provides the standalone metadata API and direct tests. Unified packages
+[amplifier-platform-workspaces](https://github.com/bkrabach/amplifier-platform-workspaces)
+owns the standalone metadata API and direct tests. Unified packages
 only its selected published artifact as the sole installed owner. Author changes,
 independent publication and artifact adoption remain separate; this is not the
-complete workspace domain.
+complete workspace domain. Follow the
+[artifact selection instructions](../../../components/README.md#select-a-workspace-metadata-artifact);
+the removed temporary author project must not be restored as another owner.
 
 Current registration IDs still derive from canonical paths, with native-project
 placeholder IDs for unresolved folders. A registration's `aliases` are display
