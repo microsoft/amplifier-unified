@@ -12,6 +12,12 @@ name: Windows path length
 # It is not setup-file or clean-account acceptance, and it runs no model turn.
 # It is not a whole in-app update: no component is fetched or installed.
 #
+# A second native job prepares and checks a chat that has its own setup, with
+# the app's real preparation: real uv, the worker dependencies, the default
+# components from their repositories, the freeze and both probes, below the
+# same folder. It then lists every path of that tree and requires that no path
+# which the app or a chat needs passes the limit. The list is an artifact.
+#
 # This is the only native job that installs the locked Amplifier Foundation.
 # So it also holds a real Foundation session ownership, as a live conversation
 # worker does, and requires that the installation folder stays usable.
@@ -35,6 +41,11 @@ on:
       - amplifier_web/installation_runtime.py
       - amplifier_web/runtime_environment.py
       - amplifier_web/host/session.py
+      # A chat with its own setup: its preparation, its stage and its check.
+      - amplifier_web/runtime_profiles.py
+      - amplifier_web/runtime_qualification.py
+      - amplifier_web/runtime_deps/**
+      - tests/test_windows_chat_setup.py
       - scripts/windows_bootstrap_native.cs
       - docs/design/native-windows-installation.md
       - tests/test_chat_project_names.py
@@ -116,6 +127,78 @@ jobs:
         run: |
           .\.venv\Scripts\python.exe -B -m pytest -q -rA -p no:cacheprovider tests/test_windows_long_paths_off.py
           if ($LASTEXITCODE -ne 0) { throw 'Windows path-length checks failed with long paths off.' }
+      - name: Restore the runner's long-path setting
+        if: ${{ always() && steps.long_paths.outputs.original != '' }}
+        shell: pwsh
+        env:
+          ORIGINAL: ${{ steps.long_paths.outputs.original }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $key = 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem'
+          if ($env:ORIGINAL -eq 'absent') {
+            Remove-ItemProperty -Path $key -Name LongPathsEnabled
+          } else {
+            Set-ItemProperty -Path $key -Name LongPathsEnabled -Value ([int]$env:ORIGINAL) -Type DWord
+          }
+          $now = (Get-ItemProperty -Path $key -Name LongPathsEnabled -ErrorAction SilentlyContinue).LongPathsEnabled
+          if ($null -eq $now) { $now = 'absent' }
+          if ("$now" -ne $env:ORIGINAL) { throw "LongPathsEnabled is $now; the runner had $env:ORIGINAL." }
+          Write-Host "LongPathsEnabled is restored to $env:ORIGINAL (read back: $now)."
+  windows-chat-setup:
+    name: A chat's own setup and the whole tree with long paths off
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUTF8: '1'
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+      UV_PYTHON_DOWNLOADS: never
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13'
+          architecture: x64
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      - name: Install the locked application and test dependencies (CI setup only)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          uv sync --locked --group dev --no-install-project --python (Get-Command python).Source
+          if ($LASTEXITCODE -ne 0) { throw 'Locked dependency installation failed.' }
+      - name: Turn Windows long paths off for new processes
+        id: long_paths
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $key = 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem'
+          $original = (Get-ItemProperty -Path $key -Name LongPathsEnabled -ErrorAction SilentlyContinue).LongPathsEnabled
+          if ($null -eq $original) { $original = 'absent' }
+          "original=$original" >> $env:GITHUB_OUTPUT
+          Set-ItemProperty -Path $key -Name LongPathsEnabled -Value 0 -Type DWord
+          if ((Get-ItemProperty -Path $key -Name LongPathsEnabled).LongPathsEnabled -ne 0) { throw 'LongPathsEnabled was not set to 0.' }
+          Write-Host "LongPathsEnabled was $original on this runner and is now 0."
+      # A new process. The opt-in makes a skip a failure. The preparation downloads
+      # the worker dependencies and the default components, as on a person's PC.
+      - name: Prepare and check a chat's own setup under the longest supported folder, then list the tree
+        shell: pwsh
+        env:
+          AMPLIFIER_REQUIRE_LONG_PATHS_OFF: '1'
+          AMPLIFIER_REQUIRE_CHAT_SETUP: '1'
+          AMPLIFIER_CHAT_SETUP_TREE: ${{ runner.temp }}\chat-setup-tree.txt
+        run: |
+          .\.venv\Scripts\python.exe -B -m pytest -q -rA -p no:cacheprovider tests/test_windows_chat_setup.py
+          if ($LASTEXITCODE -ne 0) { throw 'The setup of a chat was not prepared and checked with long paths off, or a needed path passes the limit.' }
+      - name: Keep the list of every path
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: chat-setup-tree
+          path: ${{ runner.temp }}\chat-setup-tree.txt
+          if-no-files-found: warn
+          retention-days: 30
       - name: Restore the runner's long-path setting
         if: ${{ always() && steps.long_paths.outputs.original != '' }}
         shell: pwsh

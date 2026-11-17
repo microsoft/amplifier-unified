@@ -415,6 +415,23 @@ EARLIER_SOURCE_STORE_LONGEST_ROOT = {SOURCE_OBJECT: 54}
 ROOT_FOR_20_CHARACTER_ACCOUNT = len('C:\\Users\\' + 'u' * 20 + '\\AppData\\Local\\Amplifier')
 
 
+# Paths that neither the app nor a chat opens by an ordinary path. Only these
+# may pass the limit, and the native tree check lists each one that does.
+# - ``.git``: Git's own data in a staged repository. The store reaches it by
+#   extended-length paths, and Git runs with its own long-path setting.
+# - ``tests``, ``test``: the tests of a repository or of an installed package.
+#   No bundle file, module source, context file or skill is there. The build
+#   of a module reads the copy in the build view, which is 42 characters shorter.
+# - ``__pycache__``: bytecode. Python writes it when it can and uses the
+#   source file when it cannot.
+NOT_NEEDED_FOLDERS = frozenset({'.git', 'tests', 'test', '__pycache__'})
+
+
+def needed(relative):
+    """True unless the path is in a folder that nothing opens by an ordinary path (NOT_NEEDED_FOLDERS)."""
+    return not NOT_NEEDED_FOLDERS & set(relative.lower().split('\\'))
+
+
 def test_source_store_limits_are_stated_not_hidden():
     def longest_roots(folder):
         rows = {name: (kind, relative) for name, kind, relative in source_store(folder=folder)}
