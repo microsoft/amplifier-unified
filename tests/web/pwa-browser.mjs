@@ -47,6 +47,48 @@ try{
  await page.getByRole('button',{name:'Settings test',exact:true}).click();
  await page.waitForFunction(()=>document.title==='Settings test - '+window.amplifier.getState().instanceBranding.name);
  const initialBranding=await page.evaluate(()=>window.amplifier.getState().instanceBranding);
+ assert.equal(initialBranding.colorMode,'appearance');
+ // A per-browser CSS accent must reach the public manifest and its icon URLs
+ // without being stored as the listener's explicit icon color.
+ const waitForAccent=async target=>{
+  await target.waitForFunction(()=>{
+   const root=document.querySelector('#amp-one'),manifest=document.querySelector('link[rel="manifest"]');
+   if(!root||!manifest)return false;
+   const probe=document.createElement('span');probe.style.color='var(--a-accent)';root.append(probe);
+   const color=getComputedStyle(probe).color;probe.remove();
+   const canvas=document.createElement('canvas'),ctx=canvas.getContext('2d');
+   canvas.width=canvas.height=1;ctx.fillStyle=color;ctx.fillRect(0,0,1,1);
+   const expected=[...ctx.getImageData(0,0,1,1).data].slice(0,3).map(n=>n.toString(16).padStart(2,'0')).join('');
+   return new URL(manifest.href).searchParams.get('accent')?.toLowerCase()===expected;
+  });
+  return target.evaluate(async()=>{
+   const url=new URL(document.querySelector('link[rel="manifest"]').href);
+   const body=await fetch(url).then(response=>response.json());
+   return {accent:url.searchParams.get('accent'),body};
+  });
+ };
+ await page.emulateMedia({colorScheme:'light'});
+ const light=await waitForAccent(page);
+ assert.equal(light.body.id,'/');
+ assert.ok(light.body.icons.every(icon=>new URL(icon.src,'http://127.0.0.1:8958').searchParams.get('accent')===light.accent));
+ const other=await browser.newContext({viewport:{width:1100,height:850},colorScheme:'dark',extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
+ const otherPage=await other.newPage();
+ await otherPage.goto('http://127.0.0.1:8958/');await otherPage.waitForSelector('#amp-one');
+ await otherPage.waitForFunction(()=>window.amplifier?.getState()?.instanceBranding?.colorMode==='appearance');
+ const dark=await waitForAccent(otherPage);
+ assert.notEqual(dark.accent,light.accent,'Different browser color schemes can use different appearance accents');
+ assert.ok(dark.body.icons.every(icon=>new URL(icon.src,'http://127.0.0.1:8958').searchParams.get('accent')===dark.accent));
+ assert.equal(await page.evaluate(()=>window.amplifier.getState().instanceBranding.colorMode),'appearance');
+ assert.equal((await waitForAccent(page)).accent,light.accent,'A second browser must not overwrite the first browser icon');
+ await other.close();
+ const pixels=await page.evaluate(async iconUrl=>{
+  const image=await createImageBitmap(await fetch(iconUrl).then(response=>response.blob()));
+  const canvas=document.createElement('canvas');canvas.width=image.width;canvas.height=image.height;
+  const ctx=canvas.getContext('2d');ctx.drawImage(image,0,0);
+  return {corner:ctx.getImageData(0,0,1,1).data[3],edge:ctx.getImageData(Math.floor(image.width/2),Math.floor(image.height/16),1,1).data[3]};
+ },light.body.icons[0].src);
+ assert.equal(pixels.corner,0,'Built-in icon corners are transparent');
+ assert.ok(pixels.edge>0,'The accent tile has an opaque top edge');
  await page.setViewportSize({width:1100,height:850});
  await page.evaluate(()=>window.amplifier.dispatch('settings.open',{page:'instance-branding',surface:'dialog'}));
  const appName=page.getByRole('textbox',{name:'App name',exact:true});
@@ -60,6 +102,7 @@ try{
  // Moving directly from a name edit to a color must apply BOTH, not lose the click to blur.
  await appName.fill('Design demo');await page.getByRole('button',{name:'Teal icon',exact:true}).click();
  await page.waitForFunction(()=>{const b=window.amplifier.getState().instanceBranding;return b.name==='Design demo'&&b.color==='#0f766e'});
+ assert.equal(await page.evaluate(()=>window.amplifier.getState().instanceBranding.colorMode),'custom');
  await expect(page.locator('.a-work-brand')).toHaveText('Design demo');
  await page.waitForFunction(()=>document.title==='Settings test - Design demo');
  const freshManifest=()=>page.evaluate(()=>fetch(document.querySelector('link[rel=manifest]').href).then(async response=>({headers:Object.fromEntries(response.headers),body:await response.json()})));
@@ -93,6 +136,11 @@ try{
  await page.getByRole('button',{name:'Rose icon',exact:true}).click();
  await page.waitForFunction(()=>{const b=window.amplifier.getState().instanceBranding;return !b.customIcon&&b.color==='#be123c'});
  assert.notEqual((await freshManifest()).body.icons[0].src,uploaded.iconUrl);
+ // Returning to the appearance default must leave the app name intact.
+ await page.getByRole('button',{name:'Use appearance accent',exact:true}).click();
+ await page.waitForFunction(()=>{const b=window.amplifier.getState().instanceBranding;return b.colorMode==='appearance'&&!b.customIcon&&b.name==='Upload demo'});
+ await expect(appName).toHaveValue('Upload demo');
+ assert.equal((await waitForAccent(page)).body.name,'Upload demo');
  await appName.fill('Must not save this edit');await page.getByRole('button',{name:'Reset name & icon',exact:true}).click();
  await page.waitForFunction(name=>window.amplifier.getState().instanceBranding.name===name,initialBranding.defaultName);
  await expect(appName).toHaveValue(initialBranding.defaultName);
