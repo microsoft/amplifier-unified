@@ -371,6 +371,20 @@ the environment and every declared source. The bindings must name exactly one
 ref for a module's source and commit; with none, or with two different refs,
 the commit stays a fixed version as before.
 
+The first real component update of such an installation makes its first
+generation. Qualification asks the branch of each chat-installed module again
+(`runtime_source_policy.qualify_cache_policies`). A module at the head of its
+branch is recorded with that branch. A module that is behind its branch, and
+that this update does not move, is recorded as a moved reference by the
+existing rule. The next check then offers "Refresh included components" once,
+and that update moves the module to its branch. It starts by itself when
+**Keep Amplifier up to date** is on. Before this rule a new installation ran
+that update after its first chat, also when no module was behind.
+
+A new installation with no AI connection waits for a connection only when a
+check found a component update. When the check found none, Settings says that
+the installation is up to date.
+
 A proven catalog-data-only change reuses an already qualified runtime. This requires an exact tree comparison, an allowlisted data contract and unchanged app-profile inputs. Unknown files, code, dependency or profile changes take the qualification path. Failed qualification leaves the active pointer unchanged.
 
 Qualified component generations use per-worker activation. Promotion atomically changes the generation selected by new starts. Running workers retain their source generation, environment and native writer, including while idle. The existing retirement handshake saves, rechecks pending work/resources and exits before releasing ownership. The next explicit work starts a fresh worker on the current generation and resumes native history. Active voice protects its worker. The updater does not interrupt a turn, automatically replay an operation, or add another checkpoint format. Application replacements, incompatible worker protocols and legacy generations retain the coordinated restart boundary.

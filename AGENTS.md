@@ -269,7 +269,10 @@ that changes no component (`runtime_environment.shared_build_policies`,
 declared source is no update there (`update_sequence.classify`). An update
 must add it in two other states: with a selected generation, which is
 immutable, and with no worker environment, where the first update prepares
-everything.
+everything. The first real component update then makes the first generation.
+A chat-installed module that is behind its branch at that moment gets the
+existing moved-reference record (`runtime_source_policy.qualify_cache_policies`),
+and one "Refresh included components" update follows and settles it.
 `UpdateManager.check_due` is the one rule for a check that time causes: the
 timed check, and one check at a host start when the last check or attempt was
 at least 1 hour old. A one-time reason must end by a fact that the owner keeps
