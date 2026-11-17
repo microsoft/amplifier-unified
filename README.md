@@ -37,21 +37,19 @@ the [platform and recovery instructions](docs/DEPLOYMENT.md#manual-installation)
 ### Windows 11 (preview)
 
 This is a preview. The setup file is not signed yet, so your browser asks you to
-confirm the download. You do not need WSL, Python, Git or a terminal.
+confirm the download. You do not need WSL, Python, Git or a terminal. The steps
+below describe Microsoft Edge.
 
 1. Download the setup file:
    [AmplifierUnifiedSetup-windows-x64.exe](https://github.com/microsoft/amplifier-unified/releases/latest/download/AmplifierUnifiedSetup-windows-x64.exe).
 2. Microsoft Edge holds the download and says that the file "isn't commonly
    downloaded". In the Downloads list, point at the file and select
    **More actions (…)**, then **Keep**. Edge then shows "Publisher: Unknown".
-   Select the small arrow next to **Delete**, then **Keep anyway**. Another
-   browser can ask in other words. Choose to keep the file.
-3. Open the file. In Microsoft Edge, select **Open file** below the file's
-   name in the Downloads list. In another browser, use that browser's list of
-   downloads. You can also double-click the file in the folder where your
-   browser saved it, usually your Downloads folder. Do not use "Run as
-   administrator". Select **OK** to install. Setup takes about 3 minutes.
-   Select **OK** when it has finished.
+   Select the small arrow next to **Delete**, then **Keep anyway**.
+3. Open the file: select **Open file** in the Downloads list, or double-click
+   the file in your Downloads folder. Do not use "Run as administrator". Select
+   **OK** to install. Setup takes about 3 minutes. Select **OK** when it has
+   finished.
 4. Amplifier starts. The first start can take a few minutes. Amplifier shows one
    message; select **OK**. Windows then shows a "Security Warning" that asks
    whether to install a certificate named "Amplifier Unified (this PC only)".
@@ -66,20 +64,19 @@ Amplifier shows "Preparing chat…" during that time.
 
 To open Amplifier later, use the Start menu: **Amplifier Unified**.
 
-Setup or the first start can stop with a message. The message says what
-happened and what to do. Three cases:
+In three cases, setup or the first start does not finish. A message says what
+to do:
 
 - **Administrator sign-in.** Setup says: "This Windows sign-in runs every
   program as administrator." Sign in to Windows with a standard account, or
-  turn User Account Control on. Then run setup again.
+  turn User Account Control on, and then run setup again.
 - **Long folder path.** Setup says that the path of the Amplifier folder "is
-  too long for Windows". The limit is 59 characters. Use a Windows account
+  too long for Windows" (the limit is 59 characters). Use a Windows account
   with a shorter name.
 - **Certificate step.** In step 4, Amplifier says that "this PC's security
   settings do not let it finish setting up its private connection to your
-  browser". The message names a certificate file. If your organization
-  manages this PC, ask its IT support to trust this certificate for your
-  account.
+  browser". If your organization manages this PC, ask its IT support to trust
+  the certificate named in the message for your account.
 
 Limits of this preview:
 
