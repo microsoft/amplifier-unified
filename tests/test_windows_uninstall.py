@@ -1535,28 +1535,65 @@ def test_uninstall_that_cannot_check_its_installation_does_not_say_that_amplifie
     assert "keep using" not in stopped.value.notice and "open" not in stopped.value.notice
 
 
-def test_uninstall_after_a_journal_that_a_program_deleted_says_only_what_this_uninstall_deleted(
-        deleter, monkeypatch):
-    """An earlier uninstall deleted data and stopped. Its journal is gone, so this one looks like a first one."""
+@pytest.mark.parametrize("earlier", ["journal-deleted", "other-window"])
+def test_uninstall_that_did_not_see_an_earlier_removal_says_only_what_this_uninstall_deleted(
+        deleter, monkeypatch, earlier):
+    """An earlier uninstall deleted data and stopped. This one asked its questions as for a whole installation.
+
+    `journal-deleted`: a program of this account deleted the earlier journal (the design's limit "the journal
+    is not held open"). `other-window`: another Amplifier window ran that uninstall while the first question
+    of this one waited for its answer.
+    """
     state, root, consumer = deleter.state, deleter.root, deleter.consumer
-    state["choices"], state["held"] = ["yes", "yes"], {"app/chats/one/message.txt"}
-    with pytest.raises(consumer.Unfinished):
-        deleter.run()
-    assert not (root / "shared").exists()
-    (root / plan.JOURNAL).unlink()  # A program of this account (the design's limit "the journal is not held open").
-    state["held"].clear()
-    state.update(choices=["yes", "yes"], questions=[])
-    state["calls"].clear()
-    journal_stops(deleter, monkeypatch, "refused")
+
+    def earlier_removal():
+        state.update(choices=["yes", "yes"], held={"app/chats/one/message.txt"}, questions=[])
+        with pytest.raises(consumer.Unfinished) as stopped:
+            deleter.run()
+        assert stopped.value.step == "data" and not (root / "shared").exists()
+        assert deleter.journal()["choice"] == "delete"
+        state["held"].clear()
+        state["calls"].clear()
+
+    if earlier == "journal-deleted":
+        earlier_removal()
+        (root / plan.JOURNAL).unlink()
+        state.update(choices=["yes", "yes"], questions=[])
+        journal_stops(deleter, monkeypatch, "refused")
+    else:
+        ask, failed = plan.question, []
+        def other_window():
+            try:
+                earlier_removal()
+            except BaseException as error:
+                failed.append(error)
+        def question(text, *, cancel=False):
+            if cancel:  # This window's first question is on screen. The other window runs now, to its stop.
+                assert not plan.unfinished(root)
+                monkeypatch.setattr(plan, "question", ask)
+                window = threading.Thread(target=other_window)
+                window.start()
+                window.join(60)
+                assert not window.is_alive() and not failed, failed
+                state.update(choices=["yes", "yes"], questions=[])
+                journal_stops(deleter, monkeypatch, "refused")
+            return ask(text, cancel=cancel)
+        monkeypatch.setattr(plan, "question", question)
     with pytest.raises(consumer.Unfinished) as stopped:
         deleter.run()
-    # Nothing shows this program the earlier removal: it asks the questions of a whole installation.
-    assert "Do you also want to delete your chats, settings and saved accounts?" in state["questions"][0][0]
+    # Nothing showed this program the earlier removal when it asked: the questions of a whole installation.
+    (first, cancel), (second, _) = state["questions"]
+    assert cancel and "Do you also want to delete your chats, settings and saved accounts?" in first
+    assert "Select No to change nothing. Amplifier stays installed." in second
     assert stopped.value.step == "journal" and not deletes(state)
     assert stopped.value.notice == consumer._UNFINISHED["journal"] + "\n\nReference: journal, PermissionError"
     # The stored keys went earlier. So the text speaks of this uninstall, not of the folder.
+    assert not (root / "shared").exists()
     assert "This uninstall deleted nothing in the folder." in stopped.value.notice
     assert "Nothing in the folder was deleted" not in stopped.value.notice
+    # Whether Amplifier opens differs between the two, and the text says neither.
+    assert opens(deleter, monkeypatch) is (earlier == "journal-deleted")
+    assert stopped.value.notice.count("Amplifier might not open until then.") == 1
 
 
 def test_design_entry_on_the_journal_names_what_the_cases_above_show():
@@ -2471,7 +2508,12 @@ def test_native_journal_that_loses_its_name_or_is_replaced_in_the_instant_of_its
     """
     from amplifier_web import windows_consumer as consumer
     native, root = native_installation, native_installation["root"]
-    whole = set(_tree(root))
+
+    def tree():
+        # Without the installation's own temporary folder: a process of this test has it as TEMP.
+        return {name for name in _tree(root) if Path(name).parts[0] != "temp"}
+
+    whole = tree()
     note = Path("app") / "config" / "services" / consumer.RECORD
 
     def reaches_its_start_step():
@@ -2487,9 +2529,8 @@ def test_native_journal_that_loses_its_name_or_is_replaced_in_the_instant_of_its
     assert "This uninstall deleted nothing in the folder." in first["notice"]
     assert not plan.unfinished(root) and plan.pending(root) is None
     # Nothing is gone. New: only the private note of the failure, beside the app's other service records.
-    now = set(_tree(root))
-    assert whole <= now and {name for name in now - whole if Path(name).parts[0] != "temp"} == {
-        str(note), str(note.parent), str(note.parent.parent)}, sorted(now - whole)
+    assert whole <= tree() and tree() - whole == {str(note), str(note.parent), str(note.parent.parent)}, sorted(
+        tree() - whole)
     assert shell.registry(root) == native["registration"]
     assert {path.name for path in native["entries"].iterdir()} == set(shell.LINKS)
     # The text says that Amplifier might not open. Here no journal is in the folder: Open goes on.
@@ -2502,7 +2543,7 @@ def test_native_journal_that_loses_its_name_or_is_replaced_in_the_instant_of_its
         assert (stopped["step"], stopped["error"]) == ("data", "Held"), stopped
         earlier = plan.pending(root)
         assert earlier is not None and earlier["choice"] == "delete" and not (root / "shared").exists()
-        partly = _tree(root)
+        partly = tree()
         second = native["run"]("uninstall", ["yes", "yes"], settle=2, instant="journal-lost")
     finally:
         busy.close()
@@ -2511,7 +2552,7 @@ def test_native_journal_that_loses_its_name_or_is_replaced_in_the_instant_of_its
     assert second["notice"] == consumer._UNFINISHED["journal-again"] + "\n\nReference: journal, OSError"
     assert "deleted nothing" not in second["notice"] and "does not open" not in second["notice"]
     # This uninstall deleted nothing more. Its write took the earlier journal's place, and that journal is gone.
-    assert sorted(set(partly) - {plan.JOURNAL}) == _tree(root)
+    assert tree() == partly - {plan.JOURNAL}, sorted(tree() ^ partly)
     assert not plan.unfinished(root) and (root / "app" / "busy.db").exists()
     assert shell.registry(root) == native["registration"]
     # The design's limit, on a real folder: without the journal Open goes on, on a folder that is partly deleted.
@@ -2529,7 +2570,8 @@ def test_native_journal_that_loses_its_name_or_is_replaced_in_the_instant_of_its
     assert left <= set(done["left"]) <= left | {"workspace"}, done["left"]
     assert set(os.listdir(root)) == set(done["left"]) and not native["report"].exists()
     assert plan.pending(root) == {"schema": 1, "choice": "delete", "token": "f" * 32}
-    # The name is there: Open refuses.
+    # The name is there: Open refuses. (The command of this test starts in the workspace folder.)
+    os.makedirs(root / "workspace", exist_ok=True)
     refused = native["run"]("open")
     assert (refused["step"], refused["refused"]) == ("removing", True) and not refused["events"], refused
     _outside_unchanged(native["outside"])
