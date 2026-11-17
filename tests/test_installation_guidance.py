@@ -57,10 +57,33 @@ class InstallationGuidanceTests(unittest.TestCase):
         plain = " ".join(section.split())
         for limit in ("This is a preview.", "not signed yet", "Windows 11 with an Intel or AMD processor",
                       "ARM processors are not supported yet", "your own Windows account only",
-                      "Settings > Apps > Installed apps", "It leaves the folder with your chats",
+                      "Settings > Apps > Installed apps",
                       "`%USERPROFILE%\\.amplifier\\rate-limit-state.json`. Uninstall does not remove that file"):
             with self.subTest(limit=limit):
                 self.assertIn(limit, plain)
+        # Uninstall: the question and its three buttons are the product's own, and each answer has its result.
+        consumer = source("amplifier_web/windows_consumer.py")
+        uninstall = plain.split("- **Uninstall:**", 1)[1]
+        asked = re.search(r'"(Do you also want to delete [^"\\]+\?)', consumer).group(1)
+        self.assertIn(f'Amplifier asks one question: "{asked}"', uninstall)
+        for button, product, result in (
+                ("No", "Select No to keep them.", "uninstalls Amplifier and keeps the folder."),
+                ("Yes", "Select Yes to delete them, together with the program files.",
+                 "uninstalls Amplifier and deletes the folder:"),
+                ("Cancel", "Select Cancel to keep Amplifier installed.", "changes nothing. Amplifier stays installed.")):
+            with self.subTest(button=button):
+                self.assertIn(product, consumer)
+                self.assertIn(f"- **{button}** {result}", uninstall)
+        for stated in ("Amplifier asks once more before it deletes anything; select **Yes** again.",
+                       "This cannot be undone.", "Anything in the folder that is not Amplifier's stays",
+                       # An installed launcher keeps the uninstall that its setup file had.
+                       'An installation from an earlier setup file can ask only "Uninstall Amplifier?" '
+                       "with **Yes** and **No**.",
+                       "There, **Yes** uninstalls and leaves the folder."):
+            with self.subTest(stated=stated):
+                self.assertIn(stated, uninstall)
+        self.assertIn('"Your chats, settings, accounts and the program files stay in this folder:\\n"', consumer)
+        self.assertNotIn("It leaves the folder with your chats", plain)
         self.assertNotIn("Native Windows is not yet supported", readme)
         # The design stays a record of what is tested, not a support claim.
         self.assertIn("(docs/design/native-windows-installation.md)", section)

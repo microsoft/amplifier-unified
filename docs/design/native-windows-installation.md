@@ -1263,7 +1263,8 @@ What this rule does not cover, stated:
 - A program of this account can rewrite setup's completion record (a private
   file of this person) so that it names a release from 0.98.5. After the two
   Yes answers, a folder `s` in that earlier installation then goes with the
-  program files. Such a program can delete that folder itself.
+  program files. Such a program can delete that folder itself. This is the
+  known limit G1 below.
 - A `source-store` folder that something added to a new installation is
   deleted by its name, as before this change. The launcher uses such a
   folder as the store from its next start.
@@ -1361,11 +1362,14 @@ dangling file link of that name and creates the file at the link's target.
 **Known limits.** Two reviewers examined this design in eight passes (pull
 request 2110). These limits stayed. They are stated, not solved. The numbers
 are the review's; a number that is not in the list was closed before the last
-pass. Except for L3, L4, L14 and L15, each needs a program that runs as the
-same person and acts in the moment of the uninstall.
+pass. G1 is from the later review of the store rule. Except for L3, L4, L14
+and L15, each needs a program that runs as the same person. For G1 that
+program can act at any time before the uninstall. For the others it must act
+in the moment of the uninstall.
 
-One reviewer rated L12 and L13 as blocking, the other as not blocking. The
-owner accepted both on November 15, 2026. Both reviewers rated every other
+One reviewer rated L12, L13 and G1 as blocking, the other as not blocking.
+The owner accepted L12 and L13 on November 15, 2026. On November 17, 2026,
+with G1 stated to him, he ordered the merge. Both reviewers rated every other
 limit as not blocking.
 
 - **L12 (accepted).** A program can put files into the installation folder
@@ -1393,6 +1397,18 @@ limit as not blocking.
   measured in this work). To close this, uninstall would have to
   keep a file in the folder above, which is outside the installation folder;
   uninstall changes nothing there.
+- **G1 (accepted).** Uninstall takes the folder `s` for program files when
+  setup's completion record names a release from 0.98.5 (see "Only exact
+  names"). That record is a private file of this person, so a program that
+  runs as this person can rewrite it, at any time before the uninstall. In
+  an installation that an earlier setup file made, a folder `s` that is not
+  Amplifier's is then deleted with the program files after the two Yes
+  answers. What can be lost is that one folder with its entries, inside the
+  installation folder. Such a program can delete the folder itself. No code
+  closes this while the store folder of a new installation is still deleted:
+  every record that could prove who made `s` is a file of this person. The
+  design already rests on the same record: without it there is no delete
+  choice at all.
 - **L2.** The step tells a parked file from a later entry by its creation
   time. A plain file with a number as its name and an older creation time,
   which a program moves into the flat folder while the step runs, is deleted
@@ -2972,7 +2988,9 @@ commands. The README offers the consumer setup file
 for Windows 11 as an unsigned preview and states its limits: one stable
 download link, the browser's hold on the unsigned file, Windows 11 on an Intel
 or AMD processor, one Windows account, the installation folder, and an
-uninstall that leaves that folder. `tests/test_installation_guidance.py` keeps
+uninstall that asks whether to keep or to delete that folder (the question,
+its three buttons, and that an installation from an earlier setup file keeps
+the folder). `tests/test_installation_guidance.py` keeps
 that section and the product's own names in agreement. Qualified native Windows
 support is not claimed. Earlier results below
 are historical evidence for their exact candidates, not current release acceptance.
