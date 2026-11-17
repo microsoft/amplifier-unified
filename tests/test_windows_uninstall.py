@@ -619,7 +619,8 @@ def test_a_journal_that_does_not_prove_a_delete_choice_never_deletes(deleter):
         (root / plan.JOURNAL).write_text(text)
         state["answers"] = [False]
         assert deleter.run() == {"ok": True, "cancelled": True}
-        assert not state["questions"] and "stay in this folder" in state["notices"][-1][0]
+        # The question says what this uninstall does, not what is in the folder: nobody knows that here.
+        assert not state["questions"] and "This uninstall deletes none of your" in state["notices"][-1][0]
     state["answers"] = [True]
     assert deleter.run()["installationFilesRetained"] is True and not deletes(state)
     assert (root / "shared/keys.env").exists() and (root / plan.JOURNAL).read_text() == '{"schema": 2}'
@@ -1318,6 +1319,220 @@ def test_open_takes_the_same_lock_around_its_start_step_and_refuses_when_it_is_t
     # Only the private note of the failure was written.
     assert state["calls"] == [("write", "app/config/services/" + consumer.RECORD)]
     assert state["task"] == "running" and state["registry"] is not None
+
+
+# The step `journal` can fail in four ways. After two of them a journal is in the folder (Amplifier does not
+# open), after two it is not (Amplifier opens). The program cannot tell them apart when it writes its text.
+JOURNAL_WAYS = ("refused", "published", "lost", "unseen")
+
+
+def journal_stops(deleter, monkeypatch, way):
+    """Make the next write of the journal fail in this way."""
+    state, root = deleter.state, deleter.root
+    if way == "refused":
+        # Windows refuses the write before the file has its name.
+        state["refuse_write"] = lambda path: path.name == plan.JOURNAL
+    elif way == "published":
+        # The private writer reports an error after the file has its name (`publish_private`:
+        # "a reported error is not a promise of an unchanged destination").
+        def failed():
+            raise OSError("private file was published; post-publication verification failed")
+        state["on_journal"] = failed
+    elif way == "lost":
+        # A program takes the name away directly after the write.
+        state["on_journal"] = lambda: (root / plan.JOURNAL).unlink()
+    else:
+        # Windows refuses the one look for the journal. The journal is in the folder.
+        def unseen():
+            real = plan.unfinished
+            def once(folder):
+                monkeypatch.setattr(plan, "unfinished", real)
+                return False
+            monkeypatch.setattr(plan, "unfinished", once)
+        state["on_journal"] = unseen
+
+
+def opens(deleter, monkeypatch):
+    """Whether Open starts Amplifier from this folder now, as a person selects it."""
+    state, consumer = deleter.state, deleter.consumer
+    with monkeypatch.context() as patch:
+        start = launch(deleter, patch)
+        state["calls"].clear()
+        try:
+            start()
+        except consumer.Refused as refused:
+            assert refused.step == "removing" and ("prepare",) not in state["calls"]
+            return False
+        assert ("prepare",) in state["calls"]
+        return True
+
+
+@pytest.mark.parametrize("way", JOURNAL_WAYS)
+def test_first_uninstall_that_stops_at_the_journal_does_not_say_whether_amplifier_opens(deleter, monkeypatch, way):
+    state, root, consumer = deleter.state, deleter.root, deleter.consumer
+    state["choices"], state["certificate"] = ["yes", "yes"], b"this installation's root"
+    journal_stops(deleter, monkeypatch, way)
+    before, registration = snapshot(root), state["registry"].copy()
+    with pytest.raises(consumer.Unfinished) as stopped:
+        deleter.run()
+    assert stopped.value.step == "journal" and not isinstance(stopped.value, consumer.Refused)
+    error = {"refused": "PermissionError"}.get(way, "OSError")
+    assert stopped.value.notice == consumer._UNFINISHED["journal"] + "\n\nReference: journal, " + error
+    # What the text says is true in each of the four ways: stopped, no sign-in start, nothing deleted.
+    assert state["task"] == "absent" and not deletes(state) and state["after"] is None
+    after = snapshot(root)
+    assert after.pop("app/config/services/" + consumer.RECORD)
+    present = after.pop(plan.JOURNAL, None) is not None
+    assert after == before and state["registry"] == registration
+    assert "Nothing in the folder was deleted" in stopped.value.notice
+    # The same text appears with a journal in the folder and without one.
+    assert present is (way in {"published", "unseen"}) and plan.unfinished(root) is present
+    # With the journal Open refuses; without it Open starts. So the text promises neither.
+    assert opens(deleter, monkeypatch) is not present
+    for claim in ("open it from the Start menu", "keep using", "does not open"):
+        assert claim not in stopped.value.notice
+    assert stopped.value.notice.count("Amplifier might not open until then.") == 1
+    # The next step of the text works in each way: the same command deletes the folder. (Windows deleted
+    # the certificate at the person's Yes, so nothing of this installation is trusted any more.)
+    state.update(refuse_write=None, choices=["yes", "yes"], certificate=None)
+    assert deleter.run()["afterExit"]
+    assert ("resumed" if present else "first") == (
+        "resumed" if "did not finish" in state["questions"][-2][0] else "first")
+    assert {path.name for path in root.iterdir()} == kept_names(deleter)
+
+
+@pytest.mark.parametrize("way", JOURNAL_WAYS)
+def test_second_uninstall_that_stops_at_the_journal_does_not_say_that_amplifier_stays_closed(
+        deleter, monkeypatch, way):
+    """An earlier uninstall deleted data and stopped. This one stops when it writes its new journal."""
+    state, root, consumer = deleter.state, deleter.root, deleter.consumer
+    state["choices"], state["held"] = ["yes", "yes"], {"app/chats/one/message.txt"}
+    with pytest.raises(consumer.Unfinished):
+        deleter.run()
+    earlier = deleter.journal()
+    assert not (root / "shared").exists() and earlier["choice"] == "delete"
+    state["held"].clear()
+    state["choices"] = ["yes", "yes"]
+    state["calls"].clear()
+    journal_stops(deleter, monkeypatch, way)
+    before = snapshot(root)
+    with pytest.raises(consumer.Unfinished) as stopped:
+        deleter.run()
+    assert stopped.value.step == "journal" and not deletes(state) and state["after"] is None
+    error = {"refused": "PermissionError"}.get(way, "OSError")
+    assert stopped.value.notice == consumer._UNFINISHED["journal-again"] + "\n\nReference: journal, " + error
+    # Never the text of a first uninstall: files of this folder are already deleted.
+    assert "Nothing in the folder was deleted" not in stopped.value.notice
+    after = snapshot(root)
+    assert json.loads(after.pop(consumer.RECORD))["step"] == "journal" and before.pop(consumer.RECORD)
+    now = after.pop(plan.JOURNAL, None)
+    assert before.pop(plan.JOURNAL) and after == before
+    # The earlier journal stays when the write is refused. A new one is there after an error that follows
+    # the publication, and when the look is refused. No journal is there when a program took it away.
+    present = now is not None
+    assert present is (way != "lost")
+    assert (json.loads(now)["token"] == earlier["token"]) is (way == "refused") if present else True
+    # Without the journal Open starts, on a folder that is partly deleted (the design's limit "the
+    # journal is not held open"). So this text must not say that Amplifier does not open.
+    assert opens(deleter, monkeypatch) is not present
+    assert "does not open" not in stopped.value.notice and "Start menu" not in stopped.value.notice
+    assert "Do not open Amplifier before that: its folder can be partly deleted." in stopped.value.notice
+    # The next step of the text works in each way.
+    state.update(refuse_write=None, choices=["yes", "yes"])
+    assert deleter.run()["afterExit"]
+    assert {path.name for path in root.iterdir()} == kept_names(deleter)
+
+
+@pytest.mark.parametrize("foreign", [json.dumps({"schema": 1, "choice": "delete", "token": "f" * 32}), "{"])
+def test_journal_that_a_program_replaces_in_the_instant_of_the_write_never_deletes_more_than_the_choice(
+        deleter, monkeypatch, foreign):
+    """The name exists, so the removal goes on. Its last step refuses a journal that is not its own."""
+    state, root, consumer = deleter.state, deleter.root, deleter.consumer
+    state["choices"] = ["yes", "yes"]
+    state["on_journal"] = lambda: (root / plan.JOURNAL).write_text(foreign)
+    (root / "mine.txt").write_text("not Amplifier's")
+    monkeypatch.setattr(consumer.sys, "stdout", None)
+    result = deleter.run()
+    # The person chose the deletion twice: the data and the program files went, and the Windows entries.
+    assert result["ok"] and result["userDataRetained"] is False and result["kept"] == ["mine.txt"]
+    assert not any((root / name).exists() for name in top(DATA) | top(PROGRAM) | top(LAST))
+    assert state["registry"] is None and not deleter.folder.exists()
+    # The last step saw another journal. It deleted nothing and did not start the step after exit.
+    assert result["afterExit"] is False and result["programLeft"] is None and state["after"] is None
+    assert {path.name for path in root.iterdir()} == {plan.JOURNAL, plan.COMPLETE, "mine.txt", *top(RUNNING)}
+    assert (root / plan.JOURNAL).read_text() == foreign and (root / "mine.txt").read_text() == "not Amplifier's"
+    # Both messages are true here: the data is deleted, and the last program files stay.
+    (confirmation, _), (leftover, _) = state["notices"]
+    assert "Your chats, settings, saved accounts and stored keys are deleted" in confirmation
+    assert "Amplifier could not remove its last program files" in leftover and "You can delete" not in leftover
+    # The name is there, so Amplifier does not open from this folder.
+    assert opens(deleter, monkeypatch) is False
+
+
+@pytest.mark.parametrize("failure", ["task-remove", "apps-entry"])
+def test_keeping_uninstall_that_stops_with_a_journal_in_the_folder_does_not_send_the_person_to_open(
+        deleter, monkeypatch, failure):
+    """A journal that proves no delete choice (damaged): only the keeping uninstall is offered. Open refuses."""
+    state, root, consumer = deleter.state, deleter.root, deleter.consumer
+    (root / plan.JOURNAL).write_text("{")
+    state["answers"] = [True]
+    if failure == "task-remove":
+        state["task_failure"] = failure
+    else:
+        state["commit_conflict"] = True
+    with pytest.raises(consumer.Unfinished) as stopped:
+        deleter.run()
+    assert stopped.value.step == failure and not state["questions"] and not deletes(state)
+    error = "WindowsServiceError" if failure == "task-remove" else "OSError"
+    assert stopped.value.notice == consumer._UNFINISHED["removal"] + f"\n\nReference: {failure}, {error}"
+    # The step's own text ends "To keep using Amplifier, open it from the Start menu." Open refuses here.
+    assert consumer._UNFINISHED[failure].endswith("To keep using Amplifier, open it from the Start menu.")
+    assert opens(deleter, monkeypatch) is False
+    # The question said only what this uninstall does: an earlier removal can have deleted files.
+    (question, confirm), = state["notices"]
+    assert confirm and "This uninstall deletes none of your chats, settings, accounts or program files" in question
+    assert "stay in this folder" not in question
+    # Without a journal the step's own text is the right one, and Open starts.
+    (root / plan.JOURNAL).unlink()
+    state.update(answers=[True], notices=[], choices=["no"], task="running")
+    with pytest.raises(consumer.Unfinished) as stopped:
+        deleter.run()
+    assert stopped.value.notice == consumer._UNFINISHED[failure] + f"\n\nReference: {failure}, {error}"
+    assert opens(deleter, monkeypatch) is True
+
+
+def test_keeping_uninstall_with_a_journal_in_the_folder_says_only_what_it_did(deleter, monkeypatch):
+    state, root, consumer = deleter.state, deleter.root, deleter.consumer
+    shutil.rmtree(root / "shared")  # An earlier removal deleted the stored keys. Then its journal was damaged.
+    (root / plan.JOURNAL).write_text("{")
+    state["answers"] = [True]
+    monkeypatch.setattr(consumer.sys, "stdout", None)
+    assert deleter.run()["installationFilesRetained"] is True and not deletes(state)
+    (question, _), (confirmation, _) = state["notices"]
+    for text, verb in ((question, "deletes"), (confirmation, "deleted")):
+        assert f"This uninstall {verb} none of your chats, settings, accounts or program files in this folder:" in text
+        assert "stay in this folder" not in text and "are still in this folder" not in text
+
+
+@pytest.mark.parametrize("journal", [True, False])
+def test_uninstall_that_cannot_check_its_installation_does_not_say_that_amplifier_can_be_used(
+        deleter, monkeypatch, journal):
+    state, root, consumer = deleter.state, deleter.root, deleter.consumer
+    if journal:
+        (root / plan.JOURNAL).write_text(json.dumps({"schema": 1, "choice": "delete", "token": "a" * 32}))
+    def unreadable(folder):
+        raise PermissionError(5, "Access is denied")
+    monkeypatch.setattr(consumer, "installation", unreadable)
+    before = snapshot(root)
+    with pytest.raises(consumer.Unfinished) as stopped:
+        deleter.run()
+    assert stopped.value.step == "preparation" and snapshot(root) == before and not state["calls"]
+    assert stopped.value.notice.startswith("Amplifier was not uninstalled, and nothing was changed.\n\n"
+                                           "Amplifier could not check its own installation files.")
+    # Open needs the same check, and with a journal it refuses in any case.
+    with pytest.raises(PermissionError):
+        asyncio.run(consumer.launch(root, open_browser=False))
+    assert "keep using" not in stopped.value.notice and "open" not in stopped.value.notice
 
 
 def test_the_lock_is_this_persons_own_and_has_one_name_for_every_sign_in_session(monkeypatch, tmp_path):
