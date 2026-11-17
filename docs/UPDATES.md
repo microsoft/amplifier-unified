@@ -225,6 +225,8 @@ Available updates are listed immediately at the top of Settings. The application
 
 Automatic update checks default to every **4 hours**. Under **Update preferences**, choose every **1 hour**, **4 hours**, **8 hours**, or **daily**. Existing saved schedules remain unchanged on upgrade, including the previous daily default and older 6-hour or weekly choices. Older choices are shown with an explanation until replaced. Resetting app settings restores the 4-hour check interval while leaving automatic installation off.
 
+A host start adds one check. When the host starts and its last check, or its last attempt to check, is **1 hour** old or more, the update owner checks soon after the start and does not wait for the rest of the interval. This check asks again; it does not reuse saved availability results. That holds for every such start, also when the timed interval has passed as well. Everything else is as for a timed check: it follows **Keep Amplifier up to date**, it interrupts no running work, and it retries no failed update. The first check that is admitted after the start ends this reason: the owner's own check, a person's check, and also a check that fails. The owner then follows the timed interval again, counted as before from the newest saved check or attempt. A check saves the time of its attempt before it looks. So a start check that fails, for example because the network is not up yet, is not repeated; the next automatic check is one interval later, as after any failed check. When a part of the old interval remained at the start, that next automatic check is later than it was before this rule, and no completed check lies between: without the start check, the timed check ran when the rest of the old interval had passed. A person's **Check for updates** does not wait for the interval. Like every check, it is refused in some states, for example while a prepared component update waits for its activation or while a restart is pending. A clock that is set back after the start brings no second start check. A start with a younger last check or attempt starts no check. With automatic checks off, the owner starts neither a timed check nor a check at a host start; an update sequence that has already begun still continues with its next check. The two numbers are `DEFAULT_CHECK_INTERVAL_HOURS` and `HOST_START_CHECK_AFTER_HOURS` in `amplifier_web/updates.py`. `UpdateManager.check_due` is the one rule for a check that time causes: the timed check and the check at a host start. A check that continues an update sequence, and the new check of a selection that changed, are not caused by time and do not use it. When a host starts while an update sequence waits for its next component check, and the sequence is not stopped at an error or an interruption, the owner asks for that check before a check that time causes, unless a state that the owner's pass handles earlier is present (for example a staged application or an unresolved preparation). When that check is admitted, it ends the start reason, although it looks only at components. The owner's next check that time causes, with its look for an application release, then follows the timed interval.
+
 Settings also provides manual checks, installation, and ecosystem rollback. Scheduled checks run while the local host is open; this is not a separate OS daemon. The Settings icon shows an update indicator. These controls use the shared action registry; forced interruption requires an explicit user confirmation.
 
 Application updates download the selected release's prebuilt wheel and checksum
@@ -357,6 +359,47 @@ that changed after its check (`UpdateManager.install_checked`): the refusal
 before anything is prepared leads to one new check, and that checked selection
 is installed under the caller's own admission. A second refusal, and a check
 that fails, are reported as before; nothing is repeated.
+
+A new installation has a prepared worker environment and no component
+generation until its first component update. Until then a conversation fetches
+each declared source and installs its modules at its first use. A check there
+does not offer that first use as an update. A declared source that nothing has
+fetched yet is not listed "to install": the count would be withdrawn by the
+next check. A module that a chat installed follows the branch of the binding
+that the chat wrote below the data folder's `foundation/cache/.source-bindings`.
+It is not a fixed version, and it starts no "Refresh included components"
+update. A fetched source and an installed module are still checked like every
+other component: when their branch has a newer revision, the check lists a
+real update. The rule for an absent source holds only with a worker environment
+and no selected generation; the rule for a module only with no selected
+generation. A generation is immutable, so there an absent declared source stays
+an update, and a module's branch comes only from that generation's own
+bindings. With no worker environment the first component update still lists
+the environment and every declared source. The bindings must name exactly one
+ref for a module's source and commit; with none, or with two different refs,
+the commit stays a fixed version as before.
+
+The first real component update of such an installation makes its first
+generation. Qualification asks the branch of each chat-installed module again
+(`runtime_source_policy.qualify_cache_policies`). A module at the head of its
+branch is recorded with that branch. The sequence installs included components
+first and checks the other components after that. So a chat-installed module of
+the other components that is behind its branch is still behind when an update
+of included components makes the first generation, and the existing rule
+records it as a moved reference. The check of the other components follows as
+the continuation of the same sequence. It lists the module's source as an
+update, and that second update moves the module to its branch and records the
+branch again. Such an installation therefore runs two component updates, one
+after the other, where one was enough before this rule. Settings says "Updates
+available" between them, not "You're up to date". A full check between the two
+lists the moved reference as "Refresh included components"; that update settles
+it in the same way. Before this rule a new installation ran one component
+update after its first chat, also when no module was behind and nothing
+changed. With this rule it runs none there.
+
+A new installation with no AI connection waits for a connection only when a
+check found a component update. When the check found none, Settings says that
+the installation is up to date.
 
 A proven catalog-data-only change reuses an already qualified runtime. This requires an exact tree comparison, an allowlisted data contract and unchanged app-profile inputs. Unknown files, code, dependency or profile changes take the qualification path. Failed qualification leaves the active pointer unchanged.
 
