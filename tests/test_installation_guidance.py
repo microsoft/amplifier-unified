@@ -71,11 +71,14 @@ class InstallationGuidanceTests(unittest.TestCase):
         self.assertEqual(sorted(re.findall(r"\*\*([^*]+?):?\*\*", folder)), sorted(offered))
         statements = (
                 "- **OpenAI API:** in our test on a PC, a chat wrote no file outside the folder.",
-                # Seen on a PC with an earlier version. An installation that ran one can hold this file,
-                # and nothing deletes it.
-                "- **Anthropic API:** in our test on a PC, a chat wrote one small file outside the folder: "
-                "`%USERPROFILE%\\.amplifier\\rate-limit-state.json`. "
-                "Versions after 0.106.2 keep that file in the folder. We have not tested this on a PC yet. "
+                # Both halves were seen on a PC: the file outside the folder with an earlier version, and
+                # the file in the folder with 0.106.3 (one chat and one test message of the connection).
+                # An installation that ran an earlier version can hold the file outside, and nothing deletes it.
+                "- **Anthropic API:** up to version 0.106.2, a chat writes one small file outside the folder: "
+                "`%USERPROFILE%\\.amplifier\\rate-limit-state.json`. We saw this in a test on a PC. "
+                "From version 0.106.3 on, Amplifier keeps that file in the folder. "
+                "In our test of version 0.106.3 on a PC, one chat and one test message of the connection "
+                "wrote no file outside the folder. "
                 "A file that an earlier version wrote stays where it is. "
                 "Later versions do not use it, and uninstall does not remove it. You can delete it.",
                 "- **GitHub Copilot Subscription:** its component makes two folders, "
@@ -86,16 +89,28 @@ class InstallationGuidanceTests(unittest.TestCase):
                 "we have not tested this.")
         # The item is these sentences and nothing else: it must not say that nothing is outside the folder.
         self.assertEqual(folder.split(" depends on the AI connection: ", 1)[1], " ".join(statements))
-        # "Versions after 0.106.2 keep that file in the folder" is the host's rule, with that file name.
-        # 0.106.2 is the last release without the rule. This check refuses only a version that does not exist
-        # yet. It cannot see a release: whoever merges a change of this sentence checks, directly before the
-        # merge, that the named version is the latest release.
+        # "Amplifier keeps that file in the folder" is the host's rule, with that file name. The statement
+        # names three versions: the last release without the rule, the first release with it, and the release
+        # that was tested on a PC. This check refuses a version that does not exist yet, a first release with
+        # the rule that is not later than the last one without it, and a tested release that does not have the
+        # rule. It cannot see a release or a PC: whoever changes a number here reads the release and the
+        # clean-room record first.
         from amplifier_web.provider_state_files import STATE_FILES
         self.assertEqual(STATE_FILES["provider-anthropic"]["rate_limit_state_path"], "rate-limit-state.json")
         self.assertIn('"AMPLIFIER_HOME": "shared"', source("amplifier_web/windows_consumer.py"))
-        named, = re.findall(r"Versions after (\d+\.\d+\.\d+) keep", folder)
+
+        def number(version):
+            return tuple(map(int, version.split(".")))
+
+        anthropic = folder.split("- **Anthropic API:**", 1)[1].split(" - **", 1)[0]
+        without, = re.findall(r"up to version (\d+\.\d+\.\d+),", anthropic)
+        first, = re.findall(r"From version (\d+\.\d+\.\d+) on,", anthropic)
+        tested, = re.findall(r"In our test of version (\d+\.\d+\.\d+) on a PC,", anthropic)
+        self.assertEqual(sorted(re.findall(r"\d+\.\d+\.\d+", anthropic)), sorted([without, first, tested]))
         current = re.search(r'^version = "(\d+\.\d+\.\d+)"$', source("pyproject.toml"), re.M).group(1)
-        self.assertLessEqual(tuple(map(int, named.split("."))), tuple(map(int, current.split("."))))
+        self.assertLess(number(without), number(first))
+        self.assertLessEqual(number(first), number(tested))
+        self.assertLessEqual(number(tested), number(current))
         # Uninstall: the questions and the three buttons are the product's own, and each answer has its result.
         # A sentence of the product can continue in the next string of its source.
         consumer = re.sub(r'"\s*\n\s*"', "", source("amplifier_web/windows_consumer.py"))

@@ -88,12 +88,13 @@ Limits of this preview:
   depends on the AI connection:
   - **OpenAI API:** in our test on a PC, a chat wrote no file outside the
     folder.
-  - **Anthropic API:** in our test on a PC, a chat wrote one small file
-    outside the folder: `%USERPROFILE%\.amplifier\rate-limit-state.json`.
-    Versions after 0.106.2 keep that file in the folder. We have not tested
-    this on a PC yet. A file that an earlier version wrote stays where it
-    is. Later versions do not use it, and uninstall does not remove it. You
-    can delete it.
+  - **Anthropic API:** up to version 0.106.2, a chat writes one small file
+    outside the folder: `%USERPROFILE%\.amplifier\rate-limit-state.json`. We
+    saw this in a test on a PC. From version 0.106.3 on, Amplifier keeps that
+    file in the folder. In our test of version 0.106.3 on a PC, one chat and
+    one test message of the connection wrote no file outside the folder. A
+    file that an earlier version wrote stays where it is. Later versions do
+    not use it, and uninstall does not remove it. You can delete it.
   - **GitHub Copilot Subscription:** its component makes two folders,
     `%USERPROFILE%\.amplifier-provider-github-copilot` and
     `%LOCALAPPDATA%\amplifier-provider-github-copilot`. We read this in its
