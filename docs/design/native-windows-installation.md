@@ -1613,17 +1613,34 @@ token with no administrator token beside it, not elevated, medium integrity,
 a sign-in of the user itself, and a desktop session that is not the runner's.
 A helper task of that user starts the test in that session. The program that
 runs as the user refuses unless the run's account record names this user,
-belongs to the administrators group, and cannot be changed by this user. A
-person without administrator rights cannot make such a record.
+belongs to the administrators group, and cannot be changed by this user. It
+reads the record's text, its owner and its permissions from one open file,
+and Windows itself computes from the permissions whether this user could
+change the file or its folder. A person without administrator rights cannot
+make such a record.
 
-The last step of the job runs in every case, also after a failure. It signs
-the user out and removes the user's tasks, its profile, the account and the
-saved sign-in, and it restores the one setting that the job changed. Each part
-runs also when another part failed, and the step fails when one of them is
-left. The job records the account before Windows creates it, with a mark that
-Windows keeps as the account's comment; the step removes only the account
-with that mark. If GitHub ends the job at its time limit, the step may not
-finish. A hosted runner is deleted after its job.
+The job's cleanup step (the step before the one that keeps the results) runs
+in every case, also after a failure. In every case it ends the Remote Desktop
+viewers of the run, removes the saved sign-in and restores the one setting
+that the job changed. For the run's account it signs the user out, ends the
+user's programs, and removes the user's tasks, its profile and the account.
+
+The job records the account's name before Windows creates the account, with a
+mark that Windows keeps as the account's comment. Before the cleanup step
+removes anything of the account, it reads whether the account with that name
+has that mark. When the name belongs to another account, or Windows does not
+answer, the step removes nothing of that account and fails. When the job did
+not record the SID of the run's account and Windows does not give it, the
+step cannot name the user's Amplifier task and its profile: it counts both as
+left, does the other parts, and fails. Apart from these cases, a part that
+fails does not stop the parts after it, and the step fails when one part is
+not done. It decides that from Windows: after each part it reads what Windows
+still lists (the viewers, the user's session, the user's programs, the tasks,
+the profile, the account, the setting); for the saved sign-in it takes
+Windows' answer to the deletion. The step does not delete this case's folders
+in the runner's temporary folder; no file there holds the password. If GitHub
+ends the job at its time limit, the step may not finish. A hosted runner is
+deleted after its job.
 
 The sign-in is needed. A program that another account starts with the user's
 name and password (`CreateProcessWithLogonW`) can register the user's task,
@@ -1664,8 +1681,9 @@ job can skip.
    Amplifier's message shows it. The test selects Yes with a window message,
    once. Then the launcher's check reads the connection as trusted, and
    Windows' own list of the user's root certificates holds the certificate.
-   Another dialog, or a second question, gets no answer: the step then fails
-   with the dialog's text after 90 seconds.
+   A dialog of this program that is not this question, and a second question,
+   get no answer. When such a dialog stays open for 90 seconds, the step
+   fails with what the dialog shows, and the program ends.
 6. Setup's own code reads the installation as installed, with its sign-in
    task. A second setup run would open it.
 7. A sign-out and a new sign-in. After the sign-out the task exists and does

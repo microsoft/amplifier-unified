@@ -51,6 +51,7 @@ import argparse
 import asyncio
 import base64
 from contextlib import contextmanager
+import csv
 import ctypes as C
 from ctypes import wintypes as W
 import hashlib
@@ -154,19 +155,20 @@ def require_disposable_runner(environ=None, platform=None, interpreter=None):
 HOSTED_FACTS = ("GITHUB_ACTIONS", "RUNNER_ENVIRONMENT", OPT_IN)
 
 
-def admit_standard(account, token, owner, writable, platform=None, interpreter=None):
+def admit_standard(account, token, owner, changeable, platform=None, interpreter=None):
     """Refuse unless this program is the standard user of one run of the hosted workflow.
 
     `standard` runs as the new user, which has no workflow environment. The
     account record of the run takes its place. The record counts only when an
     administrator wrote it: its file belongs to the administrators group, and
-    this user cannot write it. A person without administrator rights cannot
-    make such a file. The record names the user that the run created. It also
-    carries the workflow's facts, for the same check as on the runner's account.
+    this user can change neither the file nor its folder. A person without
+    administrator rights cannot make such a file. The record names the user
+    that the run created. It also carries the workflow's facts, for the same
+    check as on the runner's account.
     """
-    if token["sid"] != account.get("sid") or token["memberOfAdministrators"]:
+    if not isinstance(account, dict) or token["sid"] != account.get("sid") or token["memberOfAdministrators"]:
         raise SystemExit("Refused: this program runs only as the standard user that this run created.")
-    if writable or owner != ADMINISTRATORS:
+    if changeable or owner != ADMINISTRATORS:
         raise SystemExit("Refused: the account record of this run is not a file of the administrators group "
                          "that this user cannot change.")
     require_disposable_runner(account.get("hosted") or {}, platform, interpreter)
@@ -296,30 +298,87 @@ def sid_name(text):
     return name.value
 
 
-def file_owner(path):
-    """The SID of the owner of a file, as Windows records it."""
-    owner, descriptor = C.c_void_p(), C.c_void_p()
-    _adv.GetNamedSecurityInfoW.argtypes = [W.LPCWSTR, C.c_int, W.DWORD, C.POINTER(C.c_void_p), C.POINTER(C.c_void_p),
-                                           C.POINTER(C.c_void_p), C.POINTER(C.c_void_p), C.POINTER(C.c_void_p)]
-    _adv.GetNamedSecurityInfoW.restype = W.DWORD
-    # SE_FILE_OBJECT; OWNER_SECURITY_INFORMATION.
-    status = _adv.GetNamedSecurityInfoW(str(path), 1, 1, C.byref(owner), None, None, None, C.byref(descriptor))
-    if status:
-        raise C.WinError(status)
+class _Mapping(C.Structure):
+    _fields_ = [("read", W.DWORD), ("write", W.DWORD), ("execute", W.DWORD), ("all", W.DWORD)]
+
+
+# Every right that changes a file or a folder: write or add data, write its attributes, delete an
+# entry of a folder, delete it, change its permissions, take it over.
+CHANGE = 0x2 | 0x4 | 0x10 | 0x40 | 0x100 | 0x10000 | 0x40000 | 0x80000
+
+
+def _granted(descriptor):
+    """Every right that Windows gives this program's own token on an object with these permissions."""
+    token, copy = W.HANDLE(), W.HANDLE()
+    _kernel.GetCurrentProcess.restype = W.HANDLE
+    _kernel.CloseHandle.argtypes = [W.HANDLE]
+    _adv.OpenProcessToken.argtypes = [W.HANDLE, W.DWORD, C.POINTER(W.HANDLE)]
+    if not _adv.OpenProcessToken(_kernel.GetCurrentProcess(), 0x2 | 0x8, C.byref(token)):  # TOKEN_DUPLICATE | TOKEN_QUERY
+        raise _failed()
     try:
-        return sid_text(owner)
+        # Windows computes access for a copy of the token that stands for this program (SecurityImpersonation).
+        _adv.DuplicateToken.argtypes = [W.HANDLE, C.c_int, C.POINTER(W.HANDLE)]
+        if not _adv.DuplicateToken(token, 2, C.byref(copy)):
+            raise _failed()
+        try:
+            mapping = _Mapping(0x120089, 0x120116, 0x1200A0, 0x1F01FF)  # A file's generic rights.
+            privileges, size, granted, allowed = C.create_string_buffer(1024), W.DWORD(1024), W.DWORD(), W.BOOL()
+            _adv.AccessCheck.argtypes = [C.c_void_p, W.HANDLE, W.DWORD, C.POINTER(_Mapping), C.c_void_p,
+                                         C.POINTER(W.DWORD), C.POINTER(W.DWORD), C.POINTER(W.BOOL)]
+            # MAXIMUM_ALLOWED: Windows reports every right that the permissions give this token.
+            if not _adv.AccessCheck(descriptor, copy, 0x02000000, C.byref(mapping), privileges, C.byref(size),
+                                    C.byref(granted), C.byref(allowed)):
+                raise _failed()
+            return granted.value if allowed.value else 0
+        finally:
+            _kernel.CloseHandle(copy)
     finally:
-        _kernel.LocalFree.argtypes = [C.c_void_p]
-        _kernel.LocalFree(descriptor)
+        _kernel.CloseHandle(token)
 
 
-def can_write(path):
-    """True when this account can open the file for writing. Nothing is written."""
+def read_protected(path, folder=False):
+    """One open of a file or a folder: (its bytes, the SID of its owner, whether this program could change it).
+
+    All three come from the same open object. So a path that is replaced
+    between two reads cannot give the bytes of one file and the owner of
+    another. While a file is open here, no program can open it for writing or
+    for deleting. "Change" is one of the rights of `CHANGE`, as Windows itself
+    computes them for this program's token from the object's own permissions.
+    A call that fails is an error here, never an answer.
+    """
+    _kernel.CreateFileW.argtypes = [W.LPCWSTR, W.DWORD, W.DWORD, C.c_void_p, W.DWORD, W.DWORD, W.HANDLE]
+    _kernel.CreateFileW.restype = W.HANDLE
+    _kernel.CloseHandle.argtypes = [W.HANDLE]
+    # A file: read access (GENERIC_READ), and other programs may only read it meanwhile (share: 1).
+    # A folder: its attributes and its permissions only; FILE_FLAG_BACKUP_SEMANTICS opens a folder.
+    handle = _kernel.CreateFileW(str(path), 0x20080 if folder else 0x80000000, 7 if folder else 1, None, 3,
+                                 0x02000000 if folder else 0, None)
+    if handle in (None, W.HANDLE(-1).value):
+        raise _failed()
     try:
-        with open(path, "r+b"):
-            return True
-    except OSError:
-        return False
+        data = b""
+        if not folder:
+            buffer, count = C.create_string_buffer(65536), W.DWORD()
+            _kernel.ReadFile.argtypes = [W.HANDLE, C.c_void_p, W.DWORD, C.POINTER(W.DWORD), C.c_void_p]
+            if not _kernel.ReadFile(handle, buffer, 65536, C.byref(count), None):
+                raise _failed()
+            data = buffer.raw[:count.value]
+        sid, descriptor = C.c_void_p(), C.c_void_p()
+        _adv.GetSecurityInfo.argtypes = [W.HANDLE, C.c_int, W.DWORD, C.POINTER(C.c_void_p), C.POINTER(C.c_void_p),
+                                         C.POINTER(C.c_void_p), C.POINTER(C.c_void_p), C.POINTER(C.c_void_p)]
+        _adv.GetSecurityInfo.restype = W.DWORD
+        # SE_FILE_OBJECT; the owner, the group and the permissions.
+        status = _adv.GetSecurityInfo(handle, 1, 7, C.byref(sid), None, None, None, C.byref(descriptor))
+        if status:
+            raise C.WinError(status)
+        try:
+            owner, granted = sid_text(sid), _granted(descriptor)
+        finally:
+            _kernel.LocalFree.argtypes = [C.c_void_p]
+            _kernel.LocalFree(descriptor)
+    finally:
+        _kernel.CloseHandle(handle)
+    return data, owner, bool(granted & CHANGE)
 
 
 class _UserInfo1(C.Structure):
@@ -777,11 +836,13 @@ def answering(steps, asked, operation, answer, marks, *, limit=90, end=os._exit)
     It answers one dialog, once: a dialog of this process that `is_question`
     accepts. Each dialog window is one entry of `asked`, so two questions with
     the same text are two entries. Any other dialog, and a second question, is
-    recorded and never answered. Nothing else would end that wait. So after
-    `limit` seconds without an answer this thread fails the step with the
-    dialog's text and ends the program.
+    recorded and never answered. Nothing else would end that wait. So when a
+    dialog of this process is open for `limit` seconds without an answer, with
+    a text or without one, this thread fails the step with what the dialog
+    shows and ends the program. It ends the program also when it cannot look
+    at the dialogs, and when it cannot save the failure.
     """
-    done, entries, posted, waiting = threading.Event(), {}, {}, {}
+    done, entries, posted, waiting, started = threading.Event(), {}, {}, {}, time.monotonic()
     _user.PostMessageW.argtypes = [W.HWND, W.UINT, W.WPARAM, W.LPARAM]
     _user.PostMessageW.restype = W.BOOL
 
@@ -800,40 +861,53 @@ def answering(steps, asked, operation, answer, marks, *, limit=90, end=os._exit)
         steps.save()
 
     def stop(text, entry):
-        steps.failed(RuntimeError(text + ": " + json.dumps(entry)[-2500:]))
-        steps.finish()
-        done.set()
-        end(1)
+        try:
+            steps.failed(RuntimeError(text + ": " + json.dumps(entry, default=str)[-2500:]))
+            steps.finish()
+        except Exception:
+            pass  # The program ends all the same. Its caller then reports a program that ended without a result.
+        finally:
+            done.set()
+            end(1)
 
-    def watch():
-        started = time.monotonic()
-        while not done.wait(0.5):
-            now = time.monotonic()
-            for dialog in dialogs():
-                window = dialog["window"]
-                if not dialog["text"]:
-                    continue  # Windows has not filled it yet.
-                if window in posted:
-                    if now - posted[window] > limit:
-                        return stop("The answer did not close the Windows question", entries[window])
-                    continue
-                ours, button = is_question(dialog, operation, marks), button_for(dialog, answer)
-                entry = {"window": window, "title": dialog["title"], "text": dialog["text"][:4000],
-                         "buttons": sorted(label for _, label in dialog["buttons"].values()),
-                         "theQuestion": ours, "answer": None}
+    def look():
+        now = time.monotonic()
+        for dialog in dialogs():
+            window = dialog["window"]
+            if window in posted:
+                if now - posted[window] > limit:
+                    return stop("The answer did not close the Windows question", entries[window])
+                continue
+            # The limit runs from the first sight of the dialog, also while it has no text.
+            first = waiting.setdefault(window, now)
+            ours, button = is_question(dialog, operation, marks), button_for(dialog, answer)
+            entry = {"window": window, "title": dialog["title"], "text": dialog["text"][:4000],
+                     "buttons": sorted(label for _, label in dialog["buttons"].values()),
+                     "theQuestion": ours, "answer": None}
+            if dialog["text"]:  # Windows fills a dialog a moment after it shows it.
                 # One answer in all. A second question is another case: it stays. An
                 # answer counts only when Windows took the message (WM_COMMAND).
                 if ours and button and not posted and _user.PostMessageW(window, 0x0111, button[0], button[1]):
                     posted[window], entry["answer"] = now, answer
                 record(window, entry)
-                if window not in posted and now - waiting.setdefault(window, now) > limit:
-                    return stop("A Windows dialog of this program got no answer", entry)
-            if not posted and now - started > 25:
-                # For a failed step: the dialogs of other programs that this program can see.
-                for dialog in dialogs(own=False):
-                    record(("other", dialog["window"]),
-                           {"otherProgram": dialog["pid"], "title": dialog["title"], "text": dialog["text"][:2000],
-                            "buttons": sorted(label for _, label in dialog["buttons"].values())}, own=False)
+            if window not in posted and now - first > limit:
+                record(window, entry)
+                return stop("A Windows dialog of this program got no answer", entry)
+        if not posted and now - started > 25:
+            # For a failed step: the dialogs of other programs that this program can see.
+            for dialog in dialogs(own=False):
+                record(("other", dialog["window"]),
+                       {"otherProgram": dialog["pid"], "title": dialog["title"], "text": dialog["text"][:2000],
+                        "buttons": sorted(label for _, label in dialog["buttons"].values())}, own=False)
+
+    def watch():
+        while not done.wait(0.5):
+            try:
+                look()
+            except BaseException as error:
+                if not done.is_set():
+                    stop("The test could not look at the dialogs of this program",
+                         {"error": type(error).__name__ + ": " + str(error)[-500:]})
 
     thread = threading.Thread(target=watch, daemon=True)
     thread.start()
@@ -983,9 +1057,9 @@ def run():
         record.write_text(json.dumps({"sid": sid, "runnerSession": runner["desktopSession"],
                                       "hosted": {fact: os.environ.get(fact) for fact in HOSTED_FACTS}}),
                           encoding="utf-8")
-        if file_owner(record) != ADMINISTRATORS:
+        if read_protected(record)[1] != ADMINISTRATORS:
             execute([system("icacls.exe"), record, "/setowner", f"*{ADMINISTRATORS}", "/Q"])
-        owner = file_owner(record)
+        owner = read_protected(record)[1]
         report["account"]["record"] = {"owner": owner}
         need(owner == ADMINISTRATORS, "The account record does not belong to the administrators group", owner)
         need(not task("state", "AmplifierUnified-" + sid)["exists"], "The new user already has an Amplifier task")
@@ -1071,23 +1145,95 @@ def remove_profile(sid):
     return "left: " + str(said)
 
 
+def whose(name, mark):
+    """Whose account has this name: "this run's" (its comment is the run's mark), "another account" or "absent"."""
+    comment = account_comment(name)
+    return "absent" if comment is None else "this run's" if comment == mark else "another account"
+
+
+def remove_account(name, mark):
+    """Delete the account. Its mark is read again directly before: only this run's account is deleted."""
+    state = whose(name, mark)
+    return delete_user(name) if state == "this run's" else "not deleted: " + state
+
+
+def listed_processes(listing):
+    """The rows of the Windows process list (tasklist, CSV, no heading): (program, process number)."""
+    return [(row[0], row[1].strip()) for row in csv.reader(listing.splitlines())
+            if len(row) >= 2 and row[1].strip().isdigit()]
+
+
+def still_listed(filters, wanted, seconds):
+    """The processes that Windows still lists for these filters, after at most `seconds`. A failed list is an error."""
+    deadline = time.monotonic() + seconds
+    while True:
+        listing = execute([system("tasklist.exe"), *[part for item in filters for part in ("/FI", item)],
+                           "/FO", "CSV", "/NH"])
+        if listing["exitCode"] != 0:
+            raise OSError("Windows did not list the processes: " + listing["stderr"][-200:])
+        left = [row for row in listed_processes(listing["stdout"]) if wanted(row)]
+        if not left or time.monotonic() >= deadline:
+            return left
+        time.sleep(1)
+
+
+def end_viewers(pids, seconds=20):
+    """End this run's Remote Desktop viewers. "ended" only when Windows lists none of them afterwards."""
+    left = []
+    for pid in pids:
+        execute([system("taskkill.exe"), "/F", "/PID", pid, "/FI", "IMAGENAME eq mstsc.exe"])
+        # Windows gives a process number to a later program. Only a viewer with this number counts.
+        left += still_listed([f"PID eq {pid}", "IMAGENAME eq mstsc.exe"],
+                             lambda row, pid=pid: row[0].casefold() == "mstsc.exe" and row[1] == str(pid), seconds)
+    return "ended" if not left else "left: " + json.dumps(left)
+
+
+def end_processes(name, seconds=20):
+    """End the user's programs. "ended" only when Windows lists no program of the user afterwards."""
+    execute([system("taskkill.exe"), "/F", "/FI", f"USERNAME eq {name}"])
+    left = still_listed([f"USERNAME eq {name}"], lambda row: True, seconds)
+    return "ended" if not left else "left: " + json.dumps(left[:20])
+
+
+def restore_setting(earlier, registry):
+    """Put the viewer's setting back. "restored" only when Windows then has the earlier value, or none as before."""
+    name = "AuthenticationLevelOverride"
+    with registry.CreateKey(registry.HKEY_CURRENT_USER, r"Software\Microsoft\Terminal Server Client") as key:
+        if earlier is None:
+            try:
+                registry.DeleteValue(key, name)
+            except FileNotFoundError:
+                pass
+        else:
+            registry.SetValueEx(key, name, 0, registry.REG_DWORD, earlier)
+        try:
+            now = registry.QueryValueEx(key, name)[0]
+        except FileNotFoundError:
+            now = None
+    return "restored" if now == earlier else "left: Windows has the value " + repr(now)
+
+
 # What each part of the cleanup must report. With an account record: also the account's parts.
-CLEAN = {"credential": ("absent",), "viewerSetting": ("restored", "unchanged")}
-OWNED_CLEAN = {"signedOut": (True,), "helperTask": ("absent",), "amplifierTask": ("absent",),
-               "profile": ("absent",), "account": ("absent",)}
+CLEAN = {"credential": ("absent",), "viewers": ("ended",), "viewerSetting": ("restored", "unchanged")}
+OWNED_CLEAN = {"signedOut": (True,), "processes": ("ended",), "helperTask": ("absent",),
+               "amplifierTask": ("absent",), "profile": ("absent",), "account": ("absent",)}
 
 
 def cleaned(result, owned):
-    """True only when nothing of this run is left: every part, not only the account."""
+    """True only when every part that `CLEAN` names is done, and with an account record every part of `OWNED_CLEAN`."""
     wanted = {**CLEAN, **(OWNED_CLEAN if owned else {})}
     return all(result.get(name) in values for name, values in wanted.items())
 
 
 def cleanup():
-    """Sign the user out; remove its tasks, its processes, its profile, the account and the saved sign-in.
+    """End the viewers; sign the user out; remove its programs, tasks, profile, the account and the saved sign-in.
 
-    Each part runs also when an earlier part failed, and each failure is kept.
-    The step passes only when nothing of this run is left (`cleaned`).
+    Before anything of the account is removed, the account with the recorded
+    name is read: only an account with this run's mark is this run's. When the
+    name belongs to another account, or Windows does not answer, nothing of
+    that account is touched and the step fails. Apart from that, a part that
+    fails does not stop the parts after it, and each failure is kept. The step
+    passes only when `cleaned` accepts the result.
     """
     result, owned = {}, saved("ownership.json")
 
@@ -1097,11 +1243,6 @@ def cleanup():
         except Exception as error:
             result[label] = "left: " + type(error).__name__ + ": " + str(error)[-300:]
 
-    def viewers():
-        for pid in saved("viewers.json") or []:
-            execute([system("taskkill.exe"), "/F", "/PID", pid, "/FI", "IMAGENAME eq mstsc.exe"])
-        return "ended"
-
     def gone(task_name):
         return "absent" if not task("remove", task_name)["exists"] else "left"
 
@@ -1110,15 +1251,7 @@ def cleanup():
         if earlier is None:
             return "unchanged"
         import winreg
-        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Terminal Server Client") as key:
-            if earlier["earlier"] is None:
-                try:
-                    winreg.DeleteValue(key, "AuthenticationLevelOverride")
-                except FileNotFoundError:
-                    pass
-            else:
-                winreg.SetValueEx(key, "AuthenticationLevelOverride", 0, winreg.REG_DWORD, earlier["earlier"])
-        return "restored"
+        return restore_setting(earlier["earlier"], winreg)
 
     def reports():
         # The user's own reports, beside the evidence of the runner's account.
@@ -1129,36 +1262,37 @@ def cleanup():
         return "saved"
 
     part("credential", forget)
-    part("viewers", viewers)
+    part("viewers", lambda: end_viewers(saved("viewers.json") or []))
     if owned:
-        name, sid = owned["user"], owned.get("sid")
-        # Only the account with this run's mark. The record is written before
-        # the account, so the account can be absent. An account that another
-        # program made under this name is not touched.
-        try:
-            comment = account_comment(name)
-            state = "absent" if comment is None else "this run's" if comment == owned["mark"] else "another account"
-            if state == "this run's" and sid is None:
-                sid = sid_text(account_sid(name))  # Created, and the line that records the SID did not run.
-        except Exception as error:
-            state = "not read: " + type(error).__name__
-        result["accountBefore"] = state
+        name, mark, sid = owned["user"], owned["mark"], owned.get("sid")
+        # The record is written before the account, so the account can be absent.
+        part("accountBefore", lambda: whose(name, mark))
+        state, unread = result["accountBefore"], None
+        if state == "this run's" and sid is None:
+            # Windows created the account, and the line that records its SID did not run.
+            try:
+                sid = sid_text(account_sid(name))
+            except Exception as error:
+                unread = "left: the account's SID was not read: " + type(error).__name__
         if state in ("this run's", "absent"):
             part("signedOut", lambda: sign_out(name, None))
-            part("processes", lambda: execute([system("taskkill.exe"), "/F", "/FI", f"USERNAME eq {name}"])["exitCode"])
+            part("processes", lambda: end_processes(name) if state == "this run's" else "ended")
             part("helperTask", lambda: gone(HELPER))
-            part("amplifierTask", lambda: gone("AmplifierUnified-" + sid) if sid else "absent")
-            part("profile", lambda: remove_profile(sid) if sid else "absent")
+            # Without the SID the user's task and profile have no name here: they count as left.
+            part("amplifierTask", lambda: unread or (gone("AmplifierUnified-" + sid) if sid else "absent"))
+            part("profile", lambda: unread or (remove_profile(sid) if sid else "absent"))
             if state == "this run's":
-                part("deleteStatus", lambda: delete_user(name))
+                part("deleteStatus", lambda: remove_account(name, mark))
             part("account", lambda: "absent" if account_sid(name) is None else "left")
         else:
-            result["account"] = "left: " + state
+            # Another account has this name, or Windows did not say whose it is: nothing of it is touched.
+            result["account"] = "left: " + (state if state == "another account"
+                                            else "Windows did not say whose account this is")
     part("viewerSetting", setting)
     part("reports", reports)
     part("saved", lambda: save("cleanup.json", result) or "yes")
     print(json.dumps(result), flush=True)
-    # The runner is deleted after the job. Everything of this run must be gone before it ends.
+    # The runner is deleted after the job. What `cleaned` names must be done before it ends.
     return cleaned(result, owned)
 
 
@@ -1226,7 +1360,18 @@ def first(stage, exchange, account, token):
         need(standard_token(token, account), "This is not a standard user in a desktop session of its own sign-in", token)
         need(root.parent.parent.parent == Path(os.environ["USERPROFILE"]) and not root.exists(),
              "The installation folder is not a new folder in the user's own profile")
-        steps.passed(FIRST[0], token=token)
+        # What admitted this program, shown on Windows in both directions: a file
+        # that this user makes is the user's own and changeable; the run's account
+        # record and its folder are not.
+        own = exchange / "own-file.json"
+        own.write_text("{}", encoding="utf-8")
+        mine, theirs = read_protected(own), read_protected(stage / "account.json")
+        folders_read = (read_protected(exchange, folder=True)[2], read_protected(stage, folder=True)[2])
+        need(mine == (b"{}", token["sid"], True) and theirs[1:] == (ADMINISTRATORS, False)
+             and folders_read == (True, False),
+             "Windows does not tell a file of this user from the run's account record",
+             {"own": mine[1:], "record": theirs[1:], "exchangeAndStage": folders_read})
+        steps.passed(FIRST[0], token=token, recordOwner=theirs[1], recordChangeable=theirs[2])
 
         steps.begin(FIRST[1])
         checks = execute([stage / "native-setup-tests.exe"], cwd=exchange, timeout=240)
@@ -1689,9 +1834,11 @@ def standard(stage, exchange, phase):
     stage, exchange = Path(stage), Path(exchange)
     # In the stage folder, which this user cannot change. Not in the exchange folder.
     record = stage / "account.json"
-    account = json.loads(record.read_text(encoding="utf-8"))
+    # The record's text, its owner and its permissions come from one open file.
+    content, owner, changeable = read_protected(record)
+    account = json.loads(content.decode("utf-8"))
     token = token_facts()
-    admit_standard(account, token, file_owner(record), can_write(record))
+    admit_standard(account, token, owner, changeable or read_protected(record.parent, folder=True)[2])
     # One run for each phase: a second start of the helper task changes nothing.
     try:
         with open(exchange / f"{phase}.started", "x", encoding="utf-8") as marker:

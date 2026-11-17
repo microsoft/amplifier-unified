@@ -8,6 +8,7 @@ workflow can never do silently.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 import importlib.util
 import json
 from pathlib import Path
@@ -71,8 +72,8 @@ RECORD = {"sid": "S-1-5-21-1-2-3-1003", "runnerSession": 2, "hosted": HOSTED}
 USER = {"sid": "S-1-5-21-1-2-3-1003", "memberOfAdministrators": False}
 
 
-def admit(case, record=RECORD, token=USER, owner=ADMINISTRATORS, writable=False):
-    return case.admit_standard(record, token, owner, writable, "win32", SUPPORTED)
+def admit(case, record=RECORD, token=USER, owner=ADMINISTRATORS, changeable=False):
+    return case.admit_standard(record, token, owner, changeable, "win32", SUPPORTED)
 
 
 def test_the_standard_user_of_a_hosted_run_is_admitted(case):
@@ -84,10 +85,11 @@ def test_the_standard_user_of_a_hosted_run_is_admitted(case):
     ({"token": {**USER, "sid": "S-1-5-21-1-2-3-1004"}}, "only as the standard user"),
     ({"token": {**USER, "memberOfAdministrators": True}}, "only as the standard user"),
     ({"record": {"hosted": HOSTED}}, "only as the standard user"),
+    ({"record": [RECORD]}, "only as the standard user"),  # Not a record at all.
     # A record that the user made, that another account made, or that the user can change.
     ({"owner": USER["sid"]}, "administrators group"),
     ({"owner": "S-1-5-21-1-2-3-500"}, "administrators group"),
-    ({"writable": True}, "administrators group"),
+    ({"changeable": True}, "administrators group"),
     # A record without the facts of the hosted workflow.
     ({"record": {**RECORD, "hosted": {}}}, "creates a Windows user"),
     ({"record": {"sid": RECORD["sid"]}}, "creates a Windows user"),
@@ -107,7 +109,13 @@ def test_every_operation_passes_an_admission_check_before_it_does_anything():
     standard = source[source.index("def standard(stage, exchange, phase):"):source.index('if __name__ == "__main__":')]
     # The record is in the stage folder, which the user cannot change. It is never in the exchange folder.
     assert 'record = stage / "account.json"' in standard and 'exchange / "account.json"' not in source
-    assert "admit_standard(account, token, file_owner(record), can_write(record))" in standard
+    # One open file gives the record's text, its owner and its permissions. The folder is read too.
+    assert "content, owner, changeable = read_protected(record)" in standard
+    assert 'account = json.loads(content.decode("utf-8"))' in standard
+    assert ("admit_standard(account, token, owner, changeable or read_protected(record.parent, folder=True)[2])"
+            ) in standard
+    before = standard[:standard.index("admit_standard(")]
+    assert "read_text" not in before and "open(" not in before
     assert standard.index("admit_standard(") < standard.index(".started") < standard.index('"second": second')
     admit_source = source[source.index("def admit_standard("):source.index("def load(name, path):")]
     assert 'require_disposable_runner(account.get("hosted") or {}, platform, interpreter)' in admit_source
@@ -126,11 +134,35 @@ def test_the_account_record_is_written_where_the_user_cannot_change_it():
     assert source.count("HOSTED_FACTS = (\"GITHUB_ACTIONS\", \"RUNNER_ENVIRONMENT\", OPT_IN)") == 1
 
 
-def test_a_file_that_this_account_can_open_for_writing_is_read_as_such_and_stays_unchanged(case, tmp_path):
-    record = tmp_path / "account.json"
-    record.write_text("{}", encoding="utf-8")
-    assert case.can_write(record) is True and record.read_text(encoding="utf-8") == "{}"
-    assert case.can_write(tmp_path / "absent.json") is False and not (tmp_path / "absent.json").exists()
+def test_the_records_text_owner_and_permissions_come_from_one_open_file(case):
+    source = FIXTURE.read_text(encoding="utf-8")
+    reader = source[source.index("def read_protected(path, folder=False):"):source.index("class _UserInfo1(C.Structure):")]
+    # One open. While it lasts, other programs may only read the file (share: 1).
+    assert reader.count("CreateFileW(") == 1 and "0x20080 if folder else 0x80000000, 7 if folder else 1, None, 3," in reader
+    # The same handle gives the bytes, the owner and the permissions.
+    assert reader.index("CreateFileW(") < reader.index("_kernel.ReadFile(handle, ") \
+        < reader.index("_adv.GetSecurityInfo(handle, 1, 7, ") < reader.index("_granted(descriptor)") \
+        < reader.index("_kernel.CloseHandle(handle)")
+    assert "return data, owner, bool(granted & CHANGE)" in reader
+    # Windows computes what this program's token may do. A call that fails is an error, never an answer.
+    granted = source[source.index("def _granted(descriptor):"):source.index("def read_protected(")]
+    assert "_adv.AccessCheck(descriptor, copy, 0x02000000, " in granted
+    assert "except" not in granted and "except" not in reader
+    # Write or add data, write attributes, delete an entry, delete, change permissions, take over.
+    assert case.CHANGE == 0x2 | 0x4 | 0x10 | 0x40 | 0x100 | 0x10000 | 0x40000 | 0x80000
+    # No second read by a path is left.
+    for gone in ("def can_write", "def file_owner", "GetNamedSecurityInfoW"):
+        assert gone not in source, gone
+
+
+def test_the_case_shows_on_windows_that_the_read_tells_the_users_file_from_the_record():
+    source = FIXTURE.read_text(encoding="utf-8")
+    first = source[source.index("def first(stage, exchange, account, token):"):source.index("def product(stage, root):")]
+    # As the standard user: its own file is its own and changeable; the record and the stage folder are not.
+    assert 'mine, theirs = read_protected(own), read_protected(stage / "account.json")' in first
+    assert ('need(mine == (b"{}", token["sid"], True) and theirs[1:] == (ADMINISTRATORS, False)\n'
+            '             and folders_read == (True, False),') in first
+    assert first.index("read_protected(own)") < first.index("steps.passed(FIRST[0]")
 
 
 ACCOUNT = {"sid": "S-1-5-21-1-2-3-1003", "runnerSession": 2}
@@ -343,13 +375,25 @@ OWNED = {"user": "amp-std-000000", "mark": "mark-1", "sid": "S-1-5-21-1-2-3-1003
 AMPLIFIER_TASK = "AmplifierUnified-" + OWNED["sid"]
 
 
-def clean_up(case, monkeypatch, tmp_path, *, owned=OWNED, comment="mark-1", broken=(), profile="absent"):
-    """Run the cleanup with stand-ins for Windows. `broken` names the parts that fail."""
-    calls, files, exists = [], {"ownership.json": owned}, {"account": comment is not None}
+def clean_up(case, monkeypatch, tmp_path, *, owned=OWNED, comment="mark-1", later=None, broken=(),
+             profile="absent"):
+    """Run the cleanup with stand-ins for Windows. `broken` names the parts that fail.
+
+    `comment` is the comment of the account with the recorded name (None: no
+    such account). `later` is its comment at every read after the first.
+    """
+    calls, files, exists, reads = [], {"ownership.json": owned}, {"account": comment is not None}, []
 
     def fail(name):
         if name in broken:
             raise OSError(name + " failed")
+
+    def account_comment(name):
+        fail("identify")
+        reads.append(name)
+        if not exists["account"]:
+            return None
+        return comment if len(reads) == 1 or later is None else later
 
     def delete_user(name):
         fail("account")
@@ -361,11 +405,12 @@ def clean_up(case, monkeypatch, tmp_path, *, owned=OWNED, comment="mark-1", brok
     monkeypatch.setattr(case, "save", files.__setitem__)
     monkeypatch.setattr(case, "system", lambda name: name)
     monkeypatch.setattr(case, "folders", lambda: (tmp_path, tmp_path))
-    monkeypatch.setattr(case, "execute", lambda argv, **_: {"exitCode": 0})
     monkeypatch.setattr(case, "forget", lambda: fail("credential") or "absent")
-    monkeypatch.setattr(case, "account_comment", lambda name: comment if exists["account"] else None)
+    monkeypatch.setattr(case, "end_viewers", lambda pids: fail("viewers") or calls.append("viewers") or "ended")
+    monkeypatch.setattr(case, "end_processes", lambda name: fail("processes") or calls.append("processes") or "ended")
+    monkeypatch.setattr(case, "account_comment", account_comment)
     monkeypatch.setattr(case, "account_sid", lambda name: b"sid" if exists["account"] else None)
-    monkeypatch.setattr(case, "sid_text", lambda sid: OWNED["sid"])
+    monkeypatch.setattr(case, "sid_text", lambda sid: fail("sid") or OWNED["sid"])
     monkeypatch.setattr(case, "sign_out", lambda name, viewer: fail("signedOut") or calls.append("sign_out") or True)
     monkeypatch.setattr(case, "task", lambda op, name, **_: fail(name) or calls.append(op + " " + name)
                         or {"exists": False})
@@ -374,20 +419,20 @@ def clean_up(case, monkeypatch, tmp_path, *, owned=OWNED, comment="mark-1", brok
     return case.cleanup(), files["cleanup.json"], calls
 
 
-def test_the_cleanup_passes_when_nothing_of_the_run_is_left(case, monkeypatch, tmp_path):
+def test_the_cleanup_passes_when_every_part_is_done(case, monkeypatch, tmp_path):
     passed, result, calls = clean_up(case, monkeypatch, tmp_path)
     assert passed is True
-    assert {name: result[name] for name in ("credential", "signedOut", "helperTask", "amplifierTask", "profile",
-                                            "account", "viewerSetting")} == {
-        "credential": "absent", "signedOut": True, "helperTask": "absent", "amplifierTask": "absent",
-        "profile": "absent", "account": "absent", "viewerSetting": "unchanged"}
-    assert calls == ["sign_out", "remove AmplifierStandardAccountCheck", "remove " + AMPLIFIER_TASK, "profile",
-                     "delete_user"]
+    assert {name: result[name] for name in ("credential", "viewers", "signedOut", "processes", "helperTask",
+                                            "amplifierTask", "profile", "account", "viewerSetting")} == {
+        "credential": "absent", "viewers": "ended", "signedOut": True, "processes": "ended", "helperTask": "absent",
+        "amplifierTask": "absent", "profile": "absent", "account": "absent", "viewerSetting": "unchanged"}
+    assert calls == ["viewers", "sign_out", "processes", "remove AmplifierStandardAccountCheck",
+                     "remove " + AMPLIFIER_TASK, "profile", "delete_user"]
 
 
 @pytest.mark.parametrize("part, label", [
-    ("credential", "credential"), ("signedOut", "signedOut"), ("AmplifierStandardAccountCheck", "helperTask"),
-    (AMPLIFIER_TASK, "amplifierTask"), ("profile", "profile")])
+    ("credential", "credential"), ("viewers", "viewers"), ("signedOut", "signedOut"), ("processes", "processes"),
+    ("AmplifierStandardAccountCheck", "helperTask"), (AMPLIFIER_TASK, "amplifierTask"), ("profile", "profile")])
 def test_a_part_that_fails_does_not_stop_the_other_parts_and_fails_the_cleanup(case, monkeypatch, tmp_path, part, label):
     passed, result, calls = clean_up(case, monkeypatch, tmp_path, broken=(part,))
     assert passed is False
@@ -415,23 +460,154 @@ def test_an_account_whose_sid_was_not_recorded_is_removed_by_its_mark(case, monk
     assert "delete_user" in calls and "remove " + AMPLIFIER_TASK in calls and "profile" in calls
 
 
+def test_this_runs_account_is_deleted_also_when_its_sid_cannot_be_read(case, monkeypatch, tmp_path):
+    owned = {"user": OWNED["user"], "mark": "mark-1"}
+    passed, result, calls = clean_up(case, monkeypatch, tmp_path, owned=owned, broken=("sid",))
+    # The sign-out, the helper task and the account itself are done. The task and the profile
+    # that are named by the SID count as left, so the step fails.
+    assert calls == ["viewers", "sign_out", "processes", "remove AmplifierStandardAccountCheck", "delete_user"]
+    assert result["account"] == "absent" and passed is False
+    assert result["amplifierTask"] == result["profile"] == "left: the account's SID was not read: OSError"
+
+
 def test_an_account_that_was_recorded_and_never_created_is_nothing_to_delete(case, monkeypatch, tmp_path):
     owned = {"user": OWNED["user"], "mark": "mark-1"}
     passed, result, calls = clean_up(case, monkeypatch, tmp_path, owned=owned, comment=None)
     assert passed is True and result["accountBefore"] == "absent"
-    assert calls == ["sign_out", "remove AmplifierStandardAccountCheck"]
+    assert calls == ["viewers", "sign_out", "remove AmplifierStandardAccountCheck"]
 
 
 def test_an_account_of_another_program_under_this_name_is_not_touched(case, monkeypatch, tmp_path):
     passed, result, calls = clean_up(case, monkeypatch, tmp_path, comment="A person's own account")
-    assert passed is False and calls == []
+    assert passed is False and calls == ["viewers"]
     assert result["accountBefore"] == "another account" and result["account"] == "left: another account"
+
+
+def test_nothing_of_an_account_is_touched_when_windows_does_not_say_whose_it_is(case, monkeypatch, tmp_path):
+    passed, result, calls = clean_up(case, monkeypatch, tmp_path, broken=("identify",))
+    assert passed is False and calls == ["viewers"]
+    assert result["accountBefore"].startswith("left: OSError")
+    assert result["account"] == "left: Windows did not say whose account this is"
+    # The parts that are not the account's are done all the same.
+    assert result["credential"] == "absent" and result["viewers"] == "ended" and result["viewerSetting"] == "unchanged"
+
+
+def test_an_account_that_is_another_one_directly_before_the_deletion_is_not_deleted(case, monkeypatch, tmp_path):
+    passed, result, calls = clean_up(case, monkeypatch, tmp_path, later="A person's own account")
+    assert "delete_user" not in calls and result["deleteStatus"] == "not deleted: another account"
+    assert result["account"] == "left" and passed is False
 
 
 def test_no_record_means_that_no_account_was_requested(case, monkeypatch, tmp_path):
     passed, result, calls = clean_up(case, monkeypatch, tmp_path, owned=None)
-    assert passed is True and calls == [] and "account" not in result
+    assert passed is True and calls == ["viewers"] and "account" not in result
     assert result["credential"] == "absent" and result["viewerSetting"] == "unchanged"
+
+
+NONE_LISTED = "INFO: No tasks are running which match the specified criteria.\r\n"
+VIEWER = '"mstsc.exe","4321","RDP-Tcp#0","2","43,512 K"\r\n'
+
+
+def windows_lists(case, monkeypatch, listings):
+    """Stand-ins for taskkill and tasklist. Each listing is one answer of tasklist; the last one repeats."""
+    commands, listings = [], list(listings)
+
+    def execute(argv, **_):
+        commands.append([str(item) for item in argv])
+        if argv[0] != "tasklist.exe":
+            return {"exitCode": 0, "stdout": "", "stderr": ""}
+        answer = listings.pop(0) if len(listings) > 1 else listings[0]
+        return answer if isinstance(answer, dict) else {"exitCode": 0, "stdout": answer, "stderr": ""}
+
+    monkeypatch.setattr(case, "system", lambda name: name)
+    monkeypatch.setattr(case, "execute", execute)
+    monkeypatch.setattr(case.time, "sleep", lambda seconds: None)
+    return commands
+
+
+def test_the_process_list_of_windows_is_read_by_its_rows(case):
+    assert case.listed_processes(NONE_LISTED) == []
+    assert case.listed_processes(VIEWER + '"python.exe","77","RDP-Tcp#0","2","9,000 K"\r\n') == [
+        ("mstsc.exe", "4321"), ("python.exe", "77")]
+    assert case.listed_processes("") == [] and case.listed_processes('"Image Name","PID"\r\n') == []
+
+
+def test_a_viewer_is_ended_only_when_windows_lists_it_no_longer(case, monkeypatch):
+    commands = windows_lists(case, monkeypatch, [NONE_LISTED])
+    assert case.end_viewers([4321], seconds=0) == "ended"
+    assert commands == [["taskkill.exe", "/F", "/PID", "4321", "/FI", "IMAGENAME eq mstsc.exe"],
+                        ["tasklist.exe", "/FI", "PID eq 4321", "/FI", "IMAGENAME eq mstsc.exe", "/FO", "CSV", "/NH"]]
+    # Windows still lists it after the limit: left.
+    windows_lists(case, monkeypatch, [VIEWER])
+    assert case.end_viewers([4321], seconds=0) == 'left: [["mstsc.exe", "4321"]]'
+    # It is gone at the second look.
+    commands = windows_lists(case, monkeypatch, [VIEWER, NONE_LISTED])
+    assert case.end_viewers([4321], seconds=30) == "ended" and len(commands) == 3
+    # Another program got the number, or another viewer is listed: this run's viewer is gone.
+    windows_lists(case, monkeypatch, ['"notepad.exe","4321","Console","2","1 K"\r\n"mstsc.exe","99","Console","2","1 K"\r\n'])
+    assert case.end_viewers([4321], seconds=0) == "ended"
+    # No viewer was started: nothing to end, and nothing is asked.
+    commands = windows_lists(case, monkeypatch, [VIEWER])
+    assert case.end_viewers([], seconds=0) == "ended" and commands == []
+
+
+def test_a_process_list_that_windows_does_not_give_is_an_error(case, monkeypatch):
+    windows_lists(case, monkeypatch, [{"exitCode": 1, "stdout": "", "stderr": "ERROR: The search filter cannot be recognized."}])
+    with pytest.raises(OSError) as failed:
+        case.end_viewers([4321], seconds=0)
+    assert "Windows did not list the processes" in str(failed.value)
+    with pytest.raises(OSError):
+        case.end_processes("amp-std-000000", seconds=0)
+
+
+def test_the_users_programs_are_ended_only_when_windows_lists_none_of_the_user(case, monkeypatch):
+    commands = windows_lists(case, monkeypatch, [NONE_LISTED])
+    assert case.end_processes("amp-std-000000", seconds=0) == "ended"
+    assert commands == [["taskkill.exe", "/F", "/FI", "USERNAME eq amp-std-000000"],
+                        ["tasklist.exe", "/FI", "USERNAME eq amp-std-000000", "/FO", "CSV", "/NH"]]
+    windows_lists(case, monkeypatch, ['"python.exe","77","RDP-Tcp#0","2","9,000 K"\r\n'])
+    assert case.end_processes("amp-std-000000", seconds=0) == 'left: [["python.exe", "77"]]'
+
+
+class Registry:
+    """The part of Windows' registry that the viewer's setting uses. `keeps`: Windows does not take a change."""
+    HKEY_CURRENT_USER, REG_DWORD = "HKCU", 4
+
+    def __init__(self, value=None, keeps=False):
+        self.value, self.keeps = value, keeps
+
+    @contextmanager
+    def CreateKey(self, root, path):
+        assert (root, path) == ("HKCU", r"Software\Microsoft\Terminal Server Client")
+        yield "key"
+
+    def DeleteValue(self, key, name):
+        assert (key, name) == ("key", "AuthenticationLevelOverride")
+        if self.value is None:
+            raise FileNotFoundError(name)
+        if not self.keeps:
+            self.value = None
+
+    def SetValueEx(self, key, name, reserved, kind, value):
+        assert (key, name, reserved, kind) == ("key", "AuthenticationLevelOverride", 0, 4)
+        if not self.keeps:
+            self.value = value
+
+    def QueryValueEx(self, key, name):
+        if self.value is None:
+            raise FileNotFoundError(name)
+        return self.value, 4
+
+
+@pytest.mark.parametrize("now, keeps, earlier, expected, after", [
+    (0, False, None, "restored", None),  # The job made the value; before, there was none.
+    (0, False, 2, "restored", 2),  # The job changed the value.
+    (None, False, None, "restored", None),  # Nothing to do.
+    (0, True, None, "left: Windows has the value 0", 0),
+    (0, True, 2, "left: Windows has the value 0", 0)])
+def test_the_setting_is_restored_only_when_windows_has_the_earlier_value_again(case, now, keeps, earlier, expected, after):
+    registry = Registry(now, keeps)
+    assert case.restore_setting(earlier, registry) == expected and registry.value == after
 
 
 @pytest.mark.parametrize("answers, expected, calls", [
@@ -450,14 +626,17 @@ def test_the_profile_is_absent_only_when_windows_lists_none_afterwards(case, mon
 
 
 def test_clean_means_every_part(case):
-    done = {"credential": "absent", "viewerSetting": "restored", "signedOut": True, "helperTask": "absent",
-            "amplifierTask": "absent", "profile": "absent", "account": "absent"}
-    assert case.cleaned(done, OWNED) and case.cleaned({"credential": "absent", "viewerSetting": "unchanged"}, None)
+    done = {"credential": "absent", "viewers": "ended", "viewerSetting": "restored", "signedOut": True,
+            "processes": "ended", "helperTask": "absent", "amplifierTask": "absent", "profile": "absent",
+            "account": "absent"}
+    without = {"credential": "absent", "viewers": "ended", "viewerSetting": "unchanged"}
+    assert case.cleaned(done, OWNED) and case.cleaned(without, None)
     for name in done:
         assert not case.cleaned({**done, name: "left: something"}, OWNED), name
         assert not case.cleaned({key: value for key, value in done.items() if key != name}, OWNED), name
-    assert not case.cleaned({"credential": "left: something", "viewerSetting": "unchanged"}, None)
-    assert not case.cleaned({"credential": "absent"}, None)
+    for name in without:
+        assert not case.cleaned({**without, name: "left: something"}, None), name
+        assert not case.cleaned({key: value for key, value in without.items() if key != name}, None), name
 
 
 def test_the_saved_sign_in_is_absent_only_when_windows_says_so():
@@ -569,12 +748,20 @@ def test_the_design_document_says_what_the_case_shows_and_what_it_does_not(case)
     for claim in ("Its user is a member of Administrators", "Windows does not trust the connection",
                   "The test selects Yes with a window message", "the task's own trigger starts a new host",
                   "no installation folder, no sign-in task, no Start-menu entry and no Apps-list entry",
-                  "the step fails when one of them is left", "names the certificate and shows the thumbprint",
+                  "the step fails when one part is not done", "names the certificate and shows the thumbprint",
+                  "The job's cleanup step (the step before the one that keeps the results)",
+                  "When the name belongs to another account, or Windows does not answer, the step removes "
+                  "nothing of that account and fails.",
+                  "A dialog of this program that is not this question, and a second question, get no answer.",
+                  "from one open file",
+                  "it counts both as left, does the other parts, and fails",
+                  "The step does not delete this case's folders in the runner's temporary folder",
                   "Windows' own list of the user's root certificates no longer holds the certificate",
                   "the Windows version or the processor"):
         assert claim in said, claim
     # The cleanup's promise is what its code requires, and no more.
     assert "its profile and the account in every case" not in said
+    assert "The last step of the job" not in said and "Each part runs also when another part failed" not in said
     assert "If GitHub ends the job at its time limit, the step may not finish." in said
 
 
@@ -675,16 +862,19 @@ class Report:
         self.finished = True
 
 
-def answer_with(case, monkeypatch, shown, operation, answer, *, post=None, limit=90, wait=0.7):
+def answer_with(case, monkeypatch, shown, operation, answer, *, post=None, limit=90, wait=0.7, steps=None,
+                look=None, during=None):
     import types
     post, ended = Posted() if post is None else post, []
     monkeypatch.setattr(case, "_user", types.SimpleNamespace(PostMessageW=post))
-    monkeypatch.setattr(case, "dialogs", lambda own=True: list(shown) if own else [])
-    steps, asked = Report(), []
+    monkeypatch.setattr(case, "dialogs", look or (lambda own=True: list(shown) if own else []))
+    steps, asked = Report() if steps is None else steps, []
     with case.answering(steps, asked, operation, answer, MARKS, limit=limit, end=ended.append):
         deadline = time.monotonic() + 5
         while not (post.messages or (asked and steps.saved) or ended) and time.monotonic() < deadline:
             time.sleep(0.05)
+        if during:
+            during(shown)
         time.sleep(wait)  # More looks: an answered dialog is not answered twice.
     return post.messages, asked, steps, ended
 
@@ -754,6 +944,44 @@ def test_an_answer_that_does_not_close_the_question_fails_the_step(case, monkeyp
     assert steps.failure.startswith("The answer did not close the Windows question: ")
 
 
+def test_a_dialog_that_stays_without_a_text_fails_the_step_at_the_limit(case, monkeypatch):
+    # Windows fills a dialog a moment after it shows it. One that stays empty gets no answer and no end.
+    shown = [dialog("", title="Security Warning")]
+    messages, asked, steps, ended = answer_with(case, monkeypatch, shown, "install", "yes", limit=0.6, wait=2.5)
+    assert messages == [] and ended == [1] and steps.finished is True
+    assert steps.failure.startswith("A Windows dialog of this program got no answer: ")
+    assert '"title": "Security Warning"' in steps.failure
+    assert [(entry["text"], entry["answer"]) for entry in asked] == [("", None)]
+
+
+def test_a_dialog_that_gets_its_text_later_is_one_entry_and_gets_the_answer(case, monkeypatch):
+    shown = [dialog("One moment.", window=100)]
+    messages, asked, _, ended = answer_with(case, monkeypatch, shown, "install", "yes",
+                                            during=lambda shown: shown.__setitem__(0, dialog(INSTALL, window=100)))
+    assert messages == [(100, 0x0111, 6, 61)] and ended == []
+    assert len(asked) == 1 and asked[0]["text"].startswith("You are about to install") and case.one_question(asked, "yes")
+
+
+def test_the_program_ends_also_when_the_failure_cannot_be_saved(case, monkeypatch):
+    class Unsaved(Report):
+        def failed(self, error):
+            raise OSError("The disk is full")
+
+    shown = [dialog("Something else happened.", title="Error")]
+    _, _, steps, ended = answer_with(case, monkeypatch, shown, "install", "yes", limit=0.6, wait=2.5, steps=Unsaved())
+    assert ended == [1] and steps.finished is False
+
+
+def test_the_program_ends_when_the_test_cannot_look_at_the_dialogs(case, monkeypatch):
+    def look(own=True):
+        raise RuntimeError("EnumWindows failed")
+
+    messages, asked, steps, ended = answer_with(case, monkeypatch, [], "install", "yes", look=look, wait=1.2)
+    assert messages == [] and asked == [] and ended == [1]
+    assert steps.failure.startswith("The test could not look at the dialogs of this program: ")
+    assert "RuntimeError: EnumWindows failed" in steps.failure
+
+
 def test_one_question_means_exactly_one(case):
     yes = {"theQuestion": True, "answer": "yes"}
     assert case.one_question([yes], "yes")
@@ -790,3 +1018,24 @@ def test_windows_own_list_is_read_where_a_line_says_that_the_certificate_stays_o
     reader = source[source.index("ROOTS = "):source.index("def one_question(")]
     assert "Get-ChildItem -LiteralPath 'Cert:\\CurrentUser\\Root'" in reader and "amplifier_web" not in reader
     assert "no certificate" in source[source.index("THIRD = ("):source.index("JOURNEY = ")]
+
+
+@pytest.mark.parametrize("answer, expected", [
+    ({"exitCode": 0, "json": {"found": 0}}, False), ({"exitCode": 0, "json": {"found": 1}}, True),
+    ({"exitCode": 0, "json": {"found": 2}}, True)])
+def test_windows_own_list_holds_the_certificate_only_when_windows_finds_it(case, monkeypatch, answer, expected):
+    asked = []
+    monkeypatch.setattr(case, "powershell", lambda script, value, timeout=120: asked.append((script, value)) or answer)
+    assert case.windows_root_has("0a1b2c3d 4E5F6071 8293A4B5 C6D7E8F9 00112233") is expected
+    # Windows gets the thumbprint without spaces, in capital letters.
+    assert asked == [(case.ROOTS, {"thumbprint": "0A1B2C3D4E5F60718293A4B5C6D7E8F900112233"})]
+
+
+@pytest.mark.parametrize("answer", [
+    {"exitCode": 1, "json": None, "stdout": "", "stderr": "Cannot find path"},
+    {"exitCode": 0, "json": None, "stdout": "", "stderr": ""}])
+def test_a_list_that_windows_does_not_give_is_not_read_as_no_certificate(case, monkeypatch, answer):
+    monkeypatch.setattr(case, "powershell", lambda script, value, timeout=120: answer)
+    with pytest.raises(AssertionError) as failed:
+        case.windows_root_has(THUMBPRINT)
+    assert "Windows did not list this user's root certificates" in str(failed.value)
