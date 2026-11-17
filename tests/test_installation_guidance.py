@@ -58,7 +58,7 @@ class InstallationGuidanceTests(unittest.TestCase):
         for limit in ("This is a preview.", "not signed yet", "Windows 11 with an Intel or AMD processor",
                       "ARM processors are not supported yet", "your own Windows account only",
                       "Settings > Apps > Installed apps", "It leaves the folder with your chats",
-                      "Uninstall does not remove that file"):
+                      "`%USERPROFILE%\\.amplifier\\rate-limit-state.json`. Uninstall does not remove that file"):
             with self.subTest(limit=limit):
                 self.assertIn(limit, plain)
         self.assertNotIn("Native Windows is not yet supported", readme)
