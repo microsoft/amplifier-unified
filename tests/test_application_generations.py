@@ -42,15 +42,59 @@ def test_qualified_launch_preserves_arguments_and_data_scope(qualified, monkeypa
     monkeypatch.delenv('AMPLIFIER_APP_GENERATION_EXEC')
 
 
-def test_windows_hand_over_keeps_an_argument_with_a_space_whole(monkeypatch):
-    # Windows joins the exec list with spaces. Each argument is quoted, so
-    # that "C:\\Users\\Jane Doe\\app" stays one argument for the app.
-    plain = ["python.exe", "--data-dir", "C:\\Users\\Jane Doe\\app", "", 'say "hello"', "open"]
-    monkeypatch.setattr(generations.os, "name", "posix")
-    assert generations.exec_arguments(plain) == plain  # exec passes the list as it is.
+def windows_hand_over(monkeypatch, *, console=True, status=0):
+    """`hand_over` as on Windows, with stand-ins for the console, the handles and the process."""
+    import signal
+    import subprocess
+    started, ignored = [], []
+
+    class Child:
+        def __init__(self, command, **options):
+            started.append((command, options, list(ignored)))
+
+        def wait(self):
+            return status
     monkeypatch.setattr(generations.os, "name", "nt")
-    assert generations.exec_arguments(plain) == [
-        "python.exe", "--data-dir", '"C:\\Users\\Jane Doe\\app"', '""', '"say \\"hello\\""', "open"]
+    monkeypatch.setattr(generations.os, "execv", lambda *args: pytest.fail("Windows has no exec."))
+    monkeypatch.setattr(generations, "_console", lambda: console)
+    monkeypatch.setattr(generations, "_standard", lambda descriptor: f"own handle {descriptor}")
+    monkeypatch.setattr(subprocess, "Popen", Child)
+    monkeypatch.setattr(subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+    monkeypatch.setattr(signal, "SIGBREAK", 21, raising=False)
+    monkeypatch.setattr(signal, "signal", lambda number, action: ignored.append((number, action)))
+    arguments = ["-I", "-m", "amplifier_web", "--data-dir", "C:\\Users\\Jane Doe\\app", "", 'say "hello"', "open"]
+    with pytest.raises(SystemExit) as ended:
+        generations.hand_over("C:\\Users\\Jane Doe\\python.exe", arguments)
+    (command, options, ignored_at_start), = started
+    # Each argument whole, as a list: subprocess quotes it for Windows. A
+    # folder name with a space (a user name such as "Jane Doe") stays one argument.
+    assert command == ["C:\\Users\\Jane Doe\\python.exe", *arguments]
+    # Ctrl+C and Ctrl+Break are the child's to decide, from before it starts.
+    assert ignored_at_start == [(signal.SIGINT, signal.SIG_IGN), (21, signal.SIG_IGN)]
+    return ended.value.code, options
+
+
+@pytest.mark.parametrize("status,ends_with", [(0, 0), (1, 1), (3, 3), (0xC000013A, 0xC000013A - (1 << 32))])
+def test_windows_hand_over_waits_and_ends_with_the_status_of_the_app(monkeypatch, status, ends_with):
+    code, options = windows_hand_over(monkeypatch, status=status)
+    assert code == ends_with
+    assert code & 0xFFFFFFFF == status  # The same 32 bits reach the caller.
+    assert options == {"stdin": "own handle 0", "stdout": "own handle 1", "stderr": "own handle 2",
+                       "creationflags": 0}  # The app shares this process's handles and its console.
+
+
+def test_windows_hand_over_from_a_process_without_a_console_opens_no_console_window(monkeypatch):
+    _, options = windows_hand_over(monkeypatch, console=False)
+    assert options["creationflags"] == 0x08000000  # CREATE_NO_WINDOW
+
+
+def test_hand_over_is_exec_where_exec_exists(monkeypatch):
+    calls = []
+    monkeypatch.setattr(generations.os, "name", "posix")
+    monkeypatch.setattr(generations.os, "execv", lambda python, arguments: calls.append((python, arguments)))
+    generations.hand_over("/opt/app/bin/python", ["-I", "-m", "amplifier_web", "--data-dir", "/home/jane doe/app"])
+    assert calls == [("/opt/app/bin/python",
+                      ["/opt/app/bin/python", "-I", "-m", "amplifier_web", "--data-dir", "/home/jane doe/app"])]
 
 
 def test_manual_reinstall_and_development_launch_take_precedence(qualified, monkeypatch):
