@@ -2625,11 +2625,14 @@ def test_windows_plan_registry_row_that_the_runtime_tests_lack_is_reported_for_b
                                   + first + f'{TESTS_LACK} amplifier-foundation.' + STOP)
 
 
-def test_windows_plan_git_install_record_without_a_url_is_refused_with_a_sentence(consumer):
-    runtime = [install_record(row) for row in component_rows()]
-    del runtime[1]['direct']['url']
+@pytest.mark.parametrize('name', ['amplifier-foundation', 'only-in-the-runtime-graph'])
+def test_windows_plan_git_install_record_without_a_url_is_refused_with_a_sentence(consumer, name):
+    # The tool reads every record of the runtime graph: also one of a component that the plan does not have.
+    broken = install_record({**component_rows()[1], 'name': name})
+    del broken['direct']['url']
+    runtime = [broken, *[install_record(row) for row in component_rows() if row['name'] != name]]
     root, evidence, expected, path, receipts = consumer(component_rows(), component_rows(), runtime)
-    with pytest.raises(ValueError, match='^amplifier-foundation has a Git install record without a repository URL$'):
+    with pytest.raises(ValueError, match=f'^{name} has a Git install record without a repository URL$'):
         qualification.verify_consumer(root, evidence, expected, path, receipts)
 
 
@@ -2733,11 +2736,19 @@ def test_windows_plan_native_check_passes_only_with_one_acceptance_and_two_refus
         'accepted',
         f'refused: The Windows setup file has amplifier-foundation at {QUALIFIED}. {HOST_HAS} at {fixture.OTHER}.' + STOP + AGAIN,
         f'refused: The Windows setup file has amplifier-foundation at {QUALIFIED}. {TESTS_HAVE} at {fixture.OTHER}.' + STOP + AGAIN]
-    # A refusal finds the row by its normalized name, and exactly one row must change.
-    renamed = fixture.moved([install_record({**rows[1], 'name': 'Amplifier_Foundation'})])
+    # A refusal finds the one row of Amplifier Foundation by its normalized name. That row must be from Git.
+    renamed = fixture.moved([install_record({**rows[1], 'name': 'Amplifier_Foundation'})], 'The installation')
     assert renamed[0]['direct']['vcs_info']['commit_id'] == fixture.OTHER
-    with pytest.raises(RuntimeError, match='exactly one row of amplifier-foundation'):
-        fixture.moved([row for row in rows if row['name'] != 'amplifier-foundation'])
+    for count in ([row for row in rows if row['name'] != 'amplifier-foundation'],
+                  [*rows, {**rows[1], 'name': 'Amplifier.Foundation'}]):
+        with pytest.raises(RuntimeError, match='^The plan does not have exactly one row of amplifier-foundation\\.$'):
+            fixture.moved(count, 'The plan')
+    registry = changed(rows, 'amplifier-foundation', url=None, revision=None)
+    for source in (registry, [install_record(row) for row in registry],
+                   [{**records[1], 'direct': {'url': 'file:///source', 'dir_info': {}}}],
+                   [{**records[1], 'direct': {'url': FOUNDATION, 'vcs_info': {'vcs': 'hg', 'commit_id': QUALIFIED}}}]):
+        with pytest.raises(RuntimeError, match='^The installation does not have amplifier-foundation from Git\\.$'):
+            fixture.moved(source, 'The installation')
     # Each refusal changes the one row of Amplifier Foundation: one difference, and the other component is equal.
     for case in result['cases'][1:]:
         assert len([line for line in case['output'].splitlines() if 'The Windows setup file has' in line]) == 1
@@ -2771,10 +2782,24 @@ def test_windows_plan_native_check_passes_only_with_one_acceptance_and_two_refus
     result = fixture.cases(tmp_path / 'fails', path, records, tool=fails)
     assert result['ok'] is False and [case['passed'] for case in result['cases']] == [False, True, True]
     assert result['cases'][0]['returncode'] == 3
-    # A plan without a row of Amplifier Foundation ends the check with a sentence.
-    path.write_text(json.dumps({'schema': 1, 'graph': [APP_ROW, *[row for row in rows if row['name'] != 'amplifier-foundation']]}))
-    with pytest.raises(RuntimeError, match='exactly one row of amplifier-foundation'):
-        fixture.cases(tmp_path / 'no-foundation', path, records)
+    # The plan's row of Amplifier Foundation can have its name in another form.
+    path.write_text(json.dumps({'schema': 1, 'graph': [APP_ROW, {**rows[1], 'name': 'Amplifier_Foundation'}, rows[0], rows[2]]}))
+    result = fixture.cases(tmp_path / 'renamed', path, records)
+    assert result['ok'] is True and result['gitComponents'] == {'amplifier-foundation': QUALIFIED, NAMING: QUALIFIED}
+    # Without the one row of Amplifier Foundation from Git, in the plan and in the installation, the check ends
+    # with a sentence before it starts a command.
+    without = [row for row in rows if row['name'] != 'amplifier-foundation']
+    for name, plan, installation, sentence in (
+            ('no-row', without, records, 'The plan does not have exactly one row of amplifier-foundation.'),
+            ('registry-row', registry, records, 'The plan does not have amplifier-foundation from Git.'),
+            ('no-record', rows, [install_record(row) for row in without],
+             'The installation does not have exactly one row of amplifier-foundation.'),
+            ('registry-record', rows, [install_record(row) for row in registry],
+             'The installation does not have amplifier-foundation from Git.')):
+        path.write_text(json.dumps({'schema': 1, 'graph': [APP_ROW, *plan]}))
+        with pytest.raises(RuntimeError, match=f'^{re.escape(sentence)}$'):
+            fixture.cases(tmp_path / name, path, installation)
+        assert not (tmp_path / name).exists()
     # The other commit must differ from the installed one, or a refusal would show nothing.
     path.write_text(json.dumps({'schema': 1, 'graph': [APP_ROW, *component_rows(fixture.OTHER)]}))
     with pytest.raises(RuntimeError, match='Change OTHER'):
@@ -2809,29 +2834,45 @@ def test_windows_plan_native_check_keeps_only_the_published_wheel_and_installs_o
     assert len(requested) == 1
 
 
-def test_windows_plan_native_check_stops_its_commands_before_the_step_limit_and_writes_its_result(tmp_path, monkeypatch):
+def test_windows_plan_native_check_gives_its_commands_less_time_than_the_step_and_records_a_timeout(tmp_path, monkeypatch):
     fixture = native_plan_check()
     workflow = yaml.load((ROOT / '.github/workflows/windows-consumer-plan.yml').read_text(), Loader=yaml.BaseLoader)
     job = workflow['jobs']['windows-consumer-plan']
     step = next(step for step in job['steps'] if 'windows_consumer_plan_native.py' in step.get('run', ''))
-    # The step's limit is not raised. The time for the check's commands ends two minutes or more before it.
+    # The step's limit is not raised. The check ends its commands two minutes or more before that limit.
     assert step['timeout-minutes'] == '15' and job['timeout-minutes'] == '20'
     assert fixture.LIMIT <= (int(step['timeout-minutes']) - 2) * 60
-    # One command gets its own limit, and never more than what is left of the whole check.
+    # One command gets its own limit, and at most what is left of the check's 12 minutes.
     assert fixture.left(30) == 30
     monkeypatch.setattr(fixture, 'STARTED', fixture.time.monotonic() - fixture.LIMIT + 20)
     assert 0 < fixture.left(300) <= 20
-    # A command that does not end in its time is a sentence, not a traceback of the timeout.
+    # A command that passes its own limit is ended. The error is a sentence, not a traceback of the timeout.
+    sleeps = (sys.executable, '-c', 'import time; time.sleep(30)')
+    monkeypatch.setattr(fixture, 'STARTED', fixture.time.monotonic())
     with pytest.raises(RuntimeError, match=r'^python[\w.]* -c did not end in 1 seconds\.$'):
-        fixture.run(sys.executable, '-c', 'import time; time.sleep(30)', limit=1)
-    # When the time of the whole check is used up, the check ends with an error and its result file exists.
-    monkeypatch.setenv('RUNNER_TEMP', str(tmp_path))
+        fixture.run(*sleeps, limit=1)
+    # The gate's command line has the same sentence. When the rest of the time is shorter than the command's
+    # own limit, the sentence says so.
+    slow = tmp_path / 'slow.py'
+    slow.write_text('import time\ntime.sleep(30)\n')
+    cut = r" did not end in [12] seconds\. It had what was left of the check's 12 minutes\."
+    monkeypatch.setattr(fixture, 'STARTED', fixture.time.monotonic() - fixture.LIMIT + 2)
+    with pytest.raises(RuntimeError, match=r'^slow\.py verify-consumer' + cut + '$'):
+        fixture.command(slow, 'verify-consumer')
+    # A rest of less than one second is not reported as 0 seconds.
+    with monkeypatch.context() as patch:
+        patch.setattr(fixture, 'left', lambda limit: 0.4)
+        with pytest.raises(RuntimeError, match=r"^python[\w.]* -c did not end in 1 seconds\. It had what was left"):
+            fixture.run(*sleeps, limit=300)
+    # When the time is used up before a command starts, the check returns 1 and result.json has the reason.
+    (tmp_path / 'used-up').mkdir()
+    monkeypatch.setenv('RUNNER_TEMP', str(tmp_path / 'used-up'))
     monkeypatch.setenv('GITHUB_ACTIONS', 'true')
     monkeypatch.setattr(fixture, 'wheel', lambda work: work / 'app.whl')
     monkeypatch.setattr(fixture.shutil, 'which', lambda name: '/tools/' + name)
     monkeypatch.setattr(fixture, 'STARTED', fixture.time.monotonic() - fixture.LIMIT)
     assert fixture.main() == 1
-    result = json.loads((tmp_path / 'consumer-plan-evidence/result.json').read_text())
+    result = json.loads((tmp_path / 'used-up/consumer-plan-evidence/result.json').read_text())
     assert result['ok'] is False and result['stage'] == 'installation'
     assert result['error'] == 'RuntimeError: The check did not end in 12 minutes.'
     # A runner without uv ends the check with a sentence.
@@ -2839,6 +2880,15 @@ def test_windows_plan_native_check_stops_its_commands_before_the_step_limit_and_
     monkeypatch.setattr(fixture.shutil, 'which', lambda name: None)
     with pytest.raises(RuntimeError, match='^uv is not on this runner\\.$'):
         fixture.prepare(tmp_path / 'no-uv')
+    # In the check itself, a command that passes its time is ended, and result.json has the reason.
+    (tmp_path / 'timeout').mkdir()
+    monkeypatch.setenv('RUNNER_TEMP', str(tmp_path / 'timeout'))
+    monkeypatch.setattr(fixture, 'prepare', lambda work: fixture.run(*sleeps, limit=300))
+    monkeypatch.setattr(fixture, 'STARTED', fixture.time.monotonic() - fixture.LIMIT + 2)
+    assert fixture.main() == 1
+    result = json.loads((tmp_path / 'timeout/consumer-plan-evidence/result.json').read_text())
+    assert result['ok'] is False and result['stage'] == 'installation'
+    assert re.fullmatch(r'RuntimeError: python[\w.]* -c' + cut, result['error'])
 
 
 def test_windows_plan_native_check_runs_for_changes_of_the_gate_and_cannot_be_skipped():

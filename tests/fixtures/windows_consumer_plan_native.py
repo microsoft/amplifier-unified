@@ -24,6 +24,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -43,9 +44,12 @@ RELEASE = {"version": "0.106.0", "sha256": "5d89c247b7ba19aa0264516036d17a26e314
 NAME = "amplifier-foundation"
 # Any commit other than the installed one. Nothing installs it; the gate compares text.
 OTHER = "e37a946b64854eb39c09a3857ce2bc366ff297e0"
-# The commands of the check get this time together, so that the check ends with its result file
-# before the workflow step's limit of 15 minutes. Python on Windows waits for a stopped command's
-# output; a program that the command started can hold it open. Then the step's limit ends the check.
+# The check ends a command at the latest this long after the check's start. That is below the
+# workflow step's limit of 15 minutes, so that the check can end a command and write its result
+# file before that limit.
+# Not covered: Python on Windows waits for the output of a command that it ended, and a program that
+# the command started can hold that output open. The download's body, the tool's own reading of the
+# checkout and of the installation, and the file work have no limit here.
 LIMIT = 12 * 60
 STARTED = time.monotonic()
 # The last line of a refusal, after one line for each difference.
@@ -60,17 +64,27 @@ def load(path):
 
 
 def left(limit):
-    """The seconds that one command may take: its own limit, and never past the limit of the whole check."""
+    """The seconds that one command may take: its own limit, and at most what is left of the check's time."""
     remaining = LIMIT - (time.monotonic() - STARTED)
     if remaining <= 0:
         raise RuntimeError(f"The check did not end in {LIMIT // 60} minutes.")
     return min(limit, remaining)
 
 
+def started(name, arguments, limit, **options):
+    """One command of the check, with its output. A command that passes its time is ended."""
+    seconds = left(limit)
+    try:
+        return subprocess.run([*map(str, arguments)], capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", timeout=seconds, **options)
+    except subprocess.TimeoutExpired:
+        cut = "" if seconds == limit else f" It had what was left of the check's {LIMIT // 60} minutes."
+        raise RuntimeError(f"{name} did not end in {math.ceil(seconds)} seconds.{cut}") from None
+
+
 def command(tool, *arguments):
     """The release workflow's command line, with the checkout as the working directory."""
-    return subprocess.run([sys.executable, str(tool), *map(str, arguments)], cwd=ROOT, capture_output=True,
-                          text=True, encoding="utf-8", errors="replace", timeout=left(120))
+    return started(f"{Path(tool).name} {arguments[0]}", [sys.executable, tool, *arguments], 120, cwd=ROOT)
 
 
 def evidence(tool, folder, resolved):
@@ -96,20 +110,29 @@ def receipts(tool, folder, candidate, graph):
                                            "runtime": module.digest(snapshot)})
 
 
-def moved(rows):
-    """The same rows with the one row of Amplifier Foundation at the other commit, in either row form."""
+def normal(name):
+    """A package name in the gate's form. An install record has the name as the package's metadata writes it."""
+    return re.sub(r"[-_.]+", "-", name.lower())
+
+
+def moved(rows, owner):
+    """The same rows with the one row of Amplifier Foundation at the other commit, in either row form.
+
+    That row must be from Git: the gate compares no commit of a row from another source.
+    """
     result = json.loads(json.dumps(rows))
-    count = 0
-    for row in result:
-        # An install record has the name as the package's metadata writes it.
-        if re.sub(r"[-_.]+", "-", row["name"].lower()) == NAME:
-            if "direct" in row:
-                row["direct"]["vcs_info"]["commit_id"] = OTHER
-            else:
-                row["revision"] = OTHER
-            count += 1
-    if count != 1:
-        raise RuntimeError("The rows do not have exactly one row of amplifier-foundation.")
+    found = [row for row in result if normal(row["name"]) == NAME]
+    if len(found) != 1:
+        raise RuntimeError(f"{owner} does not have exactly one row of {NAME}.")
+    row = found[0]
+    if "direct" in row:
+        origin, key = (row["direct"] or {}).get("vcs_info") or {}, "commit_id"
+        git = origin.get("vcs") == "git"
+    else:
+        origin, key, git = row, "revision", bool(row.get("url"))
+    if not git:
+        raise RuntimeError(f"{owner} does not have {NAME} from Git.")
+    origin[key] = OTHER
     return result
 
 
@@ -118,14 +141,16 @@ def cases(work, plan_path, records, tool=TOOL):
     plan = json.loads(Path(plan_path).read_text(encoding="utf-8"))
     host = [{key: value for key, value in row.items() if key != "delivery"}
             for row in plan["graph"] if row["name"] != "amplifier-unified"]
-    installed = {row["name"]: row["revision"] for row in host if row.get("url")}
+    installed = {normal(row["name"]): row["revision"] for row in host if row.get("url")}
     if installed.get(NAME) == OTHER:
         raise RuntimeError("The installed Amplifier Foundation commit is the fixture's other commit. Change OTHER.")
+    # Before a command starts: each of the two has the one row of Amplifier Foundation, from Git.
+    host_other, records_other = moved(host, "The plan"), moved(records, "The installation")
     same = evidence(tool, work / "host-same", host)
-    other = evidence(tool, work / "host-other", moved(host))
+    other = evidence(tool, work / "host-other", host_other)
     receipts(tool, work / "runtime-same", same, records)
     receipts(tool, work / "runtime-same-for-other-host", other, records)
-    receipts(tool, work / "runtime-other", same, moved(records))
+    receipts(tool, work / "runtime-other", same, records_other)
     first = f"The Windows setup file has {NAME} at {installed[NAME]}. "
     wanted = [
         ("control: the evidence has the installation's commits", "host-same", same, "runtime-same", None),
@@ -155,12 +180,7 @@ def cases(work, plan_path, records, tool=TOOL):
 
 def run(*arguments, limit, **options):
     name = f"{Path(str(arguments[0])).name} {arguments[1]}"
-    seconds = left(limit)
-    try:
-        result = subprocess.run([*map(str, arguments)], capture_output=True, text=True, encoding="utf-8",
-                                errors="replace", timeout=seconds, **options)
-    except subprocess.TimeoutExpired:
-        raise RuntimeError(f"{name} did not end in {int(seconds)} seconds.") from None
+    result = started(name, arguments, limit, **options)
     if result.returncode != 0:
         raise RuntimeError(f"{name} failed: " + (result.stdout + result.stderr)[-3000:])
 
