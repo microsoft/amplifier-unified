@@ -75,7 +75,7 @@ Limits of this preview:
   select **Yes**. Windows then asks whether to delete the certificate; select
   **Yes**. In this version, uninstall stops Amplifier and removes it from the
   Start menu and the Apps list. It leaves the folder with your chats, settings
-  and accounts, and the program files (about 1.4 GB).
+  and accounts, and the program files (1.4 GB to 1.9 GB in our tests).
 
 The [native Windows design and status](docs/design/native-windows-installation.md)
 records what is tested.

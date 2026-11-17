@@ -1952,7 +1952,7 @@ trial, trust import or live-provider execution is claimed by this documentation.
 
 Source assessment: Unified `7b9358bf6443cc003edc1f3c380da8d01a8c2f5e`,
 October 31, 2026. Recheck source and resolved upstream revisions before implementation.
-The [current setup guide](../../README.md#set-up-unified-on-your-computer)
+The [current setup guide](../../README.md#install)
 continues to cover Linux, macOS and Windows through WSL.
 
 ## Intent and boundary
