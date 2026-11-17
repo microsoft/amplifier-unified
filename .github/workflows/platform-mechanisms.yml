@@ -25,6 +25,7 @@ on:
       - amplifier_web/runtime_worker.py
       - amplifier_web/runtime.py
       - amplifier_web/runtime_environment.py
+      - amplifier_web/update_sequence.py
       - amplifier_web/ownership.py
       - amplifier_web/host/storage.py
       - amplifier_web/auth.py
@@ -94,6 +95,7 @@ on:
       - tests/test_update_checks.py
       - tests/test_update_registry_trust.py
       - tests/test_update_health_setup_record.py
+      - tests/test_update_new_installation.py
       - tests/test_windows_tls.py
       - tests/test_windows_trust.py
       - tests/test_session_sign_out.py
@@ -359,6 +361,17 @@ jobs:
         run: |
           .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -p no:cacheprovider tests/test_update_health_setup_record.py
           if ($LASTEXITCODE -ne 0) { throw 'Setup-record update health checks failed.' }
+      # What an update check lists on a new installation: the real inventory,
+      # policy and classification readers on native Windows, on the files that
+      # setup and a first chat leave (a build view of the shared source store
+      # and the chat's binding), with this runner's Git. No worker, no app and
+      # no network. A skipped native case would hide the answer; here it fails.
+      - name: Check that a new installation's check offers no update for its first chat's modules or an unfetched source
+        shell: pwsh
+        run: |
+          .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -p no:cacheprovider tests/test_update_new_installation.py | Tee-Object -Variable report
+          if ($LASTEXITCODE -ne 0) { throw 'New-installation update listing checks failed.' }
+          if (-not ($report -match ' passed') -or ($report -match 'skipped')) { throw 'A native new-installation case did not run; on this lane it must run.' }
       # First start with an update: the real `open` command, handed over with
       # os.execv as an app generation is, against this installation's host
       # while that host restarts as another package version. Real private

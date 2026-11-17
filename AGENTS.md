@@ -248,6 +248,18 @@ task on a hosted runner and renames that runner's account domain. Its fixture
 changes the machine's security policy: it runs only with the workflow's opt-in
 in a hosted runner's environment. That guard stops accidental use and does not
 prove the machine; never run the fixture on a machine that is kept.
+`windows-standard-account.yml` runs the consumer journey as a standard user
+(not a member of Administrators) on a hosted runner. Its fixture creates one
+local user and signs it in through Remote Desktop to the same computer
+(`127.0.0.2`): Task Scheduler starts a task that runs with a person's own
+sign-in only in a desktop session of that person. The fixture creates a
+Windows user, changes a Remote Desktop setting of the runner's account and
+deletes that user's installation folder. The same guard and the same rule
+apply: only a hosted runner with the workflow's opt-in, never a machine that
+is kept. No hosted runner runs the setup file, because setup refuses Windows
+Server. The case compares the product's texts of the Stop question, the
+uninstall questions and the certificate message; change them together with
+the fixture.
 Python on Windows accepts only root certificates that the Windows store holds
 at that moment, and aiohttp builds its default list once at import. A new PC's
 store lacks many public roots (seen in Windows Sandbox: the package registry's
@@ -267,6 +279,32 @@ never reclassifies an earlier refusal record as waiting: its form does not
 prove that only a connection was missing. A later completed update settles it.
 The installed-package reader runs Git for a package from a local checkout, so
 a caller without the installation's Git folder on PATH reads "not prepared".
+Until that first component update the Foundation home is the data folder
+itself (`updates.foundation_home`), not setup's receipt folder
+`updates/baseline-runtime`. A conversation there fetches a declared source and
+installs its modules at first use; the module's build view carries its commit
+as its ref, and the branch is in the binding below
+`<data>/foundation/cache/.source-bindings`. A reader that looks below the
+receipt folder finds no binding, takes the commit for an unexplained fixed
+version, and offers "Refresh included components": a full component update
+that changes no component (`runtime_environment.shared_build_policies`,
+`tests/test_update_new_installation.py`). For the same reason an absent
+declared source is no update there (`update_sequence.classify`). An update
+must add it in two other states: with a selected generation, which is
+immutable, and with no worker environment, where the first update prepares
+everything. The first real component update then makes the first generation.
+A chat-installed module of the other tier that is behind its branch at that
+moment gets the existing moved-reference record
+(`runtime_source_policy.qualify_cache_policies`). The sequence's next check, of
+the other tier, lists its source as an update, and that second stage moves the
+module and records its branch again: two stages where one was enough before.
+A full check between them lists the record as "Refresh included components".
+`UpdateManager.check_due` is the one rule for a check that time causes: the
+timed check, and one check at a host start when the last check or attempt was
+at least 1 hour old. A one-time reason must end by a fact that the owner keeps
+(`_start_check_open`, ended when a check passes its admission), never by
+comparing a saved time with the start time: a clock that was ahead at the start
+and is corrected later would name the reason again on every pass.
 A reader of a private file can hold an object that another process replaced
 (`publish_private(replace=True)`). Windows then reports 0 links and a path below
 `$Extend\$Deleted` for it. That is `PrivateFileUnlinked` in `windows_files.py`,
