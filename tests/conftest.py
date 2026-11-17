@@ -22,7 +22,7 @@ except ImportError:  # Python has no pwd module on Windows.
 # of os.environ, and for work that a test leaves running when it ends. The
 # changes stay until the process ends.
 #
-# The file does nothing else. It does not change HOME (USERPROFILE on
+# What the file does not do. It does not change HOME (USERPROFILE on
 # Windows): a file or a folder that the product finds through that variable,
 # and not through one of the four variables of part 3, is still the person's
 # (for example a ChatGPT sign-in file below ~/.amplifier), and tools such as
@@ -32,7 +32,7 @@ except ImportError:  # Python has no pwd module on Windows.
 # process only. A pytest run with --noconftest does not load the file.
 
 # 1. A shell that a running Amplifier Unified starts (a chat's shell tool, a
-# worker) inherits these variables from that service. The product reads each
+# worker) can inherit these variables from that service. The product reads each
 # one (the function is named beside it). A test that inherits one can use the
 # service's component generation or its source store, and can give another
 # result than a run without it. A test that needs one sets it itself.

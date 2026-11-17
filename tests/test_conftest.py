@@ -9,18 +9,19 @@ finds some folders through a lookup of the account by ID.
 ``conftest.py`` removes the variables in its two lists: when pytest loads it,
 before each test and after each test. It sets four folder variables of the
 product: to folders of the run when pytest loads it, and to folders of the test
-for each test. It changes that lookup once, when pytest loads it; the home
-folder that the lookup gives is a folder of the run, and of the test during a
-test. It does not change ``HOME``; its first comment names the limits.
+for each test. Where Python has the ``pwd`` module, it changes that lookup
+once, when pytest loads it; the home folder that the lookup gives is a folder
+of the run, and of the test during a test. It does not change ``HOME``; its
+first comment names the limits.
 
 ``TestInsideARun`` holds what is true inside every run of this suite. Its cases
-run in the order in which they are written, in one process. The last case of
+must run in the order in which they are written, in one process. The last case of
 this file starts a second run that inherits made-up values for the variables of
 the two lists and for two of the four folder variables, and requires the same
 there.
 
-Such a shell also inherits ``AMPLIFIER_APP_GENERATION_EXEC``. The product only
-writes that variable and never reads it, so ``conftest.py`` leaves it alone.
+Such a shell can also inherit ``AMPLIFIER_APP_GENERATION_EXEC``. The product
+only writes that variable and never reads it, so ``conftest.py`` leaves it alone.
 """
 import os
 from pathlib import Path
@@ -55,7 +56,7 @@ CREDENTIALS = (
     'CHAT_COMPLETIONS_API_KEY', 'ANTHROPIC_API_KEY', 'GOOGLE_API_KEY', 'GEMINI_API_KEY',
     'GITHUB_TOKEN', 'COPILOT_AGENT_TOKEN', 'COPILOT_GITHUB_TOKEN', 'GH_TOKEN',
 )
-# The product's own folders: a folder of the run outside a test, a folder of the test inside one.
+# Four folder variables of the product: a folder of the run outside a test, a folder of the test inside one.
 HOMES = ('AMPLIFIER_WEB_HOME', 'AMPLIFIER_HOME', 'AMPLIFIER_SESSION_STATE_HOME', 'AMPLIFIER_TERMINAL_HOME')
 # A test must never get these from outside.
 REMOVED = sorted({*SERVICE_FOLDERS, *SERVICE_VALUES, *CREDENTIALS} - set(HOMES))

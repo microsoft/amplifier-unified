@@ -32,8 +32,8 @@ folders below your home folder. When pytest loads `tests/conftest.py`, that file
 does three things for the pytest process:
 
 - It removes the environment variables in its two lists. The first list holds
-  variables that such a shell inherits from the service. The second list holds the
-  product's default variables for provider credentials (`setup.PROVIDER_ENV`).
+  variables that such a shell can inherit from the service. The second list holds
+  the product's default variables for provider credentials (`setup.PROVIDER_ENV`).
 - It sets four of the product's folder variables (`AMPLIFIER_WEB_HOME`,
   `AMPLIFIER_HOME`, `AMPLIFIER_SESSION_STATE_HOME`, `AMPLIFIER_TERMINAL_HOME`) to
   folders of the test run.
@@ -41,7 +41,7 @@ does three things for the pytest process:
   (`pwd.getpwuid`) gives a home folder of the test run. The account database does
   not change.
 
-It does nothing else:
+It does not do these things:
 
 - It does not change `HOME` (`USERPROFILE` on Windows). The product still reads a
   file or a folder that it finds through that variable and not through one of these
