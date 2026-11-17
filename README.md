@@ -45,7 +45,8 @@ confirm the download. You do not need WSL, Python, Git or a terminal.
    downloaded". In the Downloads list, point at the file and select
    **More actions (…)**, then **Keep**. Edge then shows "Publisher: Unknown".
    Select the small arrow next to **Delete**, then **Keep anyway**.
-3. Open the file with a double-click. Do not use "Run as administrator". Select
+3. Open the file: select **Open file** in the Downloads list, or double-click
+   the file in your Downloads folder. Do not use "Run as administrator". Select
    **OK** to install. Setup takes about 3 minutes. Select **OK** when it has
    finished.
 4. Amplifier starts. The first start can take a few minutes. Amplifier shows one
@@ -68,7 +69,10 @@ Limits of this preview:
   supported yet.
 - **Account:** Amplifier installs for your own Windows account only. It does not
   need administrator rights.
-- **Folder:** everything is in `%LOCALAPPDATA%\Amplifier`.
+- **Folder:** Amplifier installs into `%LOCALAPPDATA%\Amplifier` and keeps your
+  chats, settings and accounts there. With an Anthropic connection, Amplifier
+  also writes one small file, `%USERPROFILE%\.amplifier\rate-limit-state.json`.
+  Uninstall does not remove that file.
 - **Uninstall:** open **Settings > Apps > Installed apps**, find
   **Amplifier Unified (unsigned preview)**, select **More options (…)**, then
   **Uninstall**, then **Uninstall** again. Amplifier asks you to confirm;
