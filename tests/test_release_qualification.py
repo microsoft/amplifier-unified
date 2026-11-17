@@ -3,6 +3,7 @@ import importlib.util
 import json
 from pathlib import Path
 import re
+import sys
 
 import pytest
 import yaml
@@ -2430,3 +2431,388 @@ def test_remote_machine_queue_routing_has_a_focused_ci_owner():
                    'tests/test_registered_test_runner_queue.py tests/test_runner_enrollment.py '
                    'tests/test_registered_test_runner_recovery.py --junitxml=routing-results.xml')
     assert any(step.get('if') == 'always()' and step.get('with', {}).get('path') == 'routing-results.xml' for step in steps)
+
+
+# The Windows setup file carries the Git commits that its release run qualified.
+# A release run resolves each branch requirement three times: the host graph
+# (bound into the candidate), the runtime tests' graph, and the Windows job's
+# installation, which becomes the setup file's plan.
+
+FOUNDATION = 'https://github.com/microsoft/amplifier-foundation'
+NAMING = 'amplifier-module-hooks-session-naming'
+QUALIFIED, MOVED = '1' * 40, '2' * 40
+APP_ROW = {'name': 'amplifier-unified', 'version': '1.2.3', 'revision': 'a' * 40,
+           'url': 'https://github.com/microsoft/amplifier-unified'}
+# The last line of a refusal, after one line for each difference.
+STOP = '\nThis run stops before it publishes.'
+# Each text names the one graph that it is about. A graph is not the whole release run.
+HOST_HAS, HOST_LACKS = "This run's host resolution has it", "This run's host resolution does not have"
+TESTS_HAVE = "The environment of this run's runtime tests has it"
+TESTS_LACK = "The environment of this run's runtime tests does not have"
+# Only for two known commits of one place: a new run can then resolve them equal.
+AGAIN = ' If a branch moved during this run, run all jobs again.'
+
+
+def component_rows(revision=QUALIFIED):
+    """Rows in the form of the host resolution and of the Windows plan."""
+    return [{'name': 'amplifier-core', 'version': '2.0.2'},
+            {'name': 'amplifier-foundation', 'version': '1.0.0', 'url': FOUNDATION, 'revision': revision},
+            {'name': NAMING, 'version': '0.2.0', 'url': FOUNDATION, 'revision': revision,
+             'subdirectory': 'modules/hooks-session-naming'}]
+
+
+def install_record(row, requested='main'):
+    """The same row in the form of an install record that uv wrote."""
+    direct = None
+    if row.get('url'):
+        direct = {'url': row['url'], 'vcs_info': {'vcs': 'git', 'commit_id': row.get('revision')}}
+        if requested is not None:
+            direct['vcs_info']['requested_revision'] = requested
+        if row.get('subdirectory'):
+            direct['subdirectory'] = row['subdirectory']
+    return {'name': row['name'], 'version': row['version'], 'direct': direct}
+
+
+def changed(rows, name, **fields):
+    """The rows with one row replaced; a field with the value None is removed."""
+    return [{key: value for key, value in {**row, **fields}.items() if value is not None}
+            if row['name'] == name else row for row in rows]
+
+
+@pytest.fixture
+def consumer(tmp_path, monkeypatch):
+    """One release run's evidence: the host resolution, the runtime graph and the plan."""
+    monkeypatch.setattr(qualification, 'identity', lambda root: {'revision': 'a' * 40, 'version': '1.2.3'})
+
+    def make(resolved, plan=None, runtime=None):
+        evidence, receipts = tmp_path / 'host', tmp_path / 'receipts'
+        evidence.mkdir()
+        receipts.mkdir()
+        qualification.write(evidence / 'resolution.json', {'ok': True, 'resolved': resolved})
+        (evidence / 'qualified-overrides.txt').write_text('overrides\n')
+        (evidence / 'development.lock').write_text('development inputs')
+        expected = qualification.candidate(tmp_path, evidence)
+        graph = [install_record(row) for row in (plan or resolved)] if runtime is None else runtime
+        editable = {'name': 'amplifier-unified', 'version': '1.2.3',
+                    'direct': {'url': 'file:///checkout', 'dir_info': {'editable': True}}}
+        snapshot = {'build': 'build-hash', 'graph': [*graph, editable]}
+        qualification.write(receipts / 'qualified-runtime.json', snapshot)
+        qualification.write(receipts / 'runtime.json', {
+            'schema': 1, 'candidate': expected, 'revision': 'a' * 40, 'lane': 'runtime',
+            'runtime': qualification.digest(snapshot)})
+        path = tmp_path / 'windows-consumer-plan.json'
+        if plan is not None:
+            qualification.write(path, {'schema': 1, 'graph': [APP_ROW, *plan]})
+        return tmp_path, evidence, expected, path, receipts
+    return make
+
+
+def test_windows_plan_with_the_commits_of_its_release_run_is_accepted(consumer, capsys):
+    # A control: none of these may stop a release. The app's own row has a commit
+    # that no resolution has. The host resolution is the development environment,
+    # so it has rows that the wheel does not install.
+    resolved = [*component_rows(), {'name': 'pytest', 'version': '9.0.0'},
+                {'name': 'amplifier-module-tool-exec', 'version': '0.1.1', 'revision': '3' * 40,
+                 'url': 'https://github.com/microsoft/amplifier-module-tool-exec'}]
+    # An empty subdirectory is the same as none, in a row and in an install record.
+    resolved = changed(resolved, 'amplifier-foundation', subdirectory='')
+    # An ending '.git' or '/' is the same repository. Registry versions are not compared.
+    plan = changed(changed(changed(component_rows(), 'amplifier-foundation', url=FOUNDATION + '.git'),
+                           NAMING, url=FOUNDATION + '/'), 'amplifier-core', version='2.0.9')
+    # A name with dots, repeated separators or upper case is the same package.
+    plan = [{**row, 'name': row['name'].replace('-', '.-_').upper()} for row in plan]
+    # An install record has the name as the package's metadata writes it.
+    runtime = [install_record({**row, 'name': row['name'].replace('-', '_').title()}) for row in resolved]
+    next(row for row in runtime if row['name'] == 'Amplifier_Foundation')['direct']['subdirectory'] = ''
+    # Only Git commits are compared: a package that the plan and the host resolution have from the
+    # registry is not looked at, also when the runtime tests' environment has it from Git.
+    next(row for row in runtime if row['name'] == 'Amplifier_Core')['direct'] = {
+        'url': 'https://github.com/microsoft/amplifier-core',
+        'vcs_info': {'vcs': 'git', 'commit_id': '4' * 40, 'requested_revision': 'main'}}
+    root, evidence, expected, path, receipts = consumer(resolved, plan, runtime)
+    assert qualification.verify_consumer(root, evidence, expected, path, receipts) == ['amplifier-foundation', NAMING]
+    output = capsys.readouterr().out
+    assert f'amplifier-foundation {QUALIFIED}: the same commit' in output
+    assert '2 Git components of the Windows setup file were compared. None differs.' in output
+
+
+@pytest.mark.parametrize(('plan', 'resolved', 'message'), [
+    # Every difference is reported, one line each, in the plan's order.
+    (component_rows(MOVED), component_rows(),
+     f'The Windows setup file has amplifier-foundation at {MOVED}. {HOST_HAS} at {QUALIFIED}.\n'
+     f'The Windows setup file has {NAMING} at {MOVED}. {HOST_HAS} at {QUALIFIED}.' + STOP + AGAIN),
+    # One moved commit and one component that the host resolution does not have: the remedy is still printed.
+    (component_rows(MOVED), [row for row in component_rows() if row['name'] != NAMING],
+     f'The Windows setup file has amplifier-foundation at {MOVED}. {HOST_HAS} at {QUALIFIED}.\n'
+     f'The Windows setup file has {NAMING} at {MOVED} from {FOUNDATION}#subdirectory=modules/hooks-session-naming. '
+     f'{HOST_LACKS} {NAMING}.' + STOP + AGAIN),
+    # The runtime graph of this case has the component. So the text must name the host resolution alone.
+    (component_rows(), [row for row in component_rows() if row['name'] != 'amplifier-foundation'],
+     f'The Windows setup file has amplifier-foundation at {QUALIFIED} from {FOUNDATION}. '
+     f'{HOST_LACKS} amplifier-foundation.' + STOP),
+    (component_rows(), changed(component_rows(), 'amplifier-foundation', url=None, revision=None),
+     f'The Windows setup file has amplifier-foundation at {QUALIFIED} from {FOUNDATION}. '
+     f'{HOST_HAS} from a source that is not Git.' + STOP),
+    (component_rows(), changed(component_rows(), 'amplifier-foundation', url='https://github.com/example/amplifier-foundation'),
+     f'The Windows setup file has amplifier-foundation at {QUALIFIED} from {FOUNDATION}. {HOST_HAS} '
+     f'at {QUALIFIED} from https://github.com/example/amplifier-foundation.' + STOP),
+    (component_rows(), changed(component_rows(), NAMING, subdirectory='modules/other'),
+     f'The Windows setup file has {NAMING} at {QUALIFIED} from {FOUNDATION}#subdirectory=modules/hooks-session-naming. '
+     f'{HOST_HAS} at {QUALIFIED} from {FOUNDATION}#subdirectory=modules/other.' + STOP),
+    # The runtime graph of this case also has it from a source that is not Git. That is no second difference.
+    (changed(component_rows(), 'amplifier-foundation', url=None, revision=None), component_rows(),
+     'The Windows setup file has amplifier-foundation from a source that is not Git. '
+     f'{HOST_HAS} at {QUALIFIED} from {FOUNDATION}.' + STOP),
+    # A Git origin without a recorded commit is never equal, also to another one without a commit.
+    # The runtime graph of this case has no commit either: one line for each graph.
+    (changed(component_rows(), 'amplifier-foundation', revision=None),
+     changed(component_rows(), 'amplifier-foundation', revision=None),
+     f'The Windows setup file has amplifier-foundation with no recorded commit. {HOST_HAS} with no recorded commit.\n'
+     f'The Windows setup file has amplifier-foundation with no recorded commit. {TESTS_HAVE} with no recorded commit.' + STOP),
+    (component_rows(), changed(component_rows(), 'amplifier-foundation', revision=None),
+     f'The Windows setup file has amplifier-foundation at {QUALIFIED}. {HOST_HAS} with no recorded commit.' + STOP),
+], ids=['commit', 'commit-and-absent', 'absent', 'registry-in-run', 'repository', 'subdirectory', 'registry-in-plan',
+        'no-commit-in-both', 'no-commit-in-run'])
+def test_windows_plan_that_differs_from_the_host_resolution_stops_the_release(consumer, plan, resolved, message):
+    root, evidence, expected, path, receipts = consumer(resolved, plan)
+    with pytest.raises(ValueError) as refusal:
+        qualification.verify_consumer(root, evidence, expected, path, receipts)
+    assert str(refusal.value) == message
+
+
+@pytest.mark.parametrize(('runtime', 'message'), [
+    (changed(component_rows(), 'amplifier-foundation', revision=MOVED),
+     f'The Windows setup file has amplifier-foundation at {QUALIFIED}. '
+     f'{TESTS_HAVE} at {MOVED}.' + STOP + AGAIN),
+    ([row for row in component_rows() if row['name'] != NAMING],
+     f'The Windows setup file has {NAMING} at {QUALIFIED} from {FOUNDATION}#subdirectory=modules/hooks-session-naming. '
+     f'{TESTS_LACK} {NAMING}.' + STOP),
+    (changed(component_rows(), 'amplifier-foundation', url=None, revision=None),
+     f'The Windows setup file has amplifier-foundation at {QUALIFIED} from {FOUNDATION}. '
+     f'{TESTS_HAVE} from a source that is not Git.' + STOP),
+    (changed(component_rows(), NAMING, subdirectory=None),
+     f'The Windows setup file has {NAMING} at {QUALIFIED} from {FOUNDATION}#subdirectory=modules/hooks-session-naming. '
+     f'{TESTS_HAVE} at {QUALIFIED} from {FOUNDATION}.' + STOP),
+    (changed(component_rows(), 'amplifier-foundation', revision=None),
+     f'The Windows setup file has amplifier-foundation at {QUALIFIED}. {TESTS_HAVE} with no recorded commit.' + STOP),
+], ids=['commit', 'absent', 'not-git', 'subdirectory', 'no-commit'])
+def test_windows_plan_that_differs_from_the_runtime_tests_stops_the_release(consumer, runtime, message):
+    root, evidence, expected, path, receipts = consumer(
+        component_rows(), component_rows(), [install_record(row) for row in runtime])
+    with pytest.raises(ValueError) as refusal:
+        qualification.verify_consumer(root, evidence, expected, path, receipts)
+    assert str(refusal.value) == message
+
+
+def test_windows_plan_that_differs_from_both_graphs_names_both(consumer):
+    root, evidence, expected, path, receipts = consumer(
+        component_rows(), changed(component_rows(), NAMING, revision=MOVED), [install_record(row) for row in component_rows()])
+    first = f'The Windows setup file has {NAMING} at {MOVED}. '
+    with pytest.raises(ValueError) as refusal:
+        qualification.verify_consumer(root, evidence, expected, path, receipts)
+    assert str(refusal.value) == (first + f'{HOST_HAS} at {QUALIFIED}.\n' + first + f'{TESTS_HAVE} at {QUALIFIED}.'
+                                  + STOP + AGAIN)
+
+
+def test_windows_plan_with_one_component_twice_is_refused(consumer):
+    # Without this, the later row would replace the earlier one in the comparison.
+    twice = [{**component_rows(MOVED)[1], 'name': 'Amplifier._Foundation'}, *component_rows()]
+    root, evidence, expected, path, receipts = consumer(component_rows(), twice, [install_record(row) for row in component_rows()])
+    with pytest.raises(ValueError, match='^amplifier-foundation is recorded twice$'):
+        qualification.verify_consumer(root, evidence, expected, path, receipts)
+
+
+@pytest.mark.parametrize(('change', 'error', 'message'), [
+    ('no-plan', FileNotFoundError, 'windows-consumer-plan.json'),
+    ('host-evidence', ValueError, 'Candidate host dependency evidence changed'),
+    ('other-candidate', ValueError, 'Qualification does not match the selected application candidate'),
+    ('runtime-graph', ValueError, 'The runtime graph is not the one that this candidate was tested with'),
+    ('runtime-candidate', ValueError, 'The runtime graph is not the one that this candidate was tested with'),
+], ids=['no-plan', 'host-evidence', 'other-candidate', 'runtime-graph', 'runtime-candidate'])
+def test_windows_plan_check_needs_the_plan_and_this_candidates_evidence(consumer, change, error, message):
+    root, evidence, expected, path, receipts = consumer(component_rows(), component_rows())
+    qualification.verify_consumer(root, evidence, expected, path, receipts)
+    # Each change leaves the three graphs equal, so only the named binding can refuse it.
+    if change == 'no-plan':
+        # A setup file without its plan must stop the run; it is not a skip.
+        path.unlink()
+    elif change == 'host-evidence':
+        (evidence / 'qualified-overrides.txt').write_text('other overrides\n')
+    elif change == 'other-candidate':
+        expected = 'f' * 64
+    elif change == 'runtime-graph':
+        value = json.loads((receipts / 'qualified-runtime.json').read_text())
+        qualification.write(receipts / 'qualified-runtime.json', {**value, 'build': 'another-build'})
+    else:
+        value = json.loads((receipts / 'runtime.json').read_text())
+        qualification.write(receipts / 'runtime.json', {**value, 'candidate': 'f' * 64})
+    with pytest.raises(error, match=message):
+        qualification.verify_consumer(root, evidence, expected, path, receipts)
+
+
+def test_windows_plan_check_starts_from_the_command_line(consumer, monkeypatch):
+    root, evidence, expected, path, receipts = consumer(component_rows(), component_rows())
+    monkeypatch.chdir(root)
+    monkeypatch.setattr(sys, 'argv', ['release_qualification.py', 'verify-consumer', '--evidence', str(evidence),
+                                      '--candidate', expected, '--plan', str(path), '--receipts', str(receipts)])
+    qualification.main()
+    # A difference ends the command with an error, so the workflow step fails.
+    qualification.write(path, {'schema': 1, 'graph': [APP_ROW, *component_rows(MOVED)]})
+    with pytest.raises(ValueError, match='This run stops before it publishes'):
+        qualification.main()
+
+
+def test_release_job_checks_the_windows_plan_after_its_download_and_before_publication():
+    jobs = yaml.load((ROOT / '.github/workflows/release.yml').read_text(), Loader=yaml.BaseLoader)['jobs']
+    steps = jobs['release']['steps']
+    receipts = next(i for i, step in enumerate(steps) if 'verify-receipts' in step.get('run', ''))
+    download = next(i for i, step in enumerate(steps) if step.get('with', {}).get('name') == 'windows-consumer')
+    check = [i for i, step in enumerate(steps) if 'verify-consumer' in step.get('run', '')]
+    publish = next(i for i, step in enumerate(steps) if 'publish --tag' in step.get('run', ''))
+    assert len(check) == 1 and receipts < download < check[0] < publish
+    step = steps[check[0]]
+    # A selected source without the producer has no plan. With the producer, a missing plan is an error.
+    assert step['if'] == steps[download]['if'] == "hashFiles('scripts/windows_consumer_release.py') != ''"
+    assert steps[download]['with']['path'] == 'dist'
+    assert step['run'] == ('python "$RUNNER_TEMP/release-tools/release_qualification.py" verify-consumer '
+                           '--evidence "$RUNNER_TEMP/host-resolution" --candidate "$RELEASE_CANDIDATE" '
+                           '--plan dist/windows-consumer-plan.json --receipts "$RUNNER_TEMP/qualification"')
+    # A failed check must stop the run: nothing lets the publication start after it.
+    assert all('continue-on-error' not in item for item in (jobs['release'], *steps))
+    assert 'if' not in steps[publish]
+    assert jobs['release']['env']['RELEASE_CANDIDATE'] == '${{ needs.prepare.outputs.candidate }}'
+    # The receipts folder holds the runtime graph and its receipt, from the job that ran the tests.
+    merged = next(step for step in steps if step.get('with', {}).get('pattern') == '*-qualification')
+    assert merged['with'] == {'pattern': '*-qualification', 'path': '${{ runner.temp }}/qualification',
+                              'merge-multiple': 'true'}
+    prepare = jobs['prepare']['steps']
+    upload = next(step for step in prepare if step.get('with', {}).get('name') == 'runtime-qualification')
+    assert upload['with']['path'].splitlines() == ['${{ runner.temp }}/runtime.json', '${{ runner.temp }}/qualified-runtime.json']
+    # The check is the workflow revision's tool, not a file of the selected source.
+    assert 'cp scripts/release.py scripts/release_qualification.py ' in '\n'.join(step.get('run', '') for step in prepare)
+
+
+def native_plan_check():
+    spec = importlib.util.spec_from_file_location('consumer_plan_native', ROOT / 'tests/fixtures/windows_consumer_plan_native.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_windows_plan_native_check_passes_only_with_one_acceptance_and_two_refusals(tmp_path):
+    # The native check's own logic, with rows in the plan's form and in the form of install records.
+    fixture = native_plan_check()
+    rows = component_rows()
+    path = tmp_path / 'windows-consumer-plan.json'
+    delivery = {'sha256': 'c' * 64, 'url': 'https://github.com/microsoft/amplifier-unified/releases/download/v1.2.3/app.whl'}
+    path.write_text(json.dumps({'schema': 1, 'graph': [{**APP_ROW, 'delivery': delivery}, *rows]}))
+    records = [install_record(row) for row in rows]
+    result = fixture.cases(tmp_path / 'work', path, records)
+    assert result['ok'] is True and [case['passed'] for case in result['cases']] == [True, True, True]
+    assert result['gitComponents'] == {'amplifier-foundation': QUALIFIED, NAMING: QUALIFIED}
+    assert [case['required'] for case in result['cases']] == [
+        'accepted',
+        f'refused: The Windows setup file has amplifier-foundation at {QUALIFIED}. {HOST_HAS} at {fixture.OTHER}.' + STOP + AGAIN,
+        f'refused: The Windows setup file has amplifier-foundation at {QUALIFIED}. {TESTS_HAVE} at {fixture.OTHER}.' + STOP + AGAIN]
+    # Each refusal changes the one row of Amplifier Foundation: one difference, and the other component is equal.
+    for case in result['cases'][1:]:
+        assert len([line for line in case['output'].splitlines() if 'The Windows setup file has' in line]) == 1
+        assert f"{NAMING} {QUALIFIED}: the same commit" in case['output']
+    tool = (ROOT / 'scripts/release_qualification.py').read_text()
+    # A gate that accepts every plan must fail the check: both refusals are required.
+    accepts = tmp_path / 'accepts.py'
+    assert tool.count('    if problems:\n') == 1
+    accepts.write_text(tool.replace('    if problems:\n', '    if False:\n'))
+    result = fixture.cases(tmp_path / 'accepts', path, records, tool=accepts)
+    assert result['ok'] is False and [case['passed'] for case in result['cases']] == [True, False, False]
+    # A gate that refuses every plan must fail the check: the acceptance is required.
+    refuses = tmp_path / 'refuses.py'
+    equal = "    if same_place and shipped['revision'] and shipped['revision'] == other['revision']:\n"
+    assert tool.count(equal) == 1
+    refuses.write_text(tool.replace(equal, '    if False:\n'))
+    result = fixture.cases(tmp_path / 'refuses', path, records, tool=refuses)
+    # Its refusals have more lines than the one difference that each case made: the exact text is required.
+    assert result['ok'] is False and [case['passed'] for case in result['cases']] == [False, False, False]
+    # A gate that refuses and names the wrong graph must fail the check: the exact text is required.
+    wrong = tmp_path / 'wrong.py'
+    assert tool.count('name in tested, TESTS)') == 1
+    wrong.write_text(tool.replace('name in tested, TESTS)', 'name in tested, HOST)'))
+    result = fixture.cases(tmp_path / 'wrong', path, records, tool=wrong)
+    assert result['ok'] is False and [case['passed'] for case in result['cases']] == [True, True, False]
+    assert result['cases'][2]['returncode'] != 0
+    # A gate that prints the acceptance and then ends with an error must fail the control.
+    fails = tmp_path / 'fails.py'
+    assert tool.count('    return checked\n') == 1
+    fails.write_text(tool.replace('    return checked\n', '    raise SystemExit(3)\n'))
+    result = fixture.cases(tmp_path / 'fails', path, records, tool=fails)
+    assert result['ok'] is False and [case['passed'] for case in result['cases']] == [False, True, True]
+    assert result['cases'][0]['returncode'] == 3
+    # The other commit must differ from the installed one, or a refusal would show nothing.
+    path.write_text(json.dumps({'schema': 1, 'graph': [APP_ROW, *component_rows(fixture.OTHER)]}))
+    with pytest.raises(RuntimeError, match='Change OTHER'):
+        fixture.cases(tmp_path / 'same-commit', path, records)
+
+
+def test_windows_plan_native_check_keeps_only_the_published_wheel_and_installs_only_on_a_ci_runner(tmp_path, monkeypatch):
+    fixture = native_plan_check()
+    requested = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *details):
+            return False
+
+        def read(self, limit):
+            return b'another file'
+
+    monkeypatch.setattr(fixture.urllib.request, 'urlopen', lambda url, timeout: requested.append(url) or Response())
+    with pytest.raises(RuntimeError, match='The downloaded wheel is not the published release file'):
+        fixture.wheel(tmp_path)
+    version = fixture.RELEASE['version']
+    assert requested == [f'https://github.com/microsoft/amplifier-unified/releases/download/v{version}/'
+                         f'amplifier_unified-{version}-py3-none-any.whl']
+    assert list(tmp_path.iterdir()) == []
+    # The installation and the compiler run start only on a runner of CI, before any download.
+    monkeypatch.delenv('GITHUB_ACTIONS', raising=False)
+    with pytest.raises(AssertionError):
+        fixture.prepare(tmp_path)
+    assert len(requested) == 1
+
+
+def test_windows_plan_native_check_runs_for_changes_of_the_gate_and_cannot_be_skipped():
+    workflows = ROOT / '.github/workflows'
+    workflow = yaml.load((workflows / 'windows-consumer-plan.yml').read_text(), Loader=yaml.BaseLoader)
+    assert set(workflow['on']) == {'workflow_dispatch', 'pull_request'}
+    assert workflow['permissions'] == {'contents': 'read'}
+    paths = workflow['on']['pull_request']['paths']
+    # The gate, the workflow that runs it, the producer of the plan with its build inputs, and the check itself.
+    assert sorted(paths) == sorted([
+        '.github/workflows/windows-consumer-plan.yml', '.github/workflows/release.yml',
+        'scripts/release_qualification.py', 'tests/fixtures/windows_consumer_plan_native.py',
+        'scripts/windows_consumer_release.py', 'scripts/windows_bootstrap_native.py',
+        'scripts/windows_bootstrap_native.cs', 'scripts/windows_bootstrap_capsule.py',
+        'scripts/windows_private_git.py', 'scripts/install.ps1'])
+    assert all((ROOT / path).is_file() for path in paths)
+    assert set(workflow['jobs']) == {'windows-consumer-plan'}
+    job = workflow['jobs']['windows-consumer-plan']
+    release = yaml.load((workflows / 'release.yml').read_text(), Loader=yaml.BaseLoader)['jobs']['windows-consumer']
+    # The same runner and resolver settings as the release job whose installation becomes the plan.
+    assert job['runs-on'] == release['runs-on'] == 'windows-latest' and job['env'] == release['env']
+    steps = job['steps']
+    assert [step.get('uses') for step in steps[:3]] == [step.get('uses') for step in release['steps'][:3]]
+    assert steps[0]['with'] == {'ref': '${{ github.event.pull_request.head.sha || github.sha }}',
+                                'persist-credentials': 'false'}
+    check = [step for step in steps if 'windows_consumer_plan_native.py' in step.get('run', '')]
+    assert len(check) == 1 and 'if' not in check[0]
+    assert check[0]['run'].splitlines() == [
+        "$ErrorActionPreference = 'Stop'",
+        'python -I -B tests/fixtures/windows_consumer_plan_native.py',
+        "if ($LASTEXITCODE -ne 0) { throw 'The consumer plan check failed; inspect result.json.' }"]
+    assert all('continue-on-error' not in item for item in (job, *steps))
+    # It is a pull-request check. It adds no step to a release run.
+    assert 'windows_consumer_plan_native' not in (workflows / 'release.yml').read_text()
+    fixture = native_plan_check()
+    assert re.fullmatch(r'\d+\.\d+\.\d+', fixture.RELEASE['version'])
+    assert re.fullmatch('[a-f0-9]{64}', fixture.RELEASE['sha256']) and re.fullmatch('[a-f0-9]{40}', fixture.RELEASE['revision'])
