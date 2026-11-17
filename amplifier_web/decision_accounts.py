@@ -20,6 +20,14 @@ from .provider_isolation import identity
 
 ACCOUNTS = "_decision_accounts"
 ENVELOPE = "_decision_account"
+# The time limit of one start of the catalog helper, in seconds. In a new
+# worker environment the first start finds no bytecode: it imports about 1,020
+# modules, compiles them and writes their bytecode. A later start reads it. On
+# a hosted Windows runner, with Windows Defender's real-time protection off,
+# 59 of 60 first starts took 1.4 to 6.2 s and one took 11.6 s; a person's PC
+# was not measured. A start over the limit fails the start of the conversation,
+# so the limit is far above a slow start. It still ends a helper that hangs.
+_CATALOG_START_SECONDS = 60
 
 
 @lru_cache(maxsize=1)
@@ -36,7 +44,8 @@ def _catalog_snapshot():
         }
     try:
         result = subprocess.run([sys.executable, "-I", str(Path(__file__).with_name("decision_account_catalog.py"))],
-                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10, check=True,
+                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                timeout=_CATALOG_START_SECONDS, check=True,
                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                                 env={name: value for name, value in os.environ.items()
                                      if name in {"PATH", "SYSTEMROOT", "WINDIR", "LANG", "LC_ALL", "TZ",
