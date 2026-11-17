@@ -1611,27 +1611,39 @@ class ListenerWatch:
     The next question follows half a second after an answer. A question that
     gets no answer can take some seconds itself. With each question the watch
     reads which processes own the listener's port. It keeps each change of
-    the answer or of the owners, with the time at which that question began.
-    So the report says, to about the time between two questions, for how long
-    the listener gave no answer after a host start, whether a process owned
-    the port in that time, and whether another process owned it afterwards.
+    the answer or of the owners, with the time at which that question began
+    and the seconds that the question took. While nothing changes, it keeps
+    the slowest question (`slowest`). So the report says, to about the time
+    between two questions, for how long the listener gave no answer after a
+    host start, whether a process owned the port in that time, and whether
+    another process owned it afterwards. It also says when the listener
+    answered late: a host that is busy for a second shows there, also in a
+    run where every read of the case is as required.
     The watch opens no file of the installation, it asks without a
     credential, and it decides no step. A watch without a question (`probe`)
     never starts; `reason` then says why.
     """
 
-    def __init__(self, probe=None, owner=None, *, every=0.5, limit=400, clock=time.time):
+    def __init__(self, probe=None, owner=None, *, every=0.5, limit=400, clock=time.time, timer=time.monotonic):
         self.probe, self.owner, self.every, self.limit, self.clock = probe, owner, every, limit, clock
-        self.changes, self.questions, self.reason = [], 0, None
-        self._halt, self._thread, self._last = threading.Event(), None, self
+        self.changes, self.questions, self.reason, self.timer = [], 0, None, timer
+        self._halt, self._thread, self._last, self._entry = threading.Event(), None, self, None
 
     def look(self):
         """One question to the listener. A change is kept; an error of the question is an answer too."""
-        at = round(self.clock(), 3)
-        now = (attempt(self.probe), attempt(self.owner) if self.owner else None)
+        at, began = round(self.clock(), 3), self.timer()
+        answer = attempt(self.probe)
+        took = round(self.timer() - began, 3)
+        now = (answer, attempt(self.owner) if self.owner else None)
         self.questions += 1
-        if now != self._last and len(self.changes) < self.limit:
-            self.changes.append({"at": at, "answer": now[0], "owner": now[1]})
+        if now != self._last:
+            # A change that the full list does not keep has no entry: no later time is written to an earlier answer.
+            self._entry = ({"at": at, "answer": now[0], "owner": now[1], "seconds": took}
+                           if len(self.changes) < self.limit else None)
+            if self._entry is not None:
+                self.changes.append(self._entry)
+        elif self._entry is not None and took > self._entry.get("slowest", {}).get("seconds", 0):
+            self._entry["slowest"] = {"at": at, "seconds": took}
         self._last = now
 
     def start(self):

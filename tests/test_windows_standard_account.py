@@ -663,7 +663,7 @@ def test_the_watch_keeps_each_change_of_the_listeners_answer_and_of_the_owners_o
     def probe():
         order.append("probe")
         return next(answers)
-    watch = case.ListenerWatch(probe, lambda: next(owners), clock=clock)
+    watch = case.ListenerWatch(probe, lambda: next(owners), clock=clock, timer=lambda: 0)
     for _ in range(5):
         watch.look()
     watch.mark("the second start")
@@ -674,12 +674,50 @@ def test_the_watch_keeps_each_change_of_the_listeners_answer_and_of_the_owners_o
     # No answer and no listener; no answer with a listener (the host is there and does not answer); an answer;
     # no answer of the same process; an answer of another process. The mark is in the same list, in the order of time.
     assert kept == {"started": False, "ended": True, "questions": 7, "changes": [
-        {"at": 100, "answer": "unreachable", "owner": []},
-        {"at": 102, "answer": "unreachable", "owner": [4500]},
-        {"at": 103, "answer": "trusted", "owner": [4500]},
+        {"at": 100, "answer": "unreachable", "owner": [], "seconds": 0},
+        {"at": 102, "answer": "unreachable", "owner": [4500], "seconds": 0},
+        {"at": 103, "answer": "trusted", "owner": [4500], "seconds": 0},
         {"at": 105, "mark": "the second start"},
-        {"at": 106, "answer": "unreachable", "owner": [4500]},
-        {"at": 107, "answer": "trusted", "owner": [5100]}]}
+        {"at": 106, "answer": "unreachable", "owner": [4500], "seconds": 0},
+        {"at": 107, "answer": "trusted", "owner": [5100], "seconds": 0}]}
+
+
+def test_the_watch_keeps_how_long_a_question_took_and_the_slowest_one_while_nothing_changes(case):
+    # Each question: the timer is read before it and after it. The differences are the seconds of the questions.
+    seconds = [0.1, 0.09, 1.6, 0.1, 1.2, 2.0, 0.08, 0.5]
+    ticks = iter([value for took in seconds for value in (10.0, 10.0 + took)])
+    answers = iter(["trusted"] * 5 + ["unreachable"] + ["trusted"] * 2)
+    times = iter(range(100, 200))
+    watch = case.ListenerWatch(lambda: next(answers), clock=lambda: next(times), timer=lambda: next(ticks))
+    for _ in range(4):
+        watch.look()
+    watch.mark("the uninstall")  # A mark is no answer: the slowest question stays with the answer before it.
+    for _ in range(4):
+        watch.look()
+    assert watch.stop()["changes"] == [
+        # The third question was the slowest of the five with this answer. A later one that took less changes nothing.
+        {"at": 100, "answer": "trusted", "owner": None, "seconds": 0.1, "slowest": {"at": 102, "seconds": 1.6}},
+        {"at": 104, "mark": "the uninstall"},
+        {"at": 106, "answer": "unreachable", "owner": None, "seconds": 2.0},
+        # A question that took longer than the one that brought the change.
+        {"at": 107, "answer": "trusted", "owner": None, "seconds": 0.08, "slowest": {"at": 108, "seconds": 0.5}}]
+    # The seconds are those of the question to the listener. The read of the port's owners is not in them.
+    clock = [0.0]
+    def question():
+        clock[0] += 0.25
+        return "trusted"
+    def owners():
+        clock[0] += 3.0
+        return [4500]
+    timed = case.ListenerWatch(question, owners, timer=lambda: clock[0])
+    timed.look()
+    assert timed.changes[0]["seconds"] == 0.25
+    # After the limit of the list no entry gets the time of a question that belongs to an answer that is not kept.
+    numbers, ticks = iter([1, 2, 2, 2]), iter([0, 0.1, 0, 0.1, 0, 5.0, 0, 9.0])
+    full = case.ListenerWatch(lambda: next(numbers), limit=1, timer=lambda: next(ticks))
+    for _ in range(4):
+        full.look()
+    assert [(change["answer"], "slowest" in change) for change in full.changes] == [(1, False)]
 
 
 def test_a_question_of_the_watch_that_fails_is_an_answer_and_the_list_has_a_limit(case):
@@ -690,9 +728,11 @@ def test_a_question_of_the_watch_that_fails_is_an_answer_and_the_list_has_a_limi
     watch = case.ListenerWatch(refused, no_table, limit=3)
     watch.look()
     watch.look()  # The same two errors again: no change.
-    assert watch.changes == [{"at": watch.changes[0]["at"],
+    first = watch.changes[0]
+    assert watch.changes == [{"at": first["at"], "seconds": first["seconds"],
                               "answer": {"errorType": "ConnectionResetError", "error": "cut off"},
-                              "owner": {"errorType": "OSError", "error": "Cannot read Windows listener table."}}]
+                              "owner": {"errorType": "OSError", "error": "Cannot read Windows listener table."},
+                              **({"slowest": first["slowest"]} if "slowest" in first else {})}]
     numbers = iter(range(100))
     counting = case.ListenerWatch(lambda: next(numbers), limit=3)
     for _ in range(10):
@@ -747,6 +787,7 @@ def test_a_watch_without_a_question_never_starts_and_says_why(case, tmp_path, mo
     kept = idle.stop()
     assert kept == {"started": False, "ended": True, "questions": 0,
                     "changes": [{"at": kept["changes"][0]["at"], "mark": "Stop Amplifier"}]}
+    assert "seconds" not in kept["changes"][0]
 
     def no_identity(home):
         raise AssertionError("The installation's private HTTPS identity is unavailable")
@@ -771,7 +812,8 @@ def test_the_watch_of_an_installation_asks_its_saved_address_and_reads_the_owner
         time.sleep(0.01)
     kept = watch.stop()
     assert kept["started"] is True and kept["ended"] is True
-    assert kept["changes"] == [{"at": kept["changes"][0]["at"], "answer": "trusted", "owner": [77, 4500]}]
+    assert [(change["answer"], change["owner"]) for change in kept["changes"]] == [("trusted", [77, 4500])]
+    assert 0 <= kept["changes"][0]["seconds"] < 5
     assert asked[:2] == [("trust", ["https://127.0.0.1:27595/api/health"], "the pin"), ("owners", "127.0.0.1", 27595)]
 
 
