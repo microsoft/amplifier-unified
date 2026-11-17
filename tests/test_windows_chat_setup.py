@@ -26,14 +26,17 @@ In a new worker environment the app's decision-catalog helper finds no
 bytecode of the provider packages (in each run so far this case counted 0
 bytecode files before its first start). The helper imports those packages,
 and the app gives one start of it a time limit
-(``decision_accounts._catalog_snapshot``). On a hosted runner that first
-start takes 2 to 6 seconds of the app's 10. Twice it took longer, and
-the preparation then failed by timing (pull request 2270, run 44143862317, two
-attempts). So this case starts the helper itself, with the app's own command,
-directly before the app's first probe command in each new environment: twice.
+(``decision_accounts._catalog_snapshot``). On a hosted runner most first
+starts take 2 to 6 seconds of the app's 10. When the app's own start was the
+first one, it reached the limit twice, and the preparation then failed by
+timing (pull request 2270, run 44143862317, two attempts). So this case
+starts the helper itself, with the app's own command, directly before the
+app's first probe command in each new environment: twice.
 It measures both starts and counts the bytecode files before and after the
 first one. The app's own start then finds bytecode and has less to compile.
-It still has the app's limit.
+It still has the app's limit. Of the first 55 first starts that this case
+measured, one took longer than that limit (11.56 s, run 44170978228); the
+case passed, and the run's page has a warning.
 
 What this case therefore does not show:
 
@@ -48,10 +51,12 @@ What this case therefore does not show:
   stop of a preparation comes after the case's own starts of the helper.
 
 The case requires that its first start added bytecode files. A first start
-that adds none fails there, for a reason that is not a path limit. Two
-possible causes: a preparation already wrote all of that bytecode, or the
-helper writes none. Find out which it is. If the environment already has the
-bytecode, the case's own starts of the helper are of no use: remove them.
+that adds none fails there, for a reason that is not a path limit. Possible
+causes, for example: a preparation already wrote all of that bytecode; the
+helper writes none; the bytecode is in another folder (the case counts below
+``.venv\\Lib\\site-packages`` of the environment). Find out which it is. If
+the environment already has the bytecode, the case's own starts of the helper
+are of no use: remove them.
 
 It then lists every path below the installation folder. That is the measured
 answer to "which paths pass the Windows limit, and does the app need them":
@@ -228,7 +233,8 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
             if environment.name not in helper_times:
                 try:
                     helper_times[environment.name] = await asyncio.to_thread(helper_in, environment)
-                except BaseException as error:   # the app's step fails with it; keep its text for this log
+                except Exception as error:   # the app's step fails with it; keep its text for this log.
+                    # A cancelled wait is no failure of the helper: CancelledError is not an Exception.
                     helper_failures[environment.name] = f'{type(error).__name__}: {error}'
                     raise
             app_commands.add(environment.name)   # from here on the app's own command runs in it
@@ -363,7 +369,8 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
         for name, (first, second, before, after) in helper_times.items():
             print(native.update_stage_probe.catalog_helper_line(name, first, second, before, after, helper_limit))
         for name, failure in helper_failures.items():
-            print(f'FAILED the case\'s own start of the decision-catalog helper in {name}: {failure}')
+            print(f'FAILED what the case does itself in {name} before the app\'s probe command (its starts of '
+                  f'the decision-catalog helper and its counts of bytecode files): {failure}')
 
     assert len({generation, *selected.values()}) == 3   # each folder's setup is its own
     # The case started the helper in every environment in which the app then ran a probe command, and in no

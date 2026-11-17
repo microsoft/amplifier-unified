@@ -284,12 +284,13 @@ def catalog_helper_line(environment, first, second, before, after, limit):
 
     ``before`` and ``after`` are the numbers of bytecode files in the environment's packages before and after
     the first start. The CI job reads these lines (``.github/workflows/windows-path-length.yml``): it keeps
-    each one on the run's page, and it warns for a line that ends with ``HELPER_LONGER``.
+    each one on the run's page, and it warns for a line that ends with ``HELPER_LONGER``. The line has that
+    end when the time of the first start, as the line prints it (two decimals), is over the limit.
     """
     return (f'{HELPER_LINE} in the new worker environment {environment}: the test\'s first start took '
             f'{first:.2f} s; {after - before} more bytecode files were there after it ({before} before it); '
             f'the test\'s second start took {second:.2f} s; the app\'s time limit for one start is {limit} s'
-            + (f'; {HELPER_LONGER}' if first > limit else ''))
+            + (f'; {HELPER_LONGER}' if round(first, 2) > limit else ''))
 
 
 def for_chat(stage, folder):

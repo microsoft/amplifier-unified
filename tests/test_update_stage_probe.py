@@ -149,8 +149,13 @@ def test_the_ci_job_finds_the_lines_that_the_chat_setup_case_prints_for_the_help
         "the test's first start took 10.04 s; 743 more bytecode files were there after it (12 before it); "
         "the test's second start took 1.00 s; the app's time limit for one start is 10 s; "
         'LONGER THAN THE TIME LIMIT OF THE APP')   # the printed time shows why
-    # A start of exactly the limit is not longer than it.
+    # A start of exactly the limit is not longer than it. The printed time decides: a line never shows a
+    # time that is not over the limit together with the words that it is longer.
     assert probe.HELPER_LONGER not in probe.catalog_helper_line('q-' + 'c' * 32, 10, 1.0, 0, 743, 10)
+    printed_as_the_limit = probe.catalog_helper_line('q-' + 'c' * 32, 10.004, 1.0, 0, 743, 10)
+    assert "first start took 10.00 s;" in printed_as_the_limit and probe.HELPER_LONGER not in printed_as_the_limit
+    printed_over_the_limit = probe.catalog_helper_line('q-' + 'c' * 32, 10.006, 1.0, 0, 743, 10)
+    assert "first start took 10.01 s;" in printed_over_the_limit and printed_over_the_limit.endswith(probe.HELPER_LONGER)
     workflow = (probe.ROOT / '.github' / 'workflows' / 'windows-path-length.yml').read_text(encoding='utf-8')
     patterns = re.findall(r"-match '([^']+)'", workflow)
     keeps, warns = '^' + probe.HELPER_LINE, probe.HELPER_LONGER
