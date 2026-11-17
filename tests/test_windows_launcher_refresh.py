@@ -1553,3 +1553,25 @@ def test_kept_cleanup_matches_journal_paths_by_folder_identity(installed):
     refresher.write_json(installed.home, refresher.JOURNAL, {"previous": str(alias)})
     refresher._keep_previous(installed.home, installed.launcher, str(new))
     assert old.is_dir()
+
+
+def test_native_fixture_stand_in_has_every_name_that_the_manual_command_reads(tmp_path):
+    # The native fixture's `Service` stands in for `TaskService`. A name that
+    # the manual command reads and the stand-in lacks fails only on the Windows
+    # runner (`registration`, run 44133982586). This finds it on every platform.
+    import ast
+    import importlib.util
+    manual = {"refresh", "_outside", "_refuse_stale", "plan", "_report", "_run", "_undo", "_observe"}
+    functions = [node for node in ast.parse(Path(refresher.__file__).read_text(encoding="utf-8")).body
+                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in manual]
+    assert {node.name for node in functions} == manual
+    read = {item.attr for node in functions for item in ast.walk(node)
+            if isinstance(item, ast.Attribute) and isinstance(item.value, ast.Name) and item.value.id == "service"}
+    assert {"registration", "launcher", "stop", "start", "ready"} <= read
+    path = Path(__file__).parent / "fixtures/windows_launcher_refresh_native.py"
+    spec = importlib.util.spec_from_file_location("launcher_refresh_native_fixture", path)
+    fixture = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fixture)
+    stand_in = fixture.Service(tmp_path, [])
+    assert sorted(name for name in read if not hasattr(stand_in, name)) == []
+    assert fixture.Service(tmp_path, [], registration="f" * 32).registration != stand_in.registration

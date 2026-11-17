@@ -143,11 +143,14 @@ def prepare():
 class Service:
     """The task's facts, with recorded stop/start in place of a Scheduled Task."""
 
-    def __init__(self, root, ready):
+    def __init__(self, root, ready, registration="0123456789abcdef0123456789abcdef"):
         self.launcher = root / "tools/amplifier-unified"
         self.tool_path = os.environ["PATH"]
         self.launch_roots = {"UV_TOOL_BIN_DIR": str(root / "tool-bin")}
         self.github_access, self.up, self.results, self.events = "anonymous", True, list(ready), []
+        # The task's registration ID. The same for every stand-in of this
+        # installation: a journal of another registration is never used.
+        self.registration = registration
 
     def running(self):
         return self.up
@@ -308,6 +311,26 @@ def run():
             need(generations.active(home)["bootstrap"] != earlier["identity"]
                  and refresher.launcher_facts(launcher)["revision"] == new["revision"],
                  "the ended run had installed and bound the new launcher")
+            need(journal.get("registration") == service.registration and journal.get("request") is None,
+                 "the saved record names the task's registration")
+            # Amplifier was installed again: the task has another registration.
+            # That record is then never used, by --check or by a run.
+            reinstalled = Service(root, [], registration="f" * 32)
+            reinstalled.up = False
+            state = {"pointer": pointer.read_bytes(), "launcher": refresher.launcher_facts(launcher)}
+            for options in ({"check": True}, {}, {"recover": True}):
+                try:
+                    refresh(reinstalled, **options)
+                    refusal = None
+                except refresher.Refused as reason:
+                    refusal = str(reason)
+                need(refusal is not None and "earlier installation" in refusal,
+                     "a saved record of an earlier installation is refused")
+            need(reinstalled.events == [] and refresher.unfinished(home) == journal
+                 and pointer.read_bytes() == state["pointer"]
+                 and refresher.launcher_facts(launcher) == state["launcher"]
+                 and Path(journal["previous"]).is_dir(),
+                 "the refusal changed nothing")
             result = refresh(service, check=True)
             need(result["action"] == "recover" and not service.up, "check sees the unfinished refresh and changes nothing")
             result = refresh(service)
@@ -348,6 +371,13 @@ def run():
         report.update(status="PASS", stage="complete", earlier=old["version"], candidate=new["version"])
     except BaseException as error:
         report["errorType"] = type(error).__name__
+        # `stage` is the last check that began. The line says where it stopped.
+        trace, here = error.__traceback__, None
+        while trace is not None:
+            if trace.tb_frame.f_code.co_filename == __file__:
+                here = trace.tb_lineno
+            trace = trace.tb_next
+        report["line"] = here
     finally:
         save("result.json", report)
         print(json.dumps(report), flush=True)

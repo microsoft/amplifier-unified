@@ -175,6 +175,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         service.management.background(service.management.command("providers.list", {}))
     from .updates import UpdateManager
     service.update_manager = UpdateManager(service)
+    from .windows_launcher_follow import at_start; at_start(service.update_manager)
     if background_updates:
         service.update_manager.task = asyncio.create_task(service.update_manager.loop())
     streams = set()
