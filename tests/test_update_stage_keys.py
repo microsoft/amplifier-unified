@@ -317,7 +317,8 @@ async def test_an_old_copy_never_stands_in_for_a_keys_file_that_the_person_remov
     manager, _ = await prepare(app, repo)
     manager._storage_last_pass = time.time()  # The owner's pass below starts no storage maintenance.
     live = amplifier_home() / 'keys.env'
-    assert not live.exists()
+    # This case writes a live entry. It must be the test's own home, and empty.
+    assert live.is_relative_to(tmp_path.resolve()) and not live.exists()
     stage = stage_at(manager.home)
     receipt = json.dumps({'hostVersion': 'old-app', 'sources': 1})
     (stage / 'validated.json').write_text(receipt)
@@ -401,6 +402,94 @@ async def test_an_old_copy_never_stands_in_for_a_keys_file_that_the_person_remov
     assert state.get('error') is None
     assert state['currentStatus']['detail'] != STALE_STAGE_KEYS
     assert state['currentStatus']['title'] != 'Update needs attention'
+
+
+@pytest.mark.parametrize('failure', ['command', 'other'])
+@pytest.mark.parametrize('path', ['install-request', 'rollback-request', 'owner'])
+async def test_a_validation_that_fails_without_a_keys_file_is_recorded_and_shown(app, repo, monkeypatch, tmp_path, path, failure):
+    """The refresh is refused, the old copy is removed, and the validation then fails.
+
+    Nothing in the changed block records or shows that failure: it removes the copy and raises
+    again. A command of the validation that fails is recorded by the validation (diagnostics.run).
+    Any other error is recorded by the caller's handler. That handler also shows the failure:
+    `command` for a person's request, `loop` for the owner's pass. This case goes through each.
+    """
+    import json
+    from amplifier_web.update_diagnostics import CommandFailure
+    from amplifier_web.update_health import STALE_STAGE_KEYS
+    manager, _ = await prepare(app, repo)
+    manager._storage_last_pass = time.time()  # The owner's pass starts no storage maintenance.
+    live = amplifier_home() / 'keys.env'
+    assert live.is_relative_to(tmp_path.resolve()) and not live.exists()
+    os.mkfifo(live)  # A live entry that is no file: the refresh's read is refused (a real refusal).
+    stage = stage_at(manager.home)
+    receipt = json.dumps({'hostVersion': 'old-app', 'sources': 1})
+    (stage / 'validated.json').write_text(receipt)
+    state = app.state['updates']
+    # An earlier request was held, and its text is still there.
+    state.update(phase='staged', pendingRelease=stage.name, error=STALE_STAGE_KEYS)
+    rollback = path == 'rollback-request'
+    if rollback:
+        (manager.directory / 'active.json').write_text(json.dumps({'current': None, 'previous': stage.name}))
+        state.pop('pendingRelease')
+    active = manager.directory / 'active.json'
+    pointer = active.read_bytes() if active.exists() else None
+    assert 'lastFailure' not in manager.diagnostics.state
+    seen = []
+
+    async def probe():
+        raise CommandFailure({'exitCode': 1, 'durationMs': 5, 'stdoutBytes': 0, 'stderrBytes': 9})
+
+    async def validate(target, release):
+        seen.append((stage / 'shared-config/keys.env').exists())
+        if failure == 'command':
+            # As the real validation: one of its recorded commands ends with an error.
+            await manager.diagnostics.run('ecosystem-compatibility', probe)
+        # As the real validation: an error outside a recorded command.
+        raise ValueError('No app-level conversation profiles are configured')
+
+    monkeypatch.setattr(manager, 'validate', validate)
+    if path == 'owner':
+        waits = []
+
+        async def one_pass(delay):
+            waits.append(delay)
+            if len(waits) > 1:
+                manager.closed = True
+
+        monkeypatch.setattr(manager, 'wait_for_work', one_pass)
+        await manager.loop()  # It raises nothing.
+    else:
+        await manager.command('rollback' if rollback else 'install', None, 'c' * 32)  # It raises nothing.
+    # The validation ran once, and it saw no keys file in the stage.
+    assert seen == [False]
+    # Nothing was switched, no receipt for this app version was written, and the old copy is gone.
+    assert (active.read_bytes() if active.exists() else None) == pointer
+    assert (stage / 'validated.json').read_text() == receipt
+    assert not (stage / 'shared-config/keys.env').exists()
+    assert_preserved(stage)
+    # The failure is recorded: by the validation for its own command, else by the caller's handler.
+    step = ('ecosystem-compatibility' if failure == 'command' else
+            {'install-request': 'install', 'rollback-request': 'rollback', 'owner': 'background-update'}[path])
+    recorded = manager.diagnostics.state['lastFailure']
+    assert (recorded['phase'], recorded['status']) == (step, 'failed')
+    assert recorded.get('exitCode') == (1 if failure == 'command' else None)
+    assert recorded.get('errorType') == ('CommandFailure' if failure == 'command' else 'ValueError')
+    if failure == 'command':
+        assert [(group['kind'], group['latest']['id'])
+                for group in manager.diagnostics.state['activeFailures'].values()] == [('ecosystem', recorded['id'])]
+    # The page says that the update failed, and at which step. The earlier refusal text is gone.
+    words = step.replace('-', ' ')
+    text = (f'Background update failed during {words}. Review its diagnostic receipt; no work was replayed.'
+            if path == 'owner' else
+            f'Update failed during {words}. Review the diagnostic receipt; no conversation work was replayed.')
+    assert (state['phase'], state['error']) == ('error', text)
+    status = state['currentStatus']
+    assert (status['status'], status['actionRequired'], status['detail'], status['action']) == (
+        'action-required', True, text, 'diagnostics')
+    assert status['title'] == ('Update could not finish' if rollback else 'Update needs attention')
+    # A prepared update stays prepared.
+    assert state.get('pendingRelease') == (None if rollback else stage.name)
 
 
 @pytest.mark.parametrize('phase', ['installed', 'checked', 'error'])

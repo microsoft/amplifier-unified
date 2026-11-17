@@ -470,8 +470,11 @@ No version is switched and no failed attempt is recorded; the page says "Update
 needs attention" with the reason, for an update and for a rollback. The next
 activation or rollback request tries again (the owner's pass does that by
 itself for a prepared update) and takes the text back when the refusal is over.
-After a rollback request nothing tries again by itself; the next check for
-updates takes that text back.
+After a rollback request nothing tries again by itself. That text then stays
+until a rollback request works, until a check for updates runs (none runs
+while an update is prepared), or until a prepared app update is installed.
+A qualification that runs there and fails is recorded and shown like any other
+failed update step; the old copy is gone then too.
 Idle maintenance also scrubs at most eight stage copies per pass, even when
 unused-code cleanup is off. A validated stage qualifies immediately. An
 unvalidated stage qualifies only when both its folder and `shared-config` are
