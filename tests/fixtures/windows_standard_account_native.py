@@ -51,7 +51,6 @@ import argparse
 import asyncio
 import base64
 from contextlib import contextmanager
-import csv
 import ctypes as C
 from ctypes import wintypes as W
 import hashlib
@@ -436,7 +435,8 @@ def account_comment(name):
     if status:
         raise OSError(f"NetUserGetInfo failed with status {status}")
     try:
-        return C.cast(buffer, C.POINTER(_UserInfo1)).contents.comment
+        # An account without a comment exists: it is never read as absent.
+        return C.cast(buffer, C.POINTER(_UserInfo1)).contents.comment or ""
     finally:
         net.NetApiBufferFree.argtypes = [C.c_void_p]
         net.NetApiBufferFree(buffer)
@@ -1075,6 +1075,19 @@ def run():
         save("result.json", report)
         need(all(step["status"] == "PASS" for step in first["steps"]), "A step after the first sign-in failed")
 
+        report["stage"] = "the process list while the user is signed in"
+        # What the cleanup step decides from, shown while both programs run: Windows' process list
+        # has the viewer as a program of the runner's account, and the Amplifier host as a program
+        # of the user.
+        host = first["journey"]["hostBeforeSignOut"][0]
+        listed = {"viewerOfTheRunnersAccount": any(program.casefold() == "mstsc.exe" and number == viewer.pid
+                                                   for program, number in user_processes(runner["sid"])),
+                  "hostOfTheUser": any(number == host for _, number in user_processes(sid))}
+        report["processList"] = listed
+        need(all(listed.values()),
+             "Windows' process list does not show the viewer as a program of the runner's account and the "
+             "Amplifier host as a program of the user", listed)
+
         report["stage"] = "the sign-out"
         need(sign_out(name, viewer), "Windows still lists a desktop session of the user after the sign-out")
         viewer = None
@@ -1157,42 +1170,63 @@ def remove_account(name, mark):
     return delete_user(name) if state == "this run's" else "not deleted: " + state
 
 
-def listed_processes(listing):
-    """The rows of the Windows process list (tasklist, CSV, no heading): (program, process number)."""
-    return [(row[0], row[1].strip()) for row in csv.reader(listing.splitlines())
-            if len(row) >= 2 and row[1].strip().isdigit()]
+PROCESSES = r"""
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+$p = [Console]::In.ReadToEnd() | ConvertFrom-Json
+$found = @()
+foreach ($process in @(Get-CimInstance -ClassName Win32_Process)) {
+    # A process that ended meanwhile, or one that Windows names no owner for, has no SID here.
+    try { $owner = (Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid).Sid } catch { $owner = $null }
+    if ($owner -eq $p.sid) { $found += @{name=[string]$process.Name; pid=[int]$process.ProcessId} }
+}
+@{found=$found} | ConvertTo-Json -Compress -Depth 3
+"""
 
 
-def still_listed(filters, wanted, seconds):
-    """The processes that Windows still lists for these filters, after at most `seconds`. A failed list is an error."""
-    deadline = time.monotonic() + seconds
-    while True:
-        listing = execute([system("tasklist.exe"), *[part for item in filters for part in ("/FI", item)],
-                           "/FO", "CSV", "/NH"])
-        if listing["exitCode"] != 0:
-            raise OSError("Windows did not list the processes: " + listing["stderr"][-200:])
-        left = [row for row in listed_processes(listing["stdout"]) if wanted(row)]
-        if not left or time.monotonic() >= deadline:
-            return left
-        time.sleep(1)
+def user_processes(sid):
+    """The programs that run as the account with this SID, as Windows lists them: [program, process number].
+
+    Windows PowerShell asks Windows for the owner of each process. The list is
+    by the SID and not by a name: it holds the programs of an account also
+    after the account is deleted. A list that Windows does not give is an
+    error here, never an empty list.
+    """
+    need(isinstance(sid, str) and sid.startswith("S-1-"), "There is no SID to list the programs of", sid)
+    listed = powershell(PROCESSES, {"sid": sid}, timeout=180)
+    found = listed["json"].get("found") if isinstance(listed["json"], dict) else None
+    need(listed["exitCode"] == 0 and isinstance(found, list), "Windows did not list the processes", listed)
+    return [[str(item["name"]), int(item["pid"])] for item in found]
 
 
-def end_viewers(pids, seconds=20):
-    """End this run's Remote Desktop viewers. "ended" only when Windows lists none of them afterwards."""
-    left = []
+def end_viewers(pids, account, seconds=30):
+    """End the Remote Desktop viewers that this run recorded.
+
+    "ended" only when Windows then lists no Remote Desktop viewer that runs as
+    the runner's account (`account`: its SID). A viewer that the run started
+    and did not record is not ended here. It counts as left.
+    """
     for pid in pids:
         execute([system("taskkill.exe"), "/F", "/PID", pid, "/FI", "IMAGENAME eq mstsc.exe"])
-        # Windows gives a process number to a later program. Only a viewer with this number counts.
-        left += still_listed([f"PID eq {pid}", "IMAGENAME eq mstsc.exe"],
-                             lambda row, pid=pid: row[0].casefold() == "mstsc.exe" and row[1] == str(pid), seconds)
-    return "ended" if not left else "left: " + json.dumps(left)
+    deadline = time.monotonic() + seconds
+    while True:
+        left = [row for row in user_processes(account) if row[0].casefold() == "mstsc.exe"]
+        if not left or time.monotonic() >= deadline:
+            return "ended" if not left else "left: " + json.dumps(left)
+        time.sleep(2)
 
 
-def end_processes(name, seconds=20):
-    """End the user's programs. "ended" only when Windows lists no program of the user afterwards."""
-    execute([system("taskkill.exe"), "/F", "/FI", f"USERNAME eq {name}"])
-    left = still_listed([f"USERNAME eq {name}"], lambda row: True, seconds)
-    return "ended" if not left else "left: " + json.dumps(left[:20])
+def end_processes(sid, seconds=30):
+    """End the programs that run as the account with this SID. "ended" only when Windows then lists none of them."""
+    deadline = time.monotonic() + seconds
+    while True:
+        left = user_processes(sid)
+        if not left or time.monotonic() >= deadline:
+            return "ended" if not left else "left: " + json.dumps(left[:20])
+        for program, number in left:
+            # The program's name with its number: Windows gives a number to a later program.
+            execute([system("taskkill.exe"), "/F", "/PID", number, "/FI", f"IMAGENAME eq {program}"])
+        time.sleep(2)
 
 
 def restore_setting(earlier, registry):
@@ -1213,10 +1247,14 @@ def restore_setting(earlier, registry):
     return "restored" if now == earlier else "left: Windows has the value " + repr(now)
 
 
+# The run records the account's SID directly after Windows created the account, and it signs the
+# user in only after that record. So with no SID record and no account of the recorded name, the
+# user never signed in: no program, no Amplifier task and no profile of the account was made.
+NEVER = "none: the run recorded no SID for the account, so it never signed the user in"
 # What each part of the cleanup must report. With an account record: also the account's parts.
 CLEAN = {"credential": ("absent",), "viewers": ("ended",), "viewerSetting": ("restored", "unchanged")}
-OWNED_CLEAN = {"signedOut": (True,), "processes": ("ended",), "helperTask": ("absent",),
-               "amplifierTask": ("absent",), "profile": ("absent",), "account": ("absent",)}
+OWNED_CLEAN = {"signedOut": (True,), "processes": ("ended", NEVER), "helperTask": ("absent",),
+               "amplifierTask": ("absent", NEVER), "profile": ("absent", NEVER), "account": ("absent",)}
 
 
 def cleaned(result, owned):
@@ -1262,32 +1300,43 @@ def cleanup():
         return "saved"
 
     part("credential", forget)
-    part("viewers", lambda: end_viewers(saved("viewers.json") or []))
+    part("viewers", lambda: end_viewers(saved("viewers.json") or [], token_facts()["sid"]))
     if owned:
-        name, mark, sid = owned["user"], owned["mark"], owned.get("sid")
-        # The record is written before the account, so the account can be absent.
-        part("accountBefore", lambda: whose(name, mark))
-        state, unread = result["accountBefore"], None
-        if state == "this run's" and sid is None:
-            # Windows created the account, and the line that records its SID did not run.
-            try:
-                sid = sid_text(account_sid(name))
-            except Exception as error:
-                unread = "left: the account's SID was not read: " + type(error).__name__
-        if state in ("this run's", "absent"):
-            part("signedOut", lambda: sign_out(name, None))
-            part("processes", lambda: end_processes(name) if state == "this run's" else "ended")
-            part("helperTask", lambda: gone(HELPER))
-            # Without the SID the user's task and profile have no name here: they count as left.
-            part("amplifierTask", lambda: unread or (gone("AmplifierUnified-" + sid) if sid else "absent"))
-            part("profile", lambda: unread or (remove_profile(sid) if sid else "absent"))
-            if state == "this run's":
-                part("deleteStatus", lambda: remove_account(name, mark))
-            part("account", lambda: "absent" if account_sid(name) is None else "left")
+        name, mark, sid = owned.get("user"), owned.get("mark"), owned.get("sid")
+        if not name or not mark:
+            result["account"] = "left: the record of the account is not complete"
         else:
-            # Another account has this name, or Windows did not say whose it is: nothing of it is touched.
-            result["account"] = "left: " + (state if state == "another account"
-                                            else "Windows did not say whose account this is")
+            # The record is written before the account, so the account can be absent.
+            part("accountBefore", lambda: whose(name, mark))
+            state, unread = result["accountBefore"], None
+            if state == "this run's" and sid is None:
+                # Windows created the account, and the line that records its SID did not run.
+                try:
+                    sid = sid_text(account_sid(name))
+                except Exception as error:
+                    unread = "left: the account's SID was not read: " + type(error).__name__
+
+            def by_sid(action):
+                """A part that Windows names by the account's SID: its programs, its Amplifier task, its profile.
+
+                With a SID the part is done and read, also when the account is
+                absent. A SID that was not read: the part counts as left.
+                """
+                return unread or (action(sid) if sid else NEVER)
+
+            if state in ("this run's", "absent"):
+                part("signedOut", lambda: sign_out(name, None))
+                part("processes", lambda: by_sid(end_processes))
+                part("helperTask", lambda: gone(HELPER))
+                part("amplifierTask", lambda: by_sid(lambda sid: gone("AmplifierUnified-" + sid)))
+                part("profile", lambda: by_sid(remove_profile))
+                if state == "this run's":
+                    part("deleteStatus", lambda: remove_account(name, mark))
+                part("account", lambda: "absent" if account_sid(name) is None else "left")
+            else:
+                # Another account has this name, or Windows did not say whose it is: nothing of it is touched.
+                result["account"] = "left: " + (state if state == "another account"
+                                                else "Windows did not say whose account this is")
     part("viewerSetting", setting)
     part("reports", reports)
     part("saved", lambda: save("cleanup.json", result) or "yes")

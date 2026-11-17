@@ -371,18 +371,58 @@ def test_the_account_is_recorded_for_removal_before_windows_creates_it():
     assert run.count("create_user(") == 1 and "mark = MARK + uuid.uuid4().hex" in run
 
 
+def test_the_user_signs_in_only_after_the_accounts_sid_is_recorded():
+    # The cleanup reads "no SID record and no account" as "the user never signed in" (`NEVER`).
+    source = FIXTURE.read_text(encoding="utf-8")
+    run = source[source.index("def run():"):source.index("PROFILE = ")]
+    recorded = run.index('save("ownership.json", {"user": name, "mark": mark, "sid": sid})')
+    for start in ("sign_in(", "in_session(", 'task("start"'):
+        assert start not in run[:recorded], start
+    assert recorded < run.index("sign_in(name, password)") < run.index("in_session(")
+    # Nothing else starts a program as the user.
+    for other in ("CreateProcessWithLogonW", "LogonUserW"):
+        assert other not in source, other
+
+
+def test_an_account_without_a_comment_is_never_read_as_absent():
+    source = FIXTURE.read_text(encoding="utf-8")
+    comment = source[source.index("def account_comment(name):"):source.index("def local_groups(name):")]
+    assert "if status == 2221:  # No such user.\n        return None" in comment
+    assert 'return C.cast(buffer, C.POINTER(_UserInfo1)).contents.comment or ""' in comment
+    assert comment.count("return None") == 1
+
+
+def test_the_process_list_is_required_while_the_user_is_signed_in():
+    source = FIXTURE.read_text(encoding="utf-8")
+    run = source[source.index("def run():"):source.index("PROFILE = ")]
+    # After the first steps, while the viewer and the host run, and before the sign-out ends both.
+    assert run.index('"A step after the first sign-in failed"') < run.index('host = first["journey"]["hostBeforeSignOut"][0]') \
+        < run.index("need(all(listed.values()),") < run.index("need(sign_out(name, viewer),")
+    assert ('listed = {"viewerOfTheRunnersAccount": any(program.casefold() == "mstsc.exe" and number == viewer.pid\n'
+            '                                                   for program, number in user_processes(runner["sid"])),\n'
+            '                  "hostOfTheUser": any(number == host for _, number in user_processes(sid))}') in run
+
+
 OWNED = {"user": "amp-std-000000", "mark": "mark-1", "sid": "S-1-5-21-1-2-3-1003"}
 AMPLIFIER_TASK = "AmplifierUnified-" + OWNED["sid"]
 
 
+RUNNER = "S-1-5-21-1-2-3-500"
+
+
 def clean_up(case, monkeypatch, tmp_path, *, owned=OWNED, comment="mark-1", later=None, broken=(),
-             profile="absent"):
+             profile="absent", processes="ended", setting=None):
     """Run the cleanup with stand-ins for Windows. `broken` names the parts that fail.
 
     `comment` is the comment of the account with the recorded name (None: no
     such account). `later` is its comment at every read after the first.
+    `processes` is what the end of the user's programs reports. `setting` is
+    (the earlier value of the viewer's setting, the registry).
     """
     calls, files, exists, reads = [], {"ownership.json": owned}, {"account": comment is not None}, []
+    if setting:
+        files["viewer-setting.json"] = {"earlier": setting[0]}
+        monkeypatch.setitem(sys.modules, "winreg", setting[1])
 
     def fail(name):
         if name in broken:
@@ -401,13 +441,22 @@ def clean_up(case, monkeypatch, tmp_path, *, owned=OWNED, comment="mark-1", late
         exists["account"] = False
         return 0
 
+    def end_viewers(pids, account):
+        assert account == RUNNER  # The viewers are read as programs of the runner's account.
+        return fail("viewers") or calls.append("viewers") or "ended"
+
+    def end_processes(sid):
+        assert sid == OWNED["sid"]  # By the SID, never by the name.
+        return fail("processes") or calls.append("processes") or processes
+
     monkeypatch.setattr(case, "saved", files.get)
     monkeypatch.setattr(case, "save", files.__setitem__)
     monkeypatch.setattr(case, "system", lambda name: name)
     monkeypatch.setattr(case, "folders", lambda: (tmp_path, tmp_path))
+    monkeypatch.setattr(case, "token_facts", lambda: {"sid": RUNNER})
     monkeypatch.setattr(case, "forget", lambda: fail("credential") or "absent")
-    monkeypatch.setattr(case, "end_viewers", lambda pids: fail("viewers") or calls.append("viewers") or "ended")
-    monkeypatch.setattr(case, "end_processes", lambda name: fail("processes") or calls.append("processes") or "ended")
+    monkeypatch.setattr(case, "end_viewers", end_viewers)
+    monkeypatch.setattr(case, "end_processes", end_processes)
     monkeypatch.setattr(case, "account_comment", account_comment)
     monkeypatch.setattr(case, "account_sid", lambda name: b"sid" if exists["account"] else None)
     monkeypatch.setattr(case, "sid_text", lambda sid: fail("sid") or OWNED["sid"])
@@ -463,18 +512,47 @@ def test_an_account_whose_sid_was_not_recorded_is_removed_by_its_mark(case, monk
 def test_this_runs_account_is_deleted_also_when_its_sid_cannot_be_read(case, monkeypatch, tmp_path):
     owned = {"user": OWNED["user"], "mark": "mark-1"}
     passed, result, calls = clean_up(case, monkeypatch, tmp_path, owned=owned, broken=("sid",))
-    # The sign-out, the helper task and the account itself are done. The task and the profile
-    # that are named by the SID count as left, so the step fails.
-    assert calls == ["viewers", "sign_out", "processes", "remove AmplifierStandardAccountCheck", "delete_user"]
+    # The sign-out, the helper task and the account itself are done. The programs, the task and
+    # the profile that are named by the SID count as left, so the step fails.
+    assert calls == ["viewers", "sign_out", "remove AmplifierStandardAccountCheck", "delete_user"]
     assert result["account"] == "absent" and passed is False
-    assert result["amplifierTask"] == result["profile"] == "left: the account's SID was not read: OSError"
+    assert result["processes"] == result["amplifierTask"] == result["profile"] \
+        == "left: the account's SID was not read: OSError"
 
 
-def test_an_account_that_was_recorded_and_never_created_is_nothing_to_delete(case, monkeypatch, tmp_path):
+def test_an_account_that_was_recorded_and_never_created_has_no_program_task_or_profile(case, monkeypatch, tmp_path):
+    # No SID record and no account with the name: the run stopped before it signed the user in.
     owned = {"user": OWNED["user"], "mark": "mark-1"}
     passed, result, calls = clean_up(case, monkeypatch, tmp_path, owned=owned, comment=None)
     assert passed is True and result["accountBefore"] == "absent"
     assert calls == ["viewers", "sign_out", "remove AmplifierStandardAccountCheck"]
+    # The result says that nothing was read, and why. It does not say "ended" or "absent".
+    assert result["processes"] == result["amplifierTask"] == result["profile"] == case.NEVER
+    assert case.NEVER.startswith("none: the run recorded no SID for the account")
+
+
+def test_the_programs_of_a_deleted_account_are_read_by_its_sid(case, monkeypatch, tmp_path):
+    # A first cleanup did not end a program of the user, deleted the account, and failed.
+    passed, result, calls = clean_up(case, monkeypatch, tmp_path, processes='left: [["python.exe", 77]]')
+    assert passed is False and result["account"] == "absent" and "delete_user" in calls
+    # The next cleanup finds no account. It still reads the programs, the task and the profile by the SID.
+    passed, result, calls = clean_up(case, monkeypatch, tmp_path, comment=None, processes='left: [["python.exe", 77]]')
+    assert calls == ["viewers", "sign_out", "processes", "remove AmplifierStandardAccountCheck",
+                     "remove " + AMPLIFIER_TASK, "profile"]
+    assert passed is False and result["processes"] == 'left: [["python.exe", 77]]'
+    # When Windows lists none of them any more, that cleanup passes.
+    passed, result, calls = clean_up(case, monkeypatch, tmp_path, comment=None)
+    assert passed is True and result["processes"] == "ended" and "processes" in calls
+    assert result["amplifierTask"] == result["profile"] == "absent"
+
+
+@pytest.mark.parametrize("owned", [{"mark": "mark-1"}, {"user": OWNED["user"]}, {"user": "", "mark": "mark-1"}])
+def test_a_record_without_a_name_or_a_mark_touches_no_account_and_the_other_parts_run(case, monkeypatch, tmp_path, owned):
+    registry = Registry(0)
+    passed, result, calls = clean_up(case, monkeypatch, tmp_path, owned=owned, setting=(None, registry))
+    assert passed is False and calls == ["viewers"]
+    assert result["account"] == "left: the record of the account is not complete"
+    assert result["viewerSetting"] == "restored" and registry.value is None
 
 
 def test_an_account_of_another_program_under_this_name_is_not_touched(case, monkeypatch, tmp_path):
@@ -504,69 +582,101 @@ def test_no_record_means_that_no_account_was_requested(case, monkeypatch, tmp_pa
     assert result["credential"] == "absent" and result["viewerSetting"] == "unchanged"
 
 
-NONE_LISTED = "INFO: No tasks are running which match the specified criteria.\r\n"
-VIEWER = '"mstsc.exe","4321","RDP-Tcp#0","2","43,512 K"\r\n'
-
-
 def windows_lists(case, monkeypatch, listings):
-    """Stand-ins for taskkill and tasklist. Each listing is one answer of tasklist; the last one repeats."""
-    commands, listings = [], list(listings)
+    """Stand-ins for the process list and taskkill. Each listing is one answer of the list; the last one repeats."""
+    asked, commands, listings = [], [], list(listings)
 
-    def execute(argv, **_):
-        commands.append([str(item) for item in argv])
-        if argv[0] != "tasklist.exe":
-            return {"exitCode": 0, "stdout": "", "stderr": ""}
+    def user_processes(sid):
+        asked.append(sid)
         answer = listings.pop(0) if len(listings) > 1 else listings[0]
-        return answer if isinstance(answer, dict) else {"exitCode": 0, "stdout": answer, "stderr": ""}
+        if isinstance(answer, Exception):
+            raise answer
+        return [list(row) for row in answer]
 
     monkeypatch.setattr(case, "system", lambda name: name)
-    monkeypatch.setattr(case, "execute", execute)
+    monkeypatch.setattr(case, "user_processes", user_processes)
+    monkeypatch.setattr(case, "execute", lambda argv, **_: commands.append([str(item) for item in argv]) or {"exitCode": 0})
     monkeypatch.setattr(case.time, "sleep", lambda seconds: None)
-    return commands
+    return asked, commands
 
 
-def test_the_process_list_of_windows_is_read_by_its_rows(case):
-    assert case.listed_processes(NONE_LISTED) == []
-    assert case.listed_processes(VIEWER + '"python.exe","77","RDP-Tcp#0","2","9,000 K"\r\n') == [
-        ("mstsc.exe", "4321"), ("python.exe", "77")]
-    assert case.listed_processes("") == [] and case.listed_processes('"Image Name","PID"\r\n') == []
+VIEWER, OTHERS = ["mstsc.exe", 4321], [["python.exe", 77], ["provisioner.exe", 900]]
 
 
-def test_a_viewer_is_ended_only_when_windows_lists_it_no_longer(case, monkeypatch):
-    commands = windows_lists(case, monkeypatch, [NONE_LISTED])
-    assert case.end_viewers([4321], seconds=0) == "ended"
-    assert commands == [["taskkill.exe", "/F", "/PID", "4321", "/FI", "IMAGENAME eq mstsc.exe"],
-                        ["tasklist.exe", "/FI", "PID eq 4321", "/FI", "IMAGENAME eq mstsc.exe", "/FO", "CSV", "/NH"]]
-    # Windows still lists it after the limit: left.
-    windows_lists(case, monkeypatch, [VIEWER])
-    assert case.end_viewers([4321], seconds=0) == 'left: [["mstsc.exe", "4321"]]'
+def test_the_viewers_are_ended_only_when_windows_lists_no_viewer_of_the_runners_account(case, monkeypatch):
+    # The runner's account has other programs. Only a Remote Desktop viewer counts.
+    asked, commands = windows_lists(case, monkeypatch, [OTHERS])
+    assert case.end_viewers([4321], RUNNER, seconds=0) == "ended"
+    assert asked == [RUNNER]
+    assert commands == [["taskkill.exe", "/F", "/PID", "4321", "/FI", "IMAGENAME eq mstsc.exe"]]
+    # Windows still lists the viewer at the limit: left.
+    windows_lists(case, monkeypatch, [[VIEWER, *OTHERS]])
+    assert case.end_viewers([4321], RUNNER, seconds=0) == 'left: [["mstsc.exe", 4321]]'
     # It is gone at the second look.
-    commands = windows_lists(case, monkeypatch, [VIEWER, NONE_LISTED])
-    assert case.end_viewers([4321], seconds=30) == "ended" and len(commands) == 3
-    # Another program got the number, or another viewer is listed: this run's viewer is gone.
-    windows_lists(case, monkeypatch, ['"notepad.exe","4321","Console","2","1 K"\r\n"mstsc.exe","99","Console","2","1 K"\r\n'])
-    assert case.end_viewers([4321], seconds=0) == "ended"
-    # No viewer was started: nothing to end, and nothing is asked.
-    commands = windows_lists(case, monkeypatch, [VIEWER])
-    assert case.end_viewers([], seconds=0) == "ended" and commands == []
+    asked, _ = windows_lists(case, monkeypatch, [[VIEWER], OTHERS])
+    assert case.end_viewers([4321], RUNNER, seconds=60) == "ended" and len(asked) == 2
+    # A viewer that the run did not record: Windows is asked all the same, and the viewer counts as left.
+    asked, commands = windows_lists(case, monkeypatch, [[["MSTSC.EXE", 555]]])
+    assert case.end_viewers([], RUNNER, seconds=0) == 'left: [["MSTSC.EXE", 555]]'
+    assert asked == [RUNNER] and commands == []
+    # No record and no viewer: ended, after a look.
+    asked, commands = windows_lists(case, monkeypatch, [OTHERS])
+    assert case.end_viewers([], RUNNER, seconds=0) == "ended" and asked == [RUNNER] and commands == []
 
 
-def test_a_process_list_that_windows_does_not_give_is_an_error(case, monkeypatch):
-    windows_lists(case, monkeypatch, [{"exitCode": 1, "stdout": "", "stderr": "ERROR: The search filter cannot be recognized."}])
-    with pytest.raises(OSError) as failed:
-        case.end_viewers([4321], seconds=0)
+def test_the_users_programs_are_ended_only_when_windows_lists_none_with_the_accounts_sid(case, monkeypatch):
+    asked, commands = windows_lists(case, monkeypatch, [[]])
+    assert case.end_processes(OWNED["sid"], seconds=0) == "ended" and asked == [OWNED["sid"]] and commands == []
+    # Windows lists two: each is ended by its number together with its name, and Windows is asked again.
+    asked, commands = windows_lists(case, monkeypatch, [[["python.exe", 77], ["explorer.exe", 80]], []])
+    assert case.end_processes(OWNED["sid"], seconds=60) == "ended" and len(asked) == 2
+    assert commands == [["taskkill.exe", "/F", "/PID", "77", "/FI", "IMAGENAME eq python.exe"],
+                        ["taskkill.exe", "/F", "/PID", "80", "/FI", "IMAGENAME eq explorer.exe"]]
+    # A program that Windows still lists at the limit: left.
+    windows_lists(case, monkeypatch, [[["python.exe", 77]]])
+    assert case.end_processes(OWNED["sid"], seconds=0) == 'left: [["python.exe", 77]]'
+
+
+def test_a_process_list_that_windows_does_not_give_is_an_error_for_both(case, monkeypatch):
+    windows_lists(case, monkeypatch, [AssertionError("Windows did not list the processes")])
+    with pytest.raises(AssertionError):
+        case.end_viewers([4321], RUNNER, seconds=0)
+    with pytest.raises(AssertionError):
+        case.end_processes(OWNED["sid"], seconds=0)
+
+
+@pytest.mark.parametrize("answer, expected", [
+    ({"exitCode": 0, "json": {"found": []}}, []),
+    ({"exitCode": 0, "json": {"found": [{"name": "python.exe", "pid": 77}, {"pid": 80, "name": "explorer.exe"}]}},
+     [["python.exe", 77], ["explorer.exe", 80]])])
+def test_the_programs_of_an_account_are_listed_by_its_sid(case, monkeypatch, answer, expected):
+    asked = []
+    monkeypatch.setattr(case, "powershell", lambda script, value, timeout=120: asked.append((script, value)) or answer)
+    assert case.user_processes(OWNED["sid"]) == expected
+    assert asked == [(case.PROCESSES, {"sid": OWNED["sid"]})]
+    # Windows gives the owner of each process as a SID. No name of an account takes part.
+    assert "-MethodName GetOwnerSid).Sid" in case.PROCESSES and "if ($owner -eq $p.sid)" in case.PROCESSES
+    assert "GetOwner)" not in case.PROCESSES and "USERNAME" not in case.PROCESSES
+
+
+@pytest.mark.parametrize("answer", [
+    {"exitCode": 1, "json": None, "stdout": "", "stderr": "Access denied"},
+    {"exitCode": 0, "json": None, "stdout": "", "stderr": ""},
+    {"exitCode": 0, "json": {"found": None}, "stdout": "", "stderr": ""},
+    {"exitCode": 0, "json": [], "stdout": "", "stderr": ""}])
+def test_a_list_that_windows_does_not_give_is_never_an_empty_list(case, monkeypatch, answer):
+    monkeypatch.setattr(case, "powershell", lambda script, value, timeout=120: answer)
+    with pytest.raises(AssertionError) as failed:
+        case.user_processes(OWNED["sid"])
     assert "Windows did not list the processes" in str(failed.value)
-    with pytest.raises(OSError):
-        case.end_processes("amp-std-000000", seconds=0)
 
 
-def test_the_users_programs_are_ended_only_when_windows_lists_none_of_the_user(case, monkeypatch):
-    commands = windows_lists(case, monkeypatch, [NONE_LISTED])
-    assert case.end_processes("amp-std-000000", seconds=0) == "ended"
-    assert commands == [["taskkill.exe", "/F", "/FI", "USERNAME eq amp-std-000000"],
-                        ["tasklist.exe", "/FI", "USERNAME eq amp-std-000000", "/FO", "CSV", "/NH"]]
-    windows_lists(case, monkeypatch, ['"python.exe","77","RDP-Tcp#0","2","9,000 K"\r\n'])
-    assert case.end_processes("amp-std-000000", seconds=0) == 'left: [["python.exe", "77"]]'
+@pytest.mark.parametrize("sid", [None, "", "amp-std-000000"])
+def test_the_programs_are_never_listed_without_a_sid(case, monkeypatch, sid):
+    monkeypatch.setattr(case, "powershell", lambda *args, **kwargs: pytest.fail("Windows was asked without a SID"))
+    with pytest.raises(AssertionError) as failed:
+        case.user_processes(sid)
+    assert "There is no SID to list the programs of" in str(failed.value)
 
 
 class Registry:
@@ -625,6 +735,17 @@ def test_the_profile_is_absent_only_when_windows_lists_none_afterwards(case, mon
     assert asked == [{"sid": "S-1-5-21-1-2-3-1003"}] * calls
 
 
+@pytest.mark.parametrize("now, keeps, earlier, expected, passes", [
+    (0, False, None, "restored", True), (0, False, 2, "restored", True),
+    (0, True, None, "left: Windows has the value 0", False)])
+def test_the_cleanup_restores_the_setting_that_the_job_changed(case, monkeypatch, tmp_path, now, keeps, earlier,
+                                                              expected, passes):
+    registry = Registry(now, keeps)
+    passed, result, _ = clean_up(case, monkeypatch, tmp_path, setting=(earlier, registry))
+    assert result["viewerSetting"] == expected and passed is passes
+    assert registry.value == (now if keeps else earlier)
+
+
 def test_clean_means_every_part(case):
     done = {"credential": "absent", "viewers": "ended", "viewerSetting": "restored", "signedOut": True,
             "processes": "ended", "helperTask": "absent", "amplifierTask": "absent", "profile": "absent",
@@ -637,6 +758,11 @@ def test_clean_means_every_part(case):
     for name in without:
         assert not case.cleaned({**without, name: "left: something"}, None), name
         assert not case.cleaned({key: value for key, value in without.items() if key != name}, None), name
+    # "The user never signed in" is an answer only for the three parts that are named by the SID.
+    never = {**done, "processes": case.NEVER, "amplifierTask": case.NEVER, "profile": case.NEVER}
+    assert case.cleaned(never, OWNED)
+    for name in ("credential", "viewers", "viewerSetting", "signedOut", "helperTask", "account"):
+        assert not case.cleaned({**done, name: case.NEVER}, OWNED), name
 
 
 def test_the_saved_sign_in_is_absent_only_when_windows_says_so():
@@ -748,13 +874,20 @@ def test_the_design_document_says_what_the_case_shows_and_what_it_does_not(case)
     for claim in ("Its user is a member of Administrators", "Windows does not trust the connection",
                   "The test selects Yes with a window message", "the task's own trigger starts a new host",
                   "no installation folder, no sign-in task, no Start-menu entry and no Apps-list entry",
-                  "the step fails when one part is not done", "names the certificate and shows the thumbprint",
+                  "the step fails when one of these parts is not done", "names the certificate and shows the thumbprint",
+                  "it ends the Remote Desktop viewers that the run recorded",
+                  "a viewer that the run did not record counts as left",
+                  "every program that runs with the account's SID, also after the account is deleted",
+                  "It records the account's SID before it signs the user in.",
+                  "the step reads no programs, no Amplifier task and no profile, and its result says so",
+                  "the job requires that the same list shows the viewer as a program of the runner's account and "
+                  "the Amplifier host as a program of the user",
                   "The job's cleanup step (the step before the one that keeps the results)",
                   "When the name belongs to another account, or Windows does not answer, the step removes "
                   "nothing of that account and fails.",
                   "A dialog of this program that is not this question, and a second question, get no answer.",
                   "from one open file",
-                  "it counts both as left, does the other parts, and fails",
+                  "it counts them as left, does the other parts, and fails",
                   "The step does not delete this case's folders in the runner's temporary folder",
                   "Windows' own list of the user's root certificates no longer holds the certificate",
                   "the Windows version or the processor"):
@@ -762,6 +895,7 @@ def test_the_design_document_says_what_the_case_shows_and_what_it_does_not(case)
     # The cleanup's promise is what its code requires, and no more.
     assert "its profile and the account in every case" not in said
     assert "The last step of the job" not in said and "Each part runs also when another part failed" not in said
+    assert "it ends the Remote Desktop viewers of the run" not in said
     assert "If GitHub ends the job at its time limit, the step may not finish." in said
 
 
@@ -863,14 +997,14 @@ class Report:
 
 
 def answer_with(case, monkeypatch, shown, operation, answer, *, post=None, limit=90, wait=0.7, steps=None,
-                look=None, during=None):
+                look=None, during=None, first=5):
     import types
     post, ended = Posted() if post is None else post, []
     monkeypatch.setattr(case, "_user", types.SimpleNamespace(PostMessageW=post))
     monkeypatch.setattr(case, "dialogs", look or (lambda own=True: list(shown) if own else []))
     steps, asked = Report() if steps is None else steps, []
     with case.answering(steps, asked, operation, answer, MARKS, limit=limit, end=ended.append):
-        deadline = time.monotonic() + 5
+        deadline = time.monotonic() + first
         while not (post.messages or (asked and steps.saved) or ended) and time.monotonic() < deadline:
             time.sleep(0.05)
         if during:
@@ -958,6 +1092,15 @@ def test_a_dialog_that_gets_its_text_later_is_one_entry_and_gets_the_answer(case
     shown = [dialog("One moment.", window=100)]
     messages, asked, _, ended = answer_with(case, monkeypatch, shown, "install", "yes",
                                             during=lambda shown: shown.__setitem__(0, dialog(INSTALL, window=100)))
+    assert messages == [(100, 0x0111, 6, 61)] and ended == []
+    assert len(asked) == 1 and asked[0]["text"].startswith("You are about to install") and case.one_question(asked, "yes")
+
+
+def test_a_dialog_that_is_empty_at_first_gets_the_answer_when_windows_has_filled_it(case, monkeypatch):
+    shown = [dialog("", window=100)]
+    messages, asked, _, ended = answer_with(case, monkeypatch, shown, "install", "yes", first=1.2,
+                                            during=lambda shown: shown.__setitem__(0, dialog(INSTALL, window=100)))
+    # No answer and no entry while it is empty. Then one answer and one entry.
     assert messages == [(100, 0x0111, 6, 61)] and ended == []
     assert len(asked) == 1 and asked[0]["text"].startswith("You are about to install") and case.one_question(asked, "yes")
 

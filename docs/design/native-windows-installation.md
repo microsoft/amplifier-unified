@@ -1621,26 +1621,38 @@ make such a record.
 
 The job's cleanup step (the step before the one that keeps the results) runs
 in every case, also after a failure. In every case it ends the Remote Desktop
-viewers of the run, removes the saved sign-in and restores the one setting
-that the job changed. For the run's account it signs the user out, ends the
-user's programs, and removes the user's tasks, its profile and the account.
+viewers that the run recorded, removes the saved sign-in and restores the one
+setting that the job changed. For the run's account it signs the user out,
+ends the programs that run as the account, and removes the user's tasks, its
+profile and the account.
 
 The job records the account's name before Windows creates the account, with a
-mark that Windows keeps as the account's comment. Before the cleanup step
-removes anything of the account, it reads whether the account with that name
-has that mark. When the name belongs to another account, or Windows does not
-answer, the step removes nothing of that account and fails. When the job did
-not record the SID of the run's account and Windows does not give it, the
-step cannot name the user's Amplifier task and its profile: it counts both as
-left, does the other parts, and fails. Apart from these cases, a part that
-fails does not stop the parts after it, and the step fails when one part is
-not done. It decides that from Windows: after each part it reads what Windows
-still lists (the viewers, the user's session, the user's programs, the tasks,
-the profile, the account, the setting); for the saved sign-in it takes
-Windows' answer to the deletion. The step does not delete this case's folders
-in the runner's temporary folder; no file there holds the password. If GitHub
-ends the job at its time limit, the step may not finish. A hosted runner is
-deleted after its job.
+mark that Windows keeps as the account's comment. It records the account's
+SID before it signs the user in. Before the cleanup step removes anything of
+the account, it reads whether the account with that name has that mark. When
+the name belongs to another account, or Windows does not answer, the step
+removes nothing of that account and fails. When the job did not record the
+SID of the run's account and Windows does not give it, the step cannot name
+the programs, the Amplifier task and the profile of the account: it counts
+them as left, does the other parts, and fails. When the job recorded no SID
+and Windows has no account with the recorded name, the run stopped before it
+signed the user in: the step reads no programs, no Amplifier task and no
+profile, and its result says so. Apart from these cases, a part that fails
+does not stop the parts after it, and the step fails when one of these parts
+is not done: the viewers, the saved sign-in, the setting, the user's session,
+the user's programs, the tasks, the profile, the account.
+
+The step decides that from Windows. After each part it reads what Windows
+still lists. For the viewers that is every Remote Desktop viewer that runs as
+the runner's account; a viewer that the run did not record counts as left.
+For the user's programs that is every program that runs with the account's
+SID, also after the account is deleted. For the saved sign-in the step takes
+Windows' answer to the deletion. While the user is signed in, the job
+requires that the same list shows the viewer as a program of the runner's
+account and the Amplifier host as a program of the user. The step does not
+delete this case's folders in the runner's temporary folder; no file there
+holds the password. If GitHub ends the job at its time limit, the step may
+not finish. A hosted runner is deleted after its job.
 
 The sign-in is needed. A program that another account starts with the user's
 name and password (`CreateProcessWithLogonW`) can register the user's task,
