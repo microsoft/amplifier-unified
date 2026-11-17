@@ -1,6 +1,6 @@
 [project]
 name = "amplifier-unified"
-version = "0.106.0"
+version = "0.106.1"
 description = "A local voice-first Amplifier workspace with a shared user and agent interface"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -86,8 +86,6 @@ exclude = [
     "/components/portability/.venv/**", "/components/portability/*.egg-info/**",
     "/components/outputs/build/**", "/components/outputs/dist/**",
     "/components/outputs/.venv/**", "/components/outputs/*.egg-info/**",
-    "/components/workspaces/build/**", "/components/workspaces/dist/**",
-    "/components/workspaces/.venv/**", "/components/workspaces/*.egg-info/**",
 ]
 
 [tool.hatch.build.targets.wheel.force-include]
