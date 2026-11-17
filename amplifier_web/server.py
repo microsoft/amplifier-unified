@@ -29,6 +29,9 @@ _READ_ONLY_WAIT_ACTIONS = frozenset({
     "operations.wait", "recall.wait",
 })
 
+_ICON_RENDER_LIMIT = 4
+_ICON_PENDING_LIMIT = 64
+
 
 def _set_response_headers(response: web.StreamResponse, request: web.Request) -> web.StreamResponse:
     path = request.path
@@ -834,7 +837,8 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     static = Path(__file__).parent / "static"
     manifest_path = static / 'manifest.webmanifest'
     manifest_template = json.loads(manifest_path.read_text(encoding='utf-8')) if manifest_path.exists() else None
-    icon_encodes = asyncio.Semaphore(4)
+    icon_encodes = asyncio.Semaphore(_ICON_RENDER_LIMIT)
+    icon_pending = 0
 
     async def instance_manifest(request):
         if manifest_template is None:
@@ -845,6 +849,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
                                  content_type='application/manifest+json')
 
     async def instance_icon(request):
+        nonlocal icon_pending
         from functools import partial
         from .instance_branding import SIZES
         size = int(request.match_info['size'])
@@ -857,9 +862,15 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         content = service.instance_branding.cached_icon(size, accent)
         if content is not None:
             return web.Response(body=content, content_type='image/png')
-        # Wait asynchronously rather than rejecting ordinary multi-tab loads or
-        # submitting an unbounded number of renders to the shared executor.
-        await icon_encodes.acquire()
+        # Queue ordinary multi-tab bursts without submitting unbounded executor
+        # work, but cap public waiting requests during a sustained flood.
+        if icon_pending >= _ICON_PENDING_LIMIT:
+            raise web.HTTPServiceUnavailable(headers={'Retry-After': '1'})
+        icon_pending += 1
+        try:
+            await icon_encodes.acquire()
+        finally:
+            icon_pending -= 1
         try:
             content = service.instance_branding.cached_icon(size, accent)
             if content is None:

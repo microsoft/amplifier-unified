@@ -363,15 +363,21 @@ async def test_old_public_icon_urls_follow_current_branding(server_app, aiohttp_
 
 async def test_public_icon_work_is_bounded_even_when_client_disconnects(server_app, aiohttp_client, monkeypatch):
     cancelled = asyncio.Event()
+    queued_arrived = asyncio.Event()
+    queued_cancelled = asyncio.Event()
     arrived = asyncio.Event()
 
     @web.middleware
     async def observe_cancel(request, handler):
         if request.path == '/instance-icon/32.png' and request.query.get('accent') == 'abcdef':
             arrived.set()
+        if request.path == '/instance-icon/32.png' and request.query.get('accent') == '999999':
+            queued_arrived.set()
         try:
             return await handler(request)
         except asyncio.CancelledError:
+            if request.query.get('accent') == '999999':
+                queued_cancelled.set()
             cancelled.set()
             raise
 
@@ -424,10 +430,12 @@ async def test_public_icon_work_is_bounded_even_when_client_disconnects(server_a
         assert head.status == 200 and head.headers['Cache-Control'] == 'no-store'
         assert await head.read() == b''
         cancelled_waiter = asyncio.ensure_future(client.get('/instance-icon/32.png?accent=999999'))
-        await asyncio.sleep(.05)
+        await asyncio.wait_for(queued_arrived.wait(), 10)
         assert not cancelled_waiter.done()
         cancelled_waiter.cancel()
         await asyncio.gather(cancelled_waiter, return_exceptions=True)
+        await asyncio.wait_for(queued_cancelled.wait(), 10)
+        cancelled.clear()
         tasks[0].cancel()
         await asyncio.gather(tasks[0], return_exceptions=True)
         await asyncio.wait_for(cancelled.wait(), 10)
@@ -477,6 +485,83 @@ async def test_public_icon_encode_failure_releases_admission(server_app, aiohttp
     for _ in range(5):
         assert (await client.get('/instance-icon/32.png?accent=987654')).status == 500
     monkeypatch.setattr(branding, '_badge', original)
+    assert (await client.get('/instance-icon/32.png?accent=987654')).status == 200
+
+
+async def test_icon_pending_queue_is_bounded_without_blocking_cached_reads(tmp_path, aiohttp_client, monkeypatch):
+    from amplifier_web import server
+    monkeypatch.setattr(server, '_ICON_RENDER_LIMIT', 1)
+    monkeypatch.setattr(server, '_ICON_PENDING_LIMIT', 2)
+    # Semaphore capacity is set when the app is created, not when a request arrives.
+    root = tmp_path / 'queue-test'
+    root.mkdir()
+    application = await create_app(root, workspace=root, runtime=Runtime(), voice=False,
+                                   background_updates=False, preload_providers=False, background_work=False)
+    arrived = asyncio.Event()
+    seen = set()
+
+    @web.middleware
+    async def observed(request, handler):
+        accent = request.query.get('accent')
+        if accent in {'000002', '000003'}:
+            seen.add(accent)
+            if len(seen) == 2:
+                arrived.set()
+        return await handler(request)
+
+    application.middlewares.insert(0, observed)
+    store = application['service'].instance_branding
+    began, release = threading.Event(), threading.Event()
+    original = branding._badge
+
+    def blocked(size, color, mark):
+        began.set()
+        assert release.wait(10)
+        return original(size, color, mark)
+
+    tasks = []
+    client = None
+    try:
+        client = await aiohttp_client(application)
+        cached = await (await client.get('/instance-icon/32.png?accent=abcdef')).read()
+        monkeypatch.setattr(branding, '_badge', blocked)
+        tasks.append(asyncio.ensure_future(client.get('/instance-icon/32.png?accent=000001')))
+        assert await asyncio.to_thread(began.wait, 10)
+        tasks.extend(asyncio.ensure_future(client.get('/instance-icon/32.png?accent=' + accent))
+                     for accent in ('000002', '000003'))
+        await asyncio.wait_for(arrived.wait(), 10)
+        assert all(not task.done() for task in tasks)
+        busy = await client.get('/instance-icon/32.png?accent=000004')
+        assert busy.status == 503 and busy.headers['Retry-After'] == '1'
+        assert busy.headers['Cache-Control'] == 'no-store'
+        hit = await client.get('/instance-icon/32.png?accent=abcdef&v=old')
+        assert hit.status == 200 and await hit.read() == cached
+    finally:
+        release.set()
+        responses = await asyncio.gather(*tasks, return_exceptions=True)
+        for response in responses:
+            if not isinstance(response, BaseException):
+                await response.read()
+        if client is not None:
+            await client.close()
+        await application['service'].close()
+    assert all(not isinstance(response, BaseException) and response.status == 200 for response in responses)
+    assert len(store._icons) <= branding._ICON_CACHE_LIMIT
+
+
+async def test_icon_executor_submission_failure_releases_admission(server_app, aiohttp_client, monkeypatch):
+    client = await aiohttp_client(server_app)
+    loop = asyncio.get_running_loop()
+    original = loop.run_in_executor
+
+    def refused(executor, func, *args):
+        raise RuntimeError('synthetic executor submission failure')
+
+    with monkeypatch.context() as patch:
+        patch.setattr(loop, 'run_in_executor', refused)
+        for _ in range(5):
+            assert (await client.get('/instance-icon/32.png?accent=987654')).status == 500
+    assert loop.run_in_executor == original
     assert (await client.get('/instance-icon/32.png?accent=987654')).status == 200
 
 
