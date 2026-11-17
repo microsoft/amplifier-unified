@@ -30,11 +30,6 @@
 /components/recall/LICENSE source-context=documentation
 /components/recall.source.json source-context=configuration
 /components/recall-delivery/** source-context=generated linguist-vendored=true linguist-generated=true -text
-/components/scheduling/amplifier_scheduling/** source-context=source
-/components/scheduling/tests/** source-context=tests
-/components/scheduling/MANIFEST.in source-context=configuration
-/components/scheduling/.gitignore source-context=configuration
-/components/scheduling/LICENSE source-context=documentation
 /components/scheduling.source.json source-context=configuration
 /components/scheduling-delivery/** source-context=generated linguist-vendored=true linguist-generated=true -text
 /components/publishing/amplifier_publishing/** source-context=source

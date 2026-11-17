@@ -160,6 +160,7 @@ ACTION_DEFINITIONS = {
     "worker.message": ("Send a follow-up to an active persistent worker", schema({"sessionId": string(200), "id": string(100), "text": string(100000)}, ["sessionId", "id", "text"])),
     "worker.steer": ("Send a correction to a worker", schema({"sessionId": string(200), "id": string(100), "text": string(100000)}, ["id", "text"])),
     "approval.respond": ("Respond to an Amplifier permission request", schema({"sessionId": string(200), "id": string(100), "decision": {"enum": ["allow", "deny", "approve", "reject"]}, "optionId": string(200), "comment": string(4000), "expectedRequestHash": string(64), "expectedApprovalScope": string(64)}, ["id", "decision"])),
+    "presentation.dismiss": ("Hide exact observed updates across this owner's clients without reading, answering, approving or stopping work.", schema({"items":{"type":"array","minItems":1,"maxItems":100,"items":schema({"id":string(1024),"fingerprint":string(100)},["id","fingerprint"])}},["items"])),
     "attention.read": ("Mark reviewed attention items as read without resolving the underlying condition. Reviewing the exact conversation error clears its historical navigation marker without changing saved errors, replaying work, or answering questions/approvals. Include fingerprints from /attention/items to avoid acknowledging newer results by mistake.", schema({"ids":{"type":"array","items":string(300),"maxItems":500},"fingerprints":{"type":"object","maxProperties":500,"additionalProperties":string(100)}},["ids"])),
     "view.update": ("Change panels, modality, draft, appearance or layout. Chat controls: panel=runtime, runtimeDraft.tab=overview/direction/limits/tools/computer. runtimeDraft.section reveals a known section (overview, direction, limits, tools, computer, screen-source, desktop-host, capture), opens its tab/panel and increments revealRevision; repeat requests reveal again. For visible agent navigation, choose clientId from canvasContext.connectedClientIds; disconnected saved clients are ineligible. Supply clientId when multiple connected browsers display the calling chat; opening controls never grants capture permission. Optional sessionId binds draft updates to that conversation without changing selection; null saves the attached client's draft before a conversation exists. Agent draft updates are limited to the calling conversation; other saved chats and the new-chat draft remain private. Canvas: canvasWidth and canvasOverviewWidth (300–16384 preferred pixels, separate artifact and overview widths), canvasFocused (full frame), canvasControlsPinned/Expanded (booleans). Navigation: navWidth (216–16384 preferred pixels), navPinned/Expanded (booleans). Workspace explorer: navWorkspacePath browses folders from /workspaceExplorer without selecting a chat, navWorkspaceFilter searches paths or aliases with case-insensitive fnmatch or plain text, navWorkspacePage selects a 1-based page, navWorkspaceAncestorsOpen toggles the ancestor menu. Use view.update workSurface=workspaces/chats/workspace and workWorkspaceId to browse without changing the active chat or its execution folder; workSurface=chat shows the selected conversation. Use session.select with an explicit id to open a particular chat. workWorkspaceTab=chats/work/files/details changes the workspace page tab. Use workspace.select to change the active workspace. Browser fits widths to the available space, preserving a 360px chat.", schema({"patch": {"type": "object"}, "clientId": string(100), "sessionId": {"type": ["string", "null"], "minLength": 1, "maxLength": 200}}, ["patch"])),
     "providers.credentials": ("Check provider credential environment availability without revealing values",schema({"sessionId":string(200),"module":string(200),"envVar":string(200)},["module"])),
@@ -396,6 +397,8 @@ from .suggestion_settings import definitions as suggestion_settings_definitions
 from .prompt_suggestions import definitions as suggestion_definitions
 ACTION_DEFINITIONS.update(suggestion_settings_definitions(schema, string))
 ACTION_DEFINITIONS.update(suggestion_definitions(schema, string))
+from .instance_branding import InstanceBranding, definitions as instance_branding_definitions
+INSTANCE_BRANDING_ACTIONS = _register_actions(instance_branding_definitions(schema, string))
 
 from .session_identity import ID_ACTIONS as SESSION_ID_ACTIONS
 # Host-owned classifications, not capabilities inferred from an action's suffix.
@@ -421,6 +424,7 @@ for _access, _actions in {
         "workspace.archive", "workspace.restore", "canvas.visibility", "view.update", "attachment.add", "attachment.remove",
     },
     "peer_read": {
+        "instanceBranding.get",
         "settings.connection.services",
         "session.inspect", "session.titlePreview", "session.history", "session.deletePreview", "session.export",
         "session.exportDeliver", "session.sharePreview", "session.shareRead", "session.shareList",
@@ -436,6 +440,7 @@ for _access, _actions in {
     "domain_authoritative": {
         *suggestion_definitions(schema, string),
         *suggestion_settings_definitions(schema, string),
+        "instanceBranding.update", "instanceBranding.reset",
         *configuration_recovery_definitions(schema, string),
         *patch_placement_definitions(schema, string),
         "worktree.create", "worktree.attach", "worktree.handoff",
@@ -516,7 +521,7 @@ class AppService:
     def state(self, value):
         self._state = value
 
-    def __init__(self, data_dir: Path, runtime=None, workspace=None):
+    def __init__(self, data_dir: Path, runtime=None, workspace=None, *, server_config=None):
         from .runtime_event_batches import EventSink
         self.on_runtime_event = EventSink(self.on_runtime_event, self.on_runtime_events)
         from .installed_build import capture
@@ -609,6 +614,9 @@ class AppService:
         recover_managed_deletions(self.data_dir, self.db, self.state)
         if recovering_deletion and self._directory_migrated:
             self.state = load_working(self.db)
+        from .deployment import DEFAULT_SERVER
+        self.instance_branding = InstanceBranding(self.data_dir, server_config or DEFAULT_SERVER)
+        self.state['instanceBranding'] = self.instance_branding.snapshot()
         from .managed_deletion import tombstones
         self._deleted_session_ids = {sid for row in tombstones(self.db) for sid in row['ids']}
         # Retain older theme bytes inert. The new appearance generation does not
@@ -2160,6 +2168,8 @@ class AppService:
                     self._publish_changes(sessions=set(), globals={'configurationRevision'})
                     result['configurationRevision'] = self.state['configurationRevision']
                 return {'accepted': True, 'result': result, 'effects': []}
+        if action == 'instanceBranding.get':
+            return {'accepted': True, 'result': self.instance_branding.snapshot(), 'effects': []}
         if action in {'externalAgents.list', 'externalAgents.get'}:
             from .external_agent_settings import catalog, read
             async with self.lock:
@@ -2573,6 +2583,12 @@ class AppService:
                     '_stateIndependent': True}
         prepared_export = None
         prepared_share = None
+        prepared_branding = None
+        if action == 'instanceBranding.update':
+            try:
+                prepared_branding = await asyncio.to_thread(self.instance_branding.prepare, args['patch'])
+            except ValueError as exc:
+                raise AppError(str(exc)) from None
         if action == 'session.sharePreview':
             from .conversation_export import messages, snapshot
             async with self.lock:
@@ -2836,6 +2852,15 @@ class AppService:
             if action in SETTINGS_ACTIONS:
                 from .settings_actions import command as settings_command
                 diagnostic_result = settings_command(self, action, args, pending, command_id)
+            elif action in INSTANCE_BRANDING_ACTIONS:
+                try:
+                    diagnostic_result = self.instance_branding.update(
+                        prepared_branding, reset=action == 'instanceBranding.reset')
+                except ValueError as exc:
+                    raise AppError(str(exc)) from None
+                except OSError:
+                    raise AppError('Could not confirm this server’s app name and icon were saved. Check the server’s configuration before retrying.', 409) from None
+                self.state['instanceBranding'] = diagnostic_result
             elif action in LIBRARY_ACTIONS:
                 try:
                     diagnostic_result = self.conversation_library.perform(action, args, prepared_share)
@@ -3684,6 +3709,9 @@ class AppService:
                         values = (session["id"], args["id"], selected, comment or None,
                                   args['expectedApprovalScope'])
                     pending.append((self.runtime.approval, values))
+            elif action == "presentation.dismiss":
+                from .client_presentation import dismiss
+                dismiss(self, args["items"])
             elif action == "attention.read":
                 from .attention import snapshot
                 # Acknowledge current owner facts, including globals changed
@@ -5777,7 +5805,7 @@ class AppService:
                         revision=self.state['revision'], command_id=args.get('id'))
                 return domain_receipt(result, action=args['action'], session_id=session_id,
                                       revision=self.state['revision'])
-            if args['action'] in {'workspace.environments.removal.read', 'workspace.environments.removal.list', 'assignment.brief', 'conversation.configuration'}:
+            if args['action'] in {'workspace.environments.removal.read', 'workspace.environments.removal.list', 'assignment.brief', 'conversation.configuration', 'instanceBranding.get'}:
                 # Do not infer nativeProject, flush progress or build a snapshot:
                 # even _session(hydrate=False) admits dormant owners. Each passive
                 # action validates its own caller scope without runtime demand.
@@ -5880,7 +5908,7 @@ class AppService:
                     result['result'] = {**result['result'], 'sessionId': action_args['sessionId'], 'readOnly': True}
                 return result
             compact_smart_tool = args['action'].startswith('smartTools.')
-            compact_domain_receipt = args['action'] in SETTINGS_ACTIONS or args['action'].startswith(('session.handoff.', 'capability.', 'coordination.', 'worktree.', 'assignment.', 'integration.', 'workspace.', 'permissions.', 'providers.', 'configuration.', 'bundles.', 'modules.', 'sources.', 'locations.', 'outputs.')) or args['action'] == 'runtime.provenance'
+            compact_domain_receipt = args['action'] in SETTINGS_ACTIONS or args['action'].startswith(('session.handoff.', 'capability.', 'coordination.', 'worktree.', 'assignment.', 'integration.', 'workspace.', 'permissions.', 'providers.', 'configuration.', 'bundles.', 'modules.', 'sources.', 'locations.', 'outputs.', 'instanceBranding.')) or args['action'] == 'runtime.provenance'
             task_action = action_args.get('operation') if args['action'] == 'runtime.control' else args['action']
             compact_task_receipt = (isinstance(task_action, str) and task_action in task_definitions(schema, string)
                                     or args['action'].startswith('assignment.task.'))

@@ -112,6 +112,9 @@ def host(home, files):
                                         REMOTE.replace("https:", "http:"), OTHER, PLAIN, UNLISTED})
     app["service"] = SimpleNamespace(data_dir=home, update_manager=SimpleNamespace(
         running_identity={"instanceId": "b" * 32, "version": __version__, "revision": REVISION}))
+    from amplifier_web.deployment import DEFAULT_SERVER
+    from amplifier_web.instance_branding import InstanceBranding
+    app["service"].instance_branding = InstanceBranding(home, DEFAULT_SERVER)
     app["sessions"] = auth.Sessions()                       # No sign-out yet, as on a new installation.
     entry.initialize(app)
     assert isinstance(app["browser_entry"], entry.GrantStore) and isinstance(app["browser_codes"], entry.CodeStore)
@@ -720,7 +723,8 @@ def test_remote_address_gets_the_code_form_and_the_local_page_is_unchanged(host)
     page = call(host, "/login", method="GET", at=REMOTE, origin=None)
     text = page.text
     assert page.status == 200 and page.content_type == "text/html"
-    assert "<script" not in text.lower() and "<title>Sign in to Amplifier</title>" in text
+    assert "<script" not in text.lower()
+    assert f'<title>Sign in · {host["service"].instance_branding.snapshot()["name"]}</title>' in text
     assert text.count("<form") == 1 and f'<form method="post" action="{entry.CODE_REDEEM_PATH}">' in text
     assert text.count("<input") == 2 and '<link rel="stylesheet" href="/app-pages.css">' in text
     for attribute in ('name="code"', 'autocomplete="one-time-code"', 'autocapitalize="characters"',

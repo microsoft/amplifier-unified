@@ -28,8 +28,10 @@ def challenge(verifier):
 async def permits_companion(request):
     """Fail closed before dispatch; never grant a generic action capability."""
     if request.method == 'GET':
-        if request.path in {'/api/companion', '/api/activity'}:
+        if request.path in {'/api/activity', '/api/attention'}:
             return True
+        if request.path == '/api/sessions':
+            return request.query.getall('view', []) == ['observation']
         return request.path == '/api/conversation/detail' and request.query.get('part') in {'messages', 'nodes'}
     if request.method != 'POST':
         return False
@@ -41,6 +43,8 @@ async def permits_companion(request):
     args = body.get('args', {})
     if not isinstance(args, dict):
         return False
+    if request.path == '/api/actions' and body.get('action') == 'presentation.dismiss':
+        return set(args) == {'items'} and isinstance(args['items'], list) and 1 <= len(args['items']) <= 100
     if request.path == '/api/actions' and body.get('action') == 'session.create':
         return (set(args) <= {'id', 'title', 'location', 'select'}
                 and args.get('location') == {'kind': 'managed'} and args.get('select') is False)
