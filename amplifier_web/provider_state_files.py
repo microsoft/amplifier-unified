@@ -8,17 +8,13 @@ installation from the setup file got ``%USERPROFILE%\\.amplifier``.
 
 One rule on every platform: these files are in the shared Amplifier home.
 Where that home is ``~/.amplifier``, the module puts them there itself and the
-host sets nothing, so the mounted plan is the one that a person configured.
-Elsewhere the host sets the paths that the configuration does not hold. A
-value that a person configured stays, also an empty one, which turns the file
-off.
+host sets nothing. Elsewhere the host gives the module the paths that its
+configuration does not hold. A value that a person configured stays, also an
+empty one, which turns the file off.
 
-The paths are plain strings that already name the folder. Set them after
-``${NAME}`` references are expanded: a folder name can contain ``$``.
-
-The mounted plan then holds these paths. Saved settings do not. Call
-``clear_state_files`` on a copy of a mounted row before it is compared with
-settings or with a saved plan, and before it leaves this PC.
+The module gets the paths when it is loaded or constructed. They are never
+written into a mount plan. A plan is saved, hashed, compared and exported, and
+a path of this PC must not look there like a setting that a person made.
 """
 from __future__ import annotations
 
@@ -33,54 +29,55 @@ STATE_FILES = {
         'fallback_state_path': 'anthropic-fallback-state.json',
     },
 }
-# What the host set on a provider row, with the values. It is beside the
-# configuration, not in it: a saved plan keeps it, so a later start can tell
-# the host's own path from one that a person configured.
-_MARKER = '_unified_state_file_defaults'
 
 
-def state_file_defaults(module, home=None):
+def state_file_defaults(module):
     """The path keys that the host sets for this module, with their values.
 
-    ``home`` is the resolved shared home. Pass it when this process changes
-    ``AMPLIFIER_HOME`` before it constructs the provider.
+    Call this while ``AMPLIFIER_HOME`` still names the shared home: a process
+    that prepares a module source changes it for its own registry.
     """
     names = STATE_FILES.get(module)
     if not names:
         return {}
-    if home is None:
-        from .session_files import amplifier_home
-        home = amplifier_home()
-    home = Path(home)
+    from .session_files import amplifier_home
+    home = amplifier_home()
     if home == Path(os.path.expanduser('~'), '.amplifier').resolve():
         return {}  # The module's own folder.
     return {key: str(home / name) for key, name in names.items()}
 
 
-def clear_state_files(row):
-    """Remove from a provider row what the host set there earlier.
+def with_state_files(module, config):
+    """One provider configuration plus the host's paths where it has none.
 
-    A configured value stays: only a value equal to the recorded one goes.
+    The result is a new mapping when the host adds a path. Otherwise it is
+    the given configuration itself, so nothing changes for any other module
+    or for the default home.
     """
-    previous = row.pop(_MARKER, None)
-    config = row.get('config')
-    if isinstance(previous, dict) and isinstance(config, dict):
-        for key, value in previous.items():
-            if key in config and config[key] == value:
-                del config[key]
-    return row
+    defaults = state_file_defaults(module)
+    return {**defaults, **(config or {})} if defaults else config
 
 
-def apply_state_files(row):
-    """Set the host's paths on one provider row whose configuration has none.
+def uses_state_files(rows):
+    """Does one of these provider rows name a module with state files?"""
+    return any(isinstance(row, dict) and row.get('module') in STATE_FILES for row in rows or ())
 
-    A saved plan can hold the path of an earlier shared home. It is replaced,
-    because the row records that the host set it.
+
+def install(coordinator):
+    """Give each module that this session loads its state-file paths.
+
+    Core loads every module through ``coordinator.loader`` and makes its own
+    loader only when it finds none. Call this before the session initializes.
+    The session's configuration stays as it is.
     """
-    clear_state_files(row)
-    config = row.get('config') or {}
-    added = {key: value for key, value in state_file_defaults(row['module']).items() if key not in config}
-    if added:
-        row['config'] = {**config, **added}
-        row[_MARKER] = added
-    return row
+    loader = getattr(coordinator, 'loader', None)
+    if loader is None:
+        from amplifier_core.loader import ModuleLoader
+        loader = ModuleLoader(coordinator=coordinator)  # The loader that Core makes itself.
+        coordinator.loader = loader
+    load = loader.load
+
+    async def load_with_state_files(module_id, config=None, *arguments, **options):
+        return await load(module_id, with_state_files(module_id, config), *arguments, **options)
+
+    loader.load = load_with_state_files

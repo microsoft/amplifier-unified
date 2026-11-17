@@ -129,7 +129,6 @@ def materialize_provider_config(config, schema, *, environment=None):
 async def materialize_bundle_providers(bundle, prepared, *, environment=None, schema_loader=None, isolation=None):
     """Materialize instances without pruning; opt-in failures remain non-executable."""
     from .module_failures import ConfiguredModuleError
-    from .provider_state_files import apply_state_files, clear_state_files
 
     root = copy.deepcopy({"providers": bundle.providers, "agents": bundle.agents})
     rows = [row for row in iter_provider_rows(root) if row.get("enabled", True)]
@@ -160,15 +159,7 @@ async def materialize_bundle_providers(bundle, prepared, *, environment=None, sc
             if isinstance(schema, BaseException):
                 raise schema
             reason = "provider_configuration_failed"
-            # A child gets its parent's mounted rows. Take the host's paths out
-            # before references are expanded: a folder name can contain "${".
-            expanded = materialize_provider_config(
-                clear_state_files(copy.deepcopy(row)).get("config", {}), schema, environment=environment)
-            # Only a row that will mount. A refused row keeps its exact
-            # declaration: provider isolation finds its failure by that.
-            clear_state_files(row)
-            row["config"] = expanded
-            apply_state_files(row)
+            row["config"] = materialize_provider_config(row.get("config", {}), schema, environment=environment)
         except Exception as exc:
             if isolation is not None:
                 isolation.record(row, reason, error=exc)

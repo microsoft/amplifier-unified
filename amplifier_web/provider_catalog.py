@@ -281,18 +281,14 @@ def configuration_key(workspace, module, config, source=None, *, home=None):
 
 
 def mounted_provider_config(row):
-    """Hash provider intent, excluding only proven host defaults.
+    """Hash provider intent, excluding only a proven host recording default.
 
     Recording provenance is outside config. Explicit raw/raw_debug values remain
     identity-bearing; neither the mounted plan nor its recording is changed.
-    The host's state-file paths are excluded the same way: saved settings do
-    not hold them, and a configured path remains identity-bearing.
     """
     from .provider_recording import apply_provider_recording
-    from .provider_state_files import clear_state_files
     copied = copy.deepcopy(row)
     apply_provider_recording({'providers': [copied]}, enabled=False)
-    clear_state_files(copied)
     return copied.get('config', {})
 
 
