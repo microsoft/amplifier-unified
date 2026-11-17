@@ -63,11 +63,16 @@ Scheduling is authored in the public
 repository. Its selected artifact remains in generated `components/scheduling-delivery`,
 bound by `components/scheduling.source.json`; see the
 [selection guide](../components/README.md#select-a-scheduling-artifact).
-Portability, publishing and Recall artifact snapshots follow the same author/delivery
+Portability and publishing artifact snapshots follow the same author/delivery
 distinction: `components/<name>` is authored, while `components/<name>-delivery`
 is generated and opt-in. Visible `components/<name>.source.json` records the
 selected public wheel. Use `--all --under components/<name>-delivery` to inspect
 it; a new component source edit or publication does not silently refresh the copy.
+Recall storage is authored in public
+[amplifier-platform-recall](https://github.com/bkrabach/amplifier-platform-recall).
+Unified's generated `components/recall-delivery` snapshot and `recall.source.json`
+record preserve `amplifier_recall`; see the
+[selection guide](../components/README.md#select-a-recall-artifact).
 Output mechanisms are authored in public
 [amplifier-platform-resources](https://github.com/bkrabach/amplifier-platform-resources).
 Unified's generated `components/outputs-delivery` snapshot and `outputs.source.json`

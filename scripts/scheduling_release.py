@@ -38,7 +38,7 @@ def component_name(selected):
     # Standalone packages declare their identity independently of repository name.
     # Historical monorepo receipts retain their original path-derived identity.
     component = selected.get("component")
-    if selected["subdirectory"] == "." and component in ("scheduling", "workspace-metadata", "operations", "worktrees", "outputs"):
+    if selected["subdirectory"] == "." and component in ("scheduling", "workspace-metadata", "operations", "worktrees", "outputs", "recall"):
         return component
     if selected["subdirectory"] == "amplifier_web/status_protocol":
         return "status-emitter"  # Original public artifact keeps its authored identity.
