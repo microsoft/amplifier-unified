@@ -92,7 +92,11 @@ try{
   const targetGeometry=locator=>locator.evaluate(el=>{
    const r=el.getBoundingClientRect(),points=[[r.x+4,r.y+4],[r.right-4,r.y+4],[r.right-4,r.bottom-4],[r.x+4,r.bottom-4],[r.x+r.width/2,r.y+r.height/2]];
    const hits=points.map(([x,y])=>{const node=document.elementFromPoint(x,y);return {x,y,inside:el.contains(node),target:node?.getAttribute('aria-label')||node?.className}});
-   return {width:r.width,height:r.height,left:r.left,right:r.right,hits,
+   const chrome=[...el.closest('#workspace-canvas').querySelectorAll('.a-canvas-chrome,.a-canvas-head,.a-canvas-navigation,.a-open-documents,.a-canvas-close-current,.a-canvas-more,.a-canvas-head>[aria-label]')].map(node=>{
+    const b=node.getBoundingClientRect(),s=getComputedStyle(node);
+    return {class:node.className,label:node.getAttribute('aria-label'),left:b.left,right:b.right,width:b.width,height:b.height,minWidth:s.minWidth,flex:s.flex,display:s.display,overflow:s.overflow};
+   });
+   return {width:r.width,height:r.height,left:r.left,right:r.right,hits,chrome,
     hit:r.left>=0&&r.right<=innerWidth+1&&r.top>=0&&r.bottom<=innerHeight+1&&hits.every(point=>point.inside)};
   });
   const reachable=async(locator,settle=false)=>{

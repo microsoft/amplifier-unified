@@ -761,6 +761,24 @@ try{
   await expect(panel).toHaveAttribute('data-navigation','compact');
   await expect(documents(),'An idle focused scroll arrow hands focus to the stable picker, never hidden chrome').toBeFocused();
   assert.equal(await page.evaluate(()=>!!document.activeElement?.closest('[hidden],[inert]')),false);
+  await toggle.focus();await resize(1100,740);await expect(panel).toHaveAttribute('data-navigation','tabs');
+  let releasePending,heldSelection;
+  const gate=new Promise(resolve=>releasePending=resolve);
+  const holdSelection=async route=>{
+   const request=route.request();
+   if(isAction(request)&&unwrap(request.postDataJSON()).action==='canvas.select'){heldSelection=request;await gate}
+   await route.continue();
+  };
+  await page.route('**/api/actions',holdSelection);
+  try{
+   await focusedDocument.click();await expect.poll(()=>!!heldSelection).toBe(true);
+   await resize(850,740);await page.waitForTimeout(850);
+   await expect(panel,'An unaccepted selection defers layout beyond the normal quiet interval').toHaveAttribute('data-navigation','tabs');
+   const accepted=page.waitForResponse(response=>response.request()===heldSelection);
+   releasePending();const response=await accepted;
+   await acceptedCanvasReceipt(observedReceipts.get(response.request()),unwrap(heldSelection.postDataJSON()).id);
+   await expect(panel).toHaveAttribute('data-navigation','compact');await expect(documents()).toBeFocused();
+  }finally{releasePending();await page.unroute('**/api/actions',holdSelection)}
   await capture('auto-narrow-tall');
   await navigation('tabs');await expect(strip).toBeVisible();
   await resize(1100,520);await expect(panel).toHaveAttribute('data-navigation','tabs');
