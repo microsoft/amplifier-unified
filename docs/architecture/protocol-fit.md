@@ -5,6 +5,10 @@ Design supporting [HP](../../contracts/host-protocol.v1.md) and
 exact inspected commits are recorded in [evidence](evidence.md). These are
 source/documentation findings, not live interoperability results.
 
+The [supported ACP pilot composition](../validation/acp-supported-composition.md)
+records later, exact-version runtime evidence and its limits separately from
+this design inventory and subsequent source-only review.
+
 ## Prefer upstream semantics
 
 The [AHP/ACP guide](https://microsoft.github.io/agent-host-protocol/guide/ahp-and-acp.html)
