@@ -787,13 +787,16 @@ def test_a_pc_from_the_setup_file_is_sent_to_its_start_menu_entry(host, monkeypa
 
 
 @pytest.mark.parametrize("change", [
-    "started-by-a-person", "another-data-folder", "another-launcher", "another-workspace",
+    "no-ticket-store", "started-by-a-person", "another-data-folder", "another-launcher", "another-workspace",
     "no-entry", "entry-test-fails"])
 def test_every_other_windows_host_names_no_way(host, monkeypatch, change):
     """One sentence that is true everywhere. No command: this host knows none that works."""
     root, looked = from_setup(host, monkeypatch, entry_there=change != "no-entry")
     task = host["owner_task"]
-    if change == "started-by-a-person":
+    if change == "no-ticket-store":
+        # This host gives no ticket: the entry's `open` would get a refusal from it.
+        host["browser_entry"] = None
+    elif change == "started-by-a-person":
         del host["owner_task"]                              # No task started this host.
     elif change == "another-data-folder":
         # The Start-menu entry opens `<root>/app` only.
@@ -877,13 +880,17 @@ def test_the_sign_in_page_shows_the_step_in_its_own_place(host, monkeypatch):
 
 
 def test_a_sign_in_page_without_the_mark_is_not_changed_and_reads_nothing(host, monkeypatch):
-    shipped = (Path(auth.__file__).parent / "static" / "windows-login.html").read_text(encoding="utf-8")
-    assert "__REOPEN__" not in shipped                      # Today's page of the client has no such place.
+    """A page of a client that has no place for the step, whatever the selected client's page has."""
+    read = Path.read_text
+    plain = read(Path(auth.__file__).parent / "static" / "windows-login.html", encoding="utf-8").replace(
+        "__REOPEN__", "The client's own sentence.")
+    monkeypatch.setattr(Path, "read_text", lambda self, *args, **options: (
+        plain if self.name == "windows-login.html" else read(self, *args, **options)))
     from_setup(host, monkeypatch)
     monkeypatch.setattr(entry, "next_step", lambda request: pytest.fail("The step was worked out for nothing"))
     page = call(host, "/login", method="GET", origin=None)
     csrf = page.cookies[auth.CSRF_COOKIE].value
-    body = host["service"].instance_branding.document(shipped.replace("__CSRF__", csrf), login=True)
+    body = host["service"].instance_branding.document(plain.replace("__CSRF__", csrf), login=True)
     assert page.text == body
 
 
@@ -896,13 +903,20 @@ def test_the_host_reads_the_real_start_menu_record(home):
     """
     from amplifier_web import windows_consumer_shell as shell
     from amplifier_web.deployment import write_private
+    from amplifier_web.windows_files import address, current_process_sid
+    from amplifier_web.windows_service import TaskSpec
     root = home
     folder = root / "entries"
     folder.mkdir()
     app = web.Application()
-    app["service"] = SimpleNamespace(data_dir=root / "app")
-    app["owner_task"] = SimpleNamespace(python=str(root / "tools" / "amplifier-unified" / "Scripts" / "pythonw.exe"),
-                                        workspace=str(root / "workspace"), data_dir=str(root / "app"))
+    app["browser_entry"] = entry.GrantStore()
+    app["service"] = SimpleNamespace(data_dir=address(root / "app"))
+    # The real definition type, with paths in the form that a registration gives them.
+    app["owner_task"] = TaskSpec(
+        sid=current_process_sid(), registration_id=uuid.uuid4().hex, tool_path=str(root),
+        python=str(address(root / "tools" / "amplifier-unified" / "Scripts" / "pythonw.exe")),
+        data_dir=str(address(root / "app")), workspace=str(address(root / "workspace")),
+        state_home=str(address(root / "state")))
 
     def now():
         return entry.next_step(asyncio.run(build(app, "/login", method="GET", origin=None)))
@@ -1094,7 +1108,8 @@ def test_the_host_answers_a_ticket_request_with_the_cause_only_and_a_code_reques
     monkeypatch.setattr(auth, "data_identity", identity)
     for _ in range(host["browser_entry"].capacity):
         local_ticket(host)
-    assert ticket_answer(host) == (503, "Amplifier has too many browser openings in work. Wait one minute. Then try again.")
+    assert ticket_answer(host) == (
+        503, "Amplifier has too many browser openings in progress. Wait one minute. Then try again.")
     host["browser_entry"] = host["browser_codes"] = None
     assert ticket_answer(host) == (503, "Windows owner browser entry is not available.")
     assert code_answer(host) == (503, "Windows owner browser entry is not available." + step)

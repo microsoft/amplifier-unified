@@ -44,7 +44,7 @@ NO_ANSWER = ("No Amplifier of this version and this data folder answered on this
              "Make sure that Amplifier is running. If it is updating, wait one minute. Then try again.")
 REFUSED = "Amplifier refused the request. Try again."
 UNCONFIRMED = "Amplifier's answer was not confirmed. The request was not repeated. Try again."
-BUSY = "Amplifier has too many browser openings in work. Wait one minute. Then try again."
+BUSY = "Amplifier has too many browser openings in progress. Wait one minute. Then try again."
 # The line that `amplifier-unified open` prints after the browser accepted the
 # address. The Windows launcher reads it, because the exit status says nothing
 # to a launcher from a setup file before pull request 2270: there a command
@@ -133,15 +133,19 @@ def _start_menu_opens(app) -> bool:
 def next_step(request) -> str:
     """The next step for a browser on this computer that is not signed in.
 
-    Windows: the Start menu, when the request is from this computer and this
-    installation's entry opens this host. Else one sentence that names no way,
-    because this host knows none that works. The tests read only this host's
-    memory and one small private record; a request that is not from this
-    computer reads no file.
+    Windows: the Start menu, when this host can give a ticket, the request is
+    from this computer, and this installation's entry opens this host. A host
+    without a ticket store answers the entry's `open` with a refusal, so it
+    does not name the entry. Else one sentence that names no way, because this
+    host knows none that works. The tests read only this host's memory and one
+    small private record; a request that is not from this computer reads no
+    file.
     """
     if not is_windows():
         return RUN_OPEN
-    return START_MENU if _on_this_computer(request) and _start_menu_opens(request.app) else ON_THE_PC
+    app = request.app
+    return START_MENU if (app.get("browser_entry") is not None and _on_this_computer(request)
+                          and _start_menu_opens(app)) else ON_THE_PC
 
 
 def current_owner_sid() -> str:

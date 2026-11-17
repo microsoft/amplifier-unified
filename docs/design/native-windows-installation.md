@@ -3292,7 +3292,9 @@ of its ticket. Both name one next step (`browser_entry.next_step`). The step is
 a text of the host, and a text says only what this host knows.
 
 - **The Start menu.** "Open Amplifier from the Start menu: Amplifier Unified.
-  Amplifier then opens in your browser." Only when all of these hold. The
+  Amplifier then opens in your browser." Only when all of these hold. This
+  host can give a ticket (it has its ticket store); without one it would
+  refuse the entry's `open`. The
   request is from this computer: both socket ends and the name in use. The
   Windows task of this installation started this host. The data folder is
   `<root>\app`. That task's Python is in
