@@ -393,6 +393,10 @@ ACTION_DEFINITIONS['conversation.send'][1]['properties']['expectedConfigurationR
 
 from .settings_actions import definitions as settings_definitions, ACTIONS as SETTINGS_ACTIONS, NAVIGATION_ACTIONS as SETTINGS_NAVIGATION
 ACTION_DEFINITIONS.update(settings_definitions(schema, string))
+from .suggestion_settings import definitions as suggestion_settings_definitions
+from .prompt_suggestions import definitions as suggestion_definitions
+ACTION_DEFINITIONS.update(suggestion_settings_definitions(schema, string))
+ACTION_DEFINITIONS.update(suggestion_definitions(schema, string))
 from .instance_branding import InstanceBranding, definitions as instance_branding_definitions
 INSTANCE_BRANDING_ACTIONS = _register_actions(instance_branding_definitions(schema, string))
 
@@ -434,6 +438,8 @@ for _access, _actions in {
         "coordination.awareness", "coordination.intent.read",
     },
     "domain_authoritative": {
+        *suggestion_definitions(schema, string),
+        *suggestion_settings_definitions(schema, string),
         "instanceBranding.update", "instanceBranding.reset",
         *configuration_recovery_definitions(schema, string),
         *patch_placement_definitions(schema, string),
@@ -746,6 +752,8 @@ class AppService:
         self.event_log_view = EventLogView(self)
         from .client_views import ClientViews
         self.clients = ClientViews(self)
+        from .prompt_suggestions import PromptSuggestions
+        self.prompt_suggestions = PromptSuggestions(self)
         from .appearance_preferences import AppearancePreferences
         self.appearance = AppearancePreferences(self)
         self._client_snapshots = {}
@@ -1918,7 +1926,7 @@ class AppService:
         passive_task = action in {'task.get', 'task.history', 'task.detail', 'task.receipt'} or (
             action == 'runtime.control' and isinstance(args.get('operation'), str) and args['operation'] in
             {'task.get', 'task.history', 'task.detail', 'task.receipt'})
-        passive_metadata = passive_task or action in {'assignment.brief', 'coordination.list', 'conversation.configuration'}
+        passive_metadata = passive_task or action.startswith('session.suggestion.') or action in {'assignment.brief', 'coordination.list', 'conversation.configuration'}
         if action in {'workspace.environments.removal.read', 'workspace.environments.removal.list'}:
             # Exact retained IDs only. General alias resolution can refresh
             # history and admit a dormant owner before the passive read runs.
@@ -2053,6 +2061,9 @@ class AppService:
         if action == "approval.respond" and args["id"].startswith("capability:"):
             return await self.configuration_authority.decide(args, origin, command_id)
         guard_history_action(self, action, args, origin, caller_session_id)
+        if action.startswith('session.suggestion.'):
+            return {'accepted': True, 'result': await self.prompt_suggestions.dispatch(
+                action, args, origin, admission_check)}
         if passive_task and origin not in {'ui', 'user'}:
             if not caller_session_id:
                 raise AppError('Task reads require a registered calling conversation.', 403)
@@ -2139,6 +2150,24 @@ class AppService:
             if retained is not None:
                 return retained
         configuration_authority = self.configuration_authority.capture(action, args, origin, caller_session_id)
+        if action in {'providers.suggestionModels', 'providers.configureSuggestions'}:
+            async with self.lock:
+                if admission_check:
+                    admission_check()
+                self.configuration_authority.check(configuration_authority)
+                if args.get('configurationTarget', {'kind': 'global'}) != {'kind': 'global'}:
+                    raise AppError('Prompt suggestions use app-global Settings.', 409)
+                try:
+                    result = await self.prompt_suggestions.manager.perform(action, {
+                        **args, 'workspace': str(self.data_dir), 'scope': 'global'})
+                except ValueError as exc:
+                    raise AppError(str(exc), 409) from None
+                if action == 'providers.configureSuggestions':
+                    self.prompt_suggestions.invalidate()
+                    self.state['configurationRevision'] = self.state.get('configurationRevision', 0) + 1
+                    self._publish_changes(sessions=set(), globals={'configurationRevision'})
+                    result['configurationRevision'] = self.state['configurationRevision']
+                return {'accepted': True, 'result': result, 'effects': []}
         if action == 'instanceBranding.get':
             return {'accepted': True, 'result': self.instance_branding.snapshot(), 'effects': []}
         if action in {'externalAgents.list', 'externalAgents.get'}:
@@ -6139,6 +6168,7 @@ class AppService:
             return
         self._close_started = True
         self.begin_shutdown()
+        await self.prompt_suggestions.close()
         await self.external_conversations.close()
         lifecycle_tasks = [task for task in self._runtime_lifecycle_tasks
                            if task is not asyncio.current_task()]

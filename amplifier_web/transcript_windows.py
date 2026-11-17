@@ -35,7 +35,7 @@ def _visible(value):
             and bool(text_content(value)))
 
 
-def _native_page(reader, source, before, limit):
+def _native_page(reader, source, before, limit, *, public_only=False):
     from collections import Counter
     from .automatic_history import directory, native_input_id
     from .shared_state_probe import text_content
@@ -64,9 +64,30 @@ def _native_page(reader, source, before, limit):
     for item in result['rows']:
         value = item['value']
         at = message_time(value)
-        text = text_content(value)
+        utility_fields = {}
+        if public_only:
+            from .native_message_projection import _public_blocks
+            from .voice_input_projection import public_input
+            from .suggestion_source import speaker
+            metadata = value.get('metadata') or {}
+            # Host-service recovery and peer inputs are not the current human.
+            provenance = metadata.get('amplifier_input') or {}
+            if (provenance.get('kind') == 'service' or metadata.get('live_recovery_job')
+                    or metadata.get('private') or value.get('private') or value.get('partial')
+                    or value.get('visibility') in {'internal', 'developer'}):
+                continue
+            text = text_content({'content': _public_blocks(value, text_only=True)['blocks']})
+            voice = public_input(text, provenance)
+            if voice:
+                text = voice['text']
+            utility_fields['inputActor'] = speaker(value)
+            if not text:
+                continue
+        else:
+            text = text_content(value)
         exact_input = native_input_id(value)
         items.append({'id': item['displayId'], 'role': value['role'],
+            **utility_fields,
             **({'nativeInputId': exact_input} if exact_input else {}),
             '_windowDigest': hashlib.sha256(text.encode()).hexdigest(),
             'text': text, 'source': 'native', 'via': 'chat',
@@ -228,7 +249,57 @@ class TranscriptWindows:
                 'coverage': {'kind': 'saved-web', 'historyComplete': False}, 'unavailableRanges': gaps,
                 '_savedComplete': start == 0 and end == len(rows) and not gaps}
 
-    async def read(self, session_id, *, before=None, limit=100, native=False):
+    def public_native_tail(self, session):
+        """Reuse a bounded utility page while its physical source is unchanged.
+
+        Generic save/event fences retire presentation caches, not public text.
+        A changed file stamp requires the same bounded canonical reader again;
+        neither a cached body nor an old stat becomes current authority.
+        """
+        from .automatic_history import directory
+        source = _source(session)
+        revision = self.reader.source_revision(directory(source), {
+            'project': source['nativeProject'],
+            'nativeId': source.get('nativeIdentity') or source.get('runtimeSessionId') or source['id']})
+        for page, _ in reversed(self.pages.values()):
+            if (page.get('_publicUtility') and page.get('_owner') == source
+                    and page.get('revision') == revision and page.get('_utilityTail')):
+                return page
+        page = _native_page(self.reader, source, None, 100, public_only=True)
+        if page['revision'] != revision:
+            raise ValueError('The public transcript source changed during reading.')
+        page.update(_publicUtility=True, _utilityTail=True)
+        page['windowKey'] = _digest([page['windowKey'], 'public-utility'])
+        size = len(json.dumps(page, ensure_ascii=False, separators=(',', ':')).encode())
+        self._retain(session['id'], page, size)
+        return page
+
+    def public_saved_tail(self, session, cold):
+        """Bounded saved suffix for utility freshness, never cold hydration.
+
+        Reuse the existing page cache only for the exact resource/index, owner
+        and fresh physical signature. A change re-enters the canonical bounded
+        reader; physical storage identity is not the utility's public input.
+        """
+        from .resource_files import detached_signature
+        from .saved_message_window import read_saved_window
+        source = _source(session)
+        signature = list(detached_signature(cold))
+        binding = {'source': source, 'resource': cold.identity,
+                   'directory': str(cold.directory), 'index': cold.indexed, 'signature': signature}
+        for page, _ in reversed(self.pages.values()):
+            if page.get('_savedUtilityBinding') == binding:
+                return page, signature
+        page = read_saved_window(cold, self.reader, session_id=session['id'], fence=0, limit=100)
+        if list(detached_signature(cold)) != signature:
+            raise ValueError('The public saved source changed during reading.')
+        page['_savedUtilityBinding'] = binding
+        page['windowKey'] = _digest([page['windowKey'], 'public-utility'])
+        size = len(json.dumps(page, ensure_ascii=False, separators=(',', ':')).encode())
+        self._retain(session['id'], page, size)
+        return page, signature
+
+    async def read(self, session_id, *, before=None, limit=100, native=False, public_only=False):
         if self.closed:
             raise ValueError('Saved message readers are closed.')
         if type(limit) is not int or not 1 <= limit <= 100:
@@ -246,7 +317,8 @@ class TranscriptWindows:
             if self.closed or len(self.jobs) >= 8:
                 raise ValueError('Saved message readers are busy. Try again.')
             if use_native:
-                work = asyncio.to_thread(_native_page, self.reader, source, before, limit)
+                work = asyncio.to_thread(_native_page, self.reader, source, before, limit,
+                                         **({'public_only': True} if public_only else {}))
             else:
                 from .saved_message_window import read_saved_window
                 work = asyncio.to_thread(read_saved_window, cold, self.reader, session_id=session_id,
@@ -260,6 +332,12 @@ class TranscriptWindows:
                 page['_savedComplete'] = before is None and not page['hasEarlier'] and not page['unavailableRanges']
             page['_savedOwner'] = {'source': source, 'fence': fence,
                                    'resource': cold.identity if cold is not None else None}
+        if public_only:
+            # The sanitized utility view must never replace an ordinary page
+            # under its display cache identity or become an initial chat window.
+            page['windowKey'] = _digest([page['windowKey'], 'public-utility'])
+            page['_publicUtility'] = True
+            page['_utilityTail'] = before is None and limit == 100
         # Detach/size only this selected page outside writer exclusion.
         def prepare():
             detached = copy.deepcopy(page)
@@ -270,10 +348,14 @@ class TranscriptWindows:
             raise ValueError('Saved message window exceeds the display budget.')
         async with self.service.lock:
             current = self.service._session(session_id, hydrate=False)
-            if (_source(current) != source or self._fence(session_id) != fence
+            if (_source(current) != source or not public_only and self._fence(session_id) != fence
                     or cold is not None and self._cold_source(current) != cold):
                 raise ValueError('The selected message source changed.')
             self._retain(session_id, page, size)
+        if public_only:
+            # Utility callers own their own input-acceptance projection. Browser
+            # wire decoration adds native progress even to accepted ACP inputs.
+            return {key: copy.deepcopy(value) for key, value in page.items() if not key.startswith('_')}
         return self._wire(page, session_id)
 
     def _wire(self, page, session_id):

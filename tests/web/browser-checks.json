@@ -1380,6 +1380,8 @@
     "shared-room",
     "work-hierarchy",
     "external-approval",
-    "attachment-preview"
+    "attachment-preview",
+    "transcript-suggestion-mounted",
+    "transcript-suggestion-boot"
   ]
 }
