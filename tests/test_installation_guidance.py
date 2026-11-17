@@ -74,10 +74,10 @@ class InstallationGuidanceTests(unittest.TestCase):
                 # a fixed list of places of the Windows account. It does not look inside other folders, and it
                 # does not see every file that a chat can write. So this statement must not say that a chat
                 # wrote no file outside the folder.
-                "- **OpenAI API:** in our tests on a PC, we looked after a chat for a file or folder with "
+                "- **OpenAI API:** after a chat in our tests on a PC, we looked for a file or folder with "
                 "\"amplifier\" in its name. We looked directly in the usual places of the Windows account, "
-                "such as the profile folder, AppData, Documents and the Desktop. Outside the folder, the only "
-                "one that Amplifier made was the Start-menu entry from setup. We did not look inside other "
+                "such as the profile folder, AppData, Documents and the Desktop. Outside the folder, we found "
+                "only one that Amplifier made: the Start-menu entry from setup. We did not look inside other "
                 "folders there or on the rest of the disk.",
                 # Both halves were seen on a PC: the file outside the folder with an earlier version, and
                 # the file inside the folder with 0.106.3. The probes of that test read names in the usual
@@ -100,6 +100,8 @@ class InstallationGuidanceTests(unittest.TestCase):
                 "we have not tested this.")
         # The item is these sentences and nothing else: it must not say that nothing is outside the folder.
         self.assertEqual(folder.split(" depends on the AI connection: ", 1)[1], " ".join(statements))
+        # A tripwire for the broad claim, also when it is added to the pinned text above. A true sentence
+        # with these words needs evidence that covers every file, and then a change of this line.
         self.assertNotIn("no file outside", folder)
         # "Amplifier writes that file inside the folder" is the host's rule, with that file name. The statement
         # names three versions: the last release without the rule, the first release with it, and the release
