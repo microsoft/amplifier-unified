@@ -1,9 +1,9 @@
 """When the update owner checks by itself: the timed check, and the check at a host start.
 
 The timed check keeps its interval (4 hours unless a person chose another).
-A host start adds one check when the last check was older than 1 hour at that
-moment. A PC that restarts therefore does not wait the rest of an interval
-for a release that came out meanwhile.
+A host start adds one check when the last check or attempt was at least 1 hour
+old at that moment. A PC that restarts therefore does not wait the rest of an
+interval for a release that came out meanwhile.
 
 The real update owner runs here: its tick, its check and its installation
 admission. A host start is a new update owner on the state that the last one
@@ -23,11 +23,12 @@ HOUR = 3600
 START_LIMIT = HOST_START_CHECK_AFTER_HOURS * HOUR
 INTERVAL = DEFAULT_CHECK_INTERVAL_HOURS * HOUR
 INSTALLED, MOVED = 'b' * 40, 'a' * 40  # The fixture's remote branch is at 'b' * 40.
+APP_ONLY = {'id': 'c' * 32, 'scope': 'app'}  # What "update the application only" saves (UpdateManager.command).
 
 
 @pytest.fixture
 def clock(monkeypatch):
-    """Move the update owner's clock forward."""
+    """Move the update owner's clock: forward, or back as a corrected clock does."""
     real, offset = time.time, [0]
     monkeypatch.setattr(updates.time, 'time', lambda: real() + offset[0])
 
@@ -80,8 +81,9 @@ def requests(owner):
     return seen
 
 
-@pytest.mark.parametrize('age', [START_LIMIT + 60, 2 * HOUR, INTERVAL - 60])
+@pytest.mark.parametrize('age', [START_LIMIT, START_LIMIT + 60, 2 * HOUR, INTERVAL - 60, INTERVAL + 60, 3 * INTERVAL])
 async def test_a_host_start_checks_once_when_the_last_check_was_older_than_the_limit(manager, clock, release_checks, age):
+    """Also after more than the interval: the check at a start is a start check, and it asks again."""
     await nothing_newer(manager)
     checks = len(release_checks)
     clock(age)
@@ -151,6 +153,71 @@ async def test_a_persons_own_check_after_the_start_is_the_check(manager, clock, 
     assert len(release_checks) == checks
 
 
+async def test_a_clock_that_is_set_back_brings_no_second_start_check(manager, clock, release_checks):
+    """A PC whose clock was hours ahead when the host started, and is corrected after that."""
+    await nothing_newer(manager)
+    clock(3 * HOUR)
+    new = await host_start(manager)
+    clock(-2 * HOUR)  # Corrected. The last check is 1 hour old now, and the start is 2 hours ahead.
+    checks = len(release_checks)
+    asked = requests(new)
+    for _ in range(4):
+        await new.tick()
+    # The one check ended the start reason. The saved times alone would name it again on every pass.
+    assert asked == [{'fresh': True, 'automatic': True}] and len(release_checks) == checks + 1
+    assert new._host_started - manager.service.state['updates']['lastCheck'] >= START_LIMIT
+    assert new.check_due() is None
+
+
+async def test_a_check_that_is_refused_does_not_end_the_start_reason(manager, clock, release_checks):
+    state = await nothing_newer(manager)
+    clock(2 * HOUR)
+    new = await host_start(manager)
+    checks = len(release_checks)
+    state['pendingRelease'] = 'f' * 32  # A prepared component update waits for its activation: no check is admitted.
+    await new.check()
+    assert len(release_checks) == checks and new.check_due() == 'start'
+    state['pendingRelease'] = None
+    asked = requests(new)
+    for _ in range(3):
+        await new.tick()
+    assert asked == [{'fresh': True, 'automatic': True}] and len(release_checks) == checks + 1
+
+
+async def test_a_start_check_runs_where_a_person_asked_for_the_application_alone(manager, clock, release_checks):
+    """The saved intent of an earlier 'update the application only' request. Nothing is staged."""
+    state = await nothing_newer(manager)
+    clock(2 * HOUR)
+    new = await host_start(manager)
+    state['applicationIntent'] = dict(APP_ONLY)
+    checks = len(release_checks)
+    asked = requests(new)
+    for _ in range(3):
+        await new.tick()
+    assert asked == [{'fresh': True, 'automatic': True}] and len(release_checks) == checks + 1
+
+
+async def test_a_start_check_while_a_component_preparation_is_unresolved_checks_the_application_only(
+        manager, clock, release_checks):
+    """An interrupted preparation waits for a person. The start check looks for a release and replays nothing."""
+    state = await nothing_newer(manager)
+    manager.installed = MOVED  # A component has a newer revision. It must not be prepared here.
+    clock(2 * HOUR)
+    new = await host_start(manager)
+    new.diagnostics.state['componentPreparation'] = {
+        'kind': 'ecosystem', 'attemptId': 'a' * 32, 'revision': 'b' * 32,
+        'retry': {'mode': 'inspect', 'inputKey': 'retained-configuration'},
+        'preparation': {'candidate': 'b' * 32, 'boundary': 'copy-only', 'copySettled': False},
+        'terminal': {'phase': 'ecosystem-stage', 'status': 'interrupted', 'attemptId': 'a' * 32}}
+    checks = len(release_checks)
+    asked = requests(new)
+    for _ in range(3):
+        await new.tick()
+    assert asked == [{'tier': 'application', 'fresh': True, 'automatic': True}]
+    assert len(release_checks) == checks + 1 and manager.stages == []
+    assert state['lastAttempt'] >= new._host_started
+
+
 @pytest.mark.parametrize('keep_up_to_date', [True, False])
 async def test_a_start_check_finds_a_release_that_came_out_meanwhile(manager, clock, monkeypatch, keep_up_to_date):
     """The restart of journey 2: a newer release existed, and the last check was 66 minutes old."""
@@ -198,11 +265,14 @@ async def test_a_start_check_starts_a_component_update_and_retries_no_failed_one
     assert len(list((again.directory / 'releases').iterdir())) == 1
 
 
-async def test_a_start_check_does_not_interrupt_running_work(waiting):
+@pytest.mark.parametrize('intent', [None, APP_ONLY])
+async def test_a_start_check_does_not_interrupt_running_work(waiting, intent):
     """A staged application update, a chat that works, and a last check that is 2 hours old."""
     w = waiting
     w.service.state['settings']['updates']['intervalHours'] = DEFAULT_CHECK_INTERVAL_HOURS
-    assert w.manager.check_due() == 'start'  # No timed check is due.
+    if intent:  # The person asked for the application alone, as the 'app' action saves it.
+        w.state.update(applicationIntent=dict(intent), pendingApp={**w.state['pendingApp'], 'updateIntent': dict(intent)})
+    assert time.time() - w.state['lastCheck'] < INTERVAL and w.manager.check_due() == 'start'  # No timed check is due.
     await w.manager.tick()
     assert w.checks == 1 and w.state['pendingApp']['revision'] == 'b' * 40  # It found the newest release.
     assert not w.promotions and not w.restarts and not work_paused(w.service.state)

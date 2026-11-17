@@ -538,6 +538,7 @@ class UpdateManager:
         self._active_update_evidence = {}
         self._update_health_initial = True
         self._host_started = time.time()  # See check_due.
+        self._start_check_open = True
         self._update_health_seen_revision = service.state.get('configurationRevision')
         publish_health(self)
         if restart_repair:
@@ -830,6 +831,9 @@ class UpdateManager:
                     or (state.get('pendingApp') or {}).get('featureSelection')
                     or (state.get('pendingSmartTools') and not self.independent_tool_results(state))):
                 return
+            # A check has passed its admission since this host started. That
+            # ends the start reason of check_due; a refusal above does not.
+            self._start_check_open = False
             if self.independent_tool_results(state):
                 # Retained runner qualification and failed optional tools own
                 # their rows independently of the new sequence/install intent.
@@ -1694,24 +1698,31 @@ class UpdateManager:
         await self.activate(rollback=True)
 
     def check_due(self):
-        """Why the update owner checks by itself now: 'timed', 'start' or None.
+        """Why the update owner checks by itself now: 'start', 'timed' or None.
 
-        The one rule for every automatic check. tick() asks only where a timed
-        check is allowed, so a host start adds no other place and no retry.
-        'start': when this host started, the last check was older than
-        HOST_START_CHECK_AFTER_HOURS, and no check has begun since. Any check
-        ends it, also a person's own. A start check asks again; it does not
-        reuse the answers that are saved for the timed interval.
+        The one rule for a check that time causes. tick() asks only where a
+        timed check is allowed, so a host start adds no other place and no
+        retry. A check that continues an update sequence, and the new check of
+        a selection that changed, have their own rules and do not ask here.
+        'start': when this host started, the last check or attempt was at least
+        HOST_START_CHECK_AFTER_HOURS old, and no check has passed its admission
+        since (_check). Any admitted check ends it, also a person's own and one
+        that fails. The end is a fact of this owner, not clock arithmetic: a
+        clock that is set back after the start brings no second start check.
+        'start' is asked first, so every check at a host start asks again and
+        does not reuse the answers that are saved for the timed interval.
         """
         settings = self.service.state['settings'].get('updates', {})
         if not settings.get('autoCheck', True):
             return None
         state = self.service.state['updates']
         last = max(state.get('lastCheck') or 0, state.get('lastAttempt') or 0)
+        if (getattr(self, '_start_check_open', False)
+                and self._host_started - last >= HOST_START_CHECK_AFTER_HOURS * 3600):
+            return 'start'
         if time.time() - last >= settings.get('intervalHours', DEFAULT_CHECK_INTERVAL_HOURS) * 3600:
             return 'timed'
-        started = getattr(self, '_host_started', 0)
-        return 'start' if started - last >= HOST_START_CHECK_AFTER_HOURS * 3600 else None
+        return None
 
     async def tick(self):
         if getattr(self, '_manual_handoff_commit_unknown', False):return
