@@ -24,6 +24,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 import uuid
 
 from amplifier_web import builtin_behaviors
@@ -194,6 +195,53 @@ def run(stage, *, capture_root, source_store, state_home, timeout=300, before_th
     lines = [line[len(PROBE_PREFIX):] for line in completed.stdout.splitlines() if line.startswith(PROBE_PREFIX)]
     return Result(completed.returncode, json.loads(lines[-1]) if lines else None,
                   completed.stdout, completed.stderr)
+
+
+def catalog_helper_call():
+    """How the app starts its decision-catalog helper: the command, and the settings of ``subprocess.run``.
+
+    The probe needs the catalog of decision adapters, as a conversation worker does. The first time, the app
+    starts ``decision_account_catalog.py`` in a new interpreter, with a time limit
+    (``decision_accounts._catalog_snapshot``). That helper loads every entry point of the group
+    ``amplifier.decision_backends``, and so it imports the provider packages of the environment.
+
+    This reads the call from the app's own function, with a recorder in the place of ``subprocess.run``.
+    Nothing is started, and the answer that the app keeps for this process is not touched. Call it while no
+    other thread of this process starts a program.
+    """
+    import inspect
+    from unittest import mock
+    from amplifier_web import decision_accounts
+    calls = []
+
+    def record(command, **settings):
+        calls.append((list(command), settings))
+        raise subprocess.SubprocessError('recorded, not started')
+
+    with mock.patch.object(decision_accounts.subprocess, 'run', record):
+        value, failure = inspect.unwrap(decision_accounts._catalog_snapshot)()
+    assert value is None and failure['category'] == 'subprocess-error' and len(calls) == 1, (value, failure, calls)
+    command, settings = calls[0]
+    assert command[0] == sys.executable and settings.get('timeout', 0) > 0, (command, settings)
+    return command, settings
+
+
+def catalog_helper_times(call, python, *, starts=2, limit=300):
+    """Start the app's decision-catalog helper with ``python``; the seconds that each start took.
+
+    ``call`` is ``catalog_helper_call()``. The interpreter and the time limit are the only differences from
+    the app's call. In a new environment the first start finds no bytecode of the provider packages. It
+    compiles them and writes the bytecode: the helper runs with ``-I``, so ``PYTHONDONTWRITEBYTECODE`` does
+    not reach it. A later start reads that bytecode. Each start must print the catalog, a JSON object.
+    """
+    command, settings = call
+    seconds = []
+    for _ in range(starts):
+        started = time.monotonic()
+        done = subprocess.run([str(python), *command[1:]], **{**settings, 'timeout': limit})
+        seconds.append(time.monotonic() - started)
+        assert isinstance(json.loads(done.stdout), dict), done.stdout[:200]
+    return seconds
 
 
 def for_chat(stage, folder):

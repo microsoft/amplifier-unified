@@ -8,6 +8,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -83,6 +85,28 @@ def test_the_fixture_runs_the_command_and_the_stage_settings_of_the_updater():
     assert "flags.append('--global-only')" in updates and "flags.append('--read-only')" in updates
     assert "flags=['--install-overrides',str(overrides)]" in updates
     assert "stage=self.directory/'releases'/release" in updates and "shared_stage=stage/'shared-config'" in updates
+
+
+def test_the_decision_catalog_helper_is_read_from_the_app_and_started_as_the_app_starts_it():
+    """``tests/test_windows_chat_setup.py`` starts this helper itself in each new worker environment.
+
+    The call is the app's own: its command, its settings and its time limit. Reading it starts nothing and
+    leaves the app's saved answer for this process as it was.
+    """
+    from amplifier_web import decision_accounts
+    run, saved = subprocess.run, decision_accounts._catalog_snapshot.cache_info()
+    command, settings = probe.catalog_helper_call()
+    assert subprocess.run is run and decision_accounts._catalog_snapshot.cache_info() == saved
+    script = probe.ROOT / 'amplifier_web' / 'decision_account_catalog.py'
+    assert command == [sys.executable, '-I', str(script)] and script.is_file()
+    # The app's limit for one start, and the few settings that the helper gets. No setting stops bytecode.
+    assert settings['timeout'] > 0 and settings['check'] is True
+    assert set(settings['env']) <= {'PATH', 'SYSTEMROOT', 'WINDIR', 'LANG', 'LC_ALL', 'TZ', 'TMPDIR', 'TEMP', 'TMP'}
+    # The same call with another time limit: each start prints the catalog.
+    times = probe.catalog_helper_times((command, settings), sys.executable)
+    assert len(times) == 2 and all(0 < seconds < 300 for seconds in times), times
+    with pytest.raises(subprocess.TimeoutExpired):   # the limit of a start is the caller's
+        probe.catalog_helper_times((command, settings), sys.executable, starts=1, limit=0.001)
 
 
 @pytest.mark.skipif(os.name == 'nt', reason='On Windows the switch is the subject: tests/test_windows_long_paths_off.py')

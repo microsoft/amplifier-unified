@@ -22,6 +22,19 @@ finds none of the stopped preparation. That list is a sample, and the case
 prints it as a measurement. ``tests/test_windows_stopped_command.py`` shows
 with a controlled command and open process handles what a stop ends.
 
+The app's decision-catalog helper is the first program that imports the
+provider packages in a new worker environment. It finds no bytecode there, and
+the app gives one start of it a time limit (``decision_accounts._catalog_snapshot``).
+On a busy runner that first start passed the limit, and the preparation then
+failed by chance (pull request 2270, run 44143862317, two attempts). So this
+case starts the helper itself, with the app's own command and settings,
+directly before the app's first probe command in each new environment: twice,
+and it measures both starts. The app's own start then finds bytecode. This case
+therefore does not show that a first start is inside the app's limit. It prints
+how long each first start took, and the CI job keeps those times on the run's
+page and warns when one passed the limit. The times of the two probe phases
+that the case prints include its two starts of the helper.
+
 It then lists every path below the installation folder. That is the measured
 answer to "which paths pass the Windows limit, and does the app need them":
 the worker environments, the update stages, Foundation's source store with the
@@ -130,7 +143,7 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
     if not REQUIRED:
         pytest.skip('Downloads the worker dependencies and the default components; the CI job opts in.')
     from fixtures.manual_app_handoff_native import token_user_default_owner
-    from amplifier_web import runtime_profiles, update_diagnostics
+    from amplifier_web import runtime_profiles, update_diagnostics, updates
     from amplifier_web.deployment import write_private
     from amplifier_web.runtime_environment import prepare_project, project_path, receipt_directory
     from amplifier_web.updates import process
@@ -169,6 +182,24 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
         return facts(stdout, stderr, returncode, duration)
 
     monkeypatch.setattr(update_diagnostics, 'command_facts', observed)
+
+    # The case's own two starts of the decision-catalog helper, directly before the app's first probe command
+    # in a new worker environment (see the top of this file). The call is read from the app, before any
+    # other thread of this process starts a program.
+    helper = native.update_stage_probe.catalog_helper_call()
+    helper_limit, helper_times, app_commands, app_process = helper[1]['timeout'], {}, set(), updates.process
+
+    async def process_after_the_helper(*args, **settings):
+        if '--project' in args and any(Path(str(value)).name == 'update_probe.py' for value in args):
+            environment = Path(args[args.index('--project') + 1])
+            if environment.name not in helper_times:
+                helper_times[environment.name] = await asyncio.to_thread(
+                    native.update_stage_probe.catalog_helper_times, helper,
+                    environment / '.venv' / 'Scripts' / 'python.exe')
+            app_commands.add(environment.name)   # from here on the app's own command runs in it
+        return await app_process(*args, **settings)
+
+    monkeypatch.setattr(updates, 'process', process_after_the_helper)
 
     # The component generation that the installation has: an empty one, with the worker environment of setup.
     generation = uuid.uuid4().hex
@@ -217,7 +248,9 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
             assert not task.done() and time.monotonic() < deadline, f'The preparation ended before the stop: {task}'
             await asyncio.sleep(1)
             made = {path.name for path in releases.iterdir()} - before
-            if len(made) == 1 and steps[label][-1:] == ['Checking this chat’s tools…']:
+            # The stop is for the app's own command, not for the case's starts of the helper before it.
+            if (len(made) == 1 and steps[label][-1:] == ['Checking this chat’s tools…']
+                    and 'prepare-' + next(iter(made)) in app_commands):
                 running = of_attempt(await asyncio.to_thread(processes), next(iter(made)), known)
         stage = releases / next(iter(made))
         attempt = json.loads((stage / 'profile-attempt.json').read_text(encoding='utf-8'))
@@ -289,8 +322,21 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
         for returncode, duration, stdout, stderr in commands[-3:]:
             print(f'COMMAND exit {returncode} after {duration} s\nSTDOUT {stdout}\nSTDERR {stderr}')
         raise
+    finally:
+        for name, (first, second) in helper_times.items():
+            print(f'MEASURED the decision-catalog helper in the new worker environment {name}: first start '
+                  f'{first:.1f} s, second start {second:.1f} s; the app\'s time limit for one start is {helper_limit} s'
+                  + ('; OVER THE APP\'S LIMIT' if first > helper_limit else ''))
 
     assert len({generation, *selected.values()}) == 3   # each folder's setup is its own
+    # The case started the helper in every environment in which the app then ran a probe command, and in no
+    # other: for each setup the preparation environment and the frozen one, and the preparation environment
+    # of the stopped attempt. With bytecode there, each start by the app was inside the app's limit: every
+    # probe command that was not stopped ended well.
+    new_environments = {'prepare-' + stopped['folder that a person chose']}
+    for value in selected.values():
+        new_environments |= {'prepare-' + value, project_path(home, value).name}
+    assert set(helper_times) == app_commands == new_environments, (sorted(helper_times), sorted(app_commands))
     for label, folder in folders.items():
         stage = receipt_directory(home, selected[label])
         project_name = 'update-' + selected[label][:12]

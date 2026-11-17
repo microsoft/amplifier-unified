@@ -22,6 +22,11 @@ name: Windows path length
 # a controlled command what a stop and a time limit end, and that the
 # launcher's kill-on-close Job ends the rest with the app.
 #
+# In each new worker environment that job starts the app's decision-catalog
+# helper itself, before the app does, and measures that first start. The run's
+# page keeps the times. A first start that took longer than the app allows is a
+# warning there, not a failure: the app's own start then finds bytecode.
+#
 # This is the only native job that installs the locked Amplifier Foundation.
 # So it also holds a real Foundation session ownership, as a live conversation
 # worker does, and requires that the installation folder stays usable.
@@ -50,6 +55,9 @@ on:
       - amplifier_web/runtime_qualification.py
       - amplifier_web/runtime_deps/**
       - tests/test_windows_chat_setup.py
+      # The helper that the chat-setup job starts and measures in each new worker environment.
+      - amplifier_web/decision_accounts.py
+      - amplifier_web/decision_account_catalog.py
       # What a stop or a time limit of a preparation command ends, and what the launcher's Job ends.
       - amplifier_web/windows_jobs.py
       - tests/test_windows_stopped_command.py
@@ -207,8 +215,27 @@ jobs:
           AMPLIFIER_REQUIRE_CHAT_SETUP: '1'
           AMPLIFIER_CHAT_SETUP_TREE: ${{ runner.temp }}\chat-setup-tree.txt
         run: |
-          .\.venv\Scripts\python.exe -B -m pytest -q -rA -p no:cacheprovider tests/test_windows_chat_setup.py
-          if ($LASTEXITCODE -ne 0) { throw 'The setup of a chat was not prepared and checked with long paths off, or a needed path passes the limit.' }
+          # A fact for the times below: whether Windows Defender scans new files on this runner.
+          try {
+            $defender = Get-MpComputerStatus -ErrorAction Stop
+            $scan = "real-time protection $($defender.RealTimeProtectionEnabled), antivirus $($defender.AntivirusEnabled)"
+          } catch { $scan = 'its state could not be read' }
+          Write-Host "Windows Defender on this runner: $scan"
+          .\.venv\Scripts\python.exe -B -m pytest -q -rA -p no:cacheprovider tests/test_windows_chat_setup.py | Tee-Object -Variable lines
+          $status = $LASTEXITCODE
+          # The first start of the app's decision-catalog helper in each new worker environment, as the case
+          # measured it. A start that took longer than the app allows is a warning: it shows the runner's
+          # speed against the app's limit, and it does not fail the case.
+          $measured = @($lines | Where-Object { "$_" -match 'MEASURED the decision-catalog helper' })
+          if ($measured.Count -gt 0) {
+            $summary = @('### First start of the decision-catalog helper in a new worker environment', '',
+                         "Windows Defender on this runner: $scan", '') + ($measured | ForEach-Object { "- $_" })
+            $summary -join "`n" >> $env:GITHUB_STEP_SUMMARY
+          }
+          foreach ($line in ($measured | Where-Object { "$_" -match 'OVER THE APP' })) {
+            Write-Host "::warning title=The decision-catalog helper took longer than the app allows::$line"
+          }
+          if ($status -ne 0) { throw 'The setup of a chat was not prepared and checked with long paths off, or a needed path passes the limit.' }
           # A skipped case ends with exit code 0. The case writes the list only after every preparation.
           if (-not (Test-Path -LiteralPath $env:AMPLIFIER_CHAT_SETUP_TREE)) { throw 'The case did not run: it wrote no list of paths.' }
       - name: Keep the list of every path
