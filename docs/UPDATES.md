@@ -479,7 +479,8 @@ failed update step; the old copy is gone then too.
 Idle maintenance also scrubs at most eight stage copies per pass, even when
 unused-code cleanup is off. A validated stage qualifies immediately. An
 unvalidated stage qualifies only when both its folder and `shared-config` are
-older than 24 hours and it is not an unresolved preparation candidate.
+older than 24 hours, it is not an unresolved preparation candidate, and it holds
+no `profile-attempt.json`.
 A chat's own setup makes the same copy in a stage of its own and records the
 attempt there in `profile-attempt.json`. When that preparation fails or is
 stopped, it removes the copy itself; settings and routing stay. A successful

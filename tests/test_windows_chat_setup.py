@@ -337,9 +337,10 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
             await asyncio.sleep(2)
             left = of_attempt(await asyncio.to_thread(processes), stage.name, known)
         ended = time.monotonic() - at
-        # Also after its last process nothing admits the stopped attempt, and its copy of the keys file is gone:
-        # no program of the stopped command made it again. When the copy was still there at the stop, the
-        # same removal must work now (idle maintenance makes it for a stage whose record says "cancelled").
+        # Also after its last process nothing admits the stopped attempt, and its copy of the keys file is gone.
+        # When the stop removed it, this shows that no program of the stopped command made it again. When
+        # the copy was still there at the stop, the same removal must work now (idle maintenance makes it
+        # for a stage whose record says "cancelled"); the case then shows only that this removal works.
         # Nothing was written into the chat's folder.
         if not removed_at_the_stop:
             reason = update_storage.remove_stage_keys(home, stage)
