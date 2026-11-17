@@ -35,10 +35,11 @@ IMPORT_PACKAGES = {"status-emitter": "amplifier_status"}
 
 
 def component_name(selected):
-    # Standalone Scheduling declares its identity independently of repository name.
+    # Standalone packages declare their identity independently of repository name.
     # Historical monorepo receipts retain their original path-derived identity.
-    if selected["subdirectory"] == "." and selected.get("component") == "scheduling":
-        return "scheduling"
+    component = selected.get("component")
+    if selected["subdirectory"] == "." and component in ("scheduling", "workspace-metadata"):
+        return component
     if selected["subdirectory"] == "amplifier_web/status_protocol":
         return "status-emitter"  # Original public artifact keeps its authored identity.
     # Original published flat projects retain their historical authored paths.
