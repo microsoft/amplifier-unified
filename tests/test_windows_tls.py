@@ -261,7 +261,7 @@ def test_force_replaces_a_keyless_identity_with_a_new_one_for_the_configured_nam
     # ... and the owner's explicit force makes a whole new identity, root last.
     # Before the first new file it records the root that it replaces.
     assert state["publications"][count:] == [
-        (wt._REPLACED, True), ("leaf.key", True), ("leaf.crt", True), ("ca.crt", True)]
+        (wt._REPLACED, False), ("leaf.key", True), ("leaf.crt", True), ("ca.crt", True)]
     assert sorted(p.name for p in pinned.path.iterdir()) == ["ca.crt", "leaf.crt", "leaf.key", wt._REPLACED]
     new, leaf = wt.keyless_identity(root)
     assert new != old and (pinned.path / "leaf.crt").read_bytes() != old_leaf
@@ -298,10 +298,12 @@ def test_force_records_each_root_that_it_replaces_before_it_writes_a_new_file(si
     assert wt.replaced_roots(root) == [] and not (pinned.path / wt._REPLACED).exists()
     count = len(state["publications"])
     tls.setup_local_ca(root, sample[0], force=True)
-    assert state["publications"][count] == (wt._REPLACED, True)
+    assert state["publications"][count] == (wt._REPLACED, False)   # The first record replaces no file.
     second = wt.keyless_identity(root)[0]
     assert second != first and wt.replaced_roots(root) == [first]
+    count = len(state["publications"])
     tls.setup_local_ca(root, sample[0], force=True)
+    assert state["publications"][count] == (wt._REPLACED, True)    # A later one replaces the record.
     assert wt.replaced_roots(root) == [first, second]              # Oldest first.
     assert wt.keyless_identity(root)[0] not in wt.replaced_roots(root)
     saved = (pinned.path / wt._REPLACED).read_bytes()
@@ -335,7 +337,7 @@ def test_a_repeated_force_after_a_partial_publication_records_the_same_root_once
     count = len(state["publications"])
     tls.setup_local_ca(root, sample[0], force=True)
     assert wt.replaced_roots(root) == [first]  # ... and the repeated request records it once:
-    assert (wt._REPLACED, True) not in state["publications"][count:]  # the record is not written again.
+    assert wt._REPLACED not in [name for name, _ in state["publications"][count:]]  # it is not written again.
     assert (pinned.path / wt._REPLACED).read_bytes().count(b"-----BEGIN CERTIFICATE-----") == 1
 
 

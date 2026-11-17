@@ -442,7 +442,8 @@ def _remember_replaced(pinned, certificate_bytes):
         if len(content) <= _LIMIT or len(kept) == 1:
             break
         kept = kept[1:]  # The oldest goes: a longer record could not be read at all.
-    pinned.publish_private(_REPLACED, content, replace=True)
+    # Like the other files here: a first publication never replaces a file.
+    pinned.publish_private(_REPLACED, content, replace=_present(pinned, _REPLACED))
 
 
 def replaced_roots(data_dir):
