@@ -100,6 +100,17 @@ receipt must match the selected Worktrees receipt exactly. This moves no user
 files or ownership/transfer records and does not extract the whole resource
 lifecycle domain. Source publication and app adoption remain separate.
 
+## Current output mechanism delivery
+
+[amplifier-platform-resources](https://github.com/bkrabach/amplifier-platform-resources)
+owns output relationships, saved-body decoding, read-only Git evidence and direct
+mechanism tests. The package keeps its `amplifier-outputs` distribution and
+`amplifier_outputs` import. Unified selects the published artifact as the sole
+installed owner and retains authorization, transactions, source access, content
+storage, integrity and retention. This transfers no user data and does not extract
+the broader resource/media lifecycle. Publication and app selection stay separate;
+historical receipts and saved-body formats retain their existing meaning.
+
 ## Not in v1
 
 Mandatory microservices or a new central runtime framework; promote only when a
