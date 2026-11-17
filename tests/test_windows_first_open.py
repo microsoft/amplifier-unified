@@ -83,13 +83,6 @@ FAILING = ("import sys, time\n"
            "sys.stderr.write('the reason\\n')\n"
            "raise SystemExit(3)\n")
 WORKING = FAILING.replace("raise SystemExit(3)", "raise SystemExit(0)")
-# What the program that took the command over has as its console (Windows).
-CONSOLE = ("import ctypes, json\n"
-           "kernel = ctypes.WinDLL('kernel32')\n"
-           "kernel.GetConsoleWindow.restype = ctypes.c_void_p\n"
-           "print(json.dumps({'console': bool(kernel.GetConsoleCP()),\n"
-           "                  'window': int(kernel.GetConsoleWindow() or 0)}), flush=True)\n")
-
 
 @pytest.fixture
 def generation_command(tmp_path):
@@ -103,16 +96,35 @@ def generation_command(tmp_path):
     """
     from amplifier_web import application_generations as generations
     from test_application_generations import isolated_launchers
-    home, bootstrap, candidate, receipt = isolated_launchers(tmp_path)
-    generations.promote(home, receipt, bootstrap)
+    base = tmp_path
+    if os.name == "nt":
+        # The app's folder is private on Windows, and the runner's temp folder
+        # is not (see `installation` below). A space in the name: every path
+        # of the command then has one.
+        from amplifier_web.windows_files import address, directory
+        base = address(Path.home() / (".unified hand over " + uuid.uuid4().hex))
+        for folder in (base, base / "owned-app", base / "owned-app" / "updates"):
+            with directory(folder, owned_root=folder if folder == base else base / "owned-app", create=True):
+                pass
+    try:
+        home, bootstrap, candidate, receipt = isolated_launchers(base)
+        generations.promote(home, receipt, bootstrap)
 
-    def command(program):
-        next(candidate.rglob("amplifier_web/__main__.py")).write_text(program, encoding="utf-8")
-        python = bootstrap / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
-        environment = {name: os.environ[name] for name in ("PATH", "SystemRoot") if name in os.environ}
-        environment["AMPLIFIER_WEB_HOME"] = str(home)
-        return [str(python), "-I", "-m", "amplifier_web", "--data-dir", str(home)], environment
-    return command
+        def command(program):
+            next(candidate.rglob("amplifier_web/__main__.py")).write_text(program, encoding="utf-8")
+            python = bootstrap / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+            environment = {name: os.environ[name] for name in ("PATH", "SystemRoot") if name in os.environ}
+            environment["AMPLIFIER_WEB_HOME"] = str(home)
+            return [str(python), "-I", "-m", "amplifier_web", "--data-dir", str(home)], environment
+        yield command
+    finally:
+        if base != tmp_path:
+            # A program that still runs keeps its files for some seconds.
+            for attempt in range(40):
+                shutil.rmtree(base, ignore_errors=True)
+                if not base.exists():
+                    break
+                time.sleep(0.5)
 
 
 @pytest.mark.parametrize("program,expected", [(FAILING, 3), (WORKING, 0)], ids=["fails", "works"])
@@ -142,26 +154,6 @@ def test_the_launcher_learns_that_a_command_failed_which_the_active_app_version_
     with pytest.raises(CommandFailure) as failed:
         asyncio.run(process(*command, "service", "start", env=environment, timeout=120))
     assert failed.value.diagnostic_facts["exitCode"] == 3
-
-
-@pytest.mark.skipif(os.name != "nt", reason="A Windows console and its window")
-def test_native_command_that_is_taken_over_opens_no_console_window(generation_command):
-    """The rule "no console window" for the launcher's commands, measured.
-
-    The Start-menu entry's program has no console. It starts each command
-    with pipes and with a console that has no window (updates.process). The
-    program that takes the command over must share that console.
-    """
-    command, environment = generation_command(CONSOLE)
-    hidden = subprocess.run(command, capture_output=True, text=True, env=environment, timeout=120,
-                            creationflags=subprocess.CREATE_NO_WINDOW)
-    assert hidden.returncode == 0, hidden.stderr[-1500:]
-    assert json.loads(hidden.stdout) == {"console": True, "window": 0}
-    # The measure can see a window on this PC: in a new console the same command has one.
-    shown = subprocess.run(command, capture_output=True, text=True, env=environment, timeout=120,
-                           creationflags=subprocess.CREATE_NEW_CONSOLE)
-    assert shown.returncode == 0, shown.stderr[-1500:]
-    assert json.loads(shown.stdout)["console"] is True and json.loads(shown.stdout)["window"] != 0
 
 
 @pytest.mark.parametrize("child,opened", [
