@@ -26,18 +26,28 @@ runs client units; `npm test --prefix tests/web` runs Unified's integration/prod
 units. Built-asset checks use `npm run test:artifact-assets --prefix .build/web-client`.
 See [host browser checks](tests/web/README.md) for affected real-server journeys.
 
-When pytest loads `tests/conftest.py`, the Python tests do not use an Amplifier
-Unified of your machine. A running Amplifier Unified gives environment variables to
-the shells that it starts; a chat's shell tool is such a shell. That file removes
-the ones in its list, and your provider credentials. It gives the product folders
-of the test run in place of its default folders, and it gives your account a home
-folder of the test run in the account database.
-It does not cover a run with `--noconftest`, a program that a test starts (it asks
-the real account database), or tools such as Git and uv, which keep their own files
-below your home folder. Its list comes from a shell of an installation on Linux; an
-installation on macOS or Windows sets more variables for its service, and the file
-does not remove those. Product code that you start by hand reads all these
-variables and uses the default folders.
+You can run the Python tests on a machine that has an Amplifier Unified, also from
+a shell that a running one started; a chat's shell tool is such a shell. When pytest
+loads `tests/conftest.py`, that file does three things for the pytest process:
+
+- It removes the environment variables in its two lists. The first list holds
+  variables that such a shell inherits from the service. The second list holds the
+  variables for provider credentials.
+- It sets the four variables for the product's folders to folders of the test run.
+- Where Python has the `pwd` module, a lookup of your own account by ID
+  (`pwd.getpwuid`) gives a home folder of the test run. The account database does
+  not change.
+
+It does nothing else:
+
+- `HOME` stays as it is. The product still reads a file that it finds through `~`,
+  for example a ChatGPT sign-in file below `~/.amplifier`. Tools such as Git and uv
+  keep their own files below your home folder.
+- A program that a test starts gets your real home folder from the account database.
+- The first list comes from a shell of an installation on Linux. An installation on
+  macOS or Windows sets more variables for its service; the file does not remove them.
+- The file does not act in a pytest run with `--noconftest`, or when you start
+  product code yourself.
 
 These are development setup commands, not a per-release checklist. For releases,
 use the [Fast Release Guide](docs/validation/release-qualification.md): reuse the

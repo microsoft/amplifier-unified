@@ -1,16 +1,18 @@
-"""The tests do not use what belongs to an Amplifier Unified of this machine.
+"""What ``conftest.py`` keeps away from the pytest process.
 
 A shell that a running Amplifier Unified starts (a chat's shell tool, a worker)
 inherits environment variables from that service. A person's shell can hold
-provider credentials. An installed Amplifier Unified keeps its data in the
-product's default folders. The product also finds some folders through the
-account database. ``conftest.py`` handles these when pytest loads it, and
-again around each test.
+environment variables with provider credentials. An installed Amplifier
+Unified keeps its data in the product's default folders. The product also
+finds some folders through a lookup of the account by ID. ``conftest.py``
+removes the variables in its two lists, gives the product folders of the run,
+and changes that lookup. It does so when pytest loads it, and again around
+each test. It does not change ``HOME``; its first comment names the limits.
 
 ``TestInsideARun`` holds what is true inside every run of this suite. Its cases
 run in the order in which they are written. The last case of this file starts a
-second run that inherits the variables of a service's shell and the provider
-credentials with made-up values, and requires the same there.
+second run that inherits the variables of a service's shell and the credential
+variables with made-up values, and requires the same there.
 
 Such a shell also inherits ``AMPLIFIER_APP_GENERATION_EXEC``. The product only
 writes that variable and never reads it, so ``conftest.py`` leaves it alone.
@@ -74,7 +76,8 @@ def product_folders():
     return folders
 
 
-# Module-level code runs before every fixture. Only conftest.py is earlier.
+# Module-level code runs when pytest collects this file: before every fixture,
+# after conftest.py, and after the test modules that pytest collected earlier.
 WHEN_PYTEST_IMPORTED_THIS_FILE = (variables(), product_folders())
 
 
@@ -106,11 +109,11 @@ def outside_a_test(seen, session_home):
 
 
 class TestInsideARun:
-    def test_module_level_code_gets_no_service_variable_and_folders_of_this_run(self, session_home):
+    def test_module_level_code_gets_no_outside_variable_and_folders_of_this_run(self, session_home):
         outside_a_test(WHEN_PYTEST_IMPORTED_THIS_FILE, session_home)
         assert session_home == real(session_home)  # No link and no short name in the run's folder.
 
-    def test_a_test_gets_no_service_variable_and_folders_of_its_own(self, tmp_path):
+    def test_a_test_gets_no_outside_variable_and_folders_of_its_own(self, tmp_path):
         found = variables()
         assert {name: found[name] for name in REMOVED} == dict.fromkeys(REMOVED)
         for name in HOMES:
@@ -132,10 +135,14 @@ class TestInsideARun:
         assert set(CREDENTIALS) == {name for names in setup.PROVIDER_ENV.values() for name in names}
         assert set(setup.COPILOT_ENV_ORDER) <= set(CREDENTIALS)
 
-    def test_a_test_leaves_a_variable_set_as_the_product_does(self):
-        os.environ[LEFT] = 'left by a test'
+    def test_a_test_leaves_variables_set(self, monkeypatch):
+        os.environ[CREDENTIALS[0]] = 'left by a test'
+        # The product sets this one during a test. The test then changes it with
+        # monkeypatch, and monkeypatch puts the product's value back when the test ends.
+        os.environ[LEFT] = 'left by the product'
+        monkeypatch.setenv(LEFT, 'set by a test')
 
-    def test_what_runs_between_two_tests_gets_no_service_variable_and_folders_of_this_run(
+    def test_what_runs_between_two_tests_gets_no_outside_variable_and_folders_of_this_run(
             self, between_two_tests, session_home):
         outside_a_test(between_two_tests, session_home)  # Not what the test before left.
         assert os.environ.get(LEFT) is None  # Not what the fixture left after it looked.

@@ -10,15 +10,23 @@ try:
 except ImportError:  # Python has no pwd module on Windows.
     pwd = None
 
-# The tests must not use what belongs to an Amplifier Unified of this machine:
-# the environment variables that a running one gives to the shells that it
-# starts, the person's provider credentials, and the folders where an installed
-# one keeps its data. tests/test_conftest.py holds the cases.
+# This file keeps three things of this machine away from the pytest process:
+# the environment variables in its two lists (parts 1 and 2), the product's
+# default folders (part 3), and the home folder that a lookup of the own
+# account by ID gives (part 4). tests/test_conftest.py holds the cases.
 #
 # pytest loads this file before it imports a test module of this folder. The
 # lines below run here and not only in a fixture, so that they also hold for
 # module-level code, for a fixture with a wider scope, for a module's own copy
-# of os.environ, and for work that a test leaves running when it ends.
+# of os.environ, and for work that a test leaves running when it ends. The
+# changes stay until the process ends.
+#
+# The file does nothing else. HOME stays as it is: a file that the product
+# finds through '~' is still the person's file (for example a ChatGPT sign-in
+# file below ~/.amplifier), and tools such as Git and uv keep their own files
+# below the home folder. Parts 1 to 3 change os.environ, so a program that a
+# test starts with that environment gets them too. Part 4 is in this process
+# only. A pytest run with --noconftest does not load the file.
 
 # 1. A shell that a running Amplifier Unified starts (a chat's shell tool, a
 # worker) inherits these variables from that service. The product reads each
@@ -37,10 +45,12 @@ SERVICE_VARIABLES = (
     'OPENAI_BASE_URL',  # native_provider._official_endpoint
     'INVOCATION_ID',  # deployment_service.current_process_is_unit_managed
 )
-# The person's provider credentials (setup.PROVIDER_ENV). The product takes the
-# first one that is set as the credential of a connection, and each one is part
-# of a connection's identity (provider_catalog.connection_key). A test must not
-# use them. A test that needs a credential sets a made-up one itself.
+# 2. The environment variables for provider credentials (setup.PROVIDER_ENV). A
+# person's shell can hold them. The product reads them for a provider's
+# credential (setup.environment_credential), and the variables of a provider
+# are part of the identity of its connections
+# (provider_catalog.connection_key). A test must not get one from outside. A
+# test that needs one sets a made-up one itself.
 CREDENTIAL_VARIABLES = (
     'OPENAI_API_KEY',
     'TYPESAFE_API_KEY',
@@ -64,13 +74,26 @@ def remove_outside_variables():
 
 remove_outside_variables()
 
-# 2. The product's own folders. Without these variables the product uses its
+
+# The product sets some of these variables for its own process and does not
+# take them back (for example host.session), and a test can leave one. So they
+# also go before each test (the fixture below) and after it. After it means:
+# after pytest's teardown of the test, when the fixtures that end with the
+# test have ended. monkeypatch is such a fixture. When it ends, it puts back
+# what it found, and that can be a value that the product set during the test.
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_teardown():
+    yield
+    remove_outside_variables()
+
+
+# 3. The product's own folders. Without these variables the product uses its
 # default folders, and an installed Amplifier Unified keeps its data there. So
 # each variable holds a folder of this run from here on. Each test then gets
 # new folders of its own (the fixture below).
 # A real path: no link and no short name in it. On Windows the temporary folder
 # can have a short name with a '~', and the product refuses a '~' in the path
-# of its app home (windows_files).
+# of its app home (windows_files._component).
 SESSION_HOME = os.path.realpath(tempfile.mkdtemp(prefix='amplifier-unified-tests-'))
 HOMES = {
     'AMPLIFIER_WEB_HOME': 'unified-home',  # host.config.app_home
@@ -83,16 +106,21 @@ for _name, _folder in HOMES.items():
 
 
 def pytest_unconfigure(config):
+    # A second pytest run inside this process that loads this file would remove
+    # the folder at its own end, before this run ends.
     shutil.rmtree(SESSION_HOME, ignore_errors=True)
 
 
-# 3. Some folders the product finds through the account database
+# 4. Some folders the product finds through a lookup of the account by ID
 # (pwd.getpwuid), not through HOME or a variable: the test-resource authority
 # that every Amplifier installation of the account shares
-# (test_host_resources.directory), and the test runners' folders. A test must
-# not take that authority's lock or read its reservations. So the lookup gives
-# the caller's own account a home folder of this run, and of each test. A
-# program that a test starts still asks the real database.
+# (test_host_resources.directory), and folders that incus_engine_generations,
+# incus_engine_probe and test_runner_controller use below that home folder. A
+# test must not take that authority's lock or read its reservations. So, where
+# Python has the pwd module, that lookup gives the caller's own account a home
+# folder of this run, and of each test, in this process. The account database
+# does not change: a lookup by name, and a program that a test starts, get the
+# real home folder.
 ACCOUNT = {'home': os.path.join(SESSION_HOME, 'account-home')}
 if pwd is not None:
     _getpwuid = pwd.getpwuid
@@ -114,16 +142,11 @@ def session_home():
 
 @pytest.fixture(autouse=True)
 def isolated_shared_session_files(tmp_path, monkeypatch):
-    # The product sets some of these variables for its own process and does
-    # not take them back (host.session). So they go before each test and after
-    # it, directly: monkeypatch puts back what it found, and it would find the
-    # value that an earlier test left.
+    # Directly, not with monkeypatch: monkeypatch puts back what it found.
     remove_outside_variables()
     for name, folder in HOMES.items():
         monkeypatch.setenv(name, str(tmp_path / folder))
     monkeypatch.setitem(ACCOUNT, 'home', str(tmp_path / 'account-home'))
-    yield
-    remove_outside_variables()
 
 
 @pytest.fixture
