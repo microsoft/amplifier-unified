@@ -82,7 +82,10 @@ class InstallationGuidanceTests(unittest.TestCase):
         # The steps use Microsoft Edge's names, and the section says so before the first step.
         steps = next(index for index, text in enumerate(texts) if text.startswith("1. Download the setup file:"))
         self.assertIn("The steps below describe Microsoft Edge.", " ".join(texts[:steps]))
-        self.assertIn(" 2. Microsoft Edge holds the download ", texts[steps])
+        numbered = " ".join(texts[steps:])
+        self.assertIn(" 2. Microsoft Edge holds the download ", numbered)
+        # "In step 4" below: step 4 is the step with the certificate question.
+        self.assertRegex(numbered, r" 4\. (?:(?! 5\. ).)*whether to install a certificate named ")
         # Below the steps and above the limits: three stops. The list is the one that follows this sentence.
         lead, limits = ("In these cases, setup or the first start does not finish. A message says what to do:",
                         "Limits of this preview:")
@@ -102,6 +105,15 @@ class InstallationGuidanceTests(unittest.TestCase):
             "\"this PC's security settings do not let it finish setting up its private connection to your "
             'browser". If your organization manages this PC, ask its IT support to trust the certificate '
             "file named in the message for your account."])
+        # Each quoted text is a part of the text that the program shows for that case.
+        first_start = source("amplifier_web/windows_installation.py")
+        shown_texts = [node.value for node in ast.walk(ast.parse(first_start))
+                       if isinstance(node, ast.Constant) and isinstance(node.value, str)]
+        quoted = re.findall(r'"([^"]+)"', plain(cases))
+        self.assertEqual(len(quoted), 3, quoted)
+        self.assertIn('"' + quoted[0] + " User Account Control is off,", setup)
+        self.assertIn('", and that path ' + quoted[1] + ' ("+', setup)
+        self.assertIn("Amplifier is running, but " + quoted[2] + ".\n\n", shown_texts)
         # Setup: its message says that setup did not finish, and shows a stop's next step below "What to do:".
         self.assertIn('"Setup did not finish.\\n\\nWhat happened:\\n"+text[0]+"\\n\\nWhat to do:\\n"+text[1]', setup)
         self.assertIn("if(stop!=null) return new[]{stop.Message,stop.Next};", setup)
@@ -120,9 +132,6 @@ class InstallationGuidanceTests(unittest.TestCase):
                 self.assertIn(next_step, between)
                 self.assertNotIn("SetupStop", between.split(next_step, 1)[0])
         # The first start: the message, the request to IT support, and the certificate file that the message names.
-        first_start = source("amplifier_web/windows_installation.py")
-        shown_texts = [node.value for node in ast.walk(ast.parse(first_start))
-                       if isinstance(node, ast.Constant) and isinstance(node.value, str)]
         for shown in ("Amplifier is running, but this PC's security settings do not let it finish "
                       "setting up its private connection to your browser.\n\n",
                       "If your organization manages this PC, ask its IT support to trust this "
