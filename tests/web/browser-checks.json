@@ -2,6 +2,14 @@
   "schemaVersion": 1,
   "scenarios": [
     {
+      "id": "retained-activity-host",
+      "command": ["node", "tests/web/retained-activity-host-browser.mjs"],
+      "env": {
+        "AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/retained-activity-host",
+        "AMPLIFIER_TEST_PYTHON": "{root}/.venv/bin/python"
+      }
+    },
+    {
       "id": "agent-chat-navigation",
       "command": ["node", "tests/web/chat-library-browser.mjs", "--agent-navigation-only"],
       "env": {"AMPLIFIER_TEST_PYTHON": "{root}/.venv/bin/python"}

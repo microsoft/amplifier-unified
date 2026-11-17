@@ -7,11 +7,11 @@ from test_shell_modules import service
 from test_shell_query_owner import prepare, settle, snapshot
 
 
-def hold_pages(service, monkeypatch):
+def hold_pages(service, monkeypatch, retry_after=0):
     from amplifier_web.shell_query_owner import PendingQuery
 
     def held(*args, **kwargs):
-        raise PendingQuery()
+        raise PendingQuery(retry_after)
 
     monkeypatch.setattr(service.projections, 'chats', held)
 
@@ -25,20 +25,21 @@ def question(**fields):
             'status': 'pending', 'required': True, **fields}
 
 
-async def test_selection_switch_keeps_reading_owner_activity_not_old_page(service, monkeypatch):
+@pytest.mark.parametrize('retry_after', [0, 1000])
+async def test_selection_switch_keeps_reading_owner_activity_not_old_page(service, monkeypatch, retry_after):
     alpha = service.state['sessions'][0]
     alpha.update(status='working', questions=[question()])
     prepare(service)
     initial = await settle(service)
     frozen = deepcopy(initial)
     assert activity_context(initial)['alpha']['label'] == 'Answer requested'
-    hold_pages(service, monkeypatch)
+    hold_pages(service, monkeypatch, retry_after)
     alpha['questions'][0].update(status='answered', delivery={'status': 'accepted'})
     service._publish_changes(sessions={'alpha'})
     service.clients.records['browser']['selectedSessionId'] = 'beta'
     current = snapshot(service, demand=2)
     entry = current['instances']['chats']
-    assert entry['pending']['recentNavigation']['status'] == 'pending'
+    assert entry['pending']['recentNavigation']['status'] == ('retry' if retry_after else 'pending')
     assert 'recentNavigation' not in entry['resources']
     assert activity_context(current) == {
         'alpha': {'kind': 'working', 'label': 'Working'},
@@ -149,6 +150,59 @@ async def test_completed_page_replaces_reading_ids_and_never_accumulates(service
     assert set(activity_context(value)) == {'beta'}
     reading = service.shell.resources.clients['browser']['instances']['chats']['reading']
     assert reading['recentNavigation']['ids'] == ('beta',)
+
+
+async def test_held_page_activity_work_is_bounded_by_reading_ids(service, monkeypatch):
+    from amplifier_web import cold_display, navigation_summary
+    from amplifier_web.cold_display import ColdRecord
+    prepare(service)
+    await settle(service)
+    hold_pages(service, monkeypatch)
+    service.clients.records['browser']['selectedSessionId'] = 'beta'
+    for number in range(200):
+        # Unrelated admitted cold histories must not add activity work or reads.
+        service.state['sessions'].append(ColdRecord({
+            'id': f'unrelated-{number}', 'status': 'idle', 'workspace': '/fixture',
+            'workspaceId': 'one', 'title': 'Unrelated history',
+            'createdAt': 1, 'recentActivityAt': 1, 'navigationActivityAt': 1,
+            '_coldFields': {name: {'$resource': 'unread'} for name in cold_display.SESSION_FIELDS}},
+            service.db))
+    service.projections.values.pop(('session-index',), None)
+    # Establish the ordinary directory metadata before measuring the changed
+    # context path, not initial admitted-directory reconciliation work.
+    service.directory.observation_revision
+    calls = []
+    in_context = False
+    navigation = service.shell.navigation
+    def context_navigation(*args, **kwargs):
+        nonlocal in_context
+        in_context = kwargs.get('context_visible_ids') is not None
+        try:
+            return navigation(*args, **kwargs)
+        finally:
+            in_context = False
+    activity = navigation_summary.activity
+    def counted(row, *args, **kwargs):
+        if in_context:
+            calls.append(row['id'])
+        return activity(row, *args, **kwargs)
+    def forbidden(*args, **kwargs):
+        raise AssertionError('Held-page context hydrated/admitted a history')
+    monkeypatch.setattr(navigation_summary, 'activity', counted)
+    monkeypatch.setattr(service.shell, 'navigation', context_navigation)
+    monkeypatch.setattr(cold_display, 'load', forbidden)
+    monkeypatch.setattr(service, '_session', forbidden)
+    try:
+        value = snapshot(service, demand=2)
+        # Default composition has two interested instances, each with exactly two
+        # reading owners; 200 unrelated histories do not become activity inputs.
+        assert sorted(calls) == ['alpha', 'alpha', 'beta', 'beta']
+        calls.clear()
+        assert snapshot(service, demand=2) == value
+        # Pending queries revisit context keys, but reuse unchanged activity.
+        assert calls == []
+    finally:
+        service.state['sessions'] = service.state['sessions'][:2]
 
 
 @pytest.mark.parametrize('questions,label', [
