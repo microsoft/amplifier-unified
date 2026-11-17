@@ -357,12 +357,31 @@ def test_pending_certificate_review_does_not_issue_browser_grant(tmp_path, monke
     assert result["health"]["ok"] and reviews == [(tmp_path, ["private-target"], "private-pin")]
 
 
-def opening_launch(tmp_path, monkeypatch, outcome, *, listed=True):
-    """Launch with trust established, up to the one `open` command; record every effect."""
+def folder_state(monkeypatch, root, state):
+    """What the start texts read about the installation folder: `whole`, `removing` or `deleted`.
+
+    `whole`: setup completed it, and the app's folder is there. `removing`:
+    an uninstall that deletes the folder wrote its journal. `deleted`: that
+    uninstall finished; nothing of the installation is left.
+    """
+    from amplifier_web import windows_uninstall
+    monkeypatch.setattr(windows_uninstall, "completed", lambda folder: folder == root and state != "deleted")
+    monkeypatch.setattr(windows_uninstall, "unfinished", lambda folder: folder == root and state == "removing")
+    if state == "whole":
+        (root / "app").mkdir(exist_ok=True)
+
+
+def opening_launch(tmp_path, monkeypatch, outcome, *, listed=True, during=None):
+    """Launch with trust established, up to the one `open` command; record every effect.
+
+    `during` is the state that the folder gets while the `open` command runs
+    (the start step has ended then, and an uninstall can take the lock).
+    """
     from amplifier_web import windows_installation, windows_consumer_shell, deployment, browser_entry, updates
     monkeypatch.setattr(consumer, "installation", lambda root: (root, {}))
     monkeypatch.setattr(consumer, "environment", lambda *a: {"private": "environment"})
     monkeypatch.setattr(windows_consumer_shell, "listed", lambda root: listed)
+    folder_state(monkeypatch, tmp_path, "whole")
     async def prepared(*args, identity, progress):
         return {"background": True, "created": False, "health": {"ok": True}}
     monkeypatch.setattr(windows_installation, "prepare_background", prepared)
@@ -373,6 +392,8 @@ def opening_launch(tmp_path, monkeypatch, outcome, *, listed=True):
                         lambda *a, fresh: events.append(("trust",)) or True)
     async def process(*args, env, timeout):
         events.append(("command", args, env, timeout))
+        if during:
+            folder_state(monkeypatch, tmp_path, during)
         if isinstance(outcome, BaseException):
             raise outcome
         return outcome
@@ -438,6 +459,38 @@ def test_browser_message_names_setup_when_the_start_menu_entry_does_not_exist(tm
                             "run the Amplifier setup file again. It keeps your chats and settings.")
 
 
+@pytest.mark.parametrize("folder", ["removing", "deleted"])
+def test_browser_message_does_not_say_that_setup_keeps_chats_which_an_uninstall_deleted(tmp_path, monkeypatch, folder):
+    """An uninstall that deletes the folder can run while this start waits for the browser.
+
+    The start then ends without a confirmation. Its message still names the
+    setup file, and no longer says that the setup file keeps chats and
+    settings: they are deleted, or they are being deleted.
+    """
+    from amplifier_web.update_diagnostics import CommandOutput
+    result, events = opening_launch(tmp_path, monkeypatch, CommandOutput(""), listed=False, during=folder)
+    assert result["browser"] == {"opened": False, "reason": "not-confirmed"}
+    assert events[2][1] == ("Amplifier may not have opened in your browser.\n\n"
+                            "Look for an Amplifier tab in your browser. If there is none, "
+                            "run the Amplifier setup file again.")
+
+
+@pytest.mark.parametrize("missing", ["record", "journal", "app"])
+def test_setup_keeps_chats_is_said_only_for_a_completed_folder_with_its_app_folder_and_no_removal(
+        tmp_path, monkeypatch, missing):
+    """Each of the three facts is needed for the sentence."""
+    from amplifier_web import windows_uninstall
+    folder_state(monkeypatch, tmp_path, "whole")
+    assert consumer._setup_again(tmp_path) == "run the Amplifier setup file again. It keeps your chats and settings"
+    if missing == "record":
+        monkeypatch.setattr(windows_uninstall, "completed", lambda folder: False)
+    elif missing == "journal":
+        monkeypatch.setattr(windows_uninstall, "unfinished", lambda folder: True)
+    else:
+        (tmp_path / "app").rmdir()
+    assert consumer._setup_again(tmp_path) == "run the Amplifier setup file again"
+
+
 @pytest.mark.parametrize("first_setup", [True, False])
 def test_first_setup_creates_the_identity_in_this_process_and_hands_windows_that_root(
         tmp_path, monkeypatch, first_setup):
@@ -482,6 +535,45 @@ def test_os_entries_require_audited_first_install_proof(tmp_path, monkeypatch):
     monkeypatch.setattr(consumer, "delivery_proof", lambda home: {"audited": True})
     consumer.integrate(tmp_path)
     assert calls == [(tmp_path, "1.0.0")]
+
+
+def test_os_entries_are_added_under_the_installations_lock_and_refused_while_it_is_taken(tmp_path, monkeypatch):
+    """An uninstall holds the lock while it removes the entries and deletes the installation's records."""
+    from amplifier_web import windows_consumer_shell, windows_uninstall
+    state = {"locked": False, "busy": False, "calls": []}
+
+    @contextmanager
+    def single(root, **options):
+        assert root == tmp_path
+        if state["busy"]:
+            raise windows_uninstall.Busy()
+        state["locked"] = True
+        try:
+            yield
+        finally:
+            state["locked"] = False
+    monkeypatch.setattr(windows_uninstall, "single", single)
+
+    def under_lock(name, result):
+        def call(*args):
+            assert state["locked"], name + " runs under the installation's lock"
+            state["calls"].append(name)
+            return result
+        return call
+    monkeypatch.setattr(consumer, "installation", under_lock("installation", (tmp_path, {"version": "1.0.0"})))
+    monkeypatch.setattr(consumer, "delivery_proof", under_lock("proof", {"audited": True}))
+    monkeypatch.setattr(windows_consumer_shell, "install", under_lock("install", {"shortcuts": 4}))
+    assert consumer.integrate(tmp_path) == {"shortcuts": 4}
+    assert state["calls"] == ["installation", "proof", "install"] and not state["locked"]
+    # Another Amplifier window starts or removes this installation: nothing is read, nothing is added.
+    state.update(busy=True, calls=[])
+    with pytest.raises(consumer.Refused) as refused:
+        consumer.integrate(tmp_path)
+    assert refused.value.step == "busy" and state["calls"] == []
+    # Setup reads the result of this command: a refusal is exit status 1 and one line.
+    with pytest.raises(SystemExit) as stopped:
+        consumer.main(["--root", str(tmp_path), "--integrate"])
+    assert stopped.value.code == 1 and state["calls"] == []
 
 
 def test_windowless_failure_is_bounded_owner_notice_not_stderr_or_retry(tmp_path, monkeypatch):
@@ -584,11 +676,16 @@ def test_maintenance_on_a_folder_that_fails_the_installation_check_writes_nothin
 
 @pytest.mark.parametrize("listed", [False, True])
 @pytest.mark.parametrize("step", ["prepare", "ready", None])
-def test_start_failure_message_matrix(tmp_path, monkeypatch, listed, step):
+@pytest.mark.parametrize("folder", ["whole", "deleted"])
+def test_start_failure_message_matrix(tmp_path, monkeypatch, listed, step, folder):
     from amplifier_web import windows_consumer_shell
     monkeypatch.setattr(windows_consumer_shell, "listed", lambda root: listed)
+    folder_state(monkeypatch, tmp_path, folder)
+    # After an uninstall that deleted the folder, the setup file makes a new
+    # installation. It has no chats to keep, and the text does not say so.
     next_step = ("open Amplifier from the Start menu: Amplifier Unified" if listed else
-                 "run the Amplifier setup file again. It keeps your chats and settings")
+                 "run the Amplifier setup file again" + (
+                     ". It keeps your chats and settings" if folder == "whole" else ""))
     if step == "prepare":
         expected = ("Amplifier could not prepare the remaining parts of the app. It downloads them from the internet.\n\n"
                     "Check that this PC is connected to the internet. Then " + next_step + "." +
@@ -598,6 +695,31 @@ def test_start_failure_message_matrix(tmp_path, monkeypatch, listed, step):
     assert consumer.start_failure(tmp_path, step) == expected
     if not listed:
         assert "Start menu" not in expected
+    assert ("keeps your chats" in expected) == (folder == "whole" and not listed)
+
+
+@pytest.mark.parametrize("listed", [False, True])
+@pytest.mark.parametrize("step", ["prepare", "ready", None])
+@pytest.mark.parametrize("error", [None, "entry"])
+def test_a_start_that_fails_on_a_folder_whose_removal_began_says_that_and_not_the_setup_file(
+        tmp_path, monkeypatch, listed, step, error):
+    """With the journal of a removal in the folder there is one true text for a start.
+
+    The launcher's own check of the installation can fail before the start
+    looks for the journal: a removal deletes the launcher's records near its
+    end. The earlier text then said "Restart Windows. Then run the Amplifier
+    setup file again. It keeps your chats and settings." Neither step helps,
+    and the chats are deleted.
+    """
+    from amplifier_web import windows_consumer_shell, windows_service
+    monkeypatch.setattr(windows_consumer_shell, "listed", lambda root: listed)
+    folder_state(monkeypatch, tmp_path, "removing")
+    problem = windows_service.TaskNotConfirmed(ENTRY) if error else None
+    text = consumer.start_failure(tmp_path, step, problem)
+    assert text == consumer._UNFINISHED["removing"]
+    assert "does not open until it has finished" in text and "Uninstall Amplifier" in text
+    for wrong in ("setup file", "keeps your chats", "Restart Windows", "internet", "Task Scheduler"):
+        assert wrong not in text
 
 
 @pytest.mark.parametrize("listed", [False, True])
@@ -672,8 +794,9 @@ def test_a_start_that_cannot_use_the_sign_in_entry_names_that_cause_and_not_the_
                 "It uses only an entry that it can confirm.\n\n") in text
         assert text.count(ENTRY) == 2 and "Task Scheduler Library" in text and "press the Delete key" in text
         assert "no longer starts when you sign in, until it makes a new entry" in text
-        assert "another Amplifier installation" in text
-        assert "do not delete the entry: use that installation, or uninstall it first." in text
+        assert ("If you have another Amplifier installation for this Windows account, the entry can belong "
+                "to it. If you want that installation to start when you sign in, do not delete the entry.\n\n"
+                "Otherwise delete the entry. ") in text
         assert ("4. Restart this PC.\n5. " + ("Open Amplifier from the Start menu: Amplifier Unified."
                                                if listed else "Run the Amplifier setup file again.")
                 + " It makes a new entry. Your chats and settings stay.") in text
@@ -694,6 +817,67 @@ def test_a_start_that_cannot_use_the_sign_in_entry_names_that_cause_and_not_the_
     with pytest.raises(SystemExit):
         consumer.main(["--root", str(tmp_path)])
     assert shown == [text]
+
+
+@pytest.mark.parametrize("purpose", ["start", "status", "uninstall", "removal"])
+def test_an_entry_that_was_not_confirmed_does_not_send_the_person_to_another_installation(purpose):
+    """The four texts that give the steps to delete the entry, each complete after its opening.
+
+    The earlier sentence was "Then do not delete the entry: use that
+    installation, or uninstall it first." An entry of another installation
+    can have the same cause (the Windows account was renamed, and both
+    installations are this account's). Then that installation does not
+    start and does not uninstall either. The sentence now says only what
+    deleting the entry takes from that installation; that holds for a start,
+    a status, an uninstall and a removal that goes on.
+    """
+    opening, _, rest = consumer.entry_notice(purpose, ENTRY, False).partition("\n\n")
+    assert opening and "entry" not in opening
+    removes = purpose in ("uninstall", "removal")
+    assert rest == (
+        "Amplifier could not confirm that its start-at-sign-in entry in Windows belongs to this installation. "
+        "It uses only an entry that it can confirm.\n\n"
+        f"The entry is the task named {ENTRY} in Windows Task Scheduler. If you have another Amplifier "
+        "installation for this Windows account, the entry can belong to it. If you want that installation "
+        "to start when you sign in, do not delete the entry.\n\n"
+        "Otherwise delete the entry. Amplifier then no longer starts when you sign in"
+        + (".\n" if removes else ", until it makes a new entry in step 5.\n") +
+        "1. Open the Start menu, type Task Scheduler and open it.\n"
+        "2. Select Task Scheduler Library.\n"
+        f"3. Select the task named {ENTRY}, press the Delete key and confirm.\n"
+        "4. Restart this PC.\n"
+        "5. " + ("Uninstall Amplifier again." if removes else
+                 "Open Amplifier from the Start menu: Amplifier Unified. It makes a new entry. "
+                 "Your chats and settings stay."))
+    for wrong in ("use that installation", "uninstall it first"):
+        assert wrong not in rest
+    # A stop needs no confirmed entry, and Windows gave no answer in the other case: neither deletes.
+    for text in (consumer.entry_notice("stop", ENTRY, False), consumer.entry_notice(purpose, ENTRY, True)):
+        assert "delete" not in text.lower() and "another Amplifier installation" not in text
+
+
+def test_a_renamed_windows_account_gets_the_steps_that_make_a_new_entry(tmp_path, monkeypatch):
+    """A stated limit (follow-up B6): Amplifier does not repair this by itself.
+
+    Task Scheduler keeps the account's earlier name in the sign-in trigger.
+    After a rename that name maps to nothing, and the computer's name still
+    maps. The ownership check refuses that, as it refuses the name of a
+    deleted other account: it cannot tell the two apart. The person gets the
+    steps to delete the entry; the next start then makes a new one.
+    """
+    from test_windows_service import AUTHORITY, SID, _trigger_xml, _windows_names
+    from amplifier_web import windows_consumer_shell, windows_service
+    _windows_names(monkeypatch, {"PC\\Former": None, "PC": (AUTHORITY, 3)})
+    with pytest.raises(windows_service.TaskNotConfirmed) as refused:
+        windows_service.owned_spec(_trigger_xml("PC\\Former"), SID)
+    assert refused.value.retry is False and refused.value.entry == "AmplifierUnified-" + SID
+    monkeypatch.setattr(windows_consumer_shell, "listed", lambda root: True)
+    folder_state(monkeypatch, tmp_path, "whole")
+    text = consumer.start_failure(tmp_path, None, refused.value)
+    assert text == consumer.entry_notice("start", "AmplifierUnified-" + SID, False)
+    assert text.startswith("Amplifier could not start.\n\nAmplifier could not confirm that its start-at-sign-in entry")
+    assert text.endswith("4. Restart this PC.\n5. Open Amplifier from the Start menu: Amplifier Unified. "
+                         "It makes a new entry. Your chats and settings stay.")
 
 
 @pytest.mark.parametrize("retry", [False, True])

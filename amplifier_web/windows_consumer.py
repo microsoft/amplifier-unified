@@ -260,7 +260,7 @@ async def launch(root, *, open_browser=True, progress=None):
                          "Look for an Amplifier tab in your browser. If there is none, " + (
                 "open Amplifier from the Start menu: Amplifier Unified. "
                 "If this message appears again, restart this PC." if listed(root) else
-                "run the Amplifier setup file again. It keeps your chats and settings."))
+                _setup_again(root) + "."))
             return {**result, "browser": {"opened": False, "reason": "not-confirmed"}}
         return {**result, "browser": {"opened": True}}
     return result
@@ -334,6 +334,10 @@ def entry_notice(purpose, entry, retry, *, listed=True):
     nothing is deleted.
     `listed` is False when Amplifier is not in the Start menu: the setup file
     then opens it.
+    The text does not send the person to another installation ("use that
+    installation, or uninstall it first"): an entry of that installation
+    which has the same cause stops its start and its uninstall as well. It
+    says only what deleting the entry takes from that installation.
     """
     opening = {"start": "Amplifier could not start.",
                "status": "Amplifier could not read its status.",
@@ -360,8 +364,8 @@ def entry_notice(purpose, entry, retry, *, listed=True):
                 "3. " + again)
     return (opening + "\n\n" + cause + "\n\n"
             f"The entry is the task named {entry} in Windows Task Scheduler. If you have another "
-            "Amplifier installation for this Windows account, the entry can belong to it. Then do "
-            "not delete the entry: use that installation, or uninstall it first.\n\n"
+            "Amplifier installation for this Windows account, the entry can belong to it. If you "
+            "want that installation to start when you sign in, do not delete the entry.\n\n"
             "Otherwise delete the entry. Amplifier then no longer starts when you sign in"
             + (".\n" if removes else ", until it makes a new entry in step 5.\n") +
             "1. Open the Start menu, type Task Scheduler and open it.\n"
@@ -751,12 +755,40 @@ async def maintenance(root, operation):
         raise Unfinished(step, error) from error
 
 def integrate(root):
-    """Setup-only OS entries after source/payload/graph and dependency checks."""
-    root, value = installation(root)
-    if delivery_proof(root / "app") is None:
-        raise ValueError("The consumer payload audit has not qualified this installation.")
-    from .windows_consumer_shell import install
-    return install(root, value["version"])
+    """Setup-only OS entries after source/payload/graph and dependency checks.
+
+    Under the installation's lock, like a start. An uninstall that deletes
+    the folder holds that lock from before it removes the entries until it
+    has deleted the records that the check here reads. So a second setup run
+    in those seconds waits, then finds no installation and adds nothing. The
+    journal of a removal is not looked for: after a removal that stopped,
+    the entries are what lets the person uninstall again.
+    """
+    from .windows_files import address
+    with _one_at_a_time(address(root)):
+        root, value = installation(root)
+        if delivery_proof(root / "app") is None:
+            raise ValueError("The consumer payload audit has not qualified this installation.")
+        from .windows_consumer_shell import install
+        return install(root, value["version"])
+
+
+def _setup_again(root):
+    """The next step that names the setup file, for the end of a sentence.
+
+    A second setup run adds the Start-menu entry again. The text says that
+    it keeps the person's chats and settings only where this program sees
+    that: setup completed this folder (setup then installs nothing and
+    deletes nothing), no removal has begun to delete it, and the app's own
+    folder is there. An uninstall that deletes the folder writes its journal
+    before it deletes anything, and the app's folder is gone before the
+    journal is. Everywhere else the program does not know what the setup
+    file finds; after such an uninstall it finds no chats to keep.
+    """
+    from . import windows_uninstall
+    kept = (not windows_uninstall.unfinished(root) and windows_uninstall.completed(root)
+            and os.path.isdir(os.path.join(root, "app")))
+    return "run the Amplifier setup file again" + (". It keeps your chats and settings" if kept else "")
 
 
 def start_failure(root, step=None, error=None):
@@ -764,15 +796,20 @@ def start_failure(root, step=None, error=None):
 
     `step` is the last step that the start named; `error` is what ended it.
     """
+    from . import windows_uninstall
     from .windows_consumer_shell import listed
     from .windows_service import TaskNotConfirmed
+    if windows_uninstall.unfinished(root):
+        # A removal of this folder began. Amplifier does not open from it, a
+        # restart does not change that, and a setup run brings nothing back.
+        return _UNFINISHED["removing"]
     has_entries = listed(root)
     if isinstance(error, TaskNotConfirmed):
         # The start-at-sign-in entry exists and Amplifier does not use it. This
         # is not a failed download, and a restart alone does not change it.
         return entry_notice("start", error.entry, error.retry, listed=has_entries)
     next_step = ("open Amplifier from the Start menu: Amplifier Unified" if has_entries else
-                 "run the Amplifier setup file again. It keeps your chats and settings")
+                 _setup_again(root))
     if step == "prepare":
         return ("Amplifier could not prepare the remaining parts of the app. It downloads them from the internet.\n\n"
                 "Check that this PC is connected to the internet. Then " + next_step + "." +
