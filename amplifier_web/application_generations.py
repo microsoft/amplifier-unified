@@ -266,18 +266,59 @@ else:
     return output.strip() == 'compatible'
 
 
-def exec_arguments(arguments):
-    """The argument list for os.execv, with every argument kept whole.
+def _console():
+    """Whether this Windows process has a console (with or without a window)."""
+    import ctypes
+    return bool(ctypes.WinDLL("kernel32").GetConsoleCP())
 
-    On Windows the C runtime joins the list with spaces and quotes nothing.
-    A folder name with a space (a user name such as "Jane Doe") would reach
-    the app as two arguments, and no command would work after an app update.
-    Quote each argument there in the way that subprocess does.
-    """
-    if os.name != "nt":
-        return list(arguments)
+
+def _standard(descriptor):
+    """This process's own standard handle for a child; the null device when it has none."""
+    import msvcrt
     import subprocess
-    return [subprocess.list2cmdline([argument]) for argument in arguments]
+    try:
+        msvcrt.get_osfhandle(descriptor)
+    except (OSError, ValueError):
+        return subprocess.DEVNULL
+    return descriptor
+
+
+def hand_over(python, arguments):
+    """Let another interpreter run this command in the place of this process. Does not return.
+
+    Elsewhere than on Windows this is exec: the process stays, with its
+    output and its exit status.
+
+    Windows has no exec. Its `os.execv` starts a new process and ends the
+    calling one at once with exit status 0. The caller of the command then
+    went on while the command still ran, and never learned that it failed.
+    So on Windows this process starts the interpreter, waits for its end and
+    ends with its exit status. The caller gets control back when the output
+    is complete.
+
+    - The child gets this process's own standard handles and its console. A
+      process without a console gives the child one that has no window:
+      Windows would otherwise open a console window for it.
+    - Ctrl+C and Ctrl+Break reach both processes. The child decides what
+      they do; this process ignores them and reports the child's end.
+    - A caller that ends this process at a time limit does not end the
+      child. That was so before, too: the command then goes on to its end.
+    - `subprocess` quotes each argument, so a folder name with a space (a
+      user name such as "Jane Doe") stays one argument.
+    """
+    command = [str(python), *map(str, arguments)]
+    if os.name != "nt":
+        return os.execv(command[0], command)
+    import signal
+    import subprocess
+    for name in ("SIGINT", "SIGBREAK"):
+        signal.signal(getattr(signal, name), signal.SIG_IGN)
+    status = subprocess.Popen(
+        command, stdin=_standard(0), stdout=_standard(1), stderr=_standard(2),
+        creationflags=0 if _console() else subprocess.CREATE_NO_WINDOW).wait()
+    # Windows gives an unsigned 32-bit status (0xC000013A after Ctrl+C).
+    # Python ends with the same bits only from the signed form.
+    raise SystemExit(status - (1 << 32) if status >= 1 << 31 else status)
 
 
 def delegate(argv=None):
@@ -326,7 +367,4 @@ def delegate(argv=None):
     os.environ["AMPLIFIER_WEB_HOME"] = str(home)
     # Match qualification's isolated import path. A repository in the caller's
     # working directory must not replace the app in this tested environment.
-    # On Windows this starts the app as a new process and ends this one at
-    # once with exit status 0. The caller of a command still receives the
-    # app's output, but never its exit status.
-    os.execv(str(python), exec_arguments([str(python), "-I", "-m", "amplifier_web", *args]))
+    hand_over(python, ["-I", "-m", "amplifier_web", *args])

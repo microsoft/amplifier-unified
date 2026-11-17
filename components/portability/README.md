@@ -30,7 +30,9 @@ No Unified, Core, Foundation, provider or account installation is needed for the
 mechanism tests. They use real Git, signing keys and synthetic private files.
 
 Standalone delivery selects the public worktrees artifact recorded in
-`worktrees-source.json`. Download all four assets from that receipt's component
+`worktrees-source.json`, now the independent
+[`amplifier-platform-worktrees` publication](https://github.com/bkrabach/amplifier-platform-worktrees/releases/tag/worktrees-v0.1.0).
+This dependency receipt does not change Unified’s selected packages. Download all four assets from that receipt's component
 release into an owned directory, compare the downloaded receipt byte-for-byte
 with this selection, and verify `SHA256SUMS` there. The receipt binds the exact
 wheel/source hashes and source revision; a version match alone is insufficient.
@@ -53,7 +55,7 @@ verified wheels together into a fresh standalone environment:
 uv venv /path/to/portability-env
 uv pip install --python /path/to/portability-env/bin/python \
   /path/to/worktrees/amplifier_worktrees-0.1.0-py3-none-any.whl \
-  /path/to/portability/amplifier_portability-0.1.0-py3-none-any.whl
+  /path/to/portability/amplifier_portability-0.1.1-py3-none-any.whl
 ```
 
 This explicit two-artifact path also satisfies the package's exact worktrees

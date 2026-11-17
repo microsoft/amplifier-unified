@@ -39,12 +39,8 @@
 /components/publishing/LICENSE source-context=documentation
 /components/publishing.source.json source-context=configuration
 /components/publishing-delivery/** source-context=generated linguist-vendored=true linguist-generated=true -text
-/components/worktrees/amplifier_worktrees/** source-context=source
-/components/worktrees/tests/** source-context=tests
-/components/worktrees/MANIFEST.in source-context=configuration
-/components/worktrees/.gitignore source-context=configuration
-/components/worktrees/LICENSE source-context=documentation
 /components/worktrees.source.json source-context=configuration
+/components/portability/worktrees-source.json source-context=configuration
 /components/worktrees-delivery/** source-context=generated linguist-vendored=true linguist-generated=true -text
 /components/portability/amplifier_portability/** source-context=source
 /components/portability/tests/** source-context=tests
@@ -53,11 +49,6 @@
 /components/portability/LICENSE source-context=documentation
 /components/portability.source.json source-context=configuration
 /components/portability-delivery/** source-context=generated linguist-vendored=true linguist-generated=true -text
-/components/outputs/amplifier_outputs/** source-context=source
-/components/outputs/tests/** source-context=tests
-/components/outputs/MANIFEST.in source-context=configuration
-/components/outputs/.gitignore source-context=configuration
-/components/outputs/LICENSE source-context=documentation
 /components/outputs.source.json source-context=configuration
 /components/outputs-delivery/** source-context=generated linguist-vendored=true linguist-generated=true -text
 /components/workspace-metadata.source.json source-context=configuration

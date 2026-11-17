@@ -178,8 +178,8 @@ def test_interrupted_swap_restores_original_selection(selected, monkeypatch):
     assert (root / delivery.RECORD).read_bytes() == record
 
 
-@pytest.fixture
-def worktrees_selection(tmp_path):
+@pytest.fixture(params=["monorepo", "repository-root"])
+def worktrees_selection(tmp_path, request):
     root, revision, dist, _ = make_candidate(tmp_path, "worktrees")
     wheel = next(dist.glob("*.whl"))
     with zipfile.ZipFile(wheel) as archive:
@@ -192,6 +192,15 @@ def worktrees_selection(tmp_path):
             archive.writestr(name, raw)
     (dist / "worktrees-source.json").unlink(); (dist / "SHA256SUMS").unlink()
     release.seal(root, revision, dist, component="worktrees")
+    if request.param == "repository-root":
+        path = dist / "worktrees-source.json"
+        receipt = json.loads(path.read_bytes())
+        receipt.update(repository="bkrabach/amplifier-platform-worktrees",
+                       component="worktrees", subdirectory=".")
+        path.write_text(json.dumps(receipt, indent=2) + "\n")
+        (dist / "SHA256SUMS").write_text("".join(
+            f"{release.sha((dist / name).read_bytes())}  {name}\n"
+            for name in (*release.artifact_names(receipt), "worktrees-source.json")))
     (root / "pyproject.toml").write_text(
         '[project]\nname="amplifier-unified"\nversion="1.0.0"\n'
         'dependencies=["filelock>=4.2.1,<5"]\n'
@@ -217,6 +226,18 @@ def test_worktrees_artifact_remains_selected_without_author_or_git(worktrees_sel
         '"filelock>=4.2.1,<5"', '"filelock>=4.2.1,<6"'))
     with pytest.raises(ValueError, match="runtime requirement"):
         delivery.verify(plain, component="worktrees")
+
+
+def test_worktrees_public_receipt_can_restore_original_selection(worktrees_selection):
+    root, revision, dist, _ = worktrees_selection
+    original_runtime = delivery.inventory(root / "components/worktrees-delivery")
+    (dist / "worktrees-source.json").unlink(); (dist / "SHA256SUMS").unlink()
+    original = release.seal(root, revision, dist, component="worktrees")
+    checksum = delivery.sha((dist / "worktrees-source.json").read_bytes())
+    delivery.select(root, dist, revision, checksum, component="worktrees")
+    assert delivery.verify(root, component="worktrees")["source"] == original
+    assert original["subdirectory"] == "components/worktrees"
+    assert delivery.inventory(root / "components/worktrees-delivery") == original_runtime
 
 
 @pytest.fixture
@@ -368,6 +389,7 @@ def test_flat_selection_preserves_modified_root_snapshot(flat_selection, recorde
     ("workspace-metadata", "workspaces", "amplifier_workspace_metadata"),
     ("workspace-metadata", ".", "amplifier_workspace_metadata"),
     ("outputs", "outputs", "amplifier_outputs"),
+    ("outputs", ".", "amplifier_outputs"),
     ("publishing", "publishing", "amplifier_publishing"),
     ("recall", "recall", "amplifier_recall"),
 ])
@@ -377,11 +399,12 @@ def nested_selection(tmp_path, request):
     with zipfile.ZipFile(next(dist.glob("*.whl")), "a") as archive:
         archive.writestr(f"{package}-0.1.0.dist-info/licenses/LICENSE", "MIT\n")
     (dist / f"{component}-source.json").unlink(); (dist / "SHA256SUMS").unlink()
-    release.seal(root, revision, dist, component=component)
+    original_receipt = release.seal(root, revision, dist, component=component)
     if author_directory == ".":
         path = dist / f"{component}-source.json"
         receipt = json.loads(path.read_bytes())
-        receipt.update(repository="bkrabach/amplifier-platform-workspaces",
+        repository = {"workspace-metadata": "workspaces", "outputs": "resources"}[component]
+        receipt.update(repository=f"bkrabach/amplifier-platform-{repository}",
                        component=component, subdirectory=".")
         path.write_text(json.dumps(receipt, indent=2) + "\n")
         (dist / "SHA256SUMS").write_text("".join(
@@ -394,7 +417,7 @@ def nested_selection(tmp_path, request):
         f'packages=["components/{component}-delivery/{package}"]\n')
     checksum = delivery.sha((dist / f"{component}-source.json").read_bytes())
     delivery.select(plain, dist, revision, checksum, component=component)
-    return plain, component, author_directory, package, revision, dist
+    return plain, component, author_directory, package, revision, dist, original_receipt
 
 
 def test_nested_selection_preserves_published_names_without_author_or_git(nested_selection):
@@ -407,7 +430,8 @@ def test_nested_selection_preserves_published_names_without_author_or_git(nested
     assert set(before["files"]) == {"LICENSE", f"{package}/__init__.py"}
     assert before["runtimeRequirements"] == []
     assert not (root / ".git").exists()
-    author_directory = "workspaces" if author_directory == "." else author_directory
+    if author_directory == ".":
+        author_directory = "workspaces" if component == "workspace-metadata" else component
     assert not (root / "components" / author_directory).exists()
     author = root / "components" / author_directory / package; author.mkdir(parents=True)
     (author / "__init__.py").write_text('raise RuntimeError("unselected author")\n')
@@ -416,7 +440,8 @@ def test_nested_selection_preserves_published_names_without_author_or_git(nested
 
 def test_nested_selection_refuses_two_installed_owners(nested_selection):
     root, component, author_directory, package, *_ = nested_selection
-    author_directory = "workspaces" if author_directory == "." else author_directory
+    if author_directory == ".":
+        author_directory = "workspaces" if component == "workspace-metadata" else component
     project = root / "pyproject.toml"
     project.write_text(project.read_text().replace(
         'packages=[', f'packages=["components/{author_directory}/{package}",'))
@@ -425,7 +450,7 @@ def test_nested_selection_refuses_two_installed_owners(nested_selection):
 
 
 def test_nested_reselection_preserves_local_delivery(nested_selection):
-    root, component, _, package, revision, dist = nested_selection
+    root, component, _, package, revision, dist, _ = nested_selection
     record = root / f"components/{component}.source.json"
     before = record.read_bytes()
     runtime = root / f"components/{component}-delivery/{package}/__init__.py"
@@ -435,6 +460,19 @@ def test_nested_reselection_preserves_local_delivery(nested_selection):
         delivery.select(root, dist, revision, checksum, component=component)
     assert record.read_bytes() == before
     assert runtime.read_text() == "local_work = True\n"
+
+
+def test_nested_selection_can_restore_original_artifact(nested_selection):
+    root, component, _, _, revision, dist, original_receipt = nested_selection
+    before = delivery.inventory(root / f"components/{component}-delivery")
+    receipt_path = dist / f"{component}-source.json"
+    receipt_path.write_text(json.dumps(original_receipt, indent=2) + "\n")
+    (dist / "SHA256SUMS").write_text("".join(
+        f"{release.sha((dist / name).read_bytes())}  {name}\n"
+        for name in (*release.artifact_names(original_receipt), receipt_path.name)))
+    delivery.select(root, dist, revision, delivery.sha(receipt_path.read_bytes()), component=component)
+    assert delivery.verify(root, component=component)["source"] == original_receipt
+    assert delivery.inventory(root / f"components/{component}-delivery") == before
 
 
 @pytest.fixture

@@ -21,14 +21,17 @@ app selection. Do not restore a second author copy here. Follow the
 [selection instructions](README.md#select-a-workspace-metadata-artifact).
 This metadata boundary is not the whole workspace domain.
 
-`components/outputs/` is temporarily authored here as an independently buildable
-Python project. Preserve `amplifier_outputs` imports and its saved-body formats.
+Author the output relationship, saved-body decoder and Git evidence package in
+[amplifier-platform-resources](https://github.com/bkrabach/amplifier-platform-resources).
+Preserve `amplifier_outputs` imports and its saved-body formats.
 Its Git/SQLite mechanism tests belong with the package; Unified retains
 transactions, authorization, source access, content integrity and retention.
 Unified consumes only the published artifact selected into `outputs-delivery/`
 by `outputs.source.json`, as the sole installed owner. Never edit that generated
 copy by hand or coinstall the standalone distribution. Author edits and publication
-do not refresh the app selection. This package is not the whole resources domain.
+do not refresh the app selection. Do not restore an author copy here; follow the
+[selection instructions](README.md#select-an-outputs-artifact).
+This package is not the whole resources domain.
 
 `components/portability/` is temporarily authored here as an independently
 buildable Python project. Preserve `amplifier_portability` imports and its existing
@@ -41,13 +44,15 @@ an exact public worktrees artifact through `portability/worktrees-source.json`;
 install both selected wheels explicitly, never alongside their Unified-owned copies.
 Never edit either generated delivery copy by hand.
 
-`components/worktrees/` is temporarily authored here as an independently buildable
-Python project. Preserve `amplifier_worktrees` and `amplifier_worktrees.git` imports;
-Unified selects published bytes into `worktrees-delivery/`, recorded by
-`worktrees.source.json`, as the sole installed owner. Its real-Git mechanism
-tests belong here; host permission, active-task, handoff and cleanup policy remain
-in Unified. The author project is independent of the generated delivery copy;
-never edit that copy by hand or coinstall the standalone distribution.
+[amplifier-platform-worktrees](https://github.com/bkrabach/amplifier-platform-worktrees)
+is the sole Worktrees author and owns its real-Git mechanism tests. Preserve
+`amplifier_worktrees` and `amplifier_worktrees.git` imports. Unified selects public
+bytes into generated `worktrees-delivery/`, recorded by `worktrees.source.json`,
+as the sole installed owner. Host permissions, active-task, handoff and cleanup
+policy remain in Unified. Portability must retain its exact selected Worktrees
+receipt; follow the [paired selection guide](README.md#select-worktrees-and-portability-artifacts).
+Never restore an author copy, edit generated delivery or coinstall the standalone
+distribution with Unified.
 
 `components/publishing/` is temporarily authored here as its independently
 buildable Python project. Preserve its `amplifier_publishing` imports and existing
