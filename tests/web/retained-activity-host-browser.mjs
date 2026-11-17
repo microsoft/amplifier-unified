@@ -6,7 +6,6 @@ import {fileURLToPath} from 'node:url';
 import {mkdir,writeFile} from 'node:fs/promises';
 import {createServer} from 'vite';
 import {chromium,expect} from '@playwright/test';
-import {showFixtureConversation} from './browser-chat-pages.mjs';
 
 const out=process.env.AMPLIFIER_TEST_ARTIFACTS||'/tmp/retained-activity-host';
 const source=process.env.AMPLIFIER_TEST_CLIENT_SOURCE||fileURLToPath(new URL('../../.build/web-client/',import.meta.url));
@@ -18,14 +17,18 @@ const ready=new Promise((resolve,reject)=>{let output='';fixture.stdout.on('data
 try{
  await mkdir(out,{recursive:true});
  const {url:target,owner,peer}=await ready;
- vite=await createServer({configFile:false,root:source,cacheDir:out+'/vite-cache',server:{host:'127.0.0.1',port:0,hmr:false,proxy:{'/api':{target,changeOrigin:true,ws:true,configure(proxy){for(const event of ['proxyReq','proxyReqWs'])proxy.on(event,req=>req.setHeader('Origin',target))}},'/branding':target,'/fixture':target}},optimizeDeps:{include:['react','react-dom/client','react/jsx-dev-runtime']}});
+ vite=await createServer({configFile:false,root:source,cacheDir:'/tmp/retained-activity-vite-cache',server:{host:'127.0.0.1',port:0,hmr:false,proxy:{'/api':{target,changeOrigin:true,ws:true,configure(proxy){for(const event of ['proxyReq','proxyReqWs'])proxy.on(event,req=>req.setHeader('Origin',target))}},'/branding':target,'/fixture':target}},optimizeDeps:{include:['react','react-dom/client','react/jsx-dev-runtime']}});
  await vite.listen();
  browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH?{executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH}:{}),...(process.env.CHROMIUM_SINGLE_PROCESS==='1'?{args:['--single-process','--no-zygote','--no-sandbox']}: {})});
  page=await browser.newPage({viewport:{width:1440,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const errors=[];page.on('pageerror',error=>errors.push(error.message));
- const shell=()=>page.evaluate(()=>window.amplifier.getShellState().snapshots.chats);
+ const shell=async()=>{await page.waitForFunction(()=>window.amplifier?.getShellState()?.snapshots?.chats);return page.evaluate(()=>window.amplifier.getShellState().snapshots.chats)};
  const mode=mode=>page.evaluate(async mode=>{const r=await fetch('/fixture/activity',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode})});if(!r.ok)throw Error('Fixture transition '+r.status);return r.json()},mode);
- await page.goto(vite.resolvedUrls.local[0]);await showFixtureConversation(page);
+ await page.goto(vite.resolvedUrls.local[0]);
+ await page.waitForFunction(()=>window.amplifier?.getState()?.client?.id);
+ const opened=await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{workSurface:'chat',navPinned:true}}));
+ assert.equal(opened.accepted,true);
+ await page.waitForFunction(()=>window.amplifier?.getState()?.view?.workSurface==='chat');
  const pin=page.locator(`.a-pinned-chats [data-session-id="${owner}"]`);
  const recent=page.locator(`.a-recent-shortcuts [data-session-id="${owner}"]`);
  const status=locator=>locator.locator('.a-navigation-status');
