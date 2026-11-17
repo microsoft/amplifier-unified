@@ -60,10 +60,6 @@
 /components/outputs/LICENSE source-context=documentation
 /components/outputs.source.json source-context=configuration
 /components/outputs-delivery/** source-context=generated linguist-vendored=true linguist-generated=true -text
-/components/workspaces/amplifier_workspace_metadata/** source-context=source
-/components/workspaces/tests/** source-context=tests
-/components/workspaces/.gitignore source-context=configuration
-/components/workspaces/LICENSE source-context=documentation
 /components/workspace-metadata.source.json source-context=configuration
 /components/workspace-metadata-delivery/** source-context=generated linguist-vendored=true linguist-generated=true -text
 /docs/** source-context=documentation
