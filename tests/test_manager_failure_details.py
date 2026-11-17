@@ -152,6 +152,8 @@ async def test_handled_compaction_error_does_not_mark_conversation_broken(tmp_pa
     ('previous_failure', 'retry cooldown'),
     ('summary_failed', 'provider availability'),
     ('native_failed', 'provider availability'),
+    ('summary_work_paused', 'requires separate admission'),
+    ('summary_progress_incompatible', 'Review the source and policy mismatch'),
 ])
 async def test_semantic_compaction_cause_survives_runtime_exit(tmp_path, code, remedy):
     app = AppService(tmp_path, workspace=tmp_path)
@@ -168,6 +170,8 @@ async def test_semantic_compaction_cause_survives_runtime_exit(tmp_path, code, r
         assert failure['code'] == code and remedy in failure['guidance']
         assert failure['inputIds'] == ['input-summary'] and failure['generationId'] == 'g-summary'
         assert failure['replayed'] is False and 'PRIVATE' not in json.dumps(failure)
+        assert failure['retryable'] is False
+        assert session['status'] == 'error' and len(app.state['sessions']) == 1
     finally:
         await app.close()
 
