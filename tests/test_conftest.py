@@ -3,16 +3,21 @@
 A shell that a running Amplifier Unified starts (a chat's shell tool, a worker)
 inherits environment variables from that service. A person's shell can hold
 environment variables with provider credentials. An installed Amplifier
-Unified can keep its data in the product's default folders. The product also
-finds some folders through a lookup of the account by ID. ``conftest.py``
-removes the variables in its two lists, gives the product folders of the run,
-and changes that lookup. It does so when pytest loads it, and again around
-each test. It does not change ``HOME``; its first comment names the limits.
+Unified can keep its data in folders below the home folder. The product also
+finds some folders through a lookup of the account by ID.
+
+``conftest.py`` removes the variables in its two lists: when pytest loads it,
+before each test and after each test. It sets four folder variables of the
+product: to folders of the run when pytest loads it, and to folders of the test
+for each test. It changes that lookup once, when pytest loads it; the home
+folder that the lookup gives is a folder of the run, and of the test during a
+test. It does not change ``HOME``; its first comment names the limits.
 
 ``TestInsideARun`` holds what is true inside every run of this suite. Its cases
-run in the order in which they are written. The last case of this file starts a
-second run that inherits the variables of a service's shell and the credential
-variables with made-up values, and requires the same there.
+run in the order in which they are written, in one process. The last case of
+this file starts a second run that inherits made-up values for the variables of
+the two lists and for two of the four folder variables, and requires the same
+there.
 
 Such a shell also inherits ``AMPLIFIER_APP_GENERATION_EXEC``. The product only
 writes that variable and never reads it, so ``conftest.py`` leaves it alone.

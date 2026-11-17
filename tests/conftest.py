@@ -11,9 +11,10 @@ except ImportError:  # Python has no pwd module on Windows.
     pwd = None
 
 # This file keeps three things of this machine away from the pytest process:
-# the environment variables in its two lists (parts 1 and 2), the product's
-# default folders (part 3), and the home folder that a lookup of the own
-# account by ID gives (part 4). tests/test_conftest.py holds the cases.
+# the environment variables in its two lists (parts 1 and 2), the folders that
+# the product takes when four of its folder variables are not set (part 3),
+# and the home folder that a lookup of the own account by ID gives (part 4).
+# tests/test_conftest.py holds the cases.
 #
 # pytest loads this file before it imports a test module of this folder. The
 # lines below run here and not only in a fixture, so that they also hold for
@@ -21,12 +22,14 @@ except ImportError:  # Python has no pwd module on Windows.
 # of os.environ, and for work that a test leaves running when it ends. The
 # changes stay until the process ends.
 #
-# The file does nothing else. HOME stays as it is: a file that the product
-# finds through '~' is still the person's file (for example a ChatGPT sign-in
-# file below ~/.amplifier), and tools such as Git and uv keep their own files
-# below the home folder. Parts 1 to 3 change os.environ, so a program that a
-# test starts with that environment gets them too. Part 4 is in this process
-# only. A pytest run with --noconftest does not load the file.
+# The file does nothing else. It does not change HOME (USERPROFILE on
+# Windows): a file or a folder that the product finds through that variable,
+# and not through one of the four variables of part 3, is still the person's
+# (for example a ChatGPT sign-in file below ~/.amplifier), and tools such as
+# Git and uv keep their own files below the home folder. It removes no
+# variable outside its two lists. Parts 1 to 3 change os.environ, so a program
+# that a test starts with that environment gets them too. Part 4 is in this
+# process only. A pytest run with --noconftest does not load the file.
 
 # 1. A shell that a running Amplifier Unified starts (a chat's shell tool, a
 # worker) inherits these variables from that service. The product reads each
@@ -45,12 +48,13 @@ SERVICE_VARIABLES = (
     'OPENAI_BASE_URL',  # native_provider._official_endpoint
     'INVOCATION_ID',  # deployment_service.current_process_is_unit_managed
 )
-# 2. The environment variables for provider credentials (setup.PROVIDER_ENV). A
-# person's shell can hold them. The product reads them for a provider's
-# credential (setup.environment_credential), and the variables of a provider
-# are part of the identity of its connections
+# 2. The product's default environment variables for provider credentials
+# (setup.PROVIDER_ENV). A person's shell can hold them. The product reads them
+# for a provider's credential (setup.environment_credential), and the
+# variables of a provider are part of the identity of its connections
 # (provider_catalog.connection_key). A test must not get one from outside. A
-# test that needs one sets a made-up one itself.
+# test that needs one sets a made-up one itself. A connection can name another
+# variable for its credential; such a variable is not in the list.
 CREDENTIAL_VARIABLES = (
     'OPENAI_API_KEY',
     'TYPESAFE_API_KEY',
@@ -81,16 +85,20 @@ remove_outside_variables()
 # after pytest's teardown of the test, when the fixtures that end with the
 # test have ended. monkeypatch is such a fixture. When it ends, it puts back
 # what it found, and that can be a value that the product set during the test.
+# hookwrapper=True: an error in the teardown of a test does not skip the line
+# after the yield.
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_teardown():
     yield
     remove_outside_variables()
 
 
-# 3. The product's own folders. Without these variables the product uses its
-# default folders, and an installed Amplifier Unified can keep its data there. So
-# each variable holds a folder of this run from here on. Each test then gets
-# new folders of its own (the fixture below).
+# 3. Four folders of the product. The product takes each one from its variable
+# (the function is named beside it). When that variable is not set, the
+# product takes another variable or a folder below the home folder, and an
+# installed Amplifier Unified can keep its data there. So each variable holds a
+# folder of this run from here on. Each test then gets new folders of its own
+# (the fixture below).
 # A real path: no link and no short name in it. On Windows the temporary folder
 # can have a short name with a '~', and the product refuses a '~' in the path
 # of its app home (windows_files._component).
