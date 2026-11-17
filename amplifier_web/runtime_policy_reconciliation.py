@@ -269,7 +269,9 @@ class Collector:
                                 prepared_local_sources=runtime_siblings)
         for name, package in dependencies.items():
             packages.setdefault(name, package)
+        from .configured_runtime_pins import configured_packages
         return {'version': VERSION, 'configuration': configuration(config), 'packages': packages,
+                'configuredPins': configured_packages(config, packages, manifests),
                 # Private selected-root evidence. Keep the requiring package
                 # even when its constraint makes a dependency row protective.
                 # Partial acquisition uses this before any installer, not an
@@ -536,6 +538,10 @@ async def reconcile(manager, stage, project, collect):
     if (stage / 'runtime.lock').exists():
         raise ValueError('A recorded generation cannot reconcile update policy.')
     old_generation = active_release(home).get('current')
+    from .configured_runtime_pins import reconcile as reconcile_configured_pins
+    configured = await reconcile_configured_pins(manager, stage, project, collect)
+    if active_release(home).get('current') != old_generation:
+        raise ValueError('The active generation changed during policy reconciliation.')
     rows = await update_inventory(home)
     request = pending(home, old_generation, rows, honor_receipt=False)
     old_receipt = receipt_directory(home, old_generation) / RECEIPT
@@ -544,11 +550,11 @@ async def reconcile(manager, stage, project, collect):
         # update. Otherwise an unresolved extra would prompt again next time.
         if old_receipt.exists():
             write_private(stage / RECEIPT, old_receipt.read_text(), owned_root=home)
-        return
+        return {'selection': configured, 'generation': old_generation} if configured else None
     separate = project / 'uv.toml'
     if separate.exists() or separate.is_symlink():
         return
-    first = await collect()
+    first = configured or await collect()
     if first.get('version') != VERSION or first.get('configuration') != request['configuration']:
         raise ValueError('Selected source settings changed during policy reconciliation.')
     selected, decisions = selected_policies(request['candidates'], first)
