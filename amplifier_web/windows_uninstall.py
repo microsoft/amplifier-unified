@@ -283,6 +283,12 @@ def begin(root, choice="delete", *, wait=time.sleep, **fields):
     while True:
         try:
             write_private(Path(root) / JOURNAL, text, owned_root=root)
+            if not unfinished(root):
+                # The writer reports a publication as done also when the file
+                # lost its name directly afterwards (windows_files,
+                # PrivateFileUnlinked). Without the journal Amplifier would
+                # open from this folder, so nothing may be deleted.
+                raise OSError("The removal's journal is not in the folder after it was written.")
             return token
         except PermissionError:
             # The app's worker programs end a moment after its task reports

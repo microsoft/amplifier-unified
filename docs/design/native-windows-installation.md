@@ -1186,8 +1186,8 @@ does.
    ask Windows once about the certificate. A failure up to here leaves the
    installation whole, with the messages of an uninstall that keeps the folder.
 5. Write the journal `unified-uninstall.json` (`schema` 1, `choice`, a random
-   `token`) with the private atomic writer. Nothing is deleted before it
-   exists.
+   `token`) with the private atomic writer, then look whether it is in the
+   folder. Nothing is deleted before it exists.
 6. Delete setup's mark of unfinished work. Setup can leave that mark in a
    finished installation; with the mark and without the completion record, a
    later setup run would treat a folder without data as its own unfinished
@@ -1362,10 +1362,11 @@ dangling file link of that name and creates the file at the link's target.
 **Known limits.** Two reviewers examined this design in eight passes (pull
 request 2110). These limits stayed. They are stated, not solved. The numbers
 are the review's; a number that is not in the list was closed before the last
-pass. G1 is from the later review of the store rule. Except for L3, L4, L14
-and L15, each needs a program that runs as the same person. For G1 that
-program can act at any time before the uninstall. For the others it must act
-in the moment of the uninstall.
+pass. G1 is from the later review of the store rule, and the entry without a
+number is from the last review. Except for L3, L4, L14 and L15, each needs a
+program that runs as the same person. For G1 that program can act at any time
+before the uninstall. For the others it must act in the moment of the
+uninstall.
 
 One reviewer rated L12, L13 and G1 as blocking, the other as not blocking.
 The owner accepted L12 and L13 on November 15, 2026. On November 17, 2026,
@@ -1397,7 +1398,8 @@ limit as not blocking.
   measured in this work). To close this, uninstall would have to
   keep a file in the folder above, which is outside the installation folder;
   uninstall changes nothing there.
-- **G1 (accepted).** Uninstall takes the folder `s` for program files when
+- **G1 (the owner ordered the merge with this limit stated).** Uninstall
+  takes the folder `s` for program files when
   setup's completion record names a release from 0.98.5 (see "Only exact
   names"). That record is a private file of this person, so a program that
   runs as this person can rewrite it, at any time before the uninstall. In
@@ -1446,6 +1448,18 @@ limit as not blocking.
   program started in that same moment, with handle inheritance and without
   such a list, would also get the two handles. The uninstall program starts
   no other process then.
+- **The journal is not held open.** The uninstall program writes the journal
+  and then looks once whether it is in the folder; without it the removal
+  stops with nothing deleted. (The private-file writer reports a publication
+  as done also when the file lost its name directly afterwards, since pull
+  request 2247; before, the writer itself stopped the removal then.) After
+  that the uninstall program holds no handle on the journal and does not look
+  for it again while it deletes. A program of this account that deletes the
+  journal during a removal takes away what the journal does: if that removal
+  then stops before its end, the launcher's commands do not refuse, and
+  Amplifier can open on a folder that is partly deleted. The step after exit
+  reads the journal's token before every pass and stops without it. Such a
+  program can delete the person's data itself.
 
 Under PowerShell constrained language mode the step stops before it answers
 and changes nothing; the parked files and both records stay.
@@ -2988,9 +3002,9 @@ commands. The README offers the consumer setup file
 for Windows 11 as an unsigned preview and states its limits: one stable
 download link, the browser's hold on the unsigned file, Windows 11 on an Intel
 or AMD processor, one Windows account, the installation folder, and an
-uninstall that asks whether to keep or to delete that folder (the question,
-its three buttons, and that an installation from an earlier setup file keeps
-the folder). `tests/test_installation_guidance.py` keeps
+uninstall that asks whether to keep or to delete that folder (the two
+questions, the three buttons of the first one, and the earlier question,
+which always keeps the folder). `tests/test_installation_guidance.py` keeps
 that section and the product's own names in agreement. Qualified native Windows
 support is not claimed. Earlier results below
 are historical evidence for their exact candidates, not current release acceptance.

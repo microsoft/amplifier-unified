@@ -407,7 +407,8 @@ def test_certificate_answer_never_stops_the_removal_and_is_said_in_the_confirmat
     ("task-read", "task-read", "nothing was changed"),
     ("stop", "stop", "Nothing was removed"),
     ("task-remove", "task-remove", "nothing else was removed"),
-    ("journal", "journal", "Nothing in the folder was deleted")])
+    ("journal", "journal", "Nothing in the folder was deleted"),
+    ("journal-lost", "journal", "Nothing in the folder was deleted")])
 def test_nothing_in_the_folder_changes_before_the_journal(deleter, monkeypatch, failure, step, phrase):
     state, root, consumer = deleter.state, deleter.root, deleter.consumer
     state["choices"], state["certificate"] = ["yes", "yes"], b"this installation's root"
@@ -425,6 +426,10 @@ def test_nothing_in_the_folder_changes_before_the_journal(deleter, monkeypatch, 
         (deleter.folder / "Uninstall Amplifier.lnk").write_bytes(b"changed after setup")
     elif failure == "journal":
         state["refuse_write"] = lambda path: path.name == plan.JOURNAL
+    elif failure == "journal-lost":
+        # Another program takes the journal away directly after it was written. The writer reported it as
+        # written. Without the journal Amplifier would open from this folder, so the removal must stop here.
+        state["on_journal"] = lambda: (root / plan.JOURNAL).unlink()
     else:
         state["task_failure"] = failure
     before, registration = snapshot(root), state["registry"].copy()
@@ -440,7 +445,7 @@ def test_nothing_in_the_folder_changes_before_the_journal(deleter, monkeypatch, 
     assert (note is None) is (failure == "busy") and state["registry"] == registration
     assert len(list(deleter.folder.iterdir())) == 4 and not state["locked"] and not state["pins"]
     # Windows is asked about the certificate only when the app has stopped and its task is gone.
-    assert (("certificate",) in state["calls"]) is (failure == "journal")
+    assert (("certificate",) in state["calls"]) is (failure in {"journal", "journal-lost"})
     # The cause is gone: the same command now deletes the folder.
     if failure not in {"proof", "entry"}:
         state.update(busy=False, lock_failure=None, pin_failure=None, refuse_write=None, task_failure=None,
