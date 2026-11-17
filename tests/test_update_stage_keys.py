@@ -723,7 +723,7 @@ async def test_scrub_leaves_the_copy_while_a_chat_setup_runs_however_old_its_sta
     manager = app.update_manager
     stage = stage_at(manager.home)
     copy = stage / 'shared-config/keys.env'
-    with pytest.raises(RuntimeError, match='fixture failure'):
+    with pytest.raises(RuntimeError, match='fixture failure') as failure:
         async with runtime_profiles._profile_attempt(
                 manager.home, 'f' * 32, stage.name, stage, tmp_path / 'absent-index.json'):
             assert json.loads((stage / 'profile-attempt.json').read_text())['status'] == 'preparing'
@@ -731,8 +731,8 @@ async def test_scrub_leaves_the_copy_while_a_chat_setup_runs_however_old_its_sta
             await storage.scrub_stage_keys(manager)
             assert copy.is_file()
             raise RuntimeError('fixture failure')
-    # The preparation ended as failed and removed the copy itself.
-    assert not copy.exists()
+    # The preparation ended as failed and removed the copy itself, with no note about a copy that stayed.
+    assert not copy.exists() and not getattr(failure.value, '__notes__', [])
     assert_preserved(stage)
 
 
@@ -768,8 +768,10 @@ async def test_a_chat_setup_that_fails_or_is_stopped_removes_its_copy_of_the_key
     if end == 'succeeded':
         await task
     else:
-        with pytest.raises({'failed': RuntimeError, 'cancelled': asyncio.CancelledError}[end]):
+        with pytest.raises({'failed': RuntimeError, 'cancelled': asyncio.CancelledError}[end]) as failure:
             await task
+        # The removal worked: the error carries no note about a copy that stayed.
+        assert not getattr(failure.value, '__notes__', [])
     # While its command ran, the stage held the copy.
     assert during == {'copy': live}
     stage = one_new_stage(h)
