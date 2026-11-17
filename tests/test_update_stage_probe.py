@@ -87,7 +87,7 @@ def test_the_fixture_runs_the_command_and_the_stage_settings_of_the_updater():
     assert "stage=self.directory/'releases'/release" in updates and "shared_stage=stage/'shared-config'" in updates
 
 
-def test_the_decision_catalog_helper_is_read_from_the_app_and_started_as_the_app_starts_it():
+def test_the_decision_catalog_helper_is_read_from_the_app_and_started_as_the_app_starts_it(monkeypatch):
     """``tests/test_windows_chat_setup.py`` starts this helper itself in each new worker environment.
 
     The call is the app's own: its command, its settings and its time limit. Reading it starts nothing and
@@ -96,7 +96,8 @@ def test_the_decision_catalog_helper_is_read_from_the_app_and_started_as_the_app
     from amplifier_web import decision_accounts
     run, saved = subprocess.run, decision_accounts._catalog_snapshot.cache_info()
     command, settings = probe.catalog_helper_call()
-    assert subprocess.run is run and decision_accounts._catalog_snapshot.cache_info() == saved
+    assert decision_accounts.subprocess is subprocess and subprocess.run is run
+    assert decision_accounts._catalog_snapshot.cache_info() == saved
     script = probe.ROOT / 'amplifier_web' / 'decision_account_catalog.py'
     assert command == [sys.executable, '-I', str(script)] and script.is_file()
     # The app's limit for one start, and the few settings that the helper gets. No setting stops bytecode.
@@ -105,8 +106,19 @@ def test_the_decision_catalog_helper_is_read_from_the_app_and_started_as_the_app
     # The same call with another time limit: each start prints the catalog.
     times = probe.catalog_helper_times((command, settings), sys.executable)
     assert len(times) == 2 and all(0 < seconds < 300 for seconds in times), times
-    with pytest.raises(subprocess.TimeoutExpired):   # the limit of a start is the caller's
-        probe.catalog_helper_times((command, settings), sys.executable, starts=1, limit=0.001)
+    # The interpreter and the limit are the caller's, everything else is the app's call, and a start that
+    # reaches the limit is not hidden. A recorder shows it: a real start with a very small limit would
+    # depend on the speed of this machine.
+    started = []
+
+    def reaches_the_limit(arguments, **given):
+        started.append((arguments, given))
+        raise subprocess.TimeoutExpired(arguments, given['timeout'])
+
+    with monkeypatch.context() as patch, pytest.raises(subprocess.TimeoutExpired):
+        patch.setattr(subprocess, 'run', reaches_the_limit)
+        probe.catalog_helper_times((command, settings), 'another-python', starts=2, limit=7)
+    assert started == [(['another-python', *command[1:]], {**settings, 'timeout': 7})]
 
 
 @pytest.mark.skipif(os.name == 'nt', reason='On Windows the switch is the subject: tests/test_windows_long_paths_off.py')

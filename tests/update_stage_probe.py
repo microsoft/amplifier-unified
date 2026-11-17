@@ -205,20 +205,25 @@ def catalog_helper_call():
     (``decision_accounts._catalog_snapshot``). That helper loads every entry point of the group
     ``amplifier.decision_backends``, and so it imports the provider packages of the environment.
 
-    This reads the call from the app's own function, with a recorder in the place of ``subprocess.run``.
-    Nothing is started, and the answer that the app keeps for this process is not touched. Call it while no
-    other thread of this process starts a program.
+    This reads the call from the app's own function. For that one call the name ``subprocess`` in the module
+    ``decision_accounts`` is a recorder: its ``run`` keeps the call and starts nothing, and every other name
+    is the real module's. No other module sees the recorder, and the answer that the app keeps for this
+    process is not touched.
     """
     import inspect
     from unittest import mock
     from amplifier_web import decision_accounts
     calls = []
 
-    def record(command, **settings):
-        calls.append((list(command), settings))
-        raise subprocess.SubprocessError('recorded, not started')
+    class Recorder:
+        def __getattr__(self, name):
+            return getattr(subprocess, name)
 
-    with mock.patch.object(decision_accounts.subprocess, 'run', record):
+        def run(self, command, **settings):
+            calls.append((list(command), settings))
+            raise subprocess.SubprocessError('recorded, not started')
+
+    with mock.patch.object(decision_accounts, 'subprocess', Recorder()):
         value, failure = inspect.unwrap(decision_accounts._catalog_snapshot)()
     assert value is None and failure['category'] == 'subprocess-error' and len(calls) == 1, (value, failure, calls)
     command, settings = calls[0]
@@ -232,7 +237,11 @@ def catalog_helper_times(call, python, *, starts=2, limit=300):
     ``call`` is ``catalog_helper_call()``. The interpreter and the time limit are the only differences from
     the app's call. In a new environment the first start finds no bytecode of the provider packages. It
     compiles them and writes the bytecode: the helper runs with ``-I``, so ``PYTHONDONTWRITEBYTECODE`` does
-    not reach it. A later start reads that bytecode. Each start must print the catalog, a JSON object.
+    not reach it. A later start can read that bytecode. Each start must print the catalog, a JSON object.
+
+    The seconds are from before the call until the helper has ended. They include the creation of the
+    process. The app's time limit counts from the moment at which the process exists. So a time a little
+    over that limit does not prove that the app's own start would have reached it.
     """
     command, settings = call
     seconds = []

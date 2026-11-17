@@ -31,11 +31,14 @@ app allows. Twice it took longer, and the preparation then failed by timing
 helper itself, with the app's own command and settings, directly before the
 app's first probe command in each new environment: twice, and it measures
 both starts and counts the bytecode files that the first one wrote. The app's
-own start then finds bytecode. This case therefore does not show that a first
-start is inside the app's limit. It prints how long each first start took, and
-the CI job keeps those times on the run's page and warns when one passed the
-limit. The times of the two probe phases that the case prints include its two
-starts of the helper.
+own start then finds bytecode and has less to compile. It still has the app's
+limit. This case therefore does not show that a first start is inside the
+app's limit. It prints how long each first start took, the creation of the
+process included, and the CI job keeps those times on the run's page and
+warns when one was longer than the limit. The stop of a preparation comes
+after the case's own starts of the helper: a stop while the helper compiles
+is not shown. The times of the two probe phases that the case prints include
+the case's two starts of the helper.
 
 It then lists every path below the installation folder. That is the measured
 answer to "which paths pass the Windows limit, and does the app need them":
@@ -341,20 +344,20 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
             print(f'MEASURED the decision-catalog helper in the new worker environment {name}: first start '
                   f'{first:.1f} s, and it wrote {after - before} bytecode files ({before} were there before it); '
                   f'second start {second:.1f} s; the app\'s time limit for one start is {helper_limit} s'
-                  + ('; OVER THE APP\'S LIMIT' if first > helper_limit else ''))
+                  + ('; LONGER THAN THE APP\'S TIME LIMIT' if first > helper_limit else ''))
 
     assert len({generation, *selected.values()}) == 3   # each folder's setup is its own
     # The case started the helper in every environment in which the app then ran a probe command, and in no
     # other: for each setup the preparation environment and the frozen one, and the preparation environment
-    # of the stopped attempt. With bytecode there, each start by the app was inside the app's limit: every
-    # probe command that was not stopped ended well.
+    # of the stopped attempt. Each later start by the app was inside the app's limit: every probe command
+    # that was not stopped ended well.
     new_environments = {'prepare-' + stopped['folder that a person chose']}
     for value in selected.values():
         new_environments |= {'prepare-' + value, project_path(home, value).name}
     assert set(helper_times) == app_commands == new_environments, (sorted(helper_times), sorted(app_commands))
-    # The first start wrote bytecode of the provider packages, and each later start reads it. That is why the
-    # app's own start no longer depends on the speed of this runner. An environment that came with bytecode,
-    # or a helper that writes none, fails here: this case's own starts of the helper are then of no use.
+    # The first start added bytecode files to the environment's packages. A later start can read them and
+    # has less to compile; the measured second starts show how much less. A first start that adds no
+    # bytecode file fails here: the case's own starts of the helper are then of no use.
     for name, (first, second, before, after) in helper_times.items():
         assert after > before, (name, before, after)
     for label, folder in folders.items():

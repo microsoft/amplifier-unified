@@ -24,8 +24,9 @@ name: Windows path length
 #
 # In each new worker environment that job starts the app's decision-catalog
 # helper itself, before the app does, and measures that first start. The run's
-# page keeps the times. A first start that took longer than the app allows is a
-# warning there, not a failure: the app's own start then finds bytecode.
+# page keeps the times. A first start that took longer than the app's time
+# limit is a warning there, not a failure: the app's own start then finds
+# bytecode and has less to compile.
 #
 # This is the only native job that installs the locked Amplifier Foundation.
 # So it also holds a real Foundation session ownership, as a live conversation
@@ -224,8 +225,8 @@ jobs:
           .\.venv\Scripts\python.exe -B -m pytest -q -rA -p no:cacheprovider tests/test_windows_chat_setup.py | Tee-Object -Variable lines
           $status = $LASTEXITCODE
           # The first start of the app's decision-catalog helper in each new worker environment, as the case
-          # measured it. A start that took longer than the app allows is a warning: it shows the runner's
-          # speed against the app's limit, and it does not fail the case.
+          # measured it, the creation of the process included. A start that took longer than the app's time
+          # limit is a warning: it shows the runner's speed against that limit, and it does not fail the case.
           $measured = @($lines | Where-Object { "$_" -match 'MEASURED the decision-catalog helper' })
           if ($measured.Count -gt 0) {
             $summary = @('### First start of the decision-catalog helper in a new worker environment', '',
@@ -233,8 +234,8 @@ jobs:
             $summary -join "`n" >> $env:GITHUB_STEP_SUMMARY
           }
           Write-Host "The run's page keeps $($measured.Count) measured first starts of the decision-catalog helper."
-          foreach ($line in ($measured | Where-Object { "$_" -match 'OVER THE APP' })) {
-            Write-Host "::warning title=The decision-catalog helper took longer than the app allows::$line"
+          foreach ($line in ($measured | Where-Object { "$_" -match 'LONGER THAN THE APP' })) {
+            Write-Host "::warning title=A first start of the decision-catalog helper took longer than the time limit of the app::$line"
           }
           if ($status -ne 0) { throw 'The setup of a chat was not prepared and checked with long paths off, or a needed path passes the limit.' }
           # A skipped case ends with exit code 0. The case writes the list only after every preparation.
