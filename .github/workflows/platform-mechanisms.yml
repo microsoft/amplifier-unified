@@ -105,7 +105,6 @@ on:
       - tests/test_windows_ports.py
       - tests/test_windows_consumer.py
       - tests/test_windows_first_open.py
-      - tests/test_application_generations.py
       - tests/test_windows_start.py
       - tests/test_windows_consumer_shell.py
       - tests/test_windows_removal.py
