@@ -24,7 +24,7 @@ try{
  page=await browser.newPage({viewport:{width:1440,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  page.on('pageerror',error=>errors.push(error.stack||error.message));
  const shell=async()=>{await page.waitForFunction(()=>window.amplifier?.getShellState()?.snapshots?.chats);return page.evaluate(()=>window.amplifier.getShellState().snapshots.chats)};
- const mode=mode=>page.evaluate(async mode=>{const r=await fetch('/fixture/activity',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode})});if(!r.ok)throw Error('Fixture transition '+r.status);return r.json()},mode);
+ const mode=mode=>page.evaluate(async mode=>{const r=await fetch('/api/fixture/activity',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode})});if(!r.ok)throw Error('Fixture transition '+r.status);return r.json()},mode);
  await page.goto(vite.resolvedUrls.local[0]);
  await page.waitForFunction(()=>window.amplifier?.getState()?.client?.id);
  const opened=await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{workSurface:'chat',navPinned:true}}));
@@ -66,7 +66,7 @@ try{
  await mode('fresh');
  await expect.poll(async()=>(await shell()).navigationResourcePending.pinnedNavigation).toBeUndefined();
  await expect(status(pin)).toHaveAttribute('aria-label','Working');
- const info=await page.evaluate(async()=>{const r=await fetch('/fixture/activity');return r.json()});
+ const info=await page.evaluate(async()=>{const r=await fetch('/api/fixture/activity');return r.json()});
  assert.deepEqual(info.runtimeStarts,[]);assert.deepEqual(info.runtimeSends,[]);assert.equal(info.historyUnchanged,true);assert.deepEqual(errors,[]);
  proof.status='PASS';proof.owner=owner;proof.peer=peer;proof.geometry={before,after};proof.info=info;proof.errors=errors;
  console.log(JSON.stringify(proof,null,2));

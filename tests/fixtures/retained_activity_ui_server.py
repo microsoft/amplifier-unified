@@ -94,8 +94,8 @@ async def main(home):
 
     configure('initial')
     held = False
-    app.router.add_post('/fixture/activity', change)
-    app.router.add_get('/fixture/activity', info)
+    app.router.add_post('/api/fixture/activity', change)
+    app.router.add_get('/api/fixture/activity', info)
     runner = web.AppRunner(app)
     await runner.setup()
     stop = asyncio.Event()
