@@ -18,6 +18,9 @@ DETERMINISTIC = RUNTIME_SOURCE_REASONS - {'runtime-source-changed'} | {
 
 PREPARED_WAITING = 'Application release validated. Waiting for work to finish before restarting.'
 PREPARED_STARTING = 'Application release validated. No work is running. Amplifier installs the update and restarts by itself.'
+STALE_STAGE_KEYS = ('Amplifier found no keys file. This update still holds an old copy of it, and Amplifier could not '
+                    'remove that copy. Amplifier did not check the update with the old copy. '
+                    'Current components remain active.')
 
 # Attempt IDs of the app replacements that THIS process executes at this moment.
 # Never saved. `updates.activation` in saved or restored state is a copy for

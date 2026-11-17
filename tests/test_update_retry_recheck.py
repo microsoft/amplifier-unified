@@ -286,11 +286,27 @@ def test_current_failure_sentence_is_bound_to_the_selected_attempt(reason, statu
     assert state == before
 
 
+async def test_a_retry_that_starts_an_update_of_another_kind_does_not_say_not_started(manager, monkeypatch):
+    """The new check can find an application release. The application then comes first."""
+    await failed_component(manager)
+    check_spy(manager, monkeypatch)
+
+    async def application_first(admitted, **kw):
+        manager.diagnostics.begin('application', 'c' * 40)
+
+    monkeypatch.setattr(manager, 'install_checked', application_first)
+    await manager.command('install', None, 'b' * 32)
+    state = manager.service.state['updates']
+    assert {key: state['retryCheck'][key] for key in ('attemptId', 'result')} == {
+        'attemptId': None, 'result': 'other-update'}
+    assert NOT_STARTED not in state['currentStatus']['detail'] and RETRIED not in state['currentStatus']['detail']
+
+
 @pytest.mark.parametrize('result,at,sentence', [
     ('nothing-to-install', 11, NOTHING), ('not-started', 11, NOT_STARTED),
     # A record that is not newer than the failure says nothing about it.
     ('nothing-to-install', 10, ''), ('not-started', 9, ''), ('not-started', None, ''),
-    ('check-failed', 11, ''), ('retried', 11, ''),
+    ('check-failed', 11, ''), ('retried', 11, ''), ('other-update', 11, ''),
 ])
 @pytest.mark.parametrize('reason,status', [('runtime-source-changed', 'action-required'),
                                            ('runtime-resolution-mismatch', 'protected')])

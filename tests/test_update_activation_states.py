@@ -359,8 +359,8 @@ async def windows_with_work(managed, monkeypatch):
     args = {**update_restart.target(manager), 'confirm': True}
     windows = SimpleNamespace(platform='win32')
     monkeypatch.setattr(update_restart, 'sys', windows)
-    # Without the early refusal, activation reaches its own Windows check: it
-    # asks for the update owner, records a failure and publishes phase `error`.
+    # Without the early refusal the request goes on into activation. The cases
+    # then fail: the refusal text is another one or absent, and the state changes.
     monkeypatch.setattr(app_updates, 'sys', windows)
     owner = Mock(return_value=None)
     monkeypatch.setattr('amplifier_web.windows_service.update_owner', owner)

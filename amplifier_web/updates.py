@@ -789,9 +789,12 @@ class UpdateManager:
                             batch = self.diagnostics.state.get('batch', {})
                             attempt = batch.get('attemptId') if (batch.get('kind') == 'ecosystem'
                                 and batch.get('attemptId') != prior_attempt) else None
-                            # 'retried' only names an attempt that this request started.
+                            # 'retried' only names a component attempt that this
+                            # request started. 'other-update': it started an update
+                            # of another kind (the application comes first).
+                            started = batch.get('attemptId') != prior_attempt
                             await self.publish(retryCheck={'at': time.time(), 'attemptId': attempt,
-                                'result': 'retried' if attempt else 'not-started'})
+                                'result': 'retried' if attempt else 'other-update' if started else 'not-started'})
             else:
                 await getattr(self, action)()
         except asyncio.CancelledError: raise
@@ -1570,13 +1573,22 @@ class UpdateManager:
                 marker=json.loads((self.directory/'releases'/target/'validated.json').read_text())
                 if marker.get('hostVersion')!=__import__('amplifier_web').__version__:
                     from .session_files import amplifier_home
-                    from .update_storage import refresh_stage_keys, remove_stage_keys
+                    from .update_health import STALE_STAGE_KEYS
+                    from .update_storage import refresh_stage_keys, remove_stage_keys, STALE_KEYS
                     target_stage = self.directory / 'releases' / target
+                    if refresh_stage_keys(self.home, target_stage, amplifier_home()) == STALE_KEYS:
+                        # The person has no keys file any more, and the stage's old
+                        # copy could not be removed. Never qualify with that copy.
+                        # Nothing was changed, so this is not a failed attempt and
+                        # the phase stays: the next request tries the removal again.
+                        await self.publish(error=STALE_STAGE_KEYS)
+                        return
+                    if state.get('error') == STALE_STAGE_KEYS:
+                        await self.publish(error=None)  # That refusal is over.
                     try:
-                        # A refusal is not an update failure. Validation then
-                        # runs with what the stage holds, as it did before this
-                        # refresh existed.
-                        refresh_stage_keys(self.home, target_stage, amplifier_home())
+                        # Any other refusal is not an update failure. Validation
+                        # then runs with what the stage holds, as it did before
+                        # this refresh existed.
                         await self.validate(target_stage, target)
                     except asyncio.CancelledError:
                         raise  # Qualification may still have a reader; keep the copy.

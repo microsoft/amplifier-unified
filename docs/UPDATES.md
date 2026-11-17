@@ -418,7 +418,12 @@ preparation failure. Settings and routing stay. Cancellation keeps the copy.
 Later activation or rollback qualification uses fresh credentials from the live
 shared home, then removes the copy again unless interrupted. A refresh that is
 refused is not an update failure: that qualification runs with what the stage
-holds.
+holds. One case is different. When the live shared home has no keys file any
+more and the stage's old copy cannot be removed, that qualification does not
+run: an old copy never stands in for credentials that the person removed. The
+page says so and nothing is changed. The next activation request tries the
+removal again (the owner's pass does that by itself for a prepared update), and
+takes the text back when the refusal is over.
 Idle maintenance also scrubs at most eight stage copies per pass, even when
 unused-code cleanup is off. A validated stage qualifies immediately. An
 unvalidated stage qualifies only when both its folder and `shared-config` are
@@ -676,8 +681,10 @@ the same unchanged-input hold; no timer replays the whole failed preparation.
 After a failed component preparation, Try update again checks sources again before
 installing what the new check finds. If that check fails or finds nothing to
 install, no installation starts. `updates.retryCheck.result` is `retried` (with
-the ID of the attempt that this request started), `not-started` (checked, and no
-attempt started, for example while no AI connection is set up),
+the ID of the component attempt that this request started), `not-started`
+(checked, and no attempt started, for example while no AI connection is set up),
+`other-update` (the request started an update of another kind first, for example
+the application),
 `nothing-to-install`, or `check-failed` (the new check ended with an error or
 could not run). The page identifies the rechecked
 attempt. When the earlier failure record keeps its priority, its text says that

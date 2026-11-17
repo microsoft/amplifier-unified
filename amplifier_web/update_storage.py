@@ -112,11 +112,17 @@ def remove_stage_keys(home, stage, *, expected=None):
         return 'refused'
 
 
+STALE_KEYS = 'stale'
+
+
 def refresh_stage_keys(home, stage, source):
     """Revalidation alone gets current credentials, never new settings/routing.
 
     Synchronous bounded I/O leaves no background copy thread on cancellation.
     Return only a reason code, never bytes, digests or filesystem exception text.
+
+    STALE_KEYS is the one reason that a caller must not ignore: the person has
+    no keys file any more, and this stage may still hold its old copy.
     """
     try:
         home, stage = _stage_address(home, stage)
@@ -143,7 +149,8 @@ def refresh_stage_keys(home, stage, source):
                     check()
         except FileNotFoundError:
             # A legacy copy must not stand in for credentials the person removed.
-            return remove_stage_keys(home, stage)
+            # When it cannot be removed, the caller must not qualify with it.
+            return STALE_KEYS if remove_stage_keys(home, stage) else None
         if os.name == 'nt':
             with directory(stage / 'shared-config', owned_root=home, create=False) as pinned:
                 pinned.publish_private('keys.env', content, replace=True)
@@ -181,10 +188,11 @@ def refresh_stage_keys(home, stage, source):
 async def scrub_stage_keys(manager):
     """Key-only maintenance, independent of unused-code policy; never retire trees.
 
-    At most eight key-removal attempts and one second of metadata traversal per
-    pass. The scan offset rotates over later entries on subsequent idle passes.
-    Entries before the offset are only counted. Each pass handles at least one
-    entry after the offset, so a slow folder cannot hold the scan at one place.
+    At most eight key-removal attempts per pass. The scan offset rotates over
+    later entries on subsequent idle passes. Entries before the offset are only
+    listed and counted, without a time limit and without a look at them. After
+    the offset a pass stops when about one second has gone, but it handles at
+    least one entry first, so a slow folder cannot hold the scan at one place.
     """
     from .update_health import pending_preparation
     from .update_retention import maintenance_blocked

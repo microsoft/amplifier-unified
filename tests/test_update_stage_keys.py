@@ -268,6 +268,89 @@ async def test_a_refused_refresh_does_not_fail_the_activation(app, repo, monkeyp
     assert_preserved(stage)
 
 
+def held_copy(stage, tmp_path):
+    """A stage copy that the removal refuses: it has a second name (a real refusal, not a stub)."""
+    second = tmp_path / 'second-name-of-the-stage-copy'
+    os.link(stage / 'shared-config/keys.env', second)
+    return second
+
+
+def test_refresh_says_stale_only_when_the_live_file_is_gone_and_the_old_copy_stays(tmp_path):
+    stage = stage_at(tmp_path)
+    source = tmp_path / 'live'
+    source.mkdir()
+    before = (stage / 'shared-config/keys.env').read_bytes()
+    second = held_copy(stage, tmp_path)
+    # No live keys file, and the old copy cannot be removed.
+    assert storage.refresh_stage_keys(tmp_path, stage, source) == storage.STALE_KEYS == 'stale'
+    assert (stage / 'shared-config/keys.env').read_bytes() == before
+    # A live keys file exists and the stage copy cannot be replaced: an ordinary refusal, never 'stale'.
+    (source / 'keys.env').write_bytes(b'FIXTURE_KEY=fake-current\n')
+    assert storage.refresh_stage_keys(tmp_path, stage, source) == 'refused'
+    (source / 'keys.env').unlink()
+    # The removal works again: the old copy goes, and nothing is stale.
+    second.unlink()
+    assert storage.refresh_stage_keys(tmp_path, stage, source) is None
+    assert not (stage / 'shared-config/keys.env').exists()
+    # No copy at all is not stale either.
+    assert storage.refresh_stage_keys(tmp_path, stage, source) is None
+
+
+@pytest.mark.parametrize('rollback', [False, True])
+async def test_an_old_copy_never_stands_in_for_a_keys_file_that_the_person_removed(app, repo, monkeypatch, tmp_path, rollback):
+    """No live keys file, and the stage's old copy cannot be removed: the stage is not qualified with it."""
+    import json
+    from amplifier_web.update_health import STALE_STAGE_KEYS
+    manager, _ = await prepare(app, repo)
+    assert not (amplifier_home() / 'keys.env').exists()
+    stage = stage_at(manager.home)
+    receipt = json.dumps({'hostVersion': 'old-app', 'sources': 1})
+    (stage / 'validated.json').write_text(receipt)
+    legacy = (stage / 'shared-config/keys.env').read_bytes()
+    second = held_copy(stage, tmp_path)
+    state = app.state['updates']
+    state.update(phase='staged', pendingRelease=stage.name)
+    if rollback:
+        (manager.directory / 'active.json').write_text(json.dumps({'current': None, 'previous': stage.name}))
+        state.pop('pendingRelease')
+    pointer = (manager.directory / 'active.json').read_bytes() if rollback else None
+    app.state['sessions'][0]['status'] = 'working'  # A later pass stops after validation, before replacement.
+    seen = []
+    async def validate(target, release):
+        seen.append((stage / 'shared-config/keys.env').exists())
+    monkeypatch.setattr(manager, 'validate', validate)
+    events = len(manager.diagnostics.state.get('events', []))
+    await manager.activate(rollback=rollback)  # It raises nothing.
+    # No qualification ran, and no receipt for this app version was written.
+    assert seen == []
+    assert (stage / 'validated.json').read_text() == receipt
+    assert (stage / 'shared-config/keys.env').read_bytes() == legacy
+    # Only the text changes. The phase stays, so the owner's next pass tries again.
+    assert (state['phase'], state['error']) == ('staged', STALE_STAGE_KEYS)
+    assert state.get('pendingRelease') == (None if rollback else stage.name)
+    if rollback:
+        assert (manager.directory / 'active.json').read_bytes() == pointer
+    else:
+        # The page says it, and it is not recorded as a failed attempt.
+        assert (state['currentStatus']['title'], state['currentStatus']['detail']) == (
+            'Update needs attention', STALE_STAGE_KEYS)
+    assert len(manager.diagnostics.state.get('events', [])) == events
+    assert_preserved(stage)
+    # The same request again changes nothing while the copy still cannot be removed.
+    await manager.activate(rollback=rollback)
+    assert seen == [] and (stage / 'validated.json').read_text() == receipt
+    # The removal works again. The next request removes the old copy first, then qualifies without it.
+    second.unlink()
+    await manager.activate(rollback=rollback)
+    assert seen == [False]
+    assert json.loads((stage / 'validated.json').read_text())['hostVersion'] == __import__('amplifier_web').__version__
+    assert not (stage / 'shared-config/keys.env').exists()
+    # The refusal is over, and its text is taken back.
+    assert state.get('error') is None
+    if not rollback:
+        assert state['currentStatus']['detail'] != STALE_STAGE_KEYS
+
+
 @pytest.mark.parametrize('part', ['source', 'stage', 'shared-config', 'keys.env'])
 def test_refresh_refuses_symlinks(tmp_path, part):
     stage = stage_at(tmp_path)
@@ -485,6 +568,12 @@ async def test_scrub_makes_progress_when_its_time_is_used_up_at_once(app, monkey
     # One stage per pass, never the same place twice in a row, and the scan starts again after the end.
     assert left[:3] == [2, 1, 0], left
     assert all(stage.is_dir() for stage in stages)
+    # The scan starts again after the end: copies that appear later are reached too.
+    for stage in stages:
+        (stage / 'shared-config/keys.env').write_bytes(b'FIXTURE_KEY=fake-later\n')
+    for _ in range(4):
+        await storage.scrub_stage_keys(manager)
+    assert not any((stage / 'shared-config/keys.env').exists() for stage in stages)
 
 
 async def test_a_failed_key_scrub_does_not_defer_the_other_maintenance(app, monkeypatch):
