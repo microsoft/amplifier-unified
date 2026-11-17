@@ -244,7 +244,7 @@ dependencies = [
 [[package]]
 name = "amplifier-module-context-managed"
 version = "0.1.0"
-source = { git = "https://github.com/microsoft/amplifier-bundle-context-managed?subdirectory=modules%2Fcontext-managed&rev=0de9bd2ea366e0ad10a3fd668c1d62c398baaefd#0de9bd2ea366e0ad10a3fd668c1d62c398baaefd" }
+source = { git = "https://github.com/microsoft/amplifier-bundle-context-managed?subdirectory=modules%2Fcontext-managed&rev=c18eb0c68d609d3471549f148f2e36f77d59a336#c18eb0c68d609d3471549f148f2e36f77d59a336" }
 dependencies = [
     { name = "amplifier-module-context-simple" },
 ]
@@ -281,7 +281,7 @@ source = { git = "https://github.com/microsoft/amplifier-foundation?subdirectory
 [[package]]
 name = "amplifier-module-loop-live"
 version = "0.2.0"
-source = { git = "https://github.com/microsoft/amplifier-module-loop-live?rev=7828753b7f46c6da8f81ca13e97ee02beab30108#7828753b7f46c6da8f81ca13e97ee02beab30108" }
+source = { git = "https://github.com/microsoft/amplifier-module-loop-live?rev=cd1c149d335c903d237a785505a3d0ccf439851c#cd1c149d335c903d237a785505a3d0ccf439851c" }
 dependencies = [
     { name = "amplifier-module-loop-streaming" },
     { name = "jsonschema" },
@@ -538,11 +538,11 @@ artifacts = [
     { name = "reportlab", specifier = ">=4,<5" },
 ]
 dev = [
-    { name = "amplifier-module-context-managed", git = "https://github.com/microsoft/amplifier-bundle-context-managed?subdirectory=modules%2Fcontext-managed&rev=0de9bd2ea366e0ad10a3fd668c1d62c398baaefd" },
+    { name = "amplifier-module-context-managed", git = "https://github.com/microsoft/amplifier-bundle-context-managed?subdirectory=modules%2Fcontext-managed&rev=c18eb0c68d609d3471549f148f2e36f77d59a336" },
     { name = "amplifier-module-context-simple", git = "https://github.com/microsoft/amplifier-module-context-simple?rev=main" },
     { name = "amplifier-module-hook-context-intelligence", git = "https://github.com/microsoft/amplifier-bundle-context-intelligence?subdirectory=modules%2Fhook-context-intelligence&rev=a80ce69d0e96e9a343501f238dcd867350dd9aa2" },
     { name = "amplifier-module-hooks-candidate-guard", git = "https://github.com/microsoft/amplifier-bundle-converge?subdirectory=modules%2Fhooks-candidate-guard&rev=da7dd8878c9e7b672e86151b32d59c0cce68bcb6" },
-    { name = "amplifier-module-loop-live", git = "https://github.com/microsoft/amplifier-module-loop-live?rev=7828753b7f46c6da8f81ca13e97ee02beab30108" },
+    { name = "amplifier-module-loop-live", git = "https://github.com/microsoft/amplifier-module-loop-live?rev=cd1c149d335c903d237a785505a3d0ccf439851c" },
     { name = "amplifier-module-provider-anthropic", git = "https://github.com/microsoft/amplifier-module-provider-anthropic?rev=fa1adae32eea495b0b9214cd03baa9d63f43517b" },
     { name = "amplifier-module-provider-openai", extras = ["native"], git = "https://github.com/microsoft/amplifier-module-provider-openai?rev=main" },
     { name = "amplifier-module-tool-apply-patch", git = "https://github.com/microsoft/amplifier-bundle-filesystem?subdirectory=modules%2Ftool-apply-patch&rev=515599f0d0763a946aa96ed1d0110db723f5c386" },
