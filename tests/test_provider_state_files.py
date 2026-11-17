@@ -330,13 +330,13 @@ async def test_the_readiness_check_of_a_transfer_asks_the_model_with_the_paths(f
     class Provider:
         def __init__(self, *, api_key=None, config=None):
             self.config = config
-            constructed.append(config)
+            constructed.append(dict(config))   # A copy: what the provider has at this moment.
 
         def get_info(self):
             return {'capabilities': ['completion:single_attempt:v1', 'completion:single_attempt:v2'], 'config_fields': []}
 
         async def complete(self, request, **options):
-            asked.append(self.config)   # The model call. Its answer is not the subject here.
+            asked.append(dict(self.config))   # The model call. Its answer is not the subject here.
             raise RuntimeError('no answer')
 
         async def close(self):

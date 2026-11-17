@@ -2,14 +2,16 @@
 
 A ``run`` step without ``shell: bash`` gets no ``pipefail``. Then ``pytest | tee`` has the exit status of
 ``tee``, and a step can pass while a case fails (a review finding of this workflow's first form). The cases
-here run the Linux step's own script, the way GitHub runs it, with a stand-in for ``uv`` that prints a given
-pytest result. They read the Windows step's check from the same file.
+here run each step's own script, the way GitHub runs it, with a stand-in that prints a given pytest result:
+the Linux step under bash, and the Windows step under PowerShell on native Windows. The CI job there sets
+``AMPLIFIER_REQUIRE_PROVIDER_STATE_FILES``: then a missing PowerShell fails; it never skips.
 """
 from __future__ import annotations
 
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 
 import pytest
@@ -39,7 +41,9 @@ def document():
 
 
 def required_step(job):
-    step, = [step for step in document()['jobs'][job]['steps'] if REQUIRE in (step.get('env') or {})]
+    """The step of this job that runs the state-file cases."""
+    step, = [step for step in document()['jobs'][job]['steps']
+             if 'tests/test_provider_state_files.py' in step.get('run', '')]
     assert step['env'][REQUIRE] == '1'
     return step
 
@@ -73,9 +77,68 @@ def test_the_windows_step_checks_the_status_of_pytest_and_then_the_same_summary_
     assert 'pytest' in lines[0] and 'tests/test_provider_state_files.py' in lines[0] and '| Tee-Object' in lines[0]
     assert lines[1].startswith('if ($LASTEXITCODE -ne 0) { throw ')   # Directly after pytest, before any other program.
     pattern, = re.findall(r"if \(\$summary -notmatch '([^']+)'\) \{ throw ", script)
-    # The same rule as the Linux step. PowerShell and Python read this pattern the same way.
-    assert pattern.replace(r'\d', '[0-9]') in required_step('linux')['run']
+    # Exactly the rule of the Linux step. PowerShell and Python read this pattern the same way.
+    linux, = re.findall(r"grep -qE '([^']+)'", required_step('linux')['run'])
+    assert pattern.replace(r'\d', '[0-9]') == linux
     assert (status == 0 and re.search(pattern, summary) is not None) is passes
+
+
+def powershell():
+    found = shutil.which('pwsh')
+    if found is None:
+        reason = 'PowerShell 7 (pwsh) is not on this PC'
+        if os.environ.get(REQUIRE) == '1':
+            pytest.fail(reason)
+        pytest.skip(reason)
+    return found
+
+
+@pytest.fixture(scope='module')
+def windows_step_folder(tmp_path_factory):
+    """What the Windows step starts: ``.venv\\Scripts\\python.exe``, and beside it a stand-in for pytest."""
+    import venv
+    folder = tmp_path_factory.mktemp('windows-step')
+    venv.create(folder / '.venv', with_pip=False)
+    # "python -m pytest" finds this file first: the folder is the working folder of the step.
+    (folder / 'pytest.py').write_text(
+        'import os, sys\nprint("PASSED tests/a.py::case")\nprint(os.environ["SUMMARY"])\nprint()\n'
+        'sys.exit(int(os.environ["STATUS"]))\n', encoding='utf-8')
+    return folder
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='The Windows step is a PowerShell script that starts .venv\\Scripts\\python.exe')
+@pytest.mark.parametrize('summary,status,passes', RESULTS)
+def test_the_windows_step_own_script_passes_only_when_every_case_passed(windows_step_folder, summary, status, passes):
+    step = required_step('windows')
+    assert step['shell'] == 'pwsh'
+    script = windows_step_folder / 'step.ps1'
+    # GitHub puts these two lines around the script of a "shell: pwsh" step and runs: pwsh -command ". '{0}'"
+    script.write_text("$ErrorActionPreference = 'stop'\n" + step['run']
+                      + "\nif ((Test-Path -LiteralPath variable:\\LASTEXITCODE)) { exit $LASTEXITCODE }\n",
+                      encoding='utf-8')
+    done = subprocess.run([powershell(), '-NoProfile', '-NonInteractive', '-Command', f". '{script}'"],
+                          cwd=windows_step_folder, env={**os.environ, 'SUMMARY': summary, 'STATUS': str(status)},
+                          capture_output=True, text=True, timeout=120)
+    assert (done.returncode == 0) is passes, (done.returncode, done.stdout[-600:], done.stderr[-600:])
+
+
+def test_every_native_step_that_requires_cases_checks_the_status_and_then_one_summary_rule():
+    steps = [step for step in document()['jobs']['windows']['steps'] if REQUIRE in (step.get('env') or {})]
+    assert len(steps) == 2   # The state-file cases, and the cases that run that step's own script.
+    rules = set()
+    for step in steps:
+        assert step['shell'] == 'pwsh' and step['env'][REQUIRE] == '1'
+        lines = [line.strip() for line in step['run'].splitlines() if line.strip()]
+        assert ' -m pytest ' in lines[0] and lines[0].endswith('| Tee-Object -Variable report')
+        assert lines[1].startswith('if ($LASTEXITCODE -ne 0) { throw ')
+        assert lines[2] == '$summary = [string]($report | Where-Object { $_ } | Select-Object -Last 1)'
+        rule, = re.findall(r"^if \(\$summary -notmatch '([^']+)'\) \{ throw ", lines[3])
+        rules.add(rule)
+        assert len(lines) == 4
+    assert len(rules) == 1
+    # The second step names the cases by their test name, so that none is deselected.
+    assert ('"tests/test_provider_state_files_workflow.py::'
+            + test_the_windows_step_own_script_passes_only_when_every_case_passed.__name__ + '"') in steps[1]['run']
 
 
 def test_a_change_to_a_file_that_the_cases_use_starts_the_workflow():

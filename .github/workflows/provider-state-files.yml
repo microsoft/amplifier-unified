@@ -8,10 +8,12 @@ name: Provider state files
 # Core's own session initialization, and the module talks to an HTTP server on
 # the runner. Nothing goes to a model and no key is needed. Without the host's
 # step the files appear below the profile; with it they are in the shared home
-# and the profile stays empty. A case that fails, is skipped or does not run
-# fails the job: each step checks the exit status of pytest and its summary
-# line (tests/test_provider_state_files_workflow.py runs the Linux step's own
-# script with failing and skipped results).
+# and the profile stays empty. A case that fails, has an error, is skipped,
+# is deselected or is expected to fail fails the job, and so does a run with
+# no case: each step checks the exit status of pytest and its summary line.
+# tests/test_provider_state_files_workflow.py runs each step's own script with
+# such results: the Linux step under bash, the Windows step under PowerShell
+# on the native runner. The rule does not count the cases.
 #
 # It is not setup-file or clean-account acceptance: no installation, no app
 # and no chat.
@@ -77,6 +79,17 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'A provider state-file case failed on native Windows.' }
           $summary = [string]($report | Where-Object { $_ } | Select-Object -Last 1)
           if ($summary -notmatch '^\d+ passed(, \d+ warnings?)? in ') { throw "A case did not pass or did not run; on this lane every case must run: $summary" }
+      # The step above is a script too. This runs that script under PowerShell
+      # with results that it must refuse.
+      - name: Require that the step above fails when a case fails or does not run
+        shell: pwsh
+        env:
+          AMPLIFIER_REQUIRE_PROVIDER_STATE_FILES: '1'
+        run: |
+          .\.venv\Scripts\python.exe -B -m pytest -q -rA -p no:cacheprovider "tests/test_provider_state_files_workflow.py::test_the_windows_step_own_script_passes_only_when_every_case_passed" | Tee-Object -Variable report
+          if ($LASTEXITCODE -ne 0) { throw 'The step that requires the state-file cases accepts a wrong result.' }
+          $summary = [string]($report | Where-Object { $_ } | Select-Object -Last 1)
+          if ($summary -notmatch '^\d+ passed(, \d+ warnings?)? in ') { throw "The cases of the step's own script did not all run: $summary" }
   linux:
     name: Provider state files, the README item and the probes
     runs-on: ubuntu-latest
