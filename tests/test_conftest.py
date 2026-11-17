@@ -108,6 +108,7 @@ def outside_a_test(seen, session_home):
 class TestInsideARun:
     def test_module_level_code_gets_no_service_variable_and_folders_of_this_run(self, session_home):
         outside_a_test(WHEN_PYTEST_IMPORTED_THIS_FILE, session_home)
+        assert session_home == real(session_home)  # No link and no short name in the run's folder.
 
     def test_a_test_gets_no_service_variable_and_folders_of_its_own(self, tmp_path):
         found = variables()
@@ -156,8 +157,12 @@ class TestInsideARun:
 
 
 def test_the_cases_above_pass_in_a_run_that_inherits_the_outside_variables(tmp_path, monkeypatch):
-    service, temporary = tmp_path / 'service', tmp_path / 'temporary'
+    service, temporary, linked = tmp_path / 'service', tmp_path / 'temporary', tmp_path / 'linked'
     temporary.mkdir()
+    try:
+        linked.symlink_to(temporary, target_is_directory=True)  # The temporary folder is reached through a link.
+    except OSError:  # This account may not make links (Windows).
+        linked = temporary
     inherited = {**SERVICE_VALUES, **{name: 'made-up-' + name.lower() for name in CREDENTIALS}}
     for name, folder in SERVICE_FOLDERS.items():
         (service / folder).mkdir(parents=True)
@@ -165,7 +170,7 @@ def test_the_cases_above_pass_in_a_run_that_inherits_the_outside_variables(tmp_p
     # This run can have options of its own. They are not for the second run.
     monkeypatch.setenv('PYTEST_ADDOPTS', '-k no_case_has_this_name')
     environment = {name: value for name, value in os.environ.items() if name != 'PYTEST_ADDOPTS'}
-    environment.update(inherited, TMPDIR=str(temporary), TEMP=str(temporary), TMP=str(temporary))
+    environment.update(inherited, TMPDIR=str(linked), TEMP=str(linked), TMP=str(linked))
     done = subprocess.run(
         [sys.executable, '-m', 'pytest', '-q', '-p', 'no:cacheprovider',
          '--basetemp', str(tmp_path / 'run'), f'{Path(__file__).resolve()}::TestInsideARun'],

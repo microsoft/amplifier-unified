@@ -64,7 +64,10 @@ remove_outside_variables()
 # default folders, and an installed Amplifier Unified keeps its data there. So
 # each variable holds a folder of this run from here on. Each test then gets
 # new folders of its own (the fixture below).
-SESSION_HOME = tempfile.mkdtemp(prefix='amplifier-unified-tests-')
+# A real path: no link and no short name in it. On Windows the temporary folder
+# can have a short name with a '~', and the product refuses a '~' in the path
+# of its app home (windows_files).
+SESSION_HOME = os.path.realpath(tempfile.mkdtemp(prefix='amplifier-unified-tests-'))
 HOMES = {
     'AMPLIFIER_WEB_HOME': 'unified-home',  # host.config.app_home
     'AMPLIFIER_HOME': 'amplifier-home',  # session_files.amplifier_home
