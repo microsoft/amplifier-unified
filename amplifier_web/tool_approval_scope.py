@@ -116,10 +116,8 @@ def _mcp(tool, proof, schema):
         connection = {'transport': 'stdio', 'command': client.command,
                       'arguments': client.args, 'authorization': client.env}
     elif cls == ('amplifier_module_tool_mcp.streamable_http_client', 'MCPStreamableHTTPClient'):
-        # The SDK queues HTTP requests; mutable authentication can change after
-        # this boundary. Until the transport enforces the approved credentials
-        # at actual send, HTTP requests retain ordinary Once/Deny.
-        raise ValueError('HTTP MCP has no reusable send-time authorization scope.')
+        connection = {'transport': 'streamable-http', 'url': client.url,
+                      'authorization': client.headers}
     else:
         raise ValueError('The MCP client configuration is unsupported.')
     if client.server_name != tool.server_name:
@@ -132,6 +130,10 @@ def _mcp(tool, proof, schema):
     binding_source = _implementation(client, proof, 'approval_binding')
     _implementation(client, proof, 'approval_scope')
     binding = client.approval_binding()
+    if connection['transport'] == 'streamable-http' and (
+            type(binding) is not dict or type(binding.get('httpSendAuthorization')) is not int
+            or binding['httpSendAuthorization'] != 1):
+        raise ValueError('HTTP MCP has no reusable send-time authorization scope.')
     if (type(binding) is not dict or binding.get('version') != 1
             or type(binding.get('key')) is not str or len(binding['key']) != 64
             or any(c not in '0123456789abcdef' for c in binding['key'])):

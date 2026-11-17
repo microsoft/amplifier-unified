@@ -53,7 +53,8 @@ async def test_canonical_stdio_client_uses_host_bound_invocation(flow, monkeypat
 
 
 @pytest.mark.asyncio
-async def test_canonical_http_client_retains_once_and_deny(flow, monkeypatch):
+@pytest.mark.parametrize('capability', [None, False, True, 0, '1', 2])
+async def test_canonical_http_client_retains_once_and_deny(flow, monkeypatch, capability):
     effects = []
     class Session:
         async def call_tool(self, name, arguments):
@@ -64,7 +65,8 @@ async def test_canonical_http_client_retains_once_and_deny(flow, monkeypatch):
     client.tools = [{'name': 'remote/name', 'input_schema': flow.tools['mcp'].input_schema}]
     # Even an older candidate exposing configuration-only APIs must not create
     # a reusable HTTP offer. Actual send-time authorization is not enforced.
-    client.approval_binding = lambda: {'version': 1, 'key': 'a' * 64}
+    client.approval_binding = lambda: {'version': 1, 'key': 'a' * 64,
+                                      'httpSendAuthorization': capability}
     prior = tool_approval_scope._implementation
     monkeypatch.setattr(tool_approval_scope, '_implementation', lambda item, proof, method='execute':
         {'fixture': 'canonical-client-source'} if item is client else prior(item, proof, method))
@@ -76,3 +78,39 @@ async def test_canonical_http_client_retains_once_and_deny(flow, monkeypatch):
     assert effects == []
     await decide(flow, 'mcp', scoped=False)
     assert effects == [('remote/name', {'command': 'exact request'})]
+
+
+@pytest.mark.asyncio
+async def test_http_send_capability_reaches_host_scope_and_work_recheck(flow, monkeypatch):
+    from amplifier_module_tool_mcp.http_approval import HTTPApprovalGuard
+    import httpx
+
+    effects = []
+    class Session:
+        async def call_tool(self, name, arguments):
+            effects.append((name, arguments.copy()))
+            return CallToolResult(content=[TextContent(type='text', text='Fixture')])
+
+    # This is the host/descriptor seam with scripted session effects. The MCP
+    # repository separately exercises the actual SDK queue and HTTP send.
+    client = MCPStreamableHTTPClient('selected', 'https://fixture.invalid/mcp')
+    client.session, client._connected = Session(), True
+    client._protocol_version = '2025-11-25'
+    client.tools = [{'name': 'remote/name', 'input_schema': flow.tools['mcp'].input_schema}]
+    async with httpx.AsyncClient(headers={'Authorization': 'Bearer fixture-only'}) as http:
+        client._approval_http = HTTPApprovalGuard(client, http)
+        client._approval_http.session = client.session
+        prior = tool_approval_scope._implementation
+        monkeypatch.setattr(tool_approval_scope, '_implementation', lambda item, proof, method='execute':
+            {'fixture': 'canonical-client-source'} if item is client else prior(item, proof, method))
+        tool = MCPToolWrapper('selected', client.tools[0], client, flow.coordinator.hooks)
+        tool.role = 'mcp'
+        flow.tools['mcp'] = tool
+        await flow.coordinator.mount('tools', tool, name='mcp')
+        allowed = await decide(flow, 'mcp')
+        denied = await decide(flow, 'mcp', decision='deny')
+        assert allowed['toolScope']['descriptor']['key'] == denied['toolScope']['descriptor']['key']
+        assert effects == [('remote/name', {'command': 'exact request'})]
+        flow.callbacks.append(lambda: http.headers.update({'Authorization': 'Bearer changed'}))
+        await decide(flow, 'mcp')
+        assert len(effects) == 1
