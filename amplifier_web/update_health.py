@@ -429,6 +429,13 @@ def current(state, evidence=None, *, manual_verified=None, explicit_retry=False,
     retry = batch.get('retry') or {}
     phase = state.get('phase')
     def result(status, title, detail, *, action=None, component=None, failure=None):
+        retry_check = state.get('retryCheck') or {}
+        if (status in {'action-required', 'protected'} and failure
+                and retry_check.get('result') == 'retried' and retry_check.get('attemptId')
+                and retry_check['attemptId'] == failure.get('attemptId')):
+            detail += ' Amplifier checked the sources again before this attempt.'
+        if status == 'current' and retry_check.get('result') == 'nothing-to-install':
+            detail += ' Amplifier checked the sources again. Nothing is left to install.'
         value = {'status': status, 'title': title, 'detail': detail,
                 'actionRequired': status in {'action-required', 'protected', 'unverified'},
                 'action': action, 'component': component}

@@ -741,18 +741,42 @@ class UpdateManager:
                     await asyncio.shield(self.check_task)
                     if self.service.state['updates'].get('phase') in {'error', 'interrupted'}:
                         return
+                def found():
+                    # After a new check the request installs what that check found.
+                    state = self.service.state['updates']
+                    return state.get('phase') == 'available' and state.get('available', 0)
+                async with self.lock:
+                    if self.closed or self.awaiting_restart():return
+                    retry = self._failed_component_retry()
+                if retry:
+                    # _check takes this same lock. Refresh outside it, before
+                    # publishing intent (_check clears applicationIntent).
+                    await self.check(fresh=True)
                 async with self.lock:
                     if self.closed or self.awaiting_restart():return
                     intent = {'id': command_id or uuid.uuid4().hex, 'scope': 'whole'}
                     pending = self.service.state['updates'].get('pendingApp')
                     await self.publish(applicationIntent=intent,
+                        **({} if retry else {'retryCheck': None}),
                         **({'pendingApp': {**pending, 'updateIntent': intent}} if pending else {}))
+                    if retry and not found():
+                        failed = self.service.state['updates'].get('phase') in {'error', 'interrupted'}
+                        await self.publish(retryCheck={'at': time.time(), 'attemptId': None,
+                            'result': 'check-failed' if failed else 'nothing-to-install'})
+                        return
+                    prior_attempt = self.diagnostics.state.get('batch', {}).get('attemptId')
                 if not self.closed and not self.awaiting_restart():
-                    def found():
-                        # After a new check the request installs what that check found.
-                        state = self.service.state['updates']
-                        return state.get('phase') == 'available' and state.get('available', 0)
                     await self.install_checked(found)
+                    if retry:
+                        async with self.lock:
+                            # Settings-race checks clear intent; a newer request
+                            # replaces it and must keep its own result.
+                            if self.service.state['updates'].get('applicationIntent') not in (None, intent):return
+                            batch = self.diagnostics.state.get('batch', {})
+                            attempt = batch.get('attemptId') if (batch.get('kind') == 'ecosystem'
+                                and batch.get('attemptId') != prior_attempt) else None
+                            await self.publish(retryCheck={'at': time.time(), 'attemptId': attempt,
+                                'result': 'retried'})
             else:
                 await getattr(self, action)()
         except asyncio.CancelledError: raise
@@ -776,6 +800,19 @@ class UpdateManager:
             # polling sleep. Wake the owner; keep all admission/idle checks in
             # tick(), rather than installing in parallel with another update.
             self.wakeup.set()
+
+    def _failed_component_retry(self):
+        """Called under the manager lock; interrupted/pending owners keep their paths."""
+        state = self.service.state['updates']
+        diagnostics = self.diagnostics.state
+        batch = diagnostics.get('componentPreparation', diagnostics.get('batch', {}))
+        failure = batch.get('failure') or diagnostics.get('lastFailure') or {}
+        return (state.get('phase') == 'error' and batch.get('kind') == 'ecosystem'
+            and bool(batch.get('attemptId')) and failure.get('attemptId') == batch['attemptId']
+            and failure.get('kind') == 'ecosystem' and failure.get('status') == 'failed'
+            and (batch.get('retry') or {}).get('mode') == 'changed-inputs'
+            and not any(state.get(key) for key in ('pendingApp', 'pendingRelease', 'pendingRollback',
+                                                  'pendingRestart', 'pendingReplacement', 'pendingSmartTools')))
 
     @staticmethod
     def independent_tool_results(state):

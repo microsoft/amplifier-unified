@@ -624,6 +624,9 @@ them transient. Changed source/configuration/application inputs or an explicit
 Install request can re-evaluate through the existing install owner. Check is
 availability discovery, not retry intent. Saved legacy backoff records retain
 the same unchanged-input hold; no timer replays the whole failed preparation.
+After a failed component preparation, Try update again checks sources again before
+installing what the new check finds. If that check fails or finds nothing to
+install, no installation starts. The page identifies the rechecked attempt.
 Interrupted or unknown effects retain their separate inspection fence.
 Pinned and exact checked-revision mismatches retain a typed source-policy reason
 and sanitized package identity; they are not transient transport failures.
