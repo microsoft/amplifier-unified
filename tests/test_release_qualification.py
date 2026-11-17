@@ -2669,3 +2669,82 @@ def test_release_job_checks_the_windows_plan_after_its_download_and_before_publi
     assert upload['with']['path'].splitlines() == ['${{ runner.temp }}/runtime.json', '${{ runner.temp }}/qualified-runtime.json']
     # The check is the workflow revision's tool, not a file of the selected source.
     assert 'cp scripts/release.py scripts/release_qualification.py ' in '\n'.join(step.get('run', '') for step in prepare)
+
+
+def native_plan_check():
+    spec = importlib.util.spec_from_file_location('consumer_plan_native', ROOT / 'tests/fixtures/windows_consumer_plan_native.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_windows_plan_native_check_passes_only_with_one_acceptance_and_two_refusals(tmp_path):
+    # The native check's own logic, with rows in the plan's form and in the form of install records.
+    fixture = native_plan_check()
+    rows = component_rows()
+    path = tmp_path / 'windows-consumer-plan.json'
+    delivery = {'sha256': 'c' * 64, 'url': 'https://github.com/microsoft/amplifier-unified/releases/download/v1.2.3/app.whl'}
+    path.write_text(json.dumps({'schema': 1, 'graph': [{**APP_ROW, 'delivery': delivery}, *rows]}))
+    records = [install_record(row) for row in rows]
+    result = fixture.cases(tmp_path / 'work', path, records)
+    assert result['ok'] is True and [case['passed'] for case in result['cases']] == [True, True, True]
+    assert result['gitComponents'] == {'amplifier-foundation': QUALIFIED, NAMING: QUALIFIED}
+    assert [case['required'] for case in result['cases']] == [
+        'accepted',
+        f'refused: The Windows setup file has amplifier-foundation at {QUALIFIED}. {HOST_HAS} at {fixture.OTHER}.' + STOP + AGAIN,
+        f'refused: The Windows setup file has amplifier-foundation at {QUALIFIED}. {TESTS_HAVE} at {fixture.OTHER}.' + STOP + AGAIN]
+    tool = (ROOT / 'scripts/release_qualification.py').read_text()
+    # A gate that accepts every plan must fail the check: both refusals are required.
+    accepts = tmp_path / 'accepts.py'
+    assert tool.count('            if problem:\n') == 1
+    accepts.write_text(tool.replace('            if problem:\n', '            if False:\n'))
+    result = fixture.cases(tmp_path / 'accepts', path, records, tool=accepts)
+    assert result['ok'] is False and [case['passed'] for case in result['cases']] == [True, False, False]
+    # A gate that refuses every plan must fail the check: the acceptance is required.
+    refuses = tmp_path / 'refuses.py'
+    equal = "    if same_place and shipped['revision'] and shipped['revision'] == other['revision']:\n"
+    assert tool.count(equal) == 1
+    refuses.write_text(tool.replace(equal, '    if False:\n'))
+    result = fixture.cases(tmp_path / 'refuses', path, records, tool=refuses)
+    assert result['ok'] is False and result['cases'][0]['passed'] is False
+    # The other commit must differ from the installed one, or a refusal would show nothing.
+    path.write_text(json.dumps({'schema': 1, 'graph': [APP_ROW, *component_rows(fixture.OTHER)]}))
+    with pytest.raises(RuntimeError, match='Change OTHER'):
+        fixture.cases(tmp_path / 'same-commit', path, records)
+
+
+def test_windows_plan_native_check_runs_for_changes_of_the_gate_and_cannot_be_skipped():
+    workflows = ROOT / '.github/workflows'
+    workflow = yaml.load((workflows / 'windows-consumer-plan.yml').read_text(), Loader=yaml.BaseLoader)
+    assert set(workflow['on']) == {'workflow_dispatch', 'pull_request'}
+    assert workflow['permissions'] == {'contents': 'read'}
+    paths = workflow['on']['pull_request']['paths']
+    # The gate, the workflow that runs it, the producer of the plan with its build inputs, and the check itself.
+    assert sorted(paths) == sorted([
+        '.github/workflows/windows-consumer-plan.yml', '.github/workflows/release.yml',
+        'scripts/release_qualification.py', 'tests/fixtures/windows_consumer_plan_native.py',
+        'scripts/windows_consumer_release.py', 'scripts/windows_bootstrap_native.py',
+        'scripts/windows_bootstrap_native.cs', 'scripts/windows_bootstrap_capsule.py',
+        'scripts/windows_private_git.py', 'scripts/install.ps1'])
+    assert all((ROOT / path).is_file() for path in paths)
+    assert set(workflow['jobs']) == {'windows-consumer-plan'}
+    job = workflow['jobs']['windows-consumer-plan']
+    release = yaml.load((workflows / 'release.yml').read_text(), Loader=yaml.BaseLoader)['jobs']['windows-consumer']
+    # The same runner and resolver settings as the release job whose installation becomes the plan.
+    assert job['runs-on'] == release['runs-on'] == 'windows-latest' and job['env'] == release['env']
+    steps = job['steps']
+    assert [step.get('uses') for step in steps[:3]] == [step.get('uses') for step in release['steps'][:3]]
+    assert steps[0]['with'] == {'ref': '${{ github.event.pull_request.head.sha || github.sha }}',
+                                'persist-credentials': 'false'}
+    check = [step for step in steps if 'windows_consumer_plan_native.py' in step.get('run', '')]
+    assert len(check) == 1 and 'if' not in check[0]
+    assert check[0]['run'].splitlines() == [
+        "$ErrorActionPreference = 'Stop'",
+        'python -I -B tests/fixtures/windows_consumer_plan_native.py',
+        "if ($LASTEXITCODE -ne 0) { throw 'The consumer plan check failed; inspect result.json.' }"]
+    assert all('continue-on-error' not in item for item in (job, *steps))
+    # It is a pull-request check. It adds no step to a release run.
+    assert 'windows_consumer_plan_native' not in (workflows / 'release.yml').read_text()
+    fixture = native_plan_check()
+    assert re.fullmatch(r'\d+\.\d+\.\d+', fixture.RELEASE['version'])
+    assert re.fullmatch('[a-f0-9]{64}', fixture.RELEASE['sha256']) and re.fullmatch('[a-f0-9]{40}', fixture.RELEASE['revision'])
