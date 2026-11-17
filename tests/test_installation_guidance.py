@@ -72,13 +72,16 @@ class InstallationGuidanceTests(unittest.TestCase):
         statements = (
                 "- **OpenAI API:** in our test on a PC, a chat wrote no file outside the folder.",
                 # Both halves were seen on a PC: the file outside the folder with an earlier version, and
-                # the file in the folder with 0.106.3 (one chat and one test message of the connection).
+                # the file inside the folder with 0.106.3. The probes of that test read names in the usual
+                # per-user places, not every file on the PC. So the statement says where the file was written
+                # and that the earlier folder did not appear. It must not say that nothing is outside the folder.
                 # An installation that ran an earlier version can hold the file outside, and nothing deletes it.
                 "- **Anthropic API:** up to version 0.106.2, a chat writes one small file outside the folder: "
                 "`%USERPROFILE%\\.amplifier\\rate-limit-state.json`. We saw this in a test on a PC. "
-                "From version 0.106.3 on, Amplifier keeps that file in the folder. "
-                "In our test of version 0.106.3 on a PC, one chat and one test message of the connection "
-                "wrote no file outside the folder. "
+                "From version 0.106.3 on, Amplifier writes that file inside the folder instead. "
+                "We tested a new installation of version 0.106.3 on a PC with one chat and one "
+                "\"Send test message\" check of the connection. Both wrote the file inside the folder. "
+                "The folder `%USERPROFILE%\\.amplifier` did not appear. "
                 "A file that an earlier version wrote stays where it is. "
                 "Later versions do not use it, and uninstall does not remove it. You can delete it.",
                 "- **GitHub Copilot Subscription:** its component makes two folders, "
@@ -89,7 +92,7 @@ class InstallationGuidanceTests(unittest.TestCase):
                 "we have not tested this.")
         # The item is these sentences and nothing else: it must not say that nothing is outside the folder.
         self.assertEqual(folder.split(" depends on the AI connection: ", 1)[1], " ".join(statements))
-        # "Amplifier keeps that file in the folder" is the host's rule, with that file name. The statement
+        # "Amplifier writes that file inside the folder" is the host's rule, with that file name. The statement
         # names three versions: the last release without the rule, the first release with it, and the release
         # that was tested on a PC. This check refuses a version that does not exist yet, a first release with
         # the rule that is not later than the last one without it, and a tested release that does not have the
@@ -105,7 +108,7 @@ class InstallationGuidanceTests(unittest.TestCase):
         anthropic = folder.split("- **Anthropic API:**", 1)[1].split(" - **", 1)[0]
         without, = re.findall(r"up to version (\d+\.\d+\.\d+),", anthropic)
         first, = re.findall(r"From version (\d+\.\d+\.\d+) on,", anthropic)
-        tested, = re.findall(r"In our test of version (\d+\.\d+\.\d+) on a PC,", anthropic)
+        tested, = re.findall(r"We tested a new installation of version (\d+\.\d+\.\d+) on a PC ", anthropic)
         self.assertEqual(sorted(re.findall(r"\d+\.\d+\.\d+", anthropic)), sorted([without, first, tested]))
         current = re.search(r'^version = "(\d+\.\d+\.\d+)"$', source("pyproject.toml"), re.M).group(1)
         self.assertLess(number(without), number(first))

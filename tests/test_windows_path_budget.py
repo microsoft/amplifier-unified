@@ -672,6 +672,8 @@ def state_file_rows():
     path fits.
     """
     from amplifier_web.provider_state_files import STATE_FILES
+    # The document's row names the Anthropic component and its two files. Revise that row with a new entry.
+    assert {module: len(files) for module, files in STATE_FILES.items()} == {'provider-anthropic': 2}
     names = [name + '.tmp' for files in STATE_FILES.values() for name in files.values()]
     return [[(name, FILE, f'{home}\\{name}') for name in names] for home in ('shared', f'{STAGE}\\shared-config')]
 
