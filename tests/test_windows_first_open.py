@@ -74,6 +74,96 @@ def test_a_command_that_another_program_takes_over_ends_with_status_0_on_windows
     assert done.returncode == (0 if os.name == "nt" else 1)
 
 
+# A command of the app, as its caller sees it: output, a pause, more output,
+# and an exit status. The failing one ends with a status that is neither 0 nor 1.
+FAILING = ("import sys, time\n"
+           "print('first line', flush=True)\n"
+           "time.sleep(3)\n"
+           "print('last line', flush=True)\n"
+           "sys.stderr.write('the reason\\n')\n"
+           "raise SystemExit(3)\n")
+WORKING = FAILING.replace("raise SystemExit(3)", "raise SystemExit(0)")
+# What the program that took the command over has as its console (Windows).
+CONSOLE = ("import ctypes, json\n"
+           "kernel = ctypes.WinDLL('kernel32')\n"
+           "kernel.GetConsoleWindow.restype = ctypes.c_void_p\n"
+           "print(json.dumps({'console': bool(kernel.GetConsoleCP()),\n"
+           "                  'window': int(kernel.GetConsoleWindow() or 0)}), flush=True)\n")
+
+
+@pytest.fixture
+def generation_command(tmp_path):
+    """A command of a real launcher that a real active app generation takes over.
+
+    Two real private environments, as application_generations has them: the
+    launcher that setup installed, and one qualified app generation that is
+    active. The launcher runs the product's own `delegate`, isolated with
+    `-I`, as an installed launcher does. Give the returned function the
+    program of the app generation; it returns the command and its environment.
+    """
+    from amplifier_web import application_generations as generations
+    from test_application_generations import isolated_launchers
+    home, bootstrap, candidate, receipt = isolated_launchers(tmp_path)
+    generations.promote(home, receipt, bootstrap)
+
+    def command(program):
+        next(candidate.rglob("amplifier_web/__main__.py")).write_text(program, encoding="utf-8")
+        python = bootstrap / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+        environment = {name: os.environ[name] for name in ("PATH", "SystemRoot") if name in os.environ}
+        environment["AMPLIFIER_WEB_HOME"] = str(home)
+        return [str(python), "-I", "-m", "amplifier_web", "--data-dir", str(home)], environment
+    return command
+
+
+@pytest.mark.parametrize("program,expected", [(FAILING, 3), (WORKING, 0)], ids=["fails", "works"])
+def test_a_command_that_the_active_app_version_takes_over_returns_complete_with_its_exit_status(
+        tmp_path, generation_command, program, expected):
+    """A caller that waits for the command, as a terminal does, has everything when it returns.
+
+    The output goes to a file, not to a pipe: a caller that reads a pipe to
+    its end waits for the program that took over in any case, and would hide
+    a command that returns too early.
+    """
+    command, environment = generation_command(program)
+    output = tmp_path / "output.txt"
+    with output.open("wb") as stream:
+        status = subprocess.run([*command, "service", "start"], stdout=stream, stderr=subprocess.STDOUT,
+                                env=environment, timeout=120).returncode
+    at_return = output.read_text(encoding="utf-8").splitlines()
+    assert at_return == ["first line", "last line", "the reason"]
+    assert status == expected
+
+
+def test_the_launcher_learns_that_a_command_failed_which_the_active_app_version_took_over(generation_command):
+    """The launcher's own reader of its commands (`service start`, `config set`) gets the failure."""
+    from amplifier_web.update_diagnostics import CommandFailure
+    from amplifier_web.updates import process
+    command, environment = generation_command(FAILING)
+    with pytest.raises(CommandFailure) as failed:
+        asyncio.run(process(*command, "service", "start", env=environment, timeout=120))
+    assert failed.value.diagnostic_facts["exitCode"] == 3
+
+
+@pytest.mark.skipif(os.name != "nt", reason="A Windows console and its window")
+def test_native_command_that_is_taken_over_opens_no_console_window(generation_command):
+    """The rule "no console window" for the launcher's commands, measured.
+
+    The Start-menu entry's program has no console. It starts each command
+    with pipes and with a console that has no window (updates.process). The
+    program that takes the command over must share that console.
+    """
+    command, environment = generation_command(CONSOLE)
+    hidden = subprocess.run(command, capture_output=True, text=True, env=environment, timeout=120,
+                            creationflags=subprocess.CREATE_NO_WINDOW)
+    assert hidden.returncode == 0, hidden.stderr[-1500:]
+    assert json.loads(hidden.stdout) == {"console": True, "window": 0}
+    # The measure can see a window on this PC: in a new console the same command has one.
+    shown = subprocess.run(command, capture_output=True, text=True, env=environment, timeout=120,
+                           creationflags=subprocess.CREATE_NEW_CONSOLE)
+    assert shown.returncode == 0, shown.stderr[-1500:]
+    assert json.loads(shown.stdout)["console"] is True and json.loads(shown.stdout)["window"] != 0
+
+
 @pytest.mark.parametrize("child,opened", [
     (f"print({entry.OPENED!r}, flush=True)\n", True),
     ("print('Browser opening disabled; no browser grant was issued.', flush=True)\n", False),
