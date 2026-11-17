@@ -405,10 +405,22 @@ async def _commit_hold(manager, follow):
 
 
 def _begun(manager, follow):
-    """Did a refresh change anything for this request? Rule R repairs only such a refresh."""
+    """Is a refresh unfinished here: a journal exists, or the helper's record for this
+    request says that it stopped the app? Rule R repairs only such a refresh. A record
+    that says `settled` is not this: see _settled."""
     from . import windows_launcher_refresh as refresh
     return (refresh.journal_kind(manager.home, follow.spec.registration_id) != 'none'
         or refresh.started(manager.home, follow.request))
+
+
+def _settled(manager, follow):
+    """The helper's final record for this request, when no journal is left. Else None."""
+    from . import windows_launcher_refresh as refresh
+    record = refresh.read_json(manager.home, refresh.RECORD) or {}
+    if (record.get('request') == follow.request['id'] and record.get('state') == 'settled'
+            and refresh.journal_kind(manager.home, follow.spec.registration_id) == 'none'):
+        return record
+    return None
 
 
 async def _reopen(manager, follow):
@@ -490,6 +502,12 @@ async def _consider(manager, follow):
     if follow.remove_pending:
         await _remove(manager, follow)
     if follow.hold_pending:
+        # The helper can finish while this host still tries to save its hold.
+        # Its result is the result: no hold is needed any more, and the bound
+        # below must not report a finished refresh as one that did not start.
+        if (record := _settled(manager, follow)) is not None:
+            await _finish(manager, follow, record.get('result'), record.get('step'))
+            return
         if follow.held_at is None or time.time() - follow.held_at < 600:
             await _commit_hold(manager, follow)
             return

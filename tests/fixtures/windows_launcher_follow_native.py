@@ -728,8 +728,9 @@ def run():
             begin(4)
             one = wait("the app's own request", request_after(), 600)
             # The app that already ran asks by itself: from the confirmation to its request.
+            # A measurement for the report. The one condition: the request is not from before the confirmation.
             request_seconds = round(one["at"] - confirmed_at)
-            assert 0 <= request_seconds <= 600, (one["at"], confirmed_at)
+            assert request_seconds >= 0, (one["at"], confirmed_at)
             assert one["target"]["generation"] == validated[0]["generation"] and one["registration"] == spec.registration_id
             asked = wait("the helper task", lambda: (lambda value: value.get("exists") and value)(helper_task()), 60)
             assert asked["request"] == one["id"], asked

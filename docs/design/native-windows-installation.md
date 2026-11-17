@@ -421,6 +421,8 @@ is for a refresh that started. The repair's own "go" needs no setting, so a
 host gives it only for such a refresh. A request whose refresh did not start
 changed nothing: the host closes it, as one counted attempt. A hold that a
 host could not save ends after the same 10 minutes, in one of these two ways.
+When the helper finishes before that, its own result closes the request at the
+host's next pass.
 
 **Bounded.** One counted automatic attempt for one app version: a refusal, a
 check that could not run three times in one host run (the host tries it again

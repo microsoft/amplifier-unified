@@ -1227,6 +1227,37 @@ async def test_hold_that_cannot_be_saved_for_a_started_refresh_reopens_for_its_r
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('result, phase', [('refreshed', 'done'), ('rolled-back', 'failed'),
+    ('withdrawn', None), ('not-started', 'failed-unchanged')])
+@pytest.mark.parametrize('at_bound', [False, True])
+async def test_hold_that_cannot_be_saved_does_not_hide_what_the_helper_finished(rig, monkeypatch, result, phase, at_bound):
+    """A host that returns in a refresh cannot save its hold, and the helper finishes meanwhile."""
+    request(rig, started=True)
+    refuse_holds(rig, monkeypatch)
+    follow.at_start(rig.m)
+    f = rig.m._launcher_follow
+    assert f.hold_pending and update_drain.held(rig.m.service) and follow.fenced(rig.m)
+    rig.m.state['drain']['messages'] = [['chat', 'message']]
+    await follow.consider(rig.m)
+    assert f.hold_pending and not rig.released
+    # The helper finished: its journal is gone and its record is final.
+    rig.records.pop('journal')
+    record(rig, 'settled', result=result, step='installing the launcher' if result == 'rolled-back' else None)
+    if at_bound:
+        rig.now[0] += 600
+    await follow.consider(rig.m)
+    assert not f.hold_pending and not f.reopened and f.request is None
+    assert not update_drain.held(rig.m.service) and not follow.fenced(rig.m)
+    assert rig.released == [['chat', 'message']]
+    closed = rig.records['request']
+    assert (closed['status'], closed['result'], closed['hold']) == ('closed', result, None)
+    assert saved(rig)['attempt']['result'] == result and saved(rig)['phase'] == phase
+    assert saved(rig)['attempt']['step'] == ('installing the launcher' if result == 'rolled-back' else None)
+    # "withdrawn" is not a counted attempt: the next one may come after 5 minutes.
+    assert (saved(rig).get('retryAfter') == rig.now[0] + 300) == (result == 'withdrawn')
+
+
+@pytest.mark.asyncio
 async def test_a_reopened_request_whose_refresh_did_not_start_gets_no_repair_go(rig, monkeypatch):
     """A repair go ignores the setting. It is only for a refresh that started."""
     await two_passes(rig)
@@ -1244,9 +1275,12 @@ async def test_a_reopened_request_whose_refresh_did_not_start_gets_no_repair_go(
     refuse[0] = False
     for _ in range(3):
         await follow.consider(rig.m)
+        # The hourly pass too: it may start the helper again, and it gives no go.
+        rig.now[0] += 3600
     # The record says "ready" for exactly this run, and the app is idle: still no go.
     assert rig.records['record']['state'] == 'ready' and rig.records['record']['run'] == rig.run
     assert rig.records['request']['hold'] is None and not update_drain.held(rig.m.service)
+    assert not [row for row in rig.calls if row[0] == 'write' and row[1] == 'request' and row[2].get('hold')]
     assert saved(rig)['phase'] == 'needs-repair'
 
 
