@@ -392,6 +392,7 @@ def test_flat_selection_preserves_modified_root_snapshot(flat_selection, recorde
     ("outputs", ".", "amplifier_outputs"),
     ("publishing", "publishing", "amplifier_publishing"),
     ("recall", "recall", "amplifier_recall"),
+    ("recall", ".", "amplifier_recall"),
 ])
 def nested_selection(tmp_path, request):
     component, author_directory, package = request.param
@@ -403,7 +404,7 @@ def nested_selection(tmp_path, request):
     if author_directory == ".":
         path = dist / f"{component}-source.json"
         receipt = json.loads(path.read_bytes())
-        repository = {"workspace-metadata": "workspaces", "outputs": "resources"}[component]
+        repository = {"workspace-metadata": "workspaces", "outputs": "resources", "recall": "recall"}[component]
         receipt.update(repository=f"bkrabach/amplifier-platform-{repository}",
                        component=component, subdirectory=".")
         path.write_text(json.dumps(receipt, indent=2) + "\n")
