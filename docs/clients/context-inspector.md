@@ -28,10 +28,13 @@ source/reason evidence and composition are disclosed on demand; identical missin
 causes are grouped without dropping their field names. Unknown, not captured,
 not reported and explicitly automatic evidence retain their distinct meanings.
 The native Canvas header stays one row at narrow widths. Its named document,
-focus and close controls remain reachable; the selected tab is revealed on resize.
-On narrow panes individual tab closing is in Open documents, not a duplicate
-button that consumes the selected title's width. Other documents keep the same
-Canvas selection and dirty-view guards.
+focus and hide controls remain reachable; the selected document is represented
+in the active navigation layout after resizing. Canvas Auto uses Compact when
+narrow or short, with a current-document picker and distinct close-current
+button. Open documents also retains named inline close actions. Tabs remains an
+explicit browser-local choice. These presentation changes retain the inspector's
+selected request and text page; all documents keep the same Canvas selection
+and dirty-view guards.
 The inspector places the shell-owned Details toggle beside its request selector,
 instead of spending a second empty toolbar row on it; the shell still owns
 Details focus, narrow overlay inertness and dismissal.
