@@ -410,6 +410,40 @@ def test_native_windows_stage_keys_private_removal(hold_open):
             shutil.rmtree(home)
 
 
+def native_refusal(home, stage):
+    """Which step of the private boundary refuses, in the boundary's own words.
+
+    The product returns a reason code only. A native failure must name its cause,
+    or the next reader guesses. Synthetic files only; no content is reported.
+    """
+    from amplifier_web import windows_files as wf
+    from amplifier_web.host.config import _read_keys
+    shared = stage / 'shared-config'
+    steps = {}
+
+    def attempt(name, action):
+        try:
+            action()
+            steps[name] = 'ok'
+        except Exception as error:
+            steps[name] = f'{type(error).__name__}: {error}'
+
+    def pin(folder, root):
+        with wf.directory(folder, owned_root=root, create=False):
+            pass
+
+    def read(root):
+        with wf.directory(shared, owned_root=root, create=False) as pinned:
+            pinned.read_private('keys.env', limit=1024 * 1024)
+
+    for folder in (home, home / 'updates', home / 'updates/releases', stage, shared):
+        attempt(f'private folder {folder.relative_to(home.parent)}', lambda folder=folder: pin(folder, folder))
+    attempt('read with owned_root=home', lambda: read(home))
+    attempt('read with owned_root=shared-config', lambda: read(shared))
+    attempt('product reader', lambda: _read_keys(shared / 'keys.env') and None)
+    return steps
+
+
 @pytest.fixture
 async def native_product_stage_keys(monkeypatch):
     """Use the real setup writer, manager directory call and install snapshot."""
@@ -453,7 +487,7 @@ async def native_product_stage_keys(monkeypatch):
 async def test_native_windows_stage_keys_product_snapshot_removal(native_product_stage_keys):
     home, live, stage, owner = native_product_stage_keys
     reason = storage.remove_stage_keys(home, stage)
-    assert reason is None, f'Product mkdir/copy2 stage key removal returned {reason!r}'
+    assert reason is None, f'Product mkdir/copy2 stage key removal returned {reason!r}: {native_refusal(home, stage)}'
     assert not (stage / 'shared-config/keys.env').exists(), 'Product snapshot key was retained'
     assert (stage / 'shared-config/settings.yaml').read_text() == '{}\n'
 
@@ -467,7 +501,7 @@ async def test_native_windows_stage_keys_product_refresh_readback(native_product
     current = {'FIXTURE_A9_PRODUCT_KEY': 'synthetic-current'}
     setup.SetupManager._keys(owner, current)
     reason = storage.refresh_stage_keys(home, stage, live)
-    assert reason is None, f'Product mkdir/copy2 stage key refresh returned {reason!r}'
+    assert reason is None, f'Product mkdir/copy2 stage key refresh returned {reason!r}: {native_refusal(home, stage)}'
     # This is the private-file/parser reader used by _load_keys/load_config in
     # qualification. It reads only our synthetic file, not process environment.
     assert _read_keys(stage / 'shared-config/keys.env') == current, 'Qualification reader did not see current synthetic keys'
