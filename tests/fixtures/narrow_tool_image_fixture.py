@@ -122,3 +122,20 @@ class MediaOnlyDelivery:
 
     def commit(self, request):
         pass
+
+
+class ActualConsumerLoader(FixtureLoader):
+    """No manual readiness: invoke each selected consumer's actual mount."""
+    async def load(self, module_id, config, *, source_hint=None, coordinator=None):
+        import amplifier_module_loop_live.orchestrator as live
+        import amplifier_module_context_simple as context
+        import amplifier_module_tool_filesystem as filesystem
+        if module_id == "provider-openai-chatgpt":
+            async def mount(current):
+                await current.mount("providers", self.provider, name="offline")
+        else:
+            original = {"loop-live": live.mount, "context-simple": context.mount,
+                        "tool-filesystem": filesystem.mount}[module_id]
+            async def mount(current):
+                await original(current, config)
+        return mount

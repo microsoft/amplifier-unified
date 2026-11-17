@@ -42,6 +42,25 @@ class HostRegistrationView:
     def __getattr__(self, name):
         return getattr(self.participant, name)
 
+    def get_capability(self, name):
+        value = self.participant.get_capability(name)
+        if name != "session.media.tool_post" or value is None:
+            return value
+        async def tool_post(event, *, hooks=None, coordinator=None):
+            # The loop executes with this host's mount-decoration view. It is
+            # not a Foundation-issued route token: translate ONLY our exact
+            # pair to its actual issuer-owned participant, keeping the real
+            # bridge, final-hook processing and witness unchanged.
+            state = self.native.get_capability("web.media.construction")
+            if (coordinator is not self or hooks is not self.participant.hooks
+                    or self.native.get_capability("web.media.registration") is not self
+                    or not state or state[0] is not value
+                    or self.native.get_capability(name) is not value
+                    or value.participant("unified-host") is not self.participant):
+                raise ValueError("Unknown host tool-post route")
+            return await value(event, hooks=self.participant.hooks, coordinator=self.participant)
+        return tool_post
+
     def __setattr__(self, name, value):
         setattr(self.participant, name, value)
 

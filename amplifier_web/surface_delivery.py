@@ -357,11 +357,21 @@ class SurfaceProvider:
         if projection_out is not None:
             projection_out[:] = [fitted, entry[4] if len(entry) > 4 else None]
         if commit:
+            def revalidated_candidate(value):
+                if not self.has_prepared_media_request(request):
+                    return value
+                # Delivery validators may return an equal detached view. Count
+                # and send must retain the *same* private media candidate;
+                # changed contents require a new fit, never silent replacement.
+                if value != cached:
+                    raise ValueError("Fitted media contents changed during host revalidation")
+                return cached
             try:
                 if hasattr(self.delivery, "revalidate"):
-                    cached = await self.delivery.revalidate(cached)
+                    cached = revalidated_candidate(await self.delivery.revalidate(cached))
                 if fitted is not None and hasattr(self.delivery, "finalize_work"):
-                    cached = await self.delivery.finalize_work(cached, fitted=fitted, binding=binding)
+                    cached = revalidated_candidate(
+                        await self.delivery.finalize_work(cached, fitted=fitted, binding=binding))
             except Exception as error:
                 # Only the pretransport checks are covered. A sent/unknown
                 # provider request never enters this refit path.
@@ -531,7 +541,8 @@ class SurfaceProvider:
                 capture.observe(capture.invalidate, self, request)
                 original_request = request
                 request = await self._prepare(request, explicit_budget=True,
-                    request_options={**(request_options or {}), **kwargs})
+                    request_options={**(request_options or {}),
+                                     **{key: value for key, value in kwargs.items() if key != 'context_estimate'}})
                 ticket = capture.observe(capture.begin_fit, self, original_request, request, request_options, kwargs)
                 actual = self._budget
                 if self.timing_coordinator is not None:
