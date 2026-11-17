@@ -3,7 +3,7 @@
 import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
-import {mkdir,mkdtemp,writeFile} from 'node:fs/promises';
+import {mkdir,mkdtemp,readFile,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {chromium,expect} from '@playwright/test';
@@ -71,8 +71,14 @@ try{
  const componentResponse=await page.request.get(url+'/client-component.json');assert.equal(componentResponse.status(),200);
  const component=await componentResponse.json(),served={};
  const entry=await page.request.get(url+'/');assert.equal(entry.status(),200);
- const index=await entry.body();assert.equal(createHash('sha256').update(index).digest('hex'),component.assets['index.html'].sha256);
- for(const path of [...index.toString().matchAll(/(?:src|href)=["'](\/[^"']+\.(?:js|css)(?:\?[^"']*)?)["']/g)].map(match=>match[1]).concat('/build.json')){
+ const index=await entry.body(),packagedIndex=await readFile(join(process.env.AMPLIFIER_TEST_PACKAGE_ROOT||join(root,'amplifier_web'),'static/index.html'));
+ assert.equal(createHash('sha256').update(packagedIndex).digest('hex'),component.assets['index.html'].sha256);
+ // The normal host entry applies instance branding. Bind its JS/CSS references
+ // to the packaged entry, rather than pretending the branded HTML is byte-equal.
+ const entryAssets=bytes=>[...bytes.toString().matchAll(/(?:src|href)=["'](\/[^"']+\.(?:js|css)(?:\?[^"']*)?)["']/g)].map(match=>match[1]);
+ assert.deepEqual(entryAssets(index),entryAssets(packagedIndex));
+ served['/']={bytes:index.length,sha256:createHash('sha256').update(index).digest('hex'),transform:'host instance branding',packagedSha256:component.assets['index.html'].sha256};
+ for(const path of entryAssets(index).concat('/build.json')){
   const response=await page.request.get(url+path);assert.equal(response.status(),200);
   const bytes=await response.body(),name=new URL(url+path).pathname.slice(1),sha256=createHash('sha256').update(bytes).digest('hex');
   assert.equal(sha256,component.assets[name].sha256,'Served entry asset must match packaged client provenance');
