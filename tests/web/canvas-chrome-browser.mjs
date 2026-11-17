@@ -727,9 +727,16 @@ try{
   await action('view.update',{patch:{canvasFocused:true,canvasControlsExpanded:false}});
   await navigation('auto');
   const resize=async(width,height)=>{
-   const box=await panel.boundingBox(),viewport=page.viewportSize();
-   await page.setViewportSize({width:Math.round(viewport.width+width-box.width),height:Math.round(viewport.height+height-box.height)});
-   await expect.poll(async()=>{const b=await panel.boundingBox();return Math.abs(b.width-width)<=2&&Math.abs(b.height-height)<=2}).toBe(true);
+   const samples=[];
+   for(let attempt=0;attempt<3;attempt++){
+    const box=await panel.boundingBox(),viewport=page.viewportSize();
+    samples.push({box,viewport,focused:await panel.getAttribute('data-focused')});
+    if(Math.abs(box.width-width)<=2&&Math.abs(box.height-height)<=2)break;
+    await page.setViewportSize({width:Math.round(viewport.width+width-box.width),height:Math.round(viewport.height+height-box.height)});
+    await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+   }
+   (report.autoResize??=[]).push({requested:{width,height},samples,actual:await panel.boundingBox()});
+   await expect.poll(async()=>{const b=await panel.boundingBox();return Math.abs(b.width-width)<=2&&Math.abs(b.height-height)<=2},{message:'Actual outer Canvas bounds '+JSON.stringify(report.autoResize.at(-1))}).toBe(true);
    return panel.boundingBox();
   };
   const observations=[];
