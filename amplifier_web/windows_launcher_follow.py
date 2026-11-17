@@ -414,11 +414,16 @@ def _begun(manager, follow):
 
 
 def _settled(manager, follow):
-    """The helper's final record for this request, when no journal is left. Else None."""
+    """The helper's final record for this request, when no journal is left. Else None.
+
+    The journal is read first. With a journal nothing is settled, and the
+    record is not read at all.
+    """
     from . import windows_launcher_refresh as refresh
+    if refresh.journal_kind(manager.home, follow.spec.registration_id) != 'none':
+        return None
     record = refresh.read_json(manager.home, refresh.RECORD) or {}
-    if (record.get('request') == follow.request['id'] and record.get('state') == 'settled'
-            and refresh.journal_kind(manager.home, follow.spec.registration_id) == 'none'):
+    if record.get('request') == follow.request['id'] and record.get('state') == 'settled':
         return record
     return None
 
@@ -505,7 +510,15 @@ async def _consider(manager, follow):
         # The helper can finish while this host still tries to save its hold.
         # Its result is the result: no hold is needed any more, and the bound
         # below must not report a finished refresh as one that did not start.
-        if (record := _settled(manager, follow)) is not None:
+        # This look can only add that result. When it cannot read a file, the
+        # pass goes on as without it: the hold write, then the bound.
+        try:
+            record = _settled(manager, follow)
+        except Exception as error:
+            record = None
+            follow.unsaved = follow.unsaved or _saved(manager).get('error') != type(error).__name__
+            _error(manager, error)
+        if record is not None:
             await _finish(manager, follow, record.get('result'), record.get('step'))
             return
         if follow.held_at is None or time.time() - follow.held_at < 600:

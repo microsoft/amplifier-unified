@@ -1257,6 +1257,59 @@ async def test_hold_that_cannot_be_saved_does_not_hide_what_the_helper_finished(
     assert (saved(rig).get('retryAfter') == rig.now[0] + 300) == (result == 'withdrawn')
 
 
+def unreadable_record(rig, monkeypatch):
+    """The helper's record cannot be read. Returns the list of the tries to read it."""
+    read, tries = rig.refresh.read_json, []
+
+    def broken(home, name):
+        if name == 'record':
+            tries.append(name)
+            raise ValueError('not a JSON object')
+        return read(home, name)
+    monkeypatch.setattr(rig.refresh, 'read_json', broken)
+    return tries
+
+
+@pytest.mark.asyncio
+async def test_unreadable_helper_record_does_not_stop_the_bound_of_a_started_refresh(rig, monkeypatch):
+    """The look for a finished helper only adds a result. With a journal it reads no record."""
+    request(rig, started=True)
+    refuse_holds(rig, monkeypatch)
+    follow.at_start(rig.m)
+    f = rig.m._launcher_follow
+    assert f.hold_pending and update_drain.held(rig.m.service) and follow.fenced(rig.m)
+    tries = unreadable_record(rig, monkeypatch)
+    for _ in range(3):
+        await follow.consider(rig.m)
+    assert f.hold_pending and saved(rig)['error'] == 'PermissionError'  # The hold write was tried.
+    rig.now[0] += 600
+    await follow.consider(rig.m)
+    assert not tries
+    assert not f.hold_pending and not f.reopen_pending and f.reopened
+    assert not update_drain.held(rig.m.service) and follow.fenced(rig.m)
+    assert rig.records['request']['hold'] is None and rig.records['request']['status'] == 'open'
+    assert saved(rig)['phase'] == 'needs-repair' and not rig.lock[0]
+
+
+@pytest.mark.asyncio
+async def test_unreadable_helper_record_does_not_stop_the_hold_write(rig, monkeypatch):
+    """No journal, so the record is read. A failure of that read is kept, and the hold is still saved."""
+    await two_passes(rig)
+    record(rig, 'ready')
+    refuse = refuse_holds(rig, monkeypatch)
+    await follow.consider(rig.m)
+    f = rig.m._launcher_follow
+    assert f.hold_pending and rig.records['request']['hold'] is None
+    tries = unreadable_record(rig, monkeypatch)
+    await follow.consider(rig.m)
+    assert tries and f.hold_pending and saved(rig)['error'] == 'PermissionError'
+    refuse[0] = False
+    await follow.consider(rig.m)
+    assert not f.hold_pending and rig.records['request']['hold'] == rig.run
+    assert update_drain.held(rig.m.service) and follow.fenced(rig.m)
+    assert rig.m.published[-1]['launcherRefresh']['error'] == 'ValueError'
+
+
 @pytest.mark.asyncio
 async def test_a_reopened_request_whose_refresh_did_not_start_gets_no_repair_go(rig, monkeypatch):
     """A repair go ignores the setting. It is only for a refresh that started."""
