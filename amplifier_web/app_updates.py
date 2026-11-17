@@ -449,8 +449,10 @@ async def _stage(manager, *, selected=None, extras):
     manager.diagnostics.clear_failure()
     manager.diagnostics.record('stage','succeeded',observedVersion=installed)
     intent = manager.service.state['updates'].get('applicationIntent')
+    # The publication derives the text: with no work running it says that the update starts now.
+    from .update_health import PREPARED_WAITING
     await manager.publish(phase='app-staged',pendingApp={**release,'attemptId':manager.diagnostics.state['attemptId'],'generation':generation,'extras':extras,
-        **({'updateIntent': copy.deepcopy(intent)} if intent is not None else {})},detail='Application release validated. Waiting for work to finish before restarting.')
+        **({'updateIntent': copy.deepcopy(intent)} if intent is not None else {})},detail=PREPARED_WAITING)
     if selected:
         from .app_features import record
         await record(manager, selected['requestId'], 'qualified', selection=selected,
@@ -479,9 +481,14 @@ async def _activate_serialized(manager, *, force=None):
             manager.wakeup.set()
             return
         selected = pending.get('featureSelection')
+        revoked = None
         try:
             with ExitStack() as holds:
-                await _activate(manager, force=force, holds=holds)
+                try:
+                    await _activate(manager, force=force, holds=holds)
+                finally:
+                    # Before the handlers below wait for anything.
+                    revoked = _end_replacement(manager)
         except Exception as error:
             from .update_restart import RestartRejected
             if isinstance(error, RestartRejected):
@@ -502,6 +509,40 @@ async def _activate_serialized(manager, *, force=None):
                     error='The staged application changed or could not be validated. Install again to prepare a new candidate.',
                     detail='The running host and previous candidate evidence were preserved.')
             raise
+        finally:
+            if revoked is not None:
+                try:
+                    async with manager.service.lock:
+                        if manager._derive_state() or revoked:
+                            manager.service._publish_changes(globals={'updates'})
+                except Exception:
+                    # The claim is withdrawn already, in memory. Only the saved
+                    # copy can lag, and a new host derives the claim again.
+                    pass
+
+
+def _end_replacement(manager):
+    """This process no longer executes a replacement. Synchronous: it waits for nothing.
+
+    None: no replacement began. Otherwise whether the published claim changed.
+    A cancellation, a failed state write or a failed derivation after this
+    cannot leave an unconfirmed marker shown as a running update.
+    """
+    attempt, manager._replacing = getattr(manager, '_replacing', None), None
+    if attempt is None:
+        return None
+    from .update_health import release_replacement, publish as publish_health
+    release_replacement(attempt)
+    state = manager.service.state['updates']
+    if state.get('activation') != 'installing':
+        return False
+    state['activation'] = None
+    try:
+        publish_health(manager)
+    except Exception:
+        pass
+    return True
+
 
 async def installed_target():
     """Only replace the uv tool environment that owns this running host."""
@@ -656,7 +697,11 @@ async def _activate(manager, *, force=None, holds=None):
             require_preserved_components(graph, host_graph)
     if force is None:
         from .update_drain import prepare
-        if not await prepare(manager, release):return
+        if not await prepare(manager, release):
+            async with manager.service.lock:
+                if manager._derive_state():
+                    manager.service._publish_changes(globals={'updates'})
+            return
         from .update_blockers import operation_holds
         held_configuration = operation_holds(manager.service)
     manager.diagnostics.begin('application',revision,validated.get('attemptId') or release.get('attemptId'),
@@ -738,7 +783,10 @@ async def _activate(manager, *, force=None, holds=None):
         if force is not None:
             from .update_restart import require
             require(manager, force)
-        if force is None and manager.app_busy():return
+        if force is None and manager.app_busy():
+            if manager._derive_state():
+                manager.service._publish_changes(globals={'updates'})
+            return
         state = manager.service.state['updates']
         if state.get('pendingApp') != release or state.get('applicationIntent') != intent:
             return  # External validation did not qualify a replacement target/intent.
@@ -749,8 +797,7 @@ async def _activate(manager, *, force=None, holds=None):
             except (OSError, ValueError, KeyError, TypeError, AttributeError, RuntimeError):
                 state['error'] = ('Automatic restart is paused because Amplifier cannot confirm earlier work has finished. '
                                   'The current app is kept.')
-                from .update_health import publish as publish_health
-                publish_health(manager)
+                manager._derive_state()
                 manager.service._publish_changes(globals={'updates'})
                 return  # No recovery, interruption, candidate discard or effect.
         if selected:
@@ -778,7 +825,13 @@ async def _activate(manager, *, force=None, holds=None):
         if force is None:
             from .update_drain import begin_replacement
             begin_replacement(manager, release)
-        manager.service.state['updates'].update(phase='activating',pendingReplacement=replacement,detail='Installing the app update and restarting…')
+        from .update_health import claim_replacement
+        manager._replacing = replacement['attemptId']
+        claim_replacement(manager._replacing)
+        # Final admission passed. An earlier pause text (a hold that could not
+        # be confirmed, then could) no longer describes this attempt.
+        manager.service.state['updates'].update(phase='activating',pendingReplacement=replacement,error=None,detail='Installing the app update and restarting…')
+        manager._derive_state()
         manager.service._publish_changes(globals={'updates'})
         if recovery is not None:
             recovery['replacement'] = copy.deepcopy(replacement)
@@ -940,6 +993,7 @@ async def restore_promoted_application(manager, promoted, recovery, bootstrap):
             error='The application update could not be verified. The previous application was verified and restored.',
             detail='The verified previous application was restored and is usable. Review update diagnostics before trying the update again.')
         try:
+            manager._derive_state()
             manager.service._publish_changes(globals={'updates'})
         except BaseException:
             state.clear()
