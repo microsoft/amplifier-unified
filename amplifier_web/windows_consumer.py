@@ -611,10 +611,12 @@ def _certificate_left(certificate, trust):
 
     `certificate` is what _trusted_root returned, and `trust` is what _forget_root returned for it.
     `declined`: Windows reported the person's No for at least one certificate. `blocked`: no No, and
-    for at least one this program does not know whether Windows still holds it (a search of the
-    store that failed, a deletion that Windows refused, a check afterwards that failed). So the
-    text for `blocked` does not say that Windows kept it. Neither outcome says for which
-    certificate, so the text for several gives no number of those that stay.
+    for at least one the deletion failed in another way (a search of the store that failed, a
+    deletion that Windows refused, a certificate that the store still held after Windows reported
+    the deletion, a check afterwards that failed). In some of these this program does not know
+    whether Windows still holds it. So the text for `blocked` does not say that Windows kept it.
+    Neither outcome says for which certificate, so the text for several gives no number of those
+    that stay.
     """
     from .windows_trust import ROOT_NAME
     if trust not in {"declined", "blocked"}:

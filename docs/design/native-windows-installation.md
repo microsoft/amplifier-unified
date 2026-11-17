@@ -671,11 +671,12 @@ a certificate, and the earlier certificate's bytes were gone from disk.
   result; a failed search and a store that cannot be opened both count as
   "Windows may hold it". `remove_root` uses the same search (`_search`): a
   failed search is `blocked`, not `absent`. For `blocked` an uninstall says
-  that Windows can still hold the certificate, because the program does not
-  know it. Only for the person's No (`declined`) does it say that Windows kept
-  the certificate. With several certificates neither outcome tells which one
-  stays, so the text then says "at least one" or "one or more" of their
-  number. `add_root` keeps its plain first search: a failure
+  that Windows can still hold the certificate: after a failed search the
+  program does not know whether Windows holds it, and one text serves every
+  case of `blocked`. Only for the person's No (`declined`) does it say that
+  Windows kept the certificate. With several certificates neither outcome
+  tells which one stays, so the text then says "at least one" or "one or
+  more" of their number. `add_root` keeps its plain first search: a failure
   there leads to the add, which Windows decides and the check after it
   confirms. If the record is still full, `force` stops with a
   plain text and changes nothing (`windows_tls.ReplacedRecord`). A record that is too long to
@@ -723,7 +724,8 @@ a certificate, and the earlier certificate's bytes were gone from disk.
   first question says how many questions Windows asks. The normal case is one.
   The result is `declined` when Windows reported the person's No for at least
   one. Otherwise it is `blocked` when at least one deletion failed in another
-  way; the program then does not know whether Windows still holds that one.
+  way; in some of those cases the program does not know whether Windows
+  still holds that one.
 
 Limits. The record is written by app code, which an in-app update brings. The
 deletion is launcher code: an installation keeps the launcher of its setup file
@@ -1698,12 +1700,21 @@ found the journal. The first question of a second uninstall is not changed
 either: its last sentence says the same, and the program that asks it has
 just read the journal.
 
-Where this section says that an uninstall shows a text or a message, or what
-such a text says, the uninstall program asks Windows to show that text.
-Windows can fail to show it. Step 9 says what the program does then for a
-last message. The text of a step that failed, and the text after a question
-that Windows did not show, get one attempt. When Windows does not show that
-text, the person sees no text of that stop.
+Where this document says that an uninstall shows a text or a message, or
+says something to the person, the uninstall program asks Windows to show
+that text. Windows can fail to show it. Three messages end an uninstall that
+did its work: the last message of an uninstall that keeps the folder, the
+confirmation of step 9, and the message that the last program files could
+not be removed. For each of them the program then tries once more. The
+further text is the same text again with a reference line, except after the
+confirmation: step 9 has that text. When Windows does not show the further
+text either, the person gets no further message. The text of an uninstall
+that stops (for example a step that failed, a question that Windows did not
+show, a refusal) gets one attempt: when Windows does not show it, the person
+sees no text of that stop. All this is the uninstall that a person starts
+from the Start menu or the Apps list: those entries start the windowless
+Python. Started with a console Python, the uninstall asks the same questions
+and prints its result. It then shows no last message and no text of a stop.
 
 **No link is followed.** In the process, every entry is opened relative to
 its parent's handle as the entry itself, judged on its own handle and deleted
@@ -1917,24 +1928,26 @@ limit as not blocking.
     the journal. The step after exit reads the journal's token before every
     pass and stops without it.
   - A program of this account replaces the journal with its own file in the
-    instant of the write. The name is there, so the removal goes on to its
-    end. The person's data and the Windows entries go, as the person chose
-    twice. The removal also tries to delete the caches and the other program
-    files; one that Windows does not let go stays. The last step
-    (`windows_uninstall.finish`) reads the journal again through the
-    private-file boundary, before it starts the step after exit. It refuses
+    instant of the write. The name is there, so the removal goes on as it
+    does with its own journal. When none of its steps fails, it deletes the
+    person's data and removes the Windows entries, as the person chose
+    twice. It also tries to delete the caches and the other program files;
+    one that Windows does not let go stays. After the confirmation of step
+    9 the last step (`windows_uninstall.finish`) reads the journal again
+    through the private-file boundary, before it starts the step after exit.
+    It refuses
     a file that it cannot read there, a file that is not a journal, a
     journal that records another choice, and a journal with another token.
     Then `python`, `tools`, that file and setup's completion record stay
     too, and the uninstall program tries to show a message that the last
     program files could not be removed. When Windows does not show that
     message, the program tries once more. When Windows does not show it then
-    either, the person gets no further message after the confirmation of
-    step 9. That is the leftover of L3. A file that records the delete
+    either, the person gets no further message after that confirmation.
+    That is the leftover of L3. A file that records the delete
     choice and this removal's own token passes: every later check takes it
     for this removal's journal, and the removal ends as it does without a
     replacement. In each case nothing more is deleted than the person chose.
-    If that removal stops before its end, a second uninstall reads the other
+    If one of that removal's steps fails, a second uninstall reads the other
     program's journal: one that records the delete choice lets the person
     choose again, twice, and any other one is L4.
 
@@ -2071,7 +2084,7 @@ the writer renamed it into place, stops a first and a second uninstall before
 they delete anything, each with its own text; no journal is in the folder
 then, and Open reaches its start step, the second time on a folder that is
 partly deleted. A journal that the test replaces in that instant lets the
-removal go on to its end, and the last step refuses it (the test's journal
+removal go on to its last step, which refuses it (the test's journal
 has another token): `python`, `tools`, that journal and setup's completion
 record stay, and no step after exit starts. The emptied `workspace` can stay
 too (it is the current folder of the test's uninstall process). Stand-ins:
@@ -2086,9 +2099,9 @@ removal did not finish; a complete
 uninstall of an installed build. These remain clean-room acceptance. Shown
 only with a stand-in for the part that fails, never with a real failure of
 Windows: a look for the journal that Windows does not answer; an error of the
-writer after the journal has its name; a question or a last message that
-Windows does not show; a second uninstall window (a second thread on a
-stand-in folder). Not
+writer after the journal has its name; a question, a last message or the
+text of a stop that Windows does not show; a second uninstall window (a
+second thread on a stand-in folder). Not
 built: "keep my chats, remove the program". The launcher refresh command does
 not look at the journal.
 

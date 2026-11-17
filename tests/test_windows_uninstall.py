@@ -404,7 +404,7 @@ def test_yes_twice_deletes_in_the_one_order_that_keeps_every_interruption_safe(d
     (2, ["removed", "absent"], "removed", None), (2, ["absent", "absent"], "absent", None)])
 def test_certificate_answer_never_stops_the_removal_and_is_said_in_the_confirmation(
         deleter, monkeypatch, roots, answer, outcome, said):
-    """A No is Windows' own answer: it kept the certificate. After another failure the program does not know that."""
+    """A No is Windows' own answer: it kept the certificate. After another failure the text does not say that."""
     from amplifier_web.windows_trust import ROOT_NAME
     state, root, consumer = deleter.state, deleter.root, deleter.consumer
     state["choices"], state["windows_answer"] = ["yes", "yes"], answer
@@ -1535,6 +1535,38 @@ def test_journal_that_a_program_replaces_in_the_instant_of_the_write_and_a_progr
                                "they hold none of your chats, settings or accounts:")
 
 
+@pytest.mark.parametrize("foreign", [json.dumps({"schema": 1, "choice": "delete", "token": "f" * 32}), "{"])
+def test_second_uninstall_after_a_replaced_journal_reads_the_other_programs_journal(deleter, foreign):
+    """A program replaced the journal, and a step of that removal failed. The next uninstall reads that file."""
+    state, root, consumer = deleter.state, deleter.root, deleter.consumer
+    state.update(choices=["yes", "yes"], held={"app/chats/one/message.txt"})
+    state["on_journal"] = lambda: (root / plan.JOURNAL).write_text(foreign)
+    with pytest.raises(consumer.Unfinished) as stopped:
+        deleter.run()
+    # The removal went on with the other file, deleted the stored keys and stopped at a data file in use.
+    assert stopped.value.step == "data" and not (root / "shared").exists()
+    assert (root / plan.JOURNAL).read_text() == foreign
+    state["held"].clear()
+    state.update(questions=[], notices=[])
+    if foreign == "{":
+        # The file proves no delete choice (L4): only the keeping uninstall is offered, and it says what it does.
+        state["answers"] = [False]
+        assert deleter.run() == {"ok": True, "cancelled": True}
+        (question, confirm), = state["notices"]
+        assert confirm and not state["questions"] and question.startswith("Uninstall Amplifier?")
+        assert "This uninstall deletes none of your chats, settings, accounts or program files" in question
+        assert (root / plan.JOURNAL).read_text() == foreign
+    else:
+        # The file records the delete choice: the person chooses again, twice, and the removal finishes.
+        state["choices"] = ["yes", "yes"]
+        assert deleter.run()["afterExit"]
+        (first, _), (second, _) = state["questions"]
+        assert first.startswith("The removal of Amplifier from this PC did not finish.")
+        assert second.startswith("Delete everything that Amplifier keeps in this folder?")
+        assert deleter.journal()["token"] != "f" * 32
+        assert {path.name for path in root.iterdir()} == kept_names(deleter)
+
+
 def test_journal_that_a_program_replaces_with_the_same_choice_and_token_ends_as_without_a_replacement(
         deleter, monkeypatch):
     """The last step refuses a journal by what it records. Another file with the same record passes."""
@@ -1890,9 +1922,33 @@ def test_last_message_that_windows_does_not_show_is_never_the_text_of_an_uninsta
         assert json.loads((root / consumer.RECORD).read_text())["step"] == "message"
 
 
-@pytest.mark.parametrize("stop", ["step", "question"])
+@pytest.mark.parametrize("end", ["keep", "delete", "last-step", "stop"])
+def test_uninstall_with_a_console_prints_its_result_and_shows_no_message(deleter, capsys, end):
+    """With a console the uninstall asks its questions, prints one line, and shows no message."""
+    state, root, consumer = deleter.state, deleter.root, deleter.consumer
+    assert consumer.sys.stdout is not None
+    state["choices"] = ["no"] if end == "keep" else ["yes", "yes"]
+    if end == "last-step":
+        state["after_failure"] = OSError("Cannot locate Windows PowerShell.")
+    elif end == "stop":
+        state["refuse_write"] = lambda path: path.name == plan.JOURNAL
+    if end == "stop":
+        with pytest.raises(SystemExit) as stopped:
+            consumer.main(["--root", str(root), "--uninstall"])
+        assert stopped.value.code == 1
+        assert json.loads(capsys.readouterr().out) == {"ok": False, "step": "journal", "errorType": "PermissionError"}
+    else:
+        consumer.main(["--root", str(root), "--uninstall"])
+        printed = json.loads(capsys.readouterr().out)
+        assert printed["ok"] and printed["userDataRetained"] is (end == "keep")
+        assert printed.get("afterExit") == {"keep": None, "delete": True, "last-step": False}[end]
+    # The questions are the same dialogs; no last message and no text of a stop is shown.
+    assert len(state["questions"]) == (1 if end == "keep" else 2) and not state["notices"]
+
+
+@pytest.mark.parametrize("stop", ["step", "question", "refusal"])
 def test_text_of_a_stop_that_windows_does_not_show_gets_one_attempt(deleter, monkeypatch, stop):
-    """A step fails, or Windows does not show a question. Windows does not show the text of that stop either."""
+    """A step fails, Windows does not show a question, or the uninstall refuses. Windows does not show that text."""
     from amplifier_web import windows_installation
     state, root, consumer = deleter.state, deleter.root, deleter.consumer
     monkeypatch.setattr(consumer.sys, "stdout", None)
@@ -1900,6 +1956,9 @@ def test_text_of_a_stop_that_windows_does_not_show_gets_one_attempt(deleter, mon
     if stop == "step":
         state["refuse_write"] = lambda path: path.name == plan.JOURNAL
         expected = consumer._UNFINISHED["journal"] + "\n\nReference: journal, "
+    elif stop == "refusal":
+        state["busy"] = True  # Another Amplifier window holds the lock. A refusal has no reference line.
+        expected = consumer._UNFINISHED["busy"]
     else:
         state["working"] = 1  # The question about a working chat: a two-button question.
         expected = consumer._UNFINISHED["questions"] + "\n\nReference: questions, OSError"
@@ -1913,12 +1972,15 @@ def test_text_of_a_stop_that_windows_does_not_show_gets_one_attempt(deleter, mon
     with pytest.raises(OSError, match="could not be displayed"):
         consumer.main(["--root", str(root), "--uninstall"])
     text = tried[-1]
-    assert text.startswith(expected) and len(tried) == (1 if stop == "step" else 2)
+    assert text.startswith(expected) and len(tried) == (2 if stop == "question" else 1)
     if stop == "question":
         assert tried[0].startswith("Amplifier is working on a chat right now.")
     assert not state["notices"]
-    assert json.loads((root / "app/config/services" / consumer.RECORD).read_text())["step"] == (
-        "journal" if stop == "step" else "questions")
+    note = root / "app/config/services" / consumer.RECORD
+    if stop == "refusal":
+        assert not note.exists() and not (root / consumer.RECORD).exists()  # Nothing failed: no note.
+    else:
+        assert json.loads(note.read_text())["step"] == ("journal" if stop == "step" else "questions")
 
 
 def test_further_message_names_the_windows_error_of_the_message_that_was_not_shown():
@@ -2152,15 +2214,20 @@ def test_design_entry_on_the_journal_names_what_the_cases_above_show():
             "another choice, and a journal with another token.",
             # What goes and what is only tried (`remove_program` returns what stayed, and nothing stops there):
             # `test_journal_that_a_program_replaces_..._and_a_program_file_in_use_stays`.
-            "The name is there, so the removal goes on to its end. The person's data and the Windows entries go, "
-            "as the person chose twice. The removal also tries to delete the caches and the other program files; "
-            "one that Windows does not let go stays.",
+            "The name is there, so the removal goes on as it does with its own journal. When none of its steps "
+            "fails, it deletes the person's data and removes the Windows entries, as the person chose twice. It "
+            "also tries to delete the caches and the other program files; one that Windows does not let go stays.",
+            # A step of it that fails: `test_second_uninstall_after_a_replaced_journal_...` below reads that journal.
+            "If one of that removal's steps fails, a second uninstall reads the other program's journal: one that "
+            "records the delete choice lets the person choose again, twice, and any other one is L4.",
             # The message is tried, twice at most: `test_further_message_..._without_a_further_message`.
+            "After the confirmation of step 9 the last step (`windows_uninstall.finish`) reads the journal again "
+            "through the private-file boundary, before it starts the step after exit.",
             "Then `python`, `tools`, that file and setup's completion record stay too, and the uninstall program "
             "tries to show a message that the last program files could not be removed. When Windows does not "
             "show that message, the program tries once more. When Windows does not show it then either, the "
-            "person gets no further message after the confirmation of step 9. That is the leftover of L3. A file "
-            "that records",
+            "person gets no further message after that confirmation. That is the leftover of L3. A file that "
+            "records",
             # `test_journal_that_a_program_replaces_with_the_same_choice_and_token_...`.
             "A file that records the delete choice and this removal's own token passes: every later check takes "
             "it for this removal's journal, and the removal ends as it does without a replacement. In each case "
@@ -2183,11 +2250,14 @@ def test_design_entry_on_the_journal_names_what_the_cases_above_show():
             "because its folder can be partly deleted. A journal that a program deleted after the uninstall saw it "
             "still counts.") in entry
     # The entry promises no outcome that the program only tries, and says of no program file that it is gone.
-    for wrong in ("a message says", "the program files and the Windows entries go", "Amplifier cannot start"):
+    for wrong in ("a message says", "the program files and the Windows entries go", "Amplifier cannot start",
+                  "goes on to its end. The person's data", "data and the Windows entries go"):
         assert wrong not in entry, wrong
     # What the native case of a replaced journal accepts (`left <= ... <= left | {"workspace"}`).
     proven = design.split("**Proven", 1)[1]
-    assert ("`python`, `tools`, that journal and setup's completion record stay, and no step after exit starts. "
+    assert ("A journal that the test replaces in that instant lets the removal go on to its last step, which "
+            "refuses it (the test's journal has another token): "
+            "`python`, `tools`, that journal and setup's completion record stay, and no step after exit starts. "
             "The emptied `workspace` can stay too (it is the current folder of the test's uninstall "
             "process).") in proven
     assert "with the emptied `workspace`" not in design
@@ -2249,12 +2319,36 @@ def test_design_entry_on_the_journal_names_what_the_cases_above_show():
             "the program that asks it has just read the journal.",
             # What "shows" means: `test_text_of_a_stop_that_windows_does_not_show_gets_one_attempt`, and the
             # cases of a last message that Windows does not show.
-            "Where this section says that an uninstall shows a text or a message, or what such a text says, the "
-            "uninstall program asks Windows to show that text. Windows can fail to show it. Step 9 says what the "
-            "program does then for a last message. The text of a step that failed, and the text after a question "
-            "that Windows did not show, get one attempt. When Windows does not show that text, the person sees no "
-            "text of that stop."):
+            "Where this document says that an uninstall shows a text or a message, or says something to the "
+            "person, the uninstall program asks Windows to show that text. Windows can fail to show it.",
+            # The cases of a last message that Windows does not show, once and twice (three messages each).
+            "Three messages end an uninstall that did its work: the last message of an uninstall that keeps the "
+            "folder, the confirmation of step 9, and the message that the last program files could not be "
+            "removed. For each of them the program then tries once more. The further text is the same text again "
+            "with a reference line, except after the confirmation: step 9 has that text. When Windows does not "
+            "show the further text either, the person gets no further message.",
+            "The text of an uninstall that stops (for example a step that failed, a question that Windows did not "
+            "show, a refusal) gets one attempt: when Windows does not show it, the person sees no text of that "
+            "stop.",
+            # `test_uninstall_with_a_console_prints_its_result_and_shows_no_message`, and the entries' program.
+            "All this is the uninstall that a person starts from the Start menu or the Apps list: those entries "
+            "start the windowless Python. Started with a console Python, the uninstall asks the same questions "
+            "and prints its result. It then shows no last message and no text of a stop.",
+            "a question, a last message or the text of a stop that Windows does not show",
+            # The sentence about a certificate that Windows did not delete: `CERTIFICATE_LEFT`, and what
+            # `windows_trust.remove_root` returns `blocked` for (also a certificate that the store still held).
+            "For `blocked` an uninstall says that Windows can still hold the certificate: after a failed search the "
+            "program does not know whether Windows holds it, and one text serves every case of `blocked`. Only "
+            "for the person's No (`declined`) does it say that Windows kept the certificate.",
+            "Otherwise it is `blocked` when at least one deletion failed in another way; in some of those cases "
+            "the program does not know whether Windows still holds that one."):
         assert stated in design, stated
+    for wrong in ("because the program does not know it", "the program then does not know whether"):
+        assert wrong not in design, wrong
+    # "the windowless Python": the program of every Start-menu entry and of the Apps-list entry.
+    python, links = shell.entries(Path("installation"))
+    assert python.name == "pythonw.exe" and links["Uninstall Amplifier.lnk"].endswith(" --uninstall")
+    assert shell.registration_values(Path("installation"), "1.0.0")["UninstallString"].startswith(str(python) + " ")
     # Exactly that. Of the texts of a stop, only the launcher's refusal says that Amplifier does not open. Of
     # the questions, only the first question of a second uninstall says it. No last message says it.
     assert [name for name, text in consumer._UNFINISHED.items()
@@ -2430,7 +2524,8 @@ UNINSTALLED = "Amplifier is uninstalled. It no longer runs, and it no longer sta
 DELETED = UNINSTALLED + "Your chats, settings, saved accounts and stored keys are deleted.\n\n"
 # The sentence about a certificate that Windows did not delete, by what Windows answered and for how many it
 # was asked. `declined`: Windows reported the person's No for at least one. `blocked`: no No, and for at
-# least one the program does not know whether Windows still holds it.
+# least one the deletion failed in another way. In some of those cases the program does not know whether
+# Windows still holds it, so the text does not say that Windows kept it.
 CERTIFICATE_LEFT = {
     ("declined", 1): '\n\nWindows kept the certificate "{certificate}". It works only for Amplifier on this PC.',
     ("blocked", 1): '\n\nWindows can still hold the certificate "{certificate}". '
