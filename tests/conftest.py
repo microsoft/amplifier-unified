@@ -40,7 +40,7 @@ for _name in SERVICE_NAMES:
 # the home folder, and an installed Amplifier Unified keeps its data there. So
 # each name holds a folder of this run from here on. Each test then gets new
 # folders of its own (the fixture below).
-SESSION_HOME = tempfile.mkdtemp(prefix='amplifier-unified-tests-')
+SESSION_HOME = os.path.realpath(tempfile.mkdtemp(prefix='amplifier-unified-tests-'))
 atexit.register(shutil.rmtree, SESSION_HOME, ignore_errors=True)
 HOMES = {
     'AMPLIFIER_WEB_HOME': 'unified-home',  # host.config.app_home
@@ -50,6 +50,23 @@ HOMES = {
 }
 for _name, _folder in HOMES.items():
     os.environ[_name] = os.path.join(SESSION_HOME, _folder)
+
+# 3. Some folders the product finds through the account database, not through
+# HOME or a name: the test-resource authority that every Amplifier installation
+# of the account shares (test_host_resources.directory), and the test runners'
+# folders. A test must not take that authority's lock or read its reservations.
+# So the account's entry names a home folder of this run, and of each test.
+ACCOUNT = {'home': os.path.join(SESSION_HOME, 'account-home')}
+if pwd is not None:
+    _getpwuid = pwd.getpwuid
+
+    def _account(uid):
+        entry = _getpwuid(uid)
+        if uid != os.getuid():
+            return entry
+        return pwd.struct_passwd((*entry[:5], ACCOUNT['home'], *entry[6:]))
+
+    pwd.getpwuid = _account
 
 
 @pytest.fixture(scope='session')
@@ -63,21 +80,7 @@ def isolated_shared_session_files(tmp_path, monkeypatch):
     for name, folder in HOMES.items():
         monkeypatch.setenv(name, str(tmp_path / folder))
     monkeypatch.delenv('AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH', raising=False)
-    if pwd is not None:
-        # 3. Some folders the product finds through the account database, not
-        # through HOME or a name: the test-resource authority that every
-        # Amplifier installation of the account shares
-        # (test_host_resources.directory), and the test runners' folders. A
-        # test must not take that authority's lock or read its reservations.
-        real = pwd.getpwuid
-
-        def account(uid):
-            entry = real(uid)
-            if uid != os.getuid():
-                return entry
-            return pwd.struct_passwd((*entry[:5], str(tmp_path / 'account-home'), entry[6]))
-
-        monkeypatch.setattr(pwd, 'getpwuid', account)
+    monkeypatch.setitem(ACCOUNT, 'home', str(tmp_path / 'account-home'))
 
 
 @pytest.fixture

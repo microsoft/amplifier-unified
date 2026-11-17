@@ -5,6 +5,9 @@ inherits names from that service. CI has none of them. An installed one keeps
 its data below the home folder, and the product uses those folders when no name
 says otherwise. ``conftest.py`` handles both when pytest loads it.
 
+The product also finds some folders through the account database. ``conftest.py``
+gives the account's entry a home folder of the run, and of each test.
+
 ``TestInsideARun`` holds what is true inside every run of this suite. The last
 case starts a second run that inherits every name with a made-up value, and
 requires the same there. It fails when ``conftest.py`` leaves one name alone.
@@ -50,8 +53,17 @@ def names():
 
 
 def product_folders():
-    return (config.app_home(), session_files.amplifier_home(), shared_state.shared_state_home(),
-            terminal_cli.root(), session_files.capture_sessions_dir(REPOSITORY))
+    folders = [config.app_home(), session_files.amplifier_home(), shared_state.shared_state_home(),
+               terminal_cli.root(), session_files.capture_sessions_dir(REPOSITORY)]
+    # The product takes some folders from the account database. HOME and the names do not move them.
+    try:
+        import pwd
+    except ImportError:  # Windows has no account database, and no such folder of the product.
+        return folders
+    folders.append(pwd.getpwuid(os.getuid()).pw_dir)
+    if test_host_resources.identity():  # Linux with a machine ID: the account's test-resource authority.
+        folders.append(test_host_resources.directory())
+    return folders
 
 
 # Module-level code runs before every fixture. Only conftest.py is earlier.
@@ -64,13 +76,18 @@ def in_a_module_fixture():
     return names(), product_folders()
 
 
+def below(folder, parent):
+    # Compare real paths: a temporary folder can be reached through a link or a short name.
+    return Path(os.path.realpath(folder)).is_relative_to(os.path.realpath(parent))
+
+
 def outside_a_test(seen, session_home):
     found, folders = seen
     assert {name: found[name] for name in REMOVED} == dict.fromkeys(REMOVED)
     for name in HOMES:
-        assert found[name] is not None and Path(found[name]).is_relative_to(session_home), name
+        assert found[name] is not None and below(found[name], session_home), name
     for folder in folders:
-        assert Path(folder).is_relative_to(session_home.resolve()), folder
+        assert below(folder, session_home), folder
 
 
 class TestInsideARun:
@@ -84,10 +101,9 @@ class TestInsideARun:
         found = names()
         assert {name: found[name] for name in REMOVED} == dict.fromkeys(REMOVED)
         for name in HOMES:
-            assert Path(found[name]).is_relative_to(tmp_path), name
-        own = tmp_path.resolve()
+            assert below(found[name], tmp_path), name
         for folder in product_folders():
-            assert Path(folder).is_relative_to(own), folder
+            assert below(folder, tmp_path), folder
         home = Path(config.app_home())
         # The source store and the component generation come from that home alone.
         assert update_sources.store_environment(home)['AMPLIFIER_SOURCE_STORE'] == str(home / 'source-store')
@@ -96,17 +112,16 @@ class TestInsideARun:
         with runtime_preparation.preparation_scope() as facts:
             assert facts == {}  # Not the immutable runtime of a worker.
 
-    def test_the_account_database_gives_a_folder_of_this_test(self, tmp_path):
-        # The product takes some folders from the account database. HOME and the names do not move them.
-        try:
-            import pwd
-        except ImportError:
-            assert sys.platform == 'win32'  # No account database, and no such folder of the product.
-            return
-        assert Path(pwd.getpwuid(os.getuid()).pw_dir).is_relative_to(tmp_path)
-        assert pwd.getpwuid(os.getuid()).pw_name  # The rest of the entry is the real one.
-        if test_host_resources.identity():  # Linux with a machine ID: the account's test-resource authority.
-            assert test_host_resources.directory().is_relative_to(tmp_path)
+    def test_the_rest_of_the_account_entry_is_the_real_one(self):
+        pwd = pytest.importorskip('pwd')  # Windows has no account database.
+        entry = pwd.getpwuid(os.getuid())
+        real = pwd.getpwnam(entry.pw_name)  # conftest.py changes the lookup by ID only.
+        assert (*entry[:5], *entry[6:]) == (*real[:5], *real[6:])
+        assert entry.pw_dir != real.pw_dir
+        other = next((row for row in pwd.getpwall() if row.pw_uid != os.getuid()), None)
+        if other is not None:  # Another account keeps its whole entry.
+            found = pwd.getpwuid(other.pw_uid)
+            assert found == pwd.getpwnam(found.pw_name)
 
 
 def test_the_cases_above_pass_in_a_run_that_inherits_every_name(tmp_path):
