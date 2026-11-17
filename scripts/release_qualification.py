@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import subprocess
 import sys
 import sysconfig
@@ -171,9 +172,114 @@ def verify_receipts(root, evidence, expected, receipts, dist):
             raise ValueError('Runtime qualification evidence changed')
 
 
+APP = 'amplifier-unified'
+HOST = ('This release run qualified', 'This release run did not qualify')
+TESTS = ('The runtime tests of this run used', 'The runtime tests of this run did not use')
+
+
+def source(row):
+    """The Git origin of one package row, or None when the row is not from Git.
+
+    A row has one of two forms: an install record as uv wrote it ('direct'), or
+    a row of the host resolution or of the Windows plan ('url', 'revision').
+    """
+    if 'direct' in row:
+        direct = row['direct'] or {}
+        vcs = direct.get('vcs_info') or {}
+        if vcs.get('vcs') != 'git':
+            return None
+        return {'url': direct.get('url'), 'revision': vcs.get('commit_id'),
+                'subdirectory': direct.get('subdirectory') or ''}
+    if not row.get('url'):
+        return None
+    return {'url': row['url'], 'revision': row['revision'], 'subdirectory': row.get('subdirectory') or ''}
+
+
+def sources(rows):
+    """The origin of every row by its normalized package name."""
+    result = {}
+    for row in rows:
+        name = re.sub(r'[-_.]+', '-', str(row['name']).lower())
+        if name in result:
+            raise ValueError(f'{name} is recorded twice')
+        result[name] = source(row)
+    return result
+
+
+def place(origin):
+    """Repository and subdirectory. An ending '.git' or '/' does not count."""
+    url = str(origin['url']).rstrip('/')
+    return url[:-4] if url.endswith('.git') else url, origin['subdirectory']
+
+
+def address(origin):
+    return origin['url'] + ('#subdirectory=' + origin['subdirectory'] if origin['subdirectory'] else '')
+
+
+def difference(name, shipped, other, known, words):
+    """None when both are the same Git commit of the same place; else what is known."""
+    same_place = bool(shipped and other and place(shipped) == place(other))
+    if same_place and shipped['revision'] == other['revision']:
+        return None
+    if not shipped:
+        first = 'from a source that is not Git'
+    elif same_place:
+        first = f"at {shipped['revision']}"
+    else:
+        first = f"at {shipped['revision']} from {address(shipped)}"
+    if same_place:
+        second = f"{words[0]} {other['revision']}."
+    elif not known:
+        second = f'{words[1]} {name}.'
+    elif other:
+        second = f"{words[0]} {name} at {other['revision']} from {address(other)}."
+    else:
+        second = f'{words[0]} {name} from a source that is not Git.'
+    return f'The Windows setup file has {name} {first}. {second} This run stops before it publishes.'
+
+
+def qualified_sources(evidence):
+    """The host graph that this run resolved once and bound into the candidate."""
+    return sources(json.loads((evidence / 'resolution.json').read_text())['resolved'])
+
+
+def verify_consumer(root, evidence, expected, plan, receipts):
+    """Before publication, require this run's commits in the Windows plan.
+
+    The Windows job installs the wheel without pins, so a branch requirement
+    takes the head of that moment. For each row of the plan except the app:
+    when the plan or the host resolution has it from Git, it must be the same
+    Git commit of the same repository and subdirectory in the plan, in the host
+    resolution and in the graph of the runtime tests. A row that only the host
+    resolution has is not looked at; that is the development environment.
+    Registry versions are not compared.
+    """
+    verify_candidate(root, evidence, expected)
+    qualified = qualified_sources(evidence)
+    runtime = json.loads((receipts / 'qualified-runtime.json').read_text())
+    receipt = json.loads((receipts / 'runtime.json').read_text())
+    if receipt.get('candidate') != expected or receipt.get('runtime') != digest(runtime):
+        raise ValueError('The runtime graph is not the one that this candidate was tested with')
+    tested = sources(runtime['graph'])
+    checked = []
+    for name, shipped in sorted(sources(json.loads(plan.read_text())['graph']).items()):
+        if name == APP or (shipped is None and qualified.get(name) is None):
+            continue
+        for other, known, words in ((qualified.get(name), name in qualified, HOST),
+                                    (tested.get(name), name in tested, TESTS)):
+            problem = difference(name, shipped, other, known, words)
+            if problem:
+                raise ValueError(problem)
+        print(f"{name} {shipped['revision']}: the same commit in this run's host resolution and in its runtime tests.")
+        checked.append(name)
+    print(f'{len(checked)} Git components of the Windows setup file have the commits that this release run qualified.')
+    return checked
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=('candidate', 'verify-candidate', 'runtime-project', 'cache-key', 'runtime-snapshot', 'core-wheel', 'receipt', 'verify-receipts'))
+    parser.add_argument('command', choices=('candidate', 'verify-candidate', 'runtime-project', 'cache-key', 'runtime-snapshot', 'core-wheel', 'receipt', 'verify-receipts',
+                                            'verify-consumer'))
     parser.add_argument('--evidence', type=Path)
     parser.add_argument('--candidate')
     parser.add_argument('--runtime', type=Path)
@@ -183,6 +289,7 @@ def main():
     parser.add_argument('--dist', type=Path, default=Path('dist'))
     parser.add_argument('--output', type=Path)
     parser.add_argument('--python', type=Path, default=Path(sys.executable))
+    parser.add_argument('--plan', type=Path)
     args = parser.parse_args()
     root = Path.cwd()
     output = None
@@ -202,6 +309,8 @@ def main():
         write(args.destination, core_wheel(args.python))
     elif args.command == 'receipt':
         receipt(root, args.evidence, args.candidate, args.lane, args.destination, args.runtime, args.dist)
+    elif args.command == 'verify-consumer':
+        verify_consumer(root, args.evidence, args.candidate, args.plan, args.receipts)
     else:
         verify_receipts(root, args.evidence, args.candidate, args.receipts, args.dist)
     if output:

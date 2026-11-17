@@ -649,6 +649,18 @@ Qualification tools come from the workflow revision, copied before selecting a
 historical application commit. They are transferred as an artifact within this
 run. Package/native qualification and candidate receipts remain fresh.
 
+The `windows-consumer` job installs the built wheel in a new Windows environment
+without pins. So each branch requirement takes the head of that moment, after the
+host graph and the runtime checks resolved it. That installation becomes the plan
+that the setup file carries. Before publication, `release_qualification.py
+verify-consumer` requires that each component that the plan has from Git is the
+same commit in the host graph and in the runtime graph. On a difference the run
+stops before it publishes and names the component and both commits. When a branch
+moved during the run, run all jobs again; a new run resolves all three again.
+When the wheel requires an exact commit that the run's checks did not use, a new
+run does not help. Registry versions are not compared, and no step of a release
+run starts the Windows installation.
+
 The frontend lane may reuse an immutable artifact from successful **Fast release
 checks** for the same-repository PR whose merge commit is this publishing main
 commit. Reuse binds the entire tracked Git tree (a conservative superset of
