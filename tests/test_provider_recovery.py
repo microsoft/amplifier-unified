@@ -219,7 +219,7 @@ async def test_worker_mount_uses_saved_exact_id_or_explicit_replacement(tmp_path
     monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(home))
     monkeypatch.setattr('amplifier_web.runtime_bootstrap.bootstrap_app_package', lambda: None)
     monkeypatch.setattr('amplifier_web.host.config.app_home', lambda: home)
-    monkeypatch.setattr('amplifier_web.runtime_qualification.active_install_overrides', lambda *args: None)
+    monkeypatch.setattr('amplifier_web.runtime_qualification.active_install_overrides', lambda *args, **kwargs: None)
     monkeypatch.setattr('amplifier_web.history_revision.recover_pending', lambda *args: None)
     runtime = SimpleNamespace(session_id='chat')
     monkeypatch.setitem(sys.modules, 'amplifier_module_loop_live.runtime', SimpleNamespace(Runtime=lambda **kwargs: runtime))

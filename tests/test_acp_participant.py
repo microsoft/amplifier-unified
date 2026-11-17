@@ -18,7 +18,7 @@ def operations(tmp_path):
     return [json.loads(line) for line in (tmp_path / 'peer/operations.jsonl').read_text().splitlines()]
 
 
-async def deny(_options):
+async def deny(_tool, _options):
     return {'outcome': {'outcome': 'cancelled'}}
 
 

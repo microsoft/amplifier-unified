@@ -132,7 +132,7 @@ class SharedConversations:
             if participant is None:
                 participant = ACPParticipant(selected, source_binding['cwd'],
                     update=lambda update, agent=delivery['agentId']: self._update(sid, agent, update),
-                    permission=lambda options, agent=delivery['agentId']: self._permission(sid, agent, options))
+                    permission=lambda tool, options, agent=delivery['agentId']: self._permission(sid, agent, options, tool))
                 self.owner.participants[key] = participant
                 self.owner.watch_retirement(sid, delivery['agentId'], participant)
             turn = Participation(delivery['id'], delivery['inputId'], delivery['agentId'],
@@ -343,6 +343,7 @@ class SharedConversations:
                 await turn.participant.close()
         finally:
             async with self.service.lock:
+                self.owner.approvals.expire(self.service._session(sid), turn=turn, terminal=True)
                 if self.turns.get((sid, turn.agent_id)) is turn:
                     self.turns.pop((sid, turn.agent_id))
                     session = self.service._session(sid)
@@ -355,6 +356,7 @@ class SharedConversations:
                     self.service._publish_changes(sessions={sid})
 
     def _settle(self, session, turn, state, *, publish=False):
+        self.owner.approvals.expire(session, turn=turn, terminal=True)
         binding = self.participant(session, turn.agent_id)
         delivery = self._delivery(session, turn)
         stream = session.get('externalStreams', {}).pop(turn.agent_id, {})
@@ -377,6 +379,9 @@ class SharedConversations:
             session = self.service._session(sid)
             if turn is None or not turn.speaking or not self._valid(session, turn):
                 return
+            if update.get('sessionUpdate') in {'tool_call', 'tool_call_update'}:
+                self.owner.approvals.observe(session, turn, update)
+                self.service._publish_changes(sessions={sid})
             binding = self.participant(session, identity)
             if update.get('sessionUpdate') == 'agent_message_chunk' and update.get('content', {}).get('type') == 'text':
                 stream = session.setdefault('externalStreams', {}).setdefault(identity, {
@@ -386,15 +391,11 @@ class SharedConversations:
                 self.service._publish_progress(session_ids={sid}, record_only=True)
             # Tools and private thoughts are never public room posts.
 
-    async def _permission(self, sid, identity, options):
-        async with self.service.lock:
-            session = self.service._session(sid)
-            turn = self.turns.get((sid, identity))
-            if turn and turn.speaking and self._valid(session, turn) and self.service.access_mode.full(session):
-                option = next((option for kind in ('allow_always', 'allow_once') for option in options if option.kind == kind), None)
-                if option:
-                    return {'outcome': {'outcome': 'selected', 'optionId': option.option_id}}
+    async def _permission(self, sid, identity, options, tool=None):
+        turn = self.turns.get((sid, identity))
+        if turn is None or tool is None:
             return {'outcome': {'outcome': 'cancelled'}}
+        return await self.owner.approvals.request(sid, identity, turn, tool, options)
 
     def restore(self, session):
         for delivery in self.room(session)['deliveries']:

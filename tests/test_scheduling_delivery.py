@@ -16,8 +16,8 @@ delivery = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(delivery)
 
 
-@pytest.fixture
-def selected(candidate):
+@pytest.fixture(params=["monorepo", "repository-root"])
+def selected(candidate, request):
     root, revision, dist, source = candidate
     wheel = next(dist.glob("*.whl"))
     # The producer fixture is deliberately minimal; real published wheels carry a license.
@@ -25,6 +25,17 @@ def selected(candidate):
         archive.writestr("amplifier_scheduling-0.1.0.dist-info/licenses/LICENSE", "MIT\n")
     (dist / release.RECEIPT).unlink(); (dist / "SHA256SUMS").unlink()
     release.seal(root, revision, dist)
+    if request.param == "repository-root":
+        # The consumer trusts the selected receipt checksum, not a producer checkout.
+        # Exercise both published receipt layouts with the same synthetic artifacts.
+        path = dist / release.RECEIPT
+        receipt = json.loads(path.read_bytes())
+        receipt.update(repository="bkrabach/amplifier-platform-scheduling",
+                       component="scheduling", subdirectory=".")
+        path.write_text(json.dumps(receipt, indent=2) + "\n")
+        (dist / "SHA256SUMS").write_text("".join(
+            f"{release.sha((dist / name).read_bytes())}  {name}\n"
+            for name in (*release.artifact_names(receipt), release.RECEIPT)))
     (root / "pyproject.toml").write_text(
         '[project]\nname="amplifier-unified"\nversion="1.0.0"\ndependencies=[]\n'
         '[tool.hatch.build.targets.wheel]\n'
@@ -53,6 +64,21 @@ def test_artifact_selection_does_not_need_producer_git_history(selected, tmp_pat
     assert not (plain / ".git").exists() and not (plain / release.PROJECT).exists()
     delivery.select(plain, dist, revision, checksum)
     assert delivery.verify(plain) == delivery.verify(root)
+
+
+def test_root_receipt_can_roll_back_to_original_artifact(selected):
+    root, revision, dist, _, _ = selected
+    source = delivery.verify(root)["source"]
+    if source["subdirectory"] == ".":
+        assert source["component"] == "scheduling"
+        assert source["repository"] == "bkrabach/amplifier-platform-scheduling"
+    (dist / release.RECEIPT).unlink(); (dist / "SHA256SUMS").unlink()
+    original = release.seal(root, revision, dist)
+    checksum = delivery.sha((dist / release.RECEIPT).read_bytes())
+    delivery.select(root, dist, revision, checksum)
+    assert delivery.verify(root)["source"] == original
+    assert original["subdirectory"] == "components/scheduling"
+    assert "component" not in original
 
 
 @pytest.mark.parametrize("fault", ["changed", "missing", "extra", "link", "receipt"])

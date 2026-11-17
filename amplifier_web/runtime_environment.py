@@ -399,9 +399,11 @@ async def update_inventory(home):
         for root, index in indexes.items():
             if await process('git', 'ls-files', '--stage', '-z', cwd=root, timeout=10, raw=True) != index:
                 raise ProtectedRuntimeSource('', 'runtime-source-changed')
+    from .runtime_source_policy import recover_app_policies
+    rows = await recover_app_policies(home, generation, inventory(home, installed=policy, graph=graph), graph, process)
     if active_release(home).get('current') != generation:
         raise ProtectedRuntimeSource('', 'runtime-source-changed')
-    return inventory(home, installed=policy, graph=graph)
+    return rows
 
 
 async def update_manifest(home):

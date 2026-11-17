@@ -125,6 +125,8 @@ async def install_app_access(coordinator, bridge, *, execution_role):
             raise ValueError('The mounted Work wrapper cannot be verified.')
         return original
     coordinator.register_capability('web.work_inspect_tool', inspect_tool)
+    from .tool_approval_scope import install as install_tool_approval_scope
+    approval_scope = install_tool_approval_scope(coordinator, inspect_tool)
     def guard_tools(incoming=None):
         check = coordinator.get_capability('web.work_effect_check')
         if not callable(check):
@@ -199,6 +201,7 @@ async def install_app_access(coordinator, bridge, *, execution_role):
                             'message': 'Current Work requirements or host execution scope are unavailable.'})
                     mark(timing, 'body.start')
                     try:
+                        approval_scope.check(self.mounted_name, self, arguments)
                         sponsor = coordinator.get_capability('web.computer_episodes')
                         if sponsor and self.mounted_name in {'computer', 'desktop', 'ui_use'}:
                             result = await sponsor.invoke(self.mounted_name, arguments, self.original.execute)

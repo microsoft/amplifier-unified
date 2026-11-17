@@ -58,7 +58,12 @@ and tests in that repository, or use the exact disposable `.build/web-client`
 prepared by the existing assembler. That ignored preparation is not part of this
 Git source inventory. A client-only merge does not update Unified's selection or
 packaged assets; selection, paired qualification and release remain explicit.
-Scheduling, worktrees, portability, outputs, publishing, Recall and workspace metadata artifact snapshots follow the same author/delivery
+Scheduling is authored in the public
+[amplifier-platform-scheduling](https://github.com/bkrabach/amplifier-platform-scheduling)
+repository. Its selected artifact remains in generated `components/scheduling-delivery`,
+bound by `components/scheduling.source.json`; see the
+[selection guide](../components/README.md#select-a-scheduling-artifact).
+Worktrees, portability, outputs, publishing, Recall and workspace metadata artifact snapshots follow the same author/delivery
 distinction: `components/<name>` is authored, while `components/<name>-delivery`
 is generated and opt-in. Visible `components/<name>.source.json` records the
 selected public wheel. Use `--all --under components/<name>-delivery` to inspect

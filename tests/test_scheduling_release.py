@@ -79,6 +79,15 @@ def test_exact_source_and_built_payload_round_trip(candidate):
     assert len(result["artifacts"]) == 2
 
 
+@pytest.mark.parametrize("component", [None, "worktrees", "status-emitter", "unknown"])
+def test_repository_root_requires_explicit_scheduling_identity(component):
+    selected = {"repository": "bkrabach/amplifier-platform-scheduling", "subdirectory": "."}
+    if component is not None:
+        selected["component"] = component
+    with pytest.raises(ValueError, match="Unknown standalone component"):
+        release.component_name(selected)
+
+
 def test_status_keeps_distribution_import_and_bundled_owner_distinct(tmp_path):
     root, revision, dist, _ = make_candidate(tmp_path, "status-emitter")
     result = release.verify(root, revision, dist, component="status-emitter")

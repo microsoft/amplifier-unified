@@ -159,7 +159,7 @@ ACTION_DEFINITIONS = {
     "worker.stop": ("Stop one worker lane", schema({"sessionId": string(200), "id": string(100)}, ["id"])),
     "worker.message": ("Send a follow-up to an active persistent worker", schema({"sessionId": string(200), "id": string(100), "text": string(100000)}, ["sessionId", "id", "text"])),
     "worker.steer": ("Send a correction to a worker", schema({"sessionId": string(200), "id": string(100), "text": string(100000)}, ["id", "text"])),
-    "approval.respond": ("Respond to an Amplifier permission request", schema({"sessionId": string(200), "id": string(100), "decision": {"enum": ["allow", "deny", "approve", "reject"]}, "comment": string(4000), "expectedRequestHash": string(64)}, ["id", "decision"])),
+    "approval.respond": ("Respond to an Amplifier permission request", schema({"sessionId": string(200), "id": string(100), "decision": {"enum": ["allow", "deny", "approve", "reject"]}, "optionId": string(200), "comment": string(4000), "expectedRequestHash": string(64), "expectedApprovalScope": string(64)}, ["id", "decision"])),
     "presentation.dismiss": ("Hide exact observed updates across this owner's clients without reading, answering, approving or stopping work.", schema({"items":{"type":"array","minItems":1,"maxItems":100,"items":schema({"id":string(1024),"fingerprint":string(100)},["id","fingerprint"])}},["items"])),
     "attention.read": ("Mark reviewed attention items as read without resolving the underlying condition. Reviewing the exact conversation error clears its historical navigation marker without changing saved errors, replaying work, or answering questions/approvals. Include fingerprints from /attention/items to avoid acknowledging newer results by mistake.", schema({"ids":{"type":"array","items":string(300),"maxItems":500},"fingerprints":{"type":"object","maxProperties":500,"additionalProperties":string(100)}},["ids"])),
     "view.update": ("Change panels, modality, draft, appearance or layout. Chat controls: panel=runtime, runtimeDraft.tab=overview/direction/limits/tools/computer. runtimeDraft.section reveals a known section (overview, direction, limits, tools, computer, screen-source, desktop-host, capture), opens its tab/panel and increments revealRevision; repeat requests reveal again. For visible agent navigation, choose clientId from canvasContext.connectedClientIds; disconnected saved clients are ineligible. Supply clientId when multiple connected browsers display the calling chat; opening controls never grants capture permission. Optional sessionId binds draft updates to that conversation without changing selection; null saves the attached client's draft before a conversation exists. Agent draft updates are limited to the calling conversation; other saved chats and the new-chat draft remain private. Canvas: canvasWidth and canvasOverviewWidth (300–16384 preferred pixels, separate artifact and overview widths), canvasFocused (full frame), canvasControlsPinned/Expanded (booleans). Navigation: navWidth (216–16384 preferred pixels), navPinned/Expanded (booleans). Workspace explorer: navWorkspacePath browses folders from /workspaceExplorer without selecting a chat, navWorkspaceFilter searches paths or aliases with case-insensitive fnmatch or plain text, navWorkspacePage selects a 1-based page, navWorkspaceAncestorsOpen toggles the ancestor menu. Use view.update workSurface=workspaces/chats/workspace and workWorkspaceId to browse without changing the active chat or its execution folder; workSurface=chat shows the selected conversation. Use session.select with an explicit id to open a particular chat. workWorkspaceTab=chats/work/files/details changes the workspace page tab. Use workspace.select to change the active workspace. Browser fits widths to the available space, preserving a 360px chat.", schema({"patch": {"type": "object"}, "clientId": string(100), "sessionId": {"type": ["string", "null"], "minLength": 1, "maxLength": 200}}, ["patch"])),
@@ -2076,6 +2076,9 @@ class AppService:
             return {'accepted':True, 'result':await query_history(self,values,reader)}
         if action == "approval.respond" and args["id"].startswith("collaboration:"):
             return await self.collaboration.decide(args, origin)
+        if action == 'approval.respond' and args['id'].startswith('external:'):
+            return await self.external_conversations.approvals.decide(
+                args, origin, command_id, admission_check=admission_check, expected_revision=expected_revision)
         routed = await self.collaboration.route(action, args, origin, command_id, caller_session_id)
         if routed is not None:
             return routed
@@ -3618,6 +3621,8 @@ class AppService:
                 pending.append((method, call_args))
             elif action == "approval.respond":
                 session = self._session(args.get("sessionId"))
+                if 'optionId' in args:
+                    raise AppError('This request does not offer external agent choices.', 409)
                 approval = next((a for a in session["approvals"] if a["id"] == args["id"]), None)
                 if approval and approval.get('resolutionReason') == 'host_restarted':
                     raise AppError('This permission request expired when the app restarted. Review the saved work and ask again if needed; nothing was replayed.', 409)
@@ -3628,6 +3633,11 @@ class AppService:
                 if (args.get('expectedRequestHash')
                         and args['expectedRequestHash'] != self.approval_request_hash(session, approval)):
                     raise AppError('The request changed. Review it before deciding.', 409)
+                if expected_scope := args.get('expectedApprovalScope'):
+                    from .approval_policy import descriptor
+                    current_scope = descriptor(self, session, approval)
+                    if current_scope is None or current_scope['key'] != expected_scope:
+                        raise AppError('The exact approval target changed. Review it before deciding.', 409)
                 decision = "allow" if args["decision"] in {"allow", "approve"} else "deny"
                 offered = approval.get("options") or ["allow", "deny"]
                 selected = next((value for value in offered
@@ -3642,6 +3652,9 @@ class AppService:
                                   approvalId=args['id'], inputOrigin='approval')
                 if self.runtime:
                     values = (session["id"], args["id"], selected) + ((comment,) if comment else ())
+                    if args.get('expectedApprovalScope'):
+                        values = (session["id"], args["id"], selected, comment or None,
+                                  args['expectedApprovalScope'])
                     pending.append((self.runtime.approval, values))
             elif action == "presentation.dismiss":
                 from .client_presentation import dismiss

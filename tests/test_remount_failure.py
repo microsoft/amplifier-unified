@@ -24,7 +24,7 @@ async def test_command_without_writer_never_hot_remounts_or_submits_input(tmp_pa
     monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(home))
     monkeypatch.setattr('amplifier_web.runtime_bootstrap.bootstrap_app_package', lambda: None)
     monkeypatch.setattr('amplifier_web.host.config.app_home', lambda: home)
-    monkeypatch.setattr('amplifier_web.runtime_qualification.active_install_overrides', lambda *args: None)
+    monkeypatch.setattr('amplifier_web.runtime_qualification.active_install_overrides', lambda *args, **kwargs: None)
     monkeypatch.setattr('amplifier_web.history_revision.recover_pending', lambda *args: None)
     monkeypatch.setattr('amplifier_web.bundle_selection.BundleTransaction.restore', lambda *args: None)
     monkeypatch.setattr('amplifier_web.shared_state.configuration_stamp', lambda *args, **kwargs: ('new',))
