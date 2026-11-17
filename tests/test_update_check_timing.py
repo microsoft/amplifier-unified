@@ -9,6 +9,7 @@ The real update owner runs here: its tick, its check and its installation
 admission. A host start is a new update owner on the state that the last one
 saved. The clock of the update owner moves; no saved time is rewritten.
 """
+import asyncio
 import time
 
 import pytest
@@ -24,6 +25,11 @@ START_LIMIT = HOST_START_CHECK_AFTER_HOURS * HOUR
 INTERVAL = DEFAULT_CHECK_INTERVAL_HOURS * HOUR
 INSTALLED, MOVED = 'b' * 40, 'a' * 40  # The fixture's remote branch is at 'b' * 40.
 APP_ONLY = {'id': 'c' * 32, 'scope': 'app'}  # What "update the application only" saves (UpdateManager.command).
+UNRESOLVED = {  # An interrupted component preparation that waits for a person (update_health.pending_preparation).
+    'kind': 'ecosystem', 'attemptId': 'a' * 32, 'revision': 'b' * 32,
+    'retry': {'mode': 'inspect', 'inputKey': 'retained-configuration'},
+    'preparation': {'candidate': 'b' * 32, 'boundary': 'copy-only', 'copySettled': False},
+    'terminal': {'phase': 'ecosystem-stage', 'status': 'interrupted', 'attemptId': 'a' * 32}}
 
 
 @pytest.fixture
@@ -142,15 +148,18 @@ async def test_a_host_start_checks_nothing_when_automatic_checks_are_off(manager
     assert len(release_checks) == checks
 
 
-async def test_a_persons_own_check_after_the_start_is_the_check(manager, clock, release_checks):
+@pytest.mark.parametrize('ahead', [0, 2 * HOUR])
+async def test_a_persons_own_check_after_the_start_is_the_check(manager, clock, release_checks, ahead):
+    """Also when the clock was ahead at the host start and is corrected before the person checks."""
     await nothing_newer(manager)
-    clock(2 * HOUR)
+    clock(2 * HOUR + ahead)
     new = await host_start(manager)
+    clock(-ahead)
     await new.check()
     checks = len(release_checks)
     for _ in range(3):
         await new.tick()
-    assert len(release_checks) == checks
+    assert len(release_checks) == checks and new.check_due() is None
 
 
 async def test_a_clock_that_is_set_back_brings_no_second_start_check(manager, clock, release_checks):
@@ -184,6 +193,40 @@ async def test_a_check_that_is_refused_does_not_end_the_start_reason(manager, cl
     assert asked == [{'fresh': True, 'automatic': True}] and len(release_checks) == checks + 1
 
 
+class Lock(asyncio.Lock):
+    """The owner's lock, which also tells when someone asks for it."""
+    def __init__(self):
+        super().__init__()
+        self.asked = asyncio.Event()
+
+    async def acquire(self):
+        self.asked.set()
+        return await super().acquire()
+
+
+async def test_a_check_that_is_refused_at_the_owners_lock_does_not_end_the_start_reason(manager, clock, release_checks):
+    """The admission can change while a check waits for the lock. The check then asks it again and is refused."""
+    state = await nothing_newer(manager)
+    clock(2 * HOUR)
+    new = await host_start(manager)
+    checks = len(release_checks)
+    new.lock = Lock()
+    await new.lock.acquire()  # Another operation of the owner works.
+    new.lock.asked.clear()
+    check = asyncio.create_task(new.check())
+    await asyncio.wait_for(new.lock.asked.wait(), 10)  # The check passed its first admission and waits.
+    state['pendingRelease'] = 'f' * 32  # That operation prepared a component update.
+    new.lock.release()
+    await check
+    assert len(release_checks) == checks and state.get('lastAttempt', 0) < new._host_started
+    assert new.check_due() == 'start'
+    state['pendingRelease'] = None
+    asked = requests(new)
+    for _ in range(3):
+        await new.tick()
+    assert asked == [{'fresh': True, 'automatic': True}] and len(release_checks) == checks + 1
+
+
 async def test_a_start_check_runs_where_a_person_asked_for_the_application_alone(manager, clock, release_checks):
     """The saved intent of an earlier 'update the application only' request. Nothing is staged."""
     state = await nothing_newer(manager)
@@ -204,11 +247,7 @@ async def test_a_start_check_while_a_component_preparation_is_unresolved_checks_
     manager.installed = MOVED  # A component has a newer revision. It must not be prepared here.
     clock(2 * HOUR)
     new = await host_start(manager)
-    new.diagnostics.state['componentPreparation'] = {
-        'kind': 'ecosystem', 'attemptId': 'a' * 32, 'revision': 'b' * 32,
-        'retry': {'mode': 'inspect', 'inputKey': 'retained-configuration'},
-        'preparation': {'candidate': 'b' * 32, 'boundary': 'copy-only', 'copySettled': False},
-        'terminal': {'phase': 'ecosystem-stage', 'status': 'interrupted', 'attemptId': 'a' * 32}}
+    new.diagnostics.state['componentPreparation'] = dict(UNRESOLVED)
     checks = len(release_checks)
     asked = requests(new)
     for _ in range(3):
@@ -216,6 +255,45 @@ async def test_a_start_check_while_a_component_preparation_is_unresolved_checks_
     assert asked == [{'tier': 'application', 'fresh': True, 'automatic': True}]
     assert len(release_checks) == checks + 1 and manager.stages == []
     assert state['lastAttempt'] >= new._host_started
+
+
+@pytest.mark.parametrize('place', ['application-alone', 'unresolved-preparation'])
+async def test_a_timed_check_keeps_its_saved_answers_at_these_places_too(manager, clock, release_checks, place):
+    """Only a start check asks again. A timed check reuses the answers of its interval, as before."""
+    state = await nothing_newer(manager)
+    if place == 'application-alone':
+        state['applicationIntent'] = dict(APP_ONLY)
+        expected = {'fresh': False, 'automatic': True}
+    else:
+        manager.diagnostics.state['componentPreparation'] = dict(UNRESOLVED)
+        expected = {'tier': 'application', 'fresh': False, 'automatic': True}
+    checks = len(release_checks)
+    asked = requests(manager)
+    clock(INTERVAL - 60)
+    await manager.tick()
+    assert asked == [] and len(release_checks) == checks
+    clock(120)
+    for _ in range(3):
+        await manager.tick()
+    assert asked == [expected] and len(release_checks) == checks + 1
+
+
+async def test_a_sequence_that_waits_for_its_next_check_at_a_host_start_runs_first_and_is_the_start_check(
+        manager, clock, release_checks):
+    """The continuation is admitted, so it ends the start reason. It looks at components only."""
+    state = await nothing_newer(manager)
+    await manager.publish(phase='installed',
+                          sequence={**state['sequence'], 'stage': 'included', 'nextStage': 'other', 'install': False})
+    clock(2 * HOUR)
+    new = await host_start(manager)
+    assert new.check_due() == 'start'
+    checks = len(release_checks)
+    asked = requests(new)
+    for _ in range(3):
+        await new.tick()
+    assert asked == [{'tier': 'other', 'install': False, 'fresh': True, 'automatic': True}]
+    assert len(release_checks) == checks and new.check_due() is None
+    assert state['sequence']['stage'] == 'complete' and state['lastCheck'] >= new._host_started
 
 
 @pytest.mark.parametrize('keep_up_to_date', [True, False])
