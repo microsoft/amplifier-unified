@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import random
 import shutil
+import threading
 import uuid
 
 from PIL import Image
@@ -42,6 +43,142 @@ def noisy_image():
     output = io.BytesIO()
     image.save(output, 'PNG')
     return base64.b64encode(output.getvalue()).decode('ascii')
+
+
+def decoded(data):
+    with Image.open(io.BytesIO(data)) as image:
+        return image.convert('RGBA')
+
+
+def test_appearance_mode_clear_color_and_restart_preserve_other_fields(tmp_path):
+    store = owner(tmp_path)
+    initial = store.snapshot()
+    assert initial['colorMode'] == 'appearance'
+    assert initial['color'] == initial['defaultColor'] == branding.REFERENCE_ACCENT
+    assert not store.path.exists()
+    # Explicit selection of the fallback is still custom and needs a new URL.
+    custom = store.update(store.prepare({'name': 'Studio', 'color': initial['color']}))
+    assert custom['colorMode'] == 'custom'
+    assert custom['revision'] != initial['revision']
+    store.update(store.prepare({'image': noisy_image()}))
+    before = store.snapshot()
+    cleared = store.update(store.prepare({'color': ''}))
+    assert cleared['colorMode'] == 'appearance' and cleared['customIcon']
+    assert cleared['name'] == before['name']
+    assert cleared['revision'] != before['revision']
+    assert owner(tmp_path).snapshot() == cleared
+    assert json.loads(store.path.read_text())['color'] == ''
+    with pytest.raises(ValueError):
+        store.prepare({'color': None})
+
+
+@pytest.mark.parametrize('size', branding.SIZES)
+@pytest.mark.parametrize('color', ['000000', 'ffffff', '0080ff', 'ffdc00', '03aef9', '48646d'])
+def test_badge_rounded_corners_and_contrasting_boundary(tmp_path, size, color):
+    store = owner(tmp_path)
+    image = decoded(store.icon(size, color))
+    assert image.size == (size, size)
+    assert all(image.getpixel(point)[3] == 0 for point in (
+        (0, 0), (size - 1, 0), (0, size - 1), (size - 1, size - 1)))
+    sample = image.getpixel((size // 8, size * 5 // 16))
+    assert sample[3] == 255
+    assert all(abs(actual - expected) <= 3 for actual, expected in zip(sample[:3], bytes.fromhex(color)))
+    # Verify actual fully opaque pixels include both the accent and selected
+    # contrasting rim/halo as well as substantial original blue artwork.
+    pixels = list(image.getdata())
+    ink = tuple(bytes.fromhex(branding._contrast_ink('#' + color)[1:]))
+    assert any(pixel[3] == 255 and sum(abs(pixel[n] - ink[n]) for n in range(3)) <= (60 if size == 32 else 0)
+               for pixel in pixels)
+    assert sum(1 for r, g, b, a in pixels if a == 255 and b > r * 1.3 and b > g * 1.05) > size * size // 100
+
+
+@pytest.mark.parametrize('color', ['000000', 'ffffff', '0080ff', 'ffdc00', '03aef9', '777777'])
+def test_contrast_ink_meets_graphical_contrast_on_representative_accents(color):
+    def luminance(value):
+        rgb = [channel / 255 for channel in bytes.fromhex(value)]
+        linear = [c / 12.92 if c <= .04045 else ((c + .055) / 1.055) ** 2.4 for c in rgb]
+        return sum(c * weight for c, weight in zip(linear, (.2126, .7152, .0722)))
+    background = luminance(color)
+    ink = luminance(branding._contrast_ink('#' + color)[1:])
+    assert (max(background, ink) + .05) / (min(background, ink) + .05) >= 4.5
+
+
+def test_browser_variants_are_bounded_ephemeral_and_customizations_win(tmp_path):
+    store = owner(tmp_path)
+    snapshot = store.snapshot()
+    blue, green = store.icon(32, 'ABCDEF'), store.icon(32, '123456')
+    assert blue != green
+    assert blue == store.icon(32, 'abcdef')
+    assert store.icon(32, '#abcdef') == store.icon(32)
+    for accent in ('', 'ffffff\\n', 'abc', '12345g', '<svg>', 'a' * 10000):
+        assert store.icon(32, accent) == store.icon(32)
+    for value in range(branding._ICON_CACHE_LIMIT + 20):
+        store.icon(32, f'{value:06x}')
+    assert len(store._icons) <= branding._ICON_CACHE_LIMIT
+    assert store.snapshot() == snapshot and not store.path.exists()
+    store.update(store.prepare({'color': '#345678'}))
+    assert store.icon(32, 'abcdef') == store.icon(32, '123456') == store.icon(32)
+    store.update(store.prepare({'color': '', 'image': noisy_image()}))
+    assert store.icon(32, 'abcdef') == store.icon(32, '123456') == store.icon(32)
+
+
+def test_uncached_default_reads_never_reopen_configuration_or_packaged_art(tmp_path, monkeypatch):
+    store = owner(tmp_path)
+    original = Image.open
+
+    def only_memory(source, *args, **kwargs):
+        assert isinstance(source, io.BytesIO), 'Read paths must not reopen packaged artwork'
+        return original(source, *args, **kwargs)
+
+    def no_file_read(*args, **kwargs):
+        pytest.fail('Read paths must not reopen the branding record')
+
+    monkeypatch.setattr(Image, 'open', only_memory)
+    monkeypatch.setattr(Path, 'open', no_file_read)
+    assert store.snapshot()['colorMode'] == 'appearance'
+    template = {'icons': [{'sizes': '192x192', 'src': 'original', 'purpose': 'any'}]}
+    assert 'accent=123456' in store.manifest(template, '123456')['icons'][0]['src']
+    assert store.icon(32, '123456') != store.icon(32, 'abcdef')
+    assert store.icon(180)
+    assert not store.path.exists()
+
+
+def test_old_encoding_cannot_repopulate_after_aba(tmp_path, monkeypatch):
+    store = owner(tmp_path)
+    original = store.snapshot()
+    began, resume = threading.Event(), threading.Event()
+    encode = branding._png
+    result = []
+    errors = []
+
+    def paused(image):
+        began.set()
+        assert resume.wait(10)
+        return encode(image)
+
+    def worker():
+        try:
+            result.append(store.icon(32, '123456'))
+        except Exception as exc:
+            errors.append(exc)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(branding, '_png', paused)
+        thread = threading.Thread(target=worker)
+        thread.start()
+        try:
+            assert began.wait(10)
+            changed = store.update(store.prepare({'color': '#abcdef'}))
+            assert store.cached_icon(32, '123456') is None
+            assert changed['revision'] != original['revision']
+            store.update(store.prepare({'color': ''}))
+            assert store.snapshot()['revision'] == original['revision']
+        finally:
+            resume.set()
+            thread.join(10)
+    assert not thread.is_alive() and not errors and len(result) == 1
+    assert not store._icons, 'Old in-flight work cannot publish after A -> B -> A'
+    assert store.icon(32, '123456') == result[0]
 
 
 def test_windows_record_lookup_uses_real_supported_read_limit(tmp_path, monkeypatch):
