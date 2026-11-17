@@ -40,7 +40,11 @@ from every conversation participant and execution runtime.
   unclosed envelopes), data URLs and encoded payloads; neither mode sends those.
   Internal/worker/scheduled-only sources and update-activation pauses are ineligible.
 - One tool-free utility `provider.complete` call uses the selected account/model,
-  512 output tokens and a 15-second overall host deadline including preparation.
+  requests 512 output tokens and is subject to a 15-second overall host deadline
+  including preparation. The provider owns its actual thinking/output budget:
+  some implementations may raise it for reasoning effort. The host request is
+  not an attested provider-output or billing cap. Higher reasoning effort can
+  increase tokens and cost; the host adds no automatic budget scaling.
   The standard isolated provider-probe constructor is reused, not a second SDK
   route, orchestrator, native cursor, context module or conversation worker.
   Installed providers only: no request-time installation or `Bundle.prepare`.
@@ -54,9 +58,12 @@ from every conversation participant and execution runtime.
   evidence reports `qualified_source_mismatch`, without Git discovery, receipt
   rewriting, preparation or fallback.
 - Utility-local provider configuration disables `max_retries`, overload fallback
-  and refusal fallback. Provider/SDK-specific one-wire-attempt enforcement still
-  requires qualification of that installed implementation; arbitrary third-party
-  providers are not attested by this host. No host repair, retry or fallback call
+  and refusal fallback. Opaque `extra_request_params`, `extra_body` and `raw`
+  overrides are stripped for this isolated utility only, without changing saved
+  connection credentials, endpoint or transport headers. Provider/SDK-specific
+  one-wire-attempt enforcement still requires qualification of that installed
+  implementation; arbitrary third-party providers are not attested by this host.
+  No host repair, retry or fallback call
   occurs after malformed, empty, cancelled, timed-out or uncertain output.
 - Model output is exactly `{"suggestion": string|null}`. A string is nonempty,
   single-line, at most 240 Unicode code points, without controls or surrounding
@@ -70,9 +77,10 @@ from every conversation participant and execution runtime.
   of UTF-8, allowing newlines/tabs but not other control characters or invalid
   Unicode surrogates. A separate fixed output/privacy/no-tools contract follows it in the
   system message. Editing instructions grants no tools, hidden context, recipient
-  change or send authority; strict parsing, 512 output tokens and the 15-second
-  deadline remain enforced. Higher effort can consume that output budget; no
-  cap increase, repair call or fallback is implied.
+  change or send authority; strict parsing, the host's 512-token output request
+  and 15-second deadline remain unchanged. Provider-owned reasoning may require
+  more tokens than requested; no bounded-billing or universal output-cap promise,
+  host budget increase, repair call or fallback is implied.
 
 ## Wire
 

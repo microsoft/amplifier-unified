@@ -47,11 +47,13 @@ def utility_config(config, model, effort):
 
     The canonical reasoning_effort field and portable call options belong to
     the provider. Remove broader-scope aliases before selecting this utility's
-    value, including null (the provider's intrinsic default).
+    value, including null (the provider's intrinsic default). Opaque request
+    override bags must not replace these choices or the requested output budget.
     """
     return {**{key: value for key, value in config.items() if key not in {
                 'reasoning_effort', 'effort', 'reasoning', 'extended_thinking',
-                'thinking_type', 'thinking_budget_tokens', 'thinking_budget_buffer'}},
+                'thinking_type', 'thinking_budget_tokens', 'thinking_budget_buffer',
+                'extra_request_params', 'raw', 'extra_body'}},
             'model': model, 'default_model': model, 'reasoning_effort': effort,
             'max_retries': 0, 'fallback_on_overload': False,
             'refusal_fallback_enabled': False, 'fallback_retry_count': 0}
@@ -61,6 +63,7 @@ FAILURE_CLASSES = {
     'AuthenticationError': 'authentication', 'PermissionDeniedError': 'permission',
     'RateLimitError': 'rate_limit', 'NotFoundError': 'not_found',
     'BadRequestError': 'invalid_request', 'InvalidRequestError': 'invalid_request',
+    'KernelInvalidRequestError': 'invalid_request',
     'InternalServerError': 'service', 'APIStatusError': 'service',
     'APITimeoutError': 'timeout', 'TimeoutError': 'timeout',
     'APIConnectionError': 'connection', 'ConnectionError': 'connection',

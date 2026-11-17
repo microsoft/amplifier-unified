@@ -879,7 +879,10 @@ class Provider(unittest.IsolatedAsyncioTestCase):
         saved = {'api_key': 'synthetic-key', 'default_model': 'foreground-model',
                  'reasoning_effort': 'foreground-effort', 'effort': 'legacy-effort',
                  'reasoning': {'effort': 'legacy-reasoning'}, 'extended_thinking': False,
-                 'thinking_type': 'enabled', 'thinking_budget_tokens': 9999}
+                 'thinking_type': 'enabled', 'thinking_budget_tokens': 9999,
+                 'extra_request_params': {'model': 'other-model', 'max_tokens': 99999},
+                 'raw': {'reasoning': {'effort': 'max'}},
+                 'extra_body': {'max_output_tokens': 99999, 'tools': [{'name': 'not-admitted'}]}}
         before = copy.deepcopy(saved)
         for cls in (OrdinaryAdapter, KeywordOptionsAdapter):
             for effort in ('low', 'high', None):
@@ -894,12 +897,31 @@ class Provider(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(isolated['model'], 'explicit-selected')
                 self.assertEqual(request.reasoning_effort, effort)
                 self.assertEqual(options, {'model': 'explicit-selected', 'reasoning_effort': effort})
-                for key in ('effort', 'reasoning', 'extended_thinking', 'thinking_type', 'thinking_budget_tokens'):
+                for key in ('effort', 'reasoning', 'extended_thinking', 'thinking_type', 'thinking_budget_tokens',
+                            'extra_request_params', 'raw', 'extra_body'):
                     self.assertNotIn(key, isolated)
                 self.assertEqual(isolated['max_retries'], 0)
                 self.assertFalse(isolated['fallback_on_overload'])
         self.assertEqual(saved, before)
         self.assertEqual(len(seen), 6)  # One completion per requested attempt, never a repair.
+
+    def test_utility_request_overrides_do_not_remove_connection_transport_or_mutate_saved_settings(self):
+        from amplifier_web.suggestion_provider import utility_config
+        saved = {
+            'api_key': '${SAVED_CONNECTION_KEY}', 'base_url': 'https://connection.invalid/api',
+            'default_headers': {'X-Transport': 'preserved'}, 'timeout': 120,
+            'extra_request_params': {'model': 'other-model', 'reasoning_effort': 'max', 'max_tokens': 100000},
+            'extra_body': {'tools': [{'name': 'unrequested'}]}, 'raw': True}
+        original = copy.deepcopy(saved)
+        for effort in ('low', 'high', None):
+            isolated = utility_config(saved, 'selected-model', effort)
+            for key in ('extra_request_params', 'extra_body', 'raw'):
+                self.assertNotIn(key, isolated)
+            for key in ('api_key', 'base_url', 'default_headers', 'timeout'):
+                self.assertEqual(isolated[key], original[key])
+            self.assertEqual(isolated['model'], 'selected-model')
+            self.assertEqual(isolated['reasoning_effort'], effort)
+            self.assertEqual(saved, original)
 
     async def test_invalid_instruction_options_refuse_before_any_provider_call(self):
         provider = SimpleNamespace(complete=AsyncMock())
@@ -984,6 +1006,7 @@ class Provider(unittest.IsolatedAsyncioTestCase):
                 ('RateLimitError', 429, 'transport_rate_limit'),
                 ('NotFoundError', 404, 'transport_not_found'),
                 ('BadRequestError', 400, 'transport_invalid_request'),
+                ('KernelInvalidRequestError', None, 'transport_invalid_request'),
                 ('TypeError', None, 'transport_type_error')):
             kind = type(name, (Exception,), {'status_code': status})
             exc = kind(private)
