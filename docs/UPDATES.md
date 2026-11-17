@@ -416,14 +416,17 @@ Component qualification uses a temporary `shared-config/keys.env` copy.
 The manager removes only that file after qualification succeeds or a handled
 preparation failure. Settings and routing stay. Cancellation keeps the copy.
 Later activation or rollback qualification uses fresh credentials from the live
-shared home, then removes the copy again unless interrupted. A refresh that is
-refused is not an update failure: that qualification runs with what the stage
-holds. One case is different. When the live shared home has no keys file any
-more and the stage's old copy cannot be removed, that qualification does not
-run: an old copy never stands in for credentials that the person removed. The
-page says so and nothing is changed. The next activation request tries the
-removal again (the owner's pass does that by itself for a prepared update), and
-takes the text back when the refusal is over.
+shared home, then removes the copy again unless interrupted. That qualification
+never reads a copy that its refresh did not write: an old copy never stands in
+for credentials that the person removed or changed. When the live shared home
+has no keys file, the stage's copy is removed. When the refresh is refused for
+any reason, the stage's copy is removed too, and the qualification runs without
+a keys file in the stage; the refused refresh is not an update failure. When
+the copy can be neither replaced nor removed, the qualification does not run.
+No version is switched and no failed attempt is recorded; the page says "Update
+needs attention" with the reason, for an update and for a rollback. The next
+activation or rollback request tries again (the owner's pass does that by
+itself for a prepared update) and takes the text back when the refusal is over.
 Idle maintenance also scrubs at most eight stage copies per pass, even when
 unused-code cleanup is off. A validated stage qualifies immediately. An
 unvalidated stage qualifies only when both its folder and `shared-config` are

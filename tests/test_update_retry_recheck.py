@@ -302,6 +302,20 @@ async def test_a_retry_that_starts_an_update_of_another_kind_does_not_say_not_st
     assert NOT_STARTED not in state['currentStatus']['detail'] and RETRIED not in state['currentStatus']['detail']
 
 
+async def test_a_retry_that_leaves_no_attempt_record_does_not_say_that_another_update_started(manager, monkeypatch):
+    await failed_component(manager)
+    check_spy(manager, monkeypatch)
+
+    async def nothing_started(admitted, **kw):
+        manager.diagnostics.state.pop('batch', None)
+
+    monkeypatch.setattr(manager, 'install_checked', nothing_started)
+    await manager.command('install', None, 'b' * 32)
+    state = manager.service.state['updates']
+    assert {key: state['retryCheck'][key] for key in ('attemptId', 'result')} == {
+        'attemptId': None, 'result': 'not-started'}
+
+
 @pytest.mark.parametrize('result,at,sentence', [
     ('nothing-to-install', 11, NOTHING), ('not-started', 11, NOT_STARTED),
     # A record that is not newer than the failure says nothing about it.

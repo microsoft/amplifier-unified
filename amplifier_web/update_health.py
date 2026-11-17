@@ -18,9 +18,9 @@ DETERMINISTIC = RUNTIME_SOURCE_REASONS - {'runtime-source-changed'} | {
 
 PREPARED_WAITING = 'Application release validated. Waiting for work to finish before restarting.'
 PREPARED_STARTING = 'Application release validated. No work is running. Amplifier installs the update and restarts by itself.'
-STALE_STAGE_KEYS = ('Amplifier found no keys file. This update still holds an old copy of it, and Amplifier could not '
-                    'remove that copy. Amplifier did not check the update with the old copy. '
-                    'Current components remain active.')
+STALE_STAGE_KEYS = ('Amplifier did not switch component versions. The version that it would switch to may still hold '
+                    'an old copy of the keys file, and Amplifier could not replace or remove that copy. Amplifier '
+                    'did not check that version with the old copy. Current components remain active.')
 
 # Attempt IDs of the app replacements that THIS process executes at this moment.
 # Never saved. `updates.activation` in saved or restored state is a copy for
@@ -592,6 +592,11 @@ def current(state, evidence=None, *, manual_verified=None, explicit_retry=False,
     if phase in {'checking', 'staging', 'validating', 'activating'}:
         return result('working', 'Checking for updates' if phase == 'checking' else 'Updating Amplifier',
                       state.get('detail') or 'Preparing and checking the requested update.')
+    if state.get('error') == STALE_STAGE_KEYS:
+        # An activation or a rollback that changed nothing (updates._activate).
+        # A rollback has no pending release, and an earlier failure record must
+        # not speak in place of this text.
+        return result('action-required', 'Update needs attention', STALE_STAGE_KEYS, action='diagnostics')
     if state.get('pendingApp') or state.get('pendingRelease'):
         if any(row.get('kind') == 'checkout-handoff' or row.get('reasonCode') in {
                 'management-tasks-unavailable', 'management-lock-unavailable', 'runtime-observer-unavailable'}

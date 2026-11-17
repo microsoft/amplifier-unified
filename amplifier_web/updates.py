@@ -792,7 +792,7 @@ class UpdateManager:
                             # 'retried' only names a component attempt that this
                             # request started. 'other-update': it started an update
                             # of another kind (the application comes first).
-                            started = batch.get('attemptId') != prior_attempt
+                            started = batch.get('attemptId') not in (None, prior_attempt)
                             await self.publish(retryCheck={'at': time.time(), 'attemptId': attempt,
                                 'result': 'retried' if attempt else 'other-update' if started else 'not-started'})
             else:
@@ -1574,13 +1574,17 @@ class UpdateManager:
                 if marker.get('hostVersion')!=__import__('amplifier_web').__version__:
                     from .session_files import amplifier_home
                     from .update_health import STALE_STAGE_KEYS
-                    from .update_storage import refresh_stage_keys, remove_stage_keys, STALE_KEYS
+                    from .update_storage import refresh_stage_keys, remove_stage_keys
                     target_stage = self.directory / 'releases' / target
-                    if refresh_stage_keys(self.home, target_stage, amplifier_home()) == STALE_KEYS:
-                        # The person has no keys file any more, and the stage's old
-                        # copy could not be removed. Never qualify with that copy.
-                        # Nothing was changed, so this is not a failed attempt and
-                        # the phase stays: the next request tries the removal again.
+                    refused = refresh_stage_keys(self.home, target_stage, amplifier_home())
+                    if refused is not None and remove_stage_keys(self.home, target_stage) is not None:
+                        # One rule, and it keeps no memory: qualification never
+                        # reads a copy that this refresh did not write. The stage
+                        # may hold such a copy (of a keys file that the person
+                        # has removed or changed since), and it cannot be removed
+                        # now. No pointer, runtime or receipt was changed, so this
+                        # is not a failed attempt and the phase stays, as when a
+                        # switch waits for work. The next request tries again.
                         # Said once: the owner's pass comes here every minute.
                         if state.get('error') != STALE_STAGE_KEYS:
                             await self.publish(error=STALE_STAGE_KEYS)
@@ -1588,9 +1592,8 @@ class UpdateManager:
                     if state.get('error') == STALE_STAGE_KEYS:
                         await self.publish(error=None)  # That refusal is over.
                     try:
-                        # Any other refusal is not an update failure. Validation
-                        # then runs with what the stage holds, as it did before
-                        # this refresh existed.
+                        # A refused refresh is not an update failure. Validation
+                        # then runs without a keys file in the stage.
                         await self.validate(target_stage, target)
                     except asyncio.CancelledError:
                         raise  # Qualification may still have a reader; keep the copy.
