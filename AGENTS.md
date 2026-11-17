@@ -266,8 +266,16 @@ receipt folder finds no binding, takes the commit for an unexplained fixed
 version, and offers "Refresh included components": a full component update
 that changes no component (`runtime_environment.shared_build_policies`,
 `tests/test_update_new_installation.py`). For the same reason an absent
-declared source is no update there (`update_sequence.classify`); a selected
-generation is immutable, so only there must an update add it.
+declared source is no update there (`update_sequence.classify`). An update
+must add it in two other states: with a selected generation, which is
+immutable, and with no worker environment, where the first update prepares
+everything.
+`UpdateManager.check_due` is the one rule for a check that time causes: the
+timed check, and one check at a host start when the last check or attempt was
+at least 1 hour old. A one-time reason must end by a fact that the owner keeps
+(`_start_check_open`, ended when a check passes its admission), never by
+comparing a saved time with the start time: a clock that was ahead at the start
+and is corrected later would name the reason again on every pass.
 A reader of a private file can hold an object that another process replaced
 (`publish_private(replace=True)`). Windows then reports 0 links and a path below
 `$Extend\$Deleted` for it. That is `PrivateFileUnlinked` in `windows_files.py`,
