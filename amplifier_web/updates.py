@@ -1296,6 +1296,8 @@ class UpdateManager:
                 write_private(stage/'validated.json',json.dumps({'generationSchema': 1, 'workerProtocol': 1, 'createdAt':time.time(),'sources':len(candidates),'hostVersion':__import__('amplifier_web').__version__, 'updateTier': self.service.state['updates'].get('sequence', {}).get('stage'),
                     'appSelection': next(row.get('appSelection') for row in self.inventory
                                          if row.get('kind') != 'smart tool')}))
+                from .update_storage import remove_stage_keys
+                remove_stage_keys(self.home, stage)
                 self.diagnostics.clear_failure()
                 self.diagnostics.record('ecosystem-stage','succeeded',commandId=stage_id)
                 await self.publish(phase='staged',pendingRelease=release,
@@ -1304,6 +1306,9 @@ class UpdateManager:
             except BaseException as error:
                 from .update_diagnostics import exception_facts, failure_guidance
                 interrupted=isinstance(error,asyncio.CancelledError)
+                if isinstance(error, Exception):
+                    from .update_storage import remove_stage_keys
+                    remove_stage_keys(self.home, stage)
                 if interrupted:proof['interruptedAt'] = time.time()
                 status='interrupted' if interrupted else 'failed'
                 failure=self.diagnostics.state.get('lastFailure',{})
@@ -1549,7 +1554,20 @@ class UpdateManager:
             if target:
                 marker=json.loads((self.directory/'releases'/target/'validated.json').read_text())
                 if marker.get('hostVersion')!=__import__('amplifier_web').__version__:
-                    await self.validate(self.directory/'releases'/target,target)
+                    from .session_files import amplifier_home
+                    from .update_storage import refresh_stage_keys, remove_stage_keys
+                    target_stage = self.directory / 'releases' / target
+                    try:
+                        if refresh_stage_keys(self.home, target_stage, amplifier_home()):
+                            raise ValueError('Could not refresh component qualification credentials.')
+                        await self.validate(target_stage, target)
+                    except asyncio.CancelledError:
+                        raise  # Qualification may still have a reader; keep the copy.
+                    except Exception:
+                        remove_stage_keys(self.home, target_stage)
+                        raise
+                    else:
+                        remove_stage_keys(self.home, target_stage)
                     marker['hostVersion']=__import__('amplifier_web').__version__
                     write_private(self.directory/'releases'/target/'validated.json',json.dumps(marker))
             from .update_partial import read as partial_read, verify_pointer, adopted_items, public_results
@@ -1889,6 +1907,8 @@ class UpdateManager:
             return
         started = time.monotonic()
         try:
+            from .update_storage import scrub_stage_keys
+            await scrub_stage_keys(self)
             # Tool result retention is its own existing promise, independent of
             # whether unused-code cleanup is enabled in Settings.
             smart_tools = getattr(self.service, 'smart_tools', None)

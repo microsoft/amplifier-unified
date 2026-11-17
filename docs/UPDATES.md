@@ -388,6 +388,18 @@ of the historical Mac resolver failure whose stderr was unavailable.
 
 Local data: `updates/inventory.json` (private source details), `updates/releases/<id>/` (staged sources/configuration), `updates/active.json` (current/previous pointer), and per-generation runtime environments. Previous and referenced generations remain available for rollback and active workers; unreferenced, verified owned generations and environments are reclaimed. Shared source objects are retained pending complete proof that no references remain. State shown to the UI/agent contains credential-safe source labels and commit IDs, not credential-bearing remote URLs.
 
+Component qualification uses a temporary `shared-config/keys.env` copy.
+The manager removes only that file after qualification succeeds or a handled
+preparation failure. Settings and routing stay. Cancellation keeps the copy.
+Later activation or rollback qualification uses fresh credentials from the live
+shared home, then removes the copy again unless interrupted.
+Idle maintenance also scrubs at most eight stage copies per pass, even when
+unused-code cleanup is off. A validated stage qualifies immediately. An
+unvalidated stage qualifies only when both its folder and `shared-config` are
+older than 24 hours and it is not an unresolved preparation candidate.
+Unsafe paths or removal refusals keep the copy for a later pass.
+Failed stage folders stay; this credential cleanup deletes no folder.
+
 If a worker dependency resolves differently from the checked update, activation
 stops. The diagnostic receipt identifies the component, checked/resolved commit
 IDs when available, and which fields differ: repository, ref, subdirectory,
