@@ -27,9 +27,9 @@ name: Windows path length
 # page keeps the times. A first start that took longer than the app's time
 # limit is a warning there, not a failure: the app's own start then finds
 # bytecode and has less to compile. The case requires that its first start
-# added bytecode files. If a preparation starts to write bytecode itself, the
-# case fails there, for a reason that is not a path limit: then remove the
-# case's own starts of the helper.
+# added bytecode files. A first start that adds none fails there, for a reason
+# that is not a path limit (for example, a preparation that already wrote all
+# of that bytecode). The docstring of the case says what to do then.
 #
 # This is the only native job that installs the locked Amplifier Foundation.
 # So it also holds a real Foundation session ownership, as a live conversation
@@ -245,8 +245,9 @@ jobs:
           if ($status -ne 0) { throw 'The setup of a chat was not prepared and checked with long paths off, or a needed path passes the limit.' }
           # A skipped case ends with exit code 0. The case writes the list only after every preparation.
           if (-not (Test-Path -LiteralPath $env:AMPLIFIER_CHAT_SETUP_TREE)) { throw 'The case did not run: it wrote no list of paths.' }
-          # A case that passed printed one line for each new worker environment. With none found, this step
-          # no longer reads them, and a first start over the app's limit would get no warning.
+          # A case that passed printed one line for each new worker environment, and -rA shows the output of
+          # a passed case. With none found, this step no longer reads them (a changed line, or pytest without
+          # -rA), and a first start over the app's limit would get no warning.
           if ($measured.Count -eq 0) { throw 'The case passed, and this step found no measured first start of the decision-catalog helper.' }
       - name: Keep the list of every path
         if: ${{ always() }}

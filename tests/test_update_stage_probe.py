@@ -102,7 +102,7 @@ def test_the_decision_catalog_helper_is_read_from_the_app_and_started_as_the_app
     script = probe.ROOT / 'amplifier_web' / 'decision_account_catalog.py'
     assert command[:2] == [sys.executable, '-I'] and len(command) == 3 and Path(command[2]).samefile(script)
     # The app's limit for one start, and the few settings that the helper gets. No setting stops bytecode.
-    assert settings['timeout'] > 0 and settings['check'] is True
+    assert settings['timeout'] > 0 and settings['check'] is True and settings['stdout'] is subprocess.PIPE
     assert set(settings['env']) <= {'PATH', 'SYSTEMROOT', 'WINDIR', 'LANG', 'LC_ALL', 'TZ', 'TMPDIR', 'TEMP', 'TMP'}
     # The same call with another time limit: each start prints the catalog.
     times = probe.catalog_helper_times((command, settings), sys.executable)
@@ -142,13 +142,13 @@ def test_the_ci_job_finds_the_lines_that_the_chat_setup_case_prints_for_the_help
     longer = probe.catalog_helper_line('q-' + 'b' * 32, 10.04, 1.0, 12, 755, 10)
     assert inside == (
         'MEASURED the decision-catalog helper in the new worker environment prepare-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: '
-        "the test's first start took 3.4 s; 674 more bytecode files were there after it (0 before it); "
-        "the test's second start took 0.9 s; the app's time limit for one start is 10 s")
+        "the test's first start took 3.44 s; 674 more bytecode files were there after it (0 before it); "
+        "the test's second start took 0.92 s; the app's time limit for one start is 10 s")
     assert longer == (
         'MEASURED the decision-catalog helper in the new worker environment q-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb: '
-        "the test's first start took 10.0 s; 743 more bytecode files were there after it (12 before it); "
-        "the test's second start took 1.0 s; the app's time limit for one start is 10 s; "
-        'LONGER THAN THE TIME LIMIT OF THE APP')
+        "the test's first start took 10.04 s; 743 more bytecode files were there after it (12 before it); "
+        "the test's second start took 1.00 s; the app's time limit for one start is 10 s; "
+        'LONGER THAN THE TIME LIMIT OF THE APP')   # the printed time shows why
     # A start of exactly the limit is not longer than it.
     assert probe.HELPER_LONGER not in probe.catalog_helper_line('q-' + 'c' * 32, 10, 1.0, 0, 743, 10)
     workflow = (probe.ROOT / '.github' / 'workflows' / 'windows-path-length.yml').read_text(encoding='utf-8')

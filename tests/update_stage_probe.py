@@ -228,15 +228,18 @@ def catalog_helper_call():
     assert value is None and failure['category'] == 'subprocess-error' and len(calls) == 1, (value, failure, calls)
     command, settings = calls[0]
     assert command[0] == sys.executable and settings.get('timeout', 0) > 0, (command, settings)
+    # ``catalog_helper_times`` reads the helper's output as bytes from a pipe, as the app does.
+    assert settings.get('stdout') is subprocess.PIPE and not any(
+        settings.get(name) for name in ('text', 'universal_newlines', 'encoding', 'errors')), settings
     return command, settings
 
 
 def catalog_helper_times(call, python, *, starts=2, limit=300):
     """Start the app's decision-catalog helper with ``python``; the seconds that each start took.
 
-    ``call`` is ``catalog_helper_call()``. Three things differ from the app's call: the interpreter, the time
-    limit, and that the helper's error output is kept. The settings (``PATH`` among them) and the current
-    folder are those of the test process; the app's own start has those of its probe command. In a new
+    ``call`` is ``catalog_helper_call()``. The interpreter and the time limit are the caller's, and the
+    helper's error output is kept. The values of the settings (``PATH`` among them) and the current folder
+    are those of the test process; the app's own start has those of its probe command. In a new
     environment the first start finds no bytecode of the provider packages. The helper runs with ``-I``, so
     ``PYTHONDONTWRITEBYTECODE`` does not reach it, and it can write bytecode. A later start can read that
     bytecode. Each start must print the catalog, a JSON object.
@@ -284,8 +287,8 @@ def catalog_helper_line(environment, first, second, before, after, limit):
     each one on the run's page, and it warns for a line that ends with ``HELPER_LONGER``.
     """
     return (f'{HELPER_LINE} in the new worker environment {environment}: the test\'s first start took '
-            f'{first:.1f} s; {after - before} more bytecode files were there after it ({before} before it); '
-            f'the test\'s second start took {second:.1f} s; the app\'s time limit for one start is {limit} s'
+            f'{first:.2f} s; {after - before} more bytecode files were there after it ({before} before it); '
+            f'the test\'s second start took {second:.2f} s; the app\'s time limit for one start is {limit} s'
             + (f'; {HELPER_LONGER}' if first > limit else ''))
 
 
