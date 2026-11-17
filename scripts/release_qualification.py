@@ -173,8 +173,9 @@ def verify_receipts(root, evidence, expected, receipts, dist):
 
 
 APP = 'amplifier-unified'
-HOST = ('This release run qualified', 'This release run did not qualify')
-TESTS = ('The runtime tests of this run used', 'The runtime tests of this run did not use')
+# Each text says what one recorded graph has. A graph is not the whole run.
+HOST = ("This run's host resolution has it", "This run's host resolution does not have")
+TESTS = ("The environment of this run's runtime tests has it", "The environment of this run's runtime tests does not have")
 
 
 def source(row):
@@ -192,7 +193,7 @@ def source(row):
                 'subdirectory': direct.get('subdirectory') or ''}
     if not row.get('url'):
         return None
-    return {'url': row['url'], 'revision': row['revision'], 'subdirectory': row.get('subdirectory') or ''}
+    return {'url': row['url'], 'revision': row.get('revision'), 'subdirectory': row.get('subdirectory') or ''}
 
 
 def sources(rows):
@@ -213,29 +214,40 @@ def place(origin):
 
 
 def address(origin):
-    return origin['url'] + ('#subdirectory=' + origin['subdirectory'] if origin['subdirectory'] else '')
+    return f"{origin['url']}" + ('#subdirectory=' + origin['subdirectory'] if origin['subdirectory'] else '')
+
+
+def at(origin):
+    return f"at {origin['revision']}" if origin['revision'] else 'with no recorded commit'
 
 
 def difference(name, shipped, other, known, words):
-    """None when both are the same Git commit of the same place; else what is known."""
+    """None when both are the same Git commit of the same place; else what is known.
+
+    A Git origin without a recorded commit is never equal to another one.
+    """
     same_place = bool(shipped and other and place(shipped) == place(other))
-    if same_place and shipped['revision'] == other['revision']:
+    if same_place and shipped['revision'] and shipped['revision'] == other['revision']:
         return None
     if not shipped:
         first = 'from a source that is not Git'
     elif same_place:
-        first = f"at {shipped['revision']}"
+        first = at(shipped)
     else:
-        first = f"at {shipped['revision']} from {address(shipped)}"
+        first = f'{at(shipped)} from {address(shipped)}'
     if same_place:
-        second = f"{words[0]} {other['revision']}."
+        second = f'{words[0]} {at(other)}.'
     elif not known:
         second = f'{words[1]} {name}.'
     elif other:
-        second = f"{words[0]} {name} at {other['revision']} from {address(other)}."
+        second = f'{words[0]} {at(other)} from {address(other)}.'
     else:
-        second = f'{words[0]} {name} from a source that is not Git.'
-    return f'The Windows setup file has {name} {first}. {second} This run stops before it publishes.'
+        second = f'{words[0]} from a source that is not Git.'
+    # Two commits of one place: a branch can have moved between two resolutions
+    # of this run. The tool does not know the cause, so the remedy has its condition.
+    again = (' If a branch moved during this run, run all jobs again.'
+             if same_place and shipped['revision'] and other['revision'] else '')
+    return f'The Windows setup file has {name} {first}. {second} This run stops before it publishes.{again}'
 
 
 def qualified_sources(evidence):
@@ -270,9 +282,10 @@ def verify_consumer(root, evidence, expected, plan, receipts):
             problem = difference(name, shipped, other, known, words)
             if problem:
                 raise ValueError(problem)
-        print(f"{name} {shipped['revision']}: the same commit in this run's host resolution and in its runtime tests.")
+        print(f"{name} {shipped['revision']}: the same commit in this run's host resolution "
+              "and in the environment of its runtime tests.")
         checked.append(name)
-    print(f'{len(checked)} Git components of the Windows setup file have the commits that this release run qualified.')
+    print(f"{len(checked)} Git components of the Windows setup file were compared. None differs.")
     return checked
 
 

@@ -2444,6 +2444,12 @@ QUALIFIED, MOVED = '1' * 40, '2' * 40
 APP_ROW = {'name': 'amplifier-unified', 'version': '1.2.3', 'revision': 'a' * 40,
            'url': 'https://github.com/microsoft/amplifier-unified'}
 STOP = ' This run stops before it publishes.'
+# Each text names the one graph that it is about. A graph is not the whole release run.
+HOST_HAS, HOST_LACKS = "This run's host resolution has it", "This run's host resolution does not have"
+TESTS_HAVE = "The environment of this run's runtime tests has it"
+TESTS_LACK = "The environment of this run's runtime tests does not have"
+# Only for two known commits of one place: a new run can then resolve them equal.
+AGAIN = ' If a branch moved during this run, run all jobs again.'
 
 
 def component_rows(revision=QUALIFIED):
@@ -2458,7 +2464,7 @@ def install_record(row, requested='main'):
     """The same row in the form of an install record that uv wrote."""
     direct = None
     if row.get('url'):
-        direct = {'url': row['url'], 'vcs_info': {'vcs': 'git', 'commit_id': row['revision']}}
+        direct = {'url': row['url'], 'vcs_info': {'vcs': 'git', 'commit_id': row.get('revision')}}
         if requested is not None:
             direct['vcs_info']['requested_revision'] = requested
         if row.get('subdirectory'):
@@ -2507,37 +2513,55 @@ def test_windows_plan_with_the_commits_of_its_release_run_is_accepted(consumer, 
     resolved = [*component_rows(), {'name': 'pytest', 'version': '9.0.0'},
                 {'name': 'amplifier-module-tool-exec', 'version': '0.1.1', 'revision': '3' * 40,
                  'url': 'https://github.com/microsoft/amplifier-module-tool-exec'}]
+    # An empty subdirectory is the same as none, in a row and in an install record.
+    resolved = changed(resolved, 'amplifier-foundation', subdirectory='')
     # An ending '.git' or '/' is the same repository. Registry versions are not compared.
     plan = changed(changed(changed(component_rows(), 'amplifier-foundation', url=FOUNDATION + '.git'),
                            NAMING, url=FOUNDATION + '/'), 'amplifier-core', version='2.0.9')
+    # A name with dots, repeated separators or upper case is the same package.
+    plan = [{**row, 'name': row['name'].replace('-', '.-_').upper()} for row in plan]
     # An install record has the name as the package's metadata writes it.
     runtime = [install_record({**row, 'name': row['name'].replace('-', '_').title()}) for row in resolved]
+    next(row for row in runtime if row['name'] == 'Amplifier_Foundation')['direct']['subdirectory'] = ''
+    # Only Git commits are compared: a package that the plan and the host resolution have from the
+    # registry is not looked at, also when the runtime tests' environment has it from Git.
+    next(row for row in runtime if row['name'] == 'Amplifier_Core')['direct'] = {
+        'url': 'https://github.com/microsoft/amplifier-core',
+        'vcs_info': {'vcs': 'git', 'commit_id': '4' * 40, 'requested_revision': 'main'}}
     root, evidence, expected, path, receipts = consumer(resolved, plan, runtime)
     assert qualification.verify_consumer(root, evidence, expected, path, receipts) == ['amplifier-foundation', NAMING]
     output = capsys.readouterr().out
     assert f'amplifier-foundation {QUALIFIED}: the same commit' in output
-    assert '2 Git components of the Windows setup file have the commits that this release run qualified.' in output
+    assert '2 Git components of the Windows setup file were compared. None differs.' in output
 
 
 @pytest.mark.parametrize(('plan', 'resolved', 'message'), [
     (component_rows(MOVED), component_rows(),
-     f'The Windows setup file has amplifier-foundation at {MOVED}. This release run qualified {QUALIFIED}.' + STOP),
+     f'The Windows setup file has amplifier-foundation at {MOVED}. {HOST_HAS} at {QUALIFIED}.' + STOP + AGAIN),
+    # The runtime graph of this case has the component. So the text must name the host resolution alone.
     (component_rows(), [row for row in component_rows() if row['name'] != 'amplifier-foundation'],
      f'The Windows setup file has amplifier-foundation at {QUALIFIED} from {FOUNDATION}. '
-     'This release run did not qualify amplifier-foundation.' + STOP),
+     f'{HOST_LACKS} amplifier-foundation.' + STOP),
     (component_rows(), changed(component_rows(), 'amplifier-foundation', url=None, revision=None),
      f'The Windows setup file has amplifier-foundation at {QUALIFIED} from {FOUNDATION}. '
-     'This release run qualified amplifier-foundation from a source that is not Git.' + STOP),
+     f'{HOST_HAS} from a source that is not Git.' + STOP),
     (component_rows(), changed(component_rows(), 'amplifier-foundation', url='https://github.com/example/amplifier-foundation'),
-     f'The Windows setup file has amplifier-foundation at {QUALIFIED} from {FOUNDATION}. This release run qualified '
-     f'amplifier-foundation at {QUALIFIED} from https://github.com/example/amplifier-foundation.' + STOP),
+     f'The Windows setup file has amplifier-foundation at {QUALIFIED} from {FOUNDATION}. {HOST_HAS} '
+     f'at {QUALIFIED} from https://github.com/example/amplifier-foundation.' + STOP),
     (component_rows(), changed(component_rows(), NAMING, subdirectory='modules/other'),
      f'The Windows setup file has {NAMING} at {QUALIFIED} from {FOUNDATION}#subdirectory=modules/hooks-session-naming. '
-     f'This release run qualified {NAMING} at {QUALIFIED} from {FOUNDATION}#subdirectory=modules/other.' + STOP),
+     f'{HOST_HAS} at {QUALIFIED} from {FOUNDATION}#subdirectory=modules/other.' + STOP),
     (changed(component_rows(), 'amplifier-foundation', url=None, revision=None), component_rows(),
      'The Windows setup file has amplifier-foundation from a source that is not Git. '
-     f'This release run qualified amplifier-foundation at {QUALIFIED} from {FOUNDATION}.' + STOP),
-], ids=['commit', 'absent', 'registry-in-run', 'repository', 'subdirectory', 'registry-in-plan'])
+     f'{HOST_HAS} at {QUALIFIED} from {FOUNDATION}.' + STOP),
+    # A Git origin without a recorded commit is never equal, also to another one without a commit.
+    (changed(component_rows(), 'amplifier-foundation', revision=None),
+     changed(component_rows(), 'amplifier-foundation', revision=None),
+     f'The Windows setup file has amplifier-foundation with no recorded commit. {HOST_HAS} with no recorded commit.' + STOP),
+    (component_rows(), changed(component_rows(), 'amplifier-foundation', revision=None),
+     f'The Windows setup file has amplifier-foundation at {QUALIFIED}. {HOST_HAS} with no recorded commit.' + STOP),
+], ids=['commit', 'absent', 'registry-in-run', 'repository', 'subdirectory', 'registry-in-plan',
+        'no-commit-in-both', 'no-commit-in-run'])
 def test_windows_plan_that_differs_from_the_host_resolution_stops_the_release(consumer, plan, resolved, message):
     root, evidence, expected, path, receipts = consumer(resolved, plan)
     with pytest.raises(ValueError) as refusal:
@@ -2548,17 +2572,19 @@ def test_windows_plan_that_differs_from_the_host_resolution_stops_the_release(co
 @pytest.mark.parametrize(('runtime', 'message'), [
     (changed(component_rows(), 'amplifier-foundation', revision=MOVED),
      f'The Windows setup file has amplifier-foundation at {QUALIFIED}. '
-     f'The runtime tests of this run used {MOVED}.' + STOP),
+     f'{TESTS_HAVE} at {MOVED}.' + STOP + AGAIN),
     ([row for row in component_rows() if row['name'] != NAMING],
      f'The Windows setup file has {NAMING} at {QUALIFIED} from {FOUNDATION}#subdirectory=modules/hooks-session-naming. '
-     f'The runtime tests of this run did not use {NAMING}.' + STOP),
+     f'{TESTS_LACK} {NAMING}.' + STOP),
     (changed(component_rows(), 'amplifier-foundation', url=None, revision=None),
      f'The Windows setup file has amplifier-foundation at {QUALIFIED} from {FOUNDATION}. '
-     'The runtime tests of this run used amplifier-foundation from a source that is not Git.' + STOP),
+     f'{TESTS_HAVE} from a source that is not Git.' + STOP),
     (changed(component_rows(), NAMING, subdirectory=None),
      f'The Windows setup file has {NAMING} at {QUALIFIED} from {FOUNDATION}#subdirectory=modules/hooks-session-naming. '
-     f'The runtime tests of this run used {NAMING} at {QUALIFIED} from {FOUNDATION}.' + STOP),
-], ids=['commit', 'absent', 'not-git', 'subdirectory'])
+     f'{TESTS_HAVE} at {QUALIFIED} from {FOUNDATION}.' + STOP),
+    (changed(component_rows(), 'amplifier-foundation', revision=None),
+     f'The Windows setup file has amplifier-foundation at {QUALIFIED}. {TESTS_HAVE} with no recorded commit.' + STOP),
+], ids=['commit', 'absent', 'not-git', 'subdirectory', 'no-commit'])
 def test_windows_plan_that_differs_from_the_runtime_tests_stops_the_release(consumer, runtime, message):
     root, evidence, expected, path, receipts = consumer(
         component_rows(), component_rows(), [install_record(row) for row in runtime])
@@ -2569,7 +2595,7 @@ def test_windows_plan_that_differs_from_the_runtime_tests_stops_the_release(cons
 
 def test_windows_plan_with_one_component_twice_is_refused(consumer):
     # Without this, the later row would replace the earlier one in the comparison.
-    twice = [{**component_rows(MOVED)[1], 'name': 'Amplifier_Foundation'}, *component_rows()]
+    twice = [{**component_rows(MOVED)[1], 'name': 'Amplifier._Foundation'}, *component_rows()]
     root, evidence, expected, path, receipts = consumer(component_rows(), twice, [install_record(row) for row in component_rows()])
     with pytest.raises(ValueError, match='^amplifier-foundation is recorded twice$'):
         qualification.verify_consumer(root, evidence, expected, path, receipts)
