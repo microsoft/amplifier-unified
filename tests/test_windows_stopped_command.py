@@ -130,8 +130,8 @@ def windows():
 class Program:
     """One process of the controlled command, held by an open handle from the moment it is known."""
 
-    def __init__(self, kernel, folder, name, wait=60):
-        self.kernel, deadline = kernel, time.monotonic() + wait
+    def __init__(self, kernel, folder, name):
+        self.kernel, deadline = kernel, time.monotonic() + 60
         while True:
             try:
                 self.pid = int((folder / name).read_text(encoding='utf-8'))
@@ -241,7 +241,6 @@ def test_the_launchers_job_ends_such_a_program_when_the_app_ends(tmp_path, conta
     def said(word):
         line = host.stdout.readline()
         if not line.startswith(word + ' '):
-            errors.flush()
             text = (folder / 'host.err').read_text(encoding='utf-8', errors='replace')[-4000:]
             pytest.fail(f'The app did not reach {word}: {line!r} {text}')
         return json.loads(line[len(word) + 1:])
@@ -280,13 +279,10 @@ def test_the_launchers_job_ends_such_a_program_when_the_app_ends(tmp_path, conta
             print(f'MEASURED without the launcher\'s Job: the program that the command started (process {left.pid}) '
                   f'still ran 10 s after the app had ended')
     finally:
-        if not app:
-            try:
-                app.append(Program(kernel, folder, 'host.pid', wait=0))   # a case that failed before RUNNING
-            except AssertionError:
-                pass   # the app never wrote its process ID, or it has ended and is gone
         if not host.stdin.closed:
             host.stdin.close()     # the app reads to the end of its input and then ends
+        # Each handle was opened while its process ran, so it names that process and no other. A case that
+        # failed before it held a handle ends nothing by a saved process ID: the app ends itself after 300 s.
         for program in app + held:
             program.close()        # ends what still runs: the app first (with its Job), then the two programs
         if host.poll() is None:

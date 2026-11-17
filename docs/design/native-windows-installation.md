@@ -932,8 +932,8 @@ process without that call ends, and the program still runs 10 seconds later.
 So a program of a stopped preparation can run on while the app runs, and the
 Job ends it with the app at the latest. That the installed launcher makes
 the call is read from the code; these cases run the call, not the installed
-launcher. The first two cases run without a Job, as the big preparation case
-does. The
+launcher. The first two cases run without the launcher's Job, as the big
+preparation case does. The
 job reads each stage's copy of the keys file through the app's private-file
 reader, which refuses another owner and a wider access list. It then lists
 every path below the installation
