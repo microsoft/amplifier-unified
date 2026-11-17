@@ -429,6 +429,67 @@ def test_a_full_record_of_roots_that_windows_may_still_hold_stops_force_and_chan
     assert wt.replaced_roots(root) == [recorded[1], current]
 
 
+def test_a_search_of_the_windows_store_that_fails_keeps_every_root_on_a_full_record(simulated, sample, monkeypatch):
+    """Windows returns nothing for "not found" and for a search that failed. Only the first drops a root."""
+    from amplifier_web import windows_trust
+    root, pinned, state = simulated
+    wt.create_identity(root, sample[0])
+    small_record(monkeypatch, pinned)
+    for _ in range(2):
+        tls.setup_local_ca(root, sample[0], force=True)
+    recorded = wt.replaced_roots(root)
+    before = {p.name: p.read_bytes() for p in pinned.path.iterdir()}
+    last, answer, searched = [0], {"error": 5}, []
+
+    @contextmanager
+    def opened(der, store, *, write):
+        assert store == "ROOT" and write is False  # The person's own store, read-only.
+        yield SimpleNamespace(CertFreeCertificateContext=lambda context: True), "store", der
+
+    def find(api, handle, context):
+        searched.append(context)
+        last[0] = answer["error"]
+        return None
+    monkeypatch.setattr(windows_trust, "_open", opened)
+    monkeypatch.setattr(windows_trust, "_find", find)
+    monkeypatch.setattr(windows_trust.C, "get_last_error", lambda: last[0], raising=False)
+    monkeypatch.setattr(windows_trust.C, "set_last_error", lambda value: last.__setitem__(0, value), raising=False)
+    # Access denied is no answer: no root leaves the record, force stops, and nothing is changed.
+    with pytest.raises(wt.ReplacedRecord, match="Its record of earlier certificates is full"):
+        tls.setup_local_ca(root, sample[0], force=True)
+    assert searched == recorded
+    assert {p.name: p.read_bytes() for p in pinned.path.iterdir()} == before
+    assert wt.replaced_roots(root) == recorded
+    # Windows' own answer "not found": those roots need no record.
+    answer["error"] = 0x80092004
+    current = wt.keyless_identity(root)[0]
+    tls.setup_local_ca(root, sample[0], force=True)
+    assert wt.replaced_roots(root) == [current]
+
+
+def test_status_reads_the_real_record_and_says_when_it_is_too_long_to_read(simulated, sample, monkeypatch, capsys):
+    from amplifier_web import cli, windows_trust
+    root, pinned, state = simulated
+    first = wt.create_identity(root, sample[0])
+    monkeypatch.setattr(windows_trust, "contains", lambda der, store="ROOT": True)
+    tls.setup_local_ca(root, sample[0], force=True)
+    current = wt.keyless_identity(root)[0]
+    cli._windows_roots(root, True)
+    assert capsys.readouterr().out == (
+        "Thumbprint in Windows (SHA-1): " + windows_trust.thumbprint(current) + "\n"
+        "Earlier certificates that Windows still holds: 1\n  " + windows_trust.thumbprint(first) + "\n")
+    (pinned.path / wt._REPLACED).write_bytes(b"x" * (wt._LIMIT + 1))
+    cli._windows_roots(root, True)
+    # Not "0": Amplifier did not read the record.
+    assert capsys.readouterr().out == (
+        "Thumbprint in Windows (SHA-1): " + windows_trust.thumbprint(current) + "\n"
+        "Earlier certificates that Windows still holds: Amplifier could not read them\n")
+    with pytest.raises(ValueError):
+        wt.replaced_roots(root, strict=True)
+    # The launcher and an uninstall get no candidate from such a record, and no error.
+    assert windows_trust.replaced(root, current) == [] and windows_trust.held_roots(root) == [current]
+
+
 def test_a_record_that_is_too_long_to_read_stops_force_and_is_never_replaced(simulated, sample):
     root, pinned, state = simulated
     wt.create_identity(root, sample[0])
@@ -442,6 +503,9 @@ def test_a_record_that_is_too_long_to_read_stops_force_and_is_never_replaced(sim
     assert text.startswith("Amplifier made no new certificate. Nothing was changed.\n\n")
     assert "Its record of earlier certificates is too long to read:\n" + str(path) + "\n" in text
     assert "Move the file to another folder, then run setup-tls force again." in text
+    # No promise of steps that delete them: without the record nothing finds them.
+    assert ("Amplifier then no longer knows the earlier certificates, and Windows keeps the ones that it holds. "
+            "Nobody can use them: no signing key exists for them. More:\n" + wt._REPLACED_GUIDE) in text
     assert text.endswith(wt._REPLACED_GUIDE)
     assert {p.name: p.read_bytes() for p in pinned.path.iterdir()} == before
     assert len(state["publications"]) == publications

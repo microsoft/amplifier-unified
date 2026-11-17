@@ -652,6 +652,17 @@ def test_several_replaced_roots_are_counted_in_the_message_and_all_are_asked_abo
     assert ("forget", many) in events
 
 
+def test_the_longest_message_stays_inside_a_bound(trust_step):
+    # The fixture's thumbprint has the real length: five groups of eight characters.
+    state, events, run = trust_step
+    state["replaced"] = [f"root-{index}".encode() for index in range(40)]
+    assert run() is True
+    text = events[2][1]
+    assert text.startswith("Windows will now ask 41 questions.")
+    assert text.count("71A44501 61589BA0 7236E01B 8BF48F15 5B4A7606") == 6 and text.endswith("\nand 35 more")
+    assert len(text) < 1100, len(text)  # The message must stay on the screen.
+
+
 @pytest.mark.parametrize("add", ["declined", "blocked", "present"])
 def test_a_replaced_root_is_deleted_only_after_windows_added_the_new_one(trust_step, add):
     state, events, run = trust_step

@@ -547,18 +547,24 @@ a certificate, and the earlier certificate's bytes were gone from disk.
   exact bytes nothing finds that root again. The record must fit in one
   bounded read (64 KiB, about 50 certificates). When one more does not fit,
   `force` asks Windows, read-only, which recorded roots it still holds for the
-  person, and drops the others. When Windows cannot be asked, nothing is
-  dropped. If the record is still full, `force` stops with a plain text and
-  changes nothing (`windows_tls.ReplacedRecord`). A record that is too long to
+  person, and drops the others. Only Windows' own answer "not found"
+  (`CRYPT_E_NOT_FOUND`) drops a root. Windows returns nothing also for a
+  search that failed, so `windows_trust.contains` raises for every other
+  result; a failed search and a store that cannot be opened both count as
+  "Windows may hold it". If the record is still full, `force` stops with a
+  plain text and changes nothing (`windows_tls.ReplacedRecord`). A record that is too long to
   read stops `force` in the same way: Amplifier never writes one of that
   length, and it does not replace a file that it cannot read. The readers get
   an empty list from such a file. When `force` writes the record again, it
   writes only the whole certificates; other text in the file is not kept.
 - **What the person can read.** `setup-tls status` on such a PC prints the
   SHA-1 thumbprint of the root in use (the form that Windows shows) and the
-  thumbprint of each replaced root that Windows still holds. The guide's steps
-  to delete a certificate by hand use these thumbprints. They never find a
-  certificate by its name.
+  thumbprint of each replaced root that Windows still holds. When it cannot
+  read its certificate, the record or the store, it says so; it never shows
+  that as "none". The guide's steps delete by hand only a certificate whose
+  thumbprint the command lists as an earlier one. Every other certificate of
+  the name stays, also when the command shows nothing: the steps never find a
+  certificate by its name, and never by exclusion.
 - **What counts.** `windows_trust.replaced` returns a recorded root only when
   it has the fixed shape of this product's root (`_shape`: the name,
   self-signed, path length 0, server-authentication use only, critical name
@@ -597,8 +603,8 @@ until a launcher refresh. So a PC with an earlier launcher records a replaced
 root and does not delete it; a later launcher deletes it at an uninstall, or at
 the open after the next `force`. A root that was replaced before this change is
 on no record and stays; nothing tells it from another installation's root of
-the same name, and the guide says so. The deployment guide has the steps to
-delete a root by hand, by its thumbprint. No launcher-side code, of any
+the same name, so the guide tells the person to leave it. A delete uninstall
+removes the record with the folder `app`. No launcher-side code, of any
 version, lists the TLS folder, so the new file does not disturb an earlier
 launcher (searched in the history of the TLS, trust, setup and launcher
 modules). Not shown: the Windows deletion question itself on a person's

@@ -229,12 +229,13 @@ def _setup_tls(data_dir: Path, mode: str) -> None:
     from .deployment import load_server_config
     config = load_server_config(data_dir)
     if mode == "status":
-        print("Local CA:", "configured" if ca_bytes(data_dir) else "not configured")
+        configured = bool(ca_bytes(data_dir))
+        print("Local CA:", "configured" if configured else "not configured")
         print("TLS:", config["tls"]["method"])
         print("TLS listener:", "ready" if tls_ready(data_dir, config) else "not configured or not startable")
         print("CA SHA-256 fingerprint:", ca_fingerprint(data_dir) or "not configured")
         if browser_entry.is_windows():
-            _windows_roots(data_dir)
+            _windows_roots(data_dir, configured)
         return
     stopped = ()
     if browser_entry.is_windows():
@@ -258,23 +259,28 @@ def _setup_tls(data_dir: Path, mode: str) -> None:
                   "Amplifier no longer uses it.")
 
 
-def _windows_roots(data_dir: Path) -> None:
+def _windows_roots(data_dir: Path, configured: bool) -> None:
     """`setup-tls status` on Windows: the thumbprints that find Amplifier's certificates in Windows.
 
     Read-only. Only a key-less identity: for another identity Amplifier added
     nothing to Windows. Windows shows a certificate's SHA-1 thumbprint, not
-    the SHA-256 fingerprint above.
+    the SHA-256 fingerprint above. What cannot be read is said, never shown
+    as "none": a person deletes a certificate in Windows by these lines.
     """
     from . import windows_tls, windows_trust
     try:
         identity = windows_tls.keyless_identity(data_dir)
-    except (OSError, ValueError):
-        identity = None
+    except (OSError, ValueError) as error:
+        # No certificate at all is said above ("Local CA: not configured").
+        if configured or not isinstance(error, FileNotFoundError):
+            print("Thumbprint in Windows (SHA-1): Amplifier could not read its certificate")
+        return
     if identity is None:
         return
     print("Thumbprint in Windows (SHA-1):", windows_trust.thumbprint(identity[0]))
     try:
-        earlier = windows_trust.replaced(data_dir, identity[0])
+        # Strict: a record that is too long to read is not "no earlier certificate".
+        earlier = windows_trust.replaced(data_dir, identity[0], strict=True)
     except (OSError, ValueError, RuntimeError):
         print("Earlier certificates that Windows still holds: Amplifier could not read them")
         return

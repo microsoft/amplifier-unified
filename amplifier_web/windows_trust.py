@@ -35,6 +35,7 @@ _READ_ONLY = 0x00008000            # CERT_STORE_READONLY_FLAG
 _ADD_REPLACE_INHERIT = 5           # CERT_STORE_ADD_REPLACE_EXISTING_INHERIT_PROPERTIES
 _FIND_EXISTING = 0x000D0000        # CERT_FIND_EXISTING
 _CANCELLED = 1223                  # ERROR_CANCELLED: the person selected No
+_NOT_FOUND = 0x80092004            # CRYPT_E_NOT_FOUND: the search ended, and the store does not hold it
 _DISABLE_USER_ROOTS = 0x1          # CERT_PROT_ROOT_DISABLE_CURRENT_USER_FLAG
 
 
@@ -201,12 +202,22 @@ def _find(api, handle, context):
 
 
 def contains(der, *, store="ROOT"):
-    """Is this exact certificate in the person's view of the store?"""
+    """Is this exact certificate in the person's view of the store?
+
+    False is Windows' own answer "not found". Windows returns nothing also
+    for a search that failed, and that is no answer: it raises OSError. A
+    caller must never read a failed search as "Windows does not hold it".
+    """
     with _open(der, store, write=False) as (api, handle, context):
+        C.set_last_error(0)
         found = _find(api, handle, context)
         if found:
             api.CertFreeCertificateContext(found)
-        return bool(found)
+            return True
+        code = C.get_last_error() & 0xFFFFFFFF
+        if code != _NOT_FOUND:
+            raise OSError(f"Windows did not complete the certificate search (error 0x{code:08X})")
+        return False
 
 
 def _dialog_windows():
@@ -345,7 +356,7 @@ def _own_shape(der):
     return True
 
 
-def replaced(home, current=None, *, store="ROOT"):
+def replaced(home, current=None, *, store="ROOT", strict=False):
     """Roots (DER) that this installation replaced and that Windows still holds for this person.
 
     Only `setup-tls force` writes the record, and the record only names
@@ -353,9 +364,13 @@ def replaced(home, current=None, *, store="ROOT"):
     product's root and the store holds exactly that certificate. `current`
     is never returned: a `force` that stopped part-way records the root that
     is still in use. Oldest first. Read-only; Windows asks nothing here.
+
+    A record that is too long to read names no candidate: nothing is removed
+    on a guess. With `strict` it raises ValueError instead, for a caller that
+    tells the person what it read.
     """
     from .windows_tls import replaced_roots
-    return [der for der in replaced_roots(home)
+    return [der for der in replaced_roots(home, strict=strict)
             if der != current and _own_shape(der) and contains(der, store=store)]
 
 

@@ -189,9 +189,14 @@ def test_candidate_checks_the_shape_of_a_saved_root(saved):
 class Store:
     """The crypt32 calls this module makes, over an in-memory set."""
 
-    def __init__(self, *, answer=True, error=5, keeps=True, openable=True):
+    NOT_FOUND = 0x80092004 - (1 << 32)  # CRYPT_E_NOT_FOUND, in the signed form that ctypes gives.
+
+    def __init__(self, *, answer=True, error=5, keeps=True, openable=True, search=None):
         self.held, self.answer, self.error, self.keeps, self.openable = set(), answer, error, keeps, openable
         self.opens, self.questions, self.raised = [], [], []
+        # `search`: the error of a search that fails ("silent": it sets none), else None.
+        # `last`: Windows' last-error value for this thread.
+        self.search, self.last = search, 0
 
     @contextmanager
     def open(self, der, store, *, write):
@@ -201,7 +206,14 @@ class Store:
         yield self, "store", der
 
     def CertFindCertificateInStore(self, handle, encoding, flags, kind, context, previous):
-        return context if context in self.held else None
+        if self.search is not None:  # The search itself failed. Windows returns nothing, as for "not found".
+            if self.search != "silent":
+                self.last = self.search
+            return None
+        if context in self.held:
+            return context
+        self.last = self.NOT_FOUND
+        return None
 
     def CertFreeCertificateContext(self, context):
         return True
@@ -211,12 +223,16 @@ class Store:
         self.questions.append("add")
         if self.answer and self.keeps:
             self.held.add(context)
+        if not self.answer:
+            self.last = self.error
         return bool(self.answer)
 
     def CertDeleteCertificateFromStore(self, context):
         self.questions.append("delete")
         if self.answer and self.keeps:
             self.held.discard(context)
+        if not self.answer:
+            self.last = self.error
         return bool(self.answer)
 
 
@@ -228,7 +244,8 @@ def store(monkeypatch):
         monkeypatch.setattr(trust, "_find", lambda api, handle, context:
                             api.CertFindCertificateInStore(handle, 0, 0, 0, context, None))
         monkeypatch.setattr(trust, "_raise_dialogs", lambda done: fake.raised.append(done.wait(5)))
-        monkeypatch.setattr(trust.C, "get_last_error", lambda: fake.error, raising=False)
+        monkeypatch.setattr(trust.C, "get_last_error", lambda: fake.last, raising=False)
+        monkeypatch.setattr(trust.C, "set_last_error", lambda value: setattr(fake, "last", value), raising=False)
         return fake
     return make
 
@@ -241,6 +258,50 @@ def test_add_asks_windows_once_and_confirms_the_store_holds_the_root(store):
     # Already trusted: no question, no window to raise.
     assert trust.add_root(b"root") == "present"
     assert fake.questions == ["add"] and fake.raised == [True]
+
+
+def test_only_windows_own_answer_not_found_counts_as_absence(store, monkeypatch):
+    fake = store()
+    assert trust.contains(b"root") is False  # Windows' own answer.
+    fake.held.add(b"root")
+    assert trust.contains(b"root") is True
+    # A search that failed returns nothing too. That is no answer, whatever its error is.
+    for error in (5, 8, 0x80070057, 0):
+        fake = store(search=error)
+        fake.held.add(b"root")
+        with pytest.raises(OSError, match="did not complete the certificate search"):
+            trust.contains(b"root")
+    # Also when it set no error, and "not found" is left from an earlier search.
+    fake = store(search="silent")
+    fake.held.add(b"root")
+    fake.last = fake.NOT_FOUND
+    with pytest.raises(OSError, match="did not complete the certificate search"):
+        trust.contains(b"root")
+    # A root whose search failed is listed for no removal, and an uninstall's list raises nothing.
+    held = identity()[0].public_bytes(DER)
+    fake.held.add(held)
+    monkeypatch.setattr(wt, "keyless_identity", lambda home: (held, b"leaf"))
+    monkeypatch.setattr(wt, "replaced_roots", lambda home, strict=False: [held])
+    assert trust.held_roots("home") == []
+    with pytest.raises(OSError):
+        trust.replaced("home")
+    assert fake.questions == [] and not any(write for _, write in fake.opens)
+
+
+def test_a_record_that_is_too_long_names_no_candidate_and_is_an_error_only_for_a_strict_reader(store, monkeypatch):
+    store()
+    asked = []
+
+    def record(home, strict=False):
+        asked.append(strict)
+        if strict:
+            raise ValueError("Windows private file exceeds read limit")
+        return []
+    monkeypatch.setattr(wt, "replaced_roots", record)
+    assert trust.replaced("home", b"current") == [] and asked == [False]  # The launcher and an uninstall.
+    with pytest.raises(ValueError):
+        trust.replaced("home", b"current", strict=True)                   # A caller that says what it read.
+    assert asked == [False, True]
 
 
 @pytest.mark.parametrize("options,expected", [
@@ -306,7 +367,8 @@ def test_replaced_names_only_recorded_roots_of_the_products_shape_that_windows_h
     fake = store()
     held, gone, current = (identity()[0].public_bytes(DER) for _ in range(3))
     foreign = wt._new_ca()[0].public_bytes(DER)  # Not the product's shape, and Windows holds it.
-    monkeypatch.setattr(wt, "replaced_roots", lambda home: [held, gone, foreign, current, b"not a certificate"])
+    monkeypatch.setattr(wt, "replaced_roots",
+                        lambda home, strict=False: [held, gone, foreign, current, b"not a certificate"])
     fake.held.update({held, foreign, current, b"not a certificate"})
     assert trust.replaced("home", current) == [held]
     # Read-only: Windows asked nothing, and the store was never opened for a change.
@@ -325,7 +387,7 @@ def test_held_roots_lists_the_current_root_first_and_never_raises(store, monkeyp
             raise state[name]
         return state[name]
     monkeypatch.setattr(wt, "keyless_identity", lambda home: read("identity"))
-    monkeypatch.setattr(wt, "replaced_roots", lambda home: read("record"))
+    monkeypatch.setattr(wt, "replaced_roots", lambda home, strict=False: read("record"))
     fake.held.update({current, older})
     assert trust.held_roots("home") == [current, older]
     # The person answered No to the new root, or did not open Amplifier after `force`.
@@ -408,12 +470,15 @@ def test_native_replaced_roots_are_found_and_removed_in_a_private_throwaway_stor
     current, first, second, never_added = (identity()[0].public_bytes(DER) for _ in range(4))
     foreign = wt._new_ca()[0].public_bytes(DER)  # Not the product's shape; the store holds it.
     monkeypatch.setattr(wt, "keyless_identity", lambda home: (current, b"leaf"))
-    monkeypatch.setattr(wt, "replaced_roots", lambda home: [first, second, never_added, foreign, current])
+    monkeypatch.setattr(wt, "replaced_roots",
+                        lambda home, strict=False: [first, second, never_added, foreign, current])
     try:
         for der in (current, first, second, foreign):
             assert trust.add_root(der, store=name) == "added"
         assert trust.replaced("home", current, store=name) == [first, second]
         assert trust.held_roots("home", store=name) == [current, first, second]
+        # "Not found" is an answer of the real store, not an error: for a store that holds other certificates.
+        assert trust.contains(never_added, store=name) is False
         assert trust.forget_roots([first, second], store=name) == "removed"
         assert trust.replaced("home", current, store=name) == []
         # The current root stays, and so does a certificate that is not this product's.

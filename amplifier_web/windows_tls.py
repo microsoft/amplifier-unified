@@ -427,15 +427,22 @@ def _certificates(content):
     return found
 
 
-def _recorded(pinned):
+def _recorded(pinned, *, strict=False):
     """Certificates (DER) of the replaced-roots record, oldest first.
 
-    For the readers. No record, or one that is too long to read, gives an
-    empty list: nothing is removed on a guess.
+    For the readers. No record gives an empty list. So does a record that is
+    too long to read: nothing is removed on a guess. With `strict` such a
+    record raises ValueError instead. For this fixed name and limit the
+    private-file read raises ValueError only for that length; a refused
+    owner or ACL is an OSError and is never read as "no record".
     """
     try:
         return _certificates(pinned.read_private(_REPLACED, limit=_LIMIT))
-    except (FileNotFoundError, ValueError):
+    except FileNotFoundError:
+        return []
+    except ValueError:
+        if strict:
+            raise
         return []
 
 
@@ -447,7 +454,11 @@ def _encoded(roots):
 
 
 def _held(der):
-    """Does Windows still hold this root for the person? Also True when Windows cannot be asked."""
+    """Can Windows still hold this root for the person?
+
+    False only for Windows' own answer "not found". A store that cannot be
+    opened and a search that failed are no answer: the root can be there.
+    """
     from . import windows_trust
     try:
         return windows_trust.contains(der)
@@ -480,8 +491,9 @@ def _remember_replaced(pinned, certificate_bytes):
             unchanged + "Its record of earlier certificates is too long to read:\n"
             + str(pinned.path / _REPLACED) + "\n\n"
             "Amplifier does not write a record of that length. Move the file to another folder, then run "
-            "setup-tls force again. Amplifier then no longer knows the earlier certificates. "
-            "These steps say how to delete them in Windows:\n" + _REPLACED_GUIDE) from None
+            "setup-tls force again. Amplifier then no longer knows the earlier certificates, and Windows "
+            "keeps the ones that it holds. Nobody can use them: no signing key exists for them. More:\n"
+            + _REPLACED_GUIDE) from None
     kept = _certificates(content) if content is not None else []
     if der in kept:
         return
@@ -500,14 +512,15 @@ def _remember_replaced(pinned, certificate_bytes):
     pinned.publish_private(_REPLACED, _encoded(kept), replace=content is not None)
 
 
-def replaced_roots(data_dir):
+def replaced_roots(data_dir, *, strict=False):
     """Roots (DER) that `setup-tls force` replaced in this installation, oldest first.
 
     Only public certificates are read. The list can name a root that Windows
     never held, and the current root after a `force` that stopped part-way.
+    `strict`: a record that is too long to read raises ValueError (see _recorded).
     """
     with _storage(data_dir) as pinned:
-        return _recorded(pinned)
+        return _recorded(pinned, strict=strict)
 
 
 def setup(data_dir, config, *, force=False):
@@ -537,7 +550,6 @@ def setup(data_dir, config, *, force=False):
                 # explicit request replaces the whole identity; Windows must
                 # confirm the new root, and other devices must import it.
                 # First keep the replaced root: Windows may still trust it.
-                _remember_replaced(pinned, contents["ca.crt"])
                 _publish_identity(pinned, config, {name: value is not None for name, value in contents.items()})
                 configured = {**config, "tls": {"method": "ca", **_LAYOUT}}
                 save_server_config(data_dir, configured)

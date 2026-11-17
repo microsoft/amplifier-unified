@@ -487,8 +487,8 @@ PC.
   it still holds. That is normally two questions. Amplifier's message before
   them gives the number of questions. It gives the thumbprint of the new
   certificate and of up to five earlier ones.
-- **No** to a deletion keeps that certificate. Windows asks about it again the
-  next time that it asks you to install Amplifier's certificate, for example
+- **No** to a deletion keeps that certificate. Windows asks about it again
+  after your next **Yes** to install Amplifier's certificate, for example
   after the next `setup-tls force`. It also asks at an uninstall.
 - When you uninstall Amplifier, Windows asks one question for each of
   Amplifier's certificates that it holds: the current one and each earlier one.
@@ -503,14 +503,9 @@ PC.
   certificate and says so. Delete earlier certificates with the steps below,
   then run the command again.
 
-Two kinds of earlier certificate stay until you delete them yourself:
-
-- one that a version before this change replaced: no file names it;
-- one on a PC whose Start-menu entry is from a setup file before this change.
-  The file names it, and Windows asks only the first question. An uninstall
-  with a later Start-menu entry asks about it.
-
-**To see which certificates are Amplifier's**, run:
+**To see which certificates are Amplifier's**, run this. Use the full command
+of [Before you start on a Windows host](#before-you-start-on-a-windows-host)
+in place of `amplifier-unified`.
 
 ```
 amplifier-unified setup-tls status
@@ -526,7 +521,8 @@ Earlier certificates that Windows still holds: 1
 ```
 
 The first line is the certificate that Amplifier uses now. Keep it. Each line
-below the count is an earlier certificate of this installation.
+below the count is an earlier certificate of this installation that Windows
+still holds. You can delete those, and only those.
 
 **To delete an earlier certificate yourself:**
 
@@ -535,18 +531,31 @@ below the count is an earlier certificate of this installation.
 3. Double-click a certificate named "Amplifier Unified (this PC only)". Select
    the **Details** tab and look at **Thumbprint**. Windows can show the 40
    characters in small letters and without spaces.
-4. If that thumbprint is one of the earlier certificates in the output above,
-   close the window and delete the certificate. Windows asks you to confirm.
-   Do not delete a certificate because of its name only.
+4. If that thumbprint is on a line below "Earlier certificates that Windows
+   still holds" in the output above, close the window and delete the
+   certificate. Windows asks you to confirm.
 5. Do steps 3 and 4 for each certificate of that name.
 
-A certificate of that name whose thumbprint is not in the output is one of two
-things, and Amplifier cannot tell which. It can be a certificate that a version
-before this change replaced. It can be the certificate of another Amplifier
-installation of your account, in another folder. If your account has more than
-one installation, run the status command for each one, with its `--data-dir`.
-Keep the certificate of each "Thumbprint in Windows" line. You can delete the
-others of that name.
+Leave every other certificate, also one of the same name. Do not delete a
+certificate because of its name. Do not delete one because the command shows
+no thumbprint, or because it says that it could not read something: nothing is
+then known about that certificate.
+
+A certificate of that name that is on no such line can be the one that an
+Amplifier installation uses now, in this folder or in another folder of your
+account. It can also be one that a version before this change replaced. No
+file names those, and Amplifier cannot tell the two apart. A certificate that
+stays does no harm: no signing key exists for it, and it names only addresses
+of this PC.
+
+Two kinds of earlier certificate stay after `setup-tls force`:
+
+- one that a version before this change replaced. No file names it, and the
+  steps above do not delete it.
+- one on a PC whose Start-menu entry is from a setup file before this change.
+  The file names it, and Windows asks only the first question. The status
+  command lists it, so the steps above delete it. An uninstall with a later
+  Start-menu entry also asks about it.
 
 If you deleted the certificate that Amplifier uses now, open Amplifier from the
 Start menu. Windows asks whether to install it again. Select **Yes**.

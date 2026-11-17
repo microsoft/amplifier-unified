@@ -453,7 +453,7 @@ def test_only_roots_that_windows_trusts_for_this_installation_count_as_its_certi
     from amplifier_web import windows_consumer as consumer, windows_tls, windows_trust
     state = {"identity": (b"root", b"leaf"), "trusted": {b"root"}, "record": []}
     monkeypatch.setattr(windows_tls, "keyless_identity", lambda home: state["identity"])
-    monkeypatch.setattr(windows_tls, "replaced_roots", lambda home: state["record"])
+    monkeypatch.setattr(windows_tls, "replaced_roots", lambda home, strict=False: state["record"])
     monkeypatch.setattr(windows_trust, "_own_shape", lambda der: der != b"another shape")
     def contains(der, *, store="ROOT"):
         if isinstance(state["trusted"], Exception):
