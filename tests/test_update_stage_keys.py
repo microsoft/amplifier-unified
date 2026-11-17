@@ -1,6 +1,7 @@
 """Credential lifetimes use synthetic files only; no app or model is launched."""
 import asyncio
 import os
+from contextlib import contextmanager
 from pathlib import Path
 import shutil
 import stat
@@ -444,8 +445,83 @@ def native_refusal(home, stage):
     return steps
 
 
+def token_sids():
+    """(TokenUser, TokenOwner) of this process as text. TokenOwner owns each new object."""
+    import ctypes as C
+    from amplifier_web import windows_files as wf
+    api = wf._API()
+    token = wf.HANDLE()
+    api.ok(api.OpenProcessToken(api.GetCurrentProcess(), 8, C.byref(token)))
+    try:
+        def sid(kind):
+            size = wf.DWORD()
+            api.GetTokenInformation(token, kind, None, 0, C.byref(size))
+            buffer = C.create_string_buffer(size.value)
+            api.ok(api.GetTokenInformation(token, kind, buffer, size, C.byref(size)))
+            return api.sid_text(C.cast(buffer, C.POINTER(wf.PVOID))[0])
+        return sid(1), sid(4)
+    finally:
+        api.close(token)
+
+
+@contextmanager
+def ordinary_default_owner():
+    """New objects belong to the account, as in a process that is not elevated.
+
+    The hosted runner's process is elevated. Windows then gives each new object
+    to BUILTIN\\Administrators (TokenOwner), and the private-file boundary
+    refuses that owner: also for the product's own reader of a stage (run
+    44111212512). Setup refuses an elevated token, so an installation does not
+    run like that. Only the default owner of NEW objects changes here, for this
+    process, and it is put back. No privilege, group, product check or product
+    code changes: the stage is still made by the product's plain mkdir and copy.
+    """
+    import ctypes as C
+    from ctypes import wintypes as W
+    advapi = C.WinDLL('advapi32', use_last_error=True)
+    kernel = C.WinDLL('kernel32', use_last_error=True)
+    kernel.GetCurrentProcess.restype = W.HANDLE
+    kernel.CloseHandle.argtypes = [W.HANDLE]
+    advapi.OpenProcessToken.argtypes = [W.HANDLE, W.DWORD, C.POINTER(W.HANDLE)]
+    advapi.GetTokenInformation.argtypes = [W.HANDLE, W.DWORD, C.c_void_p, W.DWORD, C.POINTER(W.DWORD)]
+    advapi.SetTokenInformation.argtypes = [W.HANDLE, W.DWORD, C.c_void_p, W.DWORD]
+    token = W.HANDLE()
+    # TOKEN_QUERY | TOKEN_ADJUST_DEFAULT
+    if not advapi.OpenProcessToken(kernel.GetCurrentProcess(), 0x0088, C.byref(token)):
+        raise C.WinError(C.get_last_error())
+
+    def information(kind):
+        size = W.DWORD()
+        advapi.GetTokenInformation(token, kind, None, 0, C.byref(size))
+        buffer = C.create_string_buffer(size.value)
+        if not advapi.GetTokenInformation(token, kind, buffer, size, C.byref(size)):
+            raise C.WinError(C.get_last_error())
+        return buffer
+
+    def set_owner(buffer):
+        # TOKEN_USER and TOKEN_OWNER both begin with the SID pointer.
+        sid = C.c_void_p.from_buffer(buffer)
+        if not advapi.SetTokenInformation(token, 4, C.byref(sid), C.sizeof(sid)):
+            raise C.WinError(C.get_last_error())
+
+    try:
+        user, owner = information(1), information(4)
+        set_owner(user)
+        try:
+            yield
+        finally:
+            set_owner(owner)
+    finally:
+        kernel.CloseHandle(token)
+
+
+@contextmanager
+def no_change():
+    yield
+
+
 @pytest.fixture
-async def native_product_stage_keys(monkeypatch):
+async def native_product_stage(monkeypatch):
     """Use the real setup writer, manager directory call and install snapshot."""
     from types import SimpleNamespace
     from amplifier_web import setup, windows_files as wf
@@ -455,12 +531,15 @@ async def native_product_stage_keys(monkeypatch):
     # Every directory/ACL/file write, copy, refresh and read is the real product.
     monkeypatch.setattr(setup, 'os', SimpleNamespace(environ={}))
     monkeypatch.setattr(config, '_KEY_FILE_VALUES', {})
-    home = wf.address(Path.home() / ('.a9-product-' + uuid.uuid4().hex))
-    updates = home / 'updates'
-    live = home / 'live-shared'
-    stage = updates / 'releases' / ('a' * 32)
-    owner = SimpleNamespace(store=SimpleNamespace(shared_home=live))
-    try:
+    homes = []
+
+    async def make(*, ordinary):
+        home = wf.address(Path.home() / ('.a9-product-' + uuid.uuid4().hex))
+        homes.append(home)
+        updates = home / 'updates'
+        live = home / 'live-shared'
+        stage = updates / 'releases' / ('a' * 32)
+        owner = SimpleNamespace(store=SimpleNamespace(shared_home=live))
         # UpdateManager.__init__ uses this exact private-directory boundary.
         with wf.directory(updates, owned_root=home, create=True):
             pass
@@ -468,24 +547,29 @@ async def native_product_stage_keys(monkeypatch):
         # (setup.py), including its private directory, lock and publication.
         setup.SetupManager._keys(owner, {'FIXTURE_A9_PRODUCT_KEY': 'synthetic-original'})
         config.write_private(live / 'settings.yaml', '{}\n', owned_root=live)
-        # install() deliberately uses ordinary mkdir; do not replace this with
-        # a private-directory writer or directly publish the staged key.
-        stage.mkdir(parents=True, mode=0o700)
-        proof = {'candidate': stage.name, 'activeBefore': None,
-                 'directoryIdentity': [stage.stat().st_dev, stage.stat().st_ino],
-                 'boundary': 'copy-only', 'copySettled': True}
-        await storage.snapshot_shared_config(proof, live, stage / 'shared-config')
+        with (ordinary_default_owner() if ordinary else no_change()):
+            # install() deliberately uses ordinary mkdir; do not replace this with
+            # a private-directory writer or directly publish the staged key.
+            stage.mkdir(parents=True, mode=0o700)
+            proof = {'candidate': stage.name, 'activeBefore': None,
+                     'directoryIdentity': [stage.stat().st_dev, stage.stat().st_ino],
+                     'boundary': 'copy-only', 'copySettled': True}
+            await storage.snapshot_shared_config(proof, live, stage / 'shared-config')
         assert proof['copySettled'] is True, 'The real snapshot copy did not settle'
         assert (stage / 'shared-config/keys.env').is_file(), 'The product snapshot did not copy keys'
-        yield home, live, stage, owner
+        return home, live, stage, owner
+
+    try:
+        yield make
     finally:
-        if home.exists():
-            shutil.rmtree(home)
+        for home in homes:
+            if home.exists():
+                shutil.rmtree(home)
 
 
 @pytest.mark.skipif(os.name != 'nt', reason='requires native Windows product snapshot ACLs')
-async def test_native_windows_stage_keys_product_snapshot_removal(native_product_stage_keys):
-    home, live, stage, owner = native_product_stage_keys
+async def test_native_windows_stage_keys_product_snapshot_removal(native_product_stage):
+    home, live, stage, owner = await native_product_stage(ordinary=True)
     reason = storage.remove_stage_keys(home, stage)
     assert reason is None, f'Product mkdir/copy2 stage key removal returned {reason!r}: {native_refusal(home, stage)}'
     assert not (stage / 'shared-config/keys.env').exists(), 'Product snapshot key was retained'
@@ -493,11 +577,14 @@ async def test_native_windows_stage_keys_product_snapshot_removal(native_product
 
 
 @pytest.mark.skipif(os.name != 'nt', reason='requires native Windows product refresh and reader')
-async def test_native_windows_stage_keys_product_refresh_readback(native_product_stage_keys):
+async def test_native_windows_stage_keys_product_refresh_readback(native_product_stage):
     from amplifier_web import setup
     from amplifier_web.host.config import _read_keys
 
-    home, live, stage, owner = native_product_stage_keys
+    home, live, stage, owner = await native_product_stage(ordinary=True)
+    # The qualification's own reader accepts the product's copy before any change.
+    assert _read_keys(stage / 'shared-config/keys.env') == {'FIXTURE_A9_PRODUCT_KEY': 'synthetic-original'}, \
+        'Qualification reader did not see the copied synthetic keys'
     current = {'FIXTURE_A9_PRODUCT_KEY': 'synthetic-current'}
     setup.SetupManager._keys(owner, current)
     reason = storage.refresh_stage_keys(home, stage, live)
@@ -509,3 +596,32 @@ async def test_native_windows_stage_keys_product_refresh_readback(native_product
     assert reason is None, f'Refreshed product stage key removal returned {reason!r}'
     assert not (stage / 'shared-config/keys.env').exists(), 'Refreshed product key was retained'
     assert (stage / 'shared-config/settings.yaml').read_text() == '{}\n'
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='requires a native Windows process token')
+async def test_native_windows_stage_keys_with_this_process_default_owner(native_product_stage):
+    """What this process's own token gives, stated, not assumed.
+
+    With an ordinary token the copy is removed. With an elevated token Windows
+    owns the product's stage folders through BUILTIN\\Administrators: the
+    boundary refuses them, for the removal and for the product's own reader
+    alike. The removal then reports a refusal, deletes nothing and raises
+    nothing, so a later pass can try again.
+    """
+    from amplifier_web.host.config import _read_keys
+
+    user, default_owner = token_sids()
+    home, live, stage, owner = await native_product_stage(ordinary=False)
+    key = stage / 'shared-config/keys.env'
+    reason = storage.remove_stage_keys(home, stage)
+    if default_owner == user:
+        assert reason is None, f'Removal with an ordinary token returned {reason!r}: {native_refusal(home, stage)}'
+        assert not key.exists()
+        return
+    assert default_owner == 'S-1-5-32-544', 'This token has a default owner that the case does not know'
+    assert reason == 'refused', f'Removal with an elevated default owner returned {reason!r}'
+    assert key.is_file() and (stage / 'shared-config/settings.yaml').read_text() == '{}\n'
+    with pytest.raises(PermissionError, match='trusted ownership'):
+        _read_keys(key)
+    assert storage.refresh_stage_keys(home, stage, live) == 'refused'
+    assert key.is_file()
