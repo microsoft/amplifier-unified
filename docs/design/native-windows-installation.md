@@ -891,10 +891,12 @@ The rule:
 - An object that has no name when it is validated is `PrivateFileUnlinked`. It
   is not a hardlink, not an alias, and it is never accepted. The reader closes
   it, checks the pinned folders again, opens the name again and validates
-  everything again. The limits are 8 opens of one name and no new open after 2
-  seconds. The time limit is tested immediately before each new open, after
-  the wait and the pin check; a Windows call that already runs is not
-  interrupted. The waits between the opens are at most 0.162 seconds in total.
+  everything again. The limits are 8 attempts for one name, and no further
+  attempt begins after 2 seconds. The time limit is tested as the last step
+  before each further attempt, after the wait and the pin check. It decides
+  only whether an attempt begins: the first attempt has no time test, and the
+  time of the Windows calls of an attempt is not limited. The reader asks for
+  waits of at most 0.162 seconds in total; the system can make a wait longer.
 - A file that another process replaces during each of those attempts gives
   `PrivateFileUnsettled`. Its text says that the file did not settle.
 - A read returns the complete earlier file (validated before the replacement)
@@ -909,11 +911,13 @@ The rule:
   Nothing is known or accepted there about a file that has the name now.
 
 A reader that meets a removal (not a replacement) finds no file. While another
-handle still keeps the removed file, Windows can instead refuse the new open
-with "Access is denied" until that handle closes; this is as before, and the
-native case `test_file_removed_while_a_third_handle_keeps_it` prints which
-answer a runner gives. The reopening blocks its thread for the waits and for
-one pin check per further open.
+handle still keeps the removed file, Windows can refuse the new open with
+"Access is denied" until that handle closes (measured on a Windows runner).
+Windows gives that answer to each open of such a name, with or without this
+change. The reopening meets it once and does not try again. The native case
+`test_file_removed_while_a_third_handle_keeps_it` prints which answer a runner
+gives. The reopening blocks its thread for the waits and for
+one pin check per further attempt.
 
 Both new errors are `PermissionError` subclasses, so each earlier handler of a
 refusal still catches them. A handle that passed validation can lose its name

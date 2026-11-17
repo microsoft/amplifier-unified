@@ -719,7 +719,9 @@ class ReplacedObjectTests(unittest.TestCase):
 
     def test_file_that_never_settles_is_a_distinct_error_after_a_bounded_number_of_opens(self):
         api = self.API(*["replaced at the second check", "replaced in open"] * wf._REPLACED_ATTEMPTS)
-        with patch.object(wf.time, "sleep") as sleep, self.assertRaises(wf.PrivateFileUnsettled) as unsettled:
+        # A clock that stands still: only the count limit and the wait sequence act.
+        with patch.object(wf.time, "sleep") as sleep, patch.object(wf.time, "monotonic", return_value=0.0), \
+                self.assertRaises(wf.PrivateFileUnsettled) as unsettled:
             self.pinned(api).read_private("task-runtime.json", limit=64)
         self.assertEqual(len(api.handles), wf._REPLACED_ATTEMPTS)
         self.assertEqual(api.closed, api.handles)
@@ -1251,12 +1253,13 @@ class _Child:
         return line
 
     def stop(self):
-        """End the child. Return the lines that nobody read."""
+        """End the child. Return the lines that nobody read (10 seconds in total)."""
+        import time
         if self.process.poll() is None:
             self.process.kill()
         self.process.wait(timeout=10)
-        unread = []
-        while (line := self.line(10)) is not None:
+        unread, limit = [], time.monotonic() + 10
+        while (left := limit - time.monotonic()) > 0 and (line := self.line(left)) is not None:
             unread.append(line)
         for stream in (self.process.stdin, self.process.stdout):
             try:
@@ -1532,7 +1535,7 @@ class ReplacedWhileReadNativeTests(unittest.TestCase):
             print(f"FACT free-running reads={reads} opens={opens[0]} (opens above reads: the name was "
                   f"opened again) replacements={replacements} failures={len(failures)} "
                   f"kinds={dict(Counter(failures))}")
-            self.assertEqual(writer.process.wait(timeout=30), 0)
+            self.assertEqual(writer.process.wait(timeout=30), 0, writer.stop())
             self.assertEqual(failures[:3], [])
 
 

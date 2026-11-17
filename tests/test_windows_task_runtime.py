@@ -472,6 +472,8 @@ else:
 for _ in range(200):
     runner.phase("stopping")
 runner.phase("stopped")
+# The one line of output. Nothing reads this host's pipes while it runs, so
+# it must not write more than this line (and an error text at a failure).
 print(count, flush=True)
 """
 

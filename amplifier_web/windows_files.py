@@ -94,7 +94,8 @@ _MUTATION = 0x500D0156  # generic all/write, delete, owner/DACL, data/EA/attribu
 _KNOWN_MASK = 0xF01F01FF
 _MAX_CONTENT = 1024 * 1024
 # A reader that meets a replacement opens the name again: at most this many
-# opens of one name, and no new one after this many seconds.
+# attempts for one name, and no further attempt begins after this many seconds.
+# The first attempt has no time test.
 _REPLACED_ATTEMPTS = 8
 _REPLACED_SECONDS = 2.0
 
@@ -475,9 +476,10 @@ class PinnedDirectory:
         The returned handle was valid at its last check. It can lose its name
         later; it then still holds the complete file that was validated.
 
-        This call blocks its thread for the waits (at most 0.162 seconds in
-        total) and for one pin check per further open. Only a file that is
-        replaced again during each attempt reaches those limits.
+        This call blocks its thread for the waits and for one pin check per
+        further attempt. It asks for waits of at most 0.162 seconds in total;
+        the system can make a wait longer. Only a file that is replaced again
+        during each attempt reaches those limits.
         """
         deadline = time.monotonic() + _REPLACED_SECONDS
         for attempt in range(_REPLACED_ATTEMPTS):
@@ -487,9 +489,10 @@ class PinnedDirectory:
                     break
                 time.sleep(min(0.001 * 2 ** attempt, 0.05, remaining))
                 self._check()
-                # The wait and the pin check take time too. No open of the
-                # name starts at or after the limit. A Windows call that
-                # already runs is not interrupted.
+                # The wait and the pin check take time too, so the limit is
+                # tested again here, as the last step before a further
+                # attempt. It decides only whether an attempt begins: it does
+                # not limit the time of the Windows calls of an attempt.
                 if time.monotonic() >= deadline:
                     break
             try:
