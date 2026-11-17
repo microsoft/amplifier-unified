@@ -294,6 +294,14 @@ def test_a_replaced_root_counts_only_with_the_fixed_shape_of_the_products_root()
     assert not trust._own_shape(copy.sign(other, hashes.SHA256()).public_bytes(DER))
 
 
+def test_a_certificate_that_cannot_be_read_as_the_products_shape_is_not_one_and_stops_nothing(monkeypatch):
+    der = identity()[0].public_bytes(DER)
+    def unreadable(root):
+        raise KeyError("a reading error that is not a ValueError")
+    monkeypatch.setattr(trust, "_shape", unreadable)
+    assert trust._own_shape(der) is False
+
+
 def test_replaced_names_only_recorded_roots_of_the_products_shape_that_windows_holds(store, monkeypatch):
     fake = store()
     held, gone, current = (identity()[0].public_bytes(DER) for _ in range(3))

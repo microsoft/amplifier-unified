@@ -27,14 +27,15 @@ CODE_REDEEM_PATH = "/api/browser-entry/code/redeem"
 CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"  # 32 symbols: no 0, 1, I or O.
 CODE_LENGTH = 10
 _CODE = re.compile(f"[{CODE_ALPHABET}]{{{CODE_LENGTH}}}")
-# What a person does when the browser on this computer is not signed in. A PC
-# that was set up with the Windows setup file has no `amplifier-unified` on its
-# PATH; its Start-menu entry opens the browser. This code cannot tell which
-# kind of installation it serves, so the Windows text names both ways.
+# What a person does when the browser on this computer is not signed in, or
+# did not open. A PC that was set up with the Windows setup file has no
+# `amplifier-unified` on its PATH; its Start-menu entry opens the browser. This
+# code cannot tell which kind of installation it serves, so the Windows text
+# names both ways. macOS and Linux have no such entry.
 _REOPEN = {
     True: ("Open Amplifier from the Start menu: Amplifier Unified. "
            "If the Start menu has no such entry, run this: amplifier-unified open."),
-    False: "Run this again: amplifier-unified open.",
+    False: "To open Amplifier, run this: amplifier-unified open.",
 }
 # The line that `amplifier-unified open` prints after the browser accepted the
 # address. The Windows launcher reads it, because the exit status says nothing
@@ -63,7 +64,7 @@ def is_windows() -> bool:
 
 
 def reopen() -> str:
-    """The next step for a browser on this computer that is not signed in."""
+    """The next step when the browser on this computer is not signed in or did not open."""
     return _REOPEN[bool(is_windows())]
 
 

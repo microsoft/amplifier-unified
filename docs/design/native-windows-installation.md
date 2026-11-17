@@ -539,7 +539,8 @@ a certificate, and the earlier certificate's bytes were gone from disk.
   key-less identity, it adds the root that it replaces to
   `config/tls/replaced-roots.pem` (`windows_tls._remember_replaced`), under the
   TLS lock and through the private-file writer. The file holds public
-  certificates only, oldest first, at most 32. If the record cannot be
+  certificates only, oldest first. It must fit in one bounded read (64 KiB),
+  so the oldest goes when it does not: about 50 stay. If the record cannot be
   written, `force` stops and the identity is as it was. Only this command
   writes the file. A `force` that stopped part-way records the root that is
   still in use; a repeated `force` records it once.
@@ -556,12 +557,14 @@ a certificate, and the earlier certificate's bytes were gone from disk.
 - **At the next open.** The launcher's trust step reads the list before its
   message. With no replaced root the message and the one Windows question are
   as before. With N replaced roots the one message says that Windows asks N+1
-  questions, and gives the thumbprint of each certificate. After Windows added
-  the new root (the person's Yes), the launcher asks Windows to delete each
-  replaced root (`windows_trust.forget_roots`): one Windows question for each,
-  default No. A No to the new root, a refusal, or a root that was already in
-  the store asks about no replaced root. The normal case is two questions
-  after one `force`: install the new root, delete the earlier one.
+  questions, that the deletions come after the person's Yes to the first, and
+  gives the thumbprint of each certificate. After Windows added the new root
+  (the person's Yes), the launcher asks Windows to delete each replaced root
+  (`windows_trust.forget_roots`): one Windows question for each, default No.
+  A No to the new root or a refusal asks about no replaced root. When Windows
+  already holds the new root it asks nothing, so the message announces no
+  deletion and none is asked. The normal case is two questions after one
+  `force`: install the new root, delete the earlier one.
 - **After a No.** A replaced root that the person keeps is not asked about at
   an ordinary later open: the trust step runs only when the connection is not
   trusted. Nothing saves a No, so the open after the next `force` asks about

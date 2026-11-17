@@ -502,8 +502,8 @@ because the Start-menu entry of that PC cannot delete them:
 - one that a version before this change replaced;
 - one on a PC whose Start-menu entry is from a setup file before this change
   (Windows then asks only the first question);
-- one after more than 32 uses of `setup-tls force`: the file keeps the newest
-  32.
+- one after about 50 uses of `setup-tls force` with no deletion in between:
+  the file keeps the newest that fit in it (about 50).
 
 To delete them yourself:
 

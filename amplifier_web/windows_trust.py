@@ -335,10 +335,12 @@ def _own_shape(der):
     compared: it can be expired, and it names an earlier configuration.
     """
     from cryptography import x509
-    from cryptography.exceptions import InvalidSignature
     try:
         _shape(x509.load_der_x509_certificate(der))
-    except (ValueError, TypeError, x509.ExtensionNotFound, InvalidSignature):
+    except Exception:
+        # Every failure to read it as this shape means that it is not this
+        # shape (a signature of another kind, a repeated extension, ...). The
+        # answer False only leaves a certificate where it is.
         return False
     return True
 

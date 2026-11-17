@@ -549,7 +549,8 @@ def test_bounded_wait_ends_when_the_listener_answers_and_never_waits_on_an_answe
 def trust_step(tmp_path, monkeypatch):
     """The key-less trust step with every Windows effect recorded."""
     from amplifier_web import windows_trust
-    state = {"ready": [False, True], "candidate": b"saved-root", "add": "added", "policy": False, "replaced": []}
+    state = {"ready": [False, True], "candidate": b"saved-root", "add": "added", "policy": False,
+             "replaced": [], "held": False, "reads": []}
     events = []
     def settled(urls, pin):
         events.append(("check", urls, pin))
@@ -563,6 +564,13 @@ def trust_step(tmp_path, monkeypatch):
     monkeypatch.setattr(windows_trust, "user_roots_disabled", lambda: state["policy"])
     monkeypatch.setattr(windows_trust, "add_root", lambda der: events.append(("add", der)) or state["add"])
     monkeypatch.setattr(windows_trust, "thumbprint", lambda der: "71A44501 61589BA0 7236E01B 8BF48F15 5B4A7606")
+    def contains(der):
+        # Read-only: does Windows hold the new root already? Not an effect; kept apart in `reads`.
+        state["reads"].append(der)
+        if isinstance(state["held"], Exception):
+            raise state["held"]
+        return state["held"]
+    monkeypatch.setattr(windows_trust, "contains", contains)
     def replaced(home, current):
         assert home == tmp_path / "app"
         if isinstance(state["replaced"], Exception):
@@ -613,10 +621,12 @@ def test_after_force_one_message_names_both_questions_and_windows_is_asked_to_de
     assert options == {}  # Still one Amplifier message with one OK.
     assert text.startswith("Windows will now ask 2 questions.") and "one question" not in text
     assert 'First: whether to install a certificate named "Amplifier Unified (this PC only)". Select Yes.' in text
-    assert ("Then: whether to delete the earlier certificate of the same name. Amplifier made a new "
-            "certificate and no longer uses the earlier one. Select Yes.") in text
+    # The second question comes only after the person's Yes to the first, and the message says so.
+    assert ("Then, after your Yes: whether to delete the earlier certificate of the same name. Amplifier "
+            "made a new certificate and no longer uses the earlier one. Select Yes.") in text
     # Each thumbprint stands with its own question.
-    assert text.index("print of saved-root") < text.index("Then:") < text.index("print of earlier-root")
+    assert text.index("print of saved-root") < text.index("Then, after") < text.index("print of earlier-root")
+    assert state["reads"] == [b"saved-root"]
 
 
 def test_several_replaced_roots_are_counted_in_the_message_and_all_are_asked_about(trust_step, monkeypatch):
@@ -626,7 +636,7 @@ def test_several_replaced_roots_are_counted_in_the_message_and_all_are_asked_abo
     state["replaced"] = [b"one", b"two", b"three"]
     assert run() is True
     text = events[2][1]
-    assert text.startswith("Windows will now ask 4 questions.") and "Then, 3 times:" in text
+    assert text.startswith("Windows will now ask 4 questions.") and "Then, after your Yes, 3 times:" in text
     assert "Select Yes each time." in text
     assert all("print of " + name in text for name in ("saved-root", "one", "two", "three"))
     assert ("forget", [b"one", b"two", b"three"]) in events and "more" not in text
@@ -636,7 +646,7 @@ def test_several_replaced_roots_are_counted_in_the_message_and_all_are_asked_abo
     state.update(replaced=many, ready=[False, True])
     assert run() is True
     text = events[2][1]
-    assert text.startswith("Windows will now ask 9 questions.") and "Then, 8 times:" in text
+    assert text.startswith("Windows will now ask 9 questions.") and "Then, after your Yes, 8 times:" in text
     assert text.endswith("print of root-4\nand 3 more") and "print of root-5" not in text
     assert ("forget", many) in events
 
@@ -648,6 +658,17 @@ def test_a_replaced_root_is_deleted_only_after_windows_added_the_new_one(trust_s
     run()
     # No to the new root, a refusal, or no question at all: the earlier root is not touched.
     assert "add" in [event[0] for event in events] and "forget" not in [event[0] for event in events]
+
+
+@pytest.mark.parametrize("held", [True, OSError("the store cannot be read")])
+def test_no_deletion_is_announced_when_windows_asks_nothing_about_the_new_root(trust_step, held):
+    # Windows holds the new root already (and the connection is still not trusted), or the store
+    # cannot be read: the message stays the one about the new root, and no replaced root is touched.
+    state, events, run = trust_step
+    state.update(held=held, replaced=[b"earlier-root"], add="present" if held is True else "added")
+    run()
+    assert "Windows will now ask one question" in events[2][1] and "delete" not in events[2][1]
+    assert "forget" not in [event[0] for event in events]
 
 
 def test_a_record_that_cannot_be_read_does_not_stop_the_trust_step(trust_step):

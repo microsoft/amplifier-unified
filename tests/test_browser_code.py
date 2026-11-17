@@ -744,10 +744,37 @@ def test_the_next_step_for_a_browser_that_is_not_signed_in_is_true_on_each_platf
                        "If the Start menu has no such entry, run this: amplifier-unified open.")
     monkeypatch.setattr(entry, "is_windows", lambda: False)
     other = entry.reopen()
-    assert other == "Run this again: amplifier-unified open."  # macOS and Linux have no such entry.
+    assert other == "To open Amplifier, run this: amplifier-unified open."
+    assert "Start menu" not in other  # macOS and Linux have no such entry.
     for text in (windows, other):
-        assert "launcher" not in text and "candidate" not in text and "Start menu" in text or text is other
-    assert "Start menu" not in other
+        assert "launcher" not in text and "candidate" not in text and "host" not in text
+
+
+@pytest.mark.parametrize("windows,step", [
+    (True, "Open Amplifier from the Start menu: Amplifier Unified. "
+           "If the Start menu has no such entry, run this: amplifier-unified open."),
+    (False, "To open Amplifier, run this: amplifier-unified open.")])
+def test_a_browser_that_does_not_open_gets_the_next_step_of_its_platform(tmp_path, monkeypatch, windows, step):
+    from argparse import Namespace
+    from amplifier_web import cli, update_readiness
+    monkeypatch.setattr(entry, "is_windows", lambda: windows)
+
+    async def grant(*a, **kw):
+        return LOCAL + "/login#ticket=" + "a" * 43
+    monkeypatch.setattr(entry, "owner_browser_url", grant)
+    monkeypatch.setattr(update_readiness, "probe_targets", lambda host: ([LOCAL + "/api/health"], None))
+    monkeypatch.setattr(cli.webbrowser, "open", lambda url: False)
+    with pytest.raises(entry.BrowserEntryUnavailable) as refused:
+        cli._open_browser(Namespace(no_open=False), tmp_path, {"port": 8941, "public_origins": []})
+    assert str(refused.value) == "The browser did not accept the open request. " + step
+
+
+def test_a_refused_ticket_names_the_start_menu_first(host):
+    # The reply that a browser on the PC shows when its one-use ticket opens nothing.
+    refused = open_ticket(host, "a" * 43)
+    assert refused.status == 403 and auth.SESSION_COOKIE not in refused.cookies
+    assert refused.text == ("Open Amplifier from the Start menu: Amplifier Unified. "
+                            "If the Start menu has no such entry, run this: amplifier-unified open.")
 
 def test_remote_address_gets_the_code_form_and_the_local_page_is_unchanged(host):
     for at in (LOCAL, "https://localhost:8941", "https://[::1]:8941"):

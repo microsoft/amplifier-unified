@@ -31,10 +31,10 @@ from . import windows_files as files
 
 _LIMIT = 65536
 _LOCK = ".tls.lock"
-# Public certificates only, oldest first. The newest 32 are kept: each one is
-# about 1.3 KiB, and the whole record must stay inside one bounded read.
+# Public certificates only, oldest first. The whole record must stay inside
+# one bounded read, so only the newest that fit are kept: about 50, at about
+# 1.3 KiB each.
 _REPLACED = "replaced-roots.pem"
-_REPLACED_MAX = 32
 _BLOCK = re.compile(rb"-----BEGIN CERTIFICATE-----\r?\n[A-Za-z0-9+/=\r\n]+?-----END CERTIFICATE-----")
 _LAYOUT = {"cert": "config/tls/leaf.crt", "key": "config/tls/leaf.key"}
 # Windows shows this name three times in its confirmation; it is the only
@@ -432,14 +432,16 @@ def _remember_replaced(pinned, certificate_bytes):
     from cryptography import x509
     from cryptography.hazmat.primitives import serialization
     der = x509.load_pem_x509_certificate(certificate_bytes).public_bytes(serialization.Encoding.DER)
-    kept = [value for value in _recorded(pinned) if value != der] + [der]
-    kept = kept[-_REPLACED_MAX:]
+    kept = _recorded(pinned)
+    if der in kept:
+        return
+    kept.append(der)
     while True:
         content = b"".join(x509.load_der_x509_certificate(value).public_bytes(serialization.Encoding.PEM)
                            for value in kept)
         if len(content) <= _LIMIT or len(kept) == 1:
             break
-        kept = kept[1:]
+        kept = kept[1:]  # The oldest goes: a longer record could not be read at all.
     pinned.publish_private(_REPLACED, content, replace=True)
 
 

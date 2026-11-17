@@ -245,10 +245,13 @@ def review_browser_trust(root, urls, pin, *, fresh=None):
         owner_notice(blocked)
         return False
     try:
-        # Read-only. Roots that `setup-tls force` replaced and Windows still holds.
-        earlier = windows_trust.replaced(root / "app", certificate)
+        # Read-only. Roots that `setup-tls force` replaced and Windows still
+        # holds. None when Windows already holds the new root: it then asks
+        # nothing below, and the message must not announce a deletion.
+        earlier = ([] if windows_trust.contains(certificate)
+                   else windows_trust.replaced(root / "app", certificate))
     except (OSError, ValueError, RuntimeError):
-        earlier = []  # The record cannot be read now. An uninstall asks about them.
+        earlier = []  # The store or the record cannot be read now. An uninstall asks about them.
     purpose = ("Amplifier uses this certificate only for the private connection between your "
                "browser and Amplifier on this PC. It does not work for any website. Windows "
                "shows the same security warning for every certificate of this kind.\n\n"
@@ -262,11 +265,12 @@ def review_browser_trust(root, urls, pin, *, fresh=None):
             f"Windows will now ask {len(earlier) + 1} questions.\n\n"
             "First: whether to install a certificate named \"" + windows_trust.ROOT_NAME + "\". Select Yes.\n\n"
             + purpose + "\n\n"
-            + ("Then: whether to delete the earlier certificate of the same name. Amplifier made a new "
-               "certificate and no longer uses the earlier one. Select Yes.\n\n"
+            + ("Then, after your Yes: whether to delete the earlier certificate of the same name. Amplifier "
+               "made a new certificate and no longer uses the earlier one. Select Yes.\n\n"
                "Thumbprint in that Windows message:\n" if len(earlier) == 1 else
-               f"Then, {len(earlier)} times: whether to delete an earlier certificate of the same name. "
-               "Amplifier made a new certificate and no longer uses the earlier ones. Select Yes each time.\n\n"
+               f"Then, after your Yes, {len(earlier)} times: whether to delete an earlier certificate of the "
+               "same name. Amplifier made a new certificate and no longer uses the earlier ones. "
+               "Select Yes each time.\n\n"
                "Thumbprints in those Windows messages:\n")
             # At most five lines of them: the message must stay on the screen.
             + "\n".join(windows_trust.thumbprint(der) for der in earlier[:5])

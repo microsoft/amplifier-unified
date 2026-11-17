@@ -332,21 +332,30 @@ def test_a_repeated_force_after_a_partial_publication_records_the_same_root_once
     assert x509.load_pem_x509_certificate((pinned.path / "ca.crt").read_bytes()).public_bytes(
         serialization.Encoding.DER) == first
     state["fail"] = None
+    count = len(state["publications"])
     tls.setup_local_ca(root, sample[0], force=True)
-    assert wt.replaced_roots(root) == [first]  # ... and the repeated request records it once.
+    assert wt.replaced_roots(root) == [first]  # ... and the repeated request records it once:
+    assert (wt._REPLACED, True) not in state["publications"][count:]  # the record is not written again.
+    assert (pinned.path / wt._REPLACED).read_bytes().count(b"-----BEGIN CERTIFICATE-----") == 1
 
 
-def test_the_record_keeps_only_whole_certificates_and_only_the_newest(simulated, sample, monkeypatch):
+def test_the_record_keeps_only_whole_certificates_and_only_the_newest_that_one_read_holds(
+        simulated, sample, monkeypatch):
     root, pinned, state = simulated
     wt.create_identity(root, sample[0])
-    monkeypatch.setattr(wt, "_REPLACED_MAX", 2)
+    one = len((pinned.path / "ca.crt").read_bytes())
+    # Room for two certificates in one bounded read, not for three.
+    monkeypatch.setattr(wt, "_LIMIT", 2 * one + one // 2)
+    assert max(len(p.read_bytes()) for p in pinned.path.iterdir()) <= wt._LIMIT
     replaced = []
     for _ in range(3):
         replaced.append(wt.keyless_identity(root)[0])
         tls.setup_local_ca(root, sample[0], force=True)
+    # The oldest went. A record of all three could not be read at all.
     assert wt.replaced_roots(root) == replaced[-2:]
     path = pinned.path / wt._REPLACED
     record = path.read_bytes()
+    monkeypatch.setattr(wt, "_LIMIT", 65536)
     # Other text names nothing, also inside certificate marks; a whole certificate beside it still counts.
     path.write_bytes(b"-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\nother text\n" + record
                      + sample[1]["ca.key"] + record)
