@@ -948,9 +948,11 @@ async def maintenance(root, operation):
     except Unfinished:
         raise  # An uninstall step; already recorded.
     except (OSError, ValueError, RuntimeError, TimeoutError, metadata.PackageNotFoundError) as error:
-        # Write a record only into a folder that passed the installation check.
+        # Write a record only into a folder that passed the installation check. Never into the app's own
+        # folder when a journal is in the folder: an earlier removal can have deleted that folder.
         if checked is not None and operation != "status":
-            _record(checked, operation, step, error)
+            from . import windows_uninstall
+            _record(checked, operation, step, error, services=not windows_uninstall.unfinished(checked))
         raise Unfinished(step, error) from error
 
 def integrate(root):
