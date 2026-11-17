@@ -303,70 +303,113 @@ TASK = r"""
 $ErrorActionPreference = 'Stop'
 $p = [Console]::In.ReadToEnd() | ConvertFrom-Json
 $s = New-Object -ComObject 'Schedule.Service'; $s.Connect(); $f = $s.GetFolder('\')
-$d = $s.NewTask(0)
-$d.Principal.UserId = $p.sid; $d.Principal.LogonType = 3; $d.Principal.RunLevel = 0
-$d.Settings.DisallowStartIfOnBatteries = $false; $d.Settings.StopIfGoingOnBatteries = $false
-$a = $d.Actions.Create(0); $a.Path = $env:ComSpec; $a.Arguments = '/d /c echo ran> "' + $p.marker + '"'
 $out = @{}
-try { $t = $f.RegisterTaskDefinition($p.name, $d, 2, $p.sid, $null, 3, $null); $out.registered = $true }
-catch { $out.registered = $false; $out.registerHresult = $_.Exception.HResult }
-if ($out.registered) {
+if ($p.phase -eq 'register') {
+  $d = $s.NewTask(0)
+  $d.Principal.UserId = $p.sid; $d.Principal.LogonType = 3; $d.Principal.RunLevel = 0
+  $d.Settings.DisallowStartIfOnBatteries = $false; $d.Settings.StopIfGoingOnBatteries = $false
+  $tr = $d.Triggers.Create(9); $tr.UserId = $p.sid
+  $a = $d.Actions.Create(0); $a.Path = $env:ComSpec
+  $a.Arguments = '/d /c echo %SESSIONNAME% %TIME%>> "' + $p.marker + '"'
+  try { $t = $f.RegisterTaskDefinition($p.name, $d, 2, $p.sid, $null, 3, $null); $out.registered = $true }
+  catch { $out.registered = $false; $out.registerHresult = $_.Exception.HResult }
+} else {
+  $t = $f.GetTask($p.name)
+  $out.before = if (Test-Path $p.marker) { Get-Content -Raw $p.marker } else { $null }
   try { $null = $t.Run($null); $out.run = $true } catch { $out.run = $false; $out.runHresult = $_.Exception.HResult }
-  Start-Sleep -Seconds 8
+  Start-Sleep -Seconds 6
   $t = $f.GetTask($p.name)
   $out.state = [int]$t.State; $out.lastResult = [long]$t.LastTaskResult
-  $out.marker = Test-Path $p.marker
+  $out.after = if (Test-Path $p.marker) { Get-Content -Raw $p.marker } else { $null }
   $f.DeleteTask($p.name, 0)
 }
 $out | ConvertTo-Json -Compress
 """
 
 
-def probe_child(exchange):
+def probe_child(exchange, phase):
     """Runs as the standard user."""
+    import base64
     exchange = Path(exchange)
-    report = {"stage": "token"}
+    report = {"stage": "token", "phase": phase}
     try:
         report["token"] = token_facts()
         local = Path(os.environ["LOCALAPPDATA"])
-        report.update(stage="profile", localAppData=str(local), userProfile=os.environ.get("USERPROFILE"),
-                      temp=os.environ.get("TEMP"), python=sys.executable, cwd=os.getcwd(),
-                      githubActionsSet="GITHUB_ACTIONS" in os.environ)
-        (local / "standard-account-probe.txt").write_text("own profile is writable\n")
-        report["profileWritable"] = True
-        report["whoamiGroups"] = run(["whoami", "/groups", "/fo", "csv", "/nh"])
-        report["stage"] = "task"
         marker = local / "standard-account-task-ran.txt"
-        import base64
         report["task"] = run(["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand",
                               base64.b64encode(TASK.encode("utf-16-le")).decode("ascii")],
                              stdin=json.dumps({"sid": report["token"]["sid"], "marker": str(marker),
-                                               "name": "AmplifierStandardAccountProbe-" + uuid.uuid4().hex[:8]}))
+                                               "phase": phase, "name": "AmplifierStandardAccountProbe"}))
         report["stage"] = "complete"
     except BaseException as error:
         report.update(errorType=type(error).__name__, error=str(error)[-1000:])
-    (exchange / "child.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    (exchange / f"child-{phase}.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     return report["stage"] == "complete"
+
+
+# ---- A desktop session of the user: Remote Desktop to this same computer.
+class _Credential(C.Structure):
+    _fields_ = [("flags", W.DWORD), ("type", W.DWORD), ("target", W.LPWSTR), ("comment", W.LPWSTR),
+                ("written", W.FILETIME), ("blob_size", W.DWORD), ("blob", C.c_void_p), ("persist", W.DWORD),
+                ("attribute_count", W.DWORD), ("attributes", C.c_void_p), ("alias", W.LPWSTR), ("user", W.LPWSTR)]
+
+
+def remember(target, user, password, persist):
+    """Give Windows the password for one Remote Desktop target, in memory of this logon (persist 1)."""
+    blob = C.create_string_buffer(password.encode("utf-16-le"))
+    value = _Credential(0, 1, target, None, W.FILETIME(), len(password) * 2, C.cast(blob, C.c_void_p),
+                        persist, 0, None, None, user)
+    _adv.CredWriteW.argtypes = [C.POINTER(_Credential), W.DWORD]
+    if not _adv.CredWriteW(C.byref(value), 0):
+        raise _failed()
+
+
+def forget(target):
+    _adv.CredDeleteW.argtypes = [W.LPCWSTR, W.DWORD, W.DWORD]
+    return bool(_adv.CredDeleteW(target, 1, 0))
+
+
+def windows_of(pid):
+    """The texts of the windows of one process: what a person would read."""
+    user32 = C.WinDLL("user32", use_last_error=True)
+    callback = C.WINFUNCTYPE(W.BOOL, W.HWND, W.LPARAM)
+    found = []
+
+    def text(handle):
+        value, kind = C.create_unicode_buffer(512), C.create_unicode_buffer(128)
+        user32.GetWindowTextW(handle, value, 512)
+        user32.GetClassNameW(handle, kind, 128)
+        return kind.value, value.value
+
+    def child(handle, _):
+        found.append(("  child", *text(handle)))
+        return True
+
+    def top(handle, _):
+        owner = W.DWORD()
+        user32.GetWindowThreadProcessId(handle, C.byref(owner))
+        if owner.value == pid:
+            found.append(("top", *text(handle)))
+            user32.EnumChildWindows(handle, callback(child), 0)
+        return True
+
+    user32.GetWindowThreadProcessId.argtypes = [W.HWND, C.POINTER(W.DWORD)]
+    user32.EnumWindows(callback(top), 0)
+    return [list(item) for item in found if item[2]][:60]
+
+
+def session_of(name):
+    """The line of the user's desktop session, as Windows lists it; None when there is none."""
+    listing = run(["qwinsta.exe"])["stdout"]
+    return next((line.strip() for line in listing.splitlines() if f" {name.lower()} " in line.lower()), None)
 
 
 def probe():
     """Runs as the runner's account."""
     report = {"stage": "runner"}
     name = "amp-std-" + uuid.uuid4().hex[:6]
+    target, viewer = "TERMSRV/127.0.0.2", None
     try:
-        report["runner"] = {"token": token_facts(), "python": sys.executable,
-                            "sessions": run(["qwinsta.exe"]),
-                            "os": run(["powershell.exe", "-NoProfile", "-Command",
-                                       "Get-CimInstance Win32_OperatingSystem | Select-Object Caption,Version,"
-                                       "BuildNumber,ProductType | ConvertTo-Json -Compress"]),
-                            "remoteDesktop": run(["powershell.exe", "-NoProfile", "-Command",
-                                "@{deny=(Get-ItemProperty 'HKLM:\\System\\CurrentControlSet\\Control\\Terminal Server')"
-                                ".fDenyTSConnections; service=(Get-Service TermService).Status.ToString(); "
-                                "nla=(Get-ItemProperty 'HKLM:\\System\\CurrentControlSet\\Control\\Terminal Server\\"
-                                "WinStations\\RDP-Tcp').UserAuthentication; listening=[bool](Get-NetTCPConnection "
-                                "-LocalPort 3389 -State Listen -ErrorAction SilentlyContinue); "
-                                "mstsc=(Test-Path $env:SystemRoot\\System32\\mstsc.exe)} | ConvertTo-Json -Compress"])}
-        save("probe.json", report)
         exchange = evidence() / "exchange"
         exchange.mkdir(parents=True, exist_ok=True)
         script = exchange / Path(__file__).name
@@ -374,20 +417,55 @@ def probe():
         report["stage"] = "user"
         password = new_password()
         sid = create_user(name, password)
-        save("ownership.json", {"user": name, "sid": sid})
+        net = C.WinDLL("netapi32")
+        member = _Member(C.cast(account_sid(name), C.c_void_p))
+        report["remoteDesktopUsers"] = net.NetLocalGroupAddMembers(None, sid_name("S-1-5-32-555"), 0, C.byref(member), 1)
         report["user"] = {"name": name, "sid": sid, "localGroups": local_groups(name)}
-        grant = run(["icacls.exe", exchange, "/grant", f"*{sid}:(OI)(CI)M"])
-        report["grant"] = grant["exitCode"]
-        report["stage"] = "logon"
-        report["childExitCode"] = run_as(name, password, [sys.executable, "-I", "-B", script, "probe-child",
-                                                           "--exchange", exchange], cwd=exchange, timeout=180)
-        report["sessionsDuring"] = run(["qwinsta.exe"])
-        child = exchange / "child.json"
-        report["child"] = json.loads(child.read_text(encoding="utf-8")) if child.exists() else None
+        report["grant"] = run(["icacls.exe", exchange, "/grant", f"*{sid}:(OI)(CI)M"])["exitCode"]
+
+        def child(phase):
+            code = run_as(name, password, [sys.executable, "-I", "-B", script, "probe-child",
+                                           "--exchange", exchange, "--phase", phase], cwd=exchange, timeout=180)
+            path = exchange / f"child-{phase}.json"
+            return {"exitCode": code, "report": json.loads(path.read_text(encoding="utf-8")) if path.exists() else None}
+
+        report["stage"] = "register"
+        report["register"] = child("register")
+        report["stage"] = "remote desktop"
+        import winreg
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Terminal Server Client") as key:
+            winreg.SetValueEx(key, "AuthenticationLevelOverride", 0, winreg.REG_DWORD, 0)
+        computer = os.environ["COMPUTERNAME"]
+        remember(target, computer + "\\" + name, password, 1)
+        viewer = subprocess.Popen([os.path.join(os.environ["SystemRoot"], "System32", "mstsc.exe"),
+                                   "/v:127.0.0.2", "/w:1024", "/h:768"])
+        deadline, line = time.monotonic() + 120, None
+        while time.monotonic() < deadline and line is None:
+            time.sleep(3)
+            line = session_of(name)
+        report["session"] = line
+        report["viewerAlive"] = viewer.poll() is None
+        report["viewerWindows"] = windows_of(viewer.pid)
+        report["sessions"] = run(["qwinsta.exe"])["stdout"]
+        if line is not None:
+            time.sleep(25)  # The logon trigger, if Task Scheduler fires it.
+            report["sessionAfter"] = session_of(name)
+            report["viewerWindowsAfter"] = windows_of(viewer.pid)
+        report["stage"] = "run"
+        report["run"] = child("run")
         report["stage"] = "complete"
     except BaseException as error:
         report.update(errorType=type(error).__name__, error=str(error)[-1000:])
     finally:
+        line = session_of(name)
+        if line:
+            number = next((part for part in line.split() if part.isdigit()), None)
+            report["logoff"] = run(["logoff.exe", number])["exitCode"] if number else None
+            time.sleep(5)
+            report["sessionsAfterLogoff"] = run(["qwinsta.exe"])["stdout"]
+        if viewer is not None and viewer.poll() is None:
+            viewer.kill()
+        report["forgotten"] = forget(target)
         report["userRemoved"] = delete_user(name)
     save("probe.json", report)
     print(json.dumps(report, indent=2), flush=True)
@@ -398,8 +476,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("operation", choices=("probe", "probe-child"))
     parser.add_argument("--exchange")
+    parser.add_argument("--phase")
     args = parser.parse_args()
     if args.operation == "probe-child":
-        raise SystemExit(0 if probe_child(args.exchange) else 1)
+        raise SystemExit(0 if probe_child(args.exchange, args.phase) else 1)
     require_disposable_runner()
     raise SystemExit(0 if probe() else 1)
