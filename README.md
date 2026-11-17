@@ -37,7 +37,8 @@ the [platform and recovery instructions](docs/DEPLOYMENT.md#manual-installation)
 ### Windows 11 (preview)
 
 This is a preview. The setup file is not signed yet, so your browser asks you to
-confirm the download. You do not need WSL, Python, Git or a terminal.
+confirm the download. You do not need WSL, Python, Git or a terminal. The steps
+below describe Microsoft Edge.
 
 1. Download the setup file:
    [AmplifierUnifiedSetup-windows-x64.exe](https://github.com/microsoft/amplifier-unified/releases/latest/download/AmplifierUnifiedSetup-windows-x64.exe).
@@ -62,6 +63,19 @@ Your first message takes longer than later ones (about a minute in our test).
 Amplifier shows "Preparing chat…" during that time.
 
 To open Amplifier later, use the Start menu: **Amplifier Unified**.
+
+In these cases, setup or the first start does not finish. A message says what
+to do:
+
+- Setup says: "This Windows sign-in runs every program as administrator."
+  Sign in to Windows with a standard account, or turn User Account Control
+  on, and then run setup again.
+- Setup says that the path of the Amplifier folder "is too long for Windows"
+  (the limit is 59 characters). Use a Windows account with a shorter name.
+- In step 4, Amplifier says that "this PC's security settings do not let it
+  finish setting up its private connection to your browser". If your
+  organization manages this PC, ask its IT support to trust the certificate
+  file named in the message for your account.
 
 Limits of this preview:
 

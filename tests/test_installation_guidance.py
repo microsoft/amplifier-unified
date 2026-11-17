@@ -1,5 +1,6 @@
 """Keep manual interpreter selection aligned with the executable installer."""
 
+import ast
 from pathlib import Path
 import re
 import shlex
@@ -132,6 +133,82 @@ class InstallationGuidanceTests(unittest.TestCase):
         self.assertIn("**not a native Windows support claim**", design)
         self.assertIn("Qualified native Windows support is not claimed.", " ".join(design.split()))
 
+    def test_windows_preview_names_its_browser_and_three_stops(self):
+        def source(path):
+            return (ROOT / path).read_text(encoding="utf-8")
+
+        def plain(text):
+            return " ".join(text.split())
+
+        section = source("README.md").split("\n### Windows 11 (preview)\n", 1)[1].split("\n## ", 1)[0]
+        blocks = [block.strip("\n") for block in re.split(r"\n[ \t]*\n", section) if block.strip()]
+        texts = [plain(block) for block in blocks]
+        # The steps use Microsoft Edge's names, and the section says so before the first step.
+        steps = next(index for index, text in enumerate(texts) if text.startswith("1. Download the setup file:"))
+        self.assertIn("The steps below describe Microsoft Edge.", " ".join(texts[:steps]))
+        numbered = " ".join(texts[steps:])
+        self.assertIn(" 2. Microsoft Edge holds the download ", numbered)
+        # "In step 4" below: step 4 is the step with the certificate question.
+        self.assertRegex(numbered, r" 4\. (?:(?! 5\. ).)*whether to install a certificate named ")
+        # Below the steps and above the limits: three stops. The list is the one that follows this sentence.
+        lead, limits = ("In these cases, setup or the first start does not finish. A message says what to do:",
+                        "Limits of this preview:")
+        self.assertIn(lead, texts)
+        self.assertIn(limits, texts)
+        self.assertLess(steps, texts.index(lead))
+        self.assertLess(texts.index(lead), texts.index(limits))
+        setup = source("scripts/windows_bootstrap_native.cs")
+        limit = re.search(r"internal const int MaxRootLength=(\d+);", setup).group(1)
+        cases = blocks[texts.index(lead) + 1]
+        self.assertEqual([plain(text) for text in re.findall(r"^- (.*(?:\n  .*)*)", cases, re.M)], [
+            'Setup says: "This Windows sign-in runs every program as administrator." '
+            "Sign in to Windows with a standard account, or turn User Account Control on, and then run setup again.",
+            'Setup says that the path of the Amplifier folder "is too long for Windows" '
+            f"(the limit is {limit} characters). Use a Windows account with a shorter name.",
+            "In step 4, Amplifier says that "
+            "\"this PC's security settings do not let it finish setting up its private connection to your "
+            'browser". If your organization manages this PC, ask its IT support to trust the certificate '
+            "file named in the message for your account."])
+        # Each quoted text is a part of the text that the program shows for that case.
+        first_start = source("amplifier_web/windows_installation.py")
+        shown_texts = [node.value for node in ast.walk(ast.parse(first_start))
+                       if isinstance(node, ast.Constant) and isinstance(node.value, str)]
+        quoted = re.findall(r'"([^"]+)"', plain(cases))
+        self.assertEqual(len(quoted), 3, quoted)
+        self.assertIn('"' + quoted[0] + " User Account Control is off,", setup)
+        self.assertIn('", and that path ' + quoted[1] + ' ("+', setup)
+        self.assertIn("Amplifier is running, but " + quoted[2] + ".\n\n", shown_texts)
+        # Setup: its message says that setup did not finish, and shows a stop's next step below "What to do:".
+        self.assertIn('"Setup did not finish.\\n\\nWhat happened:\\n"+text[0]+"\\n\\nWhat to do:\\n"+text[1]', setup)
+        self.assertIn("if(stop!=null) return new[]{stop.Message,stop.Next};", setup)
+        # Setup: each cause and its next step are one stop, in these words.
+        for cause, next_step in (
+                ('"This Windows sign-in runs every program as administrator. ',
+                 '"Sign in to Windows with a standard account, or turn User Account Control on. '
+                 'Then run setup again.")'),
+                ('", and that path is too long for Windows ("+',
+                 '" characters; the limit is "+MaxRootLength.ToString(CultureInfo.InvariantCulture)+").",'),
+                ('" characters; the limit is "+MaxRootLength.ToString(CultureInfo.InvariantCulture)+").",',
+                 '"Use a Windows account with a shorter name.")')):
+            with self.subTest(cause=cause):
+                self.assertEqual(setup.count(cause), 1)
+                between = setup.split(cause, 1)[1]
+                self.assertIn(next_step, between)
+                self.assertNotIn("SetupStop", between.split(next_step, 1)[0])
+        # The first start: the message, the request to IT support, and the certificate file that the message names.
+        for shown in ("Amplifier is running, but this PC's security settings do not let it finish "
+                      "setting up its private connection to your browser.\n\n",
+                      "If your organization manages this PC, ask its IT support to trust this "
+                      "certificate for your account:\n"):
+            with self.subTest(shown=shown):
+                self.assertIn(shown, shown_texts)
+        self.assertIn('saved = str(root / "export" / "local-ca.cer")', first_start)
+        self.assertIn('"certificate for your account:\\n" + saved)', first_start)
+        self.assertIn('"setting up its private connection to your browser.\\n\\n" + support + "\\n\\n"', first_start)
+        self.assertIn("owner_notice(blocked)", first_start)
+        # The design's list of what the README states names the three stops too.
+        self.assertIn("three stops that setup or the first start explains by itself",
+                      plain(source("docs/design/native-windows-installation.md")))
 
 if __name__ == "__main__":
     unittest.main()
