@@ -1116,7 +1116,9 @@ one prepares the setup, and the other waits and uses it. One preparation is
 cancelled while its first command runs. That is what a stop of the chat does:
 `RuntimeManager.stop` cancels the preparation's task. The
 job requires that the attempt is recorded as cancelled, that nothing admits
-it, and that the stop removed its copy of the keys file. The job starts the
+it, and that its copy of the keys file is gone: the stop removes it, or, when
+a program of the stopped command had the file open at that moment, the same
+removal after that program ended. The job starts the
 chat again directly after the stop. The second start gets a new stage and
 ends well. Whether a program of the stopped command still ran at that moment
 is not required; the job prints what it saw. It reads the list of processes

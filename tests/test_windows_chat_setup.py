@@ -230,14 +230,13 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
         with pytest.raises(asyncio.CancelledError):
             await task
         at = time.monotonic()
-        # The stop removed that copy (runtime_profiles._profile_attempt). The app made the stage and its
+        # The stop removes that copy (runtime_profiles._profile_attempt). The app made the stage and its
         # shared-config folder with an ordinary mkdir and the copy with an ordinary copy; the removal goes
-        # through the private-file boundary from the app's home folder down.
-        assert not copy.exists(), (
-            'The stop did not remove the stage\'s copy of the keys file. The same removal now answers '
-            f'{update_storage.remove_stage_keys(home, stage)!r}: None means removed now, so the first one was '
-            'refused for a moment (a program of the stopped command held the file); another answer means that '
-            'the private-file boundary refuses this stage.')
+        # through the private-file boundary from the app's home folder down. Windows refuses the removal
+        # while a program of the stopped command has the file open; the copy then stays for idle maintenance.
+        # That a stop removes the copy from such a stage is required, with no program in the way, in
+        # tests/test_update_stage_keys.py (the native cases of a chat's own setup).
+        removed_at_the_stop = not copy.exists()
         attempt = json.loads((stage / 'profile-attempt.json').read_text(encoding='utf-8'))
         assert (attempt['status'], attempt['errorType']) == ('cancelled', 'CancelledError'), attempt
         assert (attempt['timings'][-1]['phase'], attempt['timings'][-1]['status']) == ('dependency-prepare', 'cancelled')
@@ -260,8 +259,13 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
             await asyncio.sleep(2)
             left = of_attempt(await asyncio.to_thread(processes), stage.name, known)
         ended = time.monotonic() - at
-        # Also after its last process nothing admits the stopped attempt, and its copy of the keys file is still
-        # gone: no program of the stopped command made it again. Nothing was written into the chat's folder.
+        # Also after its last process nothing admits the stopped attempt, and its copy of the keys file is gone:
+        # no program of the stopped command made it again. When the stop could not remove it, the same removal
+        # works now (idle maintenance makes it for a stage whose record says "cancelled"). Nothing was written
+        # into the chat's folder.
+        if not removed_at_the_stop:
+            reason = update_storage.remove_stage_keys(home, stage)
+            assert reason is None, f'After the last process the removal of the stage\'s copy answered {reason!r}.'
         assert not_admitted() and not copy.exists()
         assert native.update_stage_probe.created(folder) == kept[label], label
         stopped[label] = stage.name
@@ -273,7 +277,9 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
               f'({", ".join(sorted(set(after.values()))) or "none"}); the chat was started again directly after that '
               f'list; the list (a sample) held no process of the stopped preparation {ended:.0f} s after the stop. '
               f'The attempt is '
-              f'recorded as cancelled, nothing admits it, and the stop removed its copy of the keys file. The second '
+              f'recorded as cancelled, nothing admits it, and its copy of the keys file is gone ('
+              f'{"the stop removed it" if removed_at_the_stop else "held at the stop; removed after the last process"}'
+              f'). The second '
               f'start prepared the setup in a new stage.')
         return new
 
