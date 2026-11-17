@@ -1465,12 +1465,14 @@ does.
    program files go when the message is closed; anything that is not
    Amplifier's is named and stays. If Windows does not show that message, the
    uninstall stops there, before its last step: `python`, `tools`, the
-   journal, setup's completion record and the private note of that failure
-   stay. One further message then says that the data is deleted and that the
-   last program files were not removed. It is never the message of an
-   uninstall that changed nothing. The same holds for the last message of an
-   uninstall that keeps the folder: the further message is that last message
-   again.
+   journal and setup's completion record stay, and the private note of that
+   failure when it could be written. The uninstall program then tries once
+   more to show a message. That message says that the data is deleted and
+   that the last program files were not removed. It is never the message of
+   an uninstall that changed nothing. The same holds for the last message of
+   an uninstall that keeps the folder: the further message is that last
+   message again. When Windows does not show the further message either, the
+   person sees no message of that uninstall.
 10. The last step (`windows_uninstall.finish`), under the lock and with the
     folder proven and pinned again: create the flat folder
     `unified-uninstall-last` and two kept files, one in the installation
@@ -1552,15 +1554,24 @@ keep the folder.
 
 A journal can appear after an uninstall asked its questions: another window
 began a removal while a question waited. An uninstall that keeps the folder
-looks again under the lock and refuses (step 1 of the order). When it cannot
-take the lock, it looks too. An uninstall with the delete choice goes on, as
-a second uninstall does. It looks for the journal's name at two moments:
+looks again under the lock and refuses (step 1 of the order). When one of
+its steps fails, it looks too. An uninstall with the delete choice goes on,
+as a second uninstall does. It looks for the journal's name at two moments:
 when a step before the write of its own journal fails, and directly before
 that write. If the first look finds a journal, the failed step shows a text
 of a removal that did not finish, not the text of an uninstall that changed
 nothing. If the second look finds one, a failure of that write shows the
-text that says not to open Amplifier. These looks choose a text and the
+text of a removal that did not finish too. These looks choose a text and the
 place of the failure note. They change nothing that uninstall deletes.
+
+Each of these looks, and the launcher's look before it opens Amplifier, asks
+only whether the journal's name is in the folder. A look that Windows does
+not answer counts as "no journal". So the text of a step that failed after a
+removal began does not say that Amplifier does not open. It tells the person
+not to open Amplifier, because its folder can be partly deleted. The text of
+the launcher's own refusal is not changed: it says that Amplifier does not
+open until the removal has finished, and the program that shows it has just
+found the journal.
 
 **No link is followed.** In the process, every entry is opened relative to
 its parent's handle as the entry itself, judged on its own handle and deleted
@@ -1703,17 +1714,19 @@ limit as not blocking.
   by hand.
 - **L4.** A journal that is damaged, or that records another choice, proves
   nothing. Uninstall then deletes nothing and offers only to keep the
-  folder. Afterwards Amplifier does not open from that folder. The question
+  folder. Afterwards the launcher refuses to open Amplifier from that
+  folder, as long as its look finds that file. The question
   and the messages of that uninstall say what it does, not what the folder
   holds: an earlier removal can have deleted files. When one of its steps
   from the lock to the removal of the Windows entries fails, it shows a text
-  of a removal that did not finish, which says that Amplifier does not open.
+  of a removal that did not finish, which tells the person not to open
+  Amplifier.
   Its other stops show other texts. A failed check of the installation
   files, and a question that Windows does not show, show the text of an
   uninstall that stopped before it changed anything. While another Amplifier
-  window holds the lock, the text says that. A last message that Windows
-  does not show is shown once more. A failure that no step names shows a
-  text that does not say what was changed.
+  window holds the lock, the text says that. For a last message that Windows
+  does not show, the uninstall program tries once more to show it. A failure
+  that no step names shows a text that does not say what was changed.
 - **L5.** After a program renamed an entry only by case during the removal,
   uninstall stops with the journal in place. A second uninstall refuses at
   its first check until the entry has its own name again.
@@ -1747,15 +1760,17 @@ limit as not blocking.
   - A stop at this step leaves it open whether a journal is in the folder.
     This part needs no other program. The writer can report an error after
     the journal has its name. The look answers no for every error, not only
-    for a name that is not there. With a journal the launcher refuses to
-    open Amplifier; without one it does not refuse for that reason. So the
-    two texts of this step say neither. Which of the two it is follows what
+    for a name that is not there. The launcher's look is the same one: when
+    it finds a journal, the launcher refuses to open Amplifier; when it finds
+    none, or gets no answer, the launcher does not refuse for that reason. So
+    the two texts of this step say neither. Which of the two it is follows what
     this uninstall saw, not what is in the folder at the write. It saw an
     earlier removal when a journal that records the delete choice was in the
     folder at its start (a second uninstall), and when an entry with the
     journal's name is in the folder directly before it writes its own
     (another window began a removal while a question waited). Then the text
-    says not to open Amplifier, because its folder can be partly deleted. A
+    is the one of a removal that did not finish: it tells the person not to
+    open Amplifier, because its folder can be partly deleted. A
     journal that a program deleted after the uninstall saw it still counts.
     When the uninstall saw no earlier removal, the text says that this
     uninstall deleted nothing in the folder, and that Amplifier might not
@@ -1903,8 +1918,10 @@ then, and Open reaches its start step, the second time on a folder that is
 partly deleted. A journal that the test replaces in that instant lets the
 removal go on to its end, and the last step refuses it (the test's journal
 has another token): `python`, `tools`, that journal and setup's completion
-record stay, and no step after exit starts. Stand-ins: Task Scheduler, the
-check of an installed release, the start step of Open, and the dialogs.
+record stay, with the emptied `workspace` (the current folder of the test's
+uninstall process), and no step after exit starts. Stand-ins: Task
+Scheduler, the check of an installed release, the start step of Open, and
+the dialogs.
 
 **Not proven:** the dialogs on screen; a real stop with live conversation
 workers followed by the deletion; uv's own start program (the check uses a

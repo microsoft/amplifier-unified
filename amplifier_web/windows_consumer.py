@@ -266,7 +266,7 @@ async def launch(root, *, open_browser=True, progress=None):
 
 # What an uninstall knows before its first change: it changed nothing. It does not say what the folder
 # holds or whether Amplifier is installed (another window can have begun or finished a removal), and not
-# that the person can keep using Amplifier (with a journal in the folder the launcher refuses, and Open
+# that the person can keep using Amplifier (with a journal in the folder the launcher can refuse, and Open
 # can need what failed here).
 _UNCHANGED = "This uninstall stopped before it changed anything.\n\n"
 _STOPPED = "To keep using Amplifier, open it from the Start menu."
@@ -278,11 +278,9 @@ _UNFINISHED = {
     # comes before the first change.
     "questions": _UNCHANGED + "Amplifier could not show one of its questions. Restart this PC, then uninstall again.",
     # A failure inside the uninstall that no step and no question names. This program does not know
-    # whether it came before or after a change, so this text says neither. Where the person can
-    # uninstall again depends on which entries are left, as in the text `removing`.
-    "uninstall": "Amplifier could not finish this uninstall.\n\n"
-                 "Restart this PC. Then select Uninstall Amplifier in the Start menu or in the Windows Apps list. "
-                 "If Amplifier is in neither, it is already uninstalled.",
+    # whether it came before or after a change, so this text says neither, and it does not say what is
+    # installed now.
+    "uninstall": "Amplifier could not finish this uninstall.\n\nRestart this PC, then uninstall again.",
     "stop-app": "Amplifier could not stop its background app.\n\n"
                 "Wait a few minutes or restart this PC, then select Stop Amplifier again.",
     "status": "Amplifier could not read its status.\n\nRestart this PC, then select Amplifier status again.",
@@ -302,8 +300,11 @@ _UNFINISHED = {
                "Uninstall again to finish. " + _STOPPED,
 }
 _UNFINISHED["apps-entry"] = _UNFINISHED["shortcuts"] = _UNFINISHED["entries"]
+# After a removal began. The launcher refuses to open Amplifier only when its look finds the journal: a
+# look that Windows does not answer counts as no journal, and a program can delete the journal. So this
+# text does not say that Amplifier does not open. It tells the person not to open it.
 _AGAIN = ("Close other programs or restart this PC. Then uninstall Amplifier again to finish. "
-          "Until then Amplifier does not open.")
+          "Do not open Amplifier before that: its folder can be partly deleted.")
 _UNFINISHED.update({
     # Nothing failed: another Amplifier window is at work, or a removal did not finish.
     "busy": "Amplifier is being opened or uninstalled in another window right now. Nothing was changed.\n\n"
@@ -321,18 +322,14 @@ _UNFINISHED.update({
               "question: Amplifier is then uninstalled, and its folder stays.",
     # The step `journal` failed. This program does not know whether a journal is in the folder now: the
     # write can fail before or after the file has its name, a program can take the name away, and Windows
-    # can refuse the look for it. With a journal the launcher refuses; without one it does not refuse for
-    # that reason. So neither text of this step says that Amplifier opens, and neither says that it does
-    # not. The first says what this uninstall deleted, not what the folder holds: a program can have
-    # deleted an earlier journal.
+    # can refuse the look for it. So no text of this step says that Amplifier opens, and none says that
+    # it does not. This one says what this uninstall deleted, not what the folder holds: a program can
+    # have deleted an earlier journal. When a journal was in the folder before this uninstall wrote its
+    # own (a second uninstall, or another window during a question), an earlier removal began and files
+    # can be deleted: the step then shows the text `removal`.
     "journal": "Amplifier has stopped and no longer starts when you sign in, but it could not begin to delete "
                "its folder. This uninstall deleted nothing in the folder.\n\n"
                "Wait a minute or restart this PC, then uninstall again. Amplifier might not open until then.",
-    # The same step when a journal was in the folder before this uninstall wrote its own: an earlier
-    # removal began (a second uninstall, or another window during a question), so files can be deleted.
-    "journal-again": "Amplifier could not finish its removal from this PC.\n\n"
-                     "Close other programs or restart this PC. Then uninstall Amplifier again to finish. "
-                     "Do not open Amplifier before that: its folder can be partly deleted.",
     "data": "Amplifier has stopped, but some of your chats, settings or saved accounts could not be deleted. "
             "A program may still use them.\n\n" + _AGAIN,
     # Every other failure after the deletion began, and every other failure of an uninstall that found a
@@ -363,8 +360,9 @@ def entry_notice(purpose, entry, retry, *, listed=True):
                "status": "Amplifier could not read its status.",
                "stop": "Amplifier did not stop its background app.",
                "uninstall": "This uninstall stopped before it changed anything.",
+               # Not "Amplifier does not open": the launcher refuses only when its look finds the journal.
                "removal": "Amplifier could not finish its removal from this PC. "
-                          "Until it has finished, Amplifier does not open."}[purpose]
+                          "Do not open Amplifier before it has finished: its folder can be incomplete."}[purpose]
     opens = ("Open Amplifier from the Start menu: Amplifier Unified." if listed else
              "Run the Amplifier setup file again.")
     again = {"start": opens, "status": opens, "stop": "Select Stop Amplifier again.",
@@ -714,8 +712,8 @@ async def _uninstall(root):
             if result is None:
                 # A journal is in the folder: it was there at the start and proves no delete choice, or
                 # another window began a removal after the question (seen now; the look under the lock
-                # above did not run when the lock itself failed). The launcher then refuses to open
-                # Amplifier, and a step's own text can say that it opens.
+                # above did not run when the lock itself failed). The folder can be partly deleted,
+                # and a step's own text can say that Amplifier opens.
                 earlier[0] = earlier[0] or windows_uninstall.unfinished(root)
                 raise Unfinished(at[0], error, "removal" if earlier[0] else None) from error
             result.setdefault("receiptError", error)  # Everything was removed; only tidying failed.
@@ -729,7 +727,8 @@ async def _uninstall(root):
         _record(root, "uninstall", stopped.step, stopped.error, services=not earlier[0])
         raise
     if result.get("receiptError") is not None:
-        _record(root, "uninstall", "receipt", result["receiptError"])
+        # Never a note in the app's own folder when an earlier removal can have deleted that folder.
+        _record(root, "uninstall", "receipt", result["receiptError"], services=not earlier[0])
     # Last, with the app stopped and its entries gone: the trusted certificate.
     # Its bytes are in app\config\tls, so this comes before any file removal.
     trust = await asyncio.to_thread(_forget_root, certificate)
@@ -812,7 +811,7 @@ async def _delete(root, certificate, *, resumed):
         except (OSError, ValueError, RuntimeError, TimeoutError) as error:
             begun = at[0] in windows_uninstall.AFTER_JOURNAL
             if at[0] == "journal":
-                text = "journal-again" if earlier[0] else None  # The two texts of this step say why.
+                text = "removal" if earlier[0] else None  # The text `journal` says why.
             else:
                 if not begun and windows_uninstall.unfinished(root):
                     earlier[0] = True  # This uninstall has written no journal yet: it is another window's.
