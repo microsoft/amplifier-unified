@@ -1116,9 +1116,12 @@ one prepares the setup, and the other waits and uses it. One preparation is
 cancelled while its first command runs. That is what a stop of the chat does:
 `RuntimeManager.stop` cancels the preparation's task. The
 job requires that the attempt is recorded as cancelled, that nothing admits
-it, and that its copy of the keys file is gone: the stop removes it, or, when
-a program of the stopped command had the file open at that moment, the same
-removal after that program ended. The job starts the
+it, and that its copy of the keys file is gone after the last process of the
+stopped preparation. The stop removes the copy. When the copy is still there
+after the stop, the job makes the same removal itself after that last process
+and requires that it works; it prints which of the two it saw. The job does
+not show why a copy was still there (Windows refuses the removal while a
+program has the file open). The job starts the
 chat again directly after the stop. The second start gets a new stage and
 ends well. Whether a program of the stopped command still ran at that moment
 is not required; the job prints what it saw. It reads the list of processes
@@ -1127,8 +1130,8 @@ list is a sample: a program whose parent started and ended between two
 readings is not in it. In the runs of November 17, 2026, the list held
 programs of the stopped command (Python and Git) directly after the stop and
 none some seconds later. The stopped stage and its project stay on the disk;
-nothing removes them. Only the stage's copy of the keys file goes, at the stop
-(`docs/UPDATES.md`).
+nothing removes them. Only the stage's copy of the keys file goes: at the stop,
+or at a later idle pass when the stop could not remove it (`docs/UPDATES.md`).
 
 What a stop ends is checked with a command that the test controls
 (`tests/test_windows_stopped_command.py`, in the same job). The command

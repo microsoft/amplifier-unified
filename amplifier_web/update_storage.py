@@ -190,8 +190,8 @@ def _ended_without_admission(stage):
     That preparation writes ``profile-attempt.json`` (runtime_profiles). Its
     coroutine has ended when the status is ``failed`` or ``cancelled``, and
     nothing uses the stage again. Anything else is no answer, and the caller
-    then waits for age: another status, an entry that is no regular file, a
-    record that is too long or that cannot be read.
+    then leaves the stage alone: another status, an entry that is no regular
+    file, a record that is too long or that cannot be read.
 
     The record decides only when the stage's copy of the keys file may go,
     never what is removed. The entry must be a regular file by its name (a link
@@ -233,7 +233,6 @@ async def scrub_stage_keys(manager):
     second has gone, but it handles at least one entry first, so a slow folder
     or a long listing cannot hold the scan at one place.
     """
-    from .runtime_profiles import owned
     from .update_health import pending_preparation
     from .update_retention import maintenance_blocked
 
@@ -270,10 +269,7 @@ async def scrub_stage_keys(manager):
                             return
                         progressed = True
                         manager._stage_keys_offset = index + 1
-                        # A chat's own setup that this process prepares now owns its stage,
-                        # whatever the clock says about the age of that stage.
-                        if (not re.fullmatch('[a-f0-9]{32}', entry.name) or entry.name in protected
-                                or owned(entry.name)):
+                        if not re.fullmatch('[a-f0-9]{32}', entry.name) or entry.name in protected:
                             continue
                         stage = root / entry.name
                         shared = stage / 'shared-config'
@@ -281,19 +277,24 @@ async def scrub_stage_keys(manager):
                             stage_info, shared_info = stage.lstat(), shared.lstat()
                             if not all(stat.S_ISDIR(info.st_mode) for info in (stage_info, shared_info)):
                                 continue
+                            # Already-scrubbed stages cost this one look and no effect budget.
+                            (shared / 'keys.env').lstat()
                             try:
                                 validated = stat.S_ISREG((stage / 'validated.json').lstat().st_mode)
                             except FileNotFoundError:
                                 validated = False
-                            # A failed or stopped chat setup has settled by its own record.
-                            # For every other stage without a receipt only age speaks: a
-                            # record that still says "preparing" does not prove an end.
-                            if (not validated
-                                    and max(stage_info.st_mtime, shared_info.st_mtime) >= time.time() - 86400
-                                    and not _ended_without_admission(stage)):
-                                continue
-                            # Already-scrubbed stages do not consume the effect budget.
-                            (shared / 'keys.env').lstat()
+                            if not validated:
+                                try:
+                                    (stage / 'profile-attempt.json').lstat()
+                                except FileNotFoundError:
+                                    if max(stage_info.st_mtime, shared_info.st_mtime) >= time.time() - 86400:
+                                        continue
+                                else:
+                                    # A chat's own setup owns this stage. Age is not settlement:
+                                    # only its own record says that the preparation ended. Nothing
+                                    # proves that no other app process still prepares there.
+                                    if not _ended_without_admission(stage):
+                                        continue
                             attempts += 1
                             remove_stage_keys(manager.home, stage, expected={
                                 stage: _identity(stage_info), shared: _identity(shared_info)})

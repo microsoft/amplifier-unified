@@ -692,8 +692,9 @@ NO_ANSWER = {
 
 @pytest.mark.parametrize('old', [False, True])
 @pytest.mark.parametrize('entry', sorted(NO_ANSWER))
-async def test_scrub_waits_for_age_when_the_chat_setup_record_is_no_answer(app, entry, old):
-    """Only "failed" and "cancelled" in a regular, readable record say that the preparation ended."""
+async def test_scrub_never_takes_the_copy_when_the_chat_setup_record_is_no_answer(app, entry, old):
+    """Only "failed" and "cancelled" in a regular, readable record say that the preparation ended.
+    Age says nothing about a stage that a chat's own setup owns."""
     manager = app.update_manager
     stage = stage_at(manager.home)
     attempt = stage / 'profile-attempt.json'
@@ -701,7 +702,7 @@ async def test_scrub_waits_for_age_when_the_chat_setup_record_is_no_answer(app, 
     if old:
         aged(stage)   # after the entry: its creation changes the stage's time
     await asyncio.wait_for(storage.scrub_stage_keys(manager), timeout=5)   # a FIFO must not hold the pass
-    assert (stage / 'shared-config/keys.env').exists() is (not old)
+    assert (stage / 'shared-config/keys.env').is_file()
     assert_preserved(stage)
     assert attempt.lstat()   # No entry, including a dangling link, was removed.
 
@@ -715,25 +716,22 @@ async def test_scrub_takes_a_validated_stage_whatever_its_chat_setup_record_says
     assert_preserved(stage)
 
 
-@pytest.mark.parametrize('validated', [False, True])
-async def test_scrub_leaves_a_stage_that_a_preparation_of_this_process_owns_now(app, tmp_path, validated):
-    """Neither a receipt nor age takes the copy from a preparation that still runs here."""
+async def test_scrub_leaves_the_copy_while_a_chat_setup_runs_however_old_its_stage_looks(app, tmp_path):
+    """The record that the real preparation writes while it runs, read by the real idle pass."""
     from amplifier_web import runtime_profiles
 
     manager = app.update_manager
-    stage = stage_at(manager.home, validated=validated)
+    stage = stage_at(manager.home)
     copy = stage / 'shared-config/keys.env'
-    assert not runtime_profiles.owned(stage.name)
-    async with runtime_profiles._profile_attempt(
-            manager.home, 'f' * 32, stage.name, stage, tmp_path / 'absent-index.json'):
-        assert runtime_profiles.owned(stage.name)
-        aged(stage)
-        await storage.scrub_stage_keys(manager)
-        assert copy.is_file()
-    # The preparation has ended: the same pass takes the copy now.
-    assert not runtime_profiles.owned(stage.name)
-    aged(stage)
-    await storage.scrub_stage_keys(manager)
+    with pytest.raises(RuntimeError, match='fixture failure'):
+        async with runtime_profiles._profile_attempt(
+                manager.home, 'f' * 32, stage.name, stage, tmp_path / 'absent-index.json'):
+            assert json.loads((stage / 'profile-attempt.json').read_text())['status'] == 'preparing'
+            aged(stage)   # a clock that was corrected forward, or a PC that slept
+            await storage.scrub_stage_keys(manager)
+            assert copy.is_file()
+            raise RuntimeError('fixture failure')
+    # The preparation ended as failed and removed the copy itself.
     assert not copy.exists()
     assert_preserved(stage)
 
@@ -755,8 +753,7 @@ async def test_a_chat_setup_that_fails_or_is_stopped_removes_its_copy_of_the_key
 
     async def command(*args, **kwargs):
         stage = one_new_stage(h)
-        during.update(copy=(stage / 'shared-config' / 'keys.env').read_bytes(),
-                      owned=runtime_profiles.owned(stage.name))
+        during.update(copy=(stage / 'shared-config' / 'keys.env').read_bytes())
         if end == 'failed':
             raise RuntimeError('fixture failure')
         if end == 'cancelled':
@@ -773,11 +770,12 @@ async def test_a_chat_setup_that_fails_or_is_stopped_removes_its_copy_of_the_key
     else:
         with pytest.raises({'failed': RuntimeError, 'cancelled': asyncio.CancelledError}[end]):
             await task
-    # While its command ran, the stage held the copy and the preparation owned the stage.
-    assert during == {'copy': live, 'owned': True}
+    # While its command ran, the stage held the copy.
+    assert during == {'copy': live}
     stage = one_new_stage(h)
     assert json.loads((stage / 'profile-attempt.json').read_text())['status'] == end
-    assert not runtime_profiles.owned(stage.name)
+    # The record that the real preparation wrote, read by the reader of idle maintenance.
+    assert storage._ended_without_admission(stage) is (end != 'succeeded')
     shared = stage / 'shared-config'
     if end == 'succeeded':
         assert (shared / 'keys.env').read_bytes() == live   # idle maintenance takes it (a validated stage)
@@ -790,7 +788,8 @@ async def test_a_chat_setup_that_fails_or_is_stopped_removes_its_copy_of_the_key
 
 async def test_a_refused_removal_does_not_change_how_a_chat_setup_ends(profile_inputs, tmp_path):
     """A real refusal: the copy has a second name. The copy stays for idle maintenance, which goes by the
-    recorded status (test_scrub_takes_the_copy_of_a_failed_or_stopped_chat_setup_at_once)."""
+    recorded status (test_scrub_takes_the_copy_of_a_failed_or_stopped_chat_setup_at_once). The error that
+    leaves the preparation says so, with a reason code only."""
     from amplifier_web import runtime_profiles
 
     h = profile_inputs
@@ -800,13 +799,16 @@ async def test_a_refused_removal_does_not_change_how_a_chat_setup_ends(profile_i
         raise RuntimeError('fixture failure')
 
     h.process_hook = command
-    with pytest.raises(RuntimeError, match='fixture failure'):
+    with pytest.raises(RuntimeError, match='fixture failure') as failure:
         await runtime_profiles.ensure(h.home, h.generation, h.child('keys-refused'))
     stage = one_new_stage(h)
     copy = stage / 'shared-config' / 'keys.env'
     assert copy.is_file() and storage.remove_stage_keys(h.home, stage) == 'refused'
     assert json.loads((stage / 'profile-attempt.json').read_text())['status'] == 'failed'
-    assert not (stage / 'validated.json').exists() and not runtime_profiles.owned(stage.name)
+    assert not (stage / 'validated.json').exists() and storage._ended_without_admission(stage)
+    notes = getattr(failure.value, '__notes__', [])
+    assert notes == [f"The stage's copy of the keys file was not removed (refused); idle maintenance tries "
+                     f"again. Attempt retained at {stage}."], notes
     # The refusal is over: the same removal works now.
     (tmp_path / 'second-name').unlink()
     assert storage.remove_stage_keys(h.home, stage) is None and not copy.exists() and stage.is_dir()
@@ -1154,7 +1156,7 @@ async def test_native_windows_chat_setup_stage_keys_at_a_failed_preparation(
     try:
         with ordinary_default_owner():
             stage.mkdir(mode=0o700)
-            with pytest.raises(RuntimeError, match='fixture failure'):
+            with pytest.raises(RuntimeError, match='fixture failure') as failure:
                 async with runtime_profiles._profile_attempt(
                         home, 'f' * 32, stage.name, stage, home / 'updates/profiles/absent.json'):
                     shared.mkdir(mode=0o700)
@@ -1168,7 +1170,9 @@ async def test_native_windows_chat_setup_stage_keys_at_a_failed_preparation(
         # The attempt ended as failed in both cases: a refused removal changes nothing else.
         assert json.loads((stage / 'profile-attempt.json').read_text(encoding='utf-8'))['status'] == 'failed'
         assert storage._ended_without_admission(stage), 'Idle maintenance cannot read the record of this stage'
-        assert not runtime_profiles.owned(stage.name)
+        # The error says that the copy stayed, and why, exactly when Windows refused the removal.
+        notes = getattr(failure.value, '__notes__', [])
+        assert bool([note for note in notes if 'keys file was not removed (refused)' in note]) is hold_open, notes
         if hold_open:
             assert (shared / 'keys.env').is_file(), 'Windows removed a file that another handle held open'
             held.close()
