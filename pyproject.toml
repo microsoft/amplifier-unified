@@ -1,6 +1,6 @@
 [project]
 name = "amplifier-unified"
-version = "0.103.0"
+version = "0.104.0"
 description = "A local voice-first Amplifier workspace with a shared user and agent interface"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -22,6 +22,7 @@ dependencies = [
     "pyyaml>=6.0.3,<7",
     "filelock>=4.2.1,<5",
     "qrcode>=8.2,<9",
+    "Pillow>=13,<14",
     "watchfiles>=1.1,<2",
     "mcp>=2.2,<3",
     "httpx>=0.28,<1",
@@ -32,9 +33,9 @@ dependencies = [
 
 [project.optional-dependencies]
 tui = ["amplifier-app-tui @ git+https://github.com/microsoft/amplifier-app-tui@main"]
-native-desktop = ["amplifier-module-tool-computer-use @ git+https://github.com/microsoft/amplifier-bundle-computer-use@main#subdirectory=modules/tool-computer-use", "Pillow>=13,<14"]
+native-desktop = ["amplifier-module-tool-computer-use @ git+https://github.com/microsoft/amplifier-bundle-computer-use@main#subdirectory=modules/tool-computer-use"]
 managed-browser = ["amplifier-bundle-ui-use[browser] @ git+https://github.com/microsoft/amplifier-bundle-ui-use@main"]
-decisions-openai = ["amplifier-module-provider-openai[decisions] @ git+https://github.com/microsoft/amplifier-module-provider-openai@main", "Pillow>=13,<14"]
+decisions-openai = ["amplifier-module-provider-openai[decisions] @ git+https://github.com/microsoft/amplifier-module-provider-openai@main"]
 decisions-azure = ["amplifier-module-provider-azure-openai[decisions] @ git+https://github.com/microsoft/amplifier-module-provider-azure-openai@main"]
 decisions-jev = ["amplifier-module-provider-jev @ git+https://github.com/microsoft/amplifier-module-provider-jev@main"]
 decisions-local = ["amplifier-module-provider-local-decisions @ git+https://github.com/microsoft/amplifier-module-provider-local-decisions@main"]

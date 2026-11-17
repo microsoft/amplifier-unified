@@ -38,6 +38,7 @@ on:
       - amplifier_web/worker_input.py
       - amplifier_web/message_delivery.py
       - amplifier_web/windows_files.py
+      - amplifier_web/instance_branding.py
       - amplifier_web/windows_uv_tool.py
       - amplifier_web/windows_proactor.py
       - amplifier_web/CPYTHON-LICENSE.txt
@@ -78,6 +79,7 @@ on:
       - tests/test_repair_lock_platform.py
       - tests/test_worker_platform_io.py
       - tests/test_windows_files.py
+      - tests/test_instance_branding_storage.py
       - tests/test_windows_uv_tool.py
       - tests/test_windows_app_activation.py
       - tests/test_windows_proactor.py
@@ -126,6 +128,40 @@ on:
 permissions:
   contents: read
 jobs:
+  instance-branding-storage:
+    if: ${{ !inputs.bootstrap_only && !inputs.foreground_only && !inputs.storage_only }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    env:
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13'
+          architecture: x64
+      - name: Prepare only branding storage test dependencies
+        run: |
+          python -m pip install --index-url https://pypi.org/simple --only-binary=:all: "pytest>=8,<10" "PyYAML>=6.0.3,<7" "Pillow>=13,<14"
+      - name: Check exact source and branding record boundaries
+        run: |
+          git rev-parse HEAD
+          python -B -m pytest -v -ra -p no:cacheprovider --junitxml=branding-storage.xml tests/test_instance_branding_storage.py
+      - name: Retain named native cases and skip reasons
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: instance-branding-storage-${{ matrix.os }}
+          path: branding-storage.xml
+          if-no-files-found: error
+          retention-days: 7
   passive-process-check:
     if: ${{ !inputs.bootstrap_only && !inputs.foreground_only && !inputs.storage_only }}
     strategy:

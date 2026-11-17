@@ -532,13 +532,14 @@ async def auth_required(request: web.Request, handler):
         return await handler(request)
     if extension and not request.headers.get('Authorization', '').lower().startswith('bearer amd_'):
         return web.json_response({'error': 'An app credential is required.'}, status=401)
-    # Public, immutable UI resources only. Authentication still gates the SPA,
+    # Public UI resources and bounded raster branding only. Authentication still gates the SPA,
     # every API, and all user-authored files/canvas documents.
     public = {"/oauth/mcp/callback", "/oauth/mcp/complete", "/login", "/setup", "/api/ca", "/ca.crt", "/api/health",
               "/manifest.webmanifest", "/sw.js", "/pwa.js", "/offline.html", "/app-pages.css", "/favicon.ico", "/browser-entry.js",
               "/branding/favicons/favicon.ico", "/branding/favicons/favicon-32.png",
               "/branding/favicons/apple-touch-icon.png", "/branding/icons/amplifier-icon-128.png",
               "/branding/pwa/pwa-192.png", "/branding/pwa/pwa-512.png"}
+    public.update(f'/instance-icon/{size}.png' for size in (32, 180, 192, 512))
     if request.path in public and request.method in {"GET", "HEAD"}:
         return await handler(request)
     # Deliberately published snapshots have their own unguessable bearer link.
@@ -616,7 +617,9 @@ async def login_page(request: web.Request) -> web.Response:
     page = (Path(__file__).parent / "static" / filename).read_text(encoding="utf-8")
     next_path = html.escape(validate_next_path(request.query.get("next")), quote=True)
     error = "Could not sign in. Check your host username and password and try again." if request.query.get("error") else ""
-    response = web.Response(text=page.replace("__CSRF__", csrf).replace("__NEXT__", next_path).replace("__ERROR__", error), content_type="text/html")
+    page = page.replace("__CSRF__", csrf).replace("__NEXT__", next_path).replace("__ERROR__", error)
+    page = request.app['service'].instance_branding.document(page, login=True)
+    response = web.Response(text=page, content_type="text/html")
     response.set_cookie(CSRF_COOKIE, csrf, httponly=True, samesite="Strict", secure=request.secure, path="/")
     return response
 

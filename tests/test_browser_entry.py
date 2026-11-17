@@ -119,6 +119,9 @@ def owner(tmp_path, monkeypatch):
     app["permitted_hosts"] = frozenset({"127.0.0.1", "localhost", "::1"})
     app["service"] = SimpleNamespace(data_dir=tmp_path, update_manager=SimpleNamespace(
         running_identity={"instanceId": "b" * 32, "version": __version__, "revision": REVISION}))
+    from amplifier_web.deployment import DEFAULT_SERVER
+    from amplifier_web.instance_branding import InstanceBranding
+    app["service"].instance_branding = InstanceBranding(tmp_path, DEFAULT_SERVER)
     app["sessions"] = auth.Sessions()  # No sign-out yet, as on a new installation.
     entry.initialize(app)
     app.router.add_post(entry.ISSUE_PATH, entry.issue)

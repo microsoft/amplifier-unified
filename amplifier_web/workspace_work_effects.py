@@ -32,6 +32,7 @@ def _full_access(service, source):
 # Do not infer read-only behavior from action suffixes
 # or ACTION_POLICIES (which describes ownership, not effect safety).
 SAFE_ACTIONS = frozenset({
+    'instanceBranding.get',
     'workspace.work.list', 'workspace.work.read', 'workspace.work.source',
     'workspace.work.history', 'workspace.work.context', 'workspace.work.wait',
     'workspace.work.invocation', 'workspace.work.promise',

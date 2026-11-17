@@ -393,6 +393,8 @@ ACTION_DEFINITIONS['conversation.send'][1]['properties']['expectedConfigurationR
 
 from .settings_actions import definitions as settings_definitions, ACTIONS as SETTINGS_ACTIONS, NAVIGATION_ACTIONS as SETTINGS_NAVIGATION
 ACTION_DEFINITIONS.update(settings_definitions(schema, string))
+from .instance_branding import InstanceBranding, definitions as instance_branding_definitions
+INSTANCE_BRANDING_ACTIONS = _register_actions(instance_branding_definitions(schema, string))
 
 from .session_identity import ID_ACTIONS as SESSION_ID_ACTIONS
 # Host-owned classifications, not capabilities inferred from an action's suffix.
@@ -418,6 +420,7 @@ for _access, _actions in {
         "workspace.archive", "workspace.restore", "canvas.visibility", "view.update", "attachment.add", "attachment.remove",
     },
     "peer_read": {
+        "instanceBranding.get",
         "settings.connection.services",
         "session.inspect", "session.titlePreview", "session.history", "session.deletePreview", "session.export",
         "session.exportDeliver", "session.sharePreview", "session.shareRead", "session.shareList",
@@ -431,6 +434,7 @@ for _access, _actions in {
         "coordination.awareness", "coordination.intent.read",
     },
     "domain_authoritative": {
+        "instanceBranding.update", "instanceBranding.reset",
         *configuration_recovery_definitions(schema, string),
         *patch_placement_definitions(schema, string),
         "worktree.create", "worktree.attach", "worktree.handoff",
@@ -511,7 +515,7 @@ class AppService:
     def state(self, value):
         self._state = value
 
-    def __init__(self, data_dir: Path, runtime=None, workspace=None):
+    def __init__(self, data_dir: Path, runtime=None, workspace=None, *, server_config=None):
         from .runtime_event_batches import EventSink
         self.on_runtime_event = EventSink(self.on_runtime_event, self.on_runtime_events)
         from .installed_build import capture
@@ -604,6 +608,9 @@ class AppService:
         recover_managed_deletions(self.data_dir, self.db, self.state)
         if recovering_deletion and self._directory_migrated:
             self.state = load_working(self.db)
+        from .deployment import DEFAULT_SERVER
+        self.instance_branding = InstanceBranding(self.data_dir, server_config or DEFAULT_SERVER)
+        self.state['instanceBranding'] = self.instance_branding.snapshot()
         from .managed_deletion import tombstones
         self._deleted_session_ids = {sid for row in tombstones(self.db) for sid in row['ids']}
         # Retain older theme bytes inert. The new appearance generation does not
@@ -2132,6 +2139,8 @@ class AppService:
             if retained is not None:
                 return retained
         configuration_authority = self.configuration_authority.capture(action, args, origin, caller_session_id)
+        if action == 'instanceBranding.get':
+            return {'accepted': True, 'result': self.instance_branding.snapshot(), 'effects': []}
         if action in {'externalAgents.list', 'externalAgents.get'}:
             from .external_agent_settings import catalog, read
             async with self.lock:
@@ -2545,6 +2554,12 @@ class AppService:
                     '_stateIndependent': True}
         prepared_export = None
         prepared_share = None
+        prepared_branding = None
+        if action == 'instanceBranding.update':
+            try:
+                prepared_branding = await asyncio.to_thread(self.instance_branding.prepare, args['patch'])
+            except ValueError as exc:
+                raise AppError(str(exc)) from None
         if action == 'session.sharePreview':
             from .conversation_export import messages, snapshot
             async with self.lock:
@@ -2808,6 +2823,15 @@ class AppService:
             if action in SETTINGS_ACTIONS:
                 from .settings_actions import command as settings_command
                 diagnostic_result = settings_command(self, action, args, pending, command_id)
+            elif action in INSTANCE_BRANDING_ACTIONS:
+                try:
+                    diagnostic_result = self.instance_branding.update(
+                        prepared_branding, reset=action == 'instanceBranding.reset')
+                except ValueError as exc:
+                    raise AppError(str(exc)) from None
+                except OSError:
+                    raise AppError('Could not confirm this server’s app name and icon were saved. Check the server’s configuration before retrying.', 409) from None
+                self.state['instanceBranding'] = diagnostic_result
             elif action in LIBRARY_ACTIONS:
                 try:
                     diagnostic_result = self.conversation_library.perform(action, args, prepared_share)
@@ -5752,7 +5776,7 @@ class AppService:
                         revision=self.state['revision'], command_id=args.get('id'))
                 return domain_receipt(result, action=args['action'], session_id=session_id,
                                       revision=self.state['revision'])
-            if args['action'] in {'workspace.environments.removal.read', 'workspace.environments.removal.list', 'assignment.brief', 'conversation.configuration'}:
+            if args['action'] in {'workspace.environments.removal.read', 'workspace.environments.removal.list', 'assignment.brief', 'conversation.configuration', 'instanceBranding.get'}:
                 # Do not infer nativeProject, flush progress or build a snapshot:
                 # even _session(hydrate=False) admits dormant owners. Each passive
                 # action validates its own caller scope without runtime demand.
@@ -5855,7 +5879,7 @@ class AppService:
                     result['result'] = {**result['result'], 'sessionId': action_args['sessionId'], 'readOnly': True}
                 return result
             compact_smart_tool = args['action'].startswith('smartTools.')
-            compact_domain_receipt = args['action'] in SETTINGS_ACTIONS or args['action'].startswith(('session.handoff.', 'capability.', 'coordination.', 'worktree.', 'assignment.', 'integration.', 'workspace.', 'permissions.', 'providers.', 'configuration.', 'bundles.', 'modules.', 'sources.', 'locations.', 'outputs.')) or args['action'] == 'runtime.provenance'
+            compact_domain_receipt = args['action'] in SETTINGS_ACTIONS or args['action'].startswith(('session.handoff.', 'capability.', 'coordination.', 'worktree.', 'assignment.', 'integration.', 'workspace.', 'permissions.', 'providers.', 'configuration.', 'bundles.', 'modules.', 'sources.', 'locations.', 'outputs.', 'instanceBranding.')) or args['action'] == 'runtime.provenance'
             task_action = action_args.get('operation') if args['action'] == 'runtime.control' else args['action']
             compact_task_receipt = (isinstance(task_action, str) and task_action in task_definitions(schema, string)
                                     or args['action'].startswith('assignment.task.'))
