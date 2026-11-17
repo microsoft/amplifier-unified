@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+from contextlib import contextmanager
 import hashlib
 import json
 from pathlib import Path
@@ -53,6 +55,10 @@ class Service:
         self.tool_path, self.launch_roots = str(root / "uv"), {"UV_TOOL_BIN_DIR": str(root / "tool-bin")}
         self.github_access, self.up, self.results, self.events = "anonymous", up, list(ready), []
         self.inside = self.handoff = False
+        self.registration = "a" * 32
+        self.current = {"schema": 1, "registration": self.registration, "run": "b" * 32,
+                        "pid": 77, "created": "123", "image": r"C:\Python\pythonw.exe"}
+        self.exact_stops = []
 
     def running(self):
         return self.up
@@ -66,6 +72,14 @@ class Service:
     def stop(self):
         self.events.append("stop")
         self.up = False
+
+    def run(self):
+        return dict(self.current) if self.up else None
+
+    def stop_exact(self, run):
+        assert run == self.run()
+        self.exact_stops.append(run)
+        self.stop()
 
     def start(self):
         self.events.append("start")
@@ -686,3 +700,856 @@ def test_help_says_where_the_command_must_run():
     assert "refuses to run from inside it" in refresher.__doc__
     assert "-I -m amplifier_web.windows_launcher_refresh --data-dir <data> [--check | --recover]" in refresher.__doc__
     assert "run it again" in refresher.__doc__
+
+
+def request_for(installed, service, *, hold=True):
+    request = {"schema": 1, "id": "e" * 32, "registration": service.registration,
+               "launcher": installed.old, "target": {
+                   key: installed.validated[key] for key in ("generation", "revision", "version")},
+               "status": "open", "result": None, "hold": service.run() if hold else None,
+               "repair": False, "at": 1}
+    refresher.write_json(installed.home, refresher.REQUEST, request)
+    return request
+
+
+def auto(installed, service, request, **options):
+    return asyncio.run(refresher.automatic(
+        installed.home, request["id"], service=service, process=installed.process,
+        **{"hold_wait": 0, "recover_wait": 0, "stop_wait": 0, "poll": 0.001, **options}))
+
+
+def saved(installed, name=refresher.RECORD):
+    return refresher.read_json(installed.home, name)
+
+
+def interrupted(installed, service, request, monkeypatch, *, point="install"):
+    undo = refresher._undo
+
+    async def ended(*args, **kwargs):
+        raise Ended()
+
+    monkeypatch.setattr(refresher, "_undo", ended)
+    if point == "install":
+        installed.fail["install"] = True
+    elif point == "audit":
+        installed.fail["audit"] = Ended()
+    with pytest.raises(Ended):
+        auto(installed, service, request)
+    installed.fail.clear()
+    monkeypatch.setattr(refresher, "_undo", undo)
+    return refresher.unfinished(installed.home)
+
+
+def test_automatic_first_run_refreshes_and_merges_its_record(installed):
+    service = Service(installed.root)
+    request = request_for(installed, service)
+    result = auto(installed, service, request)
+    assert result == saved(installed)
+    assert (result["state"], result["result"], result["request"]) == ("settled", "refreshed", request["id"])
+    assert result["stoppedApp"] and result["attempts"] == 0
+    assert result["from"] == dict(zip(("version", "revision"), OLD))
+    assert result["to"] == dict(zip(("version", "revision"), NEW))
+    assert service.exact_stops == [request["hold"]] and service.events == ["stop", "start"]
+    assert saved(installed, refresher.KEPT)["paths"] == [result["previous"]]
+    assert Path(result["previous"]).is_dir()  # The first automatic run deletes nothing.
+    assert saved(installed, refresher.REQUEST) == request  # Only the host writes requests.
+    calls = installed.calls[:]
+    assert auto(installed, service, request) == result  # Case 3 has no second effect.
+    assert installed.calls == calls and service.events == ["stop", "start"]
+
+
+@pytest.mark.parametrize("failure, expected", [
+    ({"install": True}, "rolled-back"), ({"version": "0.1.0"}, "rolled-back"),
+])
+def test_automatic_failure_rolls_back_with_step_and_error(installed, failure, expected):
+    service = Service(installed.root)
+    request = request_for(installed, service)
+    installed.fail.update(failure)
+    result = auto(installed, service, request)
+    assert (result["state"], result["result"]) == ("settled", expected)
+    assert result["step"] in {"installing the launcher", "checking the new launcher"}
+    assert result["errorType"] in {"RuntimeError", "ValueError"} and result["stoppedApp"]
+    assert "private output" not in json.dumps(result)
+    assert generations.bootstrap_identity(installed.launcher) == installed.old
+    assert service.up and service.exact_stops == [request["hold"]]
+
+
+@pytest.mark.parametrize("condition", ["refused", "none", "launcher", "generation", "revision"])
+def test_automatic_plan_must_still_match_the_request(installed, monkeypatch, condition):
+    service = Service(installed.root)
+    request = request_for(installed, service)
+    original = refresher.plan
+
+    def changed(*args):
+        if condition == "refused":
+            raise refresher.Refused("Not safe.")
+        selected = original(*args)
+        if condition == "none":
+            selected["action"] = "none"
+        elif condition == "launcher":
+            selected["old"] = {**selected["old"], "identity": {"digest": "changed"}}
+        else:
+            selected["target"] = {**selected["target"], condition: "changed"}
+        return selected
+
+    monkeypatch.setattr(refresher, "plan", changed)
+    assert auto(installed, service, request)["result"] == "refused"
+    assert service.events == [] and installed.calls == []
+    assert refresher.unfinished(installed.home) is None
+
+
+def test_automatic_rechecks_the_plan_before_writing_the_journal(installed, monkeypatch):
+    service = Service(installed.root)
+    request, original, calls = request_for(installed, service), refresher.plan, []
+
+    def changed(*args):
+        selected = original(*args)
+        calls.append(1)
+        if len(calls) == 2:
+            selected["target"] = {**selected["target"], "generation": "changed"}
+        return selected
+
+    monkeypatch.setattr(refresher, "plan", changed)
+    assert auto(installed, service, request)["result"] == "refused"
+    assert len(calls) == 2 and service.events == [] and refresher.unfinished(installed.home) is None
+
+
+@pytest.mark.parametrize("up, has_run", [(False, True), (True, False)])
+def test_automatic_no_running_host_withdraws_without_starting(installed, up, has_run):
+    service = Service(installed.root, up=up)
+    request = request_for(installed, service)
+    if not has_run:
+        service.run = lambda: None
+    assert auto(installed, service, request)["result"] == "withdrawn"
+    assert service.events == [] and installed.calls == []
+
+
+@pytest.mark.parametrize("change", ["closed", "missing", "id", "registration", "run", "timeout"])
+def test_automatic_preparation_needs_the_same_open_request_and_run(installed, monkeypatch, change):
+    service = Service(installed.root)
+    request = request_for(installed, service, hold=False)
+    record = refresher._automatic_record
+
+    def after_ready(*args, **kwargs):
+        result = record(*args, **kwargs)
+        if result["state"] == "ready":
+            if change == "missing":
+                refresher.remove_json(installed.home, refresher.REQUEST)
+            elif change == "run":
+                service.current["run"] = "f" * 32
+            elif change != "timeout":
+                value = {**request, {"closed": "status"}.get(change, change): "closed"}
+                refresher.write_json(installed.home, refresher.REQUEST, value)
+        return result
+
+    monkeypatch.setattr(refresher, "_automatic_record", after_ready)
+    result = auto(installed, service, request)
+    assert result["result"] == ("not-started" if change == "timeout" else "withdrawn")
+    assert service.events == [] and installed.calls == [] and refresher.unfinished(installed.home) is None
+
+
+def test_automatic_hold_arrives_during_preparation(installed, monkeypatch):
+    service = Service(installed.root)
+    request = request_for(installed, service, hold=False)
+    waits = []
+
+    async def go(seconds):
+        waits.append(seconds)
+        refresher.write_json(installed.home, refresher.REQUEST, {**request, "hold": service.run()})
+
+    monkeypatch.setattr(refresher.asyncio, "sleep", go)
+    assert auto(installed, service, request, hold_wait=1)["result"] == "refreshed"
+    assert waits == [0.001]
+
+
+def test_automatic_handover_at_the_last_check_withdraws(installed, monkeypatch):
+    service = Service(installed.root)
+    request, record = request_for(installed, service), refresher._automatic_record
+
+    def handover(*args, **kwargs):
+        result = record(*args, **kwargs)
+        service.handoff = True
+        return result
+
+    monkeypatch.setattr(refresher, "_automatic_record", handover)
+    assert auto(installed, service, request)["result"] == "withdrawn"
+    assert service.events == [] and refresher.unfinished(installed.home) is None
+
+
+@pytest.mark.parametrize("case", ["down", "none", "wrong", "no run", "closed", "void", "handover", "arrives"])
+def test_rule_s_requires_an_exact_hold_for_every_stop(installed, monkeypatch, case):
+    service = Service(installed.root, up=case != "down")
+    request = request_for(installed, service, hold=case not in {"none", "arrives"})
+    if case == "wrong":
+        refresher.write_json(installed.home, refresher.REQUEST, {**request, "hold": {**service.current, "pid": 99}})
+    if case == "no run":
+        service.run = lambda: None
+    if case == "closed":
+        refresher.write_json(installed.home, refresher.REQUEST, {**request, "status": "closed"})
+    if case == "void":
+        refresher.write_json(installed.home, refresher.REQUEST, {**request, "registration": "f" * 32})
+    service.handoff = case == "handover"
+    waits = []
+
+    def go(seconds):
+        waits.append(seconds)
+        refresher.write_json(installed.home, refresher.REQUEST, {**request, "hold": service.run()})
+
+    monkeypatch.setattr(refresher.time, "sleep", go)
+    guarded = refresher._HeldService(service, installed.home, request, 1 if case == "arrives" else 0)
+    with refresher.try_lock(installed.home) as held:
+        assert held
+        if case in {"none", "wrong", "no run", "closed", "void", "handover"}:
+            with pytest.raises(refresher.NoHold):
+                guarded.stop()
+        else:
+            guarded.stop()
+    assert len(service.exact_stops) == (1 if case == "arrives" else 0)
+    assert waits == ([0.5] if case == "arrives" else [])
+
+
+@pytest.mark.parametrize("boundary", ["before journal", "after journal"])
+def test_a_successor_between_the_last_check_and_the_stop_is_never_stopped(installed, monkeypatch, boundary):
+    service = Service(installed.root)
+    request, write, plan = request_for(installed, service), refresher._write, refresher.plan
+    plans = []
+
+    def successor():
+        service.current = {**service.current, "run": "f" * 32, "pid": 99}
+
+    def journal_written(owner, path, raw):
+        write(owner, path, raw)
+        if Path(path).name == refresher.JOURNAL:
+            assert json.loads(raw)["registration"] == service.registration
+            assert json.loads(raw)["request"] == request["id"]
+            if boundary == "after journal":
+                successor()
+
+    def planned(*args):
+        result = plan(*args)
+        plans.append(1)
+        if len(plans) == 2 and boundary == "before journal":
+            successor()
+        return result
+
+    monkeypatch.setattr(refresher, "_write", journal_written)
+    monkeypatch.setattr(refresher, "plan", planned)
+    result = auto(installed, service, request)
+    assert result["result"] == "refused" and result["errorType"] == "NoHold"
+    assert service.exact_stops == [] and service.events == [] and installed.calls == []
+    assert refresher.unfinished(installed.home) is None  # No disk change needs recovery.
+
+
+@pytest.mark.parametrize("boundary", ["before journal", "after journal"])
+def test_a_host_that_ended_at_the_journal_is_not_stopped(installed, monkeypatch, boundary):
+    service = Service(installed.root)
+    request, write, plan = request_for(installed, service), refresher._write, refresher.plan
+    plans = []
+
+    def journal_written(owner, path, raw):
+        write(owner, path, raw)
+        if Path(path).name == refresher.JOURNAL and boundary == "after journal":
+            service.up = False
+
+    def planned(*args):
+        result = plan(*args)
+        plans.append(1)
+        if len(plans) == 2 and boundary == "before journal":
+            service.up = False
+        return result
+
+    monkeypatch.setattr(refresher, "_write", journal_written)
+    monkeypatch.setattr(refresher, "plan", planned)
+    auto(installed, service, request)
+    assert service.exact_stops == [] and "stop" not in service.events
+
+
+@pytest.mark.parametrize("point", ["install", "audit"])
+def test_automatic_case_one_recovers_an_interrupted_refresh(installed, monkeypatch, point):
+    pointer, service = installed.pointer.read_bytes(), Service(installed.root)
+    request = request_for(installed, service)
+    journal = interrupted(installed, service, request, monkeypatch, point=point)
+    assert (journal["registration"], journal["request"]) == (service.registration, request["id"])
+    assert refresher.started(installed.home, request)
+    result = auto(installed, service, request)
+    assert (result["state"], result["result"], result["attempts"]) == ("settled", "rolled-back", 1)
+    assert result["lastAttempt"] is not None and service.up
+    unchanged(installed, pointer)
+
+
+def test_automatic_recovery_with_nothing_to_put_back_just_settles(installed, monkeypatch):
+    service = Service(installed.root)
+    request, write = request_for(installed, service), refresher._write
+
+    def ended(owner, path, raw):
+        write(owner, path, raw)
+        if Path(path).name == refresher.JOURNAL:
+            raise Ended()
+
+    monkeypatch.setattr(refresher, "_write", ended)
+    with pytest.raises(Ended):
+        auto(installed, service, request)
+    assert refresher.unfinished(installed.home) and service.up
+    monkeypatch.setattr(refresher, "_write", write)
+    assert auto(installed, service, request)["result"] == "rolled-back"
+    assert service.events == [] and refresher.unfinished(installed.home) is None
+
+
+def test_incomplete_automatic_rollback_waits_and_starts_nothing(installed, monkeypatch):
+    service = Service(installed.root)
+    request = request_for(installed, service)
+    interrupted(installed, service, request, monkeypatch)
+
+    def denied(*args):
+        raise PermissionError("Cannot restore.")
+
+    monkeypatch.setattr(generations, "restore_binding", denied)
+    before = service.events[:]
+    result = auto(installed, service, request)
+    assert result["state"] == "waiting" and result["attempts"] == 1
+    assert service.events == before and not service.up and refresher.unfinished(installed.home)
+
+
+def test_automatic_first_rollback_incomplete_stays_waiting(installed, monkeypatch):
+    service = Service(installed.root)
+    request = request_for(installed, service)
+    installed.fail["install"] = True
+    monkeypatch.setattr(generations, "restore_binding", lambda *args: (_ for _ in ()).throw(OSError()))
+    assert auto(installed, service, request)["state"] == "waiting"
+    assert service.events == ["stop"] and not service.up
+
+
+@pytest.mark.parametrize("recovery", [False, True])
+def test_complete_rollback_that_cannot_restart_stays_waiting(installed, monkeypatch, recovery):
+    service = Service(installed.root)
+    request = request_for(installed, service)
+    if recovery:
+        interrupted(installed, service, request, monkeypatch)
+    else:
+        installed.fail["install"] = True
+    service.start = lambda: None  # A start that does not produce a running instance.
+    result = auto(installed, service, request)
+    assert result["state"] == "waiting" and result["stoppedApp"]
+    assert refresher.unfinished(installed.home) is None
+
+
+@pytest.mark.parametrize("go", [False, True])
+def test_recovery_waits_for_the_host_that_runs_then(installed, monkeypatch, go):
+    service = Service(installed.root)
+    request = request_for(installed, service)
+    interrupted(installed, service, request, monkeypatch, point="audit")
+    service.up = True
+    service.current = {**service.current, "run": "f" * 32}
+    calls = []
+
+    async def hold(seconds):
+        calls.append(seconds)
+        refresher.write_json(installed.home, refresher.REQUEST, {**request, "hold": service.run()})
+
+    monkeypatch.setattr(refresher.asyncio, "sleep", hold)
+    before = len(service.exact_stops)
+    result = auto(installed, service, request, recover_wait=1 if go else 0)
+    if go:
+        assert result["result"] == "rolled-back" and calls == [0.001]
+        assert len(service.exact_stops) == before + 1
+        assert service.exact_stops[-1]["run"] == "f" * 32
+    else:
+        assert result["state"] == "ready" and result["run"] == service.run()
+        assert len(service.exact_stops) == before and refresher.unfinished(installed.home)
+
+
+def test_recovery_of_a_new_host_during_a_handover_sends_no_stop(installed, monkeypatch):
+    service = Service(installed.root)
+    request = request_for(installed, service)
+    interrupted(installed, service, request, monkeypatch, point="audit")
+    service.up = service.handoff = True
+    before = service.events[:]
+    assert auto(installed, service, request)["state"] == "waiting"
+    assert service.events == before
+
+
+@pytest.mark.parametrize("state, changed, expected", [
+    ("ready", False, "withdrawn"), ("waiting", False, "rolled-back"),
+    ("stopped", False, "rolled-back"), ("ready", True, "refreshed"),
+    ("waiting", True, "refreshed"), ("stopped", True, "refreshed"),
+])
+def test_case_two_settles_from_disk_without_a_second_refresh(installed, state, changed, expected):
+    service = Service(installed.root)
+    request = request_for(installed, service)
+    if changed:
+        request["launcher"] = {**installed.old, "digest": "different"}
+        refresher.write_json(installed.home, refresher.REQUEST, request)
+    refresher._automatic_record(installed.home, request, state=state, attempts=4, lastAttempt=10,
+                                **{"from": {"version": OLD[0]}})
+    assert refresher.started(installed.home, request) == (state != "ready")
+    result = auto(installed, service, request)
+    assert (result["state"], result["result"], result["attempts"], result["lastAttempt"]) == (
+        "settled", expected, 4, 10)
+    assert result["from"] == {"version": OLD[0]} and installed.calls == [] and service.events == []
+
+
+@pytest.mark.parametrize("starts", [False, True])
+def test_case_two_restarts_only_an_app_the_helper_stopped(installed, starts):
+    service = Service(installed.root, up=False)
+    request = request_for(installed, service)
+    refresher._automatic_record(installed.home, request, state="waiting", stoppedApp=True)
+    if not starts:
+        service.start = lambda: None
+    result = auto(installed, service, request)
+    assert result["state"] == ("settled" if starts else "waiting")
+    assert installed.calls == [] and result["stoppedApp"]
+
+
+@pytest.mark.parametrize("state", ["ready", "waiting"])
+def test_case_two_does_not_start_an_app_without_a_recorded_stop(installed, state):
+    service = Service(installed.root, up=False)
+    request = request_for(installed, service)
+    refresher._automatic_record(installed.home, request, state=state)
+    assert auto(installed, service, request)["state"] == "settled"
+    assert service.events == [] and installed.calls == []
+
+
+@pytest.mark.parametrize("attempts, age, tries", [(5, 1, True), (6, 3599, False), (6, 3600, True), (8, 4000, True)])
+def test_recovery_backoff_is_hourly_only_after_six_attempts(installed, monkeypatch, attempts, age, tries):
+    service = Service(installed.root)
+    request = request_for(installed, service)
+    interrupted(installed, service, request, monkeypatch)
+    monkeypatch.setattr(refresher.time, "time", lambda: 10000)
+    refresher._automatic_record(installed.home, request, state="waiting", attempts=attempts, lastAttempt=10000 - age)
+    before = saved(installed)
+    result = auto(installed, service, request)
+    assert result["attempts"] == attempts + int(tries)
+    if tries:
+        assert result["result"] == "rolled-back" and service.up
+    else:
+        assert result == before and not service.up
+
+
+@pytest.mark.parametrize("condition", ["missing", "id", "closed", "void"])
+def test_automatic_ignores_inapplicable_requests_and_retires_only_void_ones(installed, monkeypatch, condition):
+    service = Service(installed.root)
+    request = request_for(installed, service)
+    if condition == "missing":
+        refresher.remove_json(installed.home, refresher.REQUEST)
+    else:
+        field = {"id": "id", "closed": "status", "void": "registration"}[condition]
+        refresher.write_json(installed.home, refresher.REQUEST, {**request, field: "other"})
+    retired = []
+    monkeypatch.setattr(refresher, "_retire_task", lambda home: retired.append(home))
+    assert auto(installed, service, request) == {}
+    assert retired == ([installed.home] if condition == "void" else [])
+    assert saved(installed) is None and service.events == [] and installed.calls == []
+
+
+@pytest.mark.parametrize("registered", [False, True])
+def test_an_unfinished_manual_journal_is_not_used_by_automatic(installed, monkeypatch, registered):
+    service = Service(installed.root)
+    request = request_for(installed, service)
+    journal = interrupted(installed, service, request, monkeypatch)
+    journal.pop("request")
+    if not registered:
+        journal.pop("registration")
+    refresher.write_json(installed.home, refresher.JOURNAL, journal)
+    refresher.remove_json(installed.home, refresher.RECORD)
+    before, events = installed.pointer.read_bytes(), service.events[:]
+    result = auto(installed, service, request)
+    assert (result["state"], result["result"], result["step"]) == (
+        "settled", "refused", "an unfinished manual refresh")
+    assert saved(installed, refresher.JOURNAL) == journal and installed.pointer.read_bytes() == before
+    assert service.events == events
+
+
+def test_stale_journal_is_never_recovered_after_a_new_registration(installed, monkeypatch):
+    service = Service(installed.root)
+    request = request_for(installed, service)
+    journal = interrupted(installed, service, request, monkeypatch, point="audit")
+    previous = Path(journal["previous"])
+    before = (generations.bootstrap_identity(installed.launcher), installed.pointer.read_bytes(),
+              generations.bootstrap_identity(previous))
+    service.registration = service.current["registration"] = "f" * 32
+    request["registration"] = service.registration
+    refresher.write_json(installed.home, refresher.REQUEST, request)
+    assert refresher.journal_kind(installed.home, service.registration) == "stale"
+    for check in (True, False):
+        with pytest.raises(refresher.Refused, match="belongs to an earlier installation.*It was not used"):
+            run(installed, service, check=check)
+    assert str(refresher._services(installed.home) / refresher.JOURNAL) in str(
+        _stale_refusal(installed, service))
+    events = service.events[:]
+    # A settled record isolates stale-journal handling from case 2's restart.
+    refresher._automatic_record(installed.home, request, state="settled", result="refused")
+    auto(installed, service, request)
+    stale = list(refresher._services(installed.home).glob("launcher-refresh-journal-stale-*.json"))
+    assert len(stale) == 1 and json.loads(stale[0].read_text()) == journal
+    assert refresher.unfinished(installed.home) is None and service.events == events
+    assert (generations.bootstrap_identity(installed.launcher), installed.pointer.read_bytes(),
+            generations.bootstrap_identity(previous)) == before
+
+
+def _stale_refusal(installed, service):
+    with pytest.raises(refresher.Refused) as reason:
+        run(installed, service)
+    return reason.value
+
+
+def test_manual_journals_name_the_registration_and_manual_request(installed, monkeypatch):
+    service = Service(installed.root)
+    installed.fail["audit"] = Ended()
+
+    async def ended(*args, **kwargs):
+        raise Ended()
+
+    monkeypatch.setattr(refresher, "_undo", ended)
+    with pytest.raises(Ended):
+        run(installed, service)
+    journal = refresher.unfinished(installed.home)
+    assert journal["registration"] == service.registration and journal["request"] is None
+
+
+def test_request_is_read_only_after_the_lock_is_acquired(installed, monkeypatch):
+    service = Service(installed.root)
+    request, lock, attempts = request_for(installed, service), refresher.try_lock, []
+
+    @contextmanager
+    def delayed(home):
+        attempts.append(1)
+        if len(attempts) == 1:
+            refresher.write_json(home, refresher.REQUEST, {**request, "status": "closed"})
+            yield False
+        else:
+            with lock(home) as held:
+                yield held
+
+    monkeypatch.setattr(refresher, "try_lock", delayed)
+    assert auto(installed, service, request) == {} and len(attempts) == 2
+    assert service.events == [] and saved(installed) is None
+
+
+def test_try_lock_never_raises_for_a_held_lock_and_automatic_gives_up(installed, monkeypatch):
+    service = Service(installed.root)
+    request = request_for(installed, service)
+    with refresher.try_lock(installed.home) as first:
+        with refresher.try_lock(installed.home) as second:
+            assert first and not second
+        clock = iter([0, 16])
+        monkeypatch.setattr(refresher.time, "monotonic", lambda: next(clock))
+        # Avoid asyncio's use of the patched clock by driving the no-await path.
+        call = refresher.automatic(installed.home, request["id"], service=service)
+        with pytest.raises(StopIteration) as result:
+            call.send(None)
+        assert result.value.value == {}
+    assert saved(installed) is None and service.events == []
+
+
+def test_json_interface_retries_only_permission_errors(installed, monkeypatch):
+    path = refresher._services(installed.home) / refresher.REQUEST
+    assert refresher.read_json(installed.home, refresher.REQUEST) is None
+    refresher.write_json(installed.home, refresher.REQUEST, {"schema": 1})
+    read, attempts, waits = Path.read_bytes, [], []
+
+    def replacing(self):
+        if self == path:
+            attempts.append(1)
+            if len(attempts) <= 5:
+                raise PermissionError()
+        return read(self)
+
+    monkeypatch.setattr(Path, "read_bytes", replacing)
+    monkeypatch.setattr(refresher.time, "sleep", waits.append)
+    assert saved(installed, refresher.REQUEST) == {"schema": 1}
+    assert len(attempts) == 6 and waits == [0.1] * 5
+    attempts.clear()
+    monkeypatch.setattr(Path, "read_bytes", lambda self: (_ for _ in ()).throw(PermissionError()))
+    with pytest.raises(PermissionError):
+        saved(installed, refresher.REQUEST)
+    monkeypatch.setattr(Path, "read_bytes", read)
+    path.write_text("[]")
+    with pytest.raises(ValueError, match="not a JSON object"):
+        saved(installed, refresher.REQUEST)
+    refresher.remove_json(installed.home, refresher.REQUEST)
+    refresher.remove_json(installed.home, refresher.REQUEST)
+
+
+def test_started_ignores_other_requests_manual_and_done_records(installed):
+    service = Service(installed.root)
+    request = request_for(installed, service)
+    assert not refresher.started(installed.home, request)
+    for record in ({"state": "waiting"}, {"request": "other", "state": "stopped"},
+                   {"request": request["id"], "state": "ready"}):
+        refresher.write_json(installed.home, refresher.RECORD, record)
+        assert not refresher.started(installed.home, request)
+    refresher.write_json(installed.home, refresher.JOURNAL, {"done": True})
+    assert refresher.journal_kind(installed.home, service.registration) == "none"
+    assert refresher.set_stale_aside(installed.home) is None
+    assert refresher.run_identity(None) is None
+    assert refresher.run_identity({**service.current, "phase": "listening"}) == service.current
+
+
+def test_kept_cleanup_deletes_only_a_recorded_previous_automatic_folder(installed):
+    service = Service(installed.root)
+    request = request_for(installed, service)
+    first = auto(installed, service, request)
+    first_path = Path(first["previous"])
+    second_path = installed.root / "launcher-0.94.0-1234abcd-2"
+    second_path.mkdir()
+    manual = installed.root / "launcher-0.86.0-1234abcd"
+    manual.mkdir()
+    foreign = installed.root.parent / "launcher-0.80.0-1234abcd"
+    foreign.mkdir()
+    wrong = installed.root / "not-a-launcher"
+    wrong.mkdir()
+    link = installed.root / "launcher-0.81.0-1234abcd"
+    link.symlink_to(manual, target_is_directory=True)
+    refresher.write_json(installed.home, refresher.KEPT, {
+        "schema": 1, "paths": [str(first_path), str(foreign), str(wrong), str(link)]})
+    refresher._keep_previous(installed.home, installed.launcher, str(second_path))
+    assert not first_path.exists() and second_path.is_dir()
+    assert manual.is_dir() and foreign.is_dir() and wrong.is_dir() and link.is_symlink()
+    assert str(first_path) not in saved(installed, refresher.KEPT)["paths"]
+    assert str(second_path) in saved(installed, refresher.KEPT)["paths"]
+
+
+@pytest.mark.parametrize("reason", ["journal", "stale", "denied"])
+def test_kept_cleanup_leaves_a_protected_or_undeletable_folder(installed, monkeypatch, reason):
+    old, new = [installed.root / name for name in ("launcher-0.87.0-1234abcd", "launcher-0.94.0-abcdef12")]
+    old.mkdir()
+    new.mkdir()
+    refresher.write_json(installed.home, refresher.KEPT, {"schema": 1, "paths": [str(old)]})
+    if reason in {"journal", "stale"}:
+        name = refresher.JOURNAL if reason == "journal" else "launcher-refresh-journal-stale-1.json"
+        refresher.write_json(installed.home, name, {"previous": str(old)})
+    else:
+        monkeypatch.setattr(refresher.shutil, "rmtree", lambda path: (_ for _ in ()).throw(PermissionError()))
+    refresher._keep_previous(installed.home, installed.launcher, str(new))
+    assert old.is_dir() and saved(installed, refresher.KEPT)["paths"] == [str(old), str(new)]
+
+
+def test_cleanup_runs_after_the_refresh_lock_is_released(installed, monkeypatch):
+    service = Service(installed.root)
+    request, checked = request_for(installed, service), []
+
+    def cleanup(home, launcher, previous):
+        with refresher.try_lock(home) as held:
+            checked.append(held)
+
+    monkeypatch.setattr(refresher, "_keep_previous", cleanup)
+    assert auto(installed, service, request)["result"] == "refreshed"
+    assert checked == [True]
+
+
+@pytest.mark.parametrize("condition, code, retired", [
+    ("success", 0, False), ("no task", 0, True), ("unreadable", 1, False),
+    ("console", 1, False), ("inside", 1, False), ("launcher python", 1, False),
+    ("waiting", 1, False),
+])
+def test_automatic_main_is_silent_and_retires_only_for_no_main_task(
+        installed, monkeypatch, condition, code, retired):
+    from amplifier_web import windows_hidden_console, windows_installation
+    service = Service(installed.root)
+    request = request_for(installed, service)
+    calls = []
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(sys, "stdout", None)
+    monkeypatch.setattr(refresher.shutil, "which", lambda *args, **kwargs: str(installed.root / "uv/uv"))
+    monkeypatch.setattr(refresher, "_task_environment", lambda *args: calls.append("environment"))
+    monkeypatch.setattr(refresher, "_retire_task", lambda home: calls.append("retire"))
+    monkeypatch.setattr(windows_installation, "owner_notice", lambda *args: pytest.fail("No message box."))
+
+    def console():
+        calls.append("console")
+        if condition == "console":
+            raise RuntimeError("No console.")
+
+    def task(home):
+        calls.append("task")
+        if condition == "no task":
+            raise refresher.Refused("No task.")
+        if condition == "unreadable":
+            raise OSError("Cannot read task.")
+        return service
+
+    if condition == "inside":
+        service.inside = True
+    if condition == "launcher python":
+        monkeypatch.setattr(sys, "prefix", str(service.launcher))
+    if condition == "waiting":
+        refresher._automatic_record(installed.home, request, state="waiting", stoppedApp=True)
+        service.up = False
+        service.start = lambda: None
+    monkeypatch.setattr(windows_hidden_console, "ensure_hidden_console", console)
+    monkeypatch.setattr(refresher, "TaskService", task)
+    # Reuse the real automatic body with the fixture's non-executing process fake.
+    automatic = refresher.automatic
+
+    async def automatic_main(home, request_id, **kwargs):
+        try:
+            return await automatic(home, request_id, **kwargs, process=installed.process, stop_wait=0)
+        except Exception as error:
+            calls.append((type(error).__name__, str(error)))
+            raise
+
+    monkeypatch.setattr(refresher, "automatic", automatic_main)
+    text = base64.urlsafe_b64encode(json.dumps({"home": str(installed.home), "request": request["id"]}).encode()).decode()
+    with pytest.raises(SystemExit) as exit:
+        refresher.main(["--automatic", text])
+    assert exit.value.code == code and calls[0] == "console", calls
+    assert ("retire" in calls) == retired
+    if condition == "console":
+        assert calls == ["console"]
+    if code == 1:
+        assert service.events == []
+
+
+def test_automatic_main_rejects_bad_payload_and_conflicting_options(installed, monkeypatch):
+    from amplifier_web import windows_hidden_console
+    monkeypatch.setattr(windows_hidden_console, "ensure_hidden_console", lambda: None)
+    monkeypatch.setattr(sys, "platform", "win32")
+    for options in (["--automatic", "not base64"], ["--automatic", "x", "--check"],
+                    ["--automatic", "x", "--recover"]):
+        with pytest.raises(SystemExit) as exit:
+            refresher.main(options)
+        assert exit.value.code != 0
+
+
+def test_task_service_checks_live_identity_and_passes_exact_stop(tmp_path, monkeypatch):
+    from amplifier_web import windows_service, windows_task_runtime as runtime
+    record = {"schema": 1, "registration": "a" * 32, "run": "b" * 32,
+              "pid": 77, "created": "123", "image": r"C:\Python\pythonw.exe", "phase": "listening"}
+    spec = SimpleNamespace(python=str(tmp_path / "tools/amplifier-unified/Scripts/pythonw.exe"),
+                           tool_path="", launch_roots={}, github_access="auto", registration_id="a" * 32)
+    value, actual, stops = {"instances": 1}, {"exited": lambda: False}, []
+    monkeypatch.setattr(windows_service, "_read", lambda home: (value, spec))
+    monkeypatch.setattr(runtime, "read", lambda spec: record)
+    monkeypatch.setattr(runtime, "matches", lambda record, actual: actual.get("matches", True))
+
+    @contextmanager
+    def process(pid):
+        assert pid == 77
+        yield actual
+
+    monkeypatch.setattr(runtime, "process", process)
+    monkeypatch.setattr(windows_service, "_stop", lambda value, spec, **kw: stops.append(kw))
+    service = refresher.TaskService(tmp_path / "app")
+    assert service.registration == record["registration"]
+    assert service.run() == refresher.run_identity(record)
+    service.stop_exact(service.run())
+    assert stops == [{"expected": refresher.run_identity(record)}]
+    actual["matches"] = False
+    assert service.run() is None
+    actual["matches"] = True
+    actual["exited"] = lambda: True
+    assert service.run() is None
+    actual = None
+    assert service.run() is None
+    value["instances"] = 0
+    assert service.run() is None
+    monkeypatch.setattr(windows_service, "_read", lambda home: (value, None))
+    with pytest.raises(RuntimeError, match="task changed"):
+        service.stop_exact(refresher.run_identity(record))
+
+
+def test_retire_task_is_best_effort_and_uses_the_small_task_module(installed, monkeypatch):
+    module, calls = SimpleNamespace(retire_task=lambda home: calls.append(home)), []
+    monkeypatch.setitem(sys.modules, "amplifier_web.windows_launcher_task", module)
+    refresher._retire_task(installed.home)
+    assert calls == [installed.home]
+    module.retire_task = lambda home: (_ for _ in ()).throw(RuntimeError())
+    refresher._retire_task(installed.home)
+
+
+@pytest.mark.parametrize("matching", [False, True])
+def test_automatic_rollback_needs_the_new_hosts_own_hold(installed, matching):
+    service = Service(installed.root, ready=(False, False))
+    request, start = request_for(installed, service), service.start
+
+    def new_host():
+        start()
+        service.current = {**service.current, "run": "f" * 32, "pid": 99}
+        if matching:
+            refresher.write_json(installed.home, refresher.REQUEST, {**request, "hold": service.run()})
+
+    service.start = new_host
+    result = auto(installed, service, request)
+    assert len(service.exact_stops) == (2 if matching else 1)
+    assert result["state"] == ("settled" if matching else "waiting")
+    if matching:
+        assert result["result"] == "rolled-back" and service.exact_stops[-1]["pid"] == 99
+    else:
+        assert refresher.unfinished(installed.home) and service.up
+
+
+def test_legacy_manual_journal_is_still_recovered_by_the_manual_command(installed, monkeypatch):
+    service = Service(installed.root)
+    request = request_for(installed, service)
+    journal = interrupted(installed, service, request, monkeypatch)
+    journal.pop("registration")
+    journal.pop("request")
+    refresher.write_json(installed.home, refresher.JOURNAL, journal)
+    assert refresher.journal_kind(installed.home, service.registration) == "manual"
+    assert run(installed, service, recover=True)["ok"] and service.up
+
+
+@pytest.mark.parametrize("record", [{"result": "refreshed", "attempts": 9},
+                                  {"request": "other", "state": "waiting", "attempts": 9}])
+def test_a_manual_or_other_requests_record_does_not_block_the_first_run(installed, record):
+    service = Service(installed.root)
+    request = request_for(installed, service)
+    refresher.write_json(installed.home, refresher.RECORD, record)
+    result = auto(installed, service, request)
+    assert result["result"] == "refreshed" and result["attempts"] == 0
+    assert result["request"] == request["id"]
+
+
+def test_record_merges_preserve_recovery_facts_without_writing_each_poll(installed, monkeypatch):
+    service = Service(installed.root)
+    request = request_for(installed, service)
+    write, writes = refresher.write_json, []
+
+    def counted(home, name, value):
+        writes.append(name)
+        write(home, name, value)
+
+    monkeypatch.setattr(refresher, "write_json", counted)
+    first = refresher._automatic_record(installed.home, request, state="ready", run=service.run(),
+                                        attempts=3, stoppedApp=True, **{"from": {"version": OLD[0]}})
+    assert refresher._automatic_record(installed.home, request, state="ready", run=service.run()) == first
+    assert writes == [refresher.RECORD]  # The repeated poll performs no fsync/replace.
+    result = refresher._automatic_record(installed.home, request, state="waiting", stoppedApp=False)
+    assert result["stoppedApp"] and result["attempts"] == 3
+    assert result["from"] == first["from"] and result["to"] == first["to"]
+    assert writes == [refresher.RECORD, refresher.RECORD]
+
+
+def test_case_two_start_exception_keeps_recovery_waiting(installed):
+    service = Service(installed.root, up=False)
+    request = request_for(installed, service)
+    refresher._automatic_record(installed.home, request, state="stopped", stoppedApp=True)
+
+    def failed():
+        raise OSError("A private task failure.")
+
+    service.start = failed
+    result = auto(installed, service, request)
+    assert result["state"] == "waiting" and result["errorType"] == "OSError"
+    assert "private task failure" not in json.dumps(result) and installed.calls == []
+
+
+def test_manual_journal_does_not_overwrite_this_requests_existing_record(installed, monkeypatch):
+    service = Service(installed.root)
+    request = request_for(installed, service)
+    journal = interrupted(installed, service, request, monkeypatch)
+    journal["request"] = None
+    refresher.write_json(installed.home, refresher.JOURNAL, journal)
+    record = saved(installed)
+    assert auto(installed, service, request) == record and saved(installed) == record
+
+
+def test_kept_cleanup_matches_journal_paths_by_folder_identity(installed):
+    old, new = [installed.root / name for name in ("launcher-0.87.0-1234abcd", "launcher-0.94.0-abcdef12")]
+    old.mkdir()
+    new.mkdir()
+    refresher.write_json(installed.home, refresher.KEPT, {"schema": 1, "paths": [str(old)]})
+    alias = installed.root / "tools/.." / old.name
+    refresher.write_json(installed.home, refresher.JOURNAL, {"previous": str(alias)})
+    refresher._keep_previous(installed.home, installed.launcher, str(new))
+    assert old.is_dir()

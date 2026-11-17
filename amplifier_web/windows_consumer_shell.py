@@ -21,6 +21,7 @@ import time
 import uuid
 
 FILE = "consumer-shell.json"
+NOTE = "apps-list-version.json"
 SETTLE_SECONDS = 15  # Longest wait for a closing app to release the installation folder.
 LINKS = {"Amplifier Unified.lnk": "", "Amplifier status.lnk": " --status",
          "Stop Amplifier.lnk": " --stop", "Uninstall Amplifier.lnk": " --uninstall"}
@@ -118,8 +119,13 @@ def _registry_values(handle):
         winreg.EnumValue(handle, index) for index in range(winreg.QueryInfoKey(handle)[1]))}
 
 
+def _typed_registry(values):
+    # REG_SZ = 1, REG_DWORD = 4. Keep reads comparable on non-Windows test hosts.
+    return {name: (value, 4 if type(value) is int else 1) for name, value in values.items()}
+
+
 @contextmanager
-def registry_change(root, values, *, remove=False):
+def _registry_transaction(root, values, *, remove=False, version=None):
     """Prepare a conflict-detecting native registry transaction, then commit.
 
     A staged delete detects conflicting same-account edits/replacement on
@@ -156,9 +162,9 @@ def registry_change(root, values, *, remove=False):
         key = REGISTRY + identity(root)
         hive = W.HKEY(C.c_int32(int(winreg.HKEY_CURRENT_USER)).value)
         handle, disposition = W.HKEY(), W.DWORD()
-        if remove:
+        if remove or version is not None:
             error = adv.RegOpenKeyTransactedW(
-                hive, key, 0, winreg.KEY_READ | winreg.KEY_SET_VALUE | 0x10000,
+                hive, key, 0, winreg.KEY_READ | winreg.KEY_SET_VALUE | (0x10000 if remove else 0),
                 C.byref(handle), transaction, None)
         else:
             error = adv.RegCreateKeyTransactedW(
@@ -170,14 +176,15 @@ def registry_change(root, values, *, remove=False):
         # integer handle directly; retain and close our original owner exactly.
         opened = handle.value
         try:
-            if remove:
-                expected = {name: (value, winreg.REG_DWORD if type(value) is int else winreg.REG_SZ)
-                            for name, value in values.items()}
-                if _registry_values(opened) != expected:
-                    raise ValueError("The installed-app entry changed; removal refused.")
-                error = adv.RegDeleteKeyTransactedW(hive, key, 0, 0, transaction, None)
-                if error:
-                    raise C.WinError(error)
+            if remove or version is not None:
+                if _registry_values(opened) != _typed_registry(values):
+                    raise ValueError("The installed-app entry changed; the write was refused.")
+                if remove:
+                    error = adv.RegDeleteKeyTransactedW(hive, key, 0, 0, transaction, None)
+                    if error:
+                        raise C.WinError(error)
+                else:
+                    winreg.SetValueEx(opened, "DisplayVersion", 0, winreg.REG_SZ, version)
             else:
                 if disposition.value != 1:  # REG_CREATED_NEW_KEY, never adopt an existing key
                     raise ValueError("The installed-app entry already exists; nothing was overwritten.")
@@ -203,6 +210,20 @@ def registry_change(root, values, *, remove=False):
                 raise C.WinError(C.get_last_error())
 
 
+@contextmanager
+def registry_change(root, values, *, remove=False):
+    """Stage an exact create or removal; the caller chooses when to commit."""
+    with _registry_transaction(root, values, remove=remove) as commit:
+        yield commit
+
+
+def registry_version(root, earlier, version):
+    """Change only the version, if the entire earlier key still matches."""
+    registration_values(root, version)
+    with _registry_transaction(root, earlier, version=version) as commit:
+        commit()
+
+
 def registry(root, values=None, *, remove=False):
     import winreg
     if values is not None or remove:
@@ -221,6 +242,138 @@ def _receipt(root):
     from .windows_files import directory
     with directory(root, owned_root=root) as owned:
         return json.loads(owned.read_private(FILE, limit=65536))
+
+
+def _entry_record(root):
+    row = _receipt(root)
+    folder = programs() / ("Amplifier Unified - " + identity(root))
+    _, links = entries(root)
+    if (not isinstance(row, dict) or set(row) != {"schema", "root", "folder", "status", "links", "registry"}
+            or type(row["schema"]) is not int or row["schema"] != 1
+            or row["root"] != str(root) or row["folder"] != str(folder)
+            or row["status"] not in ("installed", "removed") or not isinstance(row["links"], dict)
+            or set(row["links"]) != set(links) or not isinstance(row["registry"], dict)):
+        raise ValueError("The Windows app entry receipt is incomplete; inspect before removal.")
+    expected = registration_values(root, row["registry"].get("DisplayVersion"))
+    if (row["registry"] != expected
+            or any(type(row["registry"][name]) is not type(value) for name, value in expected.items())):
+        raise ValueError("The Windows app entry receipt is incomplete; inspect before removal.")
+    return row
+
+
+def _version_record(row, version):
+    return {**row, "registry": {**row["registry"], "DisplayVersion": version}}
+
+
+def _finish_version(home, result):
+    try:
+        (home / "config/services" / NOTE).unlink(missing_ok=True)
+    except OSError:
+        return {**result, "noteRetained": True}
+    return result
+
+
+def _restore_version(root, earlier):
+    from .deployment import write_private
+    try:
+        write_private(root / FILE, json.dumps(earlier), owned_root=root)
+    except (OSError, ValueError, RuntimeError):
+        pass
+    # A write returning (or raising) does not prove what is now on disk.
+    try:
+        return _receipt(root) == earlier
+    except (OSError, ValueError, RuntimeError):
+        return False
+
+
+def set_version(root, version, *, home) -> dict:
+    """Record a confirmed app version without changing shortcuts or other values."""
+    from .deployment import write_private
+    from .windows_files import address
+    root, home = address(root), address(home)
+    try:
+        earlier = _entry_record(root)
+    except (OSError, ValueError, RuntimeError):
+        return {"changed": False, "reason": "invalid-record"}
+    if earlier["status"] != "installed":
+        return {"changed": False, "reason": "not-installed"}
+    try:
+        registration_values(root, version)
+    except ValueError:
+        return {"changed": False, "reason": "invalid-version"}
+    previous = earlier["registry"]["DisplayVersion"]
+    if previous == version:
+        return {"changed": False, "reason": "current"}
+    try:
+        if registry(root) != _typed_registry(earlier["registry"]):
+            return {"changed": False, "reason": "registry-changed"}
+        note = {"schema": 1, "root": str(root), "from": previous, "to": version}
+        write_private(home / "config/services" / NOTE, json.dumps(note), owned_root=home)
+    except (OSError, ValueError, RuntimeError):
+        return {"changed": False, "reason": "failed"}
+    try:
+        write_private(root / FILE, json.dumps(_version_record(earlier, version)), owned_root=root)
+    except PermissionError:
+        return _finish_version(home, {"changed": False, "reason": "refused"})
+    except (OSError, ValueError, RuntimeError):
+        return {"changed": False, "reason": "failed", "noteRetained": True}
+    try:
+        registry_version(root, earlier["registry"], version)
+    except (OSError, ValueError, RuntimeError) as error:
+        result = {"changed": False, "reason": "refused" if isinstance(error, PermissionError) else "failed"}
+        if _restore_version(root, earlier):
+            return _finish_version(home, result)
+        return {**result, "noteRetained": True}
+    return _finish_version(home, {"changed": True, "from": previous, "to": version})
+
+
+def settle_version(root, *, home) -> dict | None:
+    """Settle an interrupted record/key write from the files present at startup."""
+    from .windows_files import address, directory
+    root, home = address(root), address(home)
+    try:
+        with directory(home / "config/services", owned_root=home) as owned:
+            note = json.loads(owned.read_private(NOTE, limit=65536))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError, RuntimeError):
+        return _finish_version(home, {"changed": False, "state": "unreadable-note"})
+    try:
+        if (not isinstance(note, dict) or set(note) != {"schema", "root", "from", "to"}
+                or type(note["schema"]) is not int or note["schema"] != 1
+                or not isinstance(note["root"], str)):
+            raise ValueError("The Apps-list version note is invalid.")
+        registration_values(root, note["from"])
+        registration_values(root, note["to"])
+    except ValueError:
+        return _finish_version(home, {"changed": False, "state": "invalid-note"})
+    if note["root"] != str(root):
+        return _finish_version(home, {"changed": False, "state": "foreign-note"})
+    try:
+        row = _entry_record(root)
+        live = registry(root)
+    except (OSError, ValueError, RuntimeError):
+        return _finish_version(home, {"changed": False, "state": "unreadable-entries"})
+    version = row["registry"]["DisplayVersion"]
+    if row["status"] != "installed" or version not in (note["from"], note["to"]):
+        return _finish_version(home, {"changed": False, "state": "discarded"})
+    if live == _typed_registry(row["registry"]):
+        state = "agreed-from" if version == note["from"] else "agreed-to"
+        return _finish_version(home, {"changed": False, "state": state})
+    if version == note["to"]:
+        earlier = _version_record(row, note["from"])
+        if live == _typed_registry(earlier["registry"]):
+            try:
+                registry_version(root, earlier["registry"], note["to"])
+            except (OSError, ValueError, RuntimeError):
+                pass
+            else:
+                return _finish_version(home, {"changed": True, "state": "completed",
+                                              "from": note["from"], "to": note["to"]})
+        if _restore_version(root, earlier):
+            return _finish_version(home, {"changed": False, "state": "rolled-back"})
+        return {"changed": False, "state": "rollback-pending", "noteRetained": True}
+    return _finish_version(home, {"changed": False, "state": "discarded"})
 
 
 def listed(root) -> bool:
@@ -307,17 +460,9 @@ def removal(root, *, progress=None):
     from .deployment import write_private
     step = progress or (lambda name: None)
     root = address(root)
-    with directory(root, owned_root=root) as owned:
-        row = json.loads(owned.read_private(FILE, limit=65536))
-    folder = programs() / ("Amplifier Unified - " + identity(root))
+    row = _entry_record(root)
+    folder = Path(row["folder"])
     python, links = entries(root)
-    if (not isinstance(row, dict) or set(row) != {"schema", "root", "folder", "status", "links", "registry"}
-            or type(row["schema"]) is not int or row["schema"] != 1
-            or row["root"] != str(root) or row["folder"] != str(folder)
-            or row["status"] not in {"installed", "removed"} or not isinstance(row["links"], dict)
-            or set(row["links"]) != set(links) or not isinstance(row["registry"], dict)
-            or row["registry"] != registration_values(root, row["registry"].get("DisplayVersion"))):
-        raise ValueError("The Windows app entry receipt is incomplete; inspect before removal.")
     result = {"shortcutsRemoved": True, "installedAppEntryRemoved": True, "userDataRetained": True}
     if row["status"] == "removed":
         # A completed earlier removal. A second removal changes nothing.
