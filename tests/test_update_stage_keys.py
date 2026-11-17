@@ -1136,7 +1136,8 @@ async def test_native_windows_stage_keys_product_refresh_readback(native_product
 
 @pytest.mark.skipif(os.name != 'nt', reason='requires native Windows private files and a product-made stage')
 @pytest.mark.parametrize('hold_open', [False, True])
-async def test_native_windows_chat_setup_stage_keys_at_a_failed_preparation(native_product_stage, hold_open):
+async def test_native_windows_chat_setup_stage_keys_at_a_failed_preparation(
+        native_product_stage, monkeypatch, hold_open):
     """A stage as a chat's own setup makes it (runtime_profiles.ensure), with the product's own calls:
     an ordinary mkdir of the stage and of shared-config, the private writer for the settings and for the
     record, an ordinary copy of the keys file. The account owns what it makes, as on a person's PC."""
@@ -1145,6 +1146,9 @@ async def test_native_windows_chat_setup_stage_keys_at_a_failed_preparation(nati
     from amplifier_web.host.config import write_private
 
     home, live, _, _ = await native_product_stage(ordinary=True)
+    # This home is the app's home, as in the installed app: the preparation's private writer takes its
+    # root from that setting, and it refuses a stage outside it.
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(home))
     stage = home / 'updates/releases' / ('b' * 32)
     shared, held = stage / 'shared-config', ExitStack()
     try:
