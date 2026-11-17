@@ -2766,8 +2766,8 @@ def test_windows_plan_native_check_passes_only_with_one_acceptance_and_two_refus
     assert tool.count(equal) == 1
     refuses.write_text(tool.replace(equal, '    if False:\n'))
     result = fixture.cases(tmp_path / 'refuses', path, records, tool=refuses)
-    # Its refusals have more lines than the one difference that each case made. The check requires that
-    # one difference line directly before the last line.
+    # Its refusals have more lines than the one difference that each case made. The check requires this
+    # text in the tool's error output: the one difference line, and directly after it the stop line.
     assert result['ok'] is False and [case['passed'] for case in result['cases']] == [False, False, False]
     # A gate that refuses and names the wrong graph must fail the check: the required line names the graph.
     wrong = tmp_path / 'wrong.py'
@@ -2783,6 +2783,13 @@ def test_windows_plan_native_check_passes_only_with_one_acceptance_and_two_refus
     result = fixture.cases(tmp_path / 'fails', path, records, tool=fails)
     assert result['ok'] is False and [case['passed'] for case in result['cases']] == [False, True, True]
     assert result['cases'][0]['returncode'] == 3
+    # A tool whose candidate command fails ends the check with that command's exit status and error output.
+    broken = tmp_path / 'broken.py'
+    binds = "        output = ('candidate', candidate(root, args.evidence))\n"
+    assert tool.count(binds) == 1
+    broken.write_text(tool.replace(binds, "        raise SystemExit('no candidate')\n"))
+    with pytest.raises(RuntimeError, match="^The tool's candidate command ended with exit status 1: no candidate$"):
+        fixture.cases(tmp_path / 'broken', path, records, tool=broken)
     # The plan's row of Amplifier Foundation can have its name in another form.
     path.write_text(json.dumps({'schema': 1, 'graph': [APP_ROW, {**rows[1], 'name': 'Amplifier_Foundation'}, rows[0], rows[2]]}))
     result = fixture.cases(tmp_path / 'renamed', path, records)
@@ -2801,9 +2808,9 @@ def test_windows_plan_native_check_passes_only_with_one_acceptance_and_two_refus
         with pytest.raises(RuntimeError, match=f'^{re.escape(sentence)}$'):
             fixture.cases(tmp_path / name, path, installation)
         assert not (tmp_path / name).exists()
-    # The other commit must differ from the installed one, or a refusal would show nothing.
+    # The other commit must differ from the one that the plan has, or a refusal would show nothing.
     path.write_text(json.dumps({'schema': 1, 'graph': [APP_ROW, *component_rows(fixture.OTHER)]}))
-    with pytest.raises(RuntimeError, match='Change OTHER'):
+    with pytest.raises(RuntimeError, match="^The plan has Amplifier Foundation at the fixture's other commit\\. Change OTHER\\.$"):
         fixture.cases(tmp_path / 'same-commit', path, records)
     # No sentence covers an installation whose record is at the other commit already. The check then fails:
     # the tool refuses the control, and its output names that record's commit.
@@ -2861,7 +2868,9 @@ def test_windows_plan_native_check_requires_the_plan_of_its_release_with_a_compo
              f'The plan has version 0.0.1 and source {revision}.' + ours),
             ('source', {**release, 'source': 'b' * 40, 'graph': [APP_ROW, *rows]},
              f"The plan has version {version} and source {'b' * 40}." + ours),
-            ('neither', {'schema': 1, 'graph': [APP_ROW, *rows]}, 'The plan has version None and source None.' + ours),
+            ('neither', {'schema': 1, 'graph': [APP_ROW, *rows]}, 'The plan has no version and no source.' + ours),
+            ('no-source', {'schema': 1, 'version': version, 'graph': [APP_ROW, *rows]},
+             f'The plan has version {version} and no source.' + ours),
             ('flat', {**release, 'graph': [APP_ROW, *rows[:2]]},
              'The plan has no component in a subdirectory of its repository.')):
         temporary = tmp_path / name
@@ -2898,8 +2907,9 @@ def test_windows_plan_native_check_gives_its_commands_less_time_than_the_step_an
     assert step['timeout-minutes'] == '15' and job['timeout-minutes'] == '20'
     assert fixture.LIMIT <= (int(step['timeout-minutes']) - 2) * 60
 
-    # From here the case sets the fixture's clock: the seconds since the check's start. So which sentence
-    # a command gets does not depend on the speed of this machine.
+    # From here the case sets the fixture's clock: the seconds since the check's start. That clock gives
+    # each command its limit. Starting a command and waiting for it still take real time: each command
+    # sleeps 600 seconds and has a limit of at most 2 seconds.
     class Clock:
         now = 0.0
 
@@ -2931,7 +2941,7 @@ def test_windows_plan_native_check_gives_its_commands_less_time_than_the_step_an
     # that ended.
     sleeps = (sys.executable, '-c', 'import time; time.sleep(600)')
     Clock.now = 0.0
-    with pytest.raises(RuntimeError, match=r'^python[\w.]* -c did not end in 1 second\.$'):
+    with pytest.raises(RuntimeError, match=r'^python[\w.]* -c or its output did not end in 1 second\.$'):
         fixture.run(*sleeps, limit=1)
     assert len(made) == 1 and made[0].returncode not in (None, 0)
     # The gate's command line has a sentence too. When what is left of the check's time is less than the
@@ -2939,11 +2949,11 @@ def test_windows_plan_native_check_gives_its_commands_less_time_than_the_step_an
     slow = tmp_path / 'slow.py'
     slow.write_text('import time\ntime.sleep(600)\n')
     Clock.now = fixture.LIMIT - 1.5
-    with pytest.raises(RuntimeError, match=r"^slow\.py verify-consumer did not end in what was left of the "
-                                           r"check's 12 minutes \(at most 2 seconds\)\.$"):
+    with pytest.raises(RuntimeError, match=r"^slow\.py verify-consumer or its output did not end in what was "
+                                           r"left of the check's 12 minutes \(at most 2 seconds\)\.$"):
         fixture.command(slow, 'verify-consumer')
     # A rest of less than one second is not reported as 0 seconds.
-    cut = r"python[\w.]* -c did not end in what was left of the check's 12 minutes \(at most 1 second\)\."
+    cut = r"python[\w.]* -c or its output did not end in what was left of the check's 12 minutes \(at most 1 second\)\."
     Clock.now = fixture.LIMIT - 0.5
     with pytest.raises(RuntimeError, match='^' + cut + '$'):
         fixture.run(*sleeps, limit=300)
@@ -3006,7 +3016,7 @@ def test_windows_plan_native_workflow_covers_the_gate_paths_and_does_not_ignore_
     assert check[0]['run'].splitlines() == [
         "$ErrorActionPreference = 'Stop'",
         'python -I -B tests/fixtures/windows_consumer_plan_native.py',
-        "if ($LASTEXITCODE -ne 0) { throw 'The consumer plan check failed; inspect result.json.' }"]
+        "if ($LASTEXITCODE -ne 0) { throw 'The consumer plan check failed. Read result.json in the artifact if the check wrote one.' }"]
     assert all('continue-on-error' not in item for item in (job, *steps))
     # It is a pull-request check. It adds no step to a release run.
     assert 'windows_consumer_plan_native' not in (workflows / 'release.yml').read_text()

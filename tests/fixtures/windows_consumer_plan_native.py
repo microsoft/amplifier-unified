@@ -42,7 +42,8 @@ SOURCE = "https://github.com/microsoft/amplifier-unified"
 RELEASE = {"version": "0.106.0", "sha256": "5d89c247b7ba19aa0264516036d17a26e314a17ea05de05d9683a2f84e97b94c",
            "revision": "89de72c3a635f9e000cbb049c6bca3d525ade6e6"}
 NAME = "amplifier-foundation"
-# Any commit other than the installed one. Nothing installs it; the gate compares text.
+# Any commit other than the one that the plan has for Amplifier Foundation. Nothing installs it; the gate
+# compares text.
 OTHER = "e37a946b64854eb39c09a3857ce2bc366ff297e0"
 # Each command that this file starts itself (see started) gets a time limit: its own, and at most what
 # is left of this time, counted from the import of this file. This time is below the workflow step's
@@ -81,7 +82,9 @@ def span(seconds):
 def started(name, arguments, limit, **options):
     """Run one command with a time limit and give its result.
 
-    At the limit, Python ends the command's own process. It does not end a program that the command started.
+    The limit is for the command and its output together. When they do not end in that time, Python calls
+    kill() for the command's own process, which can have ended already. It does not end a program that the
+    command started.
     """
     seconds = left(limit)
     try:
@@ -89,9 +92,9 @@ def started(name, arguments, limit, **options):
                               errors="replace", timeout=seconds, **options)
     except subprocess.TimeoutExpired:
         if seconds == limit:
-            raise RuntimeError(f"{name} did not end in {span(limit)}.") from None
-        raise RuntimeError(f"{name} did not end in what was left of the check's {LIMIT // 60} minutes "
-                           f"(at most {span(math.ceil(seconds))}).") from None
+            raise RuntimeError(f"{name} or its output did not end in {span(limit)}.") from None
+        raise RuntimeError(f"{name} or its output did not end in what was left of the check's "
+                           f"{LIMIT // 60} minutes (at most {span(math.ceil(seconds))}).") from None
 
 
 def command(tool, *arguments):
@@ -107,7 +110,8 @@ def evidence(tool, folder, resolved):
     (folder / "development.lock").write_text("native check\n", encoding="utf-8")
     result = command(tool, "candidate", "--evidence", folder)
     if result.returncode != 0:
-        raise RuntimeError("The tool did not bind the candidate: " + result.stderr[-2000:])
+        raise RuntimeError(f"The tool's candidate command ended with exit status {result.returncode}: "
+                           + result.stderr[-2000:])
     return result.stdout.strip().splitlines()[-1]
 
 
@@ -155,7 +159,7 @@ def cases(work, plan_path, records, tool=TOOL):
             for row in plan["graph"] if row["name"] != "amplifier-unified"]
     installed = {normal(row["name"]): row["revision"] for row in host if row.get("url")}
     if installed.get(NAME) == OTHER:
-        raise RuntimeError("The installed Amplifier Foundation commit is the fixture's other commit. Change OTHER.")
+        raise RuntimeError("The plan has Amplifier Foundation at the fixture's other commit. Change OTHER.")
     # Before the tool runs: the plan and the installation each have the one row of Amplifier Foundation, from Git.
     host_other, records_other = moved(host, "The plan"), moved(records, "The installation")
     same = evidence(tool, work / "host-same", host)
@@ -242,9 +246,9 @@ def main():
         raw = plan_path.read_bytes()
         plan = json.loads(raw)
         if (plan.get("version"), plan.get("source")) != (RELEASE["version"], RELEASE["revision"]):
-            raise RuntimeError(f"The plan has version {plan.get('version')} and source {plan.get('source')}. "
-                               f"This check's release has version {RELEASE['version']} and revision "
-                               f"{RELEASE['revision']}.")
+            has = " and ".join(f"{key} {plan[key]}" if key in plan else f"no {key}" for key in ("version", "source"))
+            raise RuntimeError(f"The plan has {has}. This check's release has version {RELEASE['version']} "
+                               f"and revision {RELEASE['revision']}.")
         # The control must cover a component that is in a subdirectory of its repository.
         if not any(row.get("subdirectory") for row in plan["graph"]):
             raise RuntimeError("The plan has no component in a subdirectory of its repository.")

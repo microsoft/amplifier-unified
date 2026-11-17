@@ -58,7 +58,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           python -I -B tests/fixtures/windows_consumer_plan_native.py
-          if ($LASTEXITCODE -ne 0) { throw 'The consumer plan check failed; inspect result.json.' }
+          if ($LASTEXITCODE -ne 0) { throw 'The consumer plan check failed. Read result.json in the artifact if the check wrote one.' }
       - name: Retain the bounded result and the plan
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
