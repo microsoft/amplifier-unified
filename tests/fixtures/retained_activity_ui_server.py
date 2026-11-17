@@ -40,7 +40,7 @@ async def main(home):
         await service.dispatch('session.pin', {'id': row['id'], 'pinned': True})
     await service.dispatch('session.select', {'id': owner['id']})
     await service.dispatch('view.update', {'patch': {'setupJourney': 'done', 'navPinned': True,
-        'navChatScope': 'all', 'navRecentLimit': 50, 'panel': None}})
+        'navChatScope': 'all', 'navRecentLimit': 40, 'panel': None}})
     histories = {row['id']: hashlib.sha256(json.dumps(row['messages'], sort_keys=True).encode()).hexdigest()
                  for row in rows}
     held = False
