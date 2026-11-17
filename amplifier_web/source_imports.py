@@ -18,11 +18,20 @@ async def prepare(bundle, **options):
     store object. A read-only attribute on a Windows folder does not stop a new
     entry.
 
-    So from this call on the process writes no bytecode, and a Python process
-    that it starts writes none either. Workers and update stages have that
-    rule for their whole life, from ``update_sources.store_environment``. A
-    helper has the host's environment, and it keeps the bytecode of everything
-    that it imported from its own environment before this call.
+    So from this call on the process writes no bytecode. A Python process that
+    it starts afterwards gets ``PYTHONDONTWRITEBYTECODE`` with the helper's
+    environment and writes none either. A child that is started with ``-E`` or
+    ``-I``, or with an environment that leaves the setting out, ignores it.
+
+    Call this only in a helper process that ends after its one task. Both
+    settings stay for the rest of the process. Called in the host's own
+    process, they would reach every child of the host, and no helper would
+    keep bytecode. Workers and update stages have the rule for their whole
+    life, from ``update_sources.store_environment``.
+
+    A helper keeps the bytecode of what it imported from its own environment
+    before this call. It keeps none for what it imports after it: the prepared
+    module, and each package that the module is the first to import.
     """
     sys.dont_write_bytecode = True
     os.environ['PYTHONDONTWRITEBYTECODE'] = '1'

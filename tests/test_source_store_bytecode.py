@@ -16,7 +16,7 @@ on a Windows folder does not stop a new entry in it.
 
 The rule is ``amplifier_web.source_imports.prepare``: a helper that prepares a
 module from a source writes no bytecode from that call on, and a Python
-process that it starts writes none. Three helpers
+process that it starts with its environment writes none. Three helpers
 prepare a module from a source with the host's environment: the connection
 check, the readiness check of a transfer, and the module validation.
 
@@ -271,8 +271,9 @@ def test_a_helper_starts_the_preparation_of_a_bundle_only_through_the_rule():
     It finds the call by the two names that this code gives a Foundation
     bundle, and the call on the result of another call
     (``Bundle.from_dict(...).prepare(``). Another name passes unseen.
-    ``host/components.py`` prepares for conversation workers and update
-    stages; their environment turns bytecode writing off
+    ``host/components.py`` prepares in the process of a conversation worker
+    (``runtime_worker.py``) or of an update stage (``update_probe.py``). The
+    host starts both with an environment that turns bytecode writing off
     (``update_sources.store_environment``).
     """
     package = HELPER.parent
@@ -283,3 +284,16 @@ def test_a_helper_starts_the_preparation_of_a_bundle_only_through_the_rule():
     assert callers == ['host/components.py', 'source_imports.py'], (
         'A helper that prepares a module from a source calls amplifier_web.source_imports.prepare, '
         'not the bundle. Else it writes __pycache__ into the source, and Foundation then refuses a store object.')
+
+
+def test_only_the_three_helper_files_use_the_rule():
+    """The rule changes its whole process for good, so it is for a process that ends after its one task."""
+    package = HELPER.parent
+    users = sorted(
+        path.relative_to(package).as_posix() for path in package.rglob('*.py')
+        if 'static' not in path.relative_to(package).parts and path.name != 'source_imports.py'
+        and 'source_imports' in path.read_text(encoding='utf-8'))
+    assert users == ['module_validate.py', 'portability_probe.py', 'provider_probe.py'], (
+        'amplifier_web.source_imports.prepare turns bytecode writing off for the rest of its process and for the '
+        'processes that it starts. A new helper process may use it: add its file here. The host must not: '
+        'every child of the host would then keep no bytecode.')
