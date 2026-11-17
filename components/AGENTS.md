@@ -67,13 +67,16 @@ distribution with Unified, which remains the sole installed owner. Follow
 [the selection instructions](README.md#select-a-scheduling-artifact); host admission,
 authorization, Stop and execution remain in Unified.
 
-`operations/` is the temporary authoring project for `amplifier_operations`.
-Its SQLite operation observations and bounded delivery/cursor tests belong here;
+[bkrabach/amplifier-platform-operations](https://github.com/bkrabach/amplifier-platform-operations)
+is the sole authoring owner for `amplifier_operations`.
+Its SQLite operation observations and bounded delivery/cursor tests belong there;
 Unified retains admission, authority, Stop and execution. The top-level
 `amplifier_operations/` is the generated runtime snapshot selected by
 `operations.source.json`, preserving the installed and isolated-worker import path.
-Never edit that snapshot by hand or coinstall the standalone distribution with
-Unified. Independent author edits/publication do not refresh the app selection.
+Unified remains the sole installed owner. Never restore an author copy here,
+edit that snapshot by hand or coinstall the standalone distribution with Unified.
+Independent author edits/publication do not refresh the app selection. Follow
+the [selection instructions](README.md#select-an-operations-artifact).
 
 `kernels/` is the temporary authoring project for `amplifier_kernels`, including
 its Python and Node runners and real-process mechanism tests. Unified consumes
