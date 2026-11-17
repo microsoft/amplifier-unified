@@ -280,6 +280,7 @@ def _check_retained_image_selection(plan, retained_plan):
 
     from .storage import _SECRET_KEYS
     from ..provider_recording import apply_provider_recording
+    from ..provider_state_files import clear_state_files
     from ..runtime_controls import credential_field
     routed = any(not row.get("config", {}).get("backend") for row in current)
 
@@ -310,6 +311,8 @@ def _check_retained_image_selection(plan, retained_plan):
         apply_provider_recording(value, enabled=False)
         result = []
         for row in value["providers"]:
+            # A child that an earlier version saved has no host state-file path.
+            clear_state_files(row)
             config = row.get("config", {})
             if not routed and "image_generation" not in config:
                 continue

@@ -177,6 +177,8 @@ async def _probe(request):
     finally:
         await _strict_close(schema_provider)
     config = materialize_provider_config(request["config"], schema)
+    from amplifier_web.provider_state_files import with_state_files
+    config = with_state_files(request["module"], config)
     previous_copilot = os.environ.get("COPILOT_AGENT_TOKEN")
     copilot = request["module"] == "provider-github-copilot" and config.get("github_token")
     if copilot:

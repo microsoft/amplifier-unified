@@ -160,6 +160,10 @@ async def materialize_bundle_providers(bundle, prepared, *, environment=None, sc
                 raise schema
             reason = "provider_configuration_failed"
             row["config"] = materialize_provider_config(row.get("config", {}), schema, environment=environment)
+            # Only a row that will mount. A refused row keeps its exact
+            # declaration: provider isolation finds its failure by that.
+            from .provider_state_files import apply_state_files
+            apply_state_files(row)
         except Exception as exc:
             if isolation is not None:
                 isolation.record(row, reason, error=exc)
