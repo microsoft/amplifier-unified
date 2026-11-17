@@ -569,20 +569,37 @@ def test_browser_message_names_setup_when_the_start_menu_entry_does_not_exist(tm
                             "run the Amplifier setup file again. It keeps your chats and settings.")
 
 
-@pytest.mark.parametrize("folder", ["removing", "deleted"])
-def test_browser_message_does_not_say_that_setup_keeps_chats_which_an_uninstall_deleted(tmp_path, monkeypatch, folder):
+def test_browser_message_does_not_say_that_setup_keeps_chats_which_an_uninstall_deleted(tmp_path, monkeypatch):
     """An uninstall that deletes the folder can run while this start waits for the browser.
 
-    The start then ends without a confirmation. Its message still names the
-    setup file, and no longer says that the setup file keeps chats and
-    settings: they are deleted, or they are being deleted.
+    The start then ends without a confirmation. When the folder is deleted,
+    its message still names the setup file, which makes a new installation.
+    It no longer says that the setup file keeps chats and settings.
     """
     from amplifier_web.update_diagnostics import CommandOutput
-    result, events = opening_launch(tmp_path, monkeypatch, CommandOutput(""), listed=False, during=folder)
+    result, events = opening_launch(tmp_path, monkeypatch, CommandOutput(""), listed=False, during="deleted")
     assert result["browser"] == {"opened": False, "reason": "not-confirmed"}
     assert events[2][1] == ("Amplifier may not have opened in your browser.\n\n"
                             "Look for an Amplifier tab in your browser. If there is none, "
                             "run the Amplifier setup file again.")
+
+
+@pytest.mark.parametrize("listed", [False, True])
+def test_browser_message_while_a_removal_runs_says_that_and_names_neither_setup_nor_a_new_start(
+        tmp_path, monkeypatch, listed):
+    """The uninstall wrote its journal while this start waited for the browser.
+
+    From then on no start opens Amplifier, and setup installs nothing into
+    this folder. So the message names neither: it is the text of a start on
+    a folder whose removal began.
+    """
+    from amplifier_web.update_diagnostics import CommandOutput
+    result, events = opening_launch(tmp_path, monkeypatch, CommandOutput(""), listed=listed, during="removing")
+    assert result["browser"] == {"opened": False, "reason": "not-confirmed"}
+    assert [event[0] for event in events] == ["trust", "command", "notice"]  # One message.
+    assert events[2][1] == consumer._UNFINISHED["removing"]
+    for wrong in ("setup file", "keeps your chats", "open Amplifier from the Start menu", "may not have opened"):
+        assert wrong not in events[2][1]
 
 
 @pytest.mark.parametrize("missing", ["record", "journal", "app"])
@@ -905,8 +922,8 @@ def test_a_start_that_cannot_use_the_sign_in_entry_names_that_cause_and_not_the_
         assert text.count(ENTRY) == 2 and "Task Scheduler Library" in text and "press the Delete key" in text
         assert "no longer starts when you sign in, until it makes a new entry" in text
         assert ("If you have another Amplifier installation for this Windows account, the entry can belong "
-                "to it. If you want that installation to start when you sign in, do not delete the entry.\n\n"
-                "Otherwise delete the entry. ") in text
+                "to it. Without the entry, that installation does not start when you sign in.\n\n"
+                "If that is all right, delete the entry. ") in text
         assert ("4. Restart this PC.\n5. " + ("Open Amplifier from the Start menu: Amplifier Unified."
                                                if listed else "Run the Amplifier setup file again.")
                 + " It makes a new entry. Your chats and settings stay.") in text
@@ -937,9 +954,11 @@ def test_an_entry_that_was_not_confirmed_does_not_send_the_person_to_another_ins
     installation, or uninstall it first." An entry of another installation
     can have the same cause (the Windows account was renamed, and both
     installations are this account's). Then that installation does not
-    start and does not uninstall either. The sentence now says only what
-    deleting the entry takes from that installation; that holds for a start,
-    a status, an uninstall and a removal that goes on.
+    start and does not uninstall either, and deleting the entry is its
+    repair too. The sentence now says what that installation does not have
+    without the entry. It does not say that the installation starts today,
+    and it does not tell the person to keep the entry. That holds for a
+    start, a status, an uninstall and a removal that goes on.
     """
     opening, _, rest = consumer.entry_notice(purpose, ENTRY, False).partition("\n\n")
     assert opening and "entry" not in opening
@@ -948,9 +967,9 @@ def test_an_entry_that_was_not_confirmed_does_not_send_the_person_to_another_ins
         "Amplifier could not confirm that its start-at-sign-in entry in Windows belongs to this installation. "
         "It uses only an entry that it can confirm.\n\n"
         f"The entry is the task named {ENTRY} in Windows Task Scheduler. If you have another Amplifier "
-        "installation for this Windows account, the entry can belong to it. If you want that installation "
-        "to start when you sign in, do not delete the entry.\n\n"
-        "Otherwise delete the entry. Amplifier then no longer starts when you sign in"
+        "installation for this Windows account, the entry can belong to it. Without the entry, that "
+        "installation does not start when you sign in.\n\n"
+        "If that is all right, delete the entry. Amplifier then no longer starts when you sign in"
         + (".\n" if removes else ", until it makes a new entry in step 5.\n") +
         "1. Open the Start menu, type Task Scheduler and open it.\n"
         "2. Select Task Scheduler Library.\n"
@@ -959,7 +978,7 @@ def test_an_entry_that_was_not_confirmed_does_not_send_the_person_to_another_ins
         "5. " + ("Uninstall Amplifier again." if removes else
                  "Open Amplifier from the Start menu: Amplifier Unified. It makes a new entry. "
                  "Your chats and settings stay."))
-    for wrong in ("use that installation", "uninstall it first"):
+    for wrong in ("use that installation", "uninstall it first", "do not delete", "no longer starts when you sign in. If"):
         assert wrong not in rest
     # A stop needs no confirmed entry, and Windows gave no answer in the other case: neither deletes.
     for text in (consumer.entry_notice("stop", ENTRY, False), consumer.entry_notice(purpose, ENTRY, True)):

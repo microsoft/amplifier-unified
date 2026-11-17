@@ -398,10 +398,20 @@ exit status:
 - Two processes exist for the time of a command, where one existed. The task
   that starts the background app does not use this hand-over.
 
-The Start-menu launcher now gets a failure status from `service start` and
-`service status` when the host is not healthy. It treats that as a host that
-is not ready: it first asks whether another program holds the saved address,
-and names that; otherwise the start fails with its usual message.
+The Start-menu launcher now gets a failure status from its own commands.
+`service start` waits up to a minute for the host and ends with a failure
+status when the host is not healthy then. The launcher goes on to its status
+step, as it did when it could not see that status: the status step decides,
+so a host that needs longer keeps its time. `service status` ends with a
+failure status when the host is not healthy. The launcher treats that as a
+host that is not ready: it first asks whether another program holds the saved
+address, and names that; otherwise the start fails with its usual message.
+(Read from source: before, a launcher with no active app generation got that
+failure status too, and then did not ask about the address.) Every other command that fails
+ends the start at its step, as it did for a launcher with no active app
+generation: `config set`, `setup-tls`, the preparation, and `service
+install`. `service install` registers the task and does not wait for the
+host, so a taken address cannot make it fail.
 
 Shown on a Windows runner (lane `windows-local-connection`, a skip fails it):
 the complete output and the exit status through the real hand-over, into a
@@ -435,8 +445,15 @@ time and gave two browser tabs.
   nothing and shows nothing: the first one's sign or message is on the screen.
   So no second tab opens. The lock and the sign end before the message "may
   not have opened", because that message sends the person to the Start menu.
-  A lock that Windows does not give never keeps the person from Amplifier:
-  the start goes on, and the only loss is a second tab.
+  A message of the start step or of the certificate step (the question about
+  a taken address, the certificate explanation, "Open Amplifier again ...")
+  is shown while the start still runs. It is in front of other windows. A
+  second click does nothing until the person has answered it; then the lock
+  is free. A lock that Windows does not give never keeps the person from
+  Amplifier: the start goes on, and the only loss is a second tab.
+- While a start waits for the browser, an uninstall can begin to delete the
+  folder. The message is then not "may not have opened" with a next start or
+  the setup file: it is the text of a start on a folder whose removal began.
 - Limits. Another sign-in session of the same account has its own lock; the
   installation's lock still lets one start step run at a time. `amplifier-unified
   open` from a terminal takes no lock and opens its own tab. The sign does
@@ -3025,11 +3042,14 @@ gives the steps to delete it; a new start then registers a new entry when its
 checks pass, with the saved port and settings. It does not say that the entry
 was changed, because it cannot know that. The entry can belong to another
 Amplifier installation of the same Windows account. The text says so, and
-that the person does not delete the entry if that installation is to start at
-sign-in. It does not send the person to that installation (before pull
-request 2270: "use that installation, or uninstall it first"): after an
-account rename that installation's entry has the same cause, and its start
-and its uninstall stop in the same way. When Windows gave no answer about the
+what that installation does not have without the entry: it does not start at
+sign-in. Then: "If that is all right, delete the entry." The text makes no
+claim that the other installation starts today, and it does not tell the
+person to keep the entry or to go to that installation (before pull request
+2270: "use that installation, or uninstall it first"). After an account
+rename that installation's entry has the same cause; its start and its
+uninstall stop in the same way, and deleting the entry is its repair too.
+When Windows gave no answer about the
 account, the launcher asks for a restart and deletes nothing. Start, Status
 and Uninstall each have these two texts. Stop has one text for both causes:
 to stop the app now, sign out of Windows or restart the PC. Before, they

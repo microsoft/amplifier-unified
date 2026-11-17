@@ -13,7 +13,7 @@ start ends with a failure.
 
 `only(root)` lets one start at a time go on, for one installation in one
 sign-in session. A second start finds the first one, does nothing and shows
-nothing: the first one's sign is on the screen.
+nothing: the first one's sign or its message is on the screen.
 
 Standard library only. No console and no new dependency: the window is of a
 class that Windows provides, so this file registers no window class and has
@@ -83,8 +83,9 @@ class Sign:
     def open(self, *, wait=2.0):
         if os.name != "nt":
             return
-        self._thread = threading.Thread(target=self._run, name="amplifier-start-sign", daemon=True)
-        self._thread.start()
+        thread = threading.Thread(target=self._run, name="amplifier-start-sign", daemon=True)
+        thread.start()
+        self._thread = thread  # Only a thread that started is waited for in `close`.
         self._ready.wait(wait)
 
     def close(self, *, wait=2.0):
@@ -158,12 +159,12 @@ class Sign:
             dots = 96
         width, margin = _WIDTH * dots // 96, _MARGIN * dots // 96
         font = gdi.CreateFontW(-(_POINTS * dots // 72), 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, "Segoe UI")
-        # A popup with a border, in front of other windows, with no taskbar
-        # button, and never the active window (also not after a click on it).
-        window = checked(user.CreateWindowExW(0x00000008 | 0x00000080 | 0x08000000, "STATIC", "",
-                                              0x80000000 | 0x00800000, 0, 0, width, 10, None, None, None, None))
-        timer = None
+        window = timer = None
         try:
+            # A popup with a border, in front of other windows, with no taskbar
+            # button, and never the active window (also not after a click on it).
+            window = checked(user.CreateWindowExW(0x00000008 | 0x00000080 | 0x08000000, "STATIC", "",
+                                                  0x80000000 | 0x00800000, 0, 0, width, 10, None, None, None, None))
             # The text, in a second window inside the first: that gives it a margin. No `&` shortcut.
             label = checked(user.CreateWindowExW(0, "STATIC", "", 0x40000000 | 0x10000000 | 0x00000080,
                                                  margin, margin, width - 2 * margin, 10, window, None, None, None))
@@ -225,7 +226,8 @@ class Sign:
         finally:
             if timer:
                 user.KillTimer(None, timer)
-            user.DestroyWindow(window)
+            if window:
+                user.DestroyWindow(window)
             if font:
                 gdi.DeleteObject(font)
 
@@ -241,4 +243,7 @@ def sign():
     try:
         yield shown
     finally:
-        shown.close()
+        try:
+            shown.close()
+        except (OSError, RuntimeError):
+            pass  # A sign that does not close never fails the start that it showed.

@@ -388,10 +388,13 @@ async def prepare_background(root, launcher, environment, *, port=None, identity
             step("task")
             try:
                 await command("service", "start")
-            except CommandFailure as failed:
-                # `service start` waits for the host and ends with a failure
-                # status when the host is not healthy.
-                await not_ready(failed)
+            except CommandFailure:
+                # `service start` waits up to a minute for the host itself, and
+                # ends with a failure status when the host is not healthy
+                # then. The status step below decides: a host that needs
+                # longer keeps the time that it had before the launcher got
+                # this status.
+                pass
         elif task.get("instances") != 1 or task.get("state") != 4:
             raise RuntimeError("The existing task is not in a safe start/reopen state.")
     else:
@@ -429,6 +432,9 @@ async def prepare_background(root, launcher, environment, *, port=None, identity
             await command("config", "set", "port", str(port),
                           "public_origins", f"[https://127.0.0.1:{port}]")
         step("task")
+        # Registers the task and asks Windows to start it. It does not wait for
+        # the host, so its failure is a failed registration and never a taken
+        # address: it ends the start here.
         await command("service", "install")
 
     step("ready")

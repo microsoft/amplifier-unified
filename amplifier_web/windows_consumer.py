@@ -211,8 +211,10 @@ async def launch(root, *, open_browser=True, progress=None):
     screen says that Amplifier is starting (windows_start.sign). One such
     start runs at a time (windows_start.only): a second one while the first
     runs does nothing and shows nothing, so no second browser tab opens. The
-    sign and the lock end before the message that sends the person back to
-    the Start menu.
+    sign and the lock end before this function's own last message, which
+    sends the person back to the Start menu. A message of the start step or
+    of the certificate step is shown while the start still runs: the lock
+    ends when the person has answered it.
     """
     from . import windows_start
     from .windows_installation import owner_notice
@@ -232,11 +234,18 @@ async def launch(root, *, open_browser=True, progress=None):
                 progress(name)
         result = await _start(root, value, True, step)
     if result.get("browser") == {"opened": False, "reason": "not-confirmed"}:
+        from . import windows_uninstall
+        from .windows_consumer_shell import listed
+        if windows_uninstall.unfinished(root):
+            # An uninstall began to delete this folder while this start waited
+            # for the browser. No next start opens Amplifier, and setup
+            # installs nothing here: the same text as a start on such a folder.
+            owner_notice(_UNFINISHED["removing"])
+            return result
         # Say only what is known here: the browser was not confirmed. It
         # can still open, so the person looks for a tab before a new start.
         # The same next step as a failed start: the Start menu only when
         # its entry exists (after an uninstall, setup adds it again).
-        from .windows_consumer_shell import listed
         owner_notice("Amplifier may not have opened in your browser.\n\n"
                      "Look for an Amplifier tab in your browser. If there is none, " + (
             "open Amplifier from the Start menu: Amplifier Unified. "
@@ -370,7 +379,8 @@ def entry_notice(purpose, entry, retry, *, listed=True):
     The text does not send the person to another installation ("use that
     installation, or uninstall it first"): an entry of that installation
     which has the same cause stops its start and its uninstall as well. It
-    says only what deleting the entry takes from that installation.
+    says what that installation does not have without the entry, and makes
+    no claim that the installation starts today.
     """
     opening = {"start": "Amplifier could not start.",
                "status": "Amplifier could not read its status.",
@@ -397,9 +407,9 @@ def entry_notice(purpose, entry, retry, *, listed=True):
                 "3. " + again)
     return (opening + "\n\n" + cause + "\n\n"
             f"The entry is the task named {entry} in Windows Task Scheduler. If you have another "
-            "Amplifier installation for this Windows account, the entry can belong to it. If you "
-            "want that installation to start when you sign in, do not delete the entry.\n\n"
-            "Otherwise delete the entry. Amplifier then no longer starts when you sign in"
+            "Amplifier installation for this Windows account, the entry can belong to it. Without "
+            "the entry, that installation does not start when you sign in.\n\n"
+            "If that is all right, delete the entry. Amplifier then no longer starts when you sign in"
             + (".\n" if removes else ", until it makes a new entry in step 5.\n") +
             "1. Open the Start menu, type Task Scheduler and open it.\n"
             "2. Select Task Scheduler Library.\n"

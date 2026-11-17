@@ -241,8 +241,9 @@ app's status. Do not use `os.execv` on Windows where a caller reads the
 output or the status. A launcher from a setup file before that change still
 returns 0 at once, so the confirmation line of `open` stays the launcher's
 proof that the browser opened. The Start-menu start shows `windows_start.sign`
-and holds `windows_start.only`; both must end before a message that sends the
-person back to the Start menu.
+and holds `windows_start.only`; both must end before the launcher's own last
+message, which sends the person back to the Start menu. While the start holds
+that lock, a second click does nothing and shows nothing.
 Task Scheduler expands percent-bearing executable/working-directory paths.
 Reject those paths rather than recording a literal identity that launches a
 different program. Task registration/state is not authenticated host health.

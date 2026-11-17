@@ -58,6 +58,30 @@ def test_elsewhere_than_on_windows_there_is_no_sign_and_no_lock(tmp_path, monkey
     assert not [thread for thread in threading.enumerate() if thread.name == "amplifier-start-sign"]
 
 
+@pytest.mark.parametrize("fails", ["the thread does not start", "the sign does not close"])
+def test_a_sign_that_cannot_be_shown_or_closed_never_fails_the_start(monkeypatch, fails):
+    """Windows gives no new thread, or the sign's end fails: the start goes on and ends as it would."""
+    monkeypatch.setattr(windows_start, "os", SimpleNamespace(name="nt"))
+    if fails == "the thread does not start":
+        def start(self):
+            raise RuntimeError("can't start new thread")
+        monkeypatch.setattr(threading.Thread, "start", start)
+    else:
+        monkeypatch.setattr(windows_start.Sign, "open", lambda self: None)
+        def close(self):
+            raise OSError(1400, "Invalid window handle")
+        monkeypatch.setattr(windows_start.Sign, "close", close)
+    ran = []
+    with windows_start.sign() as shown:
+        shown.step("prepare")
+        ran.append(shown.text)
+    assert ran == [windows_start.PREPARING]
+    # A failure of the start itself is still that failure.
+    with pytest.raises(ValueError, match="the start failed"):
+        with windows_start.sign():
+            raise ValueError("the start failed")
+
+
 def test_the_lock_of_a_running_start_for_each_answer_of_windows(tmp_path, monkeypatch):
     from amplifier_web import windows_uninstall
     monkeypatch.setattr(windows_start, "os", SimpleNamespace(name="nt"))
@@ -133,6 +157,40 @@ def _until(condition, what, limit=10):
         time.sleep(0.05)
 
 
+def _stays_visible(user, window, what, seconds=1.0):
+    # The sign looks five times per second: one second is five looks.
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        assert user.IsWindowVisible(window), what
+        time.sleep(0.05)
+
+
+def _message_of_another_program(user):
+    """Another process with a visible window of the message-box class. Returns the process."""
+    import ctypes as C
+    title = "Another program " + uuid.uuid4().hex
+    program = ("import ctypes as C, sys, time\n"
+               "user = C.WinDLL('user32')\n"
+               "user.CreateWindowExW.restype = C.c_void_p\n"
+               "user.CreateWindowExW.argtypes = [C.c_uint32, C.c_wchar_p, C.c_wchar_p, C.c_uint32, C.c_int, C.c_int,\n"
+               "                                 C.c_int, C.c_int, C.c_void_p, C.c_void_p, C.c_void_p, C.c_void_p]\n"
+               "window = user.CreateWindowExW(0, '#32770', sys.argv[1], 0x80000000 | 0x10000000, 0, 0, 240, 120,\n"
+               "                              None, None, None, None)\n"
+               "print('made' if window else 'failed', flush=True)\n"
+               "time.sleep(120)\n")
+    other = subprocess.Popen([sys.executable, "-I", "-c", program, title], stdout=subprocess.PIPE, text=True)
+    try:
+        assert other.stdout.readline().strip() == "made"
+        user.FindWindowW.restype = C.c_void_p
+        user.FindWindowW.argtypes = [C.c_wchar_p, C.c_wchar_p]
+        found = user.FindWindowW("#32770", title)
+        assert found and user.IsWindowVisible(found), "The other program's message is not on this desktop."
+    except BaseException:
+        other.kill()
+        raise
+    return other
+
+
 @NATIVE
 def test_native_sign_is_on_the_screen_for_the_time_of_a_start_takes_no_focus_and_goes_away():
     user = _user()
@@ -166,6 +224,21 @@ def test_native_sign_is_on_the_screen_for_the_time_of_a_start_takes_no_focus_and
             user.DestroyWindow(message)
         _until(lambda: user.IsWindowVisible(window), "The sign did not come back after the message.")
         assert user.GetForegroundWindow() != window
+        # Only a message that the person can see hides the sign: a hidden window of that kind does not.
+        hidden = user.CreateWindowExW(0, "#32770", "Amplifier Unified", 0x80000000, 0, 0, 240, 120,
+                                      None, None, None, None)
+        assert hidden and not user.IsWindowVisible(hidden)
+        try:
+            _stays_visible(user, window, "The sign hid for a window of its own program that nobody can see.")
+        finally:
+            user.DestroyWindow(hidden)
+        # Only a message of THIS program hides it: another program's message does not.
+        other = _message_of_another_program(user)
+        try:
+            _stays_visible(user, window, "The sign hid for a message of another program.")
+        finally:
+            other.kill()
+            other.wait(30)
     # The start ended: the sign is gone, with no click, and nothing of it runs on.
     assert not user.IsWindow(window)
     assert not [thread for thread in threading.enumerate() if thread.name == "amplifier-start-sign"]
