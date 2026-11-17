@@ -113,11 +113,12 @@ def test_upload_is_reencoded_to_bounded_metadata_free_png(tmp_path, format):
 @pytest.mark.parametrize('size', [(4097, 1), (1, 4097), (4097, 4097)])
 def test_oversized_dimensions_are_rejected_before_decode(tmp_path, size, monkeypatch):
     encoded = raster(size)
+    store = owner(tmp_path)
     def unexpected_decode(self, *args, **kwargs):
         raise AssertionError('Oversized image must not be decoded')
     monkeypatch.setattr(Image.Image, 'load', unexpected_decode)
     with pytest.raises(ValueError, match='4096'):
-        owner(tmp_path).prepare({'image': encoded})
+        store.prepare({'image': encoded})
 
 
 def test_badge_is_raster_deterministic_and_recolored(tmp_path):
