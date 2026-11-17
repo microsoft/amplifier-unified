@@ -336,9 +336,15 @@ async def test_an_old_copy_never_stands_in_for_a_keys_file_that_the_person_remov
             'Update needs attention', STALE_STAGE_KEYS)
     assert len(manager.diagnostics.state.get('events', [])) == events
     assert_preserved(stage)
-    # The same request again changes nothing while the copy still cannot be removed.
+    # The same request again changes nothing while the copy still cannot be removed,
+    # and it publishes nothing: the owner's pass comes here every minute.
+    published = []
+    publish = app._publish_changes
+    monkeypatch.setattr(app, '_publish_changes', lambda *args, **kwargs: published.append(True) or publish(*args, **kwargs))
     await manager.activate(rollback=rollback)
     assert seen == [] and (stage / 'validated.json').read_text() == receipt
+    assert published == [] and state['error'] == STALE_STAGE_KEYS
+    monkeypatch.setattr(app, '_publish_changes', publish)
     # The removal works again. The next request removes the old copy first, then qualifies without it.
     second.unlink()
     await manager.activate(rollback=rollback)

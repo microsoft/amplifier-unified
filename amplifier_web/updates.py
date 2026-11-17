@@ -1581,7 +1581,9 @@ class UpdateManager:
                         # copy could not be removed. Never qualify with that copy.
                         # Nothing was changed, so this is not a failed attempt and
                         # the phase stays: the next request tries the removal again.
-                        await self.publish(error=STALE_STAGE_KEYS)
+                        # Said once: the owner's pass comes here every minute.
+                        if state.get('error') != STALE_STAGE_KEYS:
+                            await self.publish(error=STALE_STAGE_KEYS)
                         return
                     if state.get('error') == STALE_STAGE_KEYS:
                         await self.publish(error=None)  # That refusal is over.
