@@ -74,6 +74,56 @@ try{
  assert.equal(light.body.id,'/');
  assert.ok(light.body.icons.every(icon=>new URL(icon.src,base).searchParams.get('accent')===light.accent));
  await checkIconPixels(page,light);
+ // Keep one stylesheet and composition fixed while real fixture navigation
+ // changes only the work-surface selector on the mounted app root.
+ await expect(page.locator('#amp-one')).toHaveAttribute('data-work-surface','chat');
+ await page.evaluate(()=>{
+  const style=document.createElement('style');style.id='pwa-work-surface-test';
+  style.textContent='#amp-one[data-work-surface="chat"]{--a-accent:#112233!important} #amp-one[data-work-surface="home"]{--a-accent:#445566!important} #amp-one[data-pwa-test-probe="changed"]{--a-accent:#778899!important}';
+  document.head.append(style);
+ });
+ // Prime the fixed CSS before the controlled mutation; the resize is not part
+ // of the observation. No subtree mutation may be mistaken for the trigger.
+ await page.evaluate(()=>window.dispatchEvent(new Event('resize')));
+ await expect.poll(()=>page.locator('link[rel="manifest"]').evaluate(node=>new URL(node.href).searchParams.get('accent')),{timeout:5000}).toBe('112233');
+ await page.waitForTimeout(300);
+ await page.evaluate(()=>{
+  window.pwaRootChanges=[];
+  window.pwaRoot=document.querySelector('#amp-one');window.pwaResizeCount=0;
+  window.pwaResizeListener=()=>window.pwaResizeCount++;
+  window.addEventListener('resize',window.pwaResizeListener);
+  window.pwaRootObserver=new MutationObserver(records=>window.pwaRootChanges.push(...records.map(record=>record.attributeName)));
+  window.pwaRootObserver.observe(window.pwaRoot,{attributes:true});
+  window.pwaRoot.setAttribute('data-pwa-test-probe','changed');
+ });
+ assert.equal(await page.locator('#amp-one').evaluate(node=>getComputedStyle(node).getPropertyValue('--a-accent').trim()),'#778899');
+ await expect.poll(()=>page.locator('link[rel="manifest"]').evaluate(node=>new URL(node.href).searchParams.get('accent')),{timeout:5000}).toBe('778899');
+ const probe=await waitForAccent(page);await checkIconPixels(page,probe);
+ const probeAudit=await page.evaluate(()=>{
+  window.pwaRootObserver.disconnect();window.removeEventListener('resize',window.pwaResizeListener);
+  return {sameRoot:window.pwaRoot===document.querySelector('#amp-one'),changes:window.pwaRootChanges,resizes:window.pwaResizeCount};
+ });
+ assert.deepEqual(probeAudit,{sameRoot:true,changes:['data-pwa-test-probe'],resizes:0},
+  'An otherwise unobserved root attribute is the only changed input');
+ await page.evaluate(()=>document.querySelector('#amp-one').removeAttribute('data-pwa-test-probe'));
+ await expect.poll(()=>page.locator('link[rel="manifest"]').evaluate(node=>new URL(node.href).searchParams.get('accent')),{timeout:5000}).toBe('112233');
+ await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{workSurface:'home'}}));
+ await expect(page.locator('#amp-one')).toHaveAttribute('data-work-surface','home');
+ assert.equal(await page.locator('#amp-one').evaluate(node=>getComputedStyle(node).getPropertyValue('--a-accent').trim()),'#445566');
+ await expect.poll(()=>page.locator('link[rel="manifest"]').evaluate(node=>new URL(node.href).searchParams.get('accent')),{timeout:5000}).toBe('445566');
+ const surfaceHome=await waitForAccent(page);await checkIconPixels(page,surfaceHome);
+ await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{workSurface:'chat'}}));
+ await expect(page.locator('#amp-one')).toHaveAttribute('data-work-surface','chat');
+ await expect.poll(()=>page.locator('link[rel="manifest"]').evaluate(node=>new URL(node.href).searchParams.get('accent')),{timeout:5000}).toBe('112233');
+ const surfaceChat=await waitForAccent(page);await checkIconPixels(page,surfaceChat);
+ // Remove the synthetic CSS without changing persisted appearance, then use a
+ // separate root attribute to trigger resampling of the restored appearance.
+ await page.evaluate(()=>{
+  document.querySelector('#pwa-work-surface-test').remove();
+  document.querySelector('#amp-one').setAttribute('data-pwa-test-resample','yes');
+ });
+ assert.equal((await waitForAccent(page)).accent,light.accent);
+ console.log('Paired root-attribute probe 778899 and navigation chat 112233 -> home 445566 -> chat 112233: manifest, head icons and server-rendered pixels matched.');
  const other=await browser.newContext({viewport:{width:1100,height:850},colorScheme:'dark',extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const otherPage=await other.newPage();
  await otherPage.goto(base+'/');await otherPage.waitForSelector('#amp-one');
