@@ -1125,6 +1125,273 @@ sharing to get the same refusal, and it uses a stand-in for Task Scheduler,
 because a runner cannot register the sign-in task. A real stop with a live
 conversation worker remains clean-room acceptance.
 
+### Kept chats and settings of a removed installation
+
+Status: the move, the take-back and the first-start offer are built
+(`amplifier_web/windows_kept_data.py`). Nothing calls the move yet: uninstall
+still keeps the whole folder. The uninstall choice that uses it is a later
+change.
+
+Why the data leaves the installation folder. Setup installs only into a
+folder that is absent or empty, or that it classifies as its own unfinished
+attempt, and for such an attempt it removes all contents. So kept data inside
+the installation folder would stop a later installation or be deleted by it.
+"Keep my chats and settings" therefore moves the person's data folders into
+the sibling folder `<root>-kept` (for example `...\Local\Amplifier-kept`). A
+later setup run finds no folder and installs normally. No setup file changes.
+
+What moves. The exact top-level folders `shared`, `app`, `capture`,
+`ownership`, `import`, `workspace` and `export`, each with one rename on the
+same disk. Nothing is copied. When Windows refuses to rename a folder (it is
+another program's current folder, or a closing program holds a file in it),
+the entries inside move one by one into the folder's new place. An entry
+never replaces an entry. A folder whose name differs from one of these only
+in case (`App`) is never moved, joined or skipped: Windows opens both
+spellings as one name, so such a folder stops the move-out and the take-back
+before any change.
+
+Links. A link, or a file, in the place of a top-level data folder is never
+moved and never entered; it stays and is reported. A link inside a data
+folder moves with that folder as the link itself, as in every rename. It is
+never followed.
+
+A program that closes late. Worker programs end a moment after the app
+reports that it stopped, and one can still write a file. So a folder counts
+as moved only after a listing that is made last, and the move-out lists every
+data folder of the installation once more before the set is complete. A late
+file goes into the same folder of the set at the next call: where both sides
+have a real folder of one name, its entries move level by level. A file with
+a name that the set holds stays where it is; the result names it, and the
+set stays unfinished. After `complete`, the uninstall removes a data folder
+of the installation only when it is empty.
+
+Program state inside the data. `app\updates` and `app\runtime` hold the app
+generations, the launch record and worker environments of the removed
+program. A new launcher refuses a launch record that names another launcher
+(`windows_service._launch_python`), so a kept set is `complete` only when both
+are gone. The module does not delete them itself: the caller passes its
+link-safe deleter. A set that still holds one of them is never offered.
+
+One step at a time. A first-start step and a move-out hold one lock for their
+whole body: the file `<root>-kept.lock` next to the kept folder. A second
+launcher that starts while the first one shows its question gets "Amplifier is
+already starting" and does not start the app. A launcher that starts the app
+on empty data folders while kept data exists keeps the lock until it ends:
+until that start has written its first file, a second launcher would see
+empty folders and a kept set. Without this, Yes in one launcher and a fresh
+start in the other would put old accounts and new app data side by side. The
+lock is outside the installation folder, so it exists in every state of an
+uninstall. An empty lock file can stay behind. An installation that has its
+own data and no take-back in progress takes no lock. It reads "has data"
+before it looks for a take-back: a take-back writes its records before it
+moves the first folder, so it cannot be passed.
+
+A take-back removes an empty data folder of setup just before the kept folder
+takes its place. When the app then starts without the set, or without its
+rest, a data folder of setup that is missing is made again, empty and
+private: the launcher's own check needs all six.
+
+Two records, each written as one complete private file.
+
+`<root>-kept\amplifier-kept.json`: the installation folder, the newest app
+version that used the data (three numbers), the time, one random transfer
+identity and a state.
+
+| State | Meaning | Who continues it |
+| --- | --- | --- |
+| `moving` | A move-out did not finish. | Only the uninstall that holds the same transfer identity in its own journal. Never offered. |
+| `complete` | Every data folder is moved and no program state is left. | Offered at a first start. The uninstall with the same transfer identity goes on with it (a repeated call changes nothing). Any other uninstall with "keep" renames it whole to `<root>-kept-earlier-N` (N from 1 to 9) and never changes it. |
+| `adopting` | A take-back did not finish. | The next start finishes it before the app starts, without a second question. An uninstall finishes it before its own move-out. |
+| `returned` | A take-back finished; only tidying is left. | Any start or uninstall removes the record, the empty kept folder and the note. Never offered. |
+
+The record also holds `declined` after the person answered No. An `adopting`
+record holds three more things, each saved before the move that it
+describes: `into`, the identity of the installation folder that takes the
+set back (the folder's file number on the disk; a rename on one disk keeps
+it, and no other file or folder has it); `back`, the identity of each kept
+data folder; and `filled`, for each folder that is filled entry by entry,
+the name and identity of each entry.
+
+`<root>\amplifier-kept-return.json`: the installation's own note of a
+take-back. It is written before the kept record becomes `adopting`. It tells
+that a take-back began also when the kept record is lost.
+
+When a take-back goes on. By itself only when the record says `adopting`
+into this installation folder and the note names the same transfer (or the
+record still says `complete` and the note names its transfer: the take-back
+stopped between the two writes). Then the app starts only after the
+take-back finished, and an uninstall does not begin (`unfinished_take_back`).
+
+When the person is asked. In three states nothing says for certain how to go
+on, and the launcher asks one question. Without a person the app does not
+start in these states.
+
+- The record names this installation folder and the note is gone or cannot
+  be read: "Finish now?" Yes moves the rest back. No starts the app with the
+  part that is back. When that take-back moved nothing yet, its note is
+  removed, the record becomes `complete` again and the start is an ordinary
+  first offer. Yes writes the note again before the checks, so a set that
+  cannot go on gets its cause at the next start and no second question.
+- The note is there and the record is lost, unreadable or of another
+  transfer: the text says to restart the PC first; Yes starts the app
+  without the rest. A take-back into this folder and a note of another
+  take-back never match, whatever that note says.
+- The note is there and the kept folder is gone: the text says to put the
+  folder back; Yes starts the app without the rest.
+
+"Start without the rest" is saved before anything else: in the note (`left`)
+and, when the kept record can be read, in that record (it then names no
+installation folder, so no installation continues it). Then the part that is
+back is prepared for this version. If that fails, this start stops, the next
+start tries again, and an uninstall with "keep" can begin. With `left` an
+installation continues no take-back by itself, also when the record comes
+back. The kept folder stays as it is. There is no state that no step can end.
+
+Another installation at the same path (the person moved the first folder
+away and installed again) has another identity: there the set is never
+continued and never offered; it is named once, and a later uninstall with
+"keep" does not add to it.
+
+When a take-back finished. The record says `returned`, then the note says
+`done`; then the record, the empty kept folder and the note are removed. A
+`returned` record beside a note of another transfer is not "finished": the
+two do not match, and the person is asked.
+Each of these steps can fail and is done again later; the proof that the
+take-back finished stays until then. A note stays while a record cannot be
+read. Such a state never blocks a start or an uninstall. The app can be
+running then, so its database is not opened.
+
+"No kept folder is left" alone never means "finished"; only `done` does.
+
+A record that exists and cannot be read is not "no kept data". Neither is a
+kept folder that holds a data folder and no record. The person is told that
+kept data exists and cannot be read, and the app starts without it only on
+the person's Yes.
+
+The first start of a later installation (`windows_consumer.launch`, after the
+installation check and before anything checks or writes a data folder). When
+no kept folder, no note and no earlier set exists, the step returns at once
+and takes no lock. Else, under the lock:
+
+1. A take-back that began is finished first, or the start stops as above.
+2. An installation that already holds data starts without a question.
+3. A set is offered only when all of these hold: the record is valid and
+   private and names exactly this folder; its state is `complete`; the person
+   did not decline it; every kept data folder is a private real folder with
+   its exact name; no top-level entry of the kept folder is a link;
+   `app\updates` and `app\runtime` are absent; the record's version is not
+   newer than the app that this launcher starts; the entry names of each
+   kept data folder fit into the record; every data folder of this
+   installation is absent or empty. Setup creates six of them, empty.
+4. One question. Yes takes the set back. No starts fresh. The answer is
+   saved with the set before the app starts, so no installation asks about
+   it again; if it cannot be saved, the app does not start. The answer is
+   used only when the kept folder still holds the record that was offered.
+5. Every set that is not offered is named once in one message: a set of
+   another folder, a newer set (with its version), an unfinished move, a set
+   that holds a link, a set that was changed, a set with too many entries, a
+   set whose way back began in another installation, a declined set, and
+   earlier sets. No chooser exists; that is a stated limit.
+6. A caller without a person (`--no-open`) gets a result and no question, and
+   the app does not start while a usable or unreadable set waits.
+
+The take-back. Before its first change, also when it continues, it runs every
+check of step 3 again. One rule holds for the whole take-back: every data
+folder of the installation is empty, or it is the folder that this take-back
+moved there (the saved identity), or it is a folder that this take-back
+fills (only entries with a saved identity, and none whose name still waits
+in the kept folder). And every kept data folder is the one that the
+take-back saw at its start. Anything else stops the take-back before the
+next change and is named in the message: an entry that another program or
+the person put there, another folder in the place of one that came back,
+another file with the name of an entry that moved, a folder that came into
+the kept set later. Nothing is merged and nothing is deleted. An entry that
+was removed since then is not in the way.
+
+For each kept folder the take-back removes the installation's empty folder
+and renames the kept folder into its place. Windows refuses to remove
+`workspace` at a first start, because it is the current folder of the
+launcher and of the program that started it. Then the kept entries move into
+that empty folder one by one. Every folder that is back is held in place
+until the take-back finished, and the rule above is checked again for all of
+them before the last step and after it. An entry for which Windows gives no
+file number is an error with the restart text, never "another entry".
+
+The last step makes entries in `app`: the folder of the databases that it
+saved, and side files that the database program puts beside `app.sqlite3`.
+In an `app` folder that was filled, the record says first that this step
+began (`settling`). When the step returned, what it made is saved with its
+identity like every other entry, so a step that failed can be tried again.
+Only when the program ended inside the step does the next run accept those
+entries by their names: a side file that the database program needs for its
+repair must not be called "in the way". A side file that is put beside the
+database at any other time is in the way and is named.
+
+Folders are held in place while they are used. The installation folder, the
+kept folder and both folders of an entry-by-entry move are opened for the
+time of the move with a handle that shares read and write, not delete. While
+it is open, no program can rename, replace or delete that folder, and other
+programs can still work in it. The check that it is a real folder with its
+exact spelling is made on that handle. A whole-folder rename cannot hold its
+own source. A link that takes a folder's place in that moment is moved as a
+link and never entered: the take-back stops and names it, and a move-out
+leaves the set unfinished.
+
+Last the take-back retires the removed program's saved update status with the
+maintained repair step (`reset.reset_update_state`): an update that did not
+finish leaves a status in `app.sqlite3` that refuses every new message until
+that exact app proves itself, and that app is gone. The step saves the
+database first, each time into a new folder
+`app\reset-backups\kept-<transfer>-<time>-<random>`, and removes only that
+status. Chats, settings and accounts in the database stay. If the step
+fails, the take-back is not finished: the record and the note stay, the app
+does not start, and the next start tries again. Windows has no in-app repair
+for this status. A database file that has a second name somewhere (a hard
+link) is never changed, because the change would also reach the other file;
+the take-back does not finish then either, and the message names the file.
+The person's exit in both cases is an uninstall with "keep": its move-out
+finishes the take-back without this step and moves the data out again,
+unchanged.
+An uninstall with "keep" also finishes a take-back that a newer version of
+Amplifier began and that this version refuses to finish; the new set then
+names that newer version.
+
+What the module deletes: empty folders, its own two records and its lock
+file. Nothing else.
+
+Messages. Every refusal and every stop is one message with what happened, that
+nothing was deleted, the next step and a short reference (the cause, the
+error type and the Windows error code, never the error text). A stop that a
+restart can cure says so. Every other stop names its cause, its path and its
+own next step: the entry that is in the way (move it outside the two
+folders), a file that exists two times after a program closed late, a link,
+a folder with a changed name, program state that someone put into the kept
+set, a newer version. A top-level data folder that could not move is never
+to be moved away by the person; that text says to restart.
+A refusal before any change says that nothing was changed. While an
+installation holds a part of the kept data, the message says that an
+uninstall can delete that part. After a take-back that worked, a failure of
+a later message or check does not stop the start.
+
+Limits. A person who never installs again keeps the kept folder. A kept set
+is tied to its installation folder, because saved paths inside name it. A
+set with a data folder that holds more direct entries than the record can
+name (about 10,000) is not offered. A set is offered only while every data
+folder of the installation is empty; one stray file there makes the start
+"not the first", and the set is then not offered or named (the uninstall's
+confirmation names the kept folder). Each take-back saves the database once
+before it retires the update status, and a failed attempt can leave one more
+saved database under `app\reset-backups`. A start does not look at an
+unfinished move of its own folder: while an uninstall is unfinished, the
+uninstall's own journal must refuse Open (the change that adds the uninstall
+choice). `used_version` reads the active app version only when `app` and
+`app\updates` are real folders.
+The native check in the `windows-local-connection` job uses real NTFS
+renames, another program's current folder, a held file, a junction, a held
+folder and the private records on a Windows runner; the dialogs and the
+deleter are stand-ins, and no app, task or setup runs. A real start of the
+app on taken-back data remains clean-room acceptance.
+
 ## Process-local Proactor cleanup backport
 
 `windows_proactor.py` carries CPython gh-160429's socket-shutdown correction

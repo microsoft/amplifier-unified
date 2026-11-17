@@ -204,6 +204,13 @@ async def launch(root, *, open_browser=True, progress=None):
     from .windows_installation import (AddressUnavailable, address_message, change_address,
                                        prepare_background, owner_notice, review_browser_trust)
     root, value = installation(root)
+    # Kept chats and settings of an earlier installation in this folder: offered
+    # once, before anything checks or writes a data folder. An unfinished
+    # take-back is finished here; the app never starts on half of the data.
+    from . import windows_kept_data
+    kept = windows_kept_data.first_start(root, value["version"], ask=open_browser, hold=True)
+    if kept is not None:
+        return {"background": False, "keptData": kept}
     env = environment(root, value)
     os.environ.update(env)  # Own shortcut process only; no saved settings.
     launcher = root / "tools/amplifier-unified/Scripts/amplifier-unified.exe"

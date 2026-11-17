@@ -59,6 +59,7 @@ on:
       - amplifier_web/windows_ports.py
       - amplifier_web/windows_consumer.py
       - amplifier_web/windows_consumer_shell.py
+      - amplifier_web/windows_kept_data.py
       - amplifier_web/installation_runtime.py
       - amplifier_web/cli.py
       - amplifier_web/deployment_service.py
@@ -103,6 +104,7 @@ on:
       - tests/test_windows_consumer.py
       - tests/test_windows_first_open.py
       - tests/test_windows_consumer_shell.py
+      - tests/test_windows_kept_data.py
       - tests/test_installation_runtime.py
       - tests/test_installation_health.py
       - tests/test_cli_deployment.py
@@ -361,6 +363,20 @@ jobs:
         run: |
           .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -p no:cacheprovider tests/test_windows_consumer_shell.py
           if ($LASTEXITCODE -ne 0) { throw 'Windows uninstall entry checks failed.' }
+      # Kept chats and settings: the move out of an installation folder and back,
+      # on NTFS behind the real private-folder boundary. Real: another program's
+      # current folder, a file that a program holds open, a junction, an
+      # interrupted take-back, the private record. Stand-ins: the dialogs and the
+      # deleter of the program state. No app, task or setup runs. A skipped case
+      # fails this step.
+      - name: Check that kept chats and settings move out and back without a merge or a loss
+        shell: pwsh
+        run: |
+          $log = .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -p no:cacheprovider tests/test_windows_kept_data.py
+          $code = $LASTEXITCODE
+          $log
+          if ($code -ne 0) { throw 'Kept-data checks failed.' }
+          if ($log -match 'skipped') { throw 'A kept-data check was skipped. On this lane every case must run.' }
   windows-user-trial:
     if: ${{ inputs.storage_only || (!inputs.bootstrap_only && !inputs.foreground_only) }}
     # Candidate-only combined boundary, not a universal suite/release gate.
