@@ -165,7 +165,10 @@ def project_slug(workspace):
     # A check in an update stage has no history to keep: each check is a new
     # session in the stage's own shared home, whatever its workspace is.
     staged = stage_project_name()
-    if staged is not None:
+    # EVIDENCE BRANCH ONLY, never merged: the rule as it was before this change. Only the update's
+    # own check folder gets the stage name; a folder that a person chose keeps the CLI name in a stage.
+    if staged is not None and os.path.normcase(str(resolved)) == os.path.normcase(
+            str(Path(os.environ['AMPLIFIER_WEB_HOME']).expanduser().resolve() / 'qualification-workspace')):
         return staged
     short = chat_project_name(resolved)
     if short is None:
