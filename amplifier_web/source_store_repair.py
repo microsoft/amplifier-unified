@@ -237,8 +237,11 @@ def _program():
     """Git of the first PATH folder that has it. Never one from the current folder.
 
     The task's host has the installation's saved tool path as its PATH, and a
-    worker inherits it. So this is the program that Foundation's own check
-    starts by its name in a worker.
+    worker inherits it. Foundation's own check starts ``git`` by its name
+    there. If the two programs or their configurations differ, this step can
+    leave an object that Foundation would accept without the bytecode, or
+    remove bytecode from an object that Foundation still refuses. It cannot
+    delete anything else.
     """
     for folder in os.environ.get("PATH", "").split(os.pathsep):
         candidate = Path(folder) / ("git.exe" if os.name == "nt" else "git")
@@ -264,8 +267,10 @@ def _git(program, folder, budget, *words):
         try:
             output, _ = process.communicate(timeout=limit)
         except subprocess.TimeoutExpired:
-            # The limit ends Git. A program that Git started can still hold the
-            # pipe; this step does not wait for it. Git only reads here.
+            # The limit ends the program that this step started, and the step
+            # stops waiting. An installation's ``git\cmd\git.exe`` is Git's
+            # starter program: the Git program behind it can run on until its
+            # read ends. It only reads, and the object is left as it is.
             process.kill()
             for last in (process.communicate, process.wait):
                 try:

@@ -112,12 +112,18 @@ def _writable(path, *args):
 
 
 def _clear(folder, links):
+    """Remove a folder of a case. Foundation sealed the files and folders of an object."""
     for link in links:
         try:
             os.rmdir(link) if NATIVE else os.unlink(link)
         except OSError:
             pass
-    for attempt in range(40):  # A program of a case can still have a folder as its current folder.
+    if not NATIVE:
+        for parent, names, _ in os.walk(folder, followlinks=False):
+            for name in [parent, *(os.path.join(parent, name) for name in names)]:
+                if not os.path.islink(name):
+                    os.chmod(name, 0o755)
+    for attempt in range(20):  # A program of a case can still have a folder as its current folder.
         try:
             shutil.rmtree(folder, onexc=lambda function, path, error: (_writable(path), function(path)))
             return
@@ -148,7 +154,9 @@ def installation(tmp_path, monkeypatch):
     (outside / '__pycache__').mkdir(parents=True)
     (outside / '__pycache__' / 'precious.cpython-313.pyc').write_bytes(b'not Amplifier\'s')
     (outside / 'precious.txt').write_text('keep me', encoding='utf-8')
+    # The environment of the host that the task started (windows_service, windows_consumer.environment).
     monkeypatch.setenv('AMPLIFIER_SOURCE_STORE', str(root / 's'))
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(root / 'app'))
     # The host has no bytecode setting. A job or a shell that has one must not hide a fact.
     monkeypatch.delenv('PYTHONDONTWRITEBYTECODE', raising=False)
     lines = []
@@ -176,19 +184,22 @@ def installation(tmp_path, monkeypatch):
 
 
 def snapshot(*folders):
-    """Every entry below these folders: its kind, and a file's content or a link's target. No link is followed."""
+    """Every entry below these folders: its kind, and a file's content or a link's target. No link is entered."""
     rows = {}
-    for top in folders:
-        for folder, names, files in os.walk(top, followlinks=False):
-            for name in [*names, *files]:
-                path = Path(folder, name)
-                key = top.name + '/' + path.relative_to(top).as_posix()
-                if path.is_symlink() or os.path.isjunction(path):
-                    rows[key] = ('link', os.readlink(path))
-                elif path.is_dir():
+
+    def below(folder, prefix):
+        with os.scandir(folder) as entries:
+            for entry in sorted(entries, key=lambda entry: entry.name):
+                key = prefix + '/' + entry.name
+                if entry.is_symlink() or entry.is_junction():
+                    rows[key] = ('link', os.readlink(entry.path))
+                elif entry.is_dir(follow_symlinks=False):
                     rows[key] = ('folder',)
+                    below(entry.path, key)
                 else:
-                    rows[key] = ('file', hashlib.sha256(path.read_bytes()).hexdigest())
+                    rows[key] = ('file', hashlib.sha256(Path(entry.path).read_bytes()).hexdigest())
+    for top in folders:
+        below(top, top.name)
     return rows
 
 
@@ -623,6 +634,21 @@ async def test_a_git_that_does_not_end_is_ended_at_the_limit_and_the_object_stay
         time.sleep(max(0, started + SLOW + 2 - time.monotonic()))  # Its child has the object as its folder.
 
 
+def test_the_bounds_of_listings_and_of_entries_stop_a_run(monkeypatch):
+    rows = [('name', 0x20)] * 3
+    api = SimpleNamespace(children=lambda handle: rows)
+    monkeypatch.setattr(repair, 'LISTINGS', 2)
+    budget = repair._Budget(lambda: 0.0)
+    assert budget.children(api, 1) == rows and budget.children(api, 1) == rows
+    with pytest.raises(repair._Bound):
+        budget.children(api, 1)
+    monkeypatch.setattr(repair, 'ENTRIES', 5)
+    budget = repair._Budget(lambda: 0.0)
+    assert budget.children(api, 1) == rows
+    with pytest.raises(repair._Bound):
+        budget.children(api, 1)  # Six entries.
+
+
 def test_the_limit_of_the_whole_step_is_also_the_limit_of_git():
     now = [100.0]
     budget = repair._Budget(lambda: now[0])
@@ -725,6 +751,87 @@ async def test_a_file_that_appears_after_the_listing_leaves_the_object(installat
     result = installation.start()
     assert (result['git'], result['left'], result['files'], result['change']) == (2, 1, 0, 0)
     assert late.read_bytes() == b'new' and len(bytecode(target.folder)) == 4
+
+
+def between_git_and_the_removal(monkeypatch, change):
+    """Another program changes the object after Git listed it and before the first deletion."""
+    real = repair._remove
+
+    def then_remove(api, handle, files, count):
+        change()
+        return real(api, handle, files, count)
+    monkeypatch.setattr(repair, '_remove', then_remove)
+
+
+async def test_a_cache_folder_that_became_a_link_is_not_entered_and_nothing_behind_it_is_deleted(
+        installation, monkeypatch):
+    """Nothing is deleted through a link, at any time: each folder of a file's path is opened again as itself."""
+    target = await broken(installation)
+    cache = target.folder / PACKAGE / '__pycache__'
+    names = sorted(path.name for path in cache.iterdir())
+    for name in names:  # The same names behind the link, in the rest of the person's disk.
+        (installation.outside / '__pycache__' / name).write_bytes(b'not Amplifier\'s')
+    behind = snapshot(installation.outside)
+
+    def swap():
+        os.rename(cache, cache.with_name('moved'))
+        installation.link(installation.outside / '__pycache__', cache)
+    between_git_and_the_removal(monkeypatch, swap)
+    result = installation.start()
+    assert snapshot(installation.outside) == behind
+    assert sorted(path.name for path in cache.with_name('moved').iterdir()) == names
+    assert (result['files'], result['folders'], result['repaired'], result['later']) == (0, 0, 0, 1)
+    assert os.path.islink(cache) or os.path.isjunction(cache)
+
+
+async def test_a_file_that_became_a_link_is_not_deleted(installation, monkeypatch):
+    target = await broken(installation)
+    cache = target.folder / PACKAGE / '__pycache__'
+    first, second = sorted(cache.iterdir())
+
+    def swap():
+        first.unlink()
+        installation.link(installation.outside, first)
+    between_git_and_the_removal(monkeypatch, swap)
+    behind = snapshot(installation.outside)
+    result = installation.start()
+    assert snapshot(installation.outside) == behind and (os.path.islink(first) or os.path.isjunction(first))
+    assert not second.exists() and cache.is_dir()  # The other file went; the folder still holds the link.
+    assert (result['files'], result['folders'], result['repaired'], result['later']) == (1, 0, 0, 1)
+
+
+async def test_a_cache_folder_that_another_program_emptied_is_not_deleted(installation, monkeypatch):
+    """The folder goes only when this run took a file from it."""
+    target = await broken(installation)
+    cache = target.folder / PACKAGE / '__pycache__'
+    between_git_and_the_removal(monkeypatch, lambda: [path.unlink() for path in cache.iterdir()])
+    result = installation.start()
+    assert cache.is_dir() and not list(cache.iterdir())
+    assert (result['files'], result['folders'], result['later']) == (0, 0, 1)
+
+
+async def test_an_object_that_is_gone_from_the_store_does_not_hold_the_pass_open(installation, monkeypatch):
+    target = await broken(installation)
+    with monkeypatch.context() as patch:
+        patch.setenv('PATH', str(installation.outside))  # No Git there: one try, and the pass stays open.
+        assert installation.start()['complete'] is False and record(installation)['tries'] == {target.key: 1}
+    _clear(target.folder.parent, [])  # For example storage cleanup removed the source.
+    result = installation.start()
+    assert (result['objects'], result['complete'], record(installation)['tries']) == (0, True, {})
+
+
+async def test_git_names_in_the_environment_do_not_reach_the_decision(installation, monkeypatch, tmp_path):
+    """With another index Git would list every file as changed, and the object would be left."""
+    target = await broken(installation)
+    monkeypatch.setenv('GIT_INDEX_FILE', str(tmp_path / 'another-index'))
+    monkeypatch.setenv('GIT_DIR', str(tmp_path / 'repository' / '.git'))
+    monkeypatch.setenv('GIT_WORK_TREE', str(tmp_path / 'repository'))
+    result = installation.start()
+    assert (result['repaired'], result['files'], result['left'], result['later']) == (1, 2, 0, 0)
+    monkeypatch.delenv('GIT_INDEX_FILE')
+    monkeypatch.delenv('GIT_DIR')
+    monkeypatch.delenv('GIT_WORK_TREE')
+    assert target.verify() == 'accepted'
 
 
 async def test_a_run_that_ends_after_a_deletion_has_already_raised_the_number(installation, monkeypatch):

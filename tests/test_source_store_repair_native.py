@@ -26,7 +26,6 @@ pytestmark = pytest.mark.skipif(os.name != 'nt', reason='The native steps exist 
 
 
 def test_each_native_step_that_the_repair_uses(installation):  # noqa: F811
-    import _winapi
     api = repair._steps()
     store, outside = installation.store, installation.outside
     (store / 'plain' / 'inner').mkdir(parents=True)

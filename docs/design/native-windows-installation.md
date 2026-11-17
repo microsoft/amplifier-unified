@@ -1352,8 +1352,11 @@ reads that file and does nothing more. The first start of an app version
 lists every folder of every object outside `.git` and starts no Git on a store
 with no `__pycache__` folder; an object that has one costs two Git commands.
 One run has these bounds: 20,000 listings, 400,000 entries, 3 seconds of
-search, 5 seconds for one Git command, 8 seconds in all. A bound reached ends
-the run and a later start goes on; an object that alone passes a bound, or
+search, 5 seconds for one Git command, 8 seconds in all. At its limit the step
+ends the Git program that it started and stops waiting; the installation's
+`git\cmd\git.exe` is Git's starter program, so the Git program behind it can
+run on until its read ends. It only reads, and that object is left. A bound
+reached ends the run and a later start goes on; an object that alone passes a bound, or
 that could not be decided (a file in use, a Git failure), gets at most three
 tries for one app version, and one app version gets at most ten runs. Every
 run that finds a file to delete raises the change number and writes the record
