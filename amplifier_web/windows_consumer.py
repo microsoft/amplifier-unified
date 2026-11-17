@@ -264,14 +264,17 @@ async def launch(root, *, open_browser=True, progress=None):
     return result
 
 
-# What an uninstall knows before its first change. It does not say that the person can keep using
-# Amplifier: with a journal in the folder Amplifier does not open, and Open can need what failed here.
-_UNCHANGED = "Amplifier was not uninstalled, and nothing was changed.\n\n"
+# What an uninstall knows before its first change: it changed nothing. It does not say what the folder
+# holds (another window can have begun a removal) or that the person can keep using Amplifier (with a
+# journal in the folder the launcher refuses, and Open can need what failed here).
+_UNCHANGED = "Amplifier was not uninstalled. This uninstall changed nothing.\n\n"
 _STOPPED = "To keep using Amplifier, open it from the Start menu."
 _UNFINISHED = {
     # Before the first step: nothing was asked yet, or the question itself failed.
     "preparation": _UNCHANGED + "Amplifier could not check its own installation files. "
                    "Restart this PC, then uninstall again.",
+    # The installation is checked. A question could not be asked: Windows did not show it.
+    "questions": _UNCHANGED + "Amplifier could not ask its questions. Restart this PC, then uninstall again.",
     "stop-app": "Amplifier could not stop its background app.\n\n"
                 "Wait a few minutes or restart this PC, then select Stop Amplifier again.",
     "status": "Amplifier could not read its status.\n\nRestart this PC, then select Amplifier status again.",
@@ -310,20 +313,23 @@ _UNFINISHED.update({
               "question: Amplifier is then uninstalled, and its folder stays.",
     # The step `journal` failed. This program does not know whether a journal is in the folder now: the
     # write can fail before or after the file has its name, a program can take the name away, and Windows
-    # can refuse the look for it. With a journal Amplifier does not open; without one it opens. So neither
-    # text of this step says that Amplifier opens, and neither says that it does not. The first says what
-    # this uninstall deleted, not what the folder holds: a program can have deleted an earlier journal.
+    # can refuse the look for it. With a journal the launcher refuses; without one it does not refuse for
+    # that reason. So neither text of this step says that Amplifier opens, and neither says that it does
+    # not. The first says what this uninstall deleted, not what the folder holds: a program can have
+    # deleted an earlier journal.
     "journal": "Amplifier has stopped and no longer starts when you sign in, but it could not begin to delete "
                "its folder. This uninstall deleted nothing in the folder.\n\n"
                "Wait a minute or restart this PC, then uninstall again. Amplifier might not open until then.",
-    # The same step in an uninstall that goes on with an earlier removal: files can already be deleted.
+    # The same step when a journal was in the folder before this uninstall wrote its own: an earlier
+    # removal began (a second uninstall, or another window during a question), so files can be deleted.
     "journal-again": "Amplifier could not finish its removal from this PC.\n\n"
                      "Close other programs or restart this PC. Then uninstall Amplifier again to finish. "
                      "Do not open Amplifier before that: its folder can be partly deleted.",
     "data": "Amplifier has stopped, but some of your chats, settings or saved accounts could not be deleted. "
             "A program may still use them.\n\n" + _AGAIN,
     # Every other failure after the deletion began, and every other failure of an uninstall that found a
-    # journal in the folder. This program saw the journal: at its start, or directly after it wrote it.
+    # journal in the folder. This program saw the journal: at its start, at the step that failed, or
+    # directly after it wrote it.
     "removal": "Amplifier could not finish its removal from this PC.\n\n" + _AGAIN,
 })
 
@@ -338,8 +344,8 @@ def entry_notice(purpose, entry, retry, *, listed=True):
     changed setting, another installation, a renamed Windows account), so the
     text does not say that someone changed it. The cause sentence makes no
     claim about what Amplifier changed: a start can make an entry and then
-    not confirm it. (Only the uninstall opening says that nothing was changed;
-    an uninstall reads the entry before it changes anything.) With `retry`,
+    not confirm it. (Only the uninstall opening says that this uninstall
+    changed nothing; it reads the entry before it changes anything.) With `retry`,
     Windows gave no answer about the entry's account: that can pass, and
     nothing is deleted.
     `listed` is False when Amplifier is not in the Start menu: the setup file
@@ -348,7 +354,7 @@ def entry_notice(purpose, entry, retry, *, listed=True):
     opening = {"start": "Amplifier could not start.",
                "status": "Amplifier could not read its status.",
                "stop": "Amplifier did not stop its background app.",
-               "uninstall": "Amplifier was not uninstalled, and nothing was changed.",
+               "uninstall": "Amplifier was not uninstalled. This uninstall changed nothing.",
                "removal": "Amplifier could not finish its removal from this PC. "
                           "Until it has finished, Amplifier does not open."}[purpose]
     opens = ("Open Amplifier from the Start menu: Amplifier Unified." if listed else
@@ -402,7 +408,7 @@ class Unfinished(RuntimeError):
         code = getattr(self.error, "winerror", None)
         if isinstance(self.error, TaskNotConfirmed):
             # The step's own text would name a wrong cause and a wrong next step.
-            # After a removal began, "nothing was changed" would not be true.
+            # After a removal began, "changed nothing" would say too little.
             text = entry_notice("removal" if self.text == "removal" else
                                 {"status": "status", "stop-app": "stop"}.get(self.step, "uninstall"),
                                 self.error.entry, self.error.retry)
@@ -420,6 +426,38 @@ class Refused(Unfinished):
     @property
     def notice(self):
         return _UNFINISHED[self.step]
+
+
+class NotShown(Unfinished):
+    """The uninstall did its work, and Windows did not show the message that ends it.
+
+    `notice` is what the person must still be told, for one more attempt to show it. It is never the
+    text of a failed preparation: that text says that this uninstall changed nothing.
+    """
+
+    def __init__(self, message, error):
+        super().__init__("message", error)
+        self.message = message
+
+    @property
+    def notice(self):
+        code = getattr(self.error, "winerror", None)
+        return self.message + f"\n\nReference: {self.step}, {type(self.error).__name__}" + (f" {code}" if code else "")
+
+
+def _last_message(root, text, *, again=None, services):
+    """Show the message that ends an uninstall which did its work.
+
+    When Windows does not show it, the uninstall stops here, as before. `again` is the text for the
+    one further attempt; without it that is the same text. The note of the failure goes where the
+    notes of this uninstall go (`services` as in `_record`).
+    """
+    from .windows_installation import owner_notice
+    try:
+        owner_notice(text)
+    except (OSError, ValueError, RuntimeError, TimeoutError) as error:
+        _record(root, "uninstall", "message", error, services=services)
+        raise NotShown(again or text, error) from error
 
 
 @contextmanager
@@ -588,6 +626,8 @@ async def _uninstall(root):
     if delete:
         return await _delete(root, certificate, resumed=resumed)
 
+    earlier = [unfinished]  # A journal is in the folder: an earlier removal began.
+
     def remove():
         at, result = ["lock"], None
 
@@ -613,9 +653,12 @@ async def _uninstall(root):
             raise  # Another window starts or removes this installation; nothing was changed.
         except (OSError, ValueError, RuntimeError, TimeoutError) as error:
             if result is None:
-                # A journal that proves no delete choice is in the folder (see `_uninstall`): Amplifier does
-                # not open, and a step's own text can say that it does.
-                raise Unfinished(at[0], error, "removal" if unfinished else None) from error
+                # A journal is in the folder: it was there at the start and proves no delete choice, or
+                # another window began a removal after the question (seen now; the look under the lock
+                # above did not run when the lock itself failed). The launcher then refuses to open
+                # Amplifier, and a step's own text can say that it opens or that nothing was changed.
+                earlier[0] = earlier[0] or windows_uninstall.unfinished(root)
+                raise Unfinished(at[0], error, "removal" if earlier[0] else None) from error
             result.setdefault("receiptError", error)  # Everything was removed; only tidying failed.
         return result
 
@@ -624,7 +667,7 @@ async def _uninstall(root):
     except Refused:
         raise
     except Unfinished as stopped:
-        _record(root, "uninstall", stopped.step, stopped.error, services=not unfinished)
+        _record(root, "uninstall", stopped.step, stopped.error, services=not earlier[0])
         raise
     if result.get("receiptError") is not None:
         _record(root, "uninstall", "receipt", result["receiptError"])
@@ -634,23 +677,40 @@ async def _uninstall(root):
     if sys.stdout is None:
         # No advice to delete the folder by hand: it holds the person's chats,
         # and File Explorer can refuse its longest paths.
-        owner_notice("Amplifier is uninstalled. It no longer runs, and it no longer starts when you sign in.\n\n"
-                     + ("This uninstall deleted none of your chats, settings, accounts or program files in "
-                        "this folder:\n" if unfinished else
-                        "Your chats, settings, accounts and the program files are still in this folder:\n")
-                     + str(root)
-                     + (f'\n\nWindows kept the certificate "{ROOT_NAME}". It works only for Amplifier on this PC.'
-                        if trust in {"declined", "blocked"} else ""))
+        _last_message(
+            root, "Amplifier is uninstalled. It no longer runs, and it no longer starts when you sign in.\n\n"
+            + ("This uninstall deleted none of your chats, settings, accounts or program files in "
+               "this folder:\n" if unfinished else
+               "Your chats, settings, accounts and the program files are still in this folder:\n")
+            + str(root)
+            + (f'\n\nWindows kept the certificate "{ROOT_NAME}". It works only for Amplifier on this PC.'
+               if trust in {"declined", "blocked"} else ""), services=not unfinished)
     return {"ok": True, "operation": "uninstall", "userDataRetained": True,
             "installationFilesRetained": True, "certificate": trust}
 
 
-def _removed_notice(root, foreign, trust):
-    """The one confirmation of a deleted installation. It says only what was observed."""
+def _last_files(root, foreign, opening):
+    """What stays when the last step did not run: program files, none of the person's data."""
+    # Advice to delete the folder only when nothing in it is someone else's.
+    return (opening + " They are in this folder, and they hold none of your chats, settings or accounts:\n"
+            + str(root) + ("\n\nYou can delete that folder." if foreign == [] else ""))
+
+
+def _removed_notice(root, foreign, trust, *, last=True):
+    """The one confirmation of a deleted installation. It says only what was observed.
+
+    Without `last` the last step does not follow this text: Windows did not show the confirmation, so
+    the uninstall stopped before that step, and the program files that it runs from stay.
+    """
     from .windows_trust import ROOT_NAME
     text = ("Amplifier is uninstalled. It no longer runs, and it no longer starts when you sign in.\n\n"
-            "Your chats, settings, saved accounts and stored keys are deleted.\n\n"
-            "When you close this message, Amplifier starts to remove its last program files. ")
+            "Your chats, settings, saved accounts and stored keys are deleted.\n\n")
+    if not last:
+        text += _last_files(root, foreign, "Amplifier did not remove its last program files.")
+        if trust in {"declined", "blocked"}:
+            text += f'\n\nWindows kept the certificate "{ROOT_NAME}". It works only for Amplifier on this PC.'
+        return text
+    text += "When you close this message, Amplifier starts to remove its last program files. "
     if foreign:
         text += ("The folder itself stays, because it holds entries that are not Amplifier's. "
                  "They were not changed:\n" + "\n".join(foreign[:5])
@@ -675,12 +735,19 @@ async def _delete(root, certificate, *, resumed):
     finishes the removal.
     """
     from . import windows_uninstall
-    from .windows_installation import owner_notice
     from .windows_service import uninstall
-    at = ["lock"]
+    # `earlier`: a journal was in the folder before this uninstall wrote its own, so an earlier removal
+    # began and files can already be deleted. `resumed` is what the folder showed before the questions.
+    # Another window can begin a removal while a question waits, and this path does not look again
+    # before it goes on. So it looks when it must choose a text: before the write of its own journal,
+    # and at a step before that which failed. Only the person's text and the place of the failure note
+    # depend on these looks.
+    at, earlier = ["lock"], [resumed]
 
     def mark(name):
         at[0] = name
+        if name == "journal" and windows_uninstall.unfinished(root):
+            earlier[0] = True
 
     def remove():
         try:
@@ -692,9 +759,11 @@ async def _delete(root, certificate, *, resumed):
         except (OSError, ValueError, RuntimeError, TimeoutError) as error:
             begun = at[0] in windows_uninstall.AFTER_JOURNAL
             if at[0] == "journal":
-                text = "journal-again" if resumed else None  # The two texts of this step say why.
+                text = "journal-again" if earlier[0] else None  # The two texts of this step say why.
             else:
-                text = "data" if at[0] == "data" else "removal" if begun or resumed else None
+                if not begun and windows_uninstall.unfinished(root):
+                    earlier[0] = True  # This uninstall has written no journal yet: it is another window's.
+                text = "data" if at[0] == "data" else "removal" if begun or earlier[0] else None
             raise Unfinished(at[0], error, text) from error
 
     try:
@@ -704,11 +773,14 @@ async def _delete(root, certificate, *, resumed):
     except Unfinished as stopped:
         # Never a note in the app's own folder once that folder is being deleted.
         _record(root, "uninstall", stopped.step, stopped.error,
-                services=not resumed and stopped.step not in windows_uninstall.AFTER_JOURNAL)
+                services=not earlier[0] and stopped.step not in windows_uninstall.AFTER_JOURNAL)
         raise
     foreign = done["foreign"]
     if sys.stdout is None:
-        owner_notice(_removed_notice(root, foreign, done["certificate"]))
+        # When Windows does not show this confirmation, the uninstall stops before its last step, as
+        # before. The further attempt then says that the last program files stay.
+        _last_message(root, _removed_notice(root, foreign, done["certificate"]),
+                      again=_removed_notice(root, foreign, done["certificate"], last=False), services=False)
     # Last: the two folders that this running program runs from. After this
     # step the process imports nothing more and ends: its own files are gone.
     try:
@@ -717,10 +789,8 @@ async def _delete(root, certificate, *, resumed):
     except (OSError, ValueError, RuntimeError):
         last, started = None, False
         if sys.stdout is None:
-            # Advice to delete the folder only when nothing in it is someone else's.
-            owner_notice("Amplifier could not remove its last program files. They are in this "
-                         "folder, and they hold none of your chats, settings or accounts:\n" + str(root)
-                         + ("\n\nYou can delete that folder." if foreign == [] else ""))
+            _last_message(root, _last_files(root, foreign, "Amplifier could not remove its last program files."),
+                          services=False)
     # `afterExit`: the step after exit was started; nobody observed that it
     # finished. `programLeft`: program files that could be neither deleted
     # nor moved, so the folder stays.
@@ -758,6 +828,7 @@ async def maintenance(root, operation):
                              else result["message"])
             return result
         if operation == "uninstall":
+            step = "questions"  # The installation is checked. What fails from here, before a step, is a question.
             return await _uninstall(checked)
         if not owner_notice("Stop Amplifier's background app?", confirm=True):
             return {"ok": True, "cancelled": True}

@@ -110,17 +110,17 @@ Limits of this preview:
   that message, it starts to remove its last program files and then the
   folder. A file or folder directly in the Amplifier folder whose name
   Amplifier does not use stays, and then the folder stays too. The folder also
-  stays if that last step does not finish.
+  stays, with some program files, if that last step does not finish.
 
   An uninstall can stop before its end. Amplifier then says what happened and
   what to do next. If it says that it "could not begin to delete its folder",
   that uninstall deleted nothing in the folder. If it says that it "could not
   finish its removal from this PC", or that some of your chats, settings or
   saved accounts "could not be deleted", a part of the folder can already be
-  deleted: do not open Amplifier until you have uninstalled again. At that next
-  uninstall, the first question can be another one: "The removal of Amplifier
-  from this PC did not finish." **Yes** there leads to the second question
-  above, and **No** changes nothing.
+  deleted: do not open Amplifier, and uninstall again. At that next uninstall,
+  the first question can be another one: "The removal of Amplifier from this
+  PC did not finish." **Yes** there leads to the second question above, and
+  **No** changes nothing.
 
   Amplifier can also ask only "Uninstall Amplifier?" with **Yes** and **No**,
   for example in an installation from an earlier setup file. There, **Yes**

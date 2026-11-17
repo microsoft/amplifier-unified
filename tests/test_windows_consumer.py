@@ -579,7 +579,7 @@ def test_maintenance_on_a_folder_that_fails_the_installation_check_writes_nothin
     assert stopped.value.code == 1 and list(tmp_path.iterdir()) == []
     assert json.loads(capsys.readouterr().out) == {"ok": False, "step": step, "errorType": "ValueError"}
     if operation == "uninstall":
-        assert "nothing was changed" in consumer.Unfinished(step, ValueError()).notice
+        assert "This uninstall changed nothing." in consumer.Unfinished(step, ValueError()).notice
 
 
 @pytest.mark.parametrize("listed", [False, True])
@@ -698,7 +698,7 @@ def test_a_start_that_cannot_use_the_sign_in_entry_names_that_cause_and_not_the_
 
 @pytest.mark.parametrize("retry", [False, True])
 @pytest.mark.parametrize("operation,step,opening", [
-    ("uninstall", "task-read", "Amplifier was not uninstalled, and nothing was changed."),
+    ("uninstall", "task-read", "Amplifier was not uninstalled. This uninstall changed nothing."),
     ("stop", "stop-app", "Amplifier did not stop its background app.")])
 def test_stop_and_uninstall_name_an_entry_that_was_not_confirmed_and_a_next_step_that_fits(
         tmp_path, monkeypatch, operation, step, opening, retry):

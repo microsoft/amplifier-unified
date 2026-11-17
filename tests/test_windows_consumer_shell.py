@@ -498,7 +498,7 @@ def test_changed_entry_refuses_before_the_app_is_stopped(uninstaller, conflict):
     registration = state["registry"].copy()
     with pytest.raises(uninstaller.consumer.Unfinished) as stopped:
         uninstaller.run()
-    assert stopped.value.step == "entries-check" and "nothing was changed" in stopped.value.notice
+    assert stopped.value.step == "entries-check" and "This uninstall changed nothing." in stopped.value.notice
     assert not state["calls"] and state["task"] == "running" and state["registry"] == registration
     assert len(list(folder.iterdir())) == 4 and not state["pins"]
 
