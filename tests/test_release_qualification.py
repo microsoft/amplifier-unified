@@ -2786,8 +2786,8 @@ def test_windows_plan_native_check_passes_only_with_one_acceptance_and_two_refus
     path.write_text(json.dumps({'schema': 1, 'graph': [APP_ROW, {**rows[1], 'name': 'Amplifier_Foundation'}, rows[0], rows[2]]}))
     result = fixture.cases(tmp_path / 'renamed', path, records)
     assert result['ok'] is True and result['gitComponents'] == {'amplifier-foundation': QUALIFIED, NAMING: QUALIFIED}
-    # Without the one row of Amplifier Foundation from Git, in the plan and in the installation, the check ends
-    # with a sentence before it starts a command.
+    # Without the one row of Amplifier Foundation from Git, in the plan and in the installation, `cases` ends
+    # with a sentence before it runs the tool: it makes no work folder.
     without = [row for row in rows if row['name'] != 'amplifier-foundation']
     for name, plan, installation, sentence in (
             ('no-row', without, records, 'The plan does not have exactly one row of amplifier-foundation.'),

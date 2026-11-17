@@ -44,12 +44,13 @@ RELEASE = {"version": "0.106.0", "sha256": "5d89c247b7ba19aa0264516036d17a26e314
 NAME = "amplifier-foundation"
 # Any commit other than the installed one. Nothing installs it; the gate compares text.
 OTHER = "e37a946b64854eb39c09a3857ce2bc366ff297e0"
-# The check ends a command at the latest this long after the check's start. That is below the
-# workflow step's limit of 15 minutes, so that the check can end a command and write its result
-# file before that limit.
-# Not covered: Python on Windows waits for the output of a command that it ended, and a program that
-# the command started can hold that output open. The download's body, the tool's own reading of the
-# checkout and of the installation, and the file work have no limit here.
+# Each command that this file starts itself (started) gets a time limit. This file ends them at the
+# latest this long after its import. That is below the workflow step's limit of 15 minutes, so that
+# a timeout can be recorded in result.json before the step's limit.
+# No limit here: the download's body; the commands that the release tool starts in this process (it
+# reads the checkout's commit and the installation's packages); the file work.
+# Also not covered: Python on Windows waits for the output of a command that it ended, and a program
+# that the command started can hold that output open.
 LIMIT = 12 * 60
 STARTED = time.monotonic()
 # The last line of a refusal, after one line for each difference.
@@ -72,7 +73,7 @@ def left(limit):
 
 
 def started(name, arguments, limit, **options):
-    """One command of the check, with its output. A command that passes its time is ended."""
+    """Run one command with a time limit and give its result. A command that passes the limit is ended."""
     seconds = left(limit)
     try:
         return subprocess.run([*map(str, arguments)], capture_output=True, text=True, encoding="utf-8",
@@ -144,7 +145,7 @@ def cases(work, plan_path, records, tool=TOOL):
     installed = {normal(row["name"]): row["revision"] for row in host if row.get("url")}
     if installed.get(NAME) == OTHER:
         raise RuntimeError("The installed Amplifier Foundation commit is the fixture's other commit. Change OTHER.")
-    # Before a command starts: each of the two has the one row of Amplifier Foundation, from Git.
+    # Before the tool runs: the plan and the installation each have the one row of Amplifier Foundation, from Git.
     host_other, records_other = moved(host, "The plan"), moved(records, "The installation")
     same = evidence(tool, work / "host-same", host)
     other = evidence(tool, work / "host-other", host_other)
