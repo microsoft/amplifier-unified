@@ -890,8 +890,9 @@ def test_a_sign_in_page_without_the_mark_is_not_changed_and_reads_nothing(host, 
     monkeypatch.setattr(entry, "next_step", lambda request: pytest.fail("The step was worked out for nothing"))
     page = call(host, "/login", method="GET", origin=None)
     csrf = page.cookies[auth.CSRF_COOKIE].value
-    body = host["service"].instance_branding.document(plain.replace("__CSRF__", csrf), login=True)
-    assert page.text == body
+    # The three marks that the host filled before this change, and nothing else.
+    earlier = plain.replace("__CSRF__", csrf).replace("__NEXT__", "/").replace("__ERROR__", "")
+    assert page.text == host["service"].instance_branding.document(earlier, login=True)
 
 
 @pytest.mark.skipif(os.name != "nt", reason="The real private store of Windows and the real record of the entries")
