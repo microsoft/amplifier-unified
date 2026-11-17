@@ -64,7 +64,8 @@ def generation_failure(event):
              'native_measurement_unavailable', 'native_compaction_failed', 'disabled',
              'request_context_unavailable', 'invalid_native_contract', 'authoritative_measurement_unavailable',
              'summary_output_limit', 'summary_empty', 'previous_failure', 'summary_failed', 'native_failed',
-             'native_recovery_required_context_oversized', 'checkpoint_persist_failed'}
+             'native_recovery_required_context_oversized', 'checkpoint_persist_failed',
+             'summary_work_paused', 'summary_progress_incompatible'}
     code = code if isinstance(code, str) else None
     if category == 'context_compaction':
         stage = 'context_preparation'
@@ -92,6 +93,12 @@ def generation_failure(event):
         elif code == 'summary_empty':
             summary = 'The summarizer returned no usable conversation summary.'
             guidance = 'Check the summarization model and its output allowance before continuing. Original history is preserved; no empty summary was saved.'
+        elif code == 'summary_work_paused':
+            summary = 'Conversation preparation reached its local call allowance.'
+            guidance = 'Completed summary progress is saved. Further preparation requires separate admission; it was not automatically retried. Original history and the checkpoint are preserved.'
+        elif code == 'summary_progress_incompatible':
+            summary = 'Saved summary progress cannot be used with the current source or policy.'
+            guidance = 'No replacement summary work was started. Original history and the checkpoint are preserved. Review the source and policy mismatch before deciding how to proceed.'
         elif code == 'previous_failure':
             summary = 'Conversation preparation is waiting after an earlier compaction failure.'
             guidance = 'Inspect the earlier failure and correct its cause, or wait for the retry cooldown before continuing. The conversation has not advanced; repeating the same request immediately will not bypass this protection.'
