@@ -636,7 +636,7 @@ def test_code_or_ticket_opens_no_session_while_a_saved_sign_out_waits_for_the_ho
     assert host["browser_codes"].failures == 0              # Refused, and not counted as a wrong code.
     refused = open_ticket(host, ticket)
     assert refused.status == 403 and auth.SESSION_COOKIE not in refused.cookies
-    assert refused.text == entry.REOPEN
+    assert refused.text == entry.reopen()
     # Both are used up: they open nothing later either.
     monkeypatch.setattr(auth, "_epoch_hint", lambda data_dir: applied)
     assert wrong(redeem(host, code)) and open_ticket(host, ticket).status == 403
@@ -715,6 +715,70 @@ def test_issue_handler_checks_the_credential_itself_and_again_after_it_read_the_
 
 # The sign-in page.
 
+def test_the_field_and_sign_in_come_directly_after_the_heading_and_the_error(host):
+    """"Sign in" must not depend on how long the help is.
+
+    Run G: at 300 % the error text moved the button below the window edge,
+    because all the help stood between the heading and the field.
+    """
+    for path in ("/login", "/login?error=1"):
+        text = call(host, path, method="GET", at=REMOTE, origin=None).text
+        body = text[text.index("<main>"):text.index("</main>")]
+        heading, error, form, button, end = (body.index(mark) for mark in (
+            "<h1>", '<p class="error" role="alert">', "<form ", '<button type="submit">Sign in</button>', "</form>"))
+        assert heading < error < form < button < end
+        # Between the heading and the form there is the error text and nothing else.
+        between = body[body.index("</h1>") + len("</h1>"):form]
+        assert re.fullmatch(r'\s*<p class="error" role="alert">[^<]*</p>\s*', between), between
+        # Every other text and the one link come after the button.
+        assert all(body.index(mark) > end for mark in ('id="code-help"', "<code>", "<a "))
+        assert body.count("<p") == 3
+    assert "That code did not work" in text
+
+
+def test_the_next_step_for_a_browser_that_is_not_signed_in_is_true_on_each_platform(monkeypatch):
+    monkeypatch.setattr(entry, "is_windows", lambda: True)
+    windows = entry.reopen()
+    # A PC from the setup file has no `amplifier-unified` on its PATH: its Start-menu entry comes first.
+    assert windows == ("Open Amplifier from the Start menu: Amplifier Unified. "
+                       "If the Start menu has no such entry, run this: amplifier-unified open.")
+    # The name in the text is the name of the entry that setup makes.
+    from amplifier_web import windows_consumer_shell
+    assert "Amplifier Unified.lnk" in windows_consumer_shell.LINKS
+    monkeypatch.setattr(entry, "is_windows", lambda: False)
+    other = entry.reopen()
+    assert other == "To open Amplifier, run this: amplifier-unified open."
+    assert "Start menu" not in other  # macOS and Linux have no such entry.
+    for text in (windows, other):
+        assert "launcher" not in text and "candidate" not in text and "host" not in text
+
+
+@pytest.mark.parametrize("windows,step", [
+    (True, "Open Amplifier from the Start menu: Amplifier Unified. "
+           "If the Start menu has no such entry, run this: amplifier-unified open."),
+    (False, "To open Amplifier, run this: amplifier-unified open.")])
+def test_a_browser_that_does_not_open_gets_the_next_step_of_its_platform(tmp_path, monkeypatch, windows, step):
+    from argparse import Namespace
+    from amplifier_web import cli, update_readiness
+    monkeypatch.setattr(entry, "is_windows", lambda: windows)
+
+    async def grant(*a, **kw):
+        return LOCAL + "/login#ticket=" + "a" * 43
+    monkeypatch.setattr(entry, "owner_browser_url", grant)
+    monkeypatch.setattr(update_readiness, "probe_targets", lambda host: ([LOCAL + "/api/health"], None))
+    monkeypatch.setattr(cli.webbrowser, "open", lambda url: False)
+    with pytest.raises(entry.BrowserEntryUnavailable) as refused:
+        cli._open_browser(Namespace(no_open=False), tmp_path, {"port": 8941, "public_origins": []})
+    assert str(refused.value) == "The browser did not accept the open request. " + step
+
+
+def test_a_refused_ticket_names_the_start_menu_first(host):
+    # The reply that a browser on the PC shows when its one-use ticket opens nothing.
+    refused = open_ticket(host, "a" * 43)
+    assert refused.status == 403 and auth.SESSION_COOKIE not in refused.cookies
+    assert refused.text == ("Open Amplifier from the Start menu: Amplifier Unified. "
+                            "If the Start menu has no such entry, run this: amplifier-unified open.")
+
 def test_remote_address_gets_the_code_form_and_the_local_page_is_unchanged(host):
     for at in (LOCAL, "https://localhost:8941", "https://[::1]:8941"):
         local = call(host, "/login", method="GET", at=at, origin=None).text
@@ -730,7 +794,8 @@ def test_remote_address_gets_the_code_form_and_the_local_page_is_unchanged(host)
     for attribute in ('name="code"', 'autocomplete="one-time-code"', 'autocapitalize="characters"',
                       'spellcheck="false"', " required>", '<button type="submit">Sign in</button>'):
         assert attribute in text
-    assert "1. On the Windows PC that runs Amplifier, run: <code>amplifier-unified browsers code</code>" in text
+    assert ("To get a code, run this on the Windows PC that runs Amplifier: "
+            "<code>amplifier-unified browsers code</code>.") in text
     # A PC from the setup file has no short command: the page links to the guide's full one.
     assert ("If Windows does not find that command, use the full command from the\n"
             f'<a href="{entry.GUIDE}" target="_blank" rel="noopener noreferrer">'
@@ -739,7 +804,9 @@ def test_remote_address_gets_the_code_form_and_the_local_page_is_unchanged(host)
     assert "\n## Windows host: reach Unified from another device\n" in guide     # The link's target exists.
     assert entry.GUIDE.endswith("/docs/DEPLOYMENT.md#windows-host-reach-unified-from-another-device")
     assert text.count("<a ") == 1 and text.count("http") == 1                   # No other address on the page.
-    assert "2. Type the code here within two minutes." in text and "That code did not work" not in text
+    assert "Type the code here within two minutes." in text and "That code did not work" not in text
+    # The field's help is the text that says where the code comes from.
+    assert 'aria-describedby="code-help"' in text and text.count('id="code-help"') == 1
     csrf = page.cookies[auth.CSRF_COOKIE]
     assert f'<input type="hidden" name="csrf" value="{csrf.value}">' in text
     assert csrf["httponly"] and csrf["samesite"] == "Strict" and csrf["secure"] and csrf["path"] == "/"

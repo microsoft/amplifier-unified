@@ -507,14 +507,15 @@ Consequences and limits:
   currently configured names (root published last, so an interrupted renewal
   never serves and can be repeated). The next open then shows the Amplifier
   message and the one Windows confirmation for the new root, and every other
-  device must import the new root. Run it while the host is stopped. The earlier
-  root stays in the Windows store and is inert. Renewal before day 825 is this
-  same command; nothing reminds the owner yet.
+  device must import the new root. Run it while the host is stopped. Windows
+  can still hold the earlier root; see "Roots that `setup-tls force` replaced"
+  below. Renewal before day 825 is this same command; nothing reminds the owner
+  yet.
 - The step runs in the launcher that setup installs. An in-app update does not
   replace that launcher, so only a setup file built from this change has it.
-- `windows_trust.remove_root` is the removal call for uninstall. Windows asks
-  again there, and its default button is No, so "declined" is an ordinary
-  outcome: the root stays and is inert.
+- `windows_trust.remove_root` is the removal call. Windows asks again there,
+  and its default button is No, so "declined" is an ordinary outcome: the root
+  stays and is inert.
 - The launcher's check uses OpenSSL with the Windows roots. It does not prove
   that a browser accepts the certificate. The `windows-local-connection` job
   of the focused Windows workflow asks the Windows chain builder about the
@@ -525,6 +526,95 @@ Consequences and limits:
   acceptance.
 - The retained prototype launcher is unchanged: it keeps the earlier CA with a
   key on disk and the person's own certificate-viewer action.
+
+#### Roots that `setup-tls force` replaced
+
+Seen in clean-room Run G: three uses of `setup-tls force` left three roots
+named "Amplifier Unified (this PC only)" in the person's store, and an
+uninstall removed only the current one. Nothing knew the earlier roots: the
+store can be searched by name, but a name does not show which installation made
+a certificate, and the earlier certificate's bytes were gone from disk.
+
+- **The record.** Before `setup-tls force` writes the first file of a new
+  key-less identity, it adds the root that it replaces to
+  `config/tls/replaced-roots.pem` (`windows_tls._remember_replaced`), under the
+  TLS lock and through the private-file writer. The file holds public
+  certificates only, oldest first. If the record cannot be written, `force`
+  stops and the identity is as it was. Only this command writes the file. A
+  `force` that stopped part-way records the root that is still in use; a
+  repeated `force` records it once.
+- **The record never loses a root that Windows may still hold.** Without its
+  exact bytes nothing finds that root again. The record must fit in one
+  bounded read (64 KiB, about 50 certificates). When one more does not fit,
+  `force` asks Windows, read-only, which recorded roots it still holds for the
+  person, and drops the others. Only Windows' own answer "not found"
+  (`CRYPT_E_NOT_FOUND`) drops a root. Windows returns nothing also for a
+  search that failed, so `windows_trust.contains` raises for every other
+  result; a failed search and a store that cannot be opened both count as
+  "Windows may hold it". `remove_root` uses the same search (`_search`): a
+  failed search is `blocked`, not `absent`, so an uninstall says that Windows
+  kept the certificate. `add_root` keeps its plain first search: a failure
+  there leads to the add, which Windows decides and the check after it
+  confirms. If the record is still full, `force` stops with a
+  plain text and changes nothing (`windows_tls.ReplacedRecord`). A record that is too long to
+  read stops `force` in the same way: Amplifier never writes one of that
+  length, and it does not replace a file that it cannot read. The readers get
+  an empty list from such a file. When `force` writes the record again, it
+  writes only the whole certificates; other text in the file is not kept.
+- **What the person can read.** `setup-tls status` on such a PC prints the
+  SHA-1 thumbprint of the root in use (the form that Windows shows) and the
+  thumbprint of each replaced root that Windows still holds. When it cannot
+  read its certificate, the record or the store, it says so; it never shows
+  that as "none". The guide's steps delete by hand only a certificate whose
+  thumbprint the command lists as an earlier one. Every other certificate of
+  the name stays, also when the command shows nothing: the steps never find a
+  certificate by its name, and never by exclusion.
+- **What counts.** `windows_trust.replaced` returns a recorded root only when
+  it has the fixed shape of this product's root (`_shape`: the name,
+  self-signed, path length 0, server-authentication use only, critical name
+  constraints with no exclusion), when the store holds exactly that
+  certificate, and when it is not the current root. The period of validity and
+  the names are not compared: a replaced root can be expired, and it names an
+  earlier configuration. The record names candidates; it is no proof. A
+  program of the same account can write the file, and it can also ask Windows
+  for the same deletion itself. The shape rule keeps a changed record from
+  making Amplifier ask about a certificate that is not of this product.
+- **At the next open.** The launcher's trust step reads the list before its
+  message. With no replaced root the message and the one Windows question are
+  as before. With N replaced roots the one message says that Windows asks N+1
+  questions, that the deletions come after the person's Yes to the first, and
+  gives the thumbprint of each certificate. After Windows added the new root
+  (the person's Yes), the launcher asks Windows to delete each replaced root
+  (`windows_trust.forget_roots`): one Windows question for each, default No.
+  A No to the new root or a refusal asks about no replaced root. When Windows
+  already holds the new root it asks nothing, so the message announces no
+  deletion and none is asked. The normal case is two questions after one
+  `force`: install the new root, delete the earlier one.
+- **After a No.** A replaced root that the person keeps is not asked about at
+  an ordinary later open: the trust step runs only when the connection is not
+  trusted. Nothing saves a No, so the open after the next `force` asks about
+  it again, and so does an uninstall. The message lists at most five
+  thumbprints of replaced roots and gives the number of the others.
+- **At an uninstall.** `windows_trust.held_roots` lists the current root and
+  each replaced root that the store holds. Uninstall asks Windows once for
+  each (`_trusted_root` and `_forget_root` in `windows_consumer.py`), and its
+  first question says how many questions Windows asks. The normal case is one.
+  The result is `declined` or `blocked` when Windows kept at least one.
+
+Limits. The record is written by app code, which an in-app update brings. The
+deletion is launcher code: an installation keeps the launcher of its setup file
+until a launcher refresh. So a PC with an earlier launcher records a replaced
+root and does not delete it; a later launcher deletes it at an uninstall, or at
+the open after the next `force`. A root that was replaced before this change is
+on no record and stays; nothing tells it from another installation's root of
+the same name, so the guide tells the person to leave it. A delete uninstall
+removes the record with the folder `app`. No launcher-side code, of any
+version, lists the TLS folder, so the new file does not disturb an earlier
+launcher (searched in the history of the TLS, trust, setup and launcher
+modules). Not shown: the Windows deletion question itself on a person's
+own store; a hosted runner cannot answer it. The store calls run there on a
+private store that is not a trust store, and the list and its rule run on the
+real private file store.
 
 ### Saved local address
 
@@ -648,16 +738,31 @@ characters fits. The path-length work in the app owns this number. It measured
 the whole tree below the folder in a clean-room installation: 59 is the root
 that its design supports under both of its variants, and it may raise the
 number in its own change when its budget test proves a larger one. Worst
-observed depths below the folder: app generation 169 characters, worker
-environment 162, private Python 142, tools 124, private Git 68. Those fit at
-59 today.
+observed depths below the folder: frozen worker environment 194 characters,
+uv cache 189, first worker environment 187, app generation 171, private Python
+142, tools 124, private Git 90. Those fit at 59 today: the longest is 253
+characters, with 6 to spare. The numbers are from a clean-room installation of
+release 0.105.0 after an in-app update and a chat, and the budget test holds
+the same numbers. The frozen worker environment
+(`app\runtime\q-<32 hex digits>`) is the one that an update or the setup of
+a chat makes. Its deepest file is bytecode; its deepest source file is 180.
+While the app prepares such an environment, and after a preparation that was
+stopped or that failed, the same files are in
+`app\runtime\prepare-<32 hex digits>`. That name is 6 characters longer than
+the frozen one. Its deepest source file is then 186 (245 at 59). A bytecode
+file as deep as the deepest one of the frozen environment is 200 there: 259
+at 59, the limit itself. Python uses the source file when it cannot write
+bytecode.
+Earlier text here gave 162 for the first worker environment (its deepest
+source file) and 68 for the private Git (the earlier, smaller Git).
 
 The short folder is necessary and not sufficient. The app must also keep what
 it adds below the folder inside the budget of the next section. In a new
 installation every row of that budget fits at 59; the next section also names
-the cases that the budget does not cover. The tightest row is module
-source in the source store (253 characters at 59; see the source-store items
-below), and it fits only because the store folder is named `s`. A change to
+the cases that the budget does not cover. The tightest rows are in the
+source store (see the source-store items below): module source is 253
+characters at 59, and the deepest other file that counts as needed is 255.
+They fit only because the store folder is named `s`. A change to
 the folder name must respect this number, and
 `tests/test_windows_setup_folder.py` fails when code and document disagree.
 Setup stops before it asks anything when the path would be longer.
@@ -689,10 +794,38 @@ table with `python tests/test_windows_path_budget.py`.
   oversized-request diagnostic copy (51; the app records "unavailable" and the
   turn continues), background-job records (68), the saved view (93). A shorter
   folder path adds the same number of characters to each limit.
-- **Not covered:** a chat that a person starts in the default workspace folder
-  (`<folder>\workspace`) keeps the CLI name, like every folder a person chooses.
-  Its background-job records fit only up to a folder path of 51, and its request
-  diagnostics up to 42. An installation made by an earlier setup file (folder
+- **A folder that a person chose** keeps the CLI name, which is as long as the
+  folder's own path. For the files that keeping a chat needs (its history, its
+  saved view and its capture), the installation folder path plus the path of
+  that folder may be at most 137 characters. So the folder may have a path of
+  78 characters at 59, and of 103 at 34. When it is longer, the app answers
+  before it makes anything, when a chat is created and when a conversation
+  worker starts: "This chat's folder has a path that is too long for Windows:
+  `<folder>` (`<length>` characters; at most `<number>` fit here). Move the
+  folder to a shorter path, or start a chat in another folder." Before, the
+  app could not create the chat ("unexpected response (500)"), or the worker
+  stopped at its first write. The app gives this answer only while Windows
+  long paths are off. It reads that setting when it answers, because a
+  conversation worker is a new process and gets the setting of that moment.
+  The app itself keeps the setting that it started with. After long paths are
+  turned on, the app's own writes for such a chat can still fail until the app
+  starts again. After long paths are turned off, the app answers for a folder
+  that it could still write itself; a new worker could not.
+  Two kinds of files have less room than a kept chat: background-job records
+  (112 in place of 137) and request diagnostics (94). The default workspace
+  folder (`<folder>\workspace`) is the folder path plus 10 characters. A chat
+  there is always kept. Its background-job records fit only up to a folder
+  path of 51, and its request diagnostics up to 42.
+  A helper (sub-agent) session has less room too. Its ID is 34 characters plus
+  the agent's name, and its history is saved under the same project name as
+  the chat's. With the longest folder that the app accepts, the history of a
+  helper fits up to an agent name of 15 characters. In the default workspace
+  folder it fits up to a name of 24 characters at a folder path of 59, of 40
+  at 51 and of 74 at 34. In an app chat folder it fits up to 72 at 59. The
+  app's answer measures the chat and not a helper. This is arithmetic from
+  the names. What a person sees when the history of a helper does not fit has
+  not been run.
+- **Not covered:** an installation made by an earlier setup file (folder
   path of 74 characters plus the account name) has no budget; new chats there
   get the short name, which is necessary and not always sufficient. A chat
   there with saved history under the CLI name stays under it, including history
@@ -711,10 +844,13 @@ table with `python tests/test_windows_path_budget.py`.
   consumer installation has one (the shortest is 34, and a session folder
   below it fits only up to 22). Release 0.98.5 failed the component stage of
   its first in-app update on this (258 characters at a folder path of 51; the
-  page showed "ENOENT · FileNotFoundError · Probe: prepare"). The folder now
-  has the project name `update-<first 12 hex digits of the stage ID>` (19
-  characters) on Windows, when the process runs with that stage as its app
-  home. At 59 the longest path that a stage and its probe create is 248, with
+  page showed "ENOENT · FileNotFoundError · Probe: prepare"). On Windows, a
+  process that runs with a stage as its app home and that stage's
+  `shared-config` as its shared home now gives every folder the project name
+  `update-<first 12 hex digits of the stage ID>` (19 characters). With any
+  other shared home every folder keeps its name, so the stage's name is never
+  used where a person's history is.
+  At 59 the longest path that a stage and its probe create is 248, with
   11 characters to spare; the probe's session folder is 202. The probe's
   capture files go to the installation's capture folder, as before, under the
   same name (folder 154 at 59). Each stage has its own shared home, so two
@@ -727,12 +863,26 @@ table with `python tests/test_windows_path_budget.py`.
   A first installation without an
   AI connection has no stage: `<folder>\app\updates\baseline-runtime` holds
   receipts only (longest path 118).
-  **Not covered:** a chat with its own setup (dependency overrides of its
-  workspace or session) is checked in a stage with the chat's folder. An app
-  chat folder keeps its short name there and fits (250). A folder that a person
-  chose keeps the CLI name there; for the default workspace folder the probe's
-  transcript write fits only up to a folder path of 39. This is arithmetic
-  from the code and has not been run on a PC.
+- **A chat with its own setup** (a saved plan, which a fork has; a bundle
+  that is not offered; dependency overrides or local code in its folder) is
+  prepared and checked in a stage too (`runtime_profiles.ensure`). The probe
+  then gets the chat's folder as its workspace. Its session is not a saved
+  conversation: it is in the stage's own shared home. Every folder has the
+  stage's name there, so the probe's paths are the rows above, whatever the
+  chat's folder is: an app chat folder, the default workspace folder, a folder
+  that a person chose. The preparation itself adds only shorter paths (155 at
+  59). Before this rule a folder that a person chose kept the CLI name inside
+  the stage. For the default workspace folder the probe's session folder was
+  twice the folder path plus 134 (252 at 59), and its history write fitted
+  only up to a folder path of 39. For another folder the length of its own
+  path decided: at most 30 characters at 59, 38 at 51 and 55 at 34. The
+  native job shows that failure with the app's real probe at 51 and 59, under
+  the names from before this rule. A run of the app's whole preparation at 59
+  without the rule is on a branch that is not merged (November 17, 2026):
+  every step up to the frozen worker environment ended well, and then the
+  check ended with "FileNotFoundError" (ENOENT). Earlier versions refused every chat with
+  its own setup on Windows before they made a stage, and the chat page showed
+  only "The conversation worker could not start."
 - **Source store:** Amplifier Foundation owns its layout; the app supplies the
   folder: `<folder>\s` in a new installation, `<folder>\source-store` in an
   installation that an earlier setup file made. A Foundation revision before `7526bb55`
@@ -751,6 +901,32 @@ table with `python tests/test_windows_path_budget.py`.
   default module more than 6 characters deeper fails on the longest accepted
   account name until the budget changes. An entry that already exists under a
   64-digit name stays in use and is 48 characters longer.
+- **Source store, the files beyond the limit:** the store stages whole
+  repositories, with their Git data and their tests. Measured on native
+  Windows with long paths off at a folder path of 59, after the app prepared
+  the default components for two chats: in the run of November 17, 2026,
+  4 files and 2 folders pass the limit. The job prints these counts and the
+  size of the whole tree at each run; a later revision of a component can
+  change them. All six are test
+  fixtures of one module of the context-intelligence repository
+  (`modules\tool-context-intelligence-upload\tests\fixtures\ground_truth\<ID>\context-intelligence`,
+  for two IDs): `metadata.json` is 268 characters, `events.jsonl` is 267, and
+  the folder is 254. Their depth in the repository is 140. At a folder path of
+  51 the two `metadata.json` files are 260, as a clean-room installation
+  showed. The store writes all of them through extended-length paths, and
+  every step of the preparation ends well. An ordinary path does not open the
+  4 files. No bundle file, module source, context file or skill is among
+  them, and no chat reads them. The copy that a build reads by ordinary paths
+  is in the build view of the module and is 42 characters shorter (226). The
+  deepest files that count as needed are two documents below `docs\lanes`,
+  one of them in the skills repository (depth 127): 255 at 59, with 4
+  characters to spare. They count as needed because nothing shows that no
+  chat opens them. The
+  native job lists each path over the limit. It fails when one is anywhere
+  else than in the Git data or the tests of a staged repository, in the tests
+  of one of its modules, or in bytecode (`NOT_NEEDED` in the budget test). A
+  folder that is only named `tests` somewhere else does not count. The layout
+  of the store is unchanged.
 - **Source store, the earlier folder name:** earlier setup files named the
   folder `source-store`, 11 characters longer. There module source is folder
   path + 205. It fits up to a folder path of **54** and is 264 at 59. Those
@@ -798,6 +974,69 @@ it leaves with that test profile is exactly the list in
 `tests/update_stage_probe.py`. That is the
 probe in a stage, not a whole in-app update: no component is fetched or
 installed. It is not setup-file or clean-account acceptance.
+The same job runs that probe with the folder of a chat as its workspace: the
+default workspace folder, a person's folder with a path of 150 characters, and
+an app chat folder. With the earlier names the probe fails for the first two.
+With the stage's name it completes for all three and writes nothing into the
+chat's folder. The job also checks the app's answer for a folder that a person
+chose against Windows, one character apart: at 59 a folder path of 78
+characters keeps a chat, and at 79 Windows refuses the saved view.
+
+A second job, `windows-chat-setup`, runs the whole preparation of a chat's own
+setup, unchanged (`runtime_profiles.ensure`): real uv, the worker
+dependencies, the default components from their repositories, the freeze and
+both probes. It runs below a folder path of 59 with the folders and settings
+that the installed launcher gives the app, for the default workspace folder
+and for a person's folder. Each of the two folders declares a dependency
+override of its own. Two chats with the same setup start at the same time:
+one prepares the setup, and the other waits and uses it. One preparation is
+cancelled while its first command runs. That is what a stop of the chat does:
+`RuntimeManager.stop` cancels the preparation's task. The
+job requires that the attempt is recorded as cancelled, that nothing admits
+it, and that its copy of the keys file is still private. The job starts the
+chat again directly after the stop. The second start gets a new stage and
+ends well. Whether a program of the stopped command still ran at that moment
+is not required; the job prints what it saw. It reads the list of processes
+every two seconds until it finds no process of the stopped preparation. That
+list is a sample: a program whose parent started and ended between two
+readings is not in it. In the runs of November 17, 2026, the list held
+programs of the stopped command (Python and Git) directly after the stop and
+none some seconds later. The stopped stage and its project stay on the disk;
+this change adds nothing that removes them.
+
+What a stop ends is checked with a command that the test controls
+(`tests/test_windows_stopped_command.py`, in the same job). The command
+starts a program through a parent that ends at once, so the program has no
+living parent. The test holds an open handle of that program, and Windows
+signals the handle when the program ends; no list of processes is used. A
+stop and a time limit both go through `updates.process`. Each ends the
+command that the app started: the command has ended when the app's call
+returns. The app does not end the program that the command started: 3
+seconds later that program still runs. The launcher puts the app into a
+kill-on-close Job before it starts any child (`contain_current_host` in
+`amplifier_web/windows_jobs.py`, called for the supervised sign-in task in
+`amplifier_web/windows_service.py`). The third case runs that same call and
+the same stop in a process of its own, and then lets that process end:
+Windows ends the program with it. The fourth case is the control: the same
+process without that call ends, and the program still runs 10 seconds later.
+So a program of a stopped preparation can run on while the app runs, and the
+Job ends it with the app at the latest. That the installed launcher makes
+the call is read from the code; these cases run the call, not the installed
+launcher. The first two cases run without the launcher's Job, as the big
+preparation case does. The
+job reads each stage's copy of the keys file through the app's private-file
+reader, which refuses another owner and a wider access list. It then lists
+every path below the installation
+folder (the list is an artifact of the run) and requires that no path which
+the app or a chat needs passes the limit. That tree holds the worker
+environments, the stages, the source store with the default components, and
+uv's cache. It does not hold what the setup file installs (the launcher
+environment, the private Python, the private Git), and the job starts no
+conversation worker and calls no model. A hosted runner's account is
+elevated, so the case makes the account the default owner of the files that
+its process creates, as on a person's PC. The job prepares a chat's own setup
+from dependency overrides. A saved plan, which a fork has, goes the same way
+through the preparation and is not run there.
 
 Setup checks the PC and the folder before its first question. Each stop names
 one cause and one next step in plain language, and never shows exception text,
@@ -953,12 +1192,14 @@ So the order is:
 5. Remove the Apps-list entry, then the shortcuts ("Uninstall Amplifier" last),
    then the emptied Start-menu folder.
 6. If Windows trusts this installation's own key-less certificate for this
-   person, ask Windows once to delete it (`windows_trust.remove_root`). Windows
-   itself asks the person; its default answer is No. The first question
-   announces this. Every outcome finishes the uninstall: a certificate that
-   stays has no signing key anywhere and names only this PC. There is no
-   second attempt, no elevation and no Local Machine store. An identity from
-   an earlier setup added nothing and is not touched.
+   person, ask Windows to delete it, and each root that `setup-tls force`
+   replaced and Windows still holds (`windows_trust.forget_roots`): one
+   Windows question for each, normally one in all. Windows itself asks the
+   person; its default answer is No. The first question announces this, with
+   the number when it is more than one. Every outcome finishes the uninstall:
+   a certificate that stays has no signing key anywhere and names only this
+   PC. There is no second attempt, no elevation and no Local Machine store. An
+   identity from an earlier setup added nothing and is not touched.
 7. One message says that uninstall is complete. It says so when Windows kept
    the certificate.
 
@@ -1183,7 +1424,7 @@ does.
    Uninstall then deletes nothing, because it could not truthfully say that
    the person's data is gone.
 4. Check and pin the Windows entries; stop the app; remove its sign-in task;
-   ask Windows once about the certificate. A failure up to here leaves the
+   ask Windows about each certificate. A failure up to here leaves the
    installation whole, with the messages of an uninstall that keeps the folder.
 5. Write the journal `unified-uninstall.json` (`schema` 1, `choice`, a random
    `token`) with the private atomic writer, then look whether it is in the
@@ -2693,6 +2934,15 @@ reused for this; they carry broader authority.
   request. It is sent with `Referrer-Policy: same-origin`, not `no-referrer`:
   from a `no-referrer` page a browser posts the form with `Origin: null`, and
   the redeem check refuses that. The redeem reply is `no-store`, `no-referrer`.
+  The field and **Sign in** come directly after the heading and the error
+  text; the help follows them. In clean-room Run G the help stood before the
+  field, and with the error text **Sign in** was below the window edge at
+  300 % scale. Measured with Chromium and the page's own stylesheet, in CSS
+  pixels: in that window (1272 x 512) **Sign in** ended at 565 before and ends
+  at 372 now; at 320 x 480 it ends at 384. With the error text, a window lower
+  than 372 CSS pixels still needs scrolling. The page has no style of its own:
+  the stylesheet belongs to the web client, and the page's policy allows no
+  inline style.
 - **The session.** The signed cookie from a code is marked remote
   (`"via": "remote"`), so that a rule for remote sessions only is possible
   later. Local cookies do not change. The lifetime is the configured one.

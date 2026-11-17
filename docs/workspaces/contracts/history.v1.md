@@ -57,6 +57,19 @@ SessionRef is unchanged.
   On Windows, in a process that runs with that stage as its app home, the
   folder uses the project name `update-<first 12 hex digits of the stage id>`,
   for the same path-limit reason. It never equals a path slug or a chat name.
+- A chat with its own setup (dependency overrides, a saved plan, a bundle that
+  is not offered) is checked in such a stage too, with the chat's folder. That
+  check session is not a saved conversation either, and it is in the stage's
+  own store. So on Windows every folder has the stage's project name in a
+  process that runs with a stage as its app home and that stage's
+  `shared-config` as its shared home, also a folder that a person chose. The
+  saved conversations of that folder are not in the stage, and their project
+  name is unchanged. With any other shared home every folder keeps its name.
+- A folder that a person chose keeps the path slug, which is as long as the
+  folder's path. While Windows long paths are off, the app refuses to create
+  or start a chat in a folder whose path is too long for the chat's files. It
+  names the folder and says what to do. It does not give the folder another
+  project name.
 
 ## The promises
 

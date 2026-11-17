@@ -394,10 +394,12 @@ def test_native_history_scan_resolves_both_folders_without_stopping(chat, window
     assert workspaces[cli_name(workspace)] is None
 
 
-# The update's own check folder: ``<stage>/qualification-workspace``, when the
-# process runs with that stage as its app home (the update's compatibility probe).
+# A check that runs in an update stage: the process has the stage as its app
+# home. The update checks new components in ``<stage>/qualification-workspace``.
+# A chat with its own setup is checked there with the chat's folder.
 
 STAGE_ID = '7260914d5698489dbbdd80d8a4c4ee40'
+STAGE_NAME = 'update-7260914d5698'
 
 
 @pytest.fixture
@@ -411,10 +413,10 @@ def stage(tmp_path, monkeypatch):
 
 
 def test_update_check_folder_gets_a_short_name_in_every_store(stage, windows_rule, tmp_path, monkeypatch):
-    from amplifier_web.session_files import update_check_project_name
+    from amplifier_web.session_files import stage_project_name
     workspace = stage / 'qualification-workspace'
-    name = 'update-7260914d5698'
-    assert update_check_project_name(workspace) == name and len(name) == 19
+    name = STAGE_NAME
+    assert stage_project_name() == name and len(name) == 19
     assert project_slug(workspace) == name
     # Not a CLI name and not a chat name: it can never equal a project of a person or of a chat.
     assert not name.startswith('-') and not name.startswith('chat-')
@@ -445,7 +447,7 @@ def test_two_stages_never_share_a_session_folder(stage, windows_rule, tmp_path, 
     monkeypatch.setenv('AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH', str(tmp_path / 'capture'))
     first = stores(stage)
     other = stores(stage.parent / ('8dcd8cf0' + 'a' * 24))
-    assert (first[0], other[0]) == ('update-7260914d5698', 'update-8dcd8cf0aaaa')
+    assert (first[0], other[0]) == (STAGE_NAME, 'update-8dcd8cf0aaaa')
     assert first[1] != other[1] and first[2] != other[2]
     # The name holds the first 12 digits of the stage ID. Two stages that agree
     # in those digits (one pair in 2 to the power 48) get the same name. Each
@@ -455,36 +457,92 @@ def test_two_stages_never_share_a_session_folder(stage, windows_rule, tmp_path, 
     twin = stores(stage.parent / (STAGE_ID[:12] + 'f' * 20))
     assert twin[0] == first[0] and twin[1] != first[1]
     assert twin[1].is_relative_to(stage.parent / (STAGE_ID[:12] + 'f' * 20) / 'shared-config')
-    assert twin[2] == first[2] == (tmp_path / 'capture' / 'update-7260914d5698' / 'sessions').resolve()
+    assert twin[2] == first[2] == (tmp_path / 'capture' / STAGE_NAME / 'sessions').resolve()
 
 
-def test_only_the_check_folder_of_the_running_stage_gets_the_short_name(stage, windows_rule, tmp_path, monkeypatch):
+def test_a_chat_with_its_own_setup_is_checked_under_the_stage_name_whatever_its_folder_is(
+        chat, stage, windows_rule, tmp_path, monkeypatch):
+    """The check of a chat's own setup runs in a stage with the chat's folder as its workspace."""
+    from amplifier_web.host.storage import SessionStore
+    identity, app_chat = chat
+    default_workspace = tmp_path / 'workspace'                 # the app's default folder for a person's chats
+    chosen = tmp_path / 'Documents' / ('a folder that a person chose ' + 'x' * 120)
+    for folder in (default_workspace, chosen):
+        folder.mkdir(parents=True)
+    monkeypatch.setenv('AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH', str(tmp_path / 'capture'))
+    for folder in (default_workspace, chosen, app_chat, stage, stage / 'shared-config'):
+        assert project_slug(folder) == STAGE_NAME
+        # The length of the folder's path is not in the session path or in the capture path.
+        assert sessions_dir(folder) == (stage / 'shared-config' / 'projects' / STAGE_NAME / 'sessions').resolve()
+        assert capture_sessions_dir(folder) == (tmp_path / 'capture' / STAGE_NAME / 'sessions').resolve()
+        assert SessionStore.for_app(stage, folder).base_dir == sessions_dir(folder)
+    assert os.listdir(stage / 'shared-config' / 'projects') == [STAGE_NAME]
+
+
+def test_outside_a_stage_every_folder_keeps_its_name(chat, stage, windows_rule, tmp_path, monkeypatch):
+    """The app, a conversation worker and a person's own tools never run with a stage as their app home."""
+    identity, app_chat = chat
     workspace = stage / 'qualification-workspace'
-    # Every other folder in or beside the stage keeps the CLI name.
-    for folder in (stage, stage / 'shared-config', stage / 'qualification-workspace-2',
-                   workspace / 'project', stage.parent / 'qualification-workspace'):
-        folder.mkdir(parents=True, exist_ok=True)
-        assert project_slug(folder) == cli_name(folder)
-    # A folder of the same shape that is not this process's app home: the app
-    # itself, another stage, or a person's own folder that happens to look alike.
+    chosen = tmp_path / 'a folder that a person chose'
+    chosen.mkdir()
+    # A folder with the layout of a stage is not the app home of this process.
     lookalike = tmp_path / 'mine' / 'updates' / 'releases' / STAGE_ID / 'qualification-workspace'
     lookalike.mkdir(parents=True)
-    assert project_slug(lookalike) == cli_name(lookalike)
-    for home in (stage.parents[2], stage.parent / ('f' * 32), stage / 'shared-config', tmp_path):
-        monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(home))
-        assert project_slug(workspace) == cli_name(workspace)
-    monkeypatch.delenv('AMPLIFIER_WEB_HOME')
-    assert project_slug(workspace) == cli_name(workspace)
+    # The app itself, a folder beside the stages, a folder inside the stage, another folder.
+    for home in (stage.parents[2], stage.parent, stage / 'shared-config', tmp_path, None):
+        if home is None:
+            monkeypatch.delenv('AMPLIFIER_WEB_HOME')
+        else:
+            monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(home))
+        monkeypatch.setenv('AMPLIFIER_HOME', str(tmp_path / 'shared'))
+        for folder in (workspace, chosen, lookalike, stage):
+            assert project_slug(folder) == cli_name(folder)
+        assert project_slug(app_chat) == short_name(identity)
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', '')
+    assert project_slug(chosen) == cli_name(chosen)
 
 
-def test_a_stage_needs_the_layout_and_the_id_that_the_updater_makes(tmp_path, windows_rule, monkeypatch):
+def test_a_stage_as_the_app_home_with_another_shared_home_keeps_every_name(
+        chat, stage, windows_rule, tmp_path, monkeypatch):
+    """The stage name is only for the stage's own shared home, where no person has history."""
+    from amplifier_web.session_files import stage_project_name
+    identity, app_chat = chat
+    chosen = tmp_path / 'a folder that a person chose'
+    chosen.mkdir()
+    assert stage_project_name() == STAGE_NAME                      # the settings that a check gets
+    other = stage.parent / ('8dcd8cf0' + 'a' * 24)
+    # A person's shared home, the stage itself, a folder inside its shared home, the shared home of another stage.
+    for shared in (tmp_path / 'shared', stage, stage / 'shared-config' / 'projects', other / 'shared-config'):
+        monkeypatch.setenv('AMPLIFIER_HOME', str(shared))
+        assert stage_project_name() is None
+        for folder in (stage / 'qualification-workspace', chosen):
+            assert project_slug(folder) == cli_name(folder)
+            assert sessions_dir(folder) == (shared / 'projects' / cli_name(folder) / 'sessions').resolve()
+        assert project_slug(app_chat) == short_name(identity)
+    monkeypatch.setenv('AMPLIFIER_HOME', '')
+    assert stage_project_name() is None
+    # History that a person saved under that shared home stays where it is, under its own name.
+    monkeypatch.setenv('AMPLIFIER_HOME', str(tmp_path / 'shared'))
+    saved = history(cli_name(chosen), str(uuid.uuid4()), chosen)
+    assert saved.parent == sessions_dir(chosen)
+
+
+def test_a_stage_needs_the_layout_and_the_id_that_the_updater_makes(tmp_path, chat, windows_rule, monkeypatch):
+    identity, app_chat = chat
     for parts in (('updates', 'releases', STAGE_ID[:31]), ('updates', 'releases', STAGE_ID + '0'),
                   ('updates', 'releases', 'g' * 32), ('updates', 'release', STAGE_ID),
                   ('update', 'releases', STAGE_ID), ('releases', STAGE_ID)):
         folder = tmp_path.joinpath('app', *parts)
         (folder / 'qualification-workspace').mkdir(parents=True)
         monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(folder))
+        monkeypatch.setenv('AMPLIFIER_HOME', str(folder / 'shared-config'))   # only the layout is wrong
         assert project_slug(folder / 'qualification-workspace') == cli_name(folder / 'qualification-workspace')
+        assert project_slug(app_chat) == short_name(identity)
+    # Letter case does not matter on Windows, and the name is always lower case.
+    folder = tmp_path / 'App' / 'Updates' / 'Releases' / STAGE_ID.upper()
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(folder))
+    monkeypatch.setenv('AMPLIFIER_HOME', str(folder / 'shared-config'))
+    assert project_slug(tmp_path) == STAGE_NAME
 
 
 def test_a_stage_that_an_earlier_version_checked_keeps_its_folder_and_the_next_check_gets_the_short_name(
@@ -497,30 +555,35 @@ def test_a_stage_that_an_earlier_version_checked_keeps_its_folder_and_the_next_c
     earlier = history(cli_name(workspace), str(uuid.uuid4()), workspace)
     (earlier / 'transcript.jsonl').write_text('{"role":"user","content":"earlier check"}\n')
     before = sorted(str(path) for path in (stage / 'shared-config').rglob('*'))
-    assert project_slug(workspace) == 'update-7260914d5698'
+    assert project_slug(workspace) == STAGE_NAME
     from amplifier_web.host.storage import SessionStore
     store = SessionStore.for_app(stage, workspace)
     store.save('new-check', [{'role': 'user', 'content': 'next check'}], {'working_dir': str(workspace)})
     assert store.directory('new-check').parent == sessions_dir(workspace)
-    assert sorted(os.listdir(stage / 'shared-config' / 'projects')) == sorted(['update-7260914d5698', cli_name(workspace)])
+    assert sorted(os.listdir(stage / 'shared-config' / 'projects')) == sorted([STAGE_NAME, cli_name(workspace)])
     assert [path for path in before if not Path(path).exists()] == []
     assert (earlier / 'transcript.jsonl').read_text() == '{"role":"user","content":"earlier check"}\n'
 
 
-def test_update_check_name_reads_no_file(stage, windows_rule, monkeypatch):
-    workspace = stage / 'qualification-workspace'
+def test_the_stage_name_reads_no_file(chat, stage, windows_rule, tmp_path, monkeypatch):
+    identity, app_chat = chat
+    chosen = tmp_path / 'a folder that a person chose'
+    chosen.mkdir()
 
     def refuse(*args, **kwargs):
-        raise AssertionError('The update check name comes from the path and the app home setting alone.')
+        raise AssertionError('The stage name comes from the app home setting alone.')
 
     monkeypatch.setattr(session_files.os, 'scandir', refuse)
     monkeypatch.setattr('amplifier_web.managed_chats.metadata', refuse)
     monkeypatch.setattr('builtins.open', refuse)
-    assert project_slug(workspace) == 'update-7260914d5698'
+    for folder in (stage / 'qualification-workspace', chosen, app_chat):
+        assert project_slug(folder) == STAGE_NAME
 
 
-def test_other_platforms_keep_the_cli_name_for_the_update_check_folder(stage, monkeypatch):
+def test_other_platforms_keep_the_cli_name_in_a_stage(chat, stage, tmp_path, monkeypatch):
     monkeypatch.setattr(session_files, '_SHORT_CHAT_PROJECTS', False)
+    identity, app_chat = chat
     workspace = stage / 'qualification-workspace'
-    assert project_slug(workspace) == cli_name(workspace)
+    for folder in (workspace, app_chat, tmp_path):
+        assert project_slug(folder) == cli_name(folder)
     assert sessions_dir(workspace) == (stage / 'shared-config' / 'projects' / cli_name(workspace) / 'sessions').resolve()
