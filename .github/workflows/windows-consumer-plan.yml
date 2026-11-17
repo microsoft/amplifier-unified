@@ -1,0 +1,67 @@
+name: Windows consumer plan check
+# The release gate `release_qualification.py verify-consumer` against a plan that
+# the real producer made on a Windows runner, from one installation of a
+# published release wheel. The check passes only when the gate accepts the plan
+# with evidence that has the installation's commits, and refuses it when the
+# host resolution or the runtime graph has Amplifier Foundation at another commit.
+#
+# The evidence is made from this one installation. It is not a release run:
+# no artifact download, no publication, and not the release job's step
+# condition. It adds no step to a release run.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/windows-consumer-plan.yml
+      - .github/workflows/release.yml
+      - scripts/release_qualification.py
+      - tests/fixtures/windows_consumer_plan_native.py
+      # The producer of the plan, and the files that its build reads.
+      - scripts/windows_consumer_release.py
+      - scripts/windows_bootstrap_native.py
+      - scripts/windows_bootstrap_native.cs
+      - scripts/windows_bootstrap_capsule.py
+      - scripts/windows_private_git.py
+      - scripts/install.ps1
+permissions:
+  contents: read
+jobs:
+  windows-consumer-plan:
+    name: Release gate against a real Windows plan
+    runs-on: windows-latest
+    timeout-minutes: 20
+    # The same resolver settings as the release job that installs the wheel.
+    env:
+      UV_NO_BUILD_PACKAGE: amplifier-core
+      UV_NO_CONFIG: '1'
+      UV_LINK_MODE: copy
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUTF8: '1'
+      GIT_TERMINAL_PROMPT: '0'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13'
+          architecture: x64
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      - name: Install a published wheel, build its plan, and run the gate three times
+        timeout-minutes: 15
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python -I -B tests/fixtures/windows_consumer_plan_native.py
+          if ($LASTEXITCODE -ne 0) { throw 'The consumer plan check failed; inspect result.json.' }
+      - name: Retain the bounded result and the plan
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-consumer-plan-check
+          path: |
+            ${{ runner.temp }}/consumer-plan-evidence/result.json
+            ${{ runner.temp }}/consumer-plan-evidence/windows-consumer-plan.json
+          if-no-files-found: warn
+          retention-days: 7
