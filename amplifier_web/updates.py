@@ -1566,6 +1566,7 @@ class UpdateManager:
         """
         from .session_files import amplifier_home
         from .update_health import preparation_key
+        # Total: the owner's pass asks this at every pass while a failure is held.
         try:
             witness = preparation_key(self, [])
         except Exception as error:
@@ -1573,7 +1574,7 @@ class UpdateManager:
         try:
             info = (amplifier_home() / 'keys.env').stat()
             keys = (info.st_mtime_ns, info.st_size)
-        except OSError:
+        except Exception:
             keys = None
         return target, witness, keys
 
