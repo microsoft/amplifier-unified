@@ -696,6 +696,9 @@ async def test_inspection_fence_quietly_waits_through_ten_actual_automatic_ticks
     async def forbidden(*a,**kw):pytest.fail('automatic retry work')
     m.check=m.publish=forbidden
     m.install=lambda **kw:UpdateManager.install(m,**kw)
+    # The owner's real rule for a check that time causes. The last check was just
+    # now, so it names no reason. A rule that named one would run the forbidden check.
+    m.check_due=lambda:UpdateManager.check_due(m)
     before=copy.deepcopy(m.service.state)
     for _ in range(10):await UpdateManager.tick(m)
     assert m.service.state==before
@@ -825,6 +828,9 @@ async def test_component_fence_allows_health_storage_adoption_and_independent_ap
         m.diagnostics.begin('application','e'*40)
     async def publish(**kw):m.service.state['updates'].update(kw)
     m.publish=publish;m.retire_storage=retire;m.app=app
+    # The owner's real rule for a check that time causes. Automatic checks are off,
+    # so it names no reason; this stand-in has no check to run.
+    m.check_due=lambda:UpdateManager.check_due(m)
     m.service.state['updates']['appAvailable']=True
     monkeypatch.setattr(health,'refresh',refresh)
     await UpdateManager.tick(m)

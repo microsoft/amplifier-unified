@@ -491,9 +491,9 @@ still tries that again by itself. A rollback has no hold: only a request
 starts one.
 Idle maintenance also scrubs at most eight stage copies per pass, even when
 unused-code cleanup is off. A validated stage qualifies immediately. An
-unvalidated stage qualifies only when both its folder and `shared-config` are
-older than 24 hours, it is not an unresolved preparation candidate, and it holds
-no `profile-attempt.json`.
+unvalidated stage that holds no `profile-attempt.json` qualifies only when both
+its folder and `shared-config` are older than 24 hours and it is not an
+unresolved preparation candidate.
 A chat's own setup makes the same copy in a stage of its own and records the
 attempt there in `profile-attempt.json`. When that preparation fails or is
 stopped, it removes the copy itself; settings and routing stay. A successful
