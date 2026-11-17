@@ -87,6 +87,11 @@ from every conversation participant and execution runtime.
 `providers.suggestionModels {}` returns
 `{suggestionModels:{enabled,provider,model,effort,prompt,defaultPrompt,transcriptMode,humanTurns,revision,
 takesEffect:"next_request"},providers:[existing nonsecret connection rows]}`.
+Each provider row includes `sharedCatalogKey`, derived by the ordinary discovery
+catalog identity owner from that app-global connection and qualified runtime.
+Clients may hydrate cached choices only by this exact key, never by connection
+ID alone or a workspace override/mounted fork. Reading this roster does not
+discover models, prepare a runtime or change settings.
 
 `providers.configureSuggestions {enabled?,provider?,model?,effort?,prompt?,transcriptMode?,
 humanTurns?,scope:"global",configurationTarget:{kind:"global"}}` saves the same

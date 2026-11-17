@@ -1662,6 +1662,64 @@ class Integration(unittest.IsolatedAsyncioTestCase):
             configure(manager, {**args, 'effort': None}, self.root, 'global')
         probe.assert_not_called()
 
+    async def test_real_suggestion_roster_uses_exact_global_shared_catalog_keys_without_discovery(self):
+        from amplifier_web.management import Management
+        from amplifier_web.setup import SetupManager
+        from amplifier_web.provider_catalog import configuration_key, model_key
+        self.app.management = Management(self.app)
+        shared = self.app.management.provider_catalog
+        ordinary = SetupManager(self.app.data_dir, catalog=shared, global_only=True)
+        connections = [
+            {'id': 'saved', 'module': 'provider-openai',
+             'source': 'git+https://github.com/microsoft/amplifier-module-provider-openai@main',
+             'config': {'api_key': 'synthetic-global-key', 'default_model': 'foreground'}},
+            {'id': 'disabled', 'module': 'provider-anthropic', 'enabled': False,
+             'config': {'api_key': 'synthetic-disabled-key'}}]
+        ordinary.store.update(self.root, 'global', lambda value: value.update(config={'providers': connections}))
+        workspace = str(self.app.data_dir)
+        expected = {row['id']: ordinary.catalog_key({'id': row['id']}, workspace) for row in connections}
+        for identity, key in expected.items():
+            shared.put(model_key(key), {'models': [{'id': identity + '-global-model'}]})
+        # Same ID is not an identity: workspace overrides and mounted forks
+        # must not substitute their catalog for the global connection owner.
+        fork = {**connections[0], 'source': 'git+https://example.invalid/provider-fork@main'}
+        project = {'config': {'providers': [fork, {
+            'id': 'workspace-only', 'module': 'provider-openai', 'config': {'api_key': 'workspace-only-key'}}]}}
+        for directory in (self.root, self.app.data_dir):
+            ordinary.store.update(directory, 'project', lambda value: value.update(copy.deepcopy(project)))
+        local = SetupManager(self.app.data_dir, catalog=shared)
+        workspace_key = local.catalog_key({'id': 'saved'}, workspace)
+        mount_key = configuration_key(workspace, fork['module'], fork['config'], fork['source'],
+                                      home=self.app.data_dir)
+        self.assertNotEqual(expected['saved'], workspace_key)
+        self.assertNotEqual(expected['saved'], mount_key)
+        shared.put(model_key(workspace_key), {'models': [{'id': 'workspace-model'}]})
+        shared.put(model_key(mount_key), {'models': [{'id': 'mounted-fork-model'}]})
+        before = copy.deepcopy(ordinary.store.read(self.root, 'global'))
+        with patch.object(SetupManager, 'probe', AsyncMock(side_effect=AssertionError('no probe'))) as probe, \
+                patch.object(SetupManager, 'discover_catalog', AsyncMock(
+                    side_effect=AssertionError('no discovery'))) as discover:
+            result = (await self.app.dispatch('providers.suggestionModels', {}, include_state=False))['result']
+            rows = {row['id']: row for row in result['providers']}
+            self.assertEqual(set(rows), set(expected))
+            self.assertFalse(rows['disabled']['enabled'])
+            self.assertEqual({identity: row['sharedCatalogKey'] for identity, row in rows.items()}, expected)
+            for identity, row in rows.items():
+                self.assertEqual(shared.peek(model_key(row['sharedCatalogKey']))['models'],
+                                 [{'id': identity + '-global-model'}])
+            self.assertNotIn(workspace_key, [row['sharedCatalogKey'] for row in rows.values()])
+            self.assertNotIn(mount_key, [row['sharedCatalogKey'] for row in rows.values()])
+            for connection in connections:
+                self.assertNotIn(connection['config']['api_key'], json.dumps(result))
+            self.assertNotIn('workspace-only-key', json.dumps(result))
+        probe.assert_not_called()
+        discover.assert_not_called()
+        self.assertEqual(ordinary.store.read(self.root, 'global'), before)
+        self.runtime.start.assert_not_called()
+        self.runtime.send.assert_not_called()
+        await ordinary.close()
+        await local.close()
+
     async def test_real_shared_management_catalog_validates_global_effort_before_write_without_probe(self):
         from amplifier_web.management import Management
         from amplifier_web.setup import SetupManager

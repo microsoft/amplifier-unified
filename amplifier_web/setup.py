@@ -805,7 +805,11 @@ class SetupManager:
             return configure(self, args, workspace, scope)
         if action=='providers.suggestionModels':
             from .suggestion_settings import describe
-            return {'suggestionModels': describe(self, workspace), 'providers': self.provider_rows(workspace)}
+            with self.read_snapshot(workspace):
+                rows = self.provider_rows(workspace)
+                for row in rows:
+                    row['sharedCatalogKey'] = self.catalog_key({'id': row['id']}, workspace)
+                return {'suggestionModels': describe(self, workspace), 'providers': rows}
         if action=='providers.configureSuggestions':
             from .suggestion_settings import configure
             return configure(self, args, workspace, scope)
