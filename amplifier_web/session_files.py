@@ -187,6 +187,65 @@ def project_slug(workspace):
     return slug if _has_history(projects / slug) else short
 
 
+# What the app must be able to write to keep a chat, after the session ID: the
+# longest name below the session folder (the temporary file of the saved view)
+# and below the capture folder (the capture hook's temporary file).
+# tests/test_windows_path_budget.py holds both against the rows of the budget.
+_FILE_LIMIT = 259
+_SESSION_TAIL = len('\\unified\\.presentation-' + 'f' * 32 + '.tmp')
+_CAPTURE_TAIL = len('\\context-intelligence\\metadata.json.' + '9' * 10 + '.tmp')
+
+
+def windows_refuses_long_paths():
+    """True when this PC has Windows long paths off, which is the Windows default. False when it is not known."""
+    if not _WINDOWS:
+        return False
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r'SYSTEM\CurrentControlSet\Control\FileSystem') as key:
+            return winreg.QueryValueEx(key, 'LongPathsEnabled')[0] != 1
+    except FileNotFoundError:
+        return True   # The value is absent: the Windows default.
+    except OSError:
+        return False  # Not known. Windows decides at the write, as before.
+
+
+def chat_folder_too_long(workspace, identity):
+    """Why Windows cannot keep a chat for a folder that a person chose, in plain words, else None.
+
+    Such a folder keeps the CLI project name, which is as long as the folder's
+    own path, so a long path puts the chat's saved files over the Windows path
+    limit. Without this answer the app cannot create the chat ("unexpected
+    response (500)"), or the conversation worker stops at its first write.
+
+    The measure is what keeping a chat needs: its history, its saved view and
+    its capture. A background-job record and the request diagnostics have
+    longer names; a folder that fits here can still lose those (the design
+    document states the numbers). An app chat folder has a short name and is
+    never refused. The Windows setting is read when this is asked; a process
+    keeps the setting that it started with, so after a change of the setting
+    Windows itself answers until the app starts again. Arithmetic on names;
+    no file below the folder is read.
+    """
+    if not workspace or not windows_refuses_long_paths():
+        return None
+    try:
+        folder = Path(workspace).expanduser().resolve()
+        if chat_project_name(folder) is not None or stage_project_name() is not None:
+            return None
+        size = 1 + len(validate_id(identity))
+        over = max(len(str(sessions_dir(folder))) + size + _SESSION_TAIL,
+                   len(str(capture_sessions_dir(folder))) + size + _CAPTURE_TAIL) - _FILE_LIMIT
+    except (OSError, ValueError, RuntimeError):
+        return None  # Not a path or an ID that this can measure. The ordinary checks answer, as before.
+    if over <= 0:
+        return None
+    fits = len(str(folder)) - over
+    room = f'{len(str(folder))} characters; at most {fits} fit here' if fits > 3 else f'{len(str(folder))} characters'
+    return (f"This chat's folder has a path that is too long for Windows: {folder} ({room}). "
+            'Move the folder to a shorter path, or start a chat in another folder.')
+
+
 def validate_id(identity):
     if not isinstance(identity, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,220}', identity):
         raise ValueError('Invalid session identifier')

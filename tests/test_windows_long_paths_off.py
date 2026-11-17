@@ -477,6 +477,56 @@ def test_the_real_update_probe_completes_in_a_stage_with_long_paths_off(stage, m
     assert files <= longest and folders <= budget.FOLDER_LIMIT
 
 
+def test_a_persons_folder_is_refused_exactly_where_windows_refuses_a_file_of_the_chat(installation, base):
+    """The app's answer for a folder that a person chose, against what Windows really does, one character apart.
+
+    Such a folder keeps the CLI project name, which is as long as its path. The
+    app answers with a plain sentence when a file that keeping the chat needs
+    would pass the limit (``session_files.chat_folder_too_long``).
+    """
+    from amplifier_web import session_files
+    install = installation()
+    assert session_files.windows_refuses_long_paths() is True   # this PC's own setting, read from Windows
+    identity = str(uuid.uuid4())
+    parent = base / ('p' + uuid.uuid4().hex[:7])
+    parent.mkdir()
+
+    def named(size):
+        return parent / ('d' * (size - len(str(parent)) - 1))
+
+    try:
+        fits = max(size for size in range(len(str(parent)) + 2, 200)
+                   if session_files.chat_folder_too_long(named(size), identity) is None)
+        # Installation folder path + \shared\projects\<name>\sessions (26 + the folder's own path length)
+        # + the session ID (37) + the temporary file of the saved view (59) = 259.
+        assert fits == budget.FILE_LIMIT - budget.MAX_ROOT - 26 - 37 - 59 == 78
+        # The longest folder that the app accepts: every file that keeping a chat needs is really written.
+        folder = named(fits)
+        folder.mkdir()
+        session = save_session(install.root / 'app', folder, identity)
+        view = write_view(session)
+        assert len(str(view.with_name('.presentation-' + budget.HEX32 + '.tmp'))) == budget.FILE_LIMIT
+        capture = capture_events(folder, identity)
+        assert session.parent.parent.name == capture.parents[2].name == update_stage_probe.cli_name(folder)
+        # One character more: the app answers, and Windows refuses the write that the answer is about.
+        longer = named(fits + 1)
+        longer.mkdir()
+        assert session_files.chat_folder_too_long(longer, identity) == (
+            f"This chat's folder has a path that is too long for Windows: {longer} ({fits + 1} characters; at most "
+            f'{fits} fit here). Move the folder to a shorter path, or start a chat in another folder.')
+        session = save_session(install.root / 'app', longer, identity)   # the history itself still fits
+        assert len(str(session / 'unified' / ('.presentation-' + budget.HEX32 + '.tmp'))) == budget.FILE_LIMIT + 1
+        assert refused_for_length(lambda: write_view(session))
+        assert not (session / 'unified' / 'view.json').exists()
+        # The default workspace folder of the installation is inside the measure at the longest folder path.
+        assert session_files.chat_folder_too_long(install.root / 'workspace', identity) is None
+        print(f'MEASURED installation folder {budget.MAX_ROOT}: a folder that a person chose is accepted up to a path '
+              f'of {fits} characters (the saved view\'s temporary file is then {budget.FILE_LIMIT}); at {fits + 1} '
+              f'the app answers with its sentence and Windows refuses that file')
+    finally:
+        remove_tree(EXTENDED + str(parent))
+
+
 # A chat with its own setup (a saved plan, as a fork has; a bundle that is not
 # offered; dependency overrides of its folder) is checked in a stage too. The
 # probe then gets the chat's folder as its workspace, with the same stage

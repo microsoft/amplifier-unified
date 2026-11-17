@@ -715,6 +715,13 @@ class RuntimeManager:
                 generation = active_release(home).get('current')
                 reservation = acquire(home, generation, os.getpid())
                 source_generation = generation
+                # A folder whose path Windows cannot hold in the chat's saved files: say so, in
+                # place of a worker that stops at its first write.
+                from .session_files import chat_folder_too_long
+                too_long = None if session.get('externalAgent') else chat_folder_too_long(
+                    session.get('workspace'), session.get('runtimeSessionId') or session.get('nativeIdentity') or sid)
+                if too_long:
+                    raise RuntimeStartupError(too_long + ' This attempt did not send your message.')
                 if not self.command:
                     from .runtime_profiles import ensure
                     setup_started = time.monotonic()

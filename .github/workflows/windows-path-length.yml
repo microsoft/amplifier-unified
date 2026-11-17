@@ -50,6 +50,7 @@ on:
       - docs/design/native-windows-installation.md
       - tests/test_chat_project_names.py
       - tests/test_chat_project_names_service.py
+      - tests/test_chat_folder_too_long.py
       - tests/test_windows_path_budget.py
       - tests/test_windows_long_paths_off.py
       - tests/update_stage_probe.py
@@ -232,6 +233,9 @@ jobs:
       # The budget reads names from the locked Foundation, loop-live and capture hook.
       - name: Check the path budget and the naming rule (other platforms keep the shared name)
         run: uv run --no-sync pytest -q -ra tests/test_windows_path_budget.py tests/test_chat_project_names.py
+      # A folder that a person chose, with a path too long for the chat's files: the app's plain answer.
+      - name: Check the answer for a folder whose path is too long (the native job checks it against Windows)
+        run: uv run --no-sync pytest -q -ra tests/test_chat_folder_too_long.py
       # The same probe fixture as the native job, with this platform's project name.
       - name: Run the real update compatibility probe in a stage folder
         run: uv run --no-sync pytest -q -ra tests/test_update_stage_probe.py
