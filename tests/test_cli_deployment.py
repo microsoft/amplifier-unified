@@ -236,6 +236,7 @@ def test_task_control_attaches_after_async_application_factory(tmp_path, monkeyp
         return app
     monkeypatch.setattr(server, "create_app", create)
     class Runner:
+        spec = object()                                     # The definition of the task that started the host.
         def attach(self, value):
             assert value is app
             events.append("attached")
@@ -249,6 +250,23 @@ def test_task_control_attaches_after_async_application_factory(tmp_path, monkeyp
                      public_origin=None, tls_cert=None, tls_key=None, session_ttl_seconds=None)
     cli._serve_unlocked(args, tmp_path, task_runner=Runner())
     assert events == ["created", "attached", "listening"]
+    # The sign-in page reads it: only a host that its own task started names the Start menu.
+    assert app["owner_task"] is Runner.spec
+
+
+def test_a_host_that_a_person_started_has_no_task_definition(tmp_path, monkeypatch):
+    from amplifier_web import server, tls
+    monkeypatch.setattr(tls, "ssl_context", lambda *a: None)
+    monkeypatch.setattr("amplifier_web.settings_migration.migrate_settings", lambda *a: None)
+    monkeypatch.setattr("amplifier_web.host.config.load_config", lambda *a: None)
+    app = web.Application()
+    monkeypatch.setattr(server, "create_app", lambda *args, **kwargs: app)
+    served = []
+    monkeypatch.setattr(web, "run_app", lambda value, **kwargs: served.append(value))
+    args = Namespace(port=None, workspace=str(tmp_path), no_open=True, bind=None, host=None,
+                     public_origin=None, tls_cert=None, tls_key=None, session_ttl_seconds=None)
+    cli._serve_unlocked(args, tmp_path)
+    assert served == [app] and "owner_task" not in app
 
 
 def test_nonloopback_serve_is_rejected_before_socket_binding(tmp_path, monkeypatch):

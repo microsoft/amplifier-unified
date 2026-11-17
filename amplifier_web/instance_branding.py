@@ -25,7 +25,7 @@ MAX_IMAGE_TEXT = 4 * ((MAX_IMAGE_BYTES + 2) // 3)
 SIZES = (32, 180, 192, 512)
 # Light Reference accent for requests made before a browser supplies its own.
 REFERENCE_ACCENT = '#48646d'
-_ICON_GENERATION = 'rounded-contrast-v1'
+_ICON_GENERATION = 'rounded-original-v2'
 _ICON_CACHE_LIMIT = 32
 # Match the existing native private-file read AND publication boundary.
 _RECORD_LIMIT = 1024 * 1024
@@ -109,15 +109,6 @@ def _accent(value):
     return None
 
 
-def _contrast_ink(color):
-    """Choose black or white with at least 4.58:1 contrast against any sRGB."""
-    rgb = [int(color[index:index + 2], 16) / 255 for index in (1, 3, 5)]
-    linear = [channel / 12.92 if channel <= .04045 else ((channel + .055) / 1.055) ** 2.4
-              for channel in rgb]
-    luminance = sum(channel * weight for channel, weight in zip(linear, (.2126, .7152, .0722)))
-    return '#000000' if (luminance + .05) / .05 >= 1.05 / (luminance + .05) else '#ffffff'
-
-
 def _load_mark():
     from PIL import Image
     path = Path(__file__).parent / 'static/branding/pwa/pwa-512.png'
@@ -133,23 +124,15 @@ def _load_mark():
 
 
 def _badge(size, color, mark):
-    from PIL import Image, ImageDraw, ImageFilter
+    from PIL import Image, ImageDraw
     if mark is None:
         raise FileNotFoundError('Bundled Amplifier icon artwork is unavailable.')
-    # The contrasting outer rim separates even a white/black badge from a
-    # matching launcher. The halo separates the original colored mark from
-    # arbitrary accents without flattening or replacing its artwork.
+    # The original mark sits directly on the rounded accent, without an
+    # outline or backing. Resize the complete tile for antialiased small icons.
     canvas = Image.new('RGBA', (512, 512), (0, 0, 0, 0))
     draw = ImageDraw.Draw(canvas)
-    ink = _contrast_ink(color)
-    draw.rounded_rectangle((0, 0, 511, 511), radius=112, fill=ink)
-    draw.rounded_rectangle((7, 7, 504, 504), radius=105, fill=color)
+    draw.rounded_rectangle((0, 0, 511, 511), radius=112, fill=color)
     offset = ((512 - mark.width) // 2, (512 - mark.height) // 2)
-    mask = Image.new('L', canvas.size, 0)
-    mask.paste(mark.getchannel('A'), offset)
-    halo = Image.new('RGBA', canvas.size, ink)
-    halo.putalpha(mask.filter(ImageFilter.MaxFilter(17)))
-    canvas.alpha_composite(halo)
     canvas.alpha_composite(mark, offset)
     return canvas.resize((size, size), Image.Resampling.LANCZOS)
 
