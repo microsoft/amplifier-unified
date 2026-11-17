@@ -2483,7 +2483,8 @@ not an implicit promise or a silent scope reduction.
 ## Qualification record
 
 This document records the design, source audit and bounded qualification results.
-The README selects 3.13 in manual commands. It offers the consumer setup file
+The manual installation guide (`docs/DEPLOYMENT.md`) selects 3.13 in its
+commands. The README offers the consumer setup file
 for Windows 11 as an unsigned preview and states its limits: one stable
 download link, the browser's hold on the unsigned file, Windows 11 on an Intel
 or AMD processor, one Windows account, the installation folder, and an
