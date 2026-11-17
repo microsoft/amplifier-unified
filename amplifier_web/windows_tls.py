@@ -550,6 +550,7 @@ def setup(data_dir, config, *, force=False):
                 # explicit request replaces the whole identity; Windows must
                 # confirm the new root, and other devices must import it.
                 # First keep the replaced root: Windows may still trust it.
+                _remember_replaced(pinned, contents["ca.crt"])
                 _publish_identity(pinned, config, {name: value is not None for name, value in contents.items()})
                 configured = {**config, "tls": {"method": "ca", **_LAYOUT}}
                 save_server_config(data_dir, configured)
