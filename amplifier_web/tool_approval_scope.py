@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import hashlib
 import asyncio
+from contextlib import contextmanager
+from dataclasses import asdict
 import importlib.metadata
 import inspect
 import json
@@ -106,7 +108,7 @@ def _declarations(coordinator, source):
     return [{'module': row['module'], 'config': row.get('config', {})} for row in rows]
 
 
-def _mcp(tool, proof):
+def _mcp(tool, proof, schema):
     """Canonical configured authorization, not a remote-account attestation."""
     client = tool.client
     cls = (type(client).__module__, type(client).__name__)
@@ -114,15 +116,61 @@ def _mcp(tool, proof):
         connection = {'transport': 'stdio', 'command': client.command,
                       'arguments': client.args, 'authorization': client.env}
     elif cls == ('amplifier_module_tool_mcp.streamable_http_client', 'MCPStreamableHTTPClient'):
-        connection = {'transport': 'streamable-http', 'url': client.url,
-                      'authorization': client.headers}
+        # The SDK queues HTTP requests; mutable authentication can change after
+        # this boundary. Until the transport enforces the approved credentials
+        # at actual send, HTTP requests retain ordinary Once/Deny.
+        raise ValueError('HTTP MCP has no reusable send-time authorization scope.')
     else:
         raise ValueError('The MCP client configuration is unsupported.')
     if client.server_name != tool.server_name:
         raise ValueError('The MCP tool and configured client do not match.')
+    registered = [row for row in client.tools if row.get('name') == tool.tool_name]
+    if len(registered) != 1 or canonical(registered[0].get('input_schema')) != canonical(schema):
+        raise ValueError('The MCP tool schema no longer matches the connected registry.')
+    # Configuration is not evidence of the transport already opened. Older
+    # clients retain ordinary once/deny until they can supply this witness.
+    binding_source = _implementation(client, proof, 'approval_binding')
+    _implementation(client, proof, 'approval_scope')
+    binding = client.approval_binding()
+    if (type(binding) is not dict or binding.get('version') != 1
+            or type(binding.get('key')) is not str or len(binding['key']) != 64
+            or any(c not in '0123456789abcdef' for c in binding['key'])):
+        raise ValueError('The MCP connection binding is unsupported.')
     return {'server': tool.server_name, 'remoteTool': tool.tool_name,
             'maxContentSize': tool.max_content_size, 'connection': connection,
+            'activeConnection': binding, 'bindingImplementation': binding_source,
             'implementation': _implementation(client, proof, 'call_tool')}
+
+
+def _bash(tool, arguments, proof):
+    if arguments.get('action', 'run') != 'run':
+        raise ValueError('Managed process requests have no reusable execution scope.')
+    resolved = getattr(tool, '_windows_bash_resolved', None)
+    if resolved is not None:
+        if (type(resolved) is not tuple or len(resolved) != 2
+                or (resolved[0] is not None and type(resolved[0]) is not str)
+                or type(resolved[1]) is not bool):
+            raise ValueError('The resolved Windows shell binding is invalid.')
+    # WSL has a separate environment; an unresolved Windows shell may run an
+    # asynchronous probe after the Work check. Neither is inferred from PATH.
+    if sys.platform == 'win32' and (resolved is None or not resolved[0] or resolved[1]):
+        raise ValueError('The effective Windows shell environment is not witnessed.')
+    validator = tool._safety_validator
+    policy_source = _implementation(validator, proof, 'validate')
+    return {
+        'shell': '/bin/bash' if sys.platform != 'win32' else resolved[0],
+        'resolvedWindowsBash': list(resolved) if resolved is not None else None,
+        # Only the final descriptor digest leaves this worker. Do not expose
+        # inherited credentials in display text or receipts.
+        'environmentSha256': fingerprint(dict(os.environ)),
+        'safety': {'implementation': policy_source, 'profile': asdict(validator.profile),
+                   'config': asdict(validator.config),
+                   'allowed': validator.allowed_commands, 'denied': validator.denied_commands,
+                   'overrideAllows': validator._override_allows,
+                   'overrideBlocks': validator._override_blocks},
+        'limits': {'timeout': tool.timeout, 'maxOutputBytes': tool.max_output_bytes,
+                   'maxConcurrent': tool.max_concurrent},
+    }
 
 
 def _mode(coordinator):
@@ -202,6 +250,8 @@ class ToolApprovalScope:
             tool = tool.tool
         proof = coordinator.get_capability('web.tool_sources')
         source, kind = _source(tool, proof)
+        if kind == 'ordinary':
+            raise ValueError('This tool has no source-specific reusable scope.')
         if kind in {'read', 'write', 'edit', 'patch'} and guard is None:
             raise ValueError('The file tool has no enforcing source guard.')
         import jsonschema
@@ -234,20 +284,9 @@ class ToolApprovalScope:
                   'denied_commands', 'require_approval') if hasattr(security_tool, key)}
         binding = {}
         if kind == 'bash':
-            resolved = getattr(effective, '_windows_bash_resolved', None)
-            if resolved is not None:
-                # Canonical Bash caches (executable or None, is_wsl). Normalize
-                # only this owned field; request arguments still require JSON.
-                if (type(resolved) is not tuple or len(resolved) != 2
-                        or (resolved[0] is not None and type(resolved[0]) is not str)
-                        or type(resolved[1]) is not bool):
-                    raise ValueError('The resolved Windows shell binding is invalid.')
-                resolved = list(resolved)
-            binding = {'shell': '/bin/bash' if os.name != 'nt' else
-                       getattr(effective, '_windows_shell_preference', None),
-                       'resolvedWindowsBash': resolved}
+            binding = _bash(effective, current.arguments, proof)
         elif kind == 'mcp':
-            binding = _mcp(tool, proof)
+            binding = _mcp(tool, proof, current.input_schema)
         meaning = {'producer': PRODUCER, 'operation': 'tool.invoke',
                    'owner': facts['owner'], 'workspace': facts['workspace'],
                    'tool': current.name, 'source': source, 'schema': current.input_schema,
@@ -271,6 +310,7 @@ class ToolApprovalScope:
         epoch = {'host': facts['epoch'], 'tool': id(tool)}
         if kind == 'mcp':
             epoch['client'] = id(tool.client)
+            epoch['connection'] = id(tool.client.session)
         return current, fact, canonical(epoch)
 
     def request(self, request):
@@ -309,6 +349,22 @@ class ToolApprovalScope:
     def check_current(self, arguments):
         current = self.current()
         self.check(current.name if current else None, current.tool if current else None, arguments)
+
+    @contextmanager
+    def execution(self, name, mounted, arguments):
+        self.check(name, mounted, arguments)
+        current = self.current()
+        if current is None or current.identity not in self.accepted:
+            yield
+            return
+        tool = self.inspect_tool(name, mounted)
+        if (type(tool).__module__, type(tool).__name__) == ('amplifier_module_tool_mcp.wrapper', 'MCPToolWrapper'):
+            # The canonical client checks this exact session again after any
+            # reconnect await and immediately before sending the tool request.
+            with tool.client.approval_scope(tool.client.approval_binding(), tool.tool_name, arguments):
+                yield
+        else:
+            yield
 
 
 def install(coordinator, inspect_tool):
