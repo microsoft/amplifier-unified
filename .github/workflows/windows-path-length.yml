@@ -232,6 +232,7 @@ jobs:
                          "Windows Defender on this runner: $scan", '') + ($measured | ForEach-Object { "- $_" })
             $summary -join "`n" >> $env:GITHUB_STEP_SUMMARY
           }
+          Write-Host "The run's page keeps $($measured.Count) measured first starts of the decision-catalog helper."
           foreach ($line in ($measured | Where-Object { "$_" -match 'OVER THE APP' })) {
             Write-Host "::warning title=The decision-catalog helper took longer than the app allows::$line"
           }

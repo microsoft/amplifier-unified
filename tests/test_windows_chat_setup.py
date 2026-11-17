@@ -29,11 +29,12 @@ On a busy runner that first start passed the limit, and the preparation then
 failed by chance (pull request 2270, run 44143862317, two attempts). So this
 case starts the helper itself, with the app's own command and settings,
 directly before the app's first probe command in each new environment: twice,
-and it measures both starts. The app's own start then finds bytecode. This case
-therefore does not show that a first start is inside the app's limit. It prints
-how long each first start took, and the CI job keeps those times on the run's
-page and warns when one passed the limit. The times of the two probe phases
-that the case prints include its two starts of the helper.
+and it measures both starts and counts the bytecode files that the first one
+wrote. The app's own start then finds bytecode. This case therefore does not
+show that a first start is inside the app's limit. It prints how long each
+first start took, and the CI job keeps those times on the run's page and warns
+when one passed the limit. The times of the two probe phases that the case
+prints include its two starts of the helper.
 
 It then lists every path below the installation folder. That is the measured
 answer to "which paths pass the Windows limit, and does the app need them":
@@ -189,13 +190,25 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
     helper = native.update_stage_probe.catalog_helper_call()
     helper_limit, helper_times, app_commands, app_process = helper[1]['timeout'], {}, set(), updates.process
 
+    def helper_in(environment):
+        """Two starts of the helper: (seconds of the first, seconds of the second, bytecode files of the
+        environment's packages before the first start, and after it)."""
+        python, packages = environment / '.venv' / 'Scripts' / 'python.exe', environment / '.venv' / 'Lib' / 'site-packages'
+
+        def bytecode():
+            return sum(1 for size, kind, relative in tree(packages) if relative.lower().endswith('.pyc'))
+
+        before = bytecode()
+        first, = native.update_stage_probe.catalog_helper_times(helper, python, starts=1)
+        after = bytecode()
+        second, = native.update_stage_probe.catalog_helper_times(helper, python, starts=1)
+        return first, second, before, after
+
     async def process_after_the_helper(*args, **settings):
         if '--project' in args and any(Path(str(value)).name == 'update_probe.py' for value in args):
             environment = Path(args[args.index('--project') + 1])
             if environment.name not in helper_times:
-                helper_times[environment.name] = await asyncio.to_thread(
-                    native.update_stage_probe.catalog_helper_times, helper,
-                    environment / '.venv' / 'Scripts' / 'python.exe')
+                helper_times[environment.name] = await asyncio.to_thread(helper_in, environment)
             app_commands.add(environment.name)   # from here on the app's own command runs in it
         return await app_process(*args, **settings)
 
@@ -323,9 +336,10 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
             print(f'COMMAND exit {returncode} after {duration} s\nSTDOUT {stdout}\nSTDERR {stderr}')
         raise
     finally:
-        for name, (first, second) in helper_times.items():
+        for name, (first, second, before, after) in helper_times.items():
             print(f'MEASURED the decision-catalog helper in the new worker environment {name}: first start '
-                  f'{first:.1f} s, second start {second:.1f} s; the app\'s time limit for one start is {helper_limit} s'
+                  f'{first:.1f} s, and it wrote {after - before} bytecode files ({before} were there before it); '
+                  f'second start {second:.1f} s; the app\'s time limit for one start is {helper_limit} s'
                   + ('; OVER THE APP\'S LIMIT' if first > helper_limit else ''))
 
     assert len({generation, *selected.values()}) == 3   # each folder's setup is its own
@@ -337,6 +351,11 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
     for value in selected.values():
         new_environments |= {'prepare-' + value, project_path(home, value).name}
     assert set(helper_times) == app_commands == new_environments, (sorted(helper_times), sorted(app_commands))
+    # The first start wrote bytecode of the provider packages, and each later start reads it. That is why the
+    # app's own start no longer depends on the speed of this runner. An environment that came with bytecode,
+    # or a helper that writes none, fails here: this case's own starts of the helper are then of no use.
+    for name, (first, second, before, after) in helper_times.items():
+        assert after > before, (name, before, after)
     for label, folder in folders.items():
         stage = receipt_directory(home, selected[label])
         project_name = 'update-' + selected[label][:12]
