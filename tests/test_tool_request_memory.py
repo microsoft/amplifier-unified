@@ -9,6 +9,8 @@ import copy
 import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
+from dataclasses import dataclass, field
+from contextlib import contextmanager
 
 import pytest
 import pytest_asyncio
@@ -32,8 +34,28 @@ class ConfiguredClient:
     def __init__(self):
         self.headers = {'Authorization': 'fixture-only-not-a-credential'}
         self.session = object()
+        self.tools = [{'name': 'remote/name', 'input_schema': ExactTool.input_schema}]
+    def approval_binding(self):
+        return {'version': 1, 'key': tool_approval_scope.fingerprint(self.headers)}
+    @contextmanager
+    def approval_scope(self, expected, tool_name, arguments):
+        assert expected == self.approval_binding()
+        yield
 ConfiguredClient.__module__ = 'amplifier_module_tool_mcp.streamable_http_client'
 ConfiguredClient.__name__ = 'MCPStreamableHTTPClient'
+
+
+@dataclass
+class SafetyFixture:
+    name: str = 'strict'
+    blocked_patterns: list = field(default_factory=list)
+
+
+class ValidatorFixture:
+    def __init__(self):
+        self.profile, self.config = SafetyFixture(), SafetyFixture()
+        self.allowed_commands, self.denied_commands = [], ['forbidden']
+        self._override_allows, self._override_blocks = [], []
 
 
 class ExactTool:
@@ -48,6 +70,8 @@ class ExactTool:
         self.require_approval = True
         self.allowed_commands = None
         self.denied_commands = ['forbidden']
+        self._safety_validator = ValidatorFixture()
+        self.timeout, self.max_output_bytes, self.max_concurrent = 30, 1000, None
         self.effects = []
         self.client = ConfiguredClient()
         self.server_name, self.tool_name, self.max_content_size = 'selected', 'remote/name', 1000
@@ -94,7 +118,7 @@ async def flow(tmp_path, monkeypatch, request):
          'ordinary' if item.role == 'catalog' else item.role) if item in tools.values() else source(item, proof))
     implementation = tool_approval_scope._implementation
     monkeypatch.setattr(tool_approval_scope, '_implementation', lambda item, proof, method='execute':
-        {'fixture': 'configured-mcp-client'} if type(item) is ConfiguredClient
+        {'fixture': type(item).__name__} if type(item) in (ConfiguredClient, ValidatorFixture)
         else implementation(item, proof, method))
     events, scope_errors = [], []
     monkeypatch.setattr(runtime_worker, 'publish', events.append)
@@ -180,7 +204,7 @@ async def decide(flow, role, *, decision='allow', change=None, arguments=None, s
         await asyncio.gather(task, return_exceptions=True)
 
 
-@pytest.mark.parametrize('role', ['bash', 'catalog', 'mcp'])
+@pytest.mark.parametrize('role', ['bash', 'mcp'])
 async def test_normal_live_entry_scopes_new_calls_and_obeys_current_denial(flow, role):
     first = await decide(flow, role)
     assert flow.tools[role].effects == [{'command': 'exact request'}]
@@ -215,9 +239,60 @@ async def test_inflight_binding_or_stop_change_prevents_effect(flow, change):
     assert not flow.tools['mcp'].effects
 
 
-async def test_same_configured_mcp_reconnect_does_not_invalidate_approval(flow):
+async def test_same_configured_mcp_reconnect_invalidates_pending_approval(flow):
     await decide(flow, 'mcp', change=lambda: setattr(flow.tools['mcp'].client, 'session', object()))
-    assert len(flow.tools['mcp'].effects) == 1
+    assert not flow.tools['mcp'].effects
+
+
+async def test_unstructured_registered_tool_keeps_once_without_memory(flow):
+    await decide(flow, 'catalog', scoped=False)
+    assert len(flow.tools['catalog'].effects) == 1
+
+
+async def test_mcp_new_call_after_same_binding_reconnect_keeps_rule_key(flow):
+    first = await decide(flow, 'mcp', decision='deny')
+    flow.tools['mcp'].client.session = object()
+    second = await decide(flow, 'mcp', decision='deny')
+    assert first['toolScope']['descriptor']['key'] == second['toolScope']['descriptor']['key']
+
+
+async def test_mcp_changed_connected_registry_keeps_once(flow):
+    flow.tools['mcp'].client.tools = []
+    await decide(flow, 'mcp', decision='deny', scoped=False)
+    assert not flow.tools['mcp'].effects
+
+
+async def test_legacy_mcp_client_keeps_once(flow, monkeypatch):
+    monkeypatch.delattr(ConfiguredClient, 'approval_binding')
+    await decide(flow, 'mcp', decision='deny', scoped=False)
+    assert not flow.tools['mcp'].effects
+
+
+@pytest.mark.parametrize('change', ['environment', 'safety', 'limit'])
+async def test_effective_shell_change_requires_a_new_match(flow, monkeypatch, change):
+    first = await decide(flow, 'bash', decision='deny')
+    if change == 'environment':
+        monkeypatch.setenv('APPROVAL_FIXTURE_VALUE', 'changed-private-fixture')
+    elif change == 'safety':
+        flow.tools['bash']._safety_validator._override_blocks.append('changed')
+    else:
+        flow.tools['bash'].timeout += 1
+    second = await decide(flow, 'bash', decision='deny')
+    assert first['toolScope']['descriptor']['key'] != second['toolScope']['descriptor']['key']
+    assert not flow.tools['bash'].effects
+
+
+async def test_shell_environment_change_after_approval_stops_at_work_boundary(flow, monkeypatch):
+    flow.callbacks.append(lambda: monkeypatch.setenv('APPROVAL_FIXTURE_VALUE', 'changed'))
+    await decide(flow, 'bash')
+    assert not flow.tools['bash'].effects
+
+
+async def test_managed_process_action_has_no_reusable_scope(flow):
+    flow.tools['bash'].input_schema = {'type': 'object'}
+    await decide(flow, 'bash', arguments={'command': 'unused', 'action': 'write'},
+                 decision='deny', scoped=False)
+    assert not flow.tools['bash'].effects
 
 
 async def test_postapproval_stop_at_work_boundary_prevents_shell_effect(flow):
@@ -228,11 +303,16 @@ async def test_postapproval_stop_at_work_boundary_prevents_shell_effect(flow):
 
 @pytest.mark.parametrize('resolved', [(r'C:\Program Files\Git\bin\bash.exe', False),
                                       (r'C:\Windows\System32\bash.exe', True), (None, False)])
-async def test_cached_windows_shell_keeps_exact_descriptor(flow, monkeypatch, resolved):
+async def test_windows_shell_field_serialization_in_unix_fixture(flow, monkeypatch, resolved):
+    # This tests lossless metadata only; the separate Windows environment cases
+    # below require Once for unresolved and WSL execution.
+    monkeypatch.setattr(tool_approval_scope, 'sys',
+                        SimpleNamespace(platform='linux', modules=tool_approval_scope.sys.modules))
     meanings = []
     original = tool_approval_scope.fingerprint
     def observe(value):
-        meanings.append(copy.deepcopy(value))
+        if value.get('operation') == 'tool.invoke':
+            meanings.append(copy.deepcopy(value))
         return original(value)
     monkeypatch.setattr(tool_approval_scope, 'fingerprint', observe)
     flow.tools['bash']._windows_bash_resolved = resolved
@@ -260,6 +340,15 @@ async def test_invalid_cached_windows_shell_has_no_reusable_scope(flow, resolved
     assert not flow.tools['bash'].effects
 
 
+@pytest.mark.parametrize('resolved', [None, (None, False), ('wsl.exe', True)])
+async def test_unwitnessed_windows_environment_remains_once(flow, monkeypatch, resolved):
+    monkeypatch.setattr(tool_approval_scope, 'sys',
+                        SimpleNamespace(platform='win32', modules=tool_approval_scope.sys.modules))
+    flow.tools['bash']._windows_bash_resolved = resolved
+    await decide(flow, 'bash', decision='deny', scoped=False)
+    assert not flow.tools['bash'].effects
+
+
 async def test_previously_allowed_tool_does_not_gain_an_approval_prompt(flow):
     flow.require_approval[0] = False
     await flow.turn('catalog')
@@ -268,7 +357,7 @@ async def test_previously_allowed_tool_does_not_gain_an_approval_prompt(flow):
 
 
 @pytest.mark.parametrize('flow', [False], indirect=True)
-@pytest.mark.parametrize('role', ['bash', 'catalog', 'mcp'])
+@pytest.mark.parametrize('role', ['bash', 'mcp'])
 async def test_explicitly_disabled_programmatic_dispatch_still_describes_ordinary_call(flow, role):
     def no_lease():
         dispatcher = flow.coordinator.get_capability('tools.dispatch')

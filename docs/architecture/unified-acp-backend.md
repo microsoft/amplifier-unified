@@ -172,22 +172,34 @@ including after file-lock waits. A hook callback error does not approve it.
 
 This requires the optional streaming `tools.dispatch.current_call` capability
 and Unified's existing enforcing wrappers. Guarded reference read/write/edit and
-patch tools and other registered Python tools with verifiable selected module
-ownership are supported. Shell requests bind the exact command and arguments,
-explicit shell/configuration, working folder and current policy. This is
-permission memory, not transitive executable/environment attestation or a claim
-that repeating a command has the same effects. No display-text hashing or argument
+patch tools have source-specific scopes. Verifiable Python ownership alone does
+not describe arbitrary plugin state; tools without an explicit scope remain
+Once/Deny. Shell `run` requests bind the exact command and arguments, inherited
+environment digest, working folder, effective safety validator and execution
+limits. Unix Bash and an already resolved native Windows Bash are supported;
+unresolved Windows shells, WSL environments and managed process operations remain
+Once/Deny. The existing Work boundary rechecks these facts before invocation.
+This is permission memory, not attestation of every executable or file a command
+may subsequently read, or a claim that repeating it has the same effects.
+No display-text hashing or argument
 equivalence is used. Modes, existing approvals, observations, file checks, Work,
 budgets and native execution ownership keep their normal order and authority.
 
-Canonical MCP wrappers additionally bind the configured server, transport and
-authorization, exact remote tool name, mounted schema and arguments. This does
-not attest the remote account or promise a freshly queried remote catalog or
-implementation. Reconnecting the same configured client does not change the
-matching key. Replacing that client during a pending approval does invalidate
-the private current-call witness. Authorization values participate only in the
-opaque key; descriptors do not expose credentials. Existing MCP configuration
-provenance, connection and execution checks continue to apply.
+Canonical MCP wrappers require a connection witness captured by the client that
+opened the transport, plus the exact remote tool, current connected registry
+schema and arguments. Stdio captures the process environment and working folder;
+HTTP captures its opened endpoint/configuration and current headers/cookies.
+The negotiated protocol and selected client implementation are bound too. Older
+clients and unsupported custom HTTP authentication remain Once/Deny. This does
+not attest a remote account or promise a freshly queried remote catalog or
+implementation. A new connection with the same facts can match a future rule,
+but replacing a connection during a pending approval invalidates that invocation.
+The client checks the exact tool/arguments/session before any reconnect and again
+immediately before sending; its private invocation scope is single-use and
+expires when the call returns. Authorization/environment values participate only
+in opaque digests; descriptors do not expose credentials. Existing MCP
+configuration provenance, execution checks and ordinary unbound calls retain
+their behavior.
 
 Always permits future new matching requests across the agent's chats. It never
 authorizes replay, proves idempotence, or resumes an uncertain prior effect.

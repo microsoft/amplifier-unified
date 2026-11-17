@@ -201,12 +201,12 @@ async def install_app_access(coordinator, bridge, *, execution_role):
                             'message': 'Current Work requirements or host execution scope are unavailable.'})
                     mark(timing, 'body.start')
                     try:
-                        approval_scope.check(self.mounted_name, self, arguments)
-                        sponsor = coordinator.get_capability('web.computer_episodes')
-                        if sponsor and self.mounted_name in {'computer', 'desktop', 'ui_use'}:
-                            result = await sponsor.invoke(self.mounted_name, arguments, self.original.execute)
-                        else:
-                            result = await self.original.execute(arguments)
+                        with approval_scope.execution(self.mounted_name, self, arguments):
+                            sponsor = coordinator.get_capability('web.computer_episodes')
+                            if sponsor and self.mounted_name in {'computer', 'desktop', 'ui_use'}:
+                                result = await sponsor.invoke(self.mounted_name, arguments, self.original.execute)
+                            else:
+                                result = await self.original.execute(arguments)
                         if timing and getattr(result, 'success', None) is False:
                             timing.outcome = 'failed'
                         return result
