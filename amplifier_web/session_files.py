@@ -32,7 +32,7 @@ def amplifier_home():
 
 
 # On Windows the app's own folders get a short project name (see project_slug):
-# a chat folder, and the folder in which an update checks its candidate.
+# a chat folder, and every folder in a check that runs in an update stage.
 # A separate name lets tests exercise that rule on any platform.
 _SHORT_CHAT_PROJECTS = _WINDOWS
 _CHAT_ID = re.compile(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}')
@@ -59,29 +59,35 @@ def chat_project_name(path):
     return 'chat-' + identity.replace('-', '')[:16]
 
 
-def update_check_project_name(path):
-    """Short project name for the check folder of the update stage this process runs in, else None.
+def stage_project_name():
+    """Short project name for every folder, when this process runs in an update stage, else None.
 
-    An update checks its candidate in ``<stage>/qualification-workspace``. The
-    stage is ``<app home>/updates/releases/<32 hex>``, and the check runs with
-    that stage as its own app home (``AMPLIFIER_WEB_HOME``). The CLI name of the
-    folder repeats the installation path below the stage, so no session path
-    fits under the Windows path limit. The name comes from the stage ID. It
-    starts with neither '-' nor 'chat-', so it never equals a CLI name or a
-    chat name. Each stage has its own shared home, so the session folders of
-    two stages never meet, whatever their names are.
+    A stage is ``<app home>/updates/releases/<32 hex>``. The app checks new
+    components there, and the setup of a chat that has its own (dependency
+    overrides). The check is a child process with the stage as its app home
+    (``AMPLIFIER_WEB_HOME``) and ``<stage>/shared-config`` as its shared home.
+    Its workspace is the update's ``<stage>/qualification-workspace``, or the
+    folder of the chat: an app chat folder, or a folder that a person chose.
 
-    Every other folder keeps its name, also a folder of the same shape: the
-    app and a person's own tools never run with a stage as their app home.
+    The session of a check is not a saved conversation. Its history is in the
+    stage's own shared home, where no chat and no person has history to keep.
+    A CLI name there repeats the path of the workspace below the stage, so the
+    session paths pass the Windows path limit. So every folder gets one name
+    in such a process. The name comes from the stage ID in the app home
+    setting alone; no file is read. It starts with neither '-' nor 'chat-', so
+    it never equals a CLI name or a chat name. Each stage has its own shared
+    home, so the session folders of two stages never meet.
+
+    In every other process each folder keeps its name: the app and a person's
+    own tools never run with a stage as their app home.
     """
-    path = Path(path)
-    stage = path.parent
-    identity = stage.name.lower()
-    if (path.name.lower() != 'qualification-workspace' or not _STAGE_ID.fullmatch(identity)
-            or stage.parent.name.lower() != 'releases' or stage.parent.parent.name.lower() != 'updates'):
-        return None  # A string test only, as for every folder a person chose.
     home = os.environ.get('AMPLIFIER_WEB_HOME')
-    if not home or os.path.normcase(str(Path(home).expanduser().resolve())) != os.path.normcase(str(stage)):
+    if not home:
+        return None
+    stage = Path(home)
+    identity = stage.name.lower()
+    if (not _STAGE_ID.fullmatch(identity) or stage.parent.name.lower() != 'releases'
+            or stage.parent.parent.name.lower() != 'updates'):
         return None
     return 'update-' + identity[:12]
 
@@ -154,11 +160,16 @@ def project_slug(workspace):
     slug = slug if slug.startswith('-') else '-' + slug
     # Other platforms keep the CLI name for every folder: Foundation writes its
     # transfer fence under that name there. On Windows it only reads it.
-    short = chat_project_name(resolved) if _SHORT_CHAT_PROJECTS else None
+    if not _SHORT_CHAT_PROJECTS:
+        return slug
+    # A check in an update stage has no history to keep: each check is a new
+    # session in the stage's own shared home, whatever its workspace is.
+    staged = stage_project_name()
+    if staged is not None:
+        return staged
+    short = chat_project_name(resolved)
     if short is None:
-        # The update's own check folder has no history to keep: each check is a new session.
-        # Every folder a person chose: no file access beyond resolve().
-        return (update_check_project_name(resolved) if _SHORT_CHAT_PROJECTS else None) or slug
+        return slug  # Every folder a person chose: no file access beyond resolve().
     # A folder shaped like the app's own chat folder. Its CLI name repeats the
     # installation path inside every session path, which then exceeds the
     # Windows path limit.

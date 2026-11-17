@@ -41,6 +41,24 @@ def test_the_real_probe_completes_in_a_stage_and_writes_only_there_and_in_the_ca
     assert probe.created(layout.sources) == [] and probe.created(layout.state) == []
 
 
+def test_the_probe_of_a_chats_own_setup_runs_with_the_chats_folder_and_writes_nothing_there(layout, tmp_path):
+    """``runtime_profiles.ensure`` gives the probe the folder of the chat, not the stage's check folder."""
+    chosen = tmp_path / 'a folder that a person chose'
+    chosen.mkdir()
+    (chosen / 'notes.txt').write_text('mine', encoding='utf-8')
+    stage = probe.for_chat(probe.build(layout.app, layout.fixtures), chosen)
+    result = probe.run(stage, capture_root=layout.capture, source_store=layout.sources, state_home=layout.state)
+    probe.passed(result)
+    project = probe.expected_project(stage)
+    assert [path.name for path in (stage.shared / 'projects').iterdir()] == [project]
+    session = probe.session_of(stage, project)
+    assert probe.left_in_stage(stage, project, session) == probe.STAGE_AFTER_A_PROBE
+    assert probe.names(layout.capture, project, session) == probe.CAPTURE_AFTER_A_PROBE
+    assert probe.created(chosen) == ['notes.txt'] and (chosen / 'notes.txt').read_text(encoding='utf-8') == 'mine'
+    profiles = (probe.ROOT / 'amplifier_web/runtime_profiles.py').read_text(encoding='utf-8')
+    assert 'workspace = config.workspace' in profiles and profiles.count('str(workspace),\n            profile,') == 2
+
+
 def test_the_probe_still_refuses_a_stage_whose_provider_does_not_load(layout):
     stage = probe.build(layout.app, layout.fixtures)
     profile = json.loads(stage.profile.read_text(encoding='utf-8'))

@@ -206,7 +206,7 @@ def test_default_workspace_folder_limits_are_stated_not_hidden():
 STAGE = f'app\\updates\\releases\\{HEX32}'
 CHECK_FOLDER = f'{STAGE}\\qualification-workspace'
 BASELINE = 'app\\updates\\baseline-runtime'
-UPDATE_PROJECT = 'update-7260914d5698'   # session_files.update_check_project_name (19)
+UPDATE_PROJECT = 'update-7260914d5698'   # session_files.stage_project_name (19)
 
 
 def update_stage(project=UPDATE_PROJECT, identity=ROOT_ID):
@@ -245,20 +245,62 @@ def test_update_stage_and_its_probe_fit_under_the_longest_root():
     assert max(folders) == 202 <= FOLDER_LIMIT   # the probe's session folder
     # The check folder is the app's own folder. Its name is not a CLI name and not a chat name.
     assert len(UPDATE_PROJECT) == 19 and not UPDATE_PROJECT.startswith(('-', 'chat-'))
-    # A chat that needs its own setup is checked in a stage too, under the chat's short name.
-    chat = update_stage(CHAT_PROJECT)
-    assert {name for name, kind, relative in chat if not fits(kind, relative)} == STAGE_NEVER_WRITTEN
-    assert max(length(relative) for name, kind, relative in chat if name not in STAGE_NEVER_WRITTEN) == 250
 
 
-# Documented limit, not fixed here: a chat with its own setup (dependency
-# overrides of its workspace or session) is checked in a stage too, with the
-# chat's folder as the workspace (``runtime_profiles.py``). An app chat folder
-# has its short name there and fits (250 above). A folder that a person chose
-# keeps the CLI name inside the stage. Each number is the longest installation
-# folder path at which that row fits for the default workspace folder
-# (``<root>\workspace``). Arithmetic from the code; not run on a PC.
-CHAT_SETUP_IN_DEFAULT_WORKSPACE_LONGEST_ROOT = {
+# A chat with its own setup: dependency overrides of its workspace or session,
+# a saved plan (a fork has one), a bundle that is not offered, or local code.
+# ``runtime_profiles.ensure`` checks it in a stage too, with the CHAT's folder
+# as the workspace of the probe. In a process that runs in a stage every
+# folder has the stage's project name (``session_files.stage_project_name``),
+# so the rows of that probe are the rows above, whatever the chat's folder is:
+# an app chat folder, the default workspace folder, a folder a person chose.
+# These are the paths that only this kind of stage adds.
+SETUP_INDEX = f'app\\updates\\profiles\\{HEX64}.json'
+SETUP_PROJECT = f'app\\runtime\\prepare-{HEX32}'
+
+
+def chat_setup_stage(project=UPDATE_PROJECT, identity=ROOT_ID):
+    return update_stage(project, identity) + [
+        ('setup attempt record', FILE, f'{STAGE}\\profile-attempt.json'),
+        ('setup profile list', FILE, f'{STAGE}\\profiles.json'),
+        ('saved plan of the chat', FILE, f'{STAGE}\\runtime-plan.json'),
+        ('setup installer policy', FILE, f'{STAGE}\\runtime-install-overrides.txt'),
+        ('copied connection keys', FILE, f'{STAGE}\\shared-config\\keys.env'),
+        ('setup index', FILE, SETUP_INDEX),
+        ('setup index lock', FILE, SETUP_INDEX + '.lock'),
+        ('setup project', FOLDER, SETUP_PROJECT),
+        ('setup project lock file', FILE, f'{SETUP_PROJECT}\\pyproject.toml'),
+    ]
+
+
+def test_a_chat_with_its_own_setup_fits_whatever_its_folder_is():
+    rows = chat_setup_stage()
+    assert {name for name, kind, relative in rows if not fits(kind, relative)} == STAGE_NEVER_WRITTEN
+    written = [(length(relative), name) for name, kind, relative in rows if name not in STAGE_NEVER_WRITTEN]
+    # The longest path is the probe's own, as in an update: this kind of stage adds no longer one.
+    assert max(written) == STAGE_LONGEST[::-1]
+    assert max(length(relative) for name, kind, relative in rows[len(update_stage()):]) == 155
+    # The rule that makes it so. The stage name comes from the app home setting,
+    # before the folder is looked at; the probe gets the chat's folder and the stage settings.
+    from amplifier_web import session_files
+    slug = inspect.getsource(session_files.project_slug)
+    assert slug.index('staged = stage_project_name()') < slug.index('short = chat_project_name(resolved)')
+    assert 'path' not in inspect.signature(session_files.stage_project_name).parameters
+    profiles = (ROOT / 'amplifier_web/runtime_profiles.py').read_text(encoding='utf-8')
+    assert 'stage = receipt_directory(home, selected)' in profiles and 'workspace = config.workspace' in profiles
+    assert '"AMPLIFIER_HOME": str(shared)' in profiles and 'shared = stage / "shared-config"' in profiles
+    assert '"AMPLIFIER_WEB_HOME": str(stage)' in profiles
+    assert 'index = Path(home) / "updates/profiles" / (identity + ".json")' in profiles
+    assert 'project = Path(home) / "runtime" / ("prepare-" + selected)' in profiles
+
+
+# What the rule removes. Before it, a folder that a person chose kept the CLI
+# name inside the stage, and that name repeats the installation path below
+# the stage. Each number is the longest installation folder path at which the
+# row fitted for the default workspace folder (``<root>\workspace``). So a
+# chat there with its own setup could be checked only up to a folder path of
+# 39; setup accepts 34 to 59. The native case runs the probe both ways.
+WITHOUT_THE_STAGE_NAME_DEFAULT_WORKSPACE_LONGEST_ROOT = {
     'probe history temporary': 39,
     'probe request observation': 42,
     'probe oversized-request copy': 42,
@@ -271,7 +313,7 @@ CHAT_SETUP_IN_DEFAULT_WORKSPACE_LONGEST_ROOT = {
 }
 
 
-def test_chat_setup_limits_in_a_persons_folder_are_stated_not_hidden():
+def test_without_the_stage_name_a_persons_folder_does_not_fit_in_a_stage():
     def longest_root(name):
         for root in range(MAX_ROOT, 0, -1):
             kind, relative = next(row[1:] for row in update_stage(cli_project(root, 'workspace')) if row[0] == name)
@@ -279,10 +321,23 @@ def test_chat_setup_limits_in_a_persons_folder_are_stated_not_hidden():
                 return root
 
     measured = {name: longest_root(name) for name, kind, relative in update_stage() if name not in STAGE_NEVER_WRITTEN}
-    assert {name: root for name, root in measured.items() if root < MAX_ROOT} == CHAT_SETUP_IN_DEFAULT_WORKSPACE_LONGEST_ROOT
-    profiles = (ROOT / 'amplifier_web/runtime_profiles.py').read_text(encoding='utf-8')
-    assert 'stage = receipt_directory(home, selected)' in profiles and 'workspace = config.workspace' in profiles
-    assert '"AMPLIFIER_HOME": str(shared)' in profiles and 'shared = stage / "shared-config"' in profiles
+    assert ({name: root for name, root in measured.items() if root < MAX_ROOT}
+            == WITHOUT_THE_STAGE_NAME_DEFAULT_WORKSPACE_LONGEST_ROOT)
+    # The probe's session folder there: twice the installation folder path plus 134.
+    session = next(relative for name, kind, relative in update_stage(cli_project(MAX_ROOT, 'workspace'))
+                   if name == 'probe session folder')
+    assert length(session) == 2 * MAX_ROOT + 134 == 252 > FOLDER_LIMIT
+    # A folder that a person chose anywhere else: the length of its own path was in every session
+    # row. The longest folder path that fitted, per installation folder path (shortest, clean room, longest):
+    def longest_folder(root):
+        return max(size for size in range(1, 200) if all(
+            fits(kind, relative, root) for name, kind, relative in update_stage('-' + 'p' * (size - 1))
+            if name not in STAGE_NEVER_WRITTEN))
+
+    assert {root: longest_folder(root) for root in (34, 51, MAX_ROOT)} == {34: 55, 51: 38, MAX_ROOT: 30}
+    # With the stage name no row holds the folder's path: every row fits at every supported folder path.
+    assert all(fits(kind, relative, root) for root in range(34, MAX_ROOT + 1)
+               for name, kind, relative in chat_setup_stage() if name not in STAGE_NEVER_WRITTEN)
 
 
 def test_the_model_reproduces_the_measured_update_stage_failure():
