@@ -1684,10 +1684,11 @@ when a step before the write of its own journal fails, and directly before
 that write. If the first look finds a journal, the failed step shows a text
 of a removal that did not finish, not the text of an uninstall that changed
 nothing. If the second look finds one, a failure of that write shows the
-text of a removal that did not finish too. An uninstall also looks when
-Windows does not show one of its questions; that look chooses only the place
-of the failure note. These looks choose a text and the place of the failure
-note. They change nothing that uninstall deletes.
+text of a removal that did not finish too. An uninstall that found no
+journal at its start also looks when Windows does not show one of its
+questions; that look chooses only the place of the failure note. These
+looks choose a text and the place of the failure note. They change nothing
+that uninstall deletes.
 
 Each of these looks, and the launcher's look before it opens Amplifier, asks
 only whether the journal's name is in the folder. A look that Windows does

@@ -2394,8 +2394,8 @@ def test_design_entry_on_the_journal_names_what_the_cases_above_show():
             "text of a removal that did not finish, not the text of an uninstall that changed nothing. If the "
             "second look finds one, a failure of that write shows the text of a removal that did not finish too.",
             # `test_question_that_windows_does_not_show_after_another_window_began_a_removal_...`.
-            "An uninstall also looks when Windows does not show one of its questions; that look chooses only the "
-            "place of the failure note.",
+            "An uninstall that found no journal at its start also looks when Windows does not show one of its "
+            "questions; that look chooses only the place of the failure note.",
             "They change nothing that uninstall deletes.",
             "Each of these looks, and the launcher's look before it opens Amplifier, asks only whether the "
             "journal's name is in the folder. A look that Windows does not answer counts as \"no journal\". Where "
