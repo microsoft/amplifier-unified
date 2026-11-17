@@ -6,16 +6,23 @@ not read ``AMPLIFIER_HOME``. On an installation whose shared Amplifier home is
 another folder, those files then appear outside the installation: a Windows
 installation from the setup file got ``%USERPROFILE%\\.amplifier``.
 
-One rule on every platform: these files are in the shared Amplifier home. With
-the default home that is the path that the module uses itself, so nothing
-moves. The host sets a path only where the configuration has none. A value
-that a person configured stays, also an empty one, which turns the file off.
+One rule on every platform: these files are in the shared Amplifier home.
+Where that home is ``~/.amplifier``, the module puts them there itself and the
+host sets nothing, so the mounted plan is the one that a person configured.
+Elsewhere the host sets the paths that the configuration does not hold. A
+value that a person configured stays, also an empty one, which turns the file
+off.
 
 The paths are plain strings that already name the folder. Set them after
 ``${NAME}`` references are expanded: a folder name can contain ``$``.
+
+The mounted plan then holds these paths. Saved settings do not. Call
+``clear_state_files`` on a copy of a mounted row before it is compared with
+settings or with a saved plan, and before it leaves this PC.
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 # Module -> the configuration key that the module reads -> the file name that
@@ -33,31 +40,27 @@ _MARKER = '_unified_state_file_defaults'
 
 
 def state_file_defaults(module, home=None):
-    """The path keys that the host sets for this module, with their values."""
+    """The path keys that the host sets for this module, with their values.
+
+    ``home`` is the resolved shared home. Pass it when this process changes
+    ``AMPLIFIER_HOME`` before it constructs the provider.
+    """
     names = STATE_FILES.get(module)
     if not names:
         return {}
     if home is None:
         from .session_files import amplifier_home
         home = amplifier_home()
-    return {key: str(Path(home) / name) for key, name in names.items()}
-
-
-def with_state_files(module, config, home=None):
-    """One provider configuration plus the host's paths where it has none.
-
-    For a caller that constructs a provider without a mount plan. Pass the
-    shared home when the caller's process changes ``AMPLIFIER_HOME``.
-    """
-    return {**state_file_defaults(module, home), **config}
+    home = Path(home)
+    if home == Path(os.path.expanduser('~'), '.amplifier').resolve():
+        return {}  # The module's own folder.
+    return {key: str(home / name) for key, name in names.items()}
 
 
 def clear_state_files(row):
     """Remove from a provider row what the host set there earlier.
 
     A configured value stays: only a value equal to the recorded one goes.
-    Comparisons with saved settings or with a plan that an earlier version
-    saved use this, so the host's own path never looks like a changed account.
     """
     previous = row.pop(_MARKER, None)
     config = row.get('config')
@@ -68,21 +71,16 @@ def clear_state_files(row):
     return row
 
 
-def apply_state_files(row, home=None):
+def apply_state_files(row):
     """Set the host's paths on one provider row whose configuration has none.
 
     A saved plan can hold the path of an earlier shared home. It is replaced,
     because the row records that the host set it.
     """
     clear_state_files(row)
-    if row.get('enabled') is False:
-        return row
-    config = row.get('config')
-    if config is not None and not isinstance(config, dict):
-        return row
-    added = {key: value for key, value in state_file_defaults(row['module'], home).items()
-             if key not in (config or {})}
+    config = row.get('config') or {}
+    added = {key: value for key, value in state_file_defaults(row['module']).items() if key not in config}
     if added:
-        row.setdefault('config', {}).update(added)
+        row['config'] = {**config, **added}
         row[_MARKER] = added
     return row

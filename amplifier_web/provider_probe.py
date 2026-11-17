@@ -104,9 +104,10 @@ async def query(request):
 
 async def _query(request, progress):
     # Preparation below points AMPLIFIER_HOME at the registry for this process.
-    # The provider's own state files stay in the shared home, as in a chat.
-    from amplifier_web.session_files import amplifier_home
-    shared_home=amplifier_home()
+    # Read the provider's state-file paths first: a test message is a model
+    # call, and its files belong in the shared home, as in a chat.
+    from amplifier_web.provider_state_files import state_file_defaults
+    state_files=state_file_defaults(request['module'])
     source=request.get('source')
     if not source:
         try:provider_class(request['module'])
@@ -137,8 +138,7 @@ async def _query(request, progress):
         return {'info':public(info),'configSchema':public(schema),'imageGeneration':public(image_info)}
     progress['stage'] = 'configuration'
     config=materialize_provider_config(request.get('config',{}),schema)
-    from amplifier_web.provider_state_files import with_state_files
-    config=with_state_files(request['module'],config,shared_home)
+    config={**state_files,**config}
     if request['module']=='provider-github-copilot' and config.get('github_token'):
         os.environ['COPILOT_AGENT_TOKEN']=config['github_token']
     progress['stage'] = 'construction'

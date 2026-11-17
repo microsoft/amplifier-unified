@@ -155,6 +155,10 @@ async def _bounded_info(provider, capability):
 async def _probe(request):
     policy = _validate_request(request)
     _runtime_transfer_fence()
+    # This check is a model call. The provider's own state files belong in the
+    # shared home, as in a chat. Read the paths before the home changes below.
+    from amplifier_web.provider_state_files import state_file_defaults
+    state_files = state_file_defaults(request["module"])
     if request.get("source"):
         from amplifier_foundation import Bundle
         previous_home = os.environ.get("AMPLIFIER_HOME")
@@ -176,9 +180,7 @@ async def _probe(request):
         schema = await config_schema(schema_provider)
     finally:
         await _strict_close(schema_provider)
-    config = materialize_provider_config(request["config"], schema)
-    from amplifier_web.provider_state_files import with_state_files
-    config = with_state_files(request["module"], config)
+    config = {**state_files, **materialize_provider_config(request["config"], schema)}
     previous_copilot = os.environ.get("COPILOT_AGENT_TOKEN")
     copilot = request["module"] == "provider-github-copilot" and config.get("github_token")
     if copilot:
