@@ -809,11 +809,62 @@ async def test_a_refused_removal_does_not_change_how_a_chat_setup_ends(profile_i
     assert json.loads((stage / 'profile-attempt.json').read_text())['status'] == 'failed'
     assert not (stage / 'validated.json').exists() and storage._ended_without_admission(stage)
     notes = getattr(failure.value, '__notes__', [])
-    assert notes == [f"The stage's copy of the keys file was not removed (refused); idle maintenance tries "
+    assert notes == [f"The stage's copy of the keys file was not removed (refused). Idle maintenance tries "
                      f"again. Attempt retained at {stage}."], notes
     # The refusal is over: the same removal works now.
     (tmp_path / 'second-name').unlink()
     assert storage.remove_stage_keys(h.home, stage) is None and not copy.exists() and stage.is_dir()
+
+
+@pytest.mark.parametrize('removal', ['refused', 'works'])
+async def test_a_chat_setup_that_cannot_record_its_end_promises_no_later_removal(
+        app, profile_inputs, monkeypatch, tmp_path, removal):
+    """The write of the status "failed" fails, so the saved record still says "preparing". Idle maintenance
+    never takes the copy of such a stage. When the removal at the end is refused too, the error must say
+    that the copy stays, not that idle maintenance tries again."""
+    from amplifier_web import runtime_profiles
+
+    h = profile_inputs
+    write = runtime_profiles._write_attempt
+
+    def no_end(stage, attempt):
+        if attempt['status'] != 'preparing':
+            raise OSError('fixture: the record cannot be written')
+        write(stage, attempt)
+
+    monkeypatch.setattr(runtime_profiles, '_write_attempt', no_end)
+
+    async def command(*args, **kwargs):
+        if removal == 'refused':
+            os.link(one_new_stage(h) / 'shared-config' / 'keys.env', tmp_path / 'second-name')
+        raise RuntimeError('fixture failure')
+
+    h.process_hook = command
+    with pytest.raises(RuntimeError, match='fixture failure') as failure:
+        await runtime_profiles.ensure(h.home, h.generation, h.child('keys-no-end-' + removal))
+    stage = one_new_stage(h)
+    copy = stage / 'shared-config' / 'keys.env'
+    assert json.loads((stage / 'profile-attempt.json').read_text())['status'] == 'preparing'
+    assert not storage._ended_without_admission(stage)
+    notes = getattr(failure.value, '__notes__', [])
+    recording = (f'Profile attempt status write failed (OSError); artifacts retained at {stage}. Runtime '
+                 'environment owner must wait for preparation threads/processes before cleanup.')
+    if removal == 'works':
+        # The removal at the end does not depend on the record.
+        assert not copy.exists() and notes == [recording], notes
+        return
+    assert copy.is_file()
+    assert notes == [recording,
+                     f"The stage's copy of the keys file was not removed (refused). The saved record does not "
+                     f"say that this attempt ended, so idle maintenance leaves that copy. Attempt retained at "
+                     f"{stage}."], notes
+    # What the note says is what happens: the idle pass of this installation leaves the copy, at every age.
+    (tmp_path / 'second-name').unlink()
+    manager = app.update_manager
+    assert manager.home == h.home
+    aged(stage)
+    await storage.scrub_stage_keys(manager)
+    assert copy.is_file()
 
 
 @pytest.mark.parametrize('blocker', ['lock', 'checking', 'staging', 'validating', 'activating',

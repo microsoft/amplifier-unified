@@ -233,15 +233,19 @@ async def _profile_attempt(home, generation, selected, stage, index):
         # The stage's copy of the keys file is not a diagnostic. This coroutine
         # wrote it once, before its first command, and nothing uses this stage
         # again: a retry gets a new stage, and nothing admits what a program of
-        # this attempt still produces. A refused removal keeps the copy for idle
-        # maintenance, which reads the status that is recorded above.
-        from .update_storage import remove_stage_keys
+        # this attempt still produces. A refused removal keeps the copy. Idle
+        # maintenance removes it later only when the saved record says that this
+        # attempt ended. The status write above can fail, so the note asks the
+        # reader of idle maintenance what the record says now.
+        from .update_storage import _ended_without_admission, remove_stage_keys
 
         reason = remove_stage_keys(home, stage)
         if reason is not None:
             error.add_note(
-                f"The stage's copy of the keys file was not removed ({reason}); "
-                f"idle maintenance tries again. Attempt retained at {stage}."
+                f"The stage's copy of the keys file was not removed ({reason}). "
+                + ("Idle maintenance tries again." if _ended_without_admission(stage) else
+                   "The saved record does not say that this attempt ended, so idle maintenance leaves that copy.")
+                + f" Attempt retained at {stage}."
             )
         raise
 

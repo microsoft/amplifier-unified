@@ -489,7 +489,8 @@ alone, never by age. A record that says `failed` or `cancelled` qualifies
 immediately, so a removal that was refused is tried again. Any other record
 keeps the copy: age does not prove that the preparation ended. So an app that
 ended during a preparation leaves a record that says `preparing`, and that
-stage keeps its copy.
+stage keeps its copy. So does a preparation that could neither record its end
+nor remove its copy; its error says that the copy stays.
 Unsafe paths or removal refusals keep the copy for a later pass.
 Failed stage folders stay; this credential cleanup deletes no folder.
 
