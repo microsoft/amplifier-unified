@@ -376,6 +376,16 @@ leaves the bytecode of what it imported from that environment before that call
 for the next process; with a host-wide setting it would leave none.
 `tests/test_source_store_bytecode.py` runs the real connection check against
 Foundation's store on a hosted runner.
+A text that tells a person how to open Amplifier says only what that code
+knows. On Windows the sign-in page and the ticket refusals take the step from
+`browser_entry.next_step`: the Start menu only for a request from this
+computer to a host that this installation's own task started and whose
+Start-menu entry exists, and else one sentence that names no way. Do not name
+`amplifier-unified open` in a Windows text for a browser: it works as written
+only on an installation by hand with the default data folder. Do not put a
+path of the installation on a page that needs no sign-in. `open` is that step,
+so its own failure messages never name it or the Start menu; it prints the
+host's reason.
 
 ## Keep agent context and coordination useful
 

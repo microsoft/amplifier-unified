@@ -33,7 +33,8 @@ _CODE = re.compile(f"[{CODE_ALPHABET}]{{{CODE_LENGTH}}}")
 # and the command also needs that installation's data folder. A full command
 # with both paths would put the Windows user name on a page that needs no
 # sign-in; that was decided against. macOS and Linux have no Start-menu entry.
-START_MENU = "Open Amplifier from the Start menu: Amplifier Unified."
+START_MENU = ("Open Amplifier from the Start menu: Amplifier Unified. "
+              "Amplifier then opens in your browser.")
 ON_THE_PC = "Open Amplifier again on the Windows PC that runs it."
 RUN_OPEN = "To open Amplifier, run this: amplifier-unified open."
 # What `amplifier-unified open` says on Windows when it gets no ticket. It never

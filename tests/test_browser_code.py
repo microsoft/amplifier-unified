@@ -770,7 +770,8 @@ def step(app, **options):
 
 def test_a_pc_from_the_setup_file_is_sent_to_its_start_menu_entry(host, monkeypatch):
     root, looked = from_setup(host, monkeypatch)
-    assert step(host) == "Open Amplifier from the Start menu: Amplifier Unified."
+    assert step(host) == ("Open Amplifier from the Start menu: Amplifier Unified. "
+                          "Amplifier then opens in your browser.")
     assert looked == [root]                                 # The record of this installation, and no other.
     # The name in the text is the name of the entry that setup makes.
     from amplifier_web import windows_consumer_shell
@@ -895,10 +896,7 @@ def test_the_host_reads_the_real_start_menu_record(home):
     """
     from amplifier_web import windows_consumer_shell as shell
     from amplifier_web.deployment import write_private
-    from amplifier_web.windows_files import directory
     root = home
-    with directory(root / "app", owned_root=root, create=True):
-        pass
     folder = root / "entries"
     folder.mkdir()
     app = web.Application()
