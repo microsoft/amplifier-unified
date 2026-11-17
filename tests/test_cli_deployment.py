@@ -86,8 +86,10 @@ def test_forced_renewal_of_a_keyless_windows_identity_says_what_happens_next(
     assert ("Windows asks you to confirm it" in output) is told
     assert ("Other devices must import it again" in output) is told
     # Windows can still hold the replaced certificate, and asks about it at the same open.
-    assert ("If Windows also asks whether to delete the earlier certificate, select Yes. "
-            "Amplifier no longer uses it.\n" in output) is told
+    # True for one earlier certificate and for several.
+    assert ("If Windows also asks whether to delete an earlier certificate, select Yes. "
+            "It asks once for each earlier certificate that it still holds. "
+            "Amplifier no longer uses them.\n" in output) is told
 
 
 def test_a_force_that_the_record_stops_ends_with_its_plain_text_and_no_success_line(tmp_path, monkeypatch, capsys):

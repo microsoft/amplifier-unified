@@ -201,23 +201,34 @@ def _find(api, handle, context):
     return api.CertFindCertificateInStore(handle, _ENCODING, 0, _FIND_EXISTING, context, None)
 
 
+def _search(api, handle, context):
+    """The store's copy of this exact certificate, or None for Windows' own answer "not found".
+
+    Windows returns nothing also for a search that failed, and that is no
+    answer: it raises OSError. A caller must never read a failed search as
+    "Windows does not hold it".
+    """
+    C.set_last_error(0)
+    found = _find(api, handle, context)
+    if found:
+        return found
+    code = C.get_last_error() & 0xFFFFFFFF
+    if code != _NOT_FOUND:
+        raise OSError(f"Windows did not complete the certificate search (error 0x{code:08X})")
+    return None
+
+
 def contains(der, *, store="ROOT"):
     """Is this exact certificate in the person's view of the store?
 
-    False is Windows' own answer "not found". Windows returns nothing also
-    for a search that failed, and that is no answer: it raises OSError. A
-    caller must never read a failed search as "Windows does not hold it".
+    False is Windows' own answer "not found". A search that failed raises
+    OSError (see _search).
     """
     with _open(der, store, write=False) as (api, handle, context):
-        C.set_last_error(0)
-        found = _find(api, handle, context)
+        found = _search(api, handle, context)
         if found:
             api.CertFreeCertificateContext(found)
-            return True
-        code = C.get_last_error() & 0xFFFFFFFF
-        if code != _NOT_FOUND:
-            raise OSError(f"Windows did not complete the certificate search (error 0x{code:08X})")
-        return False
+        return bool(found)
 
 
 def _dialog_windows():
@@ -281,6 +292,9 @@ def add_root(der, *, store="ROOT"):
     helper = threading.Thread(target=_raise_dialogs, args=(done,), daemon=True)
     try:
         with _open(der, store, write=True) as (api, handle, context):
+            # A search that failed counts as "not there" here, and only here:
+            # the add below is Windows' own decision, and the check after it
+            # requires that the store really holds the root.
             found = _find(api, handle, context)
             if found:
                 api.CertFreeCertificateContext(found)
@@ -310,13 +324,15 @@ def remove_root(der, *, store="ROOT"):
 
     Returns `absent`, `removed`, `declined` or `blocked`. The default button of
     the Windows question is No, so `declined` is an ordinary outcome: the root
-    stays, and it is inert because no key can sign under it.
+    stays, and it is inert because no key can sign under it. `absent` is
+    Windows' own answer "not found". A search that failed is `blocked`:
+    Windows can hold the root, and it was not asked.
     """
     done = threading.Event()
     helper = threading.Thread(target=_raise_dialogs, args=(done,), daemon=True)
     try:
         with _open(der, store, write=True) as (api, handle, context):
-            found = _find(api, handle, context)
+            found = _search(api, handle, context)
             if not found:
                 return "absent"
             helper.start()

@@ -551,7 +551,11 @@ a certificate, and the earlier certificate's bytes were gone from disk.
   (`CRYPT_E_NOT_FOUND`) drops a root. Windows returns nothing also for a
   search that failed, so `windows_trust.contains` raises for every other
   result; a failed search and a store that cannot be opened both count as
-  "Windows may hold it". If the record is still full, `force` stops with a
+  "Windows may hold it". `remove_root` uses the same search (`_search`): a
+  failed search is `blocked`, not `absent`, so an uninstall says that Windows
+  kept the certificate. `add_root` keeps its plain first search: a failure
+  there leads to the add, which Windows decides and the check after it
+  confirms. If the record is still full, `force` stops with a
   plain text and changes nothing (`windows_tls.ReplacedRecord`). A record that is too long to
   read stops `force` in the same way: Amplifier never writes one of that
   length, and it does not replace a file that it cannot read. The readers get

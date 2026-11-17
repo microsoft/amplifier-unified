@@ -479,6 +479,11 @@ of trusted root certificates until it is deleted. Nobody can use an earlier
 certificate: no signing key exists for it, and it names only addresses of this
 PC.
 
+The Windows questions about an earlier certificate come from the Start-menu
+entries of the PC. A PC whose Start-menu entries are from a setup file that did
+not have these questions yet does not ask them. The end of this section says
+what stays on such a PC.
+
 - `setup-tls force` saves the certificate that it replaces in the file
   `replaced-roots.pem`, in the folder `app\config\tls` of the installation.
   The file holds certificates only, no key.
@@ -492,7 +497,8 @@ PC.
   after the next `setup-tls force`. It also asks at an uninstall.
 - When you uninstall Amplifier, Windows asks one question for each of
   Amplifier's certificates that it holds: the current one and each earlier one.
-  That is normally one question. Amplifier's first question gives the number.
+  That is normally one question. If there are more, Amplifier's first question
+  gives the number.
 - Amplifier asks Windows to delete only a certificate that this file names,
   that has the fixed form of Amplifier's own certificate, and that Windows
   holds exactly. It never finds a certificate by its name, and it never asks

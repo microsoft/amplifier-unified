@@ -332,6 +332,19 @@ def test_remove_reports_each_outcome_and_handles_the_default_no(store):
     fake = store(keeps=False)
     fake.held.add(b"root")
     assert trust.remove_root(b"root") == "blocked"
+    # A search that failed is not "absent": Windows can hold the root, and it was not asked.
+    for error in (5, "silent"):
+        fake = store(search=error)
+        fake.held.add(b"root")
+        assert trust.remove_root(b"root") == "blocked" and fake.questions == [] and b"root" in fake.held
+        # So an uninstall says that Windows kept the certificate.
+        assert trust.forget_roots([b"root"]) == "blocked"
+
+
+def test_a_failed_search_before_an_add_still_lets_windows_decide_and_never_claims_trust(store):
+    fake = store(search=5)
+    # The add is Windows' own decision. The check after it cannot confirm the root: not "added".
+    assert trust.add_root(b"root") == "blocked" and fake.questions == ["add"]
 
 
 def test_a_replaced_root_counts_only_with_the_fixed_shape_of_the_products_root():

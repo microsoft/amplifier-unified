@@ -255,8 +255,9 @@ def _setup_tls(data_dir: Path, mode: str) -> None:
                   "Amplifier on this PC. Other devices must import it again (setup-tls export).")
             # Windows can still hold the replaced root. The launcher asks Windows
             # to delete it; this command cannot know which launcher the PC has.
-            print("If Windows also asks whether to delete the earlier certificate, select Yes. "
-                  "Amplifier no longer uses it.")
+            print("If Windows also asks whether to delete an earlier certificate, select Yes. "
+                  "It asks once for each earlier certificate that it still holds. "
+                  "Amplifier no longer uses them.")
 
 
 def _windows_roots(data_dir: Path, configured: bool) -> None:
