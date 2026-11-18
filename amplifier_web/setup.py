@@ -348,7 +348,7 @@ class SetupManager:
             # host composition, even before any runtime receipt exists.
             # Do NOT apply this fallback to discovery reuse: an implicit probe
             # must still prove its installed implementation independently.
-            rows = [value for value in config.configured_connections if value.get('enabled', True)]
+            rows = [value for value in config.saved_connections if value.get('enabled', True)]
             source = provider_mount_sources(rows, config.settings).get(args.get('id'))
         return identity(workspace,module,raw,source,home=self.home,
             **({'_legacy_visibility':True} if binding and _legacy_visibility else {}),
@@ -544,6 +544,10 @@ class SetupManager:
             from .decision_settings import catalogs
             candidate = {'module': args.get('module') or (existing or {}).get('module'),
                          'config': args.get('config', (existing or {}).get('config', {}))}
+            definitions = catalogs(unique=True)
+            if (existing and candidate['module'] in definitions
+                    and decision_only(existing, definitions) != decision_only(candidate, definitions)):
+                raise ValueError('Changing a saved connection between chat and decision-only roles needs a new connection.')
             dedicated = (decision_only(candidate, catalogs()) or
                          any('provider' not in value and key(value) == key(existing or {})
                              for value in connections(effective.settings).values()))
@@ -643,7 +647,7 @@ class SetupManager:
             settings.setdefault('configurator',{}).setdefault('disabled',{})['providers']=sorted(disabled)
             # Clear the older Unified-only flag when editing an existing entry.
             settings.get('overrides',{}).get(identity,{}).pop('enabled',None)
-        self.store.update(workspace,scope,mutate)
+        self.store.update(workspace,scope,mutate,migrate_decisions=True)
         with self.read_snapshot(workspace):
             current=self.config(workspace)
             changed=before!=signature(current)
@@ -820,7 +824,7 @@ class SetupManager:
                             row={k:source[k] for k in ('id','module') if k in source};scoped.append(row)
                         row.setdefault('config',{})['priority']=priority
                     settings.pop('provider_order',None)
-                self.store.update(workspace,scope,reorder)
+                self.store.update(workspace,scope,reorder,migrate_decisions=True)
             return {'providers':self.provider_rows(workspace),'scope':scope}
         if action=='providers.save':
             if args.get('useGitHubCli'):

@@ -9,8 +9,8 @@ def row_id(row):
     return row.get('id') or row.get('instance_id') or row['module'].removeprefix('provider-')
 
 
-def catalogs():
-    result = {}
+def catalogs(*, unique=False):
+    result, seen, ambiguous = {}, set(), set()
     for entry in entry_points(group='amplifier.decision_backends'):
         try:
             value = entry.load()()
@@ -18,6 +18,10 @@ def catalogs():
             if metadata is None:
                 continue
             module, definition, validate = metadata
+            if unique:
+                if module in seen:
+                    ambiguous.add(module)
+                seen.add(module)
             # Preserve the settings catalog's first valid declaration. Runtime
             # discovery separately refuses ambiguous mounts of the same module.
             if module in result:
@@ -34,7 +38,7 @@ def catalogs():
                 result[module] = (row, validate)
         except Exception:
             continue  # A broken optional provider cannot break ordinary setup.
-    return result
+    return {module: row for module, row in result.items() if not unique or module not in ambiguous}
 
 
 def _backends(row):
@@ -110,7 +114,7 @@ def configure(manager, args, workspace, scope):
         result = {}
         for level, path in paths.items():
             value = settings if level == scope else read_yaml(path)
-            result = merge_settings(result, translate(value, catalogs(), inherited=result))
+            result = merge_settings(result, translate(value, catalogs(unique=True), inherited=result))
             if level == stop: break
         return result
 
@@ -146,7 +150,7 @@ def configure(manager, args, workspace, scope):
             if (any(_backends(row).get(binding['backend']) != backend for binding in bindings.values()) or
                     row.get('config', {}).get('decisions', {}).get('enabled') is not True):
                 raise ValueError('This workspace overrides decision models. Save in its workspace scope.')
-    manager.store.update(workspace, scope, save)
+    manager.store.update(workspace, scope, save, migrate_decisions=True)
     effective = manager.config(workspace)
     return {'decisionModels': describe(effective.settings, effective.providers), 'decisionModelsError': None, 'configurationChanged': True,
             'decisionSetupCompletion': {'purpose': purpose, 'mode': mode, 'scope': scope, 'takesEffect': 'new_sessions'}}

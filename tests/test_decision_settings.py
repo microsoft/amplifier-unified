@@ -21,7 +21,7 @@ def manager(tmp_path,monkeypatch):
     def validate(row):
         if set(row)-{'model','endpoint'} or not row.get('model'):raise ValueError('Invalid decision config')
         return row
-    monkeypatch.setattr(decisions,'catalogs',lambda:{'provider-fixture':({'kind':'fixture','label':'Fixture','default_model':'test','configuration_key':'decisions'},validate)})
+    monkeypatch.setattr(decisions,'catalogs',lambda **kwargs:{'provider-fixture':({'kind':'fixture','label':'Fixture','default_model':'test','configuration_key':'decisions'},validate)})
     result=SetupManager(tmp_path/'app')
     result.store.update(tmp_path,'global',lambda settings:settings.update({'config':{'providers':[{'module':'provider-fixture','config':{'api_key':'${FIXTURE_KEY}','default_model':'chat'}}]}}))
     return result
@@ -182,7 +182,7 @@ def test_configuration_requires_explicit_scope():
 async def test_decision_only_connection_never_enters_cli_providers(manager, tmp_path, monkeypatch):
     definitions = decisions.catalogs()
     definitions['provider-fixture'][0]['decision_only'] = True
-    monkeypatch.setattr(decisions, 'catalogs', lambda: definitions)
+    monkeypatch.setattr(decisions, 'catalogs', lambda **kwargs: definitions)
     await manager.perform('providers.save', {
         'workspace': str(tmp_path), 'scope': 'global', 'id': 'specialist',
         'module': 'provider-fixture', 'config': {'api_key': '${SYNTHETIC_ONLY}'}})
@@ -209,7 +209,7 @@ async def test_shared_chat_decisions_are_saved_outside_cli_provider_config(manag
 async def test_dedicated_legacy_identity_survives_edit_and_scoped_remove(manager, tmp_path, monkeypatch, identity_fields, public_id):
     definitions = decisions.catalogs()
     definitions['provider-fixture'][0]['decision_only'] = True
-    monkeypatch.setattr(decisions, 'catalogs', lambda: definitions)
+    monkeypatch.setattr(decisions, 'catalogs', lambda **kwargs: definitions)
     manager.store.update(tmp_path, 'global', lambda value: value.clear())
     manager.store.update(tmp_path, 'global', lambda value: value.update(config={'providers': [{
         'module': 'provider-fixture', **identity_fields,
@@ -229,7 +229,7 @@ async def test_dedicated_legacy_identity_survives_edit_and_scoped_remove(manager
 async def test_all_account_reorder_preserves_client_contract_without_llm_pollution(manager, tmp_path, monkeypatch):
     definitions = decisions.catalogs()
     definitions['provider-only'] = ({'decision_only': True, 'label': 'Only', 'configuration_key': 'decisions'}, lambda row: row)
-    monkeypatch.setattr(decisions, 'catalogs', lambda: definitions)
+    monkeypatch.setattr(decisions, 'catalogs', lambda **kwargs: definitions)
     await manager.perform('providers.save', {'workspace': str(tmp_path), 'scope': 'global',
         'id': 'only', 'module': 'provider-only', 'config': {'priority': 200}})
     result = await manager.perform('providers.reorder', {'workspace': str(tmp_path), 'scope': 'global',
@@ -250,6 +250,19 @@ async def test_advanced_decision_config_edit_routes_to_dedicated_owner(manager, 
     assert manager.config(tmp_path).connections[0]['config']['decisions']['backends']['ui-browser-fixture']['model'] == 'advanced-edit'
     assert 'decisions' not in manager.store.read(tmp_path, 'global')['config']['providers'][0]['config']
 
+
+async def test_conditional_account_role_change_refuses_before_publication(manager, tmp_path, monkeypatch):
+    definitions = decisions.catalogs()
+    definitions['provider-conditional'] = ({'label': 'Conditional', 'configuration_key': 'decisions',
+        'decision_only_when': {'chat_enabled': False}}, lambda value: value)
+    monkeypatch.setattr(decisions, 'catalogs', lambda **kwargs: definitions)
+    await manager.perform('providers.save', {'workspace': str(tmp_path), 'scope': 'global',
+        'id': 'conditional', 'module': 'provider-conditional', 'config': {'chat_enabled': False}})
+    before = manager.store.read(tmp_path)
+    with pytest.raises(ValueError, match='new connection'):
+        await manager.perform('providers.save', {'workspace': str(tmp_path), 'scope': 'global',
+            'id': 'conditional', 'module': 'provider-conditional', 'config': {'chat_enabled': True}})
+    assert manager.store.read(tmp_path) == before
 
 def test_conditional_hook_catalog_offers_a_decision_connection_without_changing_chat_metadata(monkeypatch):
     definition={'schema_version':2,'provider_module':'provider-mixed','validate':lambda value:value,

@@ -18,11 +18,13 @@ class SettingsStore:
     def read(self, workspace, scope="global", *, session_id=None):
         return read_yaml(self.path(workspace, scope, session_id=session_id))
 
-    def update(self, workspace, scope, mutator, *, session_id=None):
+    def update(self, workspace, scope, mutator, *, session_id=None, migrate_decisions=False):
         from .configuration_authority import check_current
         def checked_mutator(value):
             check_current(workspace=workspace, scope=scope)
-            from .decision_namespace import read_scopes, translate
+            if not migrate_decisions:
+                return mutator(value)
+            from .decision_namespace import read_scopes, translate, preflight_paths
             from .decision_settings import catalogs
             paths = settings_paths(workspace, shared_home=self.shared_home, session_id=session_id)
             prior = []
@@ -30,10 +32,19 @@ class SettingsStore:
                 if level == scope:
                     break
                 prior.append(path)
-            definitions = catalogs()
+            definitions = catalogs(unique=True)
+            original_inherited = read_scopes(prior)
             inherited = read_scopes(prior, definitions=definitions)
             value = translate(value, definitions, inherited=inherited)
             result = mutator(value)
-            return translate(value if result is None else result, definitions, inherited=inherited)
+            result = translate(value if result is None else result, definitions, inherited=inherited)
+            preflight_paths(paths.values(), definitions,
+                            replacement=(paths[scope], result))
+            if inherited != original_inherited:
+                from .decision_namespace import connections
+                dependency = connections(result).keys() & connections(inherited).keys()
+                if dependency:
+                    raise ValueError("Migrate broader decision settings before saving this scoped connection.")
+            return result
         check_current(workspace=workspace, scope=scope)
         return update_settings(self.path(workspace, scope, session_id=session_id), checked_mutator)

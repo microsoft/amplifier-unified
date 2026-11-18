@@ -86,7 +86,7 @@ async def test_provider_save_is_bounded_for_twenty_unmounted_chats(app,monkeypat
 
 async def test_decision_account_save_publishes_existing_client_contract_without_chat_probe(app, monkeypatch):
     from amplifier_web import decision_settings
-    monkeypatch.setattr(decision_settings, 'catalogs', lambda: {
+    monkeypatch.setattr(decision_settings, 'catalogs', lambda **kwargs: {
         'provider-specialist': ({'decision_only': True, 'label': 'Specialist',
                                 'configuration_key': 'decisions'}, lambda row: row)})
     probes = []

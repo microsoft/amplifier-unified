@@ -191,6 +191,29 @@ def test_ordinary_read_never_discovers_adapters_or_writes(tmp_path, monkeypatch)
     monkeypatch.setattr('amplifier_web.shared_settings.update_settings', forbidden)
     assert ns.read_scopes([path]) == old
 
+
+@pytest.mark.parametrize('module', ['provider-only', 'provider-chat'])
+def test_scoped_write_never_commits_dependency_on_unmigrated_broader_owner(tmp_path, monkeypatch, module):
+    from amplifier_web.preferences import SettingsStore
+    from amplifier_web.shared_settings import settings_paths
+    monkeypatch.setattr(decision_settings, 'catalogs', lambda **kwargs: DEFINITIONS)
+    store = SettingsStore(tmp_path / 'app')
+    paths = settings_paths(tmp_path, shared_home=store.shared_home)
+    paths['global'].parent.mkdir(parents=True, exist_ok=True)
+    old = old_settings(provider(module, decisions={'id': 'existing', 'model': 'global', 'enabled': True}))
+    paths['global'].write_text(yaml.safe_dump(old))
+    before = paths['global'].read_bytes()
+    def scoped(value):
+        value.setdefault('config', {})['providers'] = [{'id': 'one', 'config': {'decisions': {'model': 'local'}}}]
+    with pytest.raises(ValueError, match='broader decision settings'):
+        store.update(tmp_path, 'local', scoped, migrate_decisions=True)
+    assert paths['global'].read_bytes() == before
+    assert not paths['local'].exists()
+    assert ns.read_scopes(paths.values()) == old
+    ns.migrate_paths(paths.values(), definitions=DEFINITIONS)
+    store.update(tmp_path, 'local', scoped, migrate_decisions=True)
+    assert ns.logical_rows(ns.read_scopes(paths.values()))[0]['config']['decisions']['model'] == 'local'
+
 def test_migration_preserves_interleaved_equal_priority_source_precedence(tmp_path):
     decision = provider('provider-conditional', 'decision', chat_enabled=False)
     decision['source'] = '/synthetic/decision'
@@ -207,6 +230,88 @@ def test_migration_preserves_interleaved_equal_priority_source_precedence(tmp_pa
         before = _apply_settings(Bundle(name='before'), config(old, tmp_path)).to_mount_plan()
         after = _apply_settings(Bundle(name='after'), config(new, tmp_path)).to_mount_plan()
     assert after == before
+
+
+def test_narrower_first_migration_hint_preserves_inherited_ordinary_order(tmp_path):
+    chat = provider('provider-conditional', 'chat', chat_enabled=True)
+    chat['source'] = '/synthetic/chat'
+    decision = provider('provider-conditional', 'decision', chat_enabled=False)
+    decision['source'] = '/synthetic/decision'
+    base, local = old_settings(chat), {'config': {'providers': [decision]}}
+    first = ns.translate(base, DEFINITIONS)
+    second = ns.translate(local, DEFINITIONS, inherited=first)
+    new = ns.merge_settings(first, second)
+    old = ns.merge_settings(base, local)
+    assert ns.logical_rows(new) == old['config']['providers']
+    assert config(new, tmp_path).module_sources == config(old, tmp_path).module_sources
+
+
+def test_unrelated_shared_save_cannot_bypass_role_transition_refusal(tmp_path, monkeypatch):
+    from amplifier_web.preferences import SettingsStore
+    from amplifier_web.shared_settings import settings_paths
+    monkeypatch.setattr(decision_settings, 'catalogs', lambda **kwargs: DEFINITIONS)
+    store = SettingsStore(tmp_path / 'app')
+    paths = settings_paths(tmp_path, shared_home=store.shared_home)
+    for path in paths.values():
+        path.parent.mkdir(parents=True, exist_ok=True)
+    paths['global'].write_text(yaml.safe_dump(old_settings(provider(
+        'provider-conditional', chat_enabled=False))))
+    paths['local'].write_text(yaml.safe_dump({'config': {'providers': [
+        {'id': 'one', 'config': {'chat_enabled': True}}]}}))
+    before = {path: path.read_bytes() if path.exists() else None for path in paths.values()}
+    with pytest.raises(ValueError, match='chat role'):
+        store.update(tmp_path, 'global', lambda value: value.update(unrelated='changed'), migrate_decisions=True)
+    assert {path: path.read_bytes() if path.exists() else None for path in paths.values()} == before
+    store.update(tmp_path, 'global', lambda value: value.update(unrelated='changed'))
+    assert read_yaml(paths['global'])['config']['providers'][0]['config']['chat_enabled'] is False
+    assert 'connections' not in read_yaml(paths['global'])['decision_models']
+    assert config(ns.read_scopes(paths.values()), tmp_path).providers[0]['config']['chat_enabled'] is True
+
+
+def test_startup_preflights_all_supplied_workspaces_before_shared_ancestor(tmp_path, monkeypatch):
+    from amplifier_web.settings_migration import migrate_settings
+    from amplifier_web.shared_settings import settings_paths
+    from amplifier_web.session_files import amplifier_home
+    monkeypatch.setattr(decision_settings, 'catalogs', lambda **kwargs: DEFINITIONS)
+    first, second = tmp_path / 'first', tmp_path / 'second'
+    first.mkdir(); second.mkdir()
+    paths = settings_paths(second)
+    paths['global'].parent.mkdir(parents=True, exist_ok=True)
+    paths['local'].parent.mkdir(parents=True, exist_ok=True)
+    paths['global'].write_text(yaml.safe_dump(old_settings(provider(
+        'provider-conditional', chat_enabled=False))))
+    paths['local'].write_text(yaml.safe_dump({'config': {'providers': [
+        {'id': 'one', 'config': {'chat_enabled': True}}]}}))
+    before = [paths[level].read_bytes() for level in ('global', 'local')]
+    migrate_settings(tmp_path / 'app', [first, second])
+    assert [paths[level].read_bytes() for level in ('global', 'local')] == before
+
+
+def test_source_less_selected_chat_binding_keeps_decision_roster_source_fallback(tmp_path, monkeypatch):
+    from amplifier_web.shared_settings import settings_paths
+    from amplifier_web.setup import SetupManager
+    from amplifier_web.provider_catalog import configured_binding, conversation_bindings
+    from amplifier_foundation import Bundle
+    from amplifier_web.host.session import _apply_settings
+    monkeypatch.setattr(decision_settings, 'catalogs', lambda **kwargs: DEFINITIONS)
+    manager = SetupManager(tmp_path / 'app')
+    paths = settings_paths(tmp_path, shared_home=manager.store.shared_home)
+    paths['global'].parent.mkdir(parents=True, exist_ok=True)
+    decision = provider('provider-conditional', 'decision', chat_enabled=False)
+    decision['source'] = '/synthetic/shared-adapter'
+    chat = provider('provider-conditional', 'chat', chat_enabled=True)
+    del chat['source']
+    paths['global'].write_text(yaml.safe_dump(old_settings(decision, chat)))
+    key = manager.catalog_key({'id': 'chat'}, tmp_path, binding=True)
+    ns.migrate_paths(paths.values(), definitions=DEFINITIONS)
+    assert manager.catalog_key({'id': 'chat'}, tmp_path, binding=True) == key
+    assert configured_binding(tmp_path / 'app', tmp_path, 'chat', saved=key) == key
+    assert conversation_bindings(tmp_path / 'app', tmp_path, 'unsaved', [
+        {'id': 'chat', 'connectionKey': key}]) == {}
+    with patch('amplifier_web.decision_accounts.bind_sources'):
+        plan = _apply_settings(Bundle(name='fixture'), manager.config(tmp_path)).to_mount_plan()
+    row = next(row for row in plan['providers'] if row['id'] == 'chat')
+    assert row['source'] == decision['source']
 
 
 def test_unrelated_ordinary_module_overlays_keep_foundation_semantics(tmp_path):
@@ -252,7 +357,7 @@ def test_saved_selected_mixed_connection_key_and_runtime_plan_survive_migration(
     from amplifier_web.provider_catalog import configured_binding
     from amplifier_web.setup import SetupManager
     from amplifier_web.shared_settings import settings_paths
-    monkeypatch.setattr(decision_settings, 'catalogs', lambda: DEFINITIONS)
+    monkeypatch.setattr(decision_settings, 'catalogs', lambda **kwargs: DEFINITIONS)
     manager = SetupManager(tmp_path / 'app')
     paths = settings_paths(tmp_path, shared_home=manager.store.shared_home)
     path = paths['global']

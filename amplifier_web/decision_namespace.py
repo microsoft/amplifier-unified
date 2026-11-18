@@ -145,7 +145,8 @@ def translate(settings, definitions, *, inherited=None):
     if moved:
         result.setdefault("decision_models", {})["connections"] = moved
         result["decision_models"]["connection_order"] = list(dict.fromkeys([
-            *result["decision_models"].get("connection_order", []), *(key(row) for row in rows)]))
+            *(key(row) for row in prior), *result["decision_models"].get("connection_order", []),
+            *(key(row) for row in rows)]))
     if rows != kept:
         result["config"]["providers"] = kept
     # Validate the complete effective scope before a caller can publish it.
@@ -195,6 +196,16 @@ def read_scopes(paths, *, definitions=None):
     return result
 
 
+def preflight_paths(paths, definitions, *, replacement=None):
+    """Validate a complete known lineage without publishing any scope."""
+    from .shared_settings import read_yaml
+    result = {}
+    for path in paths:
+        value = replacement[1] if replacement and path == replacement[0] else read_yaml(path)
+        result = merge_settings(result, translate(value, definitions, inherited=result))
+    return result
+
+
 def migrate_paths(paths, *, definitions=None):
     """Idempotent atomic cutover of existing files, one Foundation owner at a time.
 
@@ -203,13 +214,11 @@ def migrate_paths(paths, *, definitions=None):
     """
     from .decision_settings import catalogs
     from .shared_settings import read_yaml, update_settings
-    definitions = catalogs() if definitions is None else definitions
+    definitions = catalogs(unique=True) if definitions is None else definitions
     paths = tuple(paths)
     # Preflight the whole known scope lineage before changing any file. Atomic
     # publication is still per file, not a multi-file transaction.
-    preview = {}
-    for path in paths:
-        preview = merge_settings(preview, translate(read_yaml(path), definitions, inherited=preview))
+    preflight_paths(paths, definitions)
     inherited = {}
     for path in paths:
         before = read_yaml(path)
