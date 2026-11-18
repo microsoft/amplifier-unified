@@ -171,6 +171,11 @@ def read_scopes(paths, *, definitions=None):
     result = {}
     for path in paths:
         value = read_yaml(path)
+        if "decision_models" in value and value["decision_models"] is None:
+            # Explicitly masking the optional namespace wins over inherited
+            # fragment absorption. Keep the caller's provider fragment ordinary.
+            result = merge_settings(result, value)
+            continue
         if definitions is not None:
             # Explicit write previews may translate with metadata already
             # obtained by their owner. Ordinary readers never request this.

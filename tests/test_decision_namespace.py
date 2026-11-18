@@ -285,6 +285,11 @@ def test_null_optional_section_keeps_ordinary_reads_inert(tmp_path):
     local.write_text('decision_models: null\n')
     assert ns.read_scopes([path, local])['decision_models'] is None
     assert config(ns.read_scopes([path, local]), tmp_path).connections == []
+    fragment = {'id': 'one', 'module': 'provider-only', 'config': {'priority': 1}}
+    local.write_text(yaml.safe_dump({'decision_models': None, 'config': {'providers': [fragment]}}))
+    masked = ns.read_scopes([path, local])
+    assert masked['decision_models'] is None
+    assert config(masked, tmp_path).connections == [fragment]
 
 
 def test_unrelated_shared_save_cannot_bypass_role_transition_refusal(tmp_path, monkeypatch):
