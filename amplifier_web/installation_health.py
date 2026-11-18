@@ -301,8 +301,9 @@ async def windows_working(home, *, wait=15.0):
     there: the limit can end a read while it connects, and while it waits for
     the answer. A busy host is one cause. Another program at that port after
     the host has gone is one, and a computer that gives this program no time
-    is one. While reads end in that way, the person's next question waits,
-    at most to the bound; the result is then None, as it was after one read.
+    is one. While reads end in that way, the person's next question waits
+    until the last round has ended; the result is then None, as it was after
+    one read.
     A refusal is final, and it takes time too, as it did before this wait
     existed: a hosted Windows test machine refused a port with no listener
     after about 2 seconds.
