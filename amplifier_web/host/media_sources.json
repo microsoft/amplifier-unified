@@ -285,7 +285,7 @@
     "amplifier_web/provider_catalog.py": "c9a8f42d70cd8ac16b94385936c776e3a8356b4470ccedd7f9cda2bd866c026c",
     "amplifier_web/provider_environment.py": "4786afe69d643cdc97d6be53dc6b377a20607f11efbff9fcff073092ba2aaf2e",
     "amplifier_web/provider_isolation.py": "8ca49cbb5988c07c849b037baed98d378379392d74d20f5e17e02739ceb701ff",
-    "amplifier_web/provider_recording.py": "37af863d3c9a9265a71afcc409a491fb7c566966b1a8300f6df79f5d2cd7af3e",
+    "amplifier_web/provider_recording.py": "020e4d1a3d404a73fed3beaa994ea7a694dc9aeed9a200dad24cfc2deb803844",
     "amplifier_web/provider_state_files.py": "26874764e96b278df6b8cebde70f173c75007a83332bebacd99b5b868fe65176",
     "amplifier_web/reaction_delivery.py": "f360674407e8d71753c05a6711d9f6f52883c5ec94ef19b1fc1176f80ccccaf8",
     "amplifier_web/read_policy.py": "124ec8ec06a59268ac2bbd195417853730b011eae1317928413deb353e284dd1",

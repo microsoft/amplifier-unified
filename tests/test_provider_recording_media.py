@@ -2,10 +2,12 @@
 import copy
 import hashlib
 import json
+from types import SimpleNamespace
 
 import pytest
 
-from amplifier_web.provider_recording import redact_request
+from amplifier_core import HookRegistry
+from amplifier_web.provider_recording import install_request_redaction, redact_request
 from amplifier_web.provider_payloads import DIRECTORY, open_record
 from test_provider_payloads import capture, index
 
@@ -18,8 +20,31 @@ def image_block():
     return {'type': 'input_image', 'image_url': URL, 'detail': 'high'}
 
 
+def openai_tool_output(url, text):
+    return {'input': [{'type': 'function_call_output', 'call_id': 'call_fixture',
+                       'output': [{'type': 'input_image', 'image_url': url},
+                                  {'type': 'input_text', 'text': text}]}]}
+
+
+def gemini_tool_output(data):
+    return {'contents': [{'role': 'user', 'parts': [{'function_response': {
+        'name': 'fixture', 'response': {'result': 'Tool output text'},
+        'parts': [{'inline_data': {'mime_type': 'image/png', 'data': data}}],
+    }}]}]}
+
+
 @pytest.mark.parametrize('raw,transport', [
     ({'input': [{'role': 'user', 'content': [image_block()]}]}, URL),
+    (openai_tool_output(URL, 'Tool output text'), URL),
+    ({'input': [{'type': 'custom_tool_call_output', 'call_id': 'call_fixture',
+                 'output': [image_block()]}]}, URL),
+    ({'input': [{'type': 'computer_call_output', 'call_id': 'call_fixture',
+                 'output': {'type': 'computer_screenshot', 'image_url': URL}}]}, URL),
+    (gemini_tool_output(b'image-fixture'), b'image-fixture'),
+    ({'contents': [{'role': 'user', 'parts': [{'functionResponse': {
+        'name': 'fixture', 'response': {'result': 'Tool output text'},
+        'parts': [{'inlineData': {'mimeType': 'image/png', 'data': ENCODED}}],
+    }}]}]}, ENCODED),
     ({'messages': [{'role': 'user', 'content': [
         {'type': 'image_url', 'image_url': {'url': URL, 'detail': 'high'}}]}]}, URL),
     ({'messages': [{'role': 'user', 'content': [
@@ -52,6 +77,13 @@ def test_known_wire_image_fields_become_fingerprints_without_mutation(raw, trans
     {'input': [{'role': 'user', 'content': [{'type': 'input_text', 'text': json.dumps(image_block())}]}]},
     {'tools': [{'name': 'fixture', 'input_schema': {'example': image_block()}}]},
     {'messages': [{'role': 'assistant', 'tool_calls': [{'function': {'arguments': image_block()}}]}]},
+    {'input': [{'type': 'function_call', 'arguments': json.dumps(openai_tool_output(URL, 'keep'))}]},
+    {'input': [{'type': 'function_call_output', 'output': json.dumps(image_block())}]},
+    {'input': [{'type': 'computer_call_output',
+                'output': {'type': 'computer_screenshot', 'image_url': 'https://example.test/screen.png'}}]},
+    {'contents': [{'parts': [{'function_response': {'response': {
+        'parts': [{'inline_data': {'mime_type': 'image/png', 'data': ENCODED}}],
+    }}}]}]},
     {'messages': [{'role': 'user', 'content': [{'type': 'text', 'text': image_block()}]}]},
     {'metadata': {'messages': [{'role': 'user', 'content': [image_block()]}]}},
     {'messages': [{'role': 'user', 'content': [{'type': 'input_image', 'image_url': 'https://example.test/image.png'}]}]},
@@ -115,3 +147,42 @@ async def test_full_recording_and_event_copy_omit_transport_but_preserve_large_t
     assert encoded[:1000] not in (tmp_path / 'events.jsonl').read_text()
     assert info['bytes'] < 1_102_000
     assert json.dumps(raw).encode() == original
+
+
+@pytest.mark.parametrize('event,field', [
+    ('llm:request', 'raw'), ('llm:response', 'raw_response'), ('llm:error', 'raw_request'),
+])
+async def test_real_ci_jsonl_writer_receives_only_sanitized_payload(tmp_path, event, field):
+    logging_handler = pytest.importorskip('amplifier_module_hook_context_intelligence.handlers.logging_handler')
+    hooks, capabilities = HookRegistry(), {}
+    coordinator = SimpleNamespace(hooks=hooks, get_capability=capabilities.get,
+        register_capability=lambda key, value: capabilities.update({key: value}))
+    resolver = SimpleNamespace(working_dir=str(tmp_path), session_dir=lambda session_id: tmp_path / session_id)
+    hooks.register(event, logging_handler.LoggingHandler(resolver), priority=100, name='LoggingHandler')
+    install_request_redaction(coordinator, directory=tmp_path / 'child')
+
+    encoded = 'a' * 1_100_000
+    url = 'data:image/png;base64,' + encoded
+    raw = {**openai_tool_output(url, 'Tool output text'), **gemini_tool_output(encoded)}
+    raw['input'].append({'type': 'function_call', 'arguments': '{"query": "unchanged"}'})
+    emitted = {'session_id': 'child', 'provider': 'fixture', field: raw}
+    original = copy.deepcopy(emitted)
+    await hooks.emit(event, emitted)
+
+    line = (tmp_path / 'child' / 'events.jsonl').read_text()
+    record = json.loads(line)
+    assert record['event'] == event
+    assert len(line) < 4000 and encoded[:1000] not in line
+    data = record['data']
+    safe = data[field]
+    output = safe['input'][0]['output']
+    assert output[0]['image_url']['__unified_image_transport__']['sha256'] == hashlib.sha256(url.encode()).hexdigest()
+    assert output[1] == raw['input'][0]['output'][1]
+    assert safe['input'][1] == raw['input'][1]
+    function_response = safe['contents'][0]['parts'][0]['function_response']
+    assert function_response['response'] == {'result': 'Tool output text'}
+    fingerprint = function_response['parts'][0]['inline_data']['data']['__unified_image_transport__']
+    assert fingerprint['sha256'] == hashlib.sha256(encoded.encode()).hexdigest()
+    assert data['request_capture']['truncated'] is False
+    assert 'provider_payloads' not in data and not (tmp_path / 'child' / DIRECTORY).exists()
+    assert emitted == original

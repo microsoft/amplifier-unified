@@ -21,9 +21,11 @@ import amplifier_web
 ROOT = Path(amplifier_web.__file__).resolve().parent.parent
 MANIFEST = ROOT / 'amplifier_web/host/media_sources.json'
 REPLACED = {
+    'amplifier_web/attachments.py',
     'amplifier_web/host/config.py',
     'amplifier_web/host/session.py',
     'amplifier_web/management.py',
+    'amplifier_web/provider_recording.py',
 }
 ADDED = {
     'amplifier_web/decision_namespace.py',
@@ -41,8 +43,8 @@ def authored_catalog(value):
     assert len(sources) == 307
     assert REPLACED | ADDED <= sources.keys()
     unchanged = {key: row for key, row in sources.items() if key not in REPLACED | ADDED}
-    assert len(unchanged) == 301
-    assert digest(unchanged) == 'c29ffc7977ffebfb302eb76df48b708264c6f72eb79a73ea1a41f3181b09a75a'
+    assert len(unchanged) == 299
+    assert digest(unchanged) == '91a2157c4033992ce8f05d0ee7bd6695792f088cd19292035ae290058f76ac16'
     assert digest({key: row for key, row in value.items() if key != 'sources'}) == (
         'e7fccccac29e3b28152672e8cece040842eeca88d530f8ea0777752b4d80cf34')
     for key in REPLACED | ADDED:
