@@ -428,12 +428,13 @@ file that filter, for example a `.gitattributes` of the object, its
 installation's system attribute file. The repair removes every `GIT_*` name
 from Git's environment. Foundation's check keeps the names of its process.
 So the two can read different configurations, different attribute files or
-another index. Do not write that Git only reads there. The repair stops a
-file system monitor and the optional index write of `git status`
-(`--no-optional-locks`). Git can still write a trace file, start a filter
-program or start a second Git in a submodule. Do not write that the repair
-starts only what Foundation's check starts. The design names both limits.
-The record's change mark is an
+another index. Do not write that Git only reads there. The repair tells Git
+to start no file system monitor (`core.fsmonitor=false`). It gives both
+commands `--no-optional-locks`, so `git status` leaves out its optional
+write of the object's index. Git can still write a trace file, start a
+filter program or start a second Git in a submodule. Do not write that the
+repair starts only what Foundation's check starts. The design names both
+limits. The record's change mark is an
 input of `update_inventory_index.signature`. A run works with the record that
 it read after it got the lock, never with an earlier read: another host can
 have written a new mark meanwhile. A run writes the record first; a

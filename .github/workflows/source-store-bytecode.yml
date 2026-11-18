@@ -30,9 +30,10 @@ name: Source store bytecode
 # connection's component could not be prepared
 # (amplifier_web/module_failures.py). No pull-request workflow named that
 # file. It is named here so that its cases run on a pull request that changes
-# it or a product file that its cases use. It runs on the Linux job only: two
-# of its cases (one function with two parameters) are for POSIX file
-# permissions and skip on Windows, and the Windows job allows no skip.
+# it or a product file that its cases import by name (the paths below). It
+# runs on the Linux job only: two of its cases (one function with two
+# parameters) are for POSIX file permissions and skip on Windows, and the
+# Windows job allows no skip.
 #
 # It is not setup-file or clean-account acceptance: no installation, no app,
 # no real provider module and no chat.

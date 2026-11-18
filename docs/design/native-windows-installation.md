@@ -1584,15 +1584,16 @@ list of running programs.
 One more limit is Git's own. The step does not turn off Git's configuration.
 Among the files that Git reads are the system configuration of its
 installation, the person's global configuration and the object's
-`.git\config`, each with the files that it includes. Foundation's check does
-not turn it off either. The step tells Git to start no file system monitor,
-because that program would stay after the command. With
-`--no-optional-locks`, `git status` leaves out its optional write of the
-object's index. These two settings are no promise that Git only reads. Three
-examples, each seen with Git 2.43.0 on Linux and these settings: Git writes
-a trace file that its configuration names (`trace2.eventTarget`);
-`git status` starts a content filter; `git status` starts a second Git in a
-submodule.
+`.git\config`, each with the files that it includes. The code of
+Foundation's check does not turn it off either; the environment of its
+process can change what Git reads (see below). The step tells Git to start
+no file system monitor (`core.fsmonitor=false`), because such a program can
+stay after the command. With `--no-optional-locks`, `git status` leaves out
+its optional write of the object's index. These two settings are no promise
+that Git only reads. Three examples follow. Each was seen with Git 2.43.0 on
+Linux and these settings. Git writes a trace file that its configuration
+names (`trace2.eventTarget`). `git status` starts a content filter.
+`git status` starts a second Git in a submodule.
 
 A content filter starts like this. An attribute file that Git reads for the
 object can give a tracked file a filter by its name. Git's configuration can
@@ -1608,25 +1609,25 @@ other attribute sources on a PC. A committed attribute file alone names no
 program.
 
 For an object with an ordinary `.git` folder, Foundation's `clean_checkout`
-also runs `git status` in the object. The step adds at most one `git status`
-for each try of an object. The second command (`ls-files --others`) starts
-no filter. The step can still start a program that Foundation's check does
-not start, or start none where that check starts one. The step removes every
-`GIT_*` name from Git's environment. Foundation's check starts Git with the
-environment of its process as it is. Some of those names change what Git
-reads. `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM` and `GIT_CONFIG_NOSYSTEM`
-name or drop a configuration file. `GIT_CONFIG_COUNT` with
-`GIT_CONFIG_KEY_<n>` and `GIT_CONFIG_VALUE_<n>` adds configuration values.
-`GIT_ATTR_NOSYSTEM` drops the system attribute file. `GIT_INDEX_FILE` names
-another index. A person's environment can have such a name. The app also
-gives such names to child processes that it starts
-(`reset.repository_environment`). That function can add configuration
-values through `GIT_CONFIG_COUNT`. With anonymous GitHub access it names the
-null device as the global configuration file and as the system
-configuration file. The two can also run different Git programs, and each
-Git installation has its own system configuration file and system attribute
-file. What a program that Git starts does is not bound by the rule of what
-the step deletes.
+also runs `git status` in the object. The step itself starts at most one
+`git status` command for each try of an object. The second command
+(`ls-files --others`) starts no filter. The step can still start a program
+that Foundation's check does not start, or start none where that check
+starts one. The step removes every `GIT_*` name from Git's environment.
+Foundation's check starts Git with the environment of its process as it is.
+Some of those names change what Git reads. `GIT_CONFIG_GLOBAL`,
+`GIT_CONFIG_SYSTEM` and `GIT_CONFIG_NOSYSTEM` name or drop a configuration
+file. `GIT_CONFIG_COUNT` with `GIT_CONFIG_KEY_<n>` and `GIT_CONFIG_VALUE_<n>`
+adds configuration values. `GIT_ATTR_NOSYSTEM` drops the system attribute
+file. `GIT_INDEX_FILE` names another index. A person's environment can have
+such a name. The app also gives such names to child processes that it starts
+(`reset.repository_environment`). That function can add configuration values
+through `GIT_CONFIG_COUNT`. With anonymous GitHub access it names the null
+device as the global configuration file and as the system configuration
+file. The two can also run different Git programs, and each Git installation
+has its own system configuration file and system attribute file. What a
+program that Git starts does is not bound by the rule of what the step
+deletes.
 
 **Cost and record.** `<data>\updates\source-store-repair.json` holds the app
 version, whether the pass is complete, a change mark, the tries of each object
@@ -1658,7 +1659,7 @@ replaced); after it the step gives the lock back. At its limit
 the step ends the Git program that it started and stops waiting; the installation's
 `git\cmd\git.exe` is Git's starter program, so the Git program behind it can
 run on until its read ends. The step does not limit what that program
-writes or starts, and that object is left.
+writes or starts. The step deletes nothing in that object.
 
 A bound reached ends the run and a later start goes on. The object in which a
 run reaches a bound gets one try when it is the first object of that run, also

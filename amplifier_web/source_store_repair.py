@@ -39,14 +39,16 @@ checked again on handles.
 This step does not turn off Git's configuration. Among the files that Git
 reads are the system configuration of its installation, the person's global
 configuration and the object's ``.git\\config``, each with the files that it
-includes. Foundation's own check does not turn it off either. This step
-tells Git to start no file system monitor. It gives both commands
-``--no-optional-locks`` (Foundation gives it to ``git status``); with it
-``git status`` leaves out its optional write of the object's index. These
-two settings are no promise that Git only reads. Three examples, each seen
-with Git 2.43.0 on Linux and these settings: Git writes a trace file that
-its configuration names (``trace2.eventTarget``); ``git status`` starts a
-content filter; ``git status`` starts a second Git in a submodule.
+includes. The code of Foundation's own check does not turn it off either;
+the environment of its process can change what Git reads (see below). This
+step tells Git to start no file system monitor (``core.fsmonitor=false``).
+It gives both commands ``--no-optional-locks`` (Foundation gives it to
+``git status``); with it ``git status`` leaves out its optional write of the
+object's index. These two settings are no promise that Git only reads.
+Three examples follow. Each was seen with Git 2.43.0 on Linux and these
+settings. Git writes a trace file that its configuration names
+(``trace2.eventTarget``). ``git status`` starts a content filter. ``git
+status`` starts a second Git in a submodule.
 
 A content filter starts like this. An attribute file that Git reads for the
 object can give a tracked file a filter by its name. Git's configuration can
@@ -60,8 +62,8 @@ attribute file in a module. A committed attribute file alone names no
 program.
 
 For an object with an ordinary ``.git`` folder, Foundation's check also runs
-``git status`` in the object. This step adds at most one ``git status`` for
-each try of an object. This step can still start a program that
+``git status`` in the object. This step itself starts at most one ``git
+status`` command for each try of an object. It can still start a program that
 Foundation's check does not start, or start none where that check starts
 one. That is a stated limit. This step removes every ``GIT_*`` name from
 Git's environment. Foundation's check starts Git with the environment of its
@@ -429,8 +431,8 @@ def _git(program, folder, budget, *words):
             # stops waiting. An installation's ``git\cmd\git.exe`` is Git's
             # starter program: the Git program behind it can run on until its
             # read ends. This step does not limit what that program writes
-            # or starts (the module text gives examples), and it leaves the
-            # object as it is.
+            # or starts (the module text gives examples). This step deletes
+            # nothing in that object.
             process.kill()
             for last in (process.communicate, process.wait):
                 try:
