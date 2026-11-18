@@ -125,10 +125,17 @@ def test_only_the_address_that_the_app_makes_is_read_as_the_shipped_file(tmp_pat
     assert address.startswith('file:///')
     assert selection(tmp_path, settings([address + file]))['sources'] == skills
     # The same address with "//localhost" before the folder. A general conversion of a file
-    # address takes that part away on every system; the selection must not. Not on Windows:
-    # there the text is the path of a network folder, and the selection asks the system for it.
+    # address takes that part away on every system; the selection must not. Linux and macOS
+    # only: on Windows that text is the path of a network folder, and the selection's look for
+    # a local bundle (host.bundle_paths.local_bundle_path) asks the system whether it exists.
     if os.name != 'nt':
         other = address.replace('file:///', 'file:////localhost/', 1)
+        assert selection(tmp_path, settings([other + file]))['sources'] == []
+    # The same address with a server name. On Windows the app's own address has none, and only
+    # that form is read; a general conversion does not look at the server name. Linux and
+    # macOS do not read the server name of a file address.
+    if os.name == 'nt':
+        other = address.replace('file:///', 'file://another-computer/', 1)
         assert selection(tmp_path, settings([other + file]))['sources'] == []
 
 

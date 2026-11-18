@@ -325,9 +325,13 @@ jobs:
                 f"{total['skipped']} skipped, {total['expected failures']} expected failures")
           # An entry of the two lists that this run did not use is behind. A
           # skip reason has no case name, so it only gets a line in the log.
-          ran = {name.split("::")[0] for name in files}  # Also the file of a case that pytest got by its name.
+          def covers(entry, name):
+              # The entry is the case, or its function, its class or its file.
+              return name == entry or name.startswith((entry + "::", entry + "["))
+          # Only for a case that pytest got: in a whole file, or by a name.
           for name, here in EXPECTED_FAILURES.items():
-              if here and name not in failures and name not in left_out and name.split("::")[0] in ran:
+              if (here and name not in failures and any(covers(entry, name) for entry in files)
+                      and not any(covers(entry, name) for entry in left_out)):
                   problems.append(f"this step expects a failure, and no case had it: {name}")
           for reason, here in SKIPS.items():
               if here and reason not in reasons:

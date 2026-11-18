@@ -215,9 +215,45 @@ def starts_pytest(line, name):
     if "pytest" not in words:
         return False
     before, after = words[:words.index("pytest")], words[words.index("pytest"):]
-    starts = before[:2] == ["uv", "run"] or len(before) > 1 and before[-1] == "-m" and "python" in before[0].lower()
-    return starts and any(word == name and after[index - 1] not in ("--ignore", "--deselect")
-                          for index, word in enumerate(after))
+    # `uv run` and then only options. Then `pytest`, or a Python with only options and `-m` last.
+    wrapper = before[:2] == ["uv", "run"]
+    if wrapper:
+        before = list(itertools.dropwhile(lambda word: word.startswith("-"), before[2:]))
+    python = (len(before) > 1 and "python" in before[0].lower() and before[-1] == "-m"
+              and all(word.startswith("-") for word in before[1:]))
+    if not (wrapper and not before or python):
+        return False
+    # Not a run of the file's cases: a command whose failure is thrown away, or a collection only.
+    if {"||", "--collect-only", "--co"} & set(after):
+        return False
+    return any(word == name and after[index - 1] not in ("--ignore", "--ignore-glob", "--deselect")
+               for index, word in enumerate(after))
+
+
+def command_lines(run):
+    """The lines of a step's text. A line that continues on the next one is joined to it."""
+    return re.sub(r"[\\`][ \t]*\n", " ", run).splitlines()
+
+
+@pytest.mark.parametrize("text,runs", [
+    ("uv run --no-sync pytest -q tests/test_one.py", True),
+    (".\\.native-test-venv\\Scripts\\python.exe -B -m pytest -q -ra tests/test_one.py", True),
+    ("uv run --no-sync python -m pytest tests/test_one.py", True),
+    ("uv run --no-sync pytest -q \\\n  tests/test_one.py", True),
+    ("python -m pytest -q `\n  tests/test_one.py", True),
+    ("uv run echo pytest tests/test_one.py", False),
+    ("echo pytest tests/test_one.py", False),
+    ("# uv run pytest tests/test_one.py", False),
+    ("uv run pytest tests/test_two.py # tests/test_one.py", False),
+    ("uv run pytest --ignore tests/test_one.py", False),
+    ("uv run pytest --ignore-glob tests/test_one.py", False),
+    ("uv run pytest tests/test_one.py || true", False),
+    ("uv run pytest --collect-only tests/test_one.py", False),
+    ("uv run pytest tests/test_one.py::test_x", False),
+    ("uv run pytest tests/test_two.py\necho tests/test_one.py", False),
+])
+def test_a_line_that_starts_pytest_with_a_file_is_told_from_a_line_that_has_the_words(text, runs):
+    assert any(starts_pytest(line, "tests/test_one.py") for line in command_lines(text)) == runs
 
 
 def given_to_pytest(program):
@@ -316,7 +352,7 @@ def test_a_pull_request_runs_every_launcher_case_file():
         other = yaml.safe_load((ROOT / ".github/workflows" / workflow).read_text(encoding="utf-8"))
         assert "pull_request" in other[True], workflow
         assert [job for job, body in other["jobs"].items() for step in body.get("steps", [])
-                if "if" not in step and any(starts_pytest(line, name) for line in step.get("run", "").splitlines())
+                if "if" not in step and any(starts_pytest(line, name) for line in command_lines(step.get("run", "")))
                 ], (name, workflow)
     assert [path for path in paths if "*" not in path and not (ROOT / path).is_file()] == []
 
@@ -326,6 +362,7 @@ NEEDS_WINDOWS = "import pytest\n@pytest.mark.skip(reason='native prototype Power
 
 ONE_FAILS = "def test_one(): assert False\ndef test_two(): pass\n"
 BY_NAME = "def test_one(): pass\n# The step gives pytest this case by its name, not the whole file.\n"
+SIBLING = "def test_one(): pass\ndef test_two(): pass\n# The step gives pytest only the second case, by its name.\n"
 EXPECTED_ON_WINDOWS = "import pytest\n@pytest.mark.xfail(strict=True)\ndef test_one(): assert False\ndef test_two(): pass\n"
 
 
@@ -351,6 +388,8 @@ EXPECTED_ON_WINDOWS = "import pytest\n@pytest.mark.xfail(strict=True)\ndef test_
     # The list names an expected failure for this runner, and the case has none: the list is behind.
     ("def test_one(): pass\n", True, "this step expects a failure, and no case had it: tests/test_one.py::test_one"),
     (BY_NAME, True, "this step expects a failure, and no case had it: tests/test_one.py::test_one"),
+    # pytest did not get the case with the expected failure, only another case of its file.
+    (SIBLING, True, None),
 ])
 def test_the_step_that_runs_the_listed_files_stops_for_a_wrong_result(tmp_path, body, windows, stops):
     """The step's own program, with one made-up test file in place of its list."""
@@ -358,8 +397,9 @@ def test_the_step_that_runs_the_listed_files_stops_for_a_wrong_result(tmp_path, 
     (job,) = document["jobs"].values()
     program = job["steps"][-1]["run"]
     leave = 'NOT_ON_WINDOWS = {"tests/test_one.py::test_one": "a reason"}' if body == ONE_FAILS else "NOT_ON_WINDOWS = {}"
-    given = ('FILES = []', 'CASES = ["tests/test_one.py::test_one"]') if body == BY_NAME else (
-        'FILES = ["tests/test_one.py"]', "CASES = []")
+    given = (('FILES = []', 'CASES = ["tests/test_one.py::test_one"]') if body == BY_NAME else
+             ('FILES = []', 'CASES = ["tests/test_one.py::test_two"]') if body == SIBLING else
+             ('FILES = ["tests/test_one.py"]', "CASES = []"))
     for pattern, replacement in ((r'FILES = """.*?"""\.split\(\)', given[0]),
                                  (r"CASES = \[[^\]]*\]", given[1]),
                                  (r"NOT_ON_WINDOWS = \{.*?\n\}", leave),
