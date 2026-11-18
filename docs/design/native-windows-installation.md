@@ -1538,9 +1538,13 @@ started, only on the store of the installation that the host belongs to, in
 host lock alone, without a wait; every host holds that lock shared while it
 serves. This host has started no worker, helper or update stage yet (only the
 holder of its hidden console, which reads nothing of the store). A worker or a
-helper of an earlier
-host ends with that host (a kill-on-close Job), and the task's launcher starts
-the next host only when the earlier host's process tree is empty.
+helper of an earlier host ends with that host (a kill-on-close Job), and the
+task's launcher starts the next host only when the earlier host's process tree
+is empty. One process outside that Job can be alive at this moment: the helper
+that replaces the launcher after an app update (`windows_launcher_refresh`)
+starts the task and waits for this host. It installs the launcher's own
+packages and does not read or write the source store. It waits 180 seconds
+for the host, more than this step's bounds.
 
 **Stated limits.** Three cases are not excluded. Each needs a host that a
 person started with a terminal command on this installation: a child of such a
