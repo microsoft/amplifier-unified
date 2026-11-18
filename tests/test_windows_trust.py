@@ -341,6 +341,24 @@ def test_remove_reports_each_outcome_and_handles_the_default_no(store):
         assert trust.forget_roots([b"root"]) == "blocked"
 
 
+def test_no_that_an_error_follows_in_the_same_step_is_blocked_not_declined(store, monkeypatch):
+    """Windows reported the person's No. Then the same step ends with an error (here: at the close of the store)."""
+    fake = store(answer=False, error=1223)
+    fake.held.add(b"root")
+    opened = fake.open
+
+    @contextmanager
+    def closes_with_an_error(der, name, *, write):
+        with opened(der, name, write=write) as value:
+            yield value
+        if write:
+            raise OSError("The store did not close.")
+    monkeypatch.setattr(trust, "_open", closes_with_an_error)
+    assert trust.remove_root(b"root") == "blocked" and fake.questions == ["delete"] and b"root" in fake.held
+    # One result for all: `blocked`, so the text says that Windows can still hold the certificate.
+    assert trust.forget_roots([b"root"]) == "blocked"
+
+
 def test_a_failed_search_before_an_add_still_lets_windows_decide_and_never_claims_trust(store):
     fake = store(search=5)
     # The add is Windows' own decision. The check after it cannot confirm the root: not "added".

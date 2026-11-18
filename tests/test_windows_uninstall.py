@@ -1229,6 +1229,26 @@ def test_last_deletion_that_stops_with_an_error_gives_the_message_of_a_folder_th
     assert "This folder can still exist afterwards" in confirmation and "you can delete it" not in confirmation
 
 
+def test_first_deletion_of_program_files_that_stops_with_an_error_stops_the_removal(deleter, monkeypatch):
+    """The removal deletes program files in two attempts. An error of the first one is a failed step."""
+    state, root, consumer = deleter.state, deleter.root, deleter.consumer
+    state["choices"] = ["yes", "yes"]
+    monkeypatch.setattr(consumer.sys, "stdout", None)
+    program = plan.remove_program
+
+    def first_refused(owned, *, last=False, **options):
+        if not last:
+            raise OSError(5, "Windows refused the deletion.")
+        return program(owned, last=last, **options)
+    monkeypatch.setattr(plan, "remove_program", first_refused)
+    with pytest.raises(consumer.Unfinished) as stopped:
+        deleter.run()
+    # A failed step after the journal: the text of a removal that did not finish. Every Windows entry is there.
+    assert stopped.value.step == "program" and state["registry"] is not None and plan.unfinished(root)
+    assert stopped.value.notice == STOPS["removal"] + "\n\nReference: program, OSError"
+    assert not any((root / name).exists() for name in top(DATA)) and not state["notices"]
+
+
 def test_keeping_uninstall_refuses_when_another_window_began_to_delete_after_the_question(deleter):
     state, root, consumer = deleter.state, deleter.root, deleter.consumer
     state["choices"], registration = ["no"], state["registry"].copy()
@@ -2218,7 +2238,7 @@ def test_note_of_a_refused_entries_record_in_a_keeping_uninstall_is_not_put_into
     assert json.loads(here.read_text())["step"] == "receipt" and not not_here.exists()
 
 
-@pytest.mark.parametrize("note", ["record", "message"])
+@pytest.mark.parametrize("note", ["record", "lock", "message"])
 def test_keeping_uninstall_does_not_look_again_after_the_removal_of_its_entries(deleter, monkeypatch, note):
     """No journal before the questions and none under the lock. One appears when the entries are gone."""
     state, root, consumer = deleter.state, deleter.root, deleter.consumer
@@ -2234,6 +2254,19 @@ def test_keeping_uninstall_does_not_look_again_after_the_removal_of_its_entries(
         state["refuse_write"] = lambda target: target.name == shell.FILE and appears()
         result = deleter.run()
         assert result["ok"] and result["installationFilesRetained"]
+    elif note == "lock":
+        # The entries are gone. The removal fails when it lets go of the lock, and the journal's name is there then.
+        lock = consumer._one_at_a_time
+
+        @contextmanager
+        def fails_at_its_end(folder):
+            with lock(folder):
+                yield
+            appears()
+            raise OSError("The lock could not be released.")
+        monkeypatch.setattr(consumer, "_one_at_a_time", fails_at_its_end)
+        result = deleter.run()
+        assert result["ok"] and result["installationFilesRetained"]
     else:
         # The journal's name is there before the last message, which Windows does not show.
         forget = consumer._forget_root
@@ -2244,7 +2277,8 @@ def test_keeping_uninstall_does_not_look_again_after_the_removal_of_its_entries(
     assert state["task"] == "absent" and state["registry"] is None and plan.unfinished(root)
     # The uninstall did not look again: the place of the note follows the look before the questions.
     beside_the_app, in_the_folder = root / "app/config/services" / consumer.RECORD, root / consumer.RECORD
-    assert json.loads(beside_the_app.read_text())["step"] == {"record": "receipt", "message": "message"}[note]
+    # (An error after the entries are gone is recorded with the step of the entries' record.)
+    assert json.loads(beside_the_app.read_text())["step"] == ("message" if note == "message" else "receipt")
     assert not in_the_folder.exists()
 
 
@@ -2381,9 +2415,15 @@ def test_design_entry_on_the_journal_names_what_the_cases_above_show():
             # `windows_consumer_shell.removal` changes nothing when the record says `removed`).
             "When none of its steps fails, it deletes the person's data, as the person chose twice. It removes the "
             "Windows entries through setup's record of them: when it finds no such record in the folder, or the "
-            "record says that they are removed already, it removes none. It also tries to delete the caches and "
-            "the other program files. When that attempt ends with files still there, the removal goes on; an error "
-            "of the attempt is a failed step.",
+            "record says that they are removed already, it removes none.",
+            # Two attempts (`remove`). An error of the first leaves `remove`
+            # (`test_first_deletion_of_program_files_that_stops_with_an_error_stops_the_removal`); an error of the
+            # second is caught there (`test_last_deletion_that_stops_with_an_error_gives_the_message_of_...`).
+            "It also tries to delete the caches and the other program files, in two attempts: the first before its "
+            "step for the Windows entries, the second after that step, for what the launcher's own check needs. "
+            "When an attempt ends with files still there, the removal goes on. An error of the first attempt stops "
+            "the removal. An error of the second that the removal catches (`OSError`, `ValueError` or "
+            "`RuntimeError`) does not stop it: the removal then has no last listing of the folder (step 9).",
             # A later uninstall: `test_second_uninstall_after_a_replaced_journal_reads_the_other_programs_journal`,
             # and `test_uninstall_whose_look_before_its_questions_misses_a_journal_asks_as_for_a_folder_without_one`.
             "For a later uninstall that reaches the look before its questions, the other program's file is a "
@@ -2391,7 +2431,8 @@ def test_design_entry_on_the_journal_names_what_the_cases_above_show():
             "journal exists\" above, and L4).",
             # When Windows does not show the confirmation, the uninstall stops there (step 9; the cases of a
             # last message that Windows does not show). With a console no message is shown and the last step runs.
-            "When step 9 did not stop the uninstall, the last step (`windows_uninstall.finish`) follows. Once it has "
+            "When none of its steps fails and step 9 did not stop the uninstall, the last step "
+            "(`windows_uninstall.finish`) follows. Once it has "
             "the lock and the folder, it reads the journal again through the private-file boundary, before it starts "
             "the step after exit.",
             # The message is tried, twice at most: `test_further_message_..._without_a_further_message`.
@@ -2405,9 +2446,11 @@ def test_design_entry_on_the_journal_names_what_the_cases_above_show():
             # `test_journal_that_a_program_replaces_with_the_same_choice_and_token_...` (the last step), and
             # the three comparisons of the step after exit, asserted below.
             "A file that the last step can read there as a journal (`schema` 1), and that records the delete choice "
-            "and this removal's own token, passes. The step after exit compares the same values (`FINISH_SCRIPT` in "
-            "`windows_removal.py`: schema, choice, token) and refuses a journal whose creation time, as Windows "
-            "reports it, is later than the step's own start. When it accepts the file too, the removal goes on as it "
+            "and this removal's own token, passes. The step after exit (`FINISH_SCRIPT` in `windows_removal.py`) "
+            "looks at the entry with the journal's name and refuses it when the creation time that Windows reports "
+            "for it is later than the step's own start. Then it reads the file by its path and compares the same "
+            "values: schema, choice, token. (L10 is about the time between that look and that read.) When it "
+            "accepts the file too, the removal goes on as it "
             "does without a replacement, and the step after exit treats the other program's file as the journal. "
             "In each case the uninstall deletes no entry that it does not delete with its own journal.",
             "After that look the uninstall program holds no handle on the journal, and it does not read the journal "
@@ -2420,15 +2463,20 @@ def test_design_entry_on_the_journal_names_what_the_cases_above_show():
     for compared in ("$record.schema -eq 1", "$record.choice -ceq $p.choice", "$record.token -ceq $p.token",
                      "(Later $journal)", "$entry.CreationTimeUtc -gt $startedUtc"):
         assert compared in removal.FINISH_SCRIPT, compared
+    # It looks at the entry (its creation time) first, and reads the text by the path afterwards.
+    authorized = removal.FINISH_SCRIPT.split("function Authorized {", 1)[1].split("\nfunction ", 1)[0]
+    assert authorized.index("(Later $journal)") < authorized.index("Get-Content -LiteralPath $journal.FullName")
     # The two texts as the entry describes them are the texts that the product has for this step.
     first, second = consumer._UNFINISHED["journal"], consumer._UNFINISHED["removal"]
     # Which text: what this uninstall saw (`earlier` in `_delete`), not what is in the folder at the write.
     assert ("Which of the two it is follows what this uninstall saw, not what is in the folder at the write. It saw "
-            "an earlier removal when it read a journal that records the delete choice before its questions (a "
-            "second uninstall), and when its look directly before it writes its own journal finds an entry with "
-            "that name (for example, another window began a removal while a question waited).") in entry
-    assert "When the uninstall saw no earlier removal, the text says that this uninstall deleted nothing in the " \
-           "folder, and that Amplifier might not open until the next uninstall." in entry
+            "a journal when its read before its questions gave a journal that records the delete choice (a second "
+            "uninstall), and when its look directly before it writes its own journal finds an entry with that name "
+            "(for example, another window began a removal while a question waited). A journal is no proof that a "
+            "removal began (a program of this account can write one). The uninstall takes it as the sign of "
+            "one.") in entry
+    assert "When the uninstall saw no journal in either way, the text says that this uninstall deleted nothing in " \
+           "the folder, and that Amplifier might not open until the next uninstall." in entry
     assert "This uninstall deleted nothing in the folder." in first and first.endswith(
         "then uninstall again. Amplifier might not open until then.")
     assert ("Then the text is the one of a removal that did not finish: it tells the person not to open Amplifier, "
@@ -2447,7 +2495,9 @@ def test_design_entry_on_the_journal_names_what_the_cases_above_show():
                   "made after its own start", "asks them as for a whole installation",
                   "its last step finds no journal and refuses: the leftover", "leftover of L3",
                   "nothing more is deleted than the person chose", "stays deleted",
-                  "goes on when Windows does not let one of them go",
+                  "goes on when Windows does not let one of them go", "It saw an earlier removal",
+                  "saw no earlier removal", "an error of the attempt is a failed step",
+                  "refuses a journal whose creation time", "When step 9 did not stop the uninstall, the last step",
                   "reads the journal again only when its last step begins"):
         assert wrong not in entry, wrong
     # What the native case of a replaced journal accepts (`left <= ... <= left | {"workspace"}`).
@@ -2496,9 +2546,10 @@ def test_design_entry_on_the_journal_names_what_the_cases_above_show():
     # What the order and the paragraph on the journal say about the texts, against the cases above.
     for stated in (
             # Step 7 of the keeping order: which outcome gives which sentence (`CERTIFICATE_LEFT`).
-            "7. One message says that uninstall is complete. When Windows reported the person's No for at least one "
-            "certificate (`declined`), it says that Windows kept the certificate. Otherwise, when at least one was "
-            "not confirmed as deleted (`blocked`), it says that Windows can still hold it.",
+            "7. One message says that uninstall is complete. When the result of step 6 is `declined` (Windows "
+            "reported the person's No for at least one certificate), it says that Windows kept the certificate. "
+            "When it is `blocked` (at least one was not confirmed as deleted for another reason), it says that "
+            "Windows can still hold it.",
             # Step 9: what the confirmation says in each of its three forms (asserted below against the product).
             "9. One message. It says that the data is deleted, which the removal observed, and that Amplifier "
             "starts to remove its last program files when the person closes the message. When the last listing of "
@@ -2529,9 +2580,10 @@ def test_design_entry_on_the_journal_names_what_the_cases_above_show():
             "not finish, and the uninstall tries to write the failure note into the installation folder itself, not "
             "beside the app's service records.",
             # `test_keeping_uninstall_does_not_look_again_after_the_removal_of_its_entries`.
-            "After that result the uninstall does not look again: for a refused write of setup's entry record, for "
-            "another error there, and for a last message that Windows does not show, it tries to write the note "
-            "where the look before the questions chose.",
+            "Three failures of a keeping uninstall get no new look: a refused write of setup's entry record (the "
+            "entries are gone by then), an error when the removal afterwards lets go of the entries or of the lock, "
+            "and a last message that Windows does not show. For them the uninstall tries to write the note where "
+            "the look before the questions chose.",
             # No check of the delete path refuses a folder because a journal is in it (`windows_uninstall.remove`).
             "An uninstall with the delete choice has no such refusal: a journal that appeared does not stop it, as "
             "it does not stop a second uninstall. Its own checks can still stop it.",
@@ -2585,9 +2637,10 @@ def test_design_entry_on_the_journal_names_what_the_cases_above_show():
             "Where this document says that an uninstall shows a text or a message, or says something to the "
             "person, the uninstall program asks Windows to show that text. Windows can fail to show it.",
             # The cases of a last message that Windows does not show, once and twice (three messages each).
-            "Three messages come after an uninstall did its work: the last message of an uninstall that keeps the "
-            "folder, the confirmation of step 9, and the message that the last program files could not be "
-            "removed. When Windows does not show one of them, the program tries once more. The further text is "
+            "Three kinds of message can come after an uninstall did its work: the last message of an uninstall "
+            "that keeps the folder; the confirmation of step 9; and, when the last step stops with an error, the "
+            "message that the last program files could not be removed. When Windows does not show one of them, "
+            "the program tries once more. The further text is "
             "the same text again with a reference line, except after the confirmation: step 9 has that text. "
             "When Windows does not show the further text either, the person gets no further message.",
             "The text of an uninstall that stops (for example a step that failed, a question that Windows did not "
@@ -2604,25 +2657,31 @@ def test_design_entry_on_the_journal_names_what_the_cases_above_show():
             # `windows_trust.remove_root` returns `blocked` for (also a certificate that the store still held).
             "For `blocked` an uninstall says that Windows can still hold the certificate: after a failed search the "
             "program does not know whether Windows holds it, and one text serves every case of `blocked`. Only "
-            "for the person's No (`declined`) does it say that Windows kept the certificate.",
+            "for `declined`, when Windows reported the person's No, does it say that Windows kept the certificate.",
             # Where the sentence is, and where it is not (asserted below against every text of a stop).
             "These sentences are part of the last message of an uninstall that keeps the folder, of the "
             "confirmation of an uninstall that deletes it, and of the further message for either. An uninstall "
-            "with the delete choice asks Windows before it writes its journal. When a step between that question "
-            "and the confirmation fails, the text of that step has no sentence about a certificate.",
+            "with the delete choice does its certificate step before it writes its journal. When a step after "
+            "that one fails before the confirmation, the text of the failed step has no sentence about a "
+            "certificate.",
+            # `test_no_that_an_error_follows_in_the_same_step_is_blocked_not_declined` (test_windows_trust.py).
+            "The result is `declined` when the step for at least one certificate ended with Windows' report of the "
+            "person's No.",
             # Every way to `blocked`: `remove_root`, `forget_roots`, `_forget_root` (the cases of `test_windows_trust`,
             # and `OSError("store")` in `test_certificate_answer_never_stops_the_removal_...`).
             "Otherwise it is `blocked` when at least one was not confirmed as deleted for another reason: the store "
             "could not be opened, a search failed, Windows refused a deletion, the store still held a certificate "
-            "afterwards, a check afterwards failed, or the step ended with another error. In some of those cases the "
-            "program does not know whether Windows still holds that one."):
+            "afterwards, a check afterwards failed, or the step ended with another error, also after such a "
+            "report. In some of those cases the program does not know whether Windows still holds that one."):
         assert stated in design, stated
     for wrong in ("because the program does not know it", "the program then does not know whether",
                   "the last program files go when the message is closed", "is named and stays",
                   "After another failure it says", "When one of its steps fails, it looks too",
                   "it goes on, as a second uninstall does", "a step that failed after a removal began does not say",
                   "stay, and the private note of that failure when it could be written",
-                  "another window began a removal while a question waited. An uninstall"):
+                  "another window began a removal while a question waited. An uninstall",
+                  "Three messages come after", "asks Windows before it writes its journal",
+                  "After that result the uninstall does not look again", "Only for the person's No"):
         assert wrong not in design, wrong
     # "the windowless Python": the program of every Start-menu entry and of the Apps-list entry.
     python, links = shell.entries(Path("installation"))
