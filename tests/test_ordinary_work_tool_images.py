@@ -126,7 +126,7 @@ async def test_ordinary_work_first_image_post_ack_deleted_source_reload(tmp_path
         await resumed.cleanup()
 
 
-@pytest.mark.parametrize("denial", ["work", "read-policy"])
+@pytest.mark.parametrize("denial", ["work", "read-policy", "post-null"])
 async def test_ordinary_work_read_policy_and_work_refusal_keep_text_usable(tmp_path, monkeypatch, denial):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -135,7 +135,11 @@ async def test_ordinary_work_read_policy_and_work_refusal_keep_text_usable(tmp_p
     text.write_text("Plaintext after refused image")
     provider = ScriptedReadProvider(path)
     provider.paths.append(text)
-    session, _, checkpoint, _, host = await work_root(tmp_path, monkeypatch, provider, deny_work=denial == "work")
+    async def post(event, data):
+        return (HookResult(action="modify", data={"result": None})
+                if denial == "post-null" and data["tool_call_id"] == "call-first-image" else HookResult())
+    session, _, checkpoint, _, host = await work_root(tmp_path, monkeypatch, provider,
+        prepared_host=True, deny_work=denial == "work", post=post)
     try:
         if denial == "read-policy":
             from amplifier_web.read_policy import mounted_read_file
@@ -179,21 +183,52 @@ async def test_real_prepared_host_child_tool_install_keeps_configurator_construc
     workspace.mkdir()
     path, original = picture(workspace, format)
     provider = ScriptedReadProvider(path)
-    session, _, checkpoint, checks, host = await work_root(
+    session, store, checkpoint, checks, host = await work_root(
         tmp_path, monkeypatch, provider, prepared_host=True)
     try:
         coordinator = session.coordinator
         assert callable(coordinator.get("context").factory)
+        worker = coordinator.get("tools", "live_worker")
+        assert type(worker).__name__ == "WorkCheckedTool"
+        original_worker = coordinator.get_capability("web.work_inspect_tool")("live_worker", worker)
+        assert type(original_worker).__name__ == "WorkerControl"
+        assert original_worker.registry is coordinator.get_capability("live.children")
         assert await session.execute("Read the authorized local image") == "offline completion"
         assert host.sealed
         assert provider.observed[-1] == [("tool", "call-first-image", original)]
         assert checks == [("read_file", {"file_path": str(path)})]
         rows = await checkpoint()
         assert any(media.NAMESPACE in (row.get("metadata") or {}) for row in rows)
+        assert '"type": "image"' not in json.dumps(rows)
+        before = copy.deepcopy(rows)
+        await coordinator.get("context").set_messages(rows)
+        assert await coordinator.get("context").get_messages() == before
+        wrapper = coordinator.get_capability("web.provider_transform")(provider)
+        assert not wrapper._media
+        path.unlink()
+        await session.execute("Use the retained image without reading the deleted source")
+        assert provider.observed[-1] == [("tool", "call-first-image", original)]
+        assert checks == [("read_file", {"file_path": str(path)})]
+        assert not wrapper._media and not coordinator.get_capability("web.media.request_only").requests
         assert not coordinator.get_capability("live.children").rows
         assert not coordinator.get_capability("live.children").admissions
     finally:
         await session.cleanup()
+    from amplifier_web.host.storage import SessionStore
+    reopened = SessionStore(store.base_dir)
+    loaded, _ = reopened.load("ordinary-work-media")
+    reload_provider = ScriptedReadProvider(path, read=False)
+    resumed, _, checkpoint, checks, host = await work_root(
+        tmp_path, monkeypatch, reload_provider, prepared_host=True, store=reopened)
+    try:
+        await resumed.coordinator.get("context").set_messages(loaded)
+        await checkpoint()
+        await resumed.execute("Use the retained image after reopening the checkpoint")
+        assert host.sealed and checks == []
+        assert reload_provider.observed == [[("tool", "call-first-image", original)]]
+        assert not resumed.coordinator.get_capability("web.provider_transform")(reload_provider)._media
+    finally:
+        await resumed.cleanup()
 
 
 async def test_raw_delegate_replacement_still_refuses_configuration(tmp_path, monkeypatch):
