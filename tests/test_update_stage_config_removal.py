@@ -1765,72 +1765,121 @@ def test_native_windows_stage_config_entry_with_a_name_that_is_no_text_stays_and
 @pytest.mark.skipif(os.name != 'nt', reason='requires native Windows private files')
 def test_native_windows_stage_config_folder_of_the_stages_that_becomes_a_junction_during_a_look(
         native_stage, monkeypatch):
-    """Another program moves the stage away during the pass's look at it, and makes the folder of the stages a junction.
+    """During the pass's look at a stage, the stage is moved away and the folder of the stages becomes a junction.
 
-    The moment is inside the look: the look has the stage open and reads its
-    entries. Windows lets both pass, also while the pass has the folder of the
-    stages open: the look's handle shares deletion, and the emptied folder of
-    the stages becomes a junction in place, with no rename. The junction leads
-    to a folder that has the moved stage at the same name, so the stage's path
-    now goes through the junction. The pass reads nothing by a path for the
-    stage's identity (the case records every ``os.lstat`` of the pass: there
-    is none). The removal opens the stage by its path and is refused. The
-    stage keeps every entry of its copies. With the folder of the stages back
-    at its name, the pass removes them.
+    The moment is inside the look: the look has the stage open and has read
+    its entries. Another process moves the stage to another folder (the
+    look's handle shares deletion). Then another process makes the emptied
+    folder of the stages a junction, in place and with no rename. Windows
+    lets both pass while the pass has the folder of the stages open. The
+    junction leads to a folder that has ANOTHER folder at the stage's name,
+    with copies of its own. So the stage's path names that other folder now.
+
+    Shown:
+    - The identity that the pass gives the removal is the identity of the
+      folder that the look had open. The case reads it again from a handle of
+      the moved stage. It is not the identity of the other folder, which the
+      stage's path names at that moment.
+    - From its start to its end, the pass calls neither ``os.stat`` nor
+      ``os.lstat`` for a path below the app home. (``Path.lstat`` and
+      ``Path.stat`` call ``os.stat``.)
+    - The removal is refused. The moved stage and the other folder keep every
+      entry of their copies, and the app's own files stay.
+    - With the folder of the stages back at its name, the pass removes the
+      copies of the stage, again with no such call.
+
+    Not shown: that the pass does nothing by a path. It opens the folder of
+    the stages and each stage by its path, and it looks at what it opened
+    through the handle. The removal reads and removes the files of a copy by
+    the path of a held folder, through the private-file boundary. The wrapper
+    of this case takes the whole listing of a folder at once, so the case
+    shows nothing about the bound of a listing.
     """
     from types import SimpleNamespace
     home, stage, before = native_stage()
-    root, away = stage.parent, home / 'away'
+    root, away, behind = stage.parent, home / 'away', home / 'behind'
+    moved, other = away / stage.name, behind / stage.name
     with ordinary_default_owner():
         away.mkdir()
-    moved, total, manager = away / stage.name, copied(stage), SimpleNamespace(home=home)
-    entries, remove, lstat = storage._windows_entries, storage._remove_stage_config, os.lstat
-    made, calls, by_path = [], [], []
+        other.mkdir(parents=True)
+        (other / 'validated.json').write_text('{}')
+        for folder in COPIES:
+            shutil.copytree(home / folder, other / folder)
+    total, manager = copied(stage), SimpleNamespace(home=home)
+    assert copied(other) == total
+    entries, remove = storage._windows_entries, storage._remove_stage_config
+    made, given, calls, by_path = [], [], [], []
 
     def entries_then_a_move(handle):
         found = list(entries(handle))   # The whole listing, through the handle.
         if not made and 'config' in [name for name, _ in found]:
             # The look's listing of the stage. Its handle is open.
-            made.append(refusal(lambda: os.rename(stage, moved)))
-            made.append(by_another_process(make_junction_in_place, root, away))
+            made.append(by_another_process(try_rename, stage, moved))
+            made.append(by_another_process(make_junction_in_place, root, behind))
             made.append(sorted(os.listdir(root)))   # By the path: through the junction.
         yield from found
 
     def record(home_, folder, expected, work):
+        given.append(expected[folder])
         reason = remove(home_, folder, expected, work)
-        calls.append((folder.name, type(expected[folder]).__name__, reason, work.removed))
+        calls.append((folder.name, reason, work.removed))
         return reason
 
-    def recorded_lstat(path, *args, **settings):
-        by_path.append(str(path))
-        return lstat(path, *args, **settings)
+    def below_the_app_home(call):
+        def recorded(path, *args, **settings):
+            try:
+                name = os.fspath(path)
+            except TypeError:
+                name = None   # An open file, not a path.
+            if isinstance(name, str) and name.lower().startswith(str(home).lower()):
+                by_path.append((call.__name__, name))
+            return call(path, *args, **settings)
+        return recorded
 
     def one_pass():
         with monkeypatch.context() as patch:
             patch.setattr(storage, '_windows_entries', entries_then_a_move)
             patch.setattr(storage, '_remove_stage_config', record)
-            patch.setattr(os, 'lstat', recorded_lstat)
+            patch.setattr(os, 'stat', below_the_app_home(os.stat))
+            patch.setattr(os, 'lstat', below_the_app_home(os.lstat))
             storage._scrub_stage_config(manager, root, set())   # No exception.
+
+    def by_the_path(folder):
+        info = os.lstat(folder)
+        return info.st_dev, info.st_ino
 
     try:
         one_pass()
-        # The move and the conversion passed, and the stage's path leads through the junction to the moved stage.
-        assert made == [0, 'a junction now', [stage.name]], made
-        assert os.path.isjunction(root) and (root / stage.name / 'config/auth/control-token').is_file()
-        # The pass read no identity by a path, and its removal was refused.
-        assert by_path == [], by_path
-        assert calls == [(stage.name, '_Opened', 'refused', 0)], calls
-        assert copied(moved) == total and held(home) == before
+        # The move and the conversion passed. The stage's path names the other folder now.
+        assert made == ['renamed', 'a junction now', [stage.name]], made
+        assert os.path.isjunction(root) and by_the_path(stage) == by_the_path(other) != by_the_path(moved)
+        with storage._windows_stage_hold(moved) as (of_the_moved_stage, _):
+            pass
+        with storage._windows_stage_hold(other) as (of_the_other_folder, _):
+            pass
+        assert type(of_the_moved_stage) is storage._Opened and of_the_other_folder != of_the_moved_stage
+        shown = {'the identity that the pass gave the removal': given,
+                 'os.stat and os.lstat for a path below the app home': by_path,
+                 'the removal': calls}
+        assert shown == {'the identity that the pass gave the removal': [of_the_moved_stage],
+                         'os.stat and os.lstat for a path below the app home': [],
+                         'the removal': [(stage.name, 'refused', 0)]}, (
+            f'{shown!r}; a handle of the moved stage says {of_the_moved_stage!r}, of the other folder '
+            f'{of_the_other_folder!r}; by the path the moved stage is {by_the_path(moved)!r}, '
+            f'the other folder {by_the_path(other)!r}')
+        assert copied(moved) == total and copied(other) == total and held(home) == before
     finally:
         if os.path.lexists(moved):
             os.rmdir(root)        # The junction itself, or the emptied folder.
             os.rename(away, root)
-    # With the folder of the stages at its name, the pass removes the copies, and it still reads nothing by a path.
-    del calls[:]
+    # With the folder of the stages at its name, the pass removes the copies of the stage.
+    del given[:], calls[:], by_path[:]
     one_pass()
-    assert by_path == [], by_path
-    assert calls == [(stage.name, '_Opened', None, total)], calls
-    assert gone(stage) and held(home) == before
+    with storage._windows_stage_hold(stage) as (of_the_stage, _):
+        pass
+    assert of_the_stage == of_the_moved_stage   # The same folder, at its first name again.
+    assert (given, by_path, calls) == ([of_the_stage], [], [(stage.name, None, total)]), (given, by_path, calls)
+    assert gone(stage) and copied(other) == total and held(home) == before
 
 
 @contextmanager

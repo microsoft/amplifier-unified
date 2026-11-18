@@ -702,8 +702,8 @@ def _stage_listing(root):
     through the open folder. ``look(name)`` gives the identity of the folder
     of that name when that folder has an entry ``config`` or ``routing``, else
     None. It opens that folder itself and reads it through the open folder.
-    It raises OSError for an entry that is no folder, and ValueError for a
-    name that the private-file boundary does not take.
+    It raises OSError for an entry that is no folder, and on Windows
+    ValueError for a name that the private-file boundary does not take.
 
     Each open refuses a link and a junction: at the name of the folder of the
     stages, in the path to it, and at the name of a stage. So no listing and
