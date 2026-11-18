@@ -23,6 +23,17 @@ import uuid
 FILE = "consumer-shell.json"
 NOTE = "apps-list-version.json"
 SETTLE_SECONDS = 15  # Longest wait for a closing app to release the installation folder.
+# The waits for another program to close a Start-menu shortcut add up to at
+# most this many seconds: once for the step that pins the shortcuts, and once
+# for the step that deletes them. The Windows calls of each attempt take their
+# own time, so a step that waits can take longer than this.
+# Measured on hosted Windows runners, about 3 seconds after the shortcuts were
+# made: the pin was refused for 0.01 s, and the delete was refused for at most
+# 0.25 s. Asked which program had the file open, Windows named explorer.exe
+# after 7 of 92 refused pins, and no program after the others and after the
+# refused deletes. The waits are twenty times the longest of those refusals.
+# A shortcut that is still held then stops the uninstall as before.
+HOLD_SECONDS = 5
 LINKS = {"Amplifier Unified.lnk": "", "Amplifier status.lnk": " --status",
          "Stop Amplifier.lnk": " --stop", "Uninstall Amplifier.lnk": " --uninstall"}
 REGISTRY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\AmplifierUnified-"
@@ -443,6 +454,36 @@ def install(root, version):
     return {"startMenu": str(folder), "installedAppEntry": True, "shortcuts": len(links)}
 
 
+def _held(code):
+    """Try again, for a bounded time, while another program has a shortcut open.
+
+    Windows refuses the pin of a shortcut with error 32 while another open of
+    that file does not share deleting; the Windows shell opens a new shortcut
+    like that for a moment. It refuses the delete through the pinned handle
+    with error 5 while a view of the file is mapped. It gives the same error 5
+    for a shortcut with a read-only attribute, which no wait cures: that one
+    stops the uninstall after the wait. Only a PermissionError that carries
+    exactly `code` is tried again. Every other refusal, and a shortcut that
+    differs from setup's record, raises at once.
+
+    The returned function counts its waits for all shortcuts of one step
+    together: HOLD_SECONDS in all, a tenth of a second each. It limits the
+    number of waits, not the time of the step: the Windows calls of each
+    attempt take their own time.
+    """
+    waits = [HOLD_SECONDS * 10]
+    def attempt(action):
+        while True:
+            try:
+                return action()
+            except PermissionError as refused:
+                if getattr(refused, "winerror", None) != code or waits[0] <= 0:
+                    raise
+            waits[0] -= 1
+            time.sleep(0.1)
+    return attempt
+
+
 @contextmanager
 def removal(root, *, progress=None):
     """Prepare removal of this installation's own entries; `finish` removes them.
@@ -451,6 +492,8 @@ def removal(root, *, progress=None):
     so the caller can stop the app first and remove the entries last. An entry
     that an earlier, interrupted removal already took away is skipped: a second
     uninstall completes. An entry that differs from setup's record refuses.
+    A shortcut that another program has open is tried again, in the pin and in
+    the delete, with waits of HOLD_SECONDS in all for each (`_held`).
 
     `progress(name)` names the step that is about to run: `apps-entry`,
     `shortcuts`, `receipt`. `finish` releases the pins itself, so the entries
@@ -475,6 +518,7 @@ def removal(root, *, progress=None):
         except FileNotFoundError:
             owned = None  # The whole Start-menu folder is already gone.
         # Keep ALL verified handles (deny WRITE/DELETE sharing) through effects.
+        pin = _held(32)
         for name, args in links.items() if owned else ():
             if not (folder / name).exists():
                 continue
@@ -483,7 +527,8 @@ def removal(root, *, progress=None):
                     raise ValueError("A Windows shortcut target changed; no entries were removed.")
             # COM can open without DELETE sharing. Close it first, then pin the
             # exact audited bytes: a change between those reads is refused.
-            removers.append(stack.enter_context(owned.removal_private(name, row["links"][name])))
+            # Each further attempt reads and compares the bytes again.
+            removers.append(pin(lambda: stack.enter_context(owned.removal_private(name, row["links"][name]))))
         try:
             commit = stack.enter_context(registry_change(root, row["registry"], remove=True))
         except FileNotFoundError:
@@ -496,8 +541,9 @@ def removal(root, *, progress=None):
             if commit is not None:
                 commit()
             step("shortcuts")
+            delete = _held(5)
             for remove_link in removers:
-                remove_link()
+                delete(remove_link)
             stack.close()  # Release the pins: Windows removes the shortcuts now.
             try:
                 os.rmdir(folder)  # Only when empty; a file the person added stays.
