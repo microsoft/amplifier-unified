@@ -1543,6 +1543,8 @@ def test_native_windows_stage_config_folder_that_becomes_a_junction_in_place_is_
     config, empty, target = stage / 'config', stage / 'config' / 'empty', home / 'config'
     with ordinary_default_owner():
         empty.mkdir()
+    # Only an empty folder: Windows refuses the same for a folder that has an entry (error 145).
+    assert by_another_process(make_junction_in_place, stage / 'config' / 'tls', target) == 'set winerror 145'
     total, real, made = copied(stage), wf.directory, []
 
     @contextmanager
@@ -1560,8 +1562,8 @@ def test_native_windows_stage_config_folder_that_becomes_a_junction_in_place_is_
     # The path leads into the app's config now: a listing by the path reads its entries.
     assert os.lstat(empty).st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT
     assert sorted(entry.name for entry in os.scandir(empty)) == sorted(entry.name for entry in os.scandir(target))
-    # The walk left two entries: the junction, and the folder that holds it. It handled no entry of the app's
-    # config. A walk that lists by the path counts each of them as an entry that stays.
+    # The walk left two entries: the junction, and the folder that holds it. Its count has no other entry
+    # that stays: it handled no entry of the app's config.
     assert (reason, work.removed, work.stayed) == ('refused', total - 2, 2), (
         f'The removal returned {reason!r}, removed {work.removed}, left {work.stayed}; left {left(stage)}')
     assert left(stage) == ['config', 'config/empty']
