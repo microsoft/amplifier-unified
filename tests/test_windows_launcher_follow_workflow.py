@@ -12,6 +12,7 @@ from __future__ import annotations
 import ast
 import importlib
 import importlib.util
+import itertools
 import json
 import os
 from pathlib import Path
@@ -205,6 +206,20 @@ ELSEWHERE = {"tests/test_service.py": "coordination.yml",
              "tests/test_windows_service.py": "platform-mechanisms.yml"}
 
 
+def starts_pytest(line, name):
+    """A line of a step that starts pytest with this file: `uv run ... pytest` or `<python> ... -m pytest`.
+
+    A comment, or another command that only has the words, is no run.
+    """
+    words = list(itertools.takewhile(lambda word: not word.startswith("#"), line.split()))
+    if "pytest" not in words:
+        return False
+    before, after = words[:words.index("pytest")], words[words.index("pytest"):]
+    starts = before[:2] == ["uv", "run"] or len(before) > 1 and before[-1] == "-m" and "python" in before[0].lower()
+    return starts and any(word == name and after[index - 1] not in ("--ignore", "--deselect")
+                          for index, word in enumerate(after))
+
+
 def given_to_pytest(program):
     """The files and the single cases that the step's program gives pytest: its `FILES` and `CASES`.
 
@@ -290,8 +305,10 @@ def test_a_pull_request_runs_every_launcher_case_file():
     assert [name for name in sorted(reached) if not starts(name)] == []
     # And the other way: the step runs every test file that the path filter names. A name below
     # `paths:` that nothing runs is the gap that this workflow closes. The only others are test
-    # files that a run file imports. An import runs none of their cases, so each has a pytest
-    # command in another workflow that starts for a pull request.
+    # files that a run file imports. An import runs none of their cases, so each has a line that
+    # starts pytest with it, in a step with no condition, in another workflow that starts for a
+    # pull request. Not read here: the condition of that step's job, and whether that workflow
+    # starts for a change of the file alone.
     named = [path for path in paths if path.startswith("tests/test_") and "*" not in path]
     assert sorted(set(named) - set(run)) == sorted(ELSEWHERE)
     for name, workflow in ELSEWHERE.items():
@@ -299,7 +316,8 @@ def test_a_pull_request_runs_every_launcher_case_file():
         other = yaml.safe_load((ROOT / ".github/workflows" / workflow).read_text(encoding="utf-8"))
         assert "pull_request" in other[True], workflow
         assert [job for job, body in other["jobs"].items() for step in body.get("steps", [])
-                if "pytest" in step.get("run", "") and name in step["run"].split()], (name, workflow)
+                if "if" not in step and any(starts_pytest(line, name) for line in step.get("run", "").splitlines())
+                ], (name, workflow)
     assert [path for path in paths if "*" not in path and not (ROOT / path).is_file()] == []
 
 
@@ -307,6 +325,7 @@ NEEDS_WINDOWS = "import pytest\n@pytest.mark.skip(reason='native prototype Power
 
 
 ONE_FAILS = "def test_one(): assert False\ndef test_two(): pass\n"
+BY_NAME = "def test_one(): pass\n# The step gives pytest this case by its name, not the whole file.\n"
 EXPECTED_ON_WINDOWS = "import pytest\n@pytest.mark.xfail(strict=True)\ndef test_one(): assert False\ndef test_two(): pass\n"
 
 
@@ -331,6 +350,7 @@ EXPECTED_ON_WINDOWS = "import pytest\n@pytest.mark.xfail(strict=True)\ndef test_
      "expected to fail, and this step does not expect that: tests/test_one.py::test_other"),
     # The list names an expected failure for this runner, and the case has none: the list is behind.
     ("def test_one(): pass\n", True, "this step expects a failure, and no case had it: tests/test_one.py::test_one"),
+    (BY_NAME, True, "this step expects a failure, and no case had it: tests/test_one.py::test_one"),
 ])
 def test_the_step_that_runs_the_listed_files_stops_for_a_wrong_result(tmp_path, body, windows, stops):
     """The step's own program, with one made-up test file in place of its list."""
@@ -338,8 +358,10 @@ def test_the_step_that_runs_the_listed_files_stops_for_a_wrong_result(tmp_path, 
     (job,) = document["jobs"].values()
     program = job["steps"][-1]["run"]
     leave = 'NOT_ON_WINDOWS = {"tests/test_one.py::test_one": "a reason"}' if body == ONE_FAILS else "NOT_ON_WINDOWS = {}"
-    for pattern, replacement in ((r'FILES = """.*?"""\.split\(\)', 'FILES = ["tests/test_one.py"]'),
-                                 (r"CASES = \[[^\]]*\]", "CASES = []"),
+    given = ('FILES = []', 'CASES = ["tests/test_one.py::test_one"]') if body == BY_NAME else (
+        'FILES = ["tests/test_one.py"]', "CASES = []")
+    for pattern, replacement in ((r'FILES = """.*?"""\.split\(\)', given[0]),
+                                 (r"CASES = \[[^\]]*\]", given[1]),
                                  (r"NOT_ON_WINDOWS = \{.*?\n\}", leave),
                                  (r"EXPECTED_FAILURES = \{.*?\n\}", 'EXPECTED_FAILURES = {"tests/test_one.py::test_one": windows}'),
                                  (r'windows = sys\.platform == "win32"', f"windows = {windows}"),

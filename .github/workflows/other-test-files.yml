@@ -279,7 +279,8 @@ jobs:
 
           if not result.is_file():
               sys.exit(f"pytest ended with status {status} and wrote no result file")
-          counts, problems, used = collections.defaultdict(collections.Counter), [], set()
+          counts, problems = collections.defaultdict(collections.Counter), []
+          failures, reasons = set(), set()  # The expected failures and the skip reasons that this run had.
           for case in tree.parse(result).getroot().iter("testcase"):
               # "tests.test_x", or "tests.test_x.Class" for a case in a class.
               parts = case.get("classname", "").split(".")
@@ -298,14 +299,14 @@ jobs:
               elif found["skipped"].get("type") == "pytest.xfail":
                   counts[file]["expected failures"] += 1
                   print(f"expected failure: {name}: {found['skipped'].get('message')}")
-                  used.add(name)
+                  failures.add(name)
                   if not EXPECTED_FAILURES.get(name):
                       problems.append(f"expected to fail, and this step does not expect that: {name}")
               else:
                   reason = found["skipped"].get("message", "")
                   counts[file]["skipped"] += 1
                   print(f"skipped: {name}: {reason}")
-                  used.add(reason)
+                  reasons.add(reason)
                   if not SKIPS.get(reason):
                       problems.append(f"skipped, and this step does not expect that on this runner: {name}: {reason}")
 
@@ -324,11 +325,12 @@ jobs:
                 f"{total['skipped']} skipped, {total['expected failures']} expected failures")
           # An entry of the two lists that this run did not use is behind. A
           # skip reason has no case name, so it only gets a line in the log.
+          ran = {name.split("::")[0] for name in files}  # Also the file of a case that pytest got by its name.
           for name, here in EXPECTED_FAILURES.items():
-              if here and name not in used and name not in left_out and name.split("::")[0] in files:
+              if here and name not in failures and name not in left_out and name.split("::")[0] in ran:
                   problems.append(f"this step expects a failure, and no case had it: {name}")
           for reason, here in SKIPS.items():
-              if here and reason not in used:
+              if here and reason not in reasons:
                   print(f"no case was skipped for a reason that this step allows on this runner: {reason}")
           if status and not problems:
               problems.append(f"pytest ended with status {status}")

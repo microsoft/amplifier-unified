@@ -118,9 +118,24 @@ def test_shipped_shell_is_read_from_an_app_folder_whose_address_is_quoted(tmp_pa
     assert result['sources'] == [{'url':'https://github.com/microsoft/amplifier-bundle-skills', 'ref':'main'}]
 
 
+def test_only_the_address_that_the_app_makes_is_read_as_the_shipped_file(tmp_path):
+    skills = [{'url':'https://github.com/microsoft/amplifier-bundle-skills', 'ref':'main'}]
+    address = builtin_behaviors.resource_root().as_uri()
+    file = '#subdirectory=behaviors/unified-shell.yaml'
+    assert address.startswith('file:///')
+    assert selection(tmp_path, settings([address + file]))['sources'] == skills
+    # The same address with "//localhost" before the folder. A general conversion of a file
+    # address takes that part away on every system; the selection must not. Not on Windows:
+    # there the text is the path of a network folder, and the selection asks the system for it.
+    if os.name != 'nt':
+        other = address.replace('file:///', 'file:////localhost/', 1)
+        assert selection(tmp_path, settings([other + file]))['sources'] == []
+
+
 @pytest.mark.parametrize('reference', ['file:///C:/a:b/behaviors/behavior.yaml', 'file::b/behaviors/behavior.yaml'])
 def test_a_file_address_that_is_no_path_of_this_system_selects_nothing(tmp_path, reference):
-    # On Windows neither address gives a path. The check goes on, and the reference stays in the selection as it is.
+    # Neither address is a path on Windows. It is not the shipped file, the check goes on, and the
+    # reference stays in the selection as it is.
     assert selection(tmp_path, settings([reference]))['sources'] == []
     assert selection(tmp_path, settings([reference]))['witness'] != selection(tmp_path, settings())['witness']
 
@@ -232,13 +247,15 @@ def test_an_installation_and_its_stage_have_one_configuration_key_and_one_witnes
             != update_sequence.app_selection(home, config=live)['witness'])
 
 
-def test_settings_that_name_no_folder_keep_their_configuration_key_and_witness(tmp_path):
+@pytest.mark.parametrize('name', ['app', 'caf\u00e9 app'])
+def test_settings_that_name_no_folder_keep_their_configuration_key_and_witness(tmp_path, name):
     # Most installations: the settings name Git addresses only. The two values
     # hold no path then, so they are the same on every system and for every
-    # data folder. They were read from the code before it handled a Windows
-    # path; a change of that code must not move them (see the next case).
+    # data folder, also one with a name that JSON text writes in another form.
+    # They were read from the code before it handled a Windows path; a change
+    # of that code must not move them (see the next case).
     from amplifier_web.runtime_profiles import configuration_key
-    home = tmp_path.resolve()/'app'
+    home = tmp_path.resolve()/name
     stage = home/'updates/releases'/('b'*32)
     value = settings([URI], sources={'modules': {'tool-x': 'git+' + URL + '@main#subdirectory=modules/tool-x'}})
     assert configuration_key(value, home, stage) == 'bd8517dcc00253948dc827b31b5f172f83c281d4372df6732d287cc21a2f44c4'
