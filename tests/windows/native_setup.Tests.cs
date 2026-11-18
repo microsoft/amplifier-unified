@@ -44,6 +44,16 @@ namespace UnifiedBootstrap {
             process.WaitForExit();
             Need(process.ExitCode==0,"file link created (this needs an elevated account or Developer Mode)");
         }
+        static void Unlistable(string folder, bool on) {
+            // A folder that Windows refuses to list for this account: one deny
+            // entry for the right to list it, added and taken away again.
+            var security=Directory.GetAccessControl(folder);
+            FileSystemAccessRule rule;
+            using(var identity=WindowsIdentity.GetCurrent())
+                rule=new FileSystemAccessRule(identity.User,FileSystemRights.ListDirectory,AccessControlType.Deny);
+            if(on) security.AddAccessRule(rule); else security.RemoveAccessRule(rule);
+            Directory.SetAccessControl(folder,security);
+        }
         static void OpenToOthers(string folder) {
             var security=Directory.GetAccessControl(folder);
             security.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(WellKnownSidType.BuiltinUsersSid,null),
@@ -302,8 +312,8 @@ namespace UnifiedBootstrap {
                 string emptied="Setup cannot install Amplifier yet. The folder of an earlier installation is still on this PC:\n"+left+"\n\n"+
                     "Setup cannot open Amplifier from that folder: a program file is missing. "+
                     "Setup found no chats or settings in the folder. "+
-                    "It does not change the folder, because the folder can hold files that are not Amplifier's.\n\n"+
-                    "If a file in the folder is yours, move it to another place. Then delete the folder and run this setup file again.";
+                    "It does not change the folder, because the folder can hold files or folders that are not Amplifier's.\n\n"+
+                    "Move or rename that folder. Then run this setup file again.";
                 string journal=Path.Combine(left,NativeInstaller.Journal), notes=Path.Combine(left,"my notes.txt");
                 string record="{\"schema\": 1, \"choice\": \"delete\", \"token\": \"0123456789abcdef0123456789abcdef\"}";
                 Need(NativeInstaller.Journal=="unified-uninstall.json" && String.Join(",",NativeInstaller.Data)==
@@ -335,13 +345,21 @@ namespace UnifiedBootstrap {
                     File.Delete(entry);
                     Need(NativeInstaller.Unopened(left)==emptied,"without that entry: "+name);
                 }
-                // A link with a data name is a doubt, also when it leads to an
-                // empty folder: the look never follows a link.
+                // A link with a data name counts as data, also when it leads to
+                // an empty folder.
                 string elsewhere=Path.Combine(work,"elsewhere"); Directory.CreateDirectory(elsewhere);
                 Junction(Path.Combine(left,"app"),elsewhere);
                 Need(NativeInstaller.Unopened(left)==damaged,"a link with a data name is data");
                 Directory.Delete(Path.Combine(left,"app"),false);
                 Need(Directory.Exists(elsewhere) && NativeInstaller.Unopened(left)==emptied,"without the link; its target stays");
+                // An empty data folder that Windows refuses to list is a doubt.
+                string refused=Path.Combine(left,"shared"); Directory.CreateDirectory(refused);
+                Unlistable(refused,true);
+                Need(Refused(()=>Directory.GetFileSystemEntries(refused)),"Windows refuses to list the folder");
+                Need(NativeInstaller.Unopened(left)==damaged,"a data folder that Windows does not list is data");
+                Unlistable(refused,false);
+                Need(NativeInstaller.Unopened(left)==emptied,"the same folder, empty, when Windows lists it");
+                Directory.Delete(refused);
                 // A link with the journal's name is no journal, also when it leads
                 // to a file that is one.
                 File.Move(journal,Path.Combine(elsewhere,"journal.json"));
@@ -379,6 +397,13 @@ namespace UnifiedBootstrap {
                 // Bytes that are not UTF-8 are no journal.
                 File.WriteAllBytes(journal,new byte[]{0x7b,0xff,0x7d});
                 Need(NativeInstaller.Unopened(left)==damaged,"bytes that are not UTF-8");
+                // A record that is whole, except for one byte in a text value
+                // that is not UTF-8. A reader that put another character in the
+                // place of that byte would take the record.
+                byte[] broken=System.Text.Encoding.ASCII.GetBytes(record.Replace("{","{\"more\": \"X\", "));
+                broken[Array.IndexOf(broken,(byte)'X')]=0xff;
+                File.WriteAllBytes(journal,broken);
+                Need(NativeInstaller.Unopened(left)==damaged,"a record with one byte in a text value that is not UTF-8");
                 // A folder with the journal's name is no journal.
                 File.Delete(journal); Directory.CreateDirectory(journal);
                 Need(NativeInstaller.Unopened(left)==damaged,"a folder with the journal's name");
@@ -409,7 +434,7 @@ namespace UnifiedBootstrap {
                     "the folder holds what the case put there: "+String.Join("|",names));
                 Need(File.ReadAllText(notes)=="mine" && File.ReadAllText(journal)==record &&
                     File.ReadAllText(Path.Combine(left,NativeInstaller.Complete))=="{}","the person's file and both records are unchanged");
-                Need(NativeInstaller.RootState(left)=="installed","setup still takes the folder for a finished installation, and installs nothing there");
+                Need(NativeInstaller.RootState(left)=="installed","setup still takes the folder for a finished installation");
 
                 // A folder above the target that other accounts can change is named.
                 string open=Path.Combine(work,"open"); Directory.CreateDirectory(Path.Combine(open,"inner"));

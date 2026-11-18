@@ -141,9 +141,8 @@ def test_unfinished_attempts_are_removed_and_installations_never_are():
 EMPTIED = ("Setup cannot install Amplifier yet. The folder of an earlier installation is still on this PC:\n{root}\n\n"
            "Setup cannot open Amplifier from that folder: a program file is missing. "
            "Setup found no chats or settings in the folder. "
-           "It does not change the folder, because the folder can hold files that are not Amplifier's.\n\n"
-           "If a file in the folder is yours, move it to another place. Then delete the folder and run this setup "
-           "file again.")
+           "It does not change the folder, because the folder can hold files or folders that are not Amplifier's.\n\n"
+           "Move or rename that folder. Then run this setup file again.")
 DAMAGED = ("Amplifier is already installed in {root}, but setup cannot open it: a program file is missing.\n\n"
            "Keep that folder. It holds your chats and settings. This version of setup cannot repair it.")
 
@@ -161,7 +160,9 @@ def test_setup_without_a_launcher_program_says_what_its_own_look_finds():
     the person was in it. The next setup run said "Keep that folder. It holds your chats and settings." The
     chats and settings were deleted, and the text named no next step. Setup now looks: with a journal that
     records the delete choice, and with none of the person's data, it says what it found and gives the next
-    step. Every other case keeps the earlier text. Setup still installs nothing there and deletes nothing.
+    step: move or rename the folder, as at setup's other stops. It does not tell the person to delete the
+    folder, which can hold something of the person's that the look did not see. Every other case keeps the
+    earlier text. Setup still installs nothing there and deletes nothing.
     The native check compiles these functions and runs them on real folders (tests/windows/native_setup.Tests.cs).
     """
     import inspect
@@ -170,9 +171,14 @@ def test_setup_without_a_launcher_program_says_what_its_own_look_finds():
     assert re.search(r'internal const string Journal="([^"]+)";', SOURCE).group(1) == windows_uninstall.JOURNAL
     names = re.search(r"internal static readonly string\[\] Data=\{([^}]+)\};", SOURCE).group(1)
     assert tuple(name.strip().strip('"') for name in names.split(",")) == windows_uninstall.DATA
-    # The values that uninstall's own reader requires. A change there must come here too.
+    # The schema and the token that uninstall's own reader requires. A change there must come here too.
     reader = inspect.getsource(windows_uninstall.pending)
     assert 'value["schema"] == 1' in reader and 're.fullmatch("[0-9a-f]{32}", value["token"])' in reader
+    # That reader requires a choice that is a text. Uninstall compares it in its removal steps; setup's
+    # look requires the choice "delete" itself.
+    assert 'isinstance(value.get("choice"), str)' in reader and '"delete"' not in reader
+    for step in (windows_uninstall.remove, windows_uninstall.finish):
+        assert 'record["choice"] != choice' in inspect.getsource(step)
     assert "owned.read_private(name, limit=4096)" in inspect.getsource(windows_uninstall._private_json)
     emptied = between("internal static bool Emptied(", "internal static string Unopened(")
     order = [emptied.index(text) for text in (
@@ -208,10 +214,12 @@ def test_setup_without_a_launcher_program_says_what_its_own_look_finds():
     assert emptied.count("FileStream(") == 1 and emptied.count("FileShare.Delete") == 1
     looks = "\n".join(line for line in emptied.splitlines() if not line.strip().startswith("//")).replace(
         "FileMode.Open,FileAccess.Read,FileShare.ReadWrite|FileShare.Delete", "")
+    # The words of the two texts are not operations: compare the code without its string literals.
     for body in (looks, code):
+        operations = re.sub(r'"(?:[^"\\]|\\.)*"', '""', body)
         for change in ("Delete", "Write", "Create", "Move", "Remove", "Process", "Say(", "Install", "Storage",
                        "FileMode", "FileAccess", "SetAttributes"):
-            assert change not in body, change
+            assert change not in operations, change
     # The one place that shows the text: a finished installation with no launcher program. Setup ends with 1.
     opened = between("static int OpenInstalled(", "static int ConsumerWindow()")
     assert opened.index("if(!File.Exists(AppStart(root).FileName)) {\n"
@@ -222,6 +230,11 @@ def test_setup_without_a_launcher_program_says_what_its_own_look_finds():
     assert "your chats and settings" not in EMPTIED and "already installed" not in EMPTIED
     assert "uninstall" not in EMPTIED.lower()  # A file that reads as a journal is no proof of an uninstall.
     assert "cannot start" not in EMPTIED  # Setup looked for one program file only.
+    # The next step loses nothing: the text tells nobody to delete anything.
+    assert "delete" not in EMPTIED.lower() and EMPTIED.endswith(
+        "\n\nMove or rename that folder. Then run this setup file again.")
+    # Setup's own words at its other stops for a folder that it does not change.
+    assert SOURCE.count('"Move or rename that folder. Then run setup again."') == 1
     # The launcher's program, which the Start-menu entry also starts.
     from amplifier_web import windows_consumer_shell
     assert 'Path.Combine(root,"tools","amplifier-unified","Scripts","pythonw.exe")' in between(
@@ -236,9 +249,16 @@ def test_setup_without_a_launcher_program_says_what_its_own_look_finds():
                 assert sentence in design, sentence
     for sentence in (
             "When the launcher's start program is gone, setup shows one message and ends.",
-            "a plain file (no folder, no link) of at most 4096 bytes of UTF-8 that holds a record with `schema` 1, "
-            "the choice `delete` and a token of 32 hexadecimal digits",
-            "A name counts as data when it is a file, a link, or a folder with anything in it.",
+            "When they show a file that is no folder and no link, setup opens that path and reads it.",
+            "at most 4096 bytes of UTF-8 that hold a record with `schema` 1, the choice `delete` and a token of 32 "
+            "lower-case hexadecimal digits",
+            "The schema and the token are what uninstall's own reader requires (`windows_uninstall.pending`).",
+            "Setup requires the choice `delete` in the look itself.",
+            "A name counts as data when the look at its attributes shows a file or a link, or when the listing of "
+            "the folder shows anything in it.",
+            "Setup lists an entry only after that look showed a folder that is no link.",
+            "Setup holds no lock and no handle on the folder or on an entry between two of them.",
+            "The text tells the person to move or rename the folder, not to delete it:",
             "In every other case, and when any part of the look fails, setup says what it said before:",
             "The text does not say that Amplifier was uninstalled, and it does not say that Amplifier cannot start: "
             "a file that reads as a journal is no proof of an uninstall (a program of this account can write one), "

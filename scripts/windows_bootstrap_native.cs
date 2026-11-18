@@ -735,13 +735,19 @@ namespace UnifiedBootstrap {
         }
         internal static bool Emptied(string root) {
             // Whether setup's own look finds what an uninstall with the delete
-            // choice leaves: a journal that records that choice, with the values
-            // that uninstall's own reader requires (at most 4096 bytes, schema 1,
-            // the choice, a token of 32 hexadecimal digits), and none of the
-            // person's data. A data name counts as data when it is a file, a
-            // link, or a folder with anything in it. Every doubt answers no: a
-            // journal that is missing, a link, too large, not UTF-8 or not such a
-            // record, and a folder that Windows does not list.
+            // choice leaves: a journal that records that choice, and none of the
+            // person's data. The journal: at most 4096 bytes of UTF-8 with schema
+            // 1 and a token of 32 lower-case hexadecimal digits, as uninstall's
+            // own reader requires (windows_uninstall.pending), and the choice
+            // "delete", which uninstall compares in its removal steps. A data
+            // name counts as data when the look at its attributes shows a file
+            // or a link, or when the listing of the folder shows anything in
+            // it. Every doubt answers no: a journal that is missing, a link, too
+            // large, not UTF-8 or not such a record, and a folder that Windows
+            // does not list. These are separate steps on paths, and nothing is
+            // held between them: a program of this account can replace an entry
+            // between the look at its attributes and the read or the listing.
+            // The answer only chooses a text.
             try {
                 string journal=Path.Combine(root,Journal);
                 if((File.GetAttributes(journal)&(FileAttributes.Directory|FileAttributes.ReparsePoint))!=0) return false;
@@ -761,7 +767,7 @@ namespace UnifiedBootstrap {
                     string entry=Path.Combine(root,name);
                     FileAttributes kind;
                     try { kind=File.GetAttributes(entry); } catch(FileNotFoundException) { continue; }
-                    // Only a real folder is listed; a link is never followed.
+                    // List the entry only when this look shows a folder that is no link.
                     if((kind&(FileAttributes.Directory|FileAttributes.ReparsePoint))!=FileAttributes.Directory ||
                         Directory.EnumerateFileSystemEntries(entry).Any()) return false;
                 }
@@ -776,13 +782,16 @@ namespace UnifiedBootstrap {
             // of the removal did not finish. Then the text of a damaged
             // installation is not true ("It holds your chats and settings"), and
             // it names no next step. Each sentence of the other text is what
-            // setup found at this look, or what setup does.
+            // setup found at this look, or what setup does. Its next step is to
+            // move or rename the folder, as at setup's other stops, and not to
+            // delete it: the folder can hold something of the person's that
+            // this look did not see.
             if(Emptied(root)) return
                 "Setup cannot install Amplifier yet. The folder of an earlier installation is still on this PC:\n"+root+"\n\n"+
                 "Setup cannot open Amplifier from that folder: a program file is missing. "+
                 "Setup found no chats or settings in the folder. "+
-                "It does not change the folder, because the folder can hold files that are not Amplifier's.\n\n"+
-                "If a file in the folder is yours, move it to another place. Then delete the folder and run this setup file again.";
+                "It does not change the folder, because the folder can hold files or folders that are not Amplifier's.\n\n"+
+                "Move or rename that folder. Then run this setup file again.";
             return "Amplifier is already installed in "+root+", but setup cannot open it: a program file is missing.\n\n"+
                 "Keep that folder. It holds your chats and settings. This version of setup cannot repair it.";
         }
