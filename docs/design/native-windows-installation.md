@@ -1561,6 +1561,20 @@ bytecode; that object is then refused again until the next app version.
 Nothing outside the rule above is deleted in any of them. The repair keeps no
 list of running programs.
 
+One more limit is Git's own. Git runs with the Git configuration of this
+computer, as it does in Foundation's check. The step tells it to start no
+file system monitor, because that program would stay after the command. It
+does not stop a content filter. When an attribute file of the object gives a
+tracked file a filter, and the computer's Git configuration names a program
+for that filter (Git LFS is the usual one; a repository cannot name the
+program itself), `git status` can start that program for a file whose content
+it must compare. Foundation's `clean_checkout` starts the same command in the
+same object at every check of the object, so the step starts no program that
+does not start there already; it adds at most one such command for each try
+of an object. The second command (`ls-files --others`) starts no filter. What
+such a program does is not bound by the rule of what the step deletes. The
+four provider modules had no attribute file when this was written.
+
 **Cost and record.** `<data>\updates\source-store-repair.json` holds the app
 version, whether the pass is complete, a change mark, the tries of each object
 that was left, and the counts and milliseconds of the last run. It holds no
@@ -1590,7 +1604,8 @@ lock, so a run never writes back a change mark that another host's run has
 replaced); after it the step gives the lock back. At its limit
 the step ends the Git program that it started and stops waiting; the installation's
 `git\cmd\git.exe` is Git's starter program, so the Git program behind it can
-run on until its read ends. It only reads, and that object is left.
+run on until its read ends. Git itself only reads there, and that object is
+left.
 
 A bound reached ends the run and a later start goes on. The object in which a
 run reaches a bound gets one try when it is the first object of that run, also

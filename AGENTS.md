@@ -420,7 +420,10 @@ its own lock, with that lock held alone; do not call it later in the start or
 from another process. Its limits are stated in the setup design ("Repair of a
 source store object that holds bytecode"). It imports `_Native` from
 `windows_removal` and does not copy it: a change of those steps must keep
-`tests/test_source_store_repair_native.py`. The record's change mark is an
+`tests/test_source_store_repair_native.py`. Git runs there with the
+computer's Git configuration, as in Foundation's check: `git status` can
+start a content filter of that configuration. Do not write that Git only
+reads; the design names that limit. The record's change mark is an
 input of `update_inventory_index.signature`. A run works with the record that
 it read after it got the lock, never with an earlier read: another host can
 have written a new mark meanwhile. A run writes the record first; a

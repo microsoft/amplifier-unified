@@ -33,8 +33,19 @@ Every listing and every deletion uses the native steps of
 ``windows_removal``: a name comes from the listing of an open handle, and an
 entry is opened relative to its parent's handle, as itself. No path is
 resolved twice, and no link is followed. Git gets a path; the folders of that
-path are held open meanwhile, and Git only decides. What is deleted is
+path are held open meanwhile. Git only gives the answer: what is deleted is
 checked again on handles.
+
+Git runs with the Git configuration of this computer, as it does in
+Foundation's own check. This step tells it to start no file system monitor.
+It does not stop a content filter: when an attribute file of the object gives
+a tracked file a filter, and the computer's Git configuration names a program
+for that filter (Git LFS is the usual one; a repository cannot name the
+program itself), ``git status`` can start that program for a file whose
+content it must compare. Foundation's check starts the same command in the
+same object at every check of the object, so this step starts no program that
+does not start there already. What such a program does is not bound by the
+rule above.
 
 It runs only on Windows, only in the host that the start-at-sign-in task
 started, only on the store of the installation that this host belongs to, and
@@ -138,15 +149,22 @@ def _steps():
 
 @contextmanager
 def _held(api, path):
-    """The store folder, proven on its handle and held open. Every folder above it is checked first."""
+    """The store folder, proven on its handle and held open. Every folder above it is checked first.
+
+    The check holds the folders above the store open while the store is
+    opened, and gives them back then. When that end reports an error, the
+    store's handle is given back too.
+    """
     from .windows_files import address, directory
     path = address(path)
-    with directory(path, owned_root=path):
-        handle = api.root(path)
+    handle = None
     try:
+        with directory(path, owned_root=path):
+            handle = api.root(path)
         yield handle
     finally:
-        api.close(handle)
+        if handle is not None:
+            api.close(handle)
 
 
 @contextmanager
@@ -377,7 +395,9 @@ def _git(program, folder, budget, *words):
             # The limit ends the program that this step started, and the step
             # stops waiting. An installation's ``git\cmd\git.exe`` is Git's
             # starter program: the Git program behind it can run on until its
-            # read ends. It only reads, and the object is left as it is.
+            # read ends. Git itself only reads there (a content filter that it
+            # started is a program of the computer's Git configuration), and
+            # this step leaves the object as it is.
             process.kill()
             for last in (process.communicate, process.wait):
                 try:

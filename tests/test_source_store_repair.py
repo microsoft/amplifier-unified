@@ -883,6 +883,32 @@ def test_no_native_step_begins_at_the_limit_and_a_handle_is_always_given_back():
     steps.close(1)  # A handle that cannot be given back raises nothing.
 
 
+def test_the_store_handle_is_given_back_when_the_check_of_the_folders_above_it_ends_with_an_error(monkeypatch):
+    """The check holds the folders above the store open while the store is opened. Its end can report an error."""
+    from amplifier_web import windows_files
+    begun = []
+
+    @contextmanager
+    def directory(path, *, owned_root, create=False):
+        yield
+        raise OSError(6, 'a handle of the check could not be given back')
+    monkeypatch.setattr(windows_files, 'address', lambda path: path)
+    monkeypatch.setattr(windows_files, 'directory', directory)
+    api = SimpleNamespace(root=lambda path: begun.append('root') or 7,
+                          close=lambda handle: begun.append(('close', handle)))
+    held = repair._held
+    assert held.__module__ == repair.__name__  # The product's own, not a fixture's.
+    with pytest.raises(OSError):
+        with held(api, 'store'):
+            begun.append('inside')
+    assert begun == ['root', ('close', 7)]
+    del begun[:]
+    monkeypatch.setattr(windows_files, 'directory', contextmanager(lambda path, *, owned_root, create=False: (yield)))
+    with held(api, 'store') as handle:
+        begun.append(('inside', handle))
+    assert begun == ['root', ('inside', 7), ('close', 7)]
+
+
 async def test_a_handle_that_cannot_be_given_back_does_not_keep_the_others_or_stop_the_run(installation):
     target = await broken(installation)
     real, closed = installation.api.close, []
@@ -1389,6 +1415,53 @@ async def test_a_file_system_monitor_of_the_git_configuration_is_not_started(ins
     result = installation.start()
     assert not ran.exists(), 'Git started the file system monitor'
     assert facts(result, 'git', 'repaired', 'files') == (2, 1, 2) and target.verify() == 'accepted'
+
+
+async def test_a_content_filter_of_the_git_configuration_starts_as_often_as_in_foundations_own_check(
+        installation, tmp_path):
+    """A stated limit, not a protection. Git runs with the Git configuration of the computer.
+
+    An attribute file of the object gives its Python files a filter, and the Git configuration names a
+    program for it. Git starts that program for a tracked file whose content it must compare: in
+    Foundation's own check of the object, and equally often in the repair's first command. The second
+    command starts none. The rule of what the repair deletes does not bind such a program.
+    """
+    from amplifier_foundation.sources.shared import clean_checkout
+    folder = tmp_path / 'filtered'
+    source = repository(folder)
+    with (folder / '.gitattributes').open('a', encoding='ascii', newline='\n') as stream:
+        stream.write('*.py filter=case\n')
+    git_in(folder, 'add', '.gitattributes')
+    git_in(folder, 'commit', '--quiet', '--message', 'a filter for the Python files')
+    target = await broken(installation, source)
+    ran, program = tmp_path / 'the-filter-ran', tmp_path / 'filter'
+    program.write_text('#!/bin/sh\necho ran >> "' + ran.as_posix() + '"\ncat\n', encoding='ascii', newline='\n')
+    program.chmod(0o755)
+    git_in(target.folder, 'config', 'filter.case.clean', program.as_posix())
+    # Git must compare the content of this file: its time is not the time that Git noted.
+    tracked = target.folder / PACKAGE / '_listing.py'
+    try:
+        os.utime(tracked, (1_000_000_000, 1_000_000_000))
+    except PermissionError:  # Foundation sealed the file.
+        mode = tracked.stat().st_mode
+        _writable(tracked)
+        os.utime(tracked, (1_000_000_000, 1_000_000_000))
+        os.chmod(tracked, mode)
+
+    def runs():
+        return len(ran.read_text(encoding='ascii').splitlines()) if ran.is_file() else 0
+    assert clean_checkout(target.folder) is False  # Foundation's own check. The bytecode is an extra.
+    once = runs()
+    assert once >= 1, 'the filter of this case does not run on this computer; the case shows nothing'
+    budget, git = repair._Budget(time.monotonic), repair._program()
+    assert repair._git(git, str(target.folder), budget, *repair.STATUS).strip() == b''
+    assert runs() == 2 * once  # The repair's first command: as often as Foundation's.
+    assert repair._git(git, str(target.folder), budget, *repair.OTHERS)
+    assert runs() == 2 * once  # The second command starts no filter.
+    result = installation.start()
+    assert runs() == 3 * once  # A run starts the first command once for the object.
+    assert facts(result, 'git', 'files', 'folders', 'repaired') == (2, 2, 1, 1)
+    assert target.verify() == 'accepted' and runs() == 4 * once  # And Foundation's next check starts it again.
 
 
 async def test_git_is_asked_about_the_object_and_never_about_a_repository_above_it(installation):

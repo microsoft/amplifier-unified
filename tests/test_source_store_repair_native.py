@@ -35,6 +35,8 @@ def test_each_native_step_that_the_repair_uses(installation):  # noqa: F811
     os.chmod(store / 'plain' / 'readonly.pyc', stat.S_IREAD)
     (store / 'plain' / 'busy.pyc').write_bytes(b'x')
     (store / 'plain' / 'inner' / 'deep.txt').write_text('deep', encoding='utf-8')
+    (store / 'plain' / 'empty-kept').mkdir()
+    (store / 'plain' / 'empty-gone').mkdir()
     installation.link(outside, store / 'plain' / 'junction')
     before = snapshot(outside)
     facts = {}
@@ -83,6 +85,17 @@ def test_each_native_step_that_the_repair_uses(installation):  # noqa: F811
                     facts['a folder that holds a file is deleted'] = False
             finally:
                 api.close(inner)
+            # 6b. An empty folder, opened as the repair opens a cache folder (to list it, with delete access).
+            # It stays when its handle closes with no deletion. A deletion through the handle takes it.
+            for name in ('empty-kept', 'empty-gone'):
+                folder = api.open(plain, name, enter=True, delete=True)
+                try:
+                    facts[name] = (api.kind(folder), api.children(folder))
+                    if name == 'empty-gone':
+                        api.delete(folder)
+                finally:
+                    api.close(folder)
+            facts['after the folder deletion the folder lists'] = sorted(dict(api.children(plain)))
             # 7. A file that another program has open refuses the open for deletion, and stays.
             with open(store / 'plain' / 'busy.pyc', 'rb'):
                 try:
@@ -105,7 +118,12 @@ def test_each_native_step_that_the_repair_uses(installation):  # noqa: F811
     assert facts == {
         'the held store folder can be renamed': False,
         'the store lists': ['plain'],
-        'the folder lists': ['busy.pyc', 'file.pyc', 'inner', 'junction', 'readonly.pyc'],
+        'the folder lists': ['busy.pyc', 'empty-gone', 'empty-kept', 'file.pyc', 'inner', 'junction',
+                             'readonly.pyc'],
+        'empty-kept': ('folder', []),
+        'empty-gone': ('folder', []),
+        'after the folder deletion the folder lists': ['busy.pyc', 'empty-kept', 'file.pyc', 'inner', 'junction',
+                                                       'readonly.pyc'],
         'attributes of the junction': (True, True),
         'attributes of a file and a folder': (False, True, False),
         'kind of the junction': 'link',
@@ -117,7 +135,7 @@ def test_each_native_step_that_the_repair_uses(installation):  # noqa: F811
         'a file in use is opened for deletion': False,
         'kind of file.pyc': 'file',
         'kind of readonly.pyc': 'file',
-        'after the two deletions the folder lists': ['busy.pyc', 'inner', 'junction'],
+        'after the two deletions the folder lists': ['busy.pyc', 'empty-kept', 'inner', 'junction'],
     }
     assert snapshot(outside) == before and (store / 'plain' / 'inner' / 'deep.txt').read_text() == 'deep'
 
