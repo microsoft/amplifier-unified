@@ -382,7 +382,9 @@ async def stage(manager, *, feature=None, request_id=None):
     except Exception:
         phase=manager.diagnostics.state.get('latest',{}).get('phase','stage')
         if manager.diagnostics.state.get('latest',{}).get('status')!='failed':manager.diagnostics.record(phase,'failed',errorType='ValueError')
-        await manager.publish(phase='error',error='Application update failed during '+phase.replace('-',' ')+'. The running host was retained.')
+        from .update_command_details import guidance
+        await manager.publish(phase='error',error='Application update failed during '+phase.replace('-',' ')+'. The running host was retained.'+
+                              guidance(manager.diagnostics.state.get('lastFailure', {})))
         raise
 
 

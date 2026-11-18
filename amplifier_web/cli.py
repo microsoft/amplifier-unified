@@ -209,6 +209,7 @@ def _doctor_details(data_dir: Path) -> None:
     from .tls import ca_bytes, ca_fingerprint, tls_ready
     print(f"Amplifier Unified {__version__}")
     print(f"Configuration: {data_dir / 'config' / 'server.yaml'}")
+    print(f"Private update command details (review before sharing): {data_dir / 'updates' / 'command-details'}")
     print("PAM:", pam_state)
     print("TLS local CA:", "configured" if ca_bytes(data_dir) else "not configured")
     print("TLS listener:", "ready" if tls_ready(data_dir, config) else "not configured or not startable")
@@ -292,6 +293,12 @@ def _windows_roots(data_dir: Path, configured: bool) -> None:
 
 def _serve(args, data_dir: Path, *, task_runner=None) -> None:
     from .reset import repair_lock
+    if task_runner is not None:
+        # The host that the Windows start-at-sign-in task started. It has started
+        # nothing yet and does not hold its own lock yet: the one moment for a
+        # step that needs the data folder to itself. It raises no error.
+        from .source_store_repair import at_host_start
+        at_host_start(data_dir)
     with repair_lock(data_dir, shared=True):
         if task_runner is None:
             _serve_unlocked(args, data_dir)

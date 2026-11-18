@@ -1,0 +1,115 @@
+name: Restart confirmation after an app update
+# A host that an app update started confirms its start after its first health
+# answer. On Windows that confirmation asks the Task Scheduler twice who runs
+# this host (windows_service.update_owner): once for the check of a rollback
+# (windows_app_recovery.confirm) and once before the acknowledgement
+# (update_readiness.confirm_readiness). Each question is a PowerShell process.
+#
+# Seen on Windows PCs (4 of 4 app updates): the new host answers /api/health,
+# then gives no HTTP answer for 3.3 to 4.2 seconds, then answers again. A
+# plain start has no such span.
+#
+# The Windows job runs the whole confirmation with the real question on a
+# hosted runner and prints what it measured in one line that starts with
+# HOST-LOOP-MEASUREMENT: how long the event loop did not run, how long each
+# question took, and the other work of the confirmation. It requires that the
+# loop ran and that an HTTP request was answered during each question. The
+# case must run there: a skip fails the job.
+# The Linux job runs every case of the two test files. Its stand-in for the
+# question waits in its thread until the case lets it go.
+#
+# Not shown here: an installation from the setup file, the product's own
+# server and its TLS, a registered Amplifier task (the runner's account has
+# none, so the real question answers "no task"), a real app update, and the
+# time of a question on a person's PC.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/restart-confirmation.yml
+      - amplifier_web/update_readiness.py
+      - amplifier_web/windows_app_recovery.py
+      # What the two questions and the acknowledgement rest on.
+      - amplifier_web/windows_service.py
+      - amplifier_web/windows_task_runtime.py
+      - amplifier_web/app_replacement.py
+      # What the cases run besides: the update manager and its records, the
+      # app's generations, the private files of the native case.
+      - amplifier_web/updates.py
+      - amplifier_web/app_updates.py
+      - amplifier_web/update_diagnostics.py
+      - amplifier_web/application_generations.py
+      - amplifier_web/windows_files.py
+      - tests/test_update_readiness.py
+      - tests/test_windows_app_recovery.py
+      # The native case takes its process owner setting from this file.
+      - tests/fixtures/manual_app_handoff_native.py
+permissions:
+  contents: read
+jobs:
+  linux:
+    name: Every case of the restart confirmation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13'
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      - run: uv sync --locked --group dev
+      # "shell: bash" gives pipefail: without it the step would take the status
+      # of tee, not of pytest. One skip is right here: the native Windows case.
+      - name: Require every case; only the native Windows case may skip
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --no-sync pytest -q -rs -p no:cacheprovider tests/test_update_readiness.py tests/test_windows_app_recovery.py | tee report.txt
+          summary=$(grep -v '^$' report.txt | tail -n 1)
+          if ! grep -qE '^(=+ )?[0-9]+ passed, 1 skipped(, [0-9]+ warnings?)? in ' <<<"$summary"; then
+            echo "A case did not pass, or another case than the native Windows one was skipped: $summary" >&2
+            exit 1
+          fi
+          grep -qE '^SKIPPED \[1\] tests/test_update_readiness\.py:[0-9]+: needs the real Task Scheduler question of native Windows$' report.txt
+  windows:
+    name: The loop runs during the real Task Scheduler questions on native Windows
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      PYTHONUTF8: '1'
+      UV_PYTHON_DOWNLOADS: never
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13'
+          architecture: x64
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      - run: uv sync --locked --group dev
+      # The case makes its installation folder in the runner account's home
+      # folder, as the product's private-folder check needs, and removes it.
+      # -rA prints the case's output, with the measurement line, when it passes.
+      - name: Require the native case with the real question, with no skip
+        shell: pwsh
+        run: |
+          uv run --no-sync python -c "import os, sys, struct; assert os.name == 'nt'; assert sys.version_info[:2] == (3, 13); assert struct.calcsize('P') == 8"
+          if ($LASTEXITCODE -ne 0) { throw 'Native Windows preflight failed.' }
+          uv run --no-sync pytest -q -rA -p no:cacheprovider tests/test_update_readiness.py -k native_windows | Tee-Object -Variable report
+          $status = $LASTEXITCODE
+          $report | Out-File -FilePath restart-confirmation-native.txt -Encoding utf8
+          if ($status -ne 0) { throw 'The native case failed; the line HOST-LOOP-MEASUREMENT above holds what it measured.' }
+          $summary = [string]($report | Where-Object { $_ } | Select-Object -Last 1)
+          if ($summary -notmatch '^(=+ )?1 passed, \d+ deselected(, \d+ warnings?)? in ') { throw "The native case did not run or did not pass; on this lane it must run: $summary" }
+          if (-not ($report | Where-Object { $_ -match '^HOST-LOOP-MEASUREMENT ' })) { throw 'The native case printed no measurement.' }
+      - name: Retain the native case's output
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: restart-confirmation-native
+          path: restart-confirmation-native.txt
+          if-no-files-found: warn
+          retention-days: 7

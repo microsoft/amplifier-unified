@@ -1,10 +1,16 @@
 import asyncio
 from copy import deepcopy
 import json
+import os
 from pathlib import Path
 import socket
+import sys
+import threading
+import time
 from types import SimpleNamespace
+import uuid
 
+import aiohttp
 from aiohttp import web
 import pytest
 
@@ -633,3 +639,471 @@ async def test_verified_app_restart_continues_manual_component_install(tmp_path,
         assert sequence['other']['status']=='waiting'
     finally:
         await service.close()
+
+
+# A host that an app update started confirms its start after its first health answer. On Windows that
+# confirmation asks the Task Scheduler twice who runs this host (windows_service.update_owner): once
+# for the check of a rollback (windows_app_recovery.confirm) and once before the acknowledgement. Each
+# question is a PowerShell process that takes seconds on some PCs. The cases below hold a stand-in for
+# that question in its thread and require that the host goes on answering.
+
+GENERATION = 'e' * 32
+WINDOWS_TARGET = {**TARGET, 'generation': GENERATION}
+
+
+class WindowsSys:
+    """The module's ``sys`` with the platform name of Windows. Every other attribute is the real one."""
+    platform = 'win32'
+
+    def __getattr__(self, name):
+        return getattr(sys, name)
+
+
+class HeldOwner:
+    """A stand-in for the Task Scheduler question, with the product's answer type (the task's spec).
+
+    In a thread that is not the event loop's it waits until the case lets it go. On the loop's own
+    thread it returns at once: nothing else can run there, and the case fails on ``started``.
+    """
+
+    def __init__(self, answer, questions):
+        self.answer, self.loop_thread = answer, threading.get_ident()
+        self.gates = [(threading.Event(), threading.Event()) for _ in range(questions)]
+        self.on_loop = []
+
+    def __call__(self, home):
+        index = len(self.on_loop)
+        self.on_loop.append(threading.get_ident() == self.loop_thread)
+        if self.on_loop[-1] or index >= len(self.gates):
+            return self.answer
+        started, go = self.gates[index]
+        started.set()
+        assert go.wait(30), 'The case did not let the owner question go'
+        return self.answer
+
+    async def started(self, index):
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 10
+        while not self.gates[index][0].is_set():
+            assert not any(self.on_loop), 'The owner question ran on the event loop: the host answers nothing during it'
+            assert loop.time() < deadline, 'The owner question did not start'
+            await asyncio.sleep(.005)
+
+    def go(self, index=None):
+        for _, go in self.gates if index is None else [self.gates[index]]:
+            go.set()
+
+
+def handed_over(monkeypatch, home, *, status='prepared'):
+    """What an app update leaves for the new host: the task's spec and the launcher's hand-over record.
+
+    The record is kept in memory, with the product's own validation of each write.
+    """
+    from amplifier_web import windows_app_recovery as recovery
+    spec = SimpleNamespace(python=str(Path(home) / 'bootstrap/Scripts/pythonw.exe'), data_dir=str(home),
+                           registration_id='a' * 32)
+    launcher = {'prefix': str(Path(home) / 'bootstrap'), 'digest': 'b' * 64}
+    earlier_host = {'schema': 1, 'registration': spec.registration_id, 'run': '7' * 32, 'pid': 123,
+                    'created': '134000000000000001', 'image': r'C:\Python\pythonw.exe', 'phase': 'listening'}
+    saved = {'writes': [], 'record': recovery._validate({
+        'schema': 1, 'registration': spec.registration_id,
+        'restart': {'schema': 1, 'run': earlier_host,
+                    'target': {'revision': REVISION, 'generation': GENERATION, 'attemptId': ATTEMPT}},
+        'promoted': {'schema': 1, 'bootstrap': launcher, 'revision': REVISION, 'generation': GENERATION,
+                     'version': __version__, 'componentDigest': '2' * 64},
+        'previous': None, 'bootstrap': launcher, 'installation': launcher,
+        'identity': {'version': '1.0.0', 'revision': '1' * 40, 'instanceId': '2' * 32},
+        'graph': [{'name': 'amplifier-unified', 'version': '1.0.0',
+                   'url': 'https://github.com/microsoft/amplifier-unified', 'revision': '1' * 40}],
+        'extras': [], 'artifact': None, 'status': status}, spec)}
+
+    def read(given):
+        assert given is spec
+        return deepcopy(saved['record'])
+
+    def write(given, value):
+        assert given is spec
+        saved['record'] = recovery._validate(value, spec)
+        saved['writes'].append(value['status'])
+        return deepcopy(saved['record'])
+
+    monkeypatch.setattr(recovery, 'read', read)
+    monkeypatch.setattr(recovery, '_write', write)
+    return spec, saved
+
+
+def windows_host(tmp_path, monkeypatch, questions):
+    """A host on Windows that an app update started, with a held owner question."""
+    from amplifier_web import windows_service
+    service, manager = make_manager(tmp_path, monkeypatch,
+                                    state={'phase': 'activating', 'pendingRestart': WINDOWS_TARGET})
+    spec, saved = handed_over(monkeypatch, manager.home)
+    monkeypatch.setattr(update_readiness, 'sys', WindowsSys())
+    owner = HeldOwner(spec, questions)
+    monkeypatch.setattr(windows_service, 'update_owner', owner)
+    return service, manager, saved, owner
+
+
+@pytest.mark.parametrize('held', [0, 2.3])
+async def test_the_host_answers_while_the_two_owner_questions_of_a_restart_confirmation_run(tmp_path, monkeypatch, held):
+    """``held``: the waiter's own request has a time limit of 2 seconds, counted from its start. An owner
+    question that is still open after that time is not cut by it: the limit ends when the health answer
+    is read."""
+    service, manager, saved, owner = windows_host(tmp_path, monkeypatch, questions=2)
+
+    async def handle(request):
+        return web.json_response(health(manager))
+    runner, site, sock = await listener(manager, handle)
+    await site.start()
+    task = asyncio.create_task(update_readiness.wait_for_readiness(manager, 'fixture-token', timeout=30, interval=.01))
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5), trust_env=False) as outside:
+            # 0: the check of a rollback (windows_app_recovery.confirm). 1: before the acknowledgement.
+            for question in (0, 1):
+                await owner.started(question)
+                async with outside.get(f'http://127.0.0.1:{service.port}/api/health') as response:
+                    assert response.status == 200 and (await response.json())['ok'] is True
+                if question == 0:
+                    await asyncio.sleep(held)
+                assert not task.done()
+                assert service.state['updates']['pendingRestart'] == WINDOWS_TARGET
+                assert saved['record']['status'] == 'prepared' and not saved['writes']
+                owner.go(question)
+        await asyncio.wait_for(task, 10)
+        assert owner.on_loop == [False, False]
+        state = service.state['updates']
+        assert state['phase'] == 'installed' and state['pendingRestart'] is None
+        assert state['applicationResult']['phase'] == 'restart-ack'
+        assert saved['writes'] == ['acknowledged']
+        assert manager.diagnostics.state['latest']['phase'] == 'restart-ack'
+    finally:
+        owner.go()
+        task.cancel();await asyncio.gather(task, return_exceptions=True)
+        await runner.cleanup();sock.close();await service.close()
+
+
+async def test_a_restart_target_that_changes_during_the_owner_question_is_not_acknowledged(tmp_path, monkeypatch):
+    service, manager, saved, owner = windows_host(tmp_path, monkeypatch, questions=1)
+    task = asyncio.create_task(manager.confirm_readiness(health(manager), expected=WINDOWS_TARGET))
+    try:
+        await owner.started(0)
+        # Another task of the host, while the question's thread runs: a later attempt is now pending.
+        later = {**WINDOWS_TARGET, 'attemptId': 'f' * 32}
+        service.state['updates']['pendingRestart'] = later
+        owner.go(0)
+        assert await asyncio.wait_for(task, 10) is False
+        assert owner.on_loop == [False]
+        # The hand-over record names the first attempt. The answer for it must not retire that record.
+        assert saved['record']['status'] == 'prepared' and not saved['writes']
+        state = service.state['updates']
+        assert state['pendingRestart'] == later and state['phase'] == 'activating'
+        assert 'applicationResult' not in state
+        assert not any(row['phase'] == 'restart-ack' for row in manager.diagnostics.state['events'])
+    finally:
+        owner.go()
+        task.cancel();await asyncio.gather(task, return_exceptions=True)
+        await service.close()
+
+
+async def test_an_owner_that_is_not_this_host_is_not_acknowledged(tmp_path, monkeypatch):
+    service, manager, saved, owner = windows_host(tmp_path, monkeypatch, questions=1)
+    owner.answer = None  # The Task Scheduler does not run this host for this folder.
+    task = asyncio.create_task(manager.confirm_readiness(health(manager), expected=WINDOWS_TARGET))
+    try:
+        await owner.started(0)
+        owner.go(0)
+        assert await asyncio.wait_for(task, 10) is False
+        assert saved['record']['status'] == 'prepared' and not saved['writes']
+        state = service.state['updates']
+        assert state['pendingRestart'] == WINDOWS_TARGET and state['phase'] == 'activating'
+        assert not any(row['phase'] == 'restart-ack' for row in manager.diagnostics.state['events'])
+    finally:
+        owner.go()
+        task.cancel();await asyncio.gather(task, return_exceptions=True)
+        await service.close()
+
+
+async def test_a_restart_without_a_generation_asks_no_owner_question(tmp_path, monkeypatch):
+    """A host on Windows that no app generation started (a start by hand): no question, no hand-over record."""
+    service, manager, saved, owner = windows_host(tmp_path, monkeypatch, questions=0)
+    service.state['updates']['pendingRestart'] = dict(TARGET)
+    try:
+        assert await asyncio.wait_for(manager.confirm_readiness(health(manager), expected=TARGET), 10) is True
+        assert owner.on_loop == [] and not saved['writes']
+        assert service.state['updates']['applicationResult']['phase'] == 'restart-ack'
+    finally:
+        await service.close()
+
+
+async def test_a_newer_running_version_asks_no_owner_question_and_leaves_the_hand_over_record(tmp_path, monkeypatch):
+    """A running release that is newer than the pending restart supersedes it. That path never asked
+    for the owner and never retired the launcher's record; it still does neither."""
+    from amplifier_web import app_replacement
+    proof = {'extras': []}
+    older = {**WINDOWS_TARGET, 'version': '0.0.1', 'qualification': proof}
+    running = {**IDENTITY, 'revision': 'f' * 40}
+    service, manager = make_manager(tmp_path, monkeypatch, identity=running,
+                                    state={'phase': 'activating', 'pendingRestart': older})
+    spec, saved = handed_over(monkeypatch, manager.home)
+    monkeypatch.setattr(update_readiness, 'sys', WindowsSys())
+    owner = HeldOwner(spec, questions=0)
+    monkeypatch.setattr('amplifier_web.windows_service.update_owner', owner)
+    # The installed packages of this test process are not the release's. That comparison has its own cases.
+    monkeypatch.setattr(app_replacement, 'matches_running', lambda manager, target: True)
+    successor = {**older, 'version': running['version'], 'revision': running['revision']}
+    try:
+        assert await asyncio.wait_for(update_readiness.confirm_readiness(
+            manager, health(manager), expected=older, successor=successor), 10) is True
+        assert owner.on_loop == [] and not saved['writes'] and saved['record']['status'] == 'prepared'
+        state = service.state['updates']
+        assert state['applicationResult']['phase'] == 'restart-superseded' and state['pendingRestart'] is None
+    finally:
+        await service.close()
+
+
+@pytest.mark.parametrize('question', [0, 1])
+async def test_a_confirmation_that_is_cancelled_during_an_owner_question_changes_nothing(tmp_path, monkeypatch, question):
+    service, manager, saved, owner = windows_host(tmp_path, monkeypatch, questions=2)
+
+    async def handle(request):
+        return web.json_response(health(manager))
+    runner, site, sock = await listener(manager, handle)
+    await site.start()
+    task = asyncio.create_task(update_readiness.wait_for_readiness(manager, 'fixture-token', timeout=30, interval=.01))
+    try:
+        for earlier in range(question):
+            await owner.started(earlier)
+            owner.go(earlier)
+        await owner.started(question)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert not manager.lock.locked() and not service.lock.locked()
+
+        def unchanged():
+            state = service.state['updates']
+            assert state['pendingRestart'] == WINDOWS_TARGET and state['phase'] == 'activating'
+            assert 'applicationResult' not in state
+            assert saved['record']['status'] == 'prepared' and not saved['writes']
+            assert not any(row['phase'] == 'restart-ack' for row in manager.diagnostics.state['events'])
+        unchanged()
+        failure = manager.diagnostics.state['lastFailure']
+        assert failure['phase'] == 'restart-readiness' and failure['errorType'] == 'CancelledError'
+        # The thread ends later. Nothing uses its answer.
+        owner.go()
+        await asyncio.sleep(.05)
+        unchanged()
+    finally:
+        owner.go()
+        task.cancel();await asyncio.gather(task, return_exceptions=True)
+        await runner.cleanup();sock.close();await service.close()
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='needs the real Task Scheduler question of native Windows')
+async def test_native_windows_the_loop_runs_during_the_real_owner_questions_of_a_restart_confirmation(monkeypatch):
+    """A measurement on a hosted Windows runner, and the proof with the real question.
+
+    Real: windows_service.update_owner (a PowerShell process that asks the Task Scheduler), the whole
+    confirmation (wait_for_readiness, windows_app_recovery.confirm, confirm_readiness), the app
+    service with its SQLite file, the update manager, the hand-over record and this process's run
+    record as private files, and a listener on 127.0.0.1.
+    The case's own part: the runner's account has no Amplifier task, so the real question answers
+    "no task"; the case then gives the confirmation the spec of its own folder in the answer's place.
+    The identity of the running app is a stand-in, as in every case of this file. So the comparison
+    of the installed packages with the update's record is not made; the case makes that check's two
+    reads of the installed packages (of this test environment) in its place and answers yes. The
+    line says for each of the two whether it read to its end ("installedPackagesRead"). The listener
+    is a test application with one route and no TLS, not the product's server.
+    The line HOST-LOOP-MEASUREMENT in the output holds the numbers. They are printed before the
+    checks, so a run without the change prints them too.
+    """
+    import http.client
+    import shutil
+    from fixtures.manual_app_handoff_native import token_user_default_owner
+    from amplifier_web import app_component_graph as components, app_replacement, app_updates
+    from amplifier_web import windows_app_recovery as recovery, windows_files, windows_service, windows_task_runtime
+
+    clock = time.perf_counter
+    loop_thread = threading.get_ident()
+    home = windows_files.address(Path.home() / ('au-host-loop-' + uuid.uuid4().hex[:10]))
+    report, questions, spans, ticks, answers = {}, [], [], [], []
+    stop = threading.Event()
+    real_owner = windows_service.update_owner
+
+    def timed(name, function):
+        def call(*args, **kwargs):
+            began = clock()
+            try:
+                return function(*args, **kwargs)
+            finally:
+                spans.append((name, began, clock()))
+        return call
+
+    async def tick():
+        while True:
+            ticks.append(clock())
+            await asyncio.sleep(.005)
+
+    def seconds(value):
+        return round(value, 3)
+
+    # A hosted runner's account is elevated: without this a new folder belongs to the Administrators
+    # group, and the private-folder check refuses that owner. On a person's PC the account owns it.
+    with token_user_default_owner():
+        service = runner = sock = ticker = reader = None
+        try:
+            with windows_files.directory(home / 'config/services', owned_root=home, create=True):
+                pass
+            pending = {**WINDOWS_TARGET, 'qualification': {'extras': []}}
+            service, manager = make_manager(home, monkeypatch, state={'phase': 'activating', 'pendingRestart': pending})
+            spec = SimpleNamespace(python=sys.executable, data_dir=str(home), registration_id='a' * 32)
+            launcher = {'prefix': str(home / 'bootstrap'), 'digest': 'b' * 64}
+            # This process's own run record, written by the product's runner as a host writes it.
+            host_run = windows_task_runtime.Runner(spec)
+            host_run.phase('listening')
+            earlier_host = {**host_run.record, 'run': '7' * 32}
+            record = {
+                'schema': 1, 'registration': spec.registration_id,
+                'restart': {'schema': 1, 'run': earlier_host,
+                            'target': {'revision': REVISION, 'generation': GENERATION, 'attemptId': ATTEMPT}},
+                'promoted': {'schema': 1, 'bootstrap': launcher, 'revision': REVISION, 'generation': GENERATION,
+                             'version': __version__, 'componentDigest': '2' * 64},
+                'previous': None, 'bootstrap': launcher, 'installation': launcher,
+                'identity': {'version': '1.0.0', 'revision': '1' * 40, 'instanceId': '2' * 32},
+                'graph': [{'name': 'amplifier-unified', 'version': '1.0.0',
+                           'url': 'https://github.com/microsoft/amplifier-unified', 'revision': '1' * 40}],
+                'extras': [], 'artifact': None, 'status': 'prepared'}
+            recovery._write(spec, record)
+            assert recovery.read(spec)['status'] == 'prepared'
+
+            def owner(given):
+                began = clock()
+                answer = real_owner(given)  # The real PowerShell process and the real Task Scheduler question.
+                questions.append({'began': began, 'ended': clock(), 'answer': answer,
+                                  'onLoopThread': threading.get_ident() == loop_thread})
+                return spec
+            monkeypatch.setattr(windows_service, 'update_owner', owner)
+
+            package_reads = {}
+
+            def installed_packages(manager, target):
+                # Both reads are made, also when the first one refuses a package of the test environment
+                # (a source of its own). The line names a read that did not reach its end.
+                for name, read in (('graph', components.installed_graph), ('extras', app_updates.installed_extras)):
+                    try:
+                        read()
+                    except ValueError as error:
+                        package_reads[name] = type(error).__name__
+                    else:
+                        package_reads[name] = 'complete'
+                return True
+            monkeypatch.setattr(app_replacement, 'matches_running', timed('installed packages read', installed_packages))
+            monkeypatch.setattr(recovery, 'acknowledge', timed('acknowledge', recovery.acknowledge))
+            monkeypatch.setattr(manager.diagnostics, 'record', timed('diagnostic record', manager.diagnostics.record))
+            monkeypatch.setattr(service, '_publish_changes', timed('publish', service._publish_changes))
+
+            async def handle(request):
+                return web.json_response(health(manager))
+            runner, site, sock = await listener(manager, handle)
+            await site.start()
+
+            def read_health():
+                # Another program's view: one request after the other, each on a new connection.
+                while not stop.is_set():
+                    began, status = clock(), None
+                    try:
+                        connection = http.client.HTTPConnection('127.0.0.1', service.port, timeout=60)
+                        try:
+                            connection.request('GET', '/api/health')
+                            response = connection.getresponse()
+                            response.read()
+                            status = response.status
+                        finally:
+                            connection.close()
+                    except OSError as error:
+                        status = type(error).__name__
+                    answers.append((began, clock(), status))
+                    stop.wait(.02)
+            reader = threading.Thread(target=read_health, daemon=True)
+            reader.start()
+            ticker = asyncio.create_task(tick())
+            await asyncio.sleep(.3)
+
+            began = clock()
+            await asyncio.wait_for(update_readiness.wait_for_readiness(
+                manager, 'fixture-token', timeout=120, interval=.05), 150)
+            ended = clock()
+            await asyncio.sleep(.3)
+            stop.set()
+            ticker.cancel()
+            await asyncio.gather(ticker, return_exceptions=True)
+            await asyncio.to_thread(reader.join, 70)
+
+            inside = [(first, second) for first, second in zip(ticks, ticks[1:]) if second >= began and first <= ended]
+            quiet = [(first, second) for first, second in zip(ticks, ticks[1:]) if second < began]
+            waits = [row for row in answers if row[1] >= began and row[0] <= ended]
+            for row in questions:
+                row['ticksDuring'] = sum(row['began'] < at < row['ended'] for at in ticks)
+                row['answersDuring'] = sum(row['began'] <= first and second <= row['ended'] and status == 200
+                                           for first, second, status in answers)
+            report['confirmation'] = {
+                'seconds': seconds(ended - began),
+                'longestLoopPause': seconds(max(second - first for first, second in inside)),
+                'longestLoopPauseBeforeIt': seconds(max(second - first for first, second in quiet)),
+                'longestHttpWait': seconds(max(second - first for first, second, _ in waits)),
+                'httpRequests': len(waits), 'httpNot200': sum(status != 200 for _, _, status in waits),
+                'ownerQuestions': [{'seconds': seconds(row['ended'] - row['began']),
+                                    'startedAfter': seconds(row['began'] - began),
+                                    'onLoopThread': row['onLoopThread'],
+                                    'realAnswer': 'no task' if row['answer'] is None else 'a task',
+                                    'loopTicksDuring': row['ticksDuring'],
+                                    'httpAnswersDuring': row['answersDuring']} for row in questions],
+                'otherWorkOnTheLoop': [{'what': name, 'seconds': seconds(second - first),
+                                        'startedAfter': seconds(first - began)} for name, first, second in spans],
+                'installedPackagesRead': dict(package_reads),
+            }
+            state = service.state['updates']
+            report['result'] = {'phase': state.get('phase'), 'pendingRestart': state.get('pendingRestart'),
+                                'record': recovery.read(spec)['status']}
+
+            # Each candidate alone, on this runner, after the confirmation.
+            def alone(function, times=3):
+                rows = []
+                for _ in range(times):
+                    first = clock()
+                    try:
+                        function()
+                    except Exception as error:  # A measurement: the time counts, the error is named.
+                        rows.append({'seconds': seconds(clock() - first), 'error': type(error).__name__})
+                    else:
+                        rows.append(seconds(clock() - first))
+                return rows
+            report['alone'] = {
+                'ownerQuestion': alone(lambda: real_owner(manager.home)),
+                'saveToSqlite': alone(lambda: service._save_changes(globals={'updates'})),
+                'installedGraphAndExtras': alone(lambda: (components.installed_graph(), app_updates.installed_extras())),
+                'handOverRecordWrite': alone(lambda: recovery._write(spec, {**record, 'status': 'acknowledged'})),
+                'runRecordRead': alone(lambda: windows_task_runtime.observe(spec)),
+            }
+            report['runner'] = {'python': sys.version.split()[0], 'cpus': os.cpu_count()}
+            print('HOST-LOOP-MEASUREMENT ' + json.dumps(report, sort_keys=True))
+
+            assert report['result'] == {'phase': 'installed', 'pendingRestart': None, 'record': 'acknowledged'}
+            assert len(questions) == 2, questions
+            assert any(name == 'installed packages read' for name, _, _ in spans)
+            assert set(package_reads) == {'graph', 'extras'}, package_reads
+            assert not any(row['onLoopThread'] for row in questions), 'An owner question ran on the event loop'
+            assert all(row['ticksDuring'] >= 1 for row in questions), 'The event loop did not run during an owner question'
+            assert all(row['answersDuring'] >= 1 for row in questions), 'No HTTP answer during an owner question'
+            assert report['confirmation']['httpNot200'] == 0
+        finally:
+            stop.set()
+            if ticker is not None:
+                ticker.cancel()
+            if runner is not None:
+                await runner.cleanup()
+            if sock is not None:
+                sock.close()
+            if service is not None:
+                await service.close()
+            shutil.rmtree(home, ignore_errors=True)

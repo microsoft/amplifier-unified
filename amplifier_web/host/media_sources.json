@@ -1,6 +1,18 @@
 {
   "recipe": "unified-root-read-file-v1",
   "status": "reviewed",
+  "accepted_sources": {
+    "amplifier-foundation": {
+      "repository": "https://github.com/microsoft/amplifier-foundation",
+      "commit": "a844e6c5dc03f98891839912d4d8ab5dae7cf46a",
+      "tree": "868ced8aad6d56815dd9158930958ac432906ddc"
+    },
+    "amplifier-module-provider-openai": {
+      "repository": "https://github.com/microsoft/amplifier-module-provider-openai",
+      "commit": "0640ac5f42bd6aa437f94cc0256a1c5090cb0a34",
+      "tree": "419a60ab39e77b15ebf4bf74c133be17d3258c79"
+    }
+  },
   "sources": {
     "amplifier_core/_session_init.py": "febe65040b8c968cb96bf6a2fec2b01583f2b8ace42aef673d82c3faf2379df7",
     "amplifier_core/loader.py": "e6b273ff22f99926e12a4d835f305d3d07cdd562b333158e243f743eb70b0252",

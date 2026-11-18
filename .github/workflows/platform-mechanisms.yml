@@ -426,6 +426,18 @@ jobs:
         run: |
           .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -p no:cacheprovider tests/test_windows_consumer_shell.py
           if ($LASTEXITCODE -ne 0) { throw 'Windows uninstall entry checks failed.' }
+      # Uninstall asks the running app whether a chat is at work. Real sockets
+      # and aiohttp's own errors on Windows: a listener that takes the
+      # connection and gives no answer is asked again, and the refusal of a
+      # port with no listener ends the wait. The case prints how many reads
+      # that took, how long, and how each read ended. No app runs here.
+      - name: Check the uninstall's question to a silent app and to a port with no app
+        shell: pwsh
+        run: |
+          .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -s -p no:cacheprovider tests/test_installation_health.py -k "windows_working" | Tee-Object -Variable report
+          if ($LASTEXITCODE -ne 0) { throw 'The checks of the uninstall question to the running app failed.' }
+          if (($report -join "`n") -match '\d+ skipped') { throw 'A case of the uninstall question was skipped; on this lane it must run.' }
+          if (-not (($report -join "`n") -match 'A port with no listener: \d+ read')) { throw 'The case with real sockets did not run.' }
       # Folder removal for uninstall: a real NTFS tree with a junction, folder
       # and file links, a hard link to an outside file, a read-only file, a path
       # of more than 400 characters and a file in use. Nothing outside the
