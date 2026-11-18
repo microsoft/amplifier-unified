@@ -317,8 +317,9 @@ class SourcePolicy:
 
 def bind_media(session, store, *, selection=None):
     """Before initialize. Unknown graphs do not install or enable producers."""
-    from .media_assembly import ReviewedRootRecipe, supported_plan
-    if (type(selection) is not ReviewedRootRecipe or not supported_plan(session.config)
+    from .media_assembly import ReviewedRootRecipe, root_participants
+    participants = root_participants(session.config)
+    if (type(selection) is not ReviewedRootRecipe or not participants
             or not selection.accepts_plan(session.config) or os.name != "posix"):
         return
     try:
@@ -328,9 +329,6 @@ def bind_media(session, store, *, selection=None):
         return
     coordinator = session.coordinator
     bridge = install_media_hook_bridge(coordinator)
-    plan = session.config
-    participants = ["unified-host", "loop-live", "context-simple", "tool-filesystem"]
-    participants += [row["module"] for row in plan.get("providers", []) + plan.get("hooks", [])]
     graph = bridge.begin_participating_graph(session, owner="unified-host", participants=tuple(participants))
     registration = HostRegistrationView(coordinator, graph.participant("unified-host"))
     coordinator.register_capability("web.media.registration", registration)
@@ -414,6 +412,12 @@ def _support(provider, request, model, options):
     return value
 
 
+def _supported_scope(coordinator, provider, request, options):
+    from .media_assembly import supported_request
+    state = coordinator.get_capability("web.media.construction")
+    return state is not None and supported_request(state[2].plan, provider, request, options)
+
+
 class HostMediaProjection:
     """One private counted candidate; no hydrated data in canonical messages."""
     def __init__(self, coordinator, provider, source, options, prepared, lifetime, support):
@@ -422,7 +426,7 @@ class HostMediaProjection:
         self.snapshot = source.model_copy(deep=True)
         self.capability = coordinator.get_capability(NAMESPACE)
         self.prepared, self.request, self.lifetime = prepared, prepared.request, lifetime
-        self.model = options.get("model") or source.model or getattr(provider, "default_model", None)
+        self.model = source.model  # Explicit qualified request, never a default/alias fallback.
         self.canonical = self.canonical_snapshot = None
         from ..provider_capture import provider_chain
         self.chain = provider_chain(provider)
@@ -444,6 +448,7 @@ class HostMediaProjection:
                 or not same_chain(self.chain, self.provider)
                 or self.coordinator.get_capability(NAMESPACE) is not self.capability
                 or self.capability.enabled is not True or self._binding() != self.binding
+                or not _supported_scope(self.coordinator, self.provider, self.source, self.options)
                 or self.support != _support(self.provider, self.snapshot, self.model, self.options)
                 or self.lifetime[1]() is not True):
             raise ValueError("Prepared media source/provider/construction changed")
@@ -474,15 +479,16 @@ class HostMediaProjection:
 
 class WarningProjection:
     """An unsupported root stays text usable without reading stored pixels."""
-    def __init__(self, request, options):
+    def __init__(self, request, options, *, coordinator=None):
         from amplifier_core.message_models import TextBlock
+        self.coordinator = coordinator
         self.source, self.snapshot = request, request.model_copy(deep=True)
         self.options = effective_options(request, options)
         self.request = request.model_copy(deep=True)
         for message in self.request.messages:
             if NAMESPACE in (message.metadata or {}):
                 message.metadata = {key: value for key, value in message.metadata.items() if key != NAMESPACE}
-                warning = TextBlock(text="[Image unavailable: supported reviewed root composition is not active; no pixels supplied]")
+                warning = TextBlock(text="[Image unavailable: supported reviewed root/model configuration is not active; no pixels supplied from storage]")
                 if isinstance(message.content, str):
                     message.content = [TextBlock(text=message.content), warning]
                 else:
@@ -496,6 +502,9 @@ class WarningProjection:
             raise ValueError("Reference-only request changed after fitting")
 
     def release(self):
+        registry = self.coordinator.get_capability("web.media.request_only") if self.coordinator is not None else None
+        if registry is not None:
+            registry.release(self.source)
         self.request = self.source = self.snapshot = self.canonical = self.canonical_snapshot = None
 
 
@@ -508,9 +517,11 @@ async def prepare_media(coordinator, provider, request, *, request_options=None)
             or not state[0].validate_receipt(state[0].graph_receipt)):
         if cap is not None:
             cap.enabled = False
-        return WarningProjection(request, request_options)
+        return WarningProjection(request, request_options, coordinator=coordinator)
     options = effective_options(request, request_options)
-    model = options.get("model") or request.model or getattr(provider, "default_model", None)
+    if not _supported_scope(coordinator, provider, request, options):
+        return WarningProjection(request, request_options, coordinator=coordinator)
+    model = request.model  # _supported_scope requires the same explicit portable/wire model.
     support = _support(provider, request, model, options)
     context = state[0].request_scope()
     validate = context.__enter__()

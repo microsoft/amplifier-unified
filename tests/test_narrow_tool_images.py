@@ -39,7 +39,8 @@ async def root(tmp_path, *, store=None, post=None,
     provider = RecordingProvider()
     plan = {"session": {"orchestrator": {"module": "loop-live", "config": {"configured_bundle": True}},
                         "context": {"module": "context-simple"}},
-            "providers": [{"module": "provider-openai-chatgpt"}],
+            "providers": [{"module": "provider-openai-chatgpt", "config": {
+                "auth_mode": "chatgpt_codex", "default_model": "gpt-6.1-sol"}}],
             "tools": [{"module": "tool-filesystem", "config": {
                 "working_dir": str(tmp_path), "allowed_read_paths": [str(tmp_path)]}}]}
     session = AmplifierSession(plan, session_id="root-media")
@@ -167,7 +168,7 @@ async def test_actual_core_read_original_count_send_reload(tmp_path, format):
         before = copy.deepcopy(canonical)
         encoded = json.dumps(canonical)
         assert base64.b64encode(original).decode() not in encoded
-        request = ChatRequest(messages=[Message(**row) for row in canonical])
+        request = ChatRequest(messages=[Message(**row) for row in canonical], model="gpt-6.1-sol")
         await first.wrapper.request_budget(request)
         await first.wrapper.request_budget(request)
         private = first.provider.counted
@@ -185,7 +186,7 @@ async def test_actual_core_read_original_count_send_reload(tmp_path, format):
         loaded, _ = first.store.load("root-media")
         await second.coordinator.get("context").set_messages(loaded)
         await second.checkpoint()
-        request = ChatRequest(messages=[Message(**row) for row in loaded])
+        request = ChatRequest(messages=[Message(**row) for row in loaded], model="gpt-6.1-sol")
         await second.wrapper.request_budget(request)
         await second.wrapper.complete(request)
         assert second.provider.observations[-1][2] == [(1, "tool", "call-image", original)]
@@ -228,7 +229,7 @@ async def test_current_policy_revocation_refuses_fitted_send_then_warns(tmp_path
     current = await root(tmp_path)
     try:
         _, _, refs, rows = await read(current, path)
-        request = ChatRequest(messages=[Message(**row) for row in rows])
+        request = ChatRequest(messages=[Message(**row) for row in rows], model="gpt-6.1-sol")
         await current.wrapper.request_budget(request)
         tool = current.coordinator.get("tools")["read_file"]
         tool.denied_read_paths = [str(tmp_path)]
@@ -250,7 +251,7 @@ async def test_private_cleanup_on_failure_and_abandonment(tmp_path, failure):
     current = await root(tmp_path)
     try:
         _, _, _, rows = await read(current, path)
-        request = ChatRequest(messages=[Message(**row) for row in rows])
+        request = ChatRequest(messages=[Message(**row) for row in rows], model="gpt-6.1-sol")
         current.provider.fail_count = failure == "count"
         if failure == "count":
             with pytest.raises(ValueError):
@@ -284,7 +285,7 @@ async def test_mixed_direct_upload_and_tool_ref_keep_exact_positions(tmp_path, m
         await current.coordinator.get("context").add_message({"role": "user", "content": content,
             "metadata": {"amplifier_input": {"version": 1, "id": "actual-input"}}})
         _, _, _, rows = await read(current, path)
-        request = ChatRequest(messages=[Message(**row) for row in rows])
+        request = ChatRequest(messages=[Message(**row) for row in rows], model="gpt-6.1-sol")
         await current.wrapper.request_budget(request)
         await current.wrapper.complete(request)
         images = current.provider.observations[-1][2]
@@ -302,7 +303,8 @@ async def test_mixed_direct_upload_and_tool_ref_keep_exact_positions(tmp_path, m
 def test_recipe_is_explicit_and_shipped_pins_are_pending():
     plan = {"session": {"orchestrator": "loop-live", "context": "context-simple"},
             "tools": [{"module": "tool-filesystem"}],
-            "providers": [{"module": "provider-openai-chatgpt"}]}
+            "providers": [{"module": "provider-openai-chatgpt", "config": {
+                "auth_mode": "chatgpt_codex", "default_model": "gpt-6.1-sol"}}]}
     assert supported_plan(plan)
     assert select_root(plan) is None
     for extra in ("tool-delegate", "unknown-tool"):
@@ -341,7 +343,7 @@ async def test_stream_close_releases_counted_private_candidate(tmp_path, started
     current = await root(tmp_path)
     try:
         _, _, _, rows = await read(current, path)
-        request = ChatRequest(messages=[Message(**row) for row in rows])
+        request = ChatRequest(messages=[Message(**row) for row in rows], model="gpt-6.1-sol")
         await current.wrapper.request_budget(request)
         private = current.provider.counted
         stream = current.wrapper.stream(request)
@@ -375,7 +377,7 @@ async def test_mixed_upload_issuance_survives_reload_without_becoming_global_tru
         rows, _ = first.store.load("root-media")
         await second.coordinator.get("context").set_messages(rows)
         await second.checkpoint()
-        request = ChatRequest(messages=[Message(**row) for row in rows])
+        request = ChatRequest(messages=[Message(**row) for row in rows], model="gpt-6.1-sol")
         await second.wrapper.request_budget(request)
         await second.wrapper.complete(request)
         assert second.provider.observations[-1][2] == [
@@ -403,7 +405,7 @@ async def test_canonical_relation_cannot_be_forged_or_rebound(tmp_path, change):
             changed[0]["tool_calls"][0]["arguments"]["file_path"] = str(tmp_path / "different")
         await current.coordinator.get("context").set_messages(changed)
         await current.checkpoint()
-        request = ChatRequest(messages=[Message(**row) for row in changed])
+        request = ChatRequest(messages=[Message(**row) for row in changed], model="gpt-6.1-sol")
         await current.wrapper.request_budget(request)
         await current.wrapper.complete(request)
         assert current.provider.observations[-1][2] == []
@@ -417,8 +419,8 @@ async def test_selected_provider_abandons_its_exact_private_count(tmp_path):
     current = await root(tmp_path)
     try:
         _, _, _, rows = await read(current, path)
-        request = ChatRequest(messages=[Message(**row) for row in rows])
-        selected = SelectedProvider(current.provider, {"model": "offline"}, lambda _: current.wrapper)
+        request = ChatRequest(messages=[Message(**row) for row in rows], model="gpt-6.1-sol")
+        selected = SelectedProvider(current.provider, {"model": "gpt-6.1-sol"}, lambda _: current.wrapper)
         await selected.request_budget(request)
         assert selected.release_media_request(request)
         assert not current.wrapper._media and not current.wrapper.prepared
@@ -463,7 +465,7 @@ async def test_counted_support_and_options_cannot_change_before_send(tmp_path, c
     current = await root(tmp_path)
     try:
         _, _, _, rows = await read(current, path)
-        request = ChatRequest(messages=[Message(**row) for row in rows])
+        request = ChatRequest(messages=[Message(**row) for row in rows], model="gpt-6.1-sol")
         await current.wrapper.request_budget(request)
         if change == "support":
             current.provider.support = {"v": 1, "positions": []}
@@ -488,7 +490,7 @@ async def test_unknown_post_graph_is_warning_only_and_does_not_read_assets(tmp_p
         current.coordinator.hooks.register("tool:post", unowned, name="unknown-post")
         monkeypatch.setattr(current.coordinator.get_capability("web.media.store"), "resolve_ref",
                             lambda *args, **kwargs: pytest.fail("Unknown graph attempted hydration"))
-        request = ChatRequest(messages=[Message(**row) for row in rows])
+        request = ChatRequest(messages=[Message(**row) for row in rows], model="gpt-6.1-sol")
         projection = await media.prepare_media(current.coordinator, current.provider, request)
         projection.bind_canonical(request)
         projection.validate()
@@ -506,9 +508,9 @@ async def test_selected_execution_change_cannot_replace_counted_private_request(
     current = await root(tmp_path)
     try:
         _, _, _, rows = await read(current, path)
-        request = ChatRequest(messages=[Message(**row) for row in rows])
+        request = ChatRequest(messages=[Message(**row) for row in rows], model="gpt-6.1-sol")
         adapters = [current.wrapper]
-        selected = SelectedProvider(current.provider, {"model": "offline"}, lambda _: adapters[0])
+        selected = SelectedProvider(current.provider, {"model": "gpt-6.1-sol"}, lambda _: adapters[0])
         await selected.request_budget(request)
         private = current.provider.counted
         adapters[0] = SurfaceProvider(current.provider, MediaOnlyDelivery(), coordinator=current.coordinator)
@@ -530,7 +532,7 @@ async def test_private_projection_is_released_on_cancellation(tmp_path):
         await asyncio.Event().wait()
     try:
         _, _, _, rows = await read(current, path)
-        request = ChatRequest(messages=[Message(**row) for row in rows])
+        request = ChatRequest(messages=[Message(**row) for row in rows], model="gpt-6.1-sol")
         await current.wrapper.request_budget(request)
         private = current.provider.counted
         current.provider.complete = hold
@@ -591,7 +593,7 @@ async def test_request_only_surface_and_tool_refs_count_send_then_release(tmp_pa
             "id": "call-surface", "name": "app_control", "arguments": {}}]},
             {"role": "tool", "name": "app_control", "tool_call_id": "call-surface",
              "content": json.dumps(surface.receipts["receipt"]["result"])}]
-        request = ChatRequest(messages=[Message(**row) for row in rows],
+        request = ChatRequest(messages=[Message(**row) for row in rows], model="gpt-6.1-sol",
                               tools=[{"name": "app_control", "description": "", "parameters": {}}])
         wrapper = SurfaceProvider(current.provider, surface, coordinator=current.coordinator)
         await wrapper.request_budget(request)

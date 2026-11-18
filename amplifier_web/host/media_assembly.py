@@ -18,8 +18,29 @@ import re
 from types import CodeType, FunctionType, MethodType
 
 RECIPE = "unified-root-read-file-v1"
-_PROVIDERS = {"provider-openai-chatgpt", "provider-openai"}
+MEDIA_MODEL = "gpt-6.1-sol"
 _HOOKS = {"hook-context-intelligence"}
+# One ordinary Work root, predicted from its shipped manifests and all five
+# Unified defaults. These lists are source policy, not discovered module IDs.
+WORK_TOOLS = (
+    "tool-transcript", "tool-skills", "tool-bash", "tool-exec", "tool-web",
+    "tool-ui-use", "tool-filesystem", "tool-apply-patch", "tool-search",
+    "tool-delegate", "tool-image", "tool-computer-use",
+    "tool-context-intelligence-transcript", "tool-mode",
+    "tool-context-intelligence-set-filters",
+)
+WORK_HOOKS = (
+    "hook-computer-use", "hooks-mode", "hooks-approval",
+    "hook-context-intelligence", "hooks-routing",
+)
+WORK_AGENTS = frozenset({
+    "computer-use:computer-operator", "context-intelligence:graph-analyst",
+    "context-intelligence:session-navigator", "context-intelligence:server-data-ops",
+})
+WORK_PARTICIPANTS = ("unified-host", "loop-live", "context-managed",
+                     "provider-openai-chatgpt", *WORK_TOOLS, *WORK_HOOKS)
+_MINIMAL_PARTICIPANTS = ("unified-host", "loop-live", "context-simple",
+                         "tool-filesystem", "provider-openai-chatgpt")
 # Minimum reviewed semantic owners; integration may pin further dependencies.
 # These are authored names, never discovered from the current callback graph.
 _REQUIRED_SOURCES = frozenset({
@@ -48,6 +69,47 @@ _REQUIRED_SOURCES = frozenset({
     "amplifier_module_tool_filesystem/__init__.py",
     "amplifier_module_tool_filesystem/read.py",
 })
+_WORK_SOURCES = frozenset({
+    "amplifier_foundation/bundle/_prepared.py",
+    "amplifier_web/host/initialization.py",
+    "amplifier_web/host/components.py", "amplifier_web/host/ui_use_config.py",
+    "amplifier_web/coordination_delivery.py", "amplifier_web/computer_episodes.py",
+    "amplifier_web/tool_approval_scope.py", "amplifier_web/write_policy_refresh.py",
+    "amplifier_web/preparation_context.py", "amplifier_web/context_continuity.py",
+    "amplifier_module_context_managed/boundary.py",
+    "amplifier_module_context_managed/request_context.py",
+    "amplifier_module_context_managed/summary.py",
+    "amplifier_module_loop_streaming/media.py",
+    "amplifier_module_tool_exec/runner.py",
+    "amplifier_module_hook_context_intelligence/handlers/logging_handler.py",
+    "amplifier_module_hooks_approval/approval_hook.py",
+    *("amplifier_module_" + name.replace("-", "_") + "/__init__.py"
+      for name in ("context-managed", *WORK_TOOLS, *WORK_HOOKS)),
+})
+
+
+def supported_provider(spec):
+    """Qualification is Codex + one explicit model, not the provider catalogue."""
+    if not isinstance(spec, dict) or spec.get("module") != "provider-openai-chatgpt":
+        return False
+    config = spec.get("config", {})
+    return (isinstance(config, dict) and config.get("auth_mode") == "chatgpt_codex"
+            and config.get("default_model") == MEDIA_MODEL)
+
+
+def supported_request(plan, provider, request, options):
+    """Check actual effective inputs without resolving aliases or changing defaults."""
+    from ..provider_capture import provider_chain
+    chain = provider_chain(provider)
+    actual = chain[-1]() if chain else None
+    extra = getattr(actual, "extra_request_params", {}) if actual is not None else None
+    return (supported_plan(plan) and actual is not None
+            and getattr(actual, "auth_mode", None) == "chatgpt_codex"
+            and getattr(actual, "default_model", None) == MEDIA_MODEL
+            and request.model == MEDIA_MODEL and options.get("model") == MEDIA_MODEL
+            and not {"input", "extra_body"} & options.keys()
+            and isinstance(extra, dict)
+            and not {"input", "model", "extra_body"} & extra.keys())
 
 
 def supported_plan(plan):
@@ -55,17 +117,56 @@ def supported_plan(plan):
     def module(spec):
         return spec if isinstance(spec, str) else spec.get("module") if isinstance(spec, dict) else None
     session = plan.get("session", {})
-    return (
+    common = (
         module(session.get("orchestrator")) == "loop-live"
-        and module(session.get("context")) == "context-simple"
+        and len(plan.get("providers", [])) == 1
+        and supported_provider(plan["providers"][0])
+        and not plan.get("spawn")
+    )
+    minimal = (
+        module(session.get("context")) == "context-simple"
         and len(plan.get("tools", [])) == 1
         and module(plan["tools"][0]) == "tool-filesystem"
-        and len(plan.get("providers", [])) == 1
-        and module(plan["providers"][0]) in _PROVIDERS
         and all(module(row) in _HOOKS for row in plan.get("hooks", []))
         and len(plan.get("hooks", [])) <= 1
-        and not plan.get("agents") and not plan.get("spawn")
+        and not plan.get("agents")
     )
+    return common and (minimal or ordinary_work_plan(plan))
+
+
+def ordinary_work_plan(plan):
+    """Exact root occurrence shape, retaining agents but not qualifying children."""
+    session = plan.get("session", {})
+    context = session.get("context", {})
+    def exact(rows, names):
+        return (isinstance(rows, list) and len(rows) == len(names)
+                and all(isinstance(row, dict) for row in rows)
+                and {row.get("module") for row in rows} == set(names)
+                and all(row.get("id", row["module"]) == row["module"]
+                        and row.get("instance_id", row["module"]) == row["module"]
+                        and row.get("enabled", True) is True for row in rows))
+    shape = (isinstance(context, dict) and context.get("module") == "context-managed"
+            and context.get("config", {}).get("engine", "boundary") == "boundary"
+            and exact(plan.get("tools", []), WORK_TOOLS)
+            and exact(plan.get("hooks", []), WORK_HOOKS)
+            and set(plan.get("agents", {})) == WORK_AGENTS)
+    if not shape:
+        return False
+    tools = {row["module"]: row.get("config", {}) for row in plan["tools"]}
+    # These select different construction/transport owners, not ordinary value
+    # variations of this routed, local/unavailable Work default.
+    return (not tools["tool-image"].get("builtin") and not tools["tool-image"].get("backend")
+            and not tools["tool-computer-use"].get("target")
+            and tools["tool-ui-use"].get("browser", {}).get("enabled") is not True)
+
+
+def root_participants(plan):
+    if not supported_plan(plan):
+        return ()
+    if ordinary_work_plan(plan):
+        return WORK_PARTICIPANTS
+    # Retained minimal source regressions are not the production Work profile.
+    return _MINIMAL_PARTICIPANTS + (("hook-context-intelligence",) if plan.get("hooks") else ())
 
 
 class ReviewedRootRecipe:
@@ -143,12 +244,12 @@ class ReviewedRootRecipe:
 
 def select_root(plan):
     """Use only shipped reviewed pins; no environment mutation or source fetch."""
-    if not supported_plan(plan):
+    if not supported_plan(plan) or not ordinary_work_plan(plan):
         return None
     try:
         manifest = json.loads(Path(__file__).with_name("media_sources.json").read_text())
         if (manifest["recipe"] != RECIPE or manifest["status"] != "reviewed"
-                or not _REQUIRED_SOURCES <= manifest["sources"].keys()):
+                or not (_REQUIRED_SOURCES | _WORK_SOURCES) <= manifest["sources"].keys()):
             return None
         provider = "amplifier_module_" + plan["providers"][0]["module"].replace("-", "_")
         if provider + "/__init__.py" not in manifest["sources"]:

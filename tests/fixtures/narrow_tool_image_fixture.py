@@ -12,7 +12,8 @@ from amplifier_web.host.media import NAMESPACE
 class RecordingProvider:
     name = "offline-media"
     config = {}
-    default_model = "offline"
+    default_model = "gpt-6.1-sol"
+    auth_mode = "chatgpt_codex"
     support = {"v": 1, "positions": ["user", "tool"]}
 
     def __init__(self):

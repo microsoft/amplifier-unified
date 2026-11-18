@@ -180,7 +180,8 @@ class SelectedProvider:
                     entry.execution = execution
                     entry.release_options = copy.deepcopy({
                         **(kwargs.get('request_options') or {}),
-                        **{key: value for key, value in kwargs.items() if key != 'request_options'}})
+                        **{key: value for key, value in kwargs.items()
+                           if key not in {'request_options', 'context_estimate'}}})
                     result = method(selected, **kwargs)
                 except BaseException:
                     self._forget_request(request)

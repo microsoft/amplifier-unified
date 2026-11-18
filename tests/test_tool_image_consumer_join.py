@@ -27,7 +27,9 @@ from test_narrow_tool_images import picture
 
 class ScriptedReadProvider:
     """Deterministic bottom: returns one actual read_file call, then text."""
-    name = default_model = "offline"
+    name = "offline"
+    default_model = "gpt-6.1-sol"
+    auth_mode = "chatgpt_codex"
     config = {}
 
     def __init__(self, path, *, read=True):
@@ -91,8 +93,10 @@ class FiniteSourceHost(HostAdapter):
         self.sealed = media.seal_hook_graph(coordinator)
 
     async def prepare_execution(self, loop, coordinator, providers):
+        from amplifier_web.host.session import SelectedProvider
         transform = self.native.get_capability("web.provider_transform")
-        return None, {name: transform(provider) for name, provider in providers.items()}, None
+        return None, {name: SelectedProvider(provider, {"model": "gpt-6.1-sol"}, transform)
+                      for name, provider in providers.items()}, None
 
 
 def recipe_sources():
@@ -116,7 +120,8 @@ async def actual_root(tmp_path, provider, *, post=None, store=None, deny_work=Fa
     plan = {"session": {"orchestrator": {"module": "loop-live", "config": {
                 "configured_bundle": True, "max_iterations": 4}},
             "context": {"module": "context-simple"}},
-        "providers": [{"module": "provider-openai-chatgpt"}],
+        "providers": [{"module": "provider-openai-chatgpt", "config": {
+            "auth_mode": "chatgpt_codex", "default_model": "gpt-6.1-sol"}}],
         "tools": [{"module": "tool-filesystem", "config": {
             "working_dir": str(tmp_path), "allowed_read_paths": [str(tmp_path)]}}]}
     session = AmplifierSession(plan, session_id="root-consumer-join")

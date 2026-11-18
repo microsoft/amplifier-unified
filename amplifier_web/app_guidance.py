@@ -261,6 +261,18 @@ async def install_app_access(coordinator, bridge, *, execution_role):
                 return False
             return await super()._retry(error, attempt, scope, generation, request, saved, kwargs, saved_kwargs)
     transformed = []
+    if coordinator.get_capability('web.media.construction') is not None:
+        async def release_media_turn(event, data):
+            if data.get('session_id', coordinator.session_id) == coordinator.session_id:
+                # Boundary fitting can measure discarded alternatives in
+                # nested tasks. None survives this coordinator's completed
+                # turn; child coordinators own their own adapters and cleanup.
+                for _, wrapped in transformed:
+                    await wrapped.close_media()
+            return HookResult()
+        from .host.media import registration_hooks
+        registration_hooks(coordinator).register('orchestrator:complete', release_media_turn,
+            name='unified-media-turn-release', priority=1000)
     def transform(provider):
         delivery.install_dispatch(coordinator)
         guard_tools()
