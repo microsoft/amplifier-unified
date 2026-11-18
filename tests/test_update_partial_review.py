@@ -36,9 +36,10 @@ async def review(preparation, manager, monkeypatch, tmp_path):
     shared = tmp_path / 'review-shared'
     monkeypatch.setattr(host_config, 'amplifier_home', lambda: shared)
     monkeypatch.setattr(session_files, 'amplifier_home', lambda: shared)
+    # The shared home is not below the app home. On Windows the writer needs the folder that owns the path.
     host_config.write_private(shared / 'settings.yaml', json.dumps({
         'config': {'providers': [{'module': 'provider-anthropic',
-                                 'config': {'default_model': 'fixture-model'}}]}}))
+                                 'config': {'default_model': 'fixture-model'}}]}}), owned_root=shared)
     # Restore the actual pointer digest; only working-baseline qualification is
     # synthetic. The source-selection and owned-checkout guards stay unmocked.
     monkeypatch.setattr(update_health, 'pointer_witness', pointer_witness)
@@ -305,7 +306,8 @@ async def test_retained_retry_projection_does_not_offer_unchecked_target(prior_p
         host_config.write_private(host_config.amplifier_home()/'settings.yaml',
             json.dumps({'sources': {'bundles': {'routing-matrix': 'git+https://example.invalid/changed@main'}},
                         'config': {'providers': [{'module': 'provider-anthropic',
-                                                 'config': {'default_model': 'fixture-model'}}]}}))
+                                                 'config': {'default_model': 'fixture-model'}}]}}),
+            owned_root=host_config.amplifier_home())
         m.service.state['configurationRevision']=m.service.state.get('configurationRevision',0)+1
     else:
         # No known target remains: C's held result cannot qualify A's unknown.

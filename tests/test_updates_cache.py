@@ -79,6 +79,8 @@ async def service(tmp_path, monkeypatch, repository):
         return await original(*args, **kwargs)
     monkeypatch.setattr(updates, 'process', process)
     monkeypatch.setenv('AMPLIFIER_UNIFIED_IMPORT_HOME', str(tmp_path/'no-import'))
+    # The product names its data folder as the app home before it builds the service (cli.py).
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path/'app'))
     app = AppService(tmp_path/'app', Runtime(), workspace=tmp_path)
     app.state['settings']['bundle'] = 'git+https://example.invalid/repo@main'
     app.update_manager = UpdateManager(app)

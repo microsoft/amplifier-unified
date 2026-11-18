@@ -190,8 +190,6 @@ jobs:
           # no reason was confirmed by a repair.
           POSIX_STATUS = ("the case is for the status that Linux and macOS give; on Windows another function gives it, "
                           "and platform-mechanisms.yml runs its cases")
-          OTHER_APP_HOME = ("its cases fail on a Windows runner; by a reading of the code they build the app in a folder "
-                            "that is not the test process's app home, and the app's file writer on Windows refuses a write there")
           NOT_ON_WINDOWS = {
               "tests/test_reset.py":
                   "the reset command is for Linux, WSL and macOS; on Windows it says so and stops",
@@ -200,17 +198,6 @@ jobs:
               "tests/test_windows_launcher_refresh.py":
                   "the cases turn the refresh module's Windows switch off, and the app's file writer on Windows "
                   "then refuses their writes; windows-launcher-refresh.yml runs the native case",
-              "tests/test_update_partial_review.py":
-                  "its fixture, in tests/test_update_sequence.py, writes the shared settings file with the app's "
-                  "writer and names no owner folder, which that writer needs on Windows",
-              "tests/test_updates_cache.py":
-                  OTHER_APP_HOME + "; other cases there compare a path that has the runner's separator",
-              "tests/test_update_core_lookup_failure.py": OTHER_APP_HOME,
-              "tests/test_update_health_first_install.py": OTHER_APP_HOME,
-              "tests/test_effective_behavior_updates.py::test_index_invalidates_on_effective_selection_not_history_size":
-                  OTHER_APP_HOME,
-              "tests/test_effective_behavior_updates.py::test_real_check_includes_selected_source_before_other_tier":
-                  OTHER_APP_HOME,
               "tests/test_application_generations.py::test_qualified_launch_preserves_arguments_and_data_scope":
                   "the case stands in for os.execv; on Windows the app starts a child and waits for it",
               "tests/test_installation_health.py::test_status_reports_every_verified_listener_and_partial_failure":

@@ -16,9 +16,12 @@ class Runtime:
 @pytest.fixture
 async def manager(tmp_path, monkeypatch):
     from amplifier_web.host.config import amplifier_home, write_private
+    # The shared home is not below the app home. On Windows the writer needs the folder that owns the path.
     write_private(amplifier_home() / 'settings.yaml', json.dumps({
         'config': {'providers': [{'module': 'provider-anthropic',
-                                 'config': {'default_model': 'fixture-model'}}]}}))
+                                 'config': {'default_model': 'fixture-model'}}]}}), owned_root=amplifier_home())
+    # The product names its data folder as the app home before it builds the service (cli.py).
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path/'app'))
     service = AppService(tmp_path/'app', Runtime(), workspace=tmp_path)
     manager = UpdateManager(service)
     service.update_manager = manager

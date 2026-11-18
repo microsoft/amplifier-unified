@@ -53,6 +53,8 @@ async def current_install(worker, monkeypatch):  # noqa: F811 -- pytest fixture 
 @asynccontextmanager
 async def checked_install(home, row, monkeypatch):
     """The real service and update manager for `home`; only external answers are injected."""
+    # The product names its data folder as the app home before it builds the service (cli.py).
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(home))
     service = AppService(home, Runtime(), workspace=home.parent)
     manager = UpdateManager(service)
     service.update_manager = manager
