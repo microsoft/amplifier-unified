@@ -307,7 +307,8 @@ class HostSettingsTests(unittest.TestCase):
                        {'engine': 'boundary', 'durable_checkpoints': False, 'archive_recovery': False}):
             adapted, _ = live_plan({'session': {'orchestrator': 'loop-live',
                 'context': {'module': 'context-managed', 'config': config}}})
-            self.assertEqual(adapted['session']['context']['config'], config)
+            self.assertEqual(adapted['session']['context']['config'],
+                             {**config, 'foreground_continuation': True})
         for engine in (None, False, '', 'legacy', 'unknown'):
             original = {'session': {'orchestrator': 'loop-live',
                 'context': {'module': 'context-managed', 'config': {'engine': engine}}}}
