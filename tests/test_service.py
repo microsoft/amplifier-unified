@@ -920,6 +920,12 @@ class _RuntimeThatDoesNotStart(Runtime):
         raise RuntimeStartupError('Amplifier did not send your message.')
 
 
+class _RuntimeOfAChatInUseElsewhere(Runtime):
+    async def send(self, session, text, input_id, emit, **options):
+        from amplifier_web.runtime import SessionInUseError
+        raise SessionInUseError({'app': 'amplifier-cli', 'host': 'test-host', 'pid': 123})
+
+
 async def test_first_use_starts_every_new_browser_tab_at_the_first_setup_step(tmp_path):
     service = AppService(tmp_path, Runtime(), workspace=tmp_path)
     try:
@@ -1030,5 +1036,43 @@ async def test_a_persons_message_whose_delivery_fails_still_ends_first_use(tmp_p
         assert _saved_setup_step(service) == 'done'
         service.clients.attach('tab-two')
         assert _setup_step(service, 'tab-two') == 'done'
+    finally:
+        await service.close()
+
+
+async def test_a_persons_message_that_is_refused_because_the_chat_is_in_use_still_ends_first_use(tmp_path):
+    service = AppService(tmp_path, _RuntimeOfAChatInUseElsewhere(), workspace=tmp_path)
+    try:
+        service.clients.attach('tab-one')
+        await _as_client(service, 'tab-one', 'session.create', {'title': 'Made by an earlier version'})
+        chat = service.clients.records['tab-one']['selectedSessionId']
+        _as_an_earlier_version_saved_it(service)
+        await _as_client(service, 'tab-one', 'view.update', {'patch': {'draft': 'Keep this draft'}})
+        with pytest.raises(AppError, match='conversation is in use') as refusal:
+            await _as_client(service, 'tab-one', 'conversation.send', {'sessionId': chat, 'text': 'Keep this draft'})
+        assert refusal.value.status == 409 and refusal.value.code == 'session_busy'
+        # The host removed the attempted message again and kept the draft.
+        assert service._session(chat)['messages'] == []
+        assert service.clients.records['tab-one']['drafts'][chat] == 'Keep this draft'
+        # The chat exists and a person used it: first use is over.
+        assert _saved_setup_step(service) == 'done'
+        service.clients.attach('tab-two')
+        assert _setup_step(service, 'tab-two') == 'done'
+    finally:
+        await service.close()
+
+
+async def test_a_message_to_internal_work_does_not_end_first_use(tmp_path):
+    service = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    try:
+        service.clients.attach('tab-one')
+        created = await _as_client(service, 'tab-one', 'session.create', {'purpose': 'terminal-tool'})
+        internal = created['sessionId']
+        assert service._session(internal)['sessionKind'] == 'internal'
+        sent = await _as_client(service, 'tab-one', 'conversation.send', {'sessionId': internal, 'text': 'Run it'})
+        assert sent['accepted']
+        assert _saved_setup_step(service) == 'welcome'
+        service.clients.attach('tab-two')
+        assert _setup_step(service, 'tab-two') == 'welcome'
     finally:
         await service.close()
