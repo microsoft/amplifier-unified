@@ -405,6 +405,14 @@ async def confirm_readiness(manager, health, expected=None, command_id=None, *, 
                 if successor:
                     application.update(latest='v'+identity['version'], revision=identity['revision'],
                         releaseBehind=False, detail='The current published installation is verified.')
+                else:
+                    from .app_updates import version_tuple
+                    latest = version_tuple(application.get('latest'))
+                    if latest and latest == version_tuple(identity['version']):
+                        # The row can still hold the sentence of the check that offered this
+                        # replacement ("Newer application components are available; ..."). The
+                        # owner's next check is of the components and takes this row as it is.
+                        application['detail'] = 'The latest published application release is installed.'
             state['items'] = [application if row.get('id') == 'application' else row for row in state.get('items', [])]
             state['available'] = sum(row.get('status') == 'update' for row in state['items'])
             state.update(phase='installed', pendingRestart=None, pendingReplacement=None, pendingApp=None, appAvailable=application.get('status')=='update' if selected else False,
