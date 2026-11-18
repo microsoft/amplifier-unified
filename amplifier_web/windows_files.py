@@ -1,10 +1,22 @@
 """Bounded private config files on native Windows local fixed NTFS.
 
 This is not a general filesystem, settings migration, or durable authority
-checkpoint backend. Pins deny rename/delete; ACL validation, not sharing, blocks
-foreign WRITE_ATTRIBUTES/reparse conversion. Trusted OS administrators and other
+checkpoint backend. ACL validation, not sharing, blocks foreign
+WRITE_ATTRIBUTES/reparse conversion. Trusted OS administrators and other
 processes running as the current TokenUser remain inside the trust boundary.
 Publication flushes the file, not a directory/power-loss durability promise.
+
+A pin is an open handle on every folder of a path, down to the folder that
+the caller named. Each handle asks for attributes and security information
+only. A pin does not keep that last folder in its place: on hosted Windows
+runners another program of this account renamed it, and removed it when it
+was empty, while a pin was open. The pin's next check (`_check`) then
+refused, and nothing was written. Windows refused a rename of the two folders
+above it. So a pin covers what goes through its handles and its checks. It
+does not cover an act by a path, while the pin is open or after it: the path
+can name another folder then. The measurements are described in the design
+("Private config and credential boundary",
+docs/design/native-windows-installation.md).
 """
 from __future__ import annotations
 
@@ -298,7 +310,9 @@ class _API:
 
     def open(self, path, *, directory=False, create=False, cleanup=False, exclusive=False):
         _local(str(path))
-        # Pins: read attributes/control, deny WRITE and DELETE sharing.
+        # A folder's pin: read attributes/control only. Its share mode leaves
+        # out WRITE and DELETE, and that keeps no other program from renaming
+        # or removing the folder (measured; see the text at the top).
         # Readers: allow DELETE for atomic replacement, never WRITE/partial reads.
         access = 0x20080 | (0 if directory else 0x80000000)
         share = 1 if directory or exclusive else 5
