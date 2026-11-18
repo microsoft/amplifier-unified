@@ -138,6 +138,22 @@ class SessionStore:
         return SessionHistoryStore(self.directory(session_id), events_path=events_path,
                                    session_id=session_id)
 
+    def media(self, session_id, *, policy_verifier=None, request_only_verifier=None):
+        """One session-owned original store; its caller closes the lifetime."""
+        from amplifier_foundation.session.media import MediaPolicy, SessionMediaStore
+        from amplifier_foundation.session.checkpoint import verified_checkpoint_refs
+        return SessionMediaStore(self.directory(session_id).absolute() / 'media', session_id,
+            policy=MediaPolicy(), checkpoint_verifier=verified_checkpoint_refs,
+            policy_verifier=policy_verifier, request_only_verifier=request_only_verifier)
+
+    def acknowledge_media(self, session_id, canonical, media_store):
+        """ACK the exact saved primary legacy rows; no second save or migration."""
+        from amplifier_foundation.session.checkpoint import acknowledge_legacy_checkpoint
+        receipt = acknowledge_legacy_checkpoint(self.directory(session_id), session_id=session_id,
+                                                expected_messages=canonical, windows_policy='legacy')
+        media_store.acknowledge_checkpoint(receipt)
+        return receipt
+
     def has_transcript(self, session_id):
         directory = self.directory(session_id)
         return any((directory / name).exists() for name in

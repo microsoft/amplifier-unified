@@ -138,6 +138,360 @@ def test_unfinished_attempts_are_removed_and_installations_never_are():
     assert "Directory.CreateDirectory" not in saved and "File.Copy" not in saved
 
 
+EMPTIED = ("Setup cannot install Amplifier yet. Setup found an installation record in this folder:\n{root}\n\n"
+           "Setup cannot find a program file that it needs to open Amplifier from that folder. "
+           "Setup found no chats or settings in the folder. "
+           "It does not change the folder, because the folder can hold files or folders that are not Amplifier's.\n\n"
+           "Move or rename that folder. Then run this setup file again.")
+DAMAGED = ("Amplifier is already installed in {root}, but setup cannot open it: a program file is missing.\n\n"
+           "Keep that folder. It holds your chats and settings. This version of setup cannot repair it.")
+
+
+def literal(body):
+    """The text that a C# expression of string literals and `root` gives, with `{root}` for the folder."""
+    parts = re.findall(r'"((?:[^"\\]|\\.)*)"|\b(root)\b', body)
+    return "".join("{root}" if name else text.replace("\\n", "\n").replace('\\"', '"') for text, name in parts)
+
+
+def test_setup_without_a_launcher_program_says_what_its_own_look_finds():
+    """Setup's text for a finished installation whose launcher program is missing (follow-up A24).
+
+    Seen on a PC on November 17, 2026: an uninstall with the delete choice left the folder, because a file of
+    the person was in it. The next setup run said "Keep that folder. It holds your chats and settings." The
+    chats and settings were deleted, and the text named no next step. Setup now looks: with a journal that
+    records the delete choice, and with none of the person's data, it says what it found and gives the next
+    step: move or rename the folder, as at setup's stop for a damaged folder. It does not tell the person to
+    delete the
+    folder, which can hold something of the person's that the look did not see. Every other case keeps the
+    earlier text. Setup still installs nothing there and deletes nothing.
+    The native check compiles these functions and runs them on real folders (tests/windows/native_setup.Tests.cs).
+    """
+    import inspect
+    from amplifier_web import windows_uninstall
+    # Uninstall owns the names. Setup has a copy, and only looks.
+    assert re.search(r'internal const string Journal="([^"]+)";', SOURCE).group(1) == windows_uninstall.JOURNAL
+    names = re.search(r"internal static readonly string\[\] Data=\{([^}]+)\};", SOURCE).group(1)
+    assert tuple(name.strip().strip('"') for name in names.split(",")) == windows_uninstall.DATA
+    # The schema and the token that uninstall's own reader requires. A change there must come here too.
+    reader = inspect.getsource(windows_uninstall.pending)
+    assert 'value["schema"] == 1' in reader and 're.fullmatch("[0-9a-f]{32}", value["token"])' in reader
+    # That reader requires a choice that is a text. Uninstall compares it in its removal steps; setup's
+    # look requires the choice "delete" itself.
+    assert 'isinstance(value.get("choice"), str)' in reader and '"delete"' not in reader
+    for step in (windows_uninstall.remove, windows_uninstall.finish):
+        assert 'record["choice"] != choice' in inspect.getsource(step)
+    assert "owned.read_private(name, limit=4096)" in inspect.getsource(windows_uninstall._private_json)
+    emptied = between("internal static bool Emptied(", "internal static string Unopened(")
+    order = [emptied.index(text) for text in (
+        "string journal=Path.Combine(root,Journal);",
+        "if((File.GetAttributes(journal)&(FileAttributes.Directory|FileAttributes.ReparsePoint))!=0) return false;",
+        "var bytes=new byte[4097]; int count=0, read;",
+        # Shared with every other access: the last step of a removal deletes the journal.
+        "new FileStream(journal,FileMode.Open,FileAccess.Read,FileShare.ReadWrite|FileShare.Delete))",
+        "while(count<bytes.Length && (read=file.Read(bytes,count,bytes.Length-count))>0) count+=read;",
+        "if(count>4096) return false;",
+        "Json.Deserialize<Dictionary<string,object>>(Utf8.GetString(bytes,0,count));",
+        'if(record==null || !record.TryGetValue("schema",out schema) || !(schema is int) || (int)schema!=1) return false;',
+        r'if(Text(record,"choice")!="delete" || !Regex.IsMatch(token,"\\A[0-9a-f]{32}\\z")) return false;',
+        "foreach(string name in Data) {",
+        "try { kind=File.GetAttributes(entry); } catch(FileNotFoundException) { continue; }",
+        # A file and a link are data. Only a real folder is listed.
+        "if((kind&(FileAttributes.Directory|FileAttributes.ReparsePoint))!=FileAttributes.Directory ||",
+        "Directory.EnumerateFileSystemEntries(entry).Any()) return false;",
+        "return true;",
+        "} catch(Exception) { return false; }")]
+    assert order == sorted(order)
+    assert emptied.count("return false;") == 6 and emptied.count("return") == 7  # One yes, after every look.
+    # Strict UTF-8: bytes that are not UTF-8 are an error, and an error answers no.
+    assert "static readonly UTF8Encoding Utf8 = new UTF8Encoding(false, true);" in SOURCE
+    # The two texts, complete. The one with the next step only after the look said yes.
+    unopened = between("internal static string Unopened(", "static int OpenInstalled(")
+    code = "\n".join(line for line in unopened.splitlines() if not line.strip().startswith("//"))
+    first, second = code.split("if(Emptied(root)) return", 1)[1].split(";\n            return ", 1)
+    assert literal(first) == EMPTIED and literal(second.split(";", 1)[0]) == DAMAGED
+    assert code.count("return") == 2 and code.count("Emptied(") == 1
+    # They only look and build a text. The one open is for reading, and it allows a deletion by another
+    # program (`FileShare.Delete` is a sharing mode, not a deletion).
+    assert emptied.count("FileStream(") == 1 and emptied.count("FileShare.Delete") == 1
+    looks = "\n".join(line for line in emptied.splitlines() if not line.strip().startswith("//")).replace(
+        "FileMode.Open,FileAccess.Read,FileShare.ReadWrite|FileShare.Delete", "")
+    # The words of the two texts are not operations: compare the code without its string literals.
+    for body in (looks, code):
+        operations = re.sub(r'"(?:[^"\\]|\\.)*"', '""', body)
+        for change in ("Delete", "Write", "Create", "Move", "Remove", "Process", "Say(", "Install", "Storage",
+                       "FileMode", "FileAccess", "Set"):
+            assert change not in operations, change
+    # A list of words does not name every operation (a property of a `FileInfo`, for example). So the
+    # case also holds, for the two functions and for the one function of setup that they call: each name
+    # that stands before a `(`, with the number of its uses; that each assignment whose target is a name
+    # is to one of the look's own local names; that nothing which ends with a bracket stands directly
+    # before an assignment operator; and that no comment stands in a line of code (a comment between
+    # two tokens would hide them from these expressions). These are checks of the source text for
+    # these forms. A form of C# that is not in this list is not checked, and they do not prove what a
+    # call does. The native case holds what the looks leave in the folder and in setup's list of names.
+    def text(body):
+        lines = "\n".join(line for line in body.splitlines() if not line.strip().startswith("//"))
+        return re.sub(r'"(?:[^"\\]|\\.)*"', '""', lines)
+
+    def calls(body):
+        found = re.findall(r"([A-Za-z_][A-Za-z0-9_.]*)(?:<[A-Za-z0-9_<>,]*>)?\s*\(", text(body))
+        return {name: found.count(name) for name in found}
+    assert calls(emptied) == {
+        "if": 5, "using": 1, "while": 1, "foreach": 1, "catch": 2,
+        "Path.Combine": 2, "File.GetAttributes": 2, "FileStream": 1, "file.Read": 1, "Json.Deserialize": 1,
+        "Utf8.GetString": 1, "record.TryGetValue": 1, "Text": 2, "Regex.IsMatch": 1,
+        "Directory.EnumerateFileSystemEntries": 1, "Any": 1}
+    assert calls(unopened) == {"if": 1, "Emptied": 1}
+    reads = between("static string Text(", "static Dictionary<string,object> Object(")
+    assert calls(reads) == {"Need": 1, "map.TryGetValue": 1, "return": 1}  # `return (string)value;`
+    assert ("static void Need(bool value, string message) "
+            "{ if (!value) throw new InvalidDataException(message); }") in SOURCE
+    # A name, with or without an index, before `=` or before an operator with `=`. Not `==`, `!=`, `<=`,
+    # `>=` and not `=>`. No field of setup (`Stage`, `Data[6]`) and no member gets a value.
+    target = r"(?<![A-Za-z0-9_.])([A-Za-z_][A-Za-z0-9_.]*)(?:\s*\[[^\]]*\])?\s*(?:[-+*/%|&^]|<<|>>)?=(?![=>])"
+    assert set(re.findall(target, text(emptied))) == {
+        "journal", "bytes", "count", "read", "file", "record", "token", "kind", "entry"}
+    for body in (unopened, reads):
+        assert not re.findall(target, text(body))
+    # A target in brackets (`(Data)[6]=`) or after an index (`Data[6][0]=`) has no name directly before the
+    # operator. No assignment of the three functions has that form.
+    closed = r"[)\]]\s*(?:[-+*/%|&^]|<<|>>)?=(?![=>])"
+    for body in (emptied, unopened, reads):
+        assert not re.findall(closed, text(body))
+        assert "++" not in text(body) and "--" not in text(body)
+        # Every comment of these functions is a whole line. (`text` takes those lines and the string
+        # literals away.)
+        assert "//" not in text(body) and "/*" not in text(body)
+    assert re.findall(r"\bnew\s+[A-Za-z_][A-Za-z0-9_.]*", text(emptied)) == ["new byte", "new FileStream"]
+    assert "new" not in re.findall(r"[A-Za-z_]+", text(unopened) + text(reads))
+    # The one place that shows the text: a finished installation with no launcher program. Setup ends with 1.
+    opened = between("static int OpenInstalled(", "static int ConsumerWindow()")
+    assert opened.index("if(!File.Exists(AppStart(root).FileName)) {\n"
+                        "                Say(Unopened(root),MessageBoxButtons.OK,MessageBoxIcon.Warning);\n"
+                        "                return 1;\n            }") < opened.index("bool listed=false;")
+    # Nothing but comments stands before that look in `OpenInstalled`.
+    first = [line.strip() for line in opened.splitlines() if line.strip() and not line.strip().startswith("//")]
+    assert first[:2] == ["string root) {", "if(!File.Exists(AppStart(root).FileName)) {"]
+    assert SOURCE.count("Unopened(") == 2 and SOURCE.count("Emptied(") == 2
+    # What the new text does not say.
+    assert "your chats and settings" not in EMPTIED and "already installed" not in EMPTIED
+    # Nothing about the folder's history: setup knows only that a file with the record's name is there.
+    assert "earlier installation" not in EMPTIED and "was installed" not in EMPTIED
+    marked = between("static string Marked(", "internal static void RemoveUnfinished(")
+    assert 'if(File.Exists(Path.Combine(root,Complete))) return "installed";' in marked
+    # Setup names that file in three places: the name, this look for the name, and the write at the end
+    # of an installation. It reads the file nowhere.
+    assert len(re.findall(r"\bComplete\b", SOURCE)) == 3
+    assert "PrivateText(Path.Combine(root,Complete),Json.Serialize(" in SOURCE
+    assert "uninstall" not in EMPTIED.lower()  # A file that reads as a journal is no proof of an uninstall.
+    assert "cannot start" not in EMPTIED  # Setup looked for one program file only.
+    # `File.Exists` also answers no for a file that Windows does not let setup see.
+    assert "missing" not in EMPTIED and "cannot find a program file" in EMPTIED
+    # The next step loses nothing: the text tells nobody to delete anything.
+    assert "delete" not in EMPTIED.lower() and EMPTIED.endswith(
+        "\n\nMove or rename that folder. Then run this setup file again.")
+    # The same step as at setup's stop for a damaged folder.
+    damaged = between('if(state=="damaged") throw new SetupStop(', "string program=null;")
+    assert '"Move or rename that folder. Then run setup again.");' in damaged
+    # Setup's own lock is against a second setup run. It is not the installation's lock, whose name
+    # uninstall gives.
+    lock = re.search(r'with named\("Global\\\\([^"]+)", root, wait=wait\):',
+                     inspect.getsource(windows_uninstall.single)).group(1)
+    assert lock == "AmplifierUnified-installation-"
+    assert lock.rstrip("-") not in SOURCE and SOURCE.count("Mutex(") == 1
+    # The launcher's program, which the Start-menu entry also starts.
+    from amplifier_web import windows_consumer_shell
+    assert 'Path.Combine(root,"tools","amplifier-unified","Scripts","pythonw.exe")' in between(
+        "static ProcessStartInfo AppStart(", "internal static bool AddEntries(")
+    assert '"tools/amplifier-unified/Scripts/pythonw.exe"' in inspect.getsource(windows_consumer_shell.entries)
+    # The design has both texts, sentence for sentence, and what the look reads.
+    design = " ".join(DESIGN.split())
+    for text in (EMPTIED, DAMAGED):
+        for part in text.replace("{root}", "\n").split("\n"):
+            # The design names the folder between two quoted parts, so a part can begin with ", ".
+            for sentence in re.split(r"(?<=[.:]) ", part.strip().removeprefix(", ")):
+                assert sentence in design, sentence
+    for sentence in (
+            "When the launcher's start program is gone, setup shows one message and ends.",
+            "When they show a file that is no folder and no link, setup opens that path and reads it.",
+            "at most 4096 bytes of UTF-8 that hold a record with `schema` 1, the choice `delete` and a token of 32 "
+            "lower-case hexadecimal digits",
+            "The schema and the token are what uninstall's own reader requires (`windows_uninstall.pending`).",
+            "Setup requires the choice `delete` in the look itself.",
+            "A name counts as data when the look at its attributes shows a file or a link, or when the listing of "
+            "the folder shows anything in it.",
+            "Setup lists an entry only after that look showed a folder that is no link.",
+            "Setup does not take the installation's lock for it, and it holds no handle on the folder or on an "
+            "entry between two of those steps.",
+            "Setup's stop for a damaged folder names the same step.",
+            "The text tells the person to move or rename the folder, not to delete it:",
+            "Each statement of the first text is what setup found in this run, or what setup does, with the "
+            "reason why it does not change the folder; its last two sentences are the next step.",
+            "Setup found the record's name when it classified the folder, and it looked for the launcher's start "
+            "program directly before this look.",
+            "setup's look for the launcher's start program found no file (`File.Exists`).",
+            "That look also finds no file when Windows does not let setup see one that is there, so the first "
+            "text says \"cannot find\" and not \"is missing\".",
+            "The second text says \"a program file is missing\" for the same look, as it did before; that is not "
+            "true for a file that setup cannot see.",
+            "An emptied folder that Windows still keeps for a program is not data when Windows answers the look "
+            "at its attributes and its listing; an entry that Windows does not let setup examine counts as data.",
+            "For an entry with the exact spelling of a name, the removal itself gives the same two answers "
+            "(`holding` in `windows_removal.py`).",
+            "For an entry under another spelling (`App` for `app`) the two differ.",
+            "The removal never examines such an entry: it counts the name as holding something, and it does not "
+            "begin in a folder that has one.",
+            "Setup's look asks Windows for the path with the name's own spelling and treats the entry that "
+            "Windows gives like any other.",
+            "Where Windows ignores the case of letters (an ordinary folder), that is the entry `App`: when it is "
+            "an empty folder it is not data, and with a file in it it is data.",
+            "Setup does not read that file in this look, and it knows no more about the folder's history.",
+            "The text does not say that an installation was made in the folder.",
+            "In every other case, and when any part of the look fails, setup says what it said before:",
+            "The text does not say that Amplifier was uninstalled, and it does not say that Amplifier cannot start: "
+            "a file that reads as a journal is no proof of an uninstall (a program of this account can write one), "
+            "and setup looked for one program file only.",
+            "With either text setup installs nothing, deletes nothing and ends with status 1.",
+            "Setup opens the file for reading with every sharing mode, so Windows does not refuse another program's "
+            "deletion of the journal because of this handle",
+            "Setup reads the journal for one purpose only: to choose the text of one message (see Leftovers)."):
+        assert sentence in design, sentence
+    # Where the look and the removal differ: an entry under another spelling of a name (`App` for `app`).
+    # The removal's look at what an entry holds never examines it and counts the name as holding
+    # something, and the removal does not begin in a folder that has one. Setup's look asks Windows for
+    # the path with the name's own spelling. The native case holds what Windows gives for that path.
+    removal = (ROOT / "amplifier_web/windows_removal.py").read_text(encoding="utf-8")
+    holding = removal.split("    def holding(self, names):\n", 1)[1].split("\n    def ", 1)[0]
+    assert ("            own = wanted.get(same_name(name))\n            if own is None:\n                continue\n"
+            "            if name != own:\n                held.add(own)\n                continue\n") in holding
+    assert "held = set(owned.holding(names))" in inspect.getsource(windows_uninstall._clear)
+    begins = inspect.getsource(windows_uninstall.remove)
+    refusal = ("            if altered(owned.names(), short):\n"
+               "                raise ValueError(\"An entry differs from this installation's own name only by case.\")\n")
+    assert begins.index(refusal) < begins.index("token = begin(root, choice, wait=wait, **fields)")
+    assert "string entry=Path.Combine(root,name);" in emptied
+    # The numbers of the design's sentence on the native check.
+    native = (ROOT / "tests/windows/native_setup.Tests.cs").read_text(encoding="utf-8")
+    for message in ("Windows gives the folder App for the path with app",
+                    "an empty folder under another spelling of a data name is not data",
+                    "a file in a folder under another spelling of a data name is data"):
+        assert f'"{message}");' in native, message
+    others = native.split("string[] others={", 1)[1].split("};", 1)[0]
+    assert "nineteen files that are not such a journal" in design
+    assert ("that a look changes no creation time, no write time and no attribute of the journal, of setup's "
+            "record and of the person's file") in design
+    assert ("a look changes no creation time, no write time and no attribute of the journal, of setup's record "
+            "and of the person's file") in native
+    # Five literal files in the first line, then one file for each `record.Replace(...)`, then the file
+    # that is one byte too large.
+    assert others.split("\n", 1)[0] == '"","{","[]","null","\\"delete\\"",'
+    assert 5 + others.count("record.Replace(") + others.count("record+new string(") == 19
+    assert len(windows_uninstall.DATA) == 7 and "the seven names of the person's data" in design
+    # The native check has the same two texts.
+    cases = native.split('string left=Make(work,"Left");', 1)[1]
+    assert literal(cases.split("string damaged=", 1)[1].split(";", 1)[0].replace("left", "root")) == DAMAGED
+    assert literal(cases.split("string emptied=", 1)[1].split(";", 1)[0].replace("left", "root")) == EMPTIED
+
+
+def test_the_check_that_runs_this_file_requires_every_case_to_run_and_pass(tmp_path):
+    """The workflow step that runs this file on a pull request (follow-up A24).
+
+    Before, no check ran this file: its workflow named it only as a path that starts the workflow. The step
+    must fail when a case did not run or did not pass. pytest ends with status 0 also for a skipped case and
+    for an expected failure, a case with that mark can be set not to run, and a case can end the run early
+    with status 0. So the step reads pytest's own lines: exactly one line "collected N items", and a last
+    line that names passed cases only, with the same N. This case runs pytest on small files and gives each
+    real output to the step's two expressions, with the step's rule. It does not run the step: a hosted
+    runner does that. The step does not see a case that pytest never collects (a function that lost its
+    `test_` name, for example).
+    """
+    import os
+    import subprocess
+    import sys
+    workflow = (ROOT / ".github/workflows/windows-private-shell.yml").read_text(encoding="utf-8")
+    step = workflow.split(
+        "      - name: Check setup's folder rules and texts against its source and the design\n", 1)[1].split(
+        "\n      - name: ", 1)[0]
+    order = [step.index(line) for line in (
+        " -B -m pytest -ra --color=no -p no:cacheprovider tests/test_windows_setup_folder.py"
+        " | Tee-Object -Variable log\n",
+        "          if ($LASTEXITCODE -ne 0) { throw 'Setup folder and text checks failed.' }\n",
+        '          $lines = @($log | ForEach-Object { "$_".Trim() } | Where-Object { $_ })\n',
+        "          $summary = if ($lines.Count) { $lines[-1] } else { '' }\n",
+        "          $listed = [regex]::Match((@($lines | Where-Object { $_.StartsWith('collected ') }) -join \"`n\"), '",
+        "          $passed = [regex]::Match($summary, '",
+        "          if (-not ($listed.Success -and $passed.Success -and "
+        "$listed.Groups[1].Value -eq $passed.Groups[1].Value)) { throw \"")]
+    assert order == sorted(order)
+    assert "-k " not in step and "--deselect" not in step and "continue-on-error" not in step
+    assert " -q" not in step  # With `-q` pytest does not write the line with the number of collected cases.
+    listed = re.search(r"\$listed = \[regex\]::Match\(\(.+\), '([^']+)'\)\n", step).group(1)
+    passed = re.search(r"\$passed = \[regex\]::Match\(\$summary, '([^']+)'\)\n", step).group(1)
+
+    def accepts(output):
+        """The step's rule for the output of a pytest run that ended with status 0."""
+        lines = [line.strip() for line in output.splitlines() if line.strip()]
+        first = re.search(listed, "\n".join(line for line in lines if line.startswith("collected ")))
+        last = re.search(passed, lines[-1] if lines else "")
+        return bool(first and last and first.group(1) == last.group(1))
+    # A change of a file that these cases read starts the workflow.
+    paths = workflow.split("    paths:\n", 1)[1].split("permissions:", 1)[0]
+    for name in (".github/workflows/windows-private-shell.yml", "scripts/windows_bootstrap_native.cs",
+                 "scripts/windows_bootstrap_native.py", "scripts/windows_bootstrap_capsule.py",
+                 "scripts/windows_private_git.py", "scripts/install.ps1", "amplifier_web/windows_uninstall.py",
+                 "amplifier_web/windows_removal.py",
+                 "amplifier_web/windows_consumer_shell.py", "tests/windows/native_setup.Tests.cs",
+                 "tests/test_windows_setup_folder.py", "docs/design/native-windows-installation.md"):
+        assert f"      - {name}\n" in paths, name
+    (tmp_path / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+    before = "import pytest\n\n\ndef test_first():\n    assert True\n\n\n"
+    after = "\n\ndef test_last():\n    assert True\n"
+    outcomes = {
+        "passed": ("def test_other():\n    assert True\n", 0),
+        "xfail_not_run": ("@pytest.mark.xfail(run=False)\ndef test_other():\n    assert False\n", 0),
+        "xfail": ("@pytest.mark.xfail\ndef test_other():\n    assert False\n", 0),
+        "xpass": ("@pytest.mark.xfail\ndef test_other():\n    assert True\n", 0),
+        "skip": ("@pytest.mark.skip\ndef test_other():\n    assert False\n", 0),
+        # The run ends here with status 0; `test_last` does not run.
+        "exit": ("def test_other():\n    pytest.exit(\"stop\", returncode=0)\n", 0),
+        "fail": ("def test_other():\n    assert False\n", 1)}
+    # The step's options. Options that a person's environment adds to every pytest run are left out.
+    environment = {name: value for name, value in os.environ.items() if name != "PYTEST_ADDOPTS"}
+    for name, (other, status) in outcomes.items():
+        (tmp_path / f"test_{name}.py").write_text(before + other + after, encoding="utf-8")
+        run = subprocess.run(
+            [sys.executable, "-B", "-m", "pytest", "-ra", "--color=no", "-p", "no:cacheprovider", f"test_{name}.py"],
+            cwd=tmp_path, env=environment, capture_output=True, text=True, encoding="utf-8", timeout=120)
+        # pytest's status alone does not tell a case that did not run or did not pass.
+        assert run.returncode == status, (name, run.stdout, run.stderr)
+        assert "\ncollected 3 items\n" in run.stdout, (name, run.stdout)
+        assert accepts(run.stdout) == (name == "passed"), (name, run.stdout)
+    for output in ("collected 12 items\n===== 12 passed in 0.32s =====",
+                   "collected 1 item\n= 1 passed, 1 warning in 0.32s =",
+                   "collected 1592 items\n== 1592 passed, 2 warnings in 64.17s (0:01:04) =="):
+        assert accepts(output), output
+    for output in ("", "collected 12 items", "== 12 passed in 0.10s ==",
+                   # Fewer cases passed than pytest collected.
+                   "collected 12 items\n== 11 passed in 0.10s ==",
+                   "collected 12 items / 1 deselected / 11 selected\n== 11 passed, 1 deselected in 0.10s ==",
+                   "collected 12 items / 1 deselected / 11 selected\n== 12 passed in 0.10s ==",
+                   "collected 12 items\ncollected 12 items\n== 12 passed in 0.10s ==",
+                   # A line after pytest's summary.
+                   "collected 12 items\n== 12 passed in 0.10s ==\n!!!!! _pytest.outcomes.Exit: stop !!!!!",
+                   "collected 12 items\n== 1 failed, 11 passed in 0.10s ==",
+                   "collected 12 items\n== 12 passed, 1 warning, 1 error in 0.10s ==",
+                   "collected 12 items\n== 11 passed, 1 skipped in 0.10s ==",
+                   "collected 12 items\n== 11 passed, 1 xfailed in 0.10s ==",
+                   "collected 12 items\n== 12 passed, 1 xpassed in 0.10s ==",
+                   "collected 12 items\n== no tests ran in 0.01s ==",
+                   # The last line holds more than pytest's summary.
+                   "collected 12 items\nx == 12 passed in 0.10s ==", "collected 12 items\n== 12 passed in 0.10s == x",
+                   # The form of `-q`, and other letter cases.
+                   "collected 12 items\n12 passed in 0.32s",
+                   "collected 12 items\n== 12 Passed in 0.10s ==", "Collected 12 items\n== 12 passed in 0.10s =="):
+        assert not accepts(output), output
+
+
 def test_second_setup_restores_entries_before_start_and_waits_without_pins():
     opened = between("static int OpenInstalled(", "static int ConsumerWindow()")
     assert ("Amplifier is already installed on this PC, but it is not in the Start menu "
