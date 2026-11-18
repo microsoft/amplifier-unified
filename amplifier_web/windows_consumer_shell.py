@@ -23,12 +23,15 @@ import uuid
 FILE = "consumer-shell.json"
 NOTE = "apps-list-version.json"
 SETTLE_SECONDS = 15  # Longest wait for a closing app to release the installation folder.
-# Longest wait for another program to close a Start-menu shortcut: once for the
-# step that pins the shortcuts, and once for the step that deletes them.
+# The waits for another program to close a Start-menu shortcut add up to at
+# most this many seconds: once for the step that pins the shortcuts, and once
+# for the step that deletes them. The Windows calls of each attempt take their
+# own time, so a step that waits can take longer than this.
 # Measured on hosted Windows runners, about 3 seconds after the shortcuts were
-# made: the pin was refused for 0.01 s (Windows named explorer.exe as the
-# program that had the file open), and the delete was refused for at most
-# 0.25 s (Windows named no program). This is twenty times the longest of those.
+# made: the pin was refused for 0.01 s, and the delete was refused for at most
+# 0.25 s. Asked which program had the file open, Windows named explorer.exe
+# after 7 of 92 refused pins, and no program after the others and after the
+# refused deletes. The waits are twenty times the longest of those refusals.
 # A shortcut that is still held then stops the uninstall as before.
 HOLD_SECONDS = 5
 LINKS = {"Amplifier Unified.lnk": "", "Amplifier status.lnk": " --status",
@@ -465,7 +468,8 @@ def _held(code):
 
     The returned function counts its waits for all shortcuts of one step
     together: HOLD_SECONDS in all, a tenth of a second each. It limits the
-    waits. The Windows calls of an attempt take their own time.
+    number of waits, not the time of the step: the Windows calls of each
+    attempt take their own time.
     """
     waits = [HOLD_SECONDS * 10]
     def attempt(action):
@@ -488,8 +492,8 @@ def removal(root, *, progress=None):
     so the caller can stop the app first and remove the entries last. An entry
     that an earlier, interrupted removal already took away is skipped: a second
     uninstall completes. An entry that differs from setup's record refuses.
-    A shortcut that another program has open is waited for, in the pin and in
-    the delete, for HOLD_SECONDS each (`_held`).
+    A shortcut that another program has open is tried again, in the pin and in
+    the delete, with waits of HOLD_SECONDS in all for each (`_held`).
 
     `progress(name)` names the step that is about to run: `apps-entry`,
     `shortcuts`, `receipt`. `finish` releases the pins itself, so the entries

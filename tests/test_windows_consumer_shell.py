@@ -6,7 +6,6 @@ import json
 import os
 from pathlib import Path
 import sys
-import threading
 import time
 from types import SimpleNamespace
 import uuid
@@ -1064,8 +1063,9 @@ def test_failed_shortcut_removal_is_finished_by_a_second_uninstall(uninstaller):
 
 
 # Another program (the shell, a search index, a scanner) can have a shortcut open for a moment. Windows
-# then refuses the uninstall's pin with error 32 (the other open does not share deleting) and its delete
-# with error 5 (a view of the file is mapped). Both were seen on hosted Windows runners.
+# refuses the uninstall's pin with error 32 while another open of the shortcut does not share deleting.
+# It refuses the delete with error 5 while a view of the file is mapped. Hosted Windows runners showed
+# both errors for a moment after the shortcuts were made. Which program caused error 5 there is not known.
 HELD = [("pin", 32, "entries-check"), ("delete", 5, "shortcuts")]
 
 
@@ -1517,7 +1517,8 @@ def native_uninstall(monkeypatch):
     transaction, pinned private files and NTFS sharing. Stand-ins: Task
     Scheduler, the dialogs and the installation receipt check. No app is
     started. `waits` holds each wait that the uninstall asked for; the wait
-    itself is real.
+    itself is real. `at_wait[n]` is called at the n-th wait of a tenth of a
+    second: what another program does at that moment.
     """
     if os.name != "nt":
         if os.environ.get("AMPLIFIER_REQUIRE_WINDOWS_SHELL_CHECKS") == "1":
@@ -1531,7 +1532,7 @@ def native_uninstall(monkeypatch):
     with windows_files.directory(root, owned_root=root, create=True):
         pass
     folder = shell.programs() / ("Amplifier Unified - " + shell.identity(root))
-    events, waits, sleep = [], [], time.sleep
+    events, waits, at_wait, sleep = [], [], {}, time.sleep
     monkeypatch.setattr(consumer, "installation", lambda value: (windows_files.address(value), {}))
     monkeypatch.setattr(consumer, "environment", lambda *a: {})
     monkeypatch.setattr(windows_installation, "owner_notice", lambda text, confirm=False: True)
@@ -1545,12 +1546,15 @@ def native_uninstall(monkeypatch):
     monkeypatch.setattr(windows_service, "uninstall", uninstall)
     def wait(seconds):
         waits.append(seconds)
+        if seconds == 0.1 and waits.count(0.1) in at_wait:
+            at_wait.pop(waits.count(0.1))()
         sleep(seconds)
     monkeypatch.setattr(shell.time, "sleep", wait)
     try:
         registration = _install_native_entries(root)
         assert registration and {path.name for path in folder.iterdir()} == set(shell.LINKS)
         yield SimpleNamespace(root=root, folder=folder, registration=registration, events=events, waits=waits,
+                              at_wait=at_wait,
                               consumer=consumer, run=lambda: asyncio.run(consumer.maintenance(root, "uninstall")))
     finally:
         # Only this test's own throwaway objects, by their exact names.
@@ -1617,23 +1621,26 @@ def test_native_shortcut_that_another_program_holds_is_waited_for_and_the_wait_h
 
     1. The shortcut stays held: the uninstall waits its bounded time, then
        stops with that refusal.
-    2. The other program lets go a second later: the uninstall waits and
-       finishes.
+    2. The other program lets go at the third wait of the next uninstall:
+       that uninstall waits three times and finishes.
     """
     native, consumer = native_uninstall, native_uninstall.consumer
     name = "Amplifier status.lnk"  # The second of the four in the order of removal.
     step, code = ("shortcuts", 5) if mapped else ("entries-check", 32)
     longest = shell.HOLD_SECONDS
     release = _another_program_holds(native.folder / name, mapped=mapped)
-    timer = threading.Timer(1.0, release)
     try:
         monkeypatch.setattr(shell, "HOLD_SECONDS", 1)
+        began = time.monotonic()
         with pytest.raises(consumer.Unfinished) as stopped:
             native.run()
+        seconds = round(time.monotonic() - began, 2)  # The whole uninstall, with its ten waits.
         left = sorted(path.name for path in native.folder.iterdir())
+        # The workflow reads the first three keys of this line, in this order.
         seen = {"step": stopped.value.step, "error": type(stopped.value.error).__name__,
                 "code": getattr(stopped.value.error, "winerror", None), "waits": native.waits.count(0.1),
-                "events": list(native.events), "left": left, "appsEntry": shell.registry(native.root) is not None}
+                "events": list(native.events), "left": left, "appsEntry": shell.registry(native.root) is not None,
+                "seconds": seconds}
         print("UNINSTALL_HELD " + json.dumps(seen))
         assert (seen["step"], seen["error"], seen["code"]) == (step, "PermissionError", code), seen
         if mapped:
@@ -1649,21 +1656,18 @@ def test_native_shortcut_that_another_program_holds_is_waited_for_and_the_wait_h
             assert stopped.value.notice.startswith("This uninstall stopped before it changed anything.\n\n")
         # One second: one attempt, then ten more, a tenth of a second apart.
         assert seen["waits"] == 10, seen
-        # The other program lets go one second after this point.
+        # The other program lets go at the third wait of the next uninstall.
         monkeypatch.setattr(shell, "HOLD_SECONDS", longest)
         del native.waits[:]
-        timer.start()
+        native.at_wait[3] = release
         result = native.run()
         assert result["ok"] and result["certificate"] == "none", result
-        assert 1 <= native.waits.count(0.1) <= longest * 10, native.waits
+        assert native.waits.count(0.1) == 3 and not native.at_wait, native.waits
         assert shell.registry(native.root) is None and not native.folder.exists()
         from amplifier_web import windows_files
         with windows_files.directory(native.root, owned_root=native.root) as owned:
             assert json.loads(owned.read_private(shell.FILE, limit=65536))["status"] == "removed"
     finally:
-        timer.cancel()
-        if timer.ident is not None:
-            timer.join()
         release()
 
 
