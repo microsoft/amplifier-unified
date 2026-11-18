@@ -895,6 +895,118 @@ async def test_degraded_dispatch_from_shared_fitter(tmp_path, monkeypatch):
         assert wire.effects == 1 and wire.unknown_invocations == 0
 
 
+async def test_degraded_stream_marks_only_after_pull_and_current_admission():
+    """Preparing/suspending an iterator is not ordinary provider dispatch."""
+    import asyncio
+    from amplifier_core import ChatRequest, ChatResponse, Message
+    from amplifier_web.execution_events import ExecutionEvents, _CONTINUATION_WARNING
+
+    events, sent = [], []
+    admitted, release = asyncio.Event(), asyncio.Event()
+
+    class Provider:
+        def get_info(self):
+            return {'id': 'fixture', 'defaults': {'model': 'offline'}}
+
+        async def complete(self, request):
+            raise AssertionError('This case must use the streaming path')
+
+        async def stream(self, request):
+            sent.append(request)
+            yield ChatResponse(content=[])
+
+    async def guard(row):
+        admitted.set()
+        await release.wait()
+
+    provider = Provider()
+    telemetry = ExecutionEvents('root', events.append)
+    telemetry.admission_guard = guard
+    telemetry.lifecycle({'type': 'generation.started', 'generation_id': 'generation',
+                         'initial_input_id': 'ordinary-input'})
+    telemetry.instrument_provider('root', provider)
+    request = ChatRequest(messages=[
+        Message(role='developer', content=_CONTINUATION_WARNING, metadata={
+            'source': 'context-managed-continuation', 'ephemeral': True}),
+        Message(role='user', content='Current accepted input, unchanged.'),
+    ])
+    iterator = provider.stream(request)
+    assert events == sent == []  # A prepared iterator alone does no work.
+    pulling = asyncio.create_task(anext(iterator))
+    try:
+        await asyncio.wait_for(admitted.wait(), 5)
+        assert events == sent == []  # Even a pull must wait for current admission.
+        release.set()
+        await asyncio.wait_for(pulling, 5)
+        marked = [event['event'] for event in events
+                  if event['event'].get('incompleteHistoryDispatched')]
+        assert len(marked) == 1 and sent == [request]
+        assert marked[0]['admissionInputId'] == 'ordinary-input'
+        assert marked[0]['generationId'] == 'generation'
+    finally:
+        pulling.cancel()
+        await asyncio.wait_for(asyncio.gather(pulling, return_exceptions=True), 5)
+        await asyncio.wait_for(iterator.aclose(), 5)
+
+
+async def test_degraded_stream_cancelled_before_admission_has_no_warning_or_transport():
+    import asyncio
+    from amplifier_core import ChatRequest, Message
+    from amplifier_web.execution_events import ExecutionEvents, _CONTINUATION_WARNING
+
+    events, sent = [], []
+    waiting = asyncio.Event()
+
+    class Provider:
+        def get_info(self):
+            return {'id': 'fixture', 'defaults': {'model': 'offline'}}
+
+        async def complete(self, request):
+            raise AssertionError('Unexpected completion')
+
+        async def stream(self, request):
+            sent.append(request)
+            yield None
+
+    async def guard(row):
+        waiting.set()
+        await asyncio.Event().wait()
+
+    provider = Provider()
+    telemetry = ExecutionEvents('root', events.append)
+    telemetry.admission_guard = guard
+    telemetry.lifecycle({'type': 'generation.started', 'generation_id': 'generation',
+                         'initial_input_id': 'ordinary-input'})
+    telemetry.instrument_provider('root', provider)
+    iterator = provider.stream(ChatRequest(messages=[Message(
+        role='developer', content=_CONTINUATION_WARNING, metadata={
+            'source': 'context-managed-continuation', 'ephemeral': True})]))
+    pulling = asyncio.create_task(anext(iterator))
+    try:
+        await asyncio.wait_for(waiting.wait(), 5)
+        pulling.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(pulling, 5)
+        assert events == sent == []
+    finally:
+        pulling.cancel()
+        await asyncio.wait_for(asyncio.gather(pulling, return_exceptions=True), 5)
+        await asyncio.wait_for(iterator.aclose(), 5)
+
+
+@pytest.mark.parametrize('explicit', [None, True, False])
+def test_live_plan_enables_ordinary_fitting_without_overriding_explicit_choice(explicit):
+    from amplifier_web.host.session import live_plan
+    config = {} if explicit is None else {'foreground_continuation': explicit}
+    source = {'session': {'orchestrator': 'loop-streaming',
+                         'context': {'module': 'context-managed', 'config': config}}}
+    before = copy.deepcopy(source)
+    plan, _ = live_plan(source)
+    assert plan['session']['context']['config']['foreground_continuation'] is (
+        True if explicit is None else explicit)
+    assert source == before
+
+
 def recovery_decision_accounts():
     return [{'module': 'provider-fixture-decision', 'instance_id': name,
              'source': 'git+https://example.test/decision@exact', 'enabled': enabled,

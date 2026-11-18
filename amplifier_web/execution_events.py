@@ -20,8 +20,10 @@ CURRENT_PROVIDER = contextvars.ContextVar("amplifier_web_public_provider", defau
 ADMITTED_CALL = contextvars.ContextVar("amplifier_web_admitted_provider_call", default=None)
 
 _CONTINUATION_WARNING = (
-    "Older context may be incomplete. Tell the user if missing history affects the answer. "
-    "Do not invent missing details or assume earlier actions should be replayed."
+    "Older context may be incomplete. Omitted exchanges remain in saved history and are "
+    "not represented or summarized in this request. Tell the user if missing history affects "
+    "the answer. Do not invent missing details or replay actions because their evidence "
+    "is absent; inspect saved history and receipts first."
 )
 
 
