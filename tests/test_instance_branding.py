@@ -19,6 +19,7 @@ from amplifier_web.deployment import DEFAULT_SERVER
 from amplifier_web.errors import AppError
 from amplifier_web.server import create_app
 from test_configuration_authority import app, agent, grant
+from test_instance_branding_storage import approved_badge, decoded
 from test_service import Runtime
 
 
@@ -321,6 +322,24 @@ async def test_browser_accents_manifest_icons_and_clear_action(server_app, aioht
     assert images[0] == images[1] == store.icon(192)
     assert all('accent=' not in icon['src'] for icon in (
         await (await client.get('/manifest.webmanifest?accent=abcdef')).json())['icons'])
+
+
+async def test_old_render_generation_urls_serve_approved_pixels(server_app, aiohttp_client, monkeypatch):
+    client = await aiohttp_client(server_app)
+    store = server_app['service'].instance_branding
+    with monkeypatch.context() as previous:
+        previous.setattr(branding, '_ICON_GENERATION', 'rounded-contrast-v1')
+        old = branding.InstanceBranding(store.root, server_app['server_config'])
+    assert old.snapshot()['revision'] != store.snapshot()['revision']
+    for size in branding.SIZES:
+        for accent in ('ffffff', '000000', '0080ff'):
+            old_url = old.icon_url(size, accent)
+            assert old_url != store.icon_url(size, accent)
+            response = await client.get(old_url, allow_redirects=False)
+            assert response.status == 200 and response.content_type == 'image/png'
+            assert response.headers['Cache-Control'] == 'no-store'
+            assert 'Set-Cookie' not in response.headers
+            assert decoded(await response.read()).tobytes() == approved_badge(size, accent).tobytes()
 
 
 async def test_old_public_icon_urls_follow_current_branding(server_app, aiohttp_client):

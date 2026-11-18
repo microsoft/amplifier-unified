@@ -5,9 +5,15 @@ import pytest
 
 from amplifier_web import __version__, app_updates, release_notes
 from amplifier_web.attention import snapshot
-from amplifier_web.service import AppService
 from amplifier_web.updates import UpdateManager
-from test_service import Runtime
+
+
+@pytest.fixture
+def service_types():
+    # Metadata-only checks do not need the app service's optional dependencies.
+    from amplifier_web.service import AppService
+    from test_service import Runtime
+    return AppService, Runtime
 
 
 def entry(number='99.0.0'):
@@ -20,7 +26,8 @@ def document(entries):
     return json.dumps({'schemaVersion':1,'releases':entries})
 
 
-async def test_fresh_install_notices_start_at_installed_version_and_survive_upgrade(tmp_path, monkeypatch):
+async def test_fresh_install_notices_start_at_installed_version_and_survive_upgrade(tmp_path, monkeypatch, service_types):
+    AppService, Runtime = service_types
     monkeypatch.setattr('amplifier_web.__version__', '2.0.0')
     monkeypatch.setattr(release_notes, 'bundled', lambda: [entry('2.0.0'), entry('1.0.0')])
     app = AppService(tmp_path, Runtime(), workspace=tmp_path)
@@ -40,7 +47,8 @@ async def test_fresh_install_notices_start_at_installed_version_and_survive_upgr
     await restored.close()
 
 
-async def test_legacy_install_keeps_unread_guidance_even_without_chats(tmp_path, monkeypatch):
+async def test_legacy_install_keeps_unread_guidance_even_without_chats(tmp_path, monkeypatch, service_types):
+    AppService, Runtime = service_types
     monkeypatch.setattr(release_notes, 'bundled', lambda: [entry(__version__), entry('0.1.0')])
     app = AppService(tmp_path, Runtime(), workspace=tmp_path)
     app.state.pop('releaseNoticeStartVersion')  # Saved state from before this field existed.
@@ -65,6 +73,34 @@ def test_packaged_history_has_current_release_and_retains_initial_changes():
     {'schemaVersion':1,'releases':[{**entry(),'notices':[{'id':'bad/url'}]}]}])
 def test_invalid_history_rejected(value):
     with pytest.raises(ValueError):release_notes.parse(json.dumps(value))
+
+
+@pytest.mark.parametrize('day', ['2026-11-17', '2024-02-29', '2000-02-29'])
+def test_optional_calendar_date_survives_validation_and_retention(day):
+    dated = {**entry(), 'date': day}
+    assert release_notes.parse(document([dated])) == [dated]
+    assert release_notes.retain([dated]) == [dated]
+    assert 'date' not in release_notes.parse(document([entry()]))[0]
+
+
+@pytest.mark.parametrize('day', [None, '', 20261117, True, [], {}, '2026-2-01',
+    '20260201', '2026-11-17T00:00:00Z', ' 2026-11-17', '2026-11-17\n',
+    '2026-02-29', '1900-02-29', '2026-04-31', '2026-13-01', '0000-01-01'])
+def test_invalid_release_dates_are_rejected(day):
+    with pytest.raises(ValueError):
+        release_notes.parse(document([{**entry(), 'date': day}]))
+
+
+@pytest.mark.parametrize('installed_date', [None, '2026-11-17'])
+def test_history_preserves_whole_record_date_precedence_and_future_cache(monkeypatch, installed_date):
+    installed = entry(__version__)
+    if installed_date:
+        installed['date'] = installed_date
+    stale = {**installed, 'date': '2026-11-16', 'title': 'Stale'}
+    upcoming = {**entry(), 'date': '2026-11-18'}
+    monkeypatch.setattr(release_notes, 'bundled', lambda: [installed])
+    assert release_notes.history([stale, upcoming]) == [upcoming, installed]
+    assert release_notes.history([stale, upcoming], latest='v' + __version__) == [installed]
 
 
 def test_history_limits_and_exact_published_version():
@@ -143,7 +179,8 @@ async def test_exact_release_history_includes_skipped_versions_and_failure_does_
     assert 'private credentials must not leak' not in json.dumps(checked)
 
 
-async def test_notice_review_survives_restart_and_upgrade_but_changed_guidance_is_unread(tmp_path,monkeypatch):
+async def test_notice_review_survives_restart_and_upgrade_but_changed_guidance_is_unread(tmp_path,monkeypatch,service_types):
+    AppService, Runtime = service_types
     monkeypatch.setattr(release_notes,'bundled',lambda:[])
     app=AppService(tmp_path,Runtime(),workspace=tmp_path)
     manager=UpdateManager(app)
@@ -167,7 +204,8 @@ async def test_notice_review_survives_restart_and_upgrade_but_changed_guidance_i
 
 
 @pytest.mark.parametrize('changed_field',['detail','action','title'])
-async def test_editorial_notice_title_preserves_review_after_upgrade_but_changed_content_is_unread(tmp_path,monkeypatch,changed_field):
+async def test_editorial_notice_title_preserves_review_after_upgrade_but_changed_content_is_unread(tmp_path,monkeypatch,changed_field,service_types):
+    AppService, Runtime = service_types
     original=entry(__version__)
     monkeypatch.setattr(release_notes,'bundled',lambda:[original])
     app=AppService(tmp_path,Runtime(),workspace=tmp_path)
@@ -315,6 +353,7 @@ def test_packaged_precedence_is_resolved_before_any_source_is_pruned(tmp_path, m
 def test_cached_notice_all_fields_survive_validation_selection_and_repeated_merge(monkeypatch):
     protected = entry('0.0.1')
     protected['extension'] = {'keep': [1, 2]}
+    protected['date'] = '2026-11-17'
     protected['notices'][0].update(previousTitles=[], extension='unchanged')
     monkeypatch.setattr(release_notes, 'bundled', lambda: [])
     saved = release_notes.history([protected, *[ordinary(f'0.1.{i}') for i in range(300)]])
@@ -389,7 +428,8 @@ def test_unread_and_editorial_acknowledgements_unchanged_after_retention(monkeyp
 
 
 @pytest.mark.parametrize('failure',['check','notes'])
-async def test_failed_refresh_preserves_saved_upcoming_notices_across_restart(tmp_path,monkeypatch,failure):
+async def test_failed_refresh_preserves_saved_upcoming_notices_across_restart(tmp_path,monkeypatch,failure,service_types):
+    AppService, Runtime = service_types
     from unittest.mock import AsyncMock
     app=AppService(tmp_path,Runtime(),workspace=tmp_path)
     manager=UpdateManager(app)

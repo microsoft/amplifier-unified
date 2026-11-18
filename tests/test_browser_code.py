@@ -131,7 +131,7 @@ def host(home, files):
 
 
 async def build(app, path, *, method="POST", at=LOCAL, origin=..., headers=None, body=None,
-                secure=True, peer="127.0.0.1"):
+                secure=True, peer="127.0.0.1", sock="127.0.0.1", connected=True):
     """One real aiohttp request to the address `at`; no socket."""
     headers = {"Host": at.split("://", 1)[1], "Origin": at if origin is ... else origin, **(headers or {})}
     headers = {key: value for key, value in headers.items() if value is not None}
@@ -147,10 +147,13 @@ async def build(app, path, *, method="POST", at=LOCAL, origin=..., headers=None,
 
     def extra(name):
         if name in {"peername", "sockname"}:
-            return (peer if name == "peername" else "127.0.0.1", 8941)
-    return make_mocked_request(method, path, headers=headers, app=app, payload=content,
+            return (peer if name == "peername" else sock, 8941)
+    request = make_mocked_request(method, path, headers=headers, app=app, payload=content,
                                transport=SimpleNamespace(get_extra_info=extra),
                                sslcontext=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER) if secure else None)
+    if not connected:
+        request._protocol.transport = None                  # The connection is gone.
+    return request
 
 
 async def send(app, path, **options):
@@ -636,7 +639,7 @@ def test_code_or_ticket_opens_no_session_while_a_saved_sign_out_waits_for_the_ho
     assert host["browser_codes"].failures == 0              # Refused, and not counted as a wrong code.
     refused = open_ticket(host, ticket)
     assert refused.status == 403 and auth.SESSION_COOKIE not in refused.cookies
-    assert refused.text == entry.reopen()
+    assert refused.text == entry.ON_THE_PC
     # Both are used up: they open nothing later either.
     monkeypatch.setattr(auth, "_epoch_hint", lambda data_dir: applied)
     assert wrong(redeem(host, code)) and open_ticket(host, ticket).status == 403
@@ -736,28 +739,203 @@ def test_the_field_and_sign_in_come_directly_after_the_heading_and_the_error(hos
     assert "That code did not work" in text
 
 
-def test_the_next_step_for_a_browser_that_is_not_signed_in_is_true_on_each_platform(monkeypatch):
-    monkeypatch.setattr(entry, "is_windows", lambda: True)
-    windows = entry.reopen()
-    # A PC from the setup file has no `amplifier-unified` on its PATH: its Start-menu entry comes first.
-    assert windows == ("Open Amplifier from the Start menu: Amplifier Unified. "
-                       "If the Start menu has no such entry, run this: amplifier-unified open.")
+# The next step for a browser on the PC that is not signed in.
+
+def from_setup(app, monkeypatch, *, entry_there=True):
+    """Make this host the one of an installation from the setup file.
+
+    Its data folder is `<root>/app`, and the task of that installation's
+    launcher and workspace started it. The Start-menu record is a stand-in;
+    `test_the_host_reads_the_real_start_menu_record` has the real one.
+    """
+    from amplifier_web import windows_consumer_shell
+    root = Path(app["service"].data_dir)
+    app["service"].data_dir = root / "app"
+    app["owner_task"] = SimpleNamespace(
+        python=str(root / "tools" / "amplifier-unified" / "Scripts" / "pythonw.exe"),
+        workspace=str(root / "workspace"), data_dir=str(root / "app"))
+    looked = []
+    monkeypatch.setattr(windows_consumer_shell, "listed", lambda folder: looked.append(Path(folder)) or entry_there)
+    return root, looked
+
+
+def step(app, **options):
+    """The text that a browser gets for a ticket that opens nothing."""
+    csrf = auth.new_csrf(app["session_secret"])
+    refused = call(app, entry.REDEEM_PATH, headers={"Content-Type": FORM, "Cookie": f"{auth.CSRF_COOKIE}={csrf}"},
+                   body=urlencode({"csrf": csrf, "ticket": "a" * 43}), **options)
+    assert refused.status == 403 and auth.SESSION_COOKIE not in refused.cookies
+    return refused.text
+
+
+def test_a_pc_from_the_setup_file_is_sent_to_its_start_menu_entry(host, monkeypatch):
+    root, looked = from_setup(host, monkeypatch)
+    assert step(host) == ("Open Amplifier from the Start menu: Amplifier Unified. "
+                          "Amplifier then opens in your browser.")
+    assert looked == [root]                                 # The record of this installation, and no other.
     # The name in the text is the name of the entry that setup makes.
     from amplifier_web import windows_consumer_shell
     assert "Amplifier Unified.lnk" in windows_consumer_shell.LINKS
-    monkeypatch.setattr(entry, "is_windows", lambda: False)
-    other = entry.reopen()
-    assert other == "To open Amplifier, run this: amplifier-unified open."
-    assert "Start menu" not in other  # macOS and Linux have no such entry.
-    for text in (windows, other):
+    # Every local name of this computer gets the same text. The fixture's host accepts an
+    # Origin of its first local address only, so these requests carry none.
+    for at in ("https://localhost:8941", "https://[::1]:8941", "https://LOCALHOST.:8941", "https://127.0.0.2:8941"):
+        assert step(host, at=at, origin=None) == entry.START_MENU
+    # A form that this host did not sign gets the same text, and no session.
+    unsigned = call(host, entry.REDEEM_PATH, headers={"Content-Type": FORM},
+                    body=urlencode({"csrf": "not signed", "ticket": "a" * 43}))
+    assert unsigned.status == 403 and unsigned.text == entry.START_MENU and auth.SESSION_COOKIE not in unsigned.cookies
+
+
+@pytest.mark.parametrize("change", [
+    "no-ticket-store", "started-by-a-person", "another-data-folder", "another-launcher", "another-workspace",
+    "no-entry", "entry-test-fails"])
+def test_every_other_windows_host_names_no_way(host, monkeypatch, change):
+    """One sentence that is true everywhere. No command: this host knows none that works."""
+    root, looked = from_setup(host, monkeypatch, entry_there=change != "no-entry")
+    task = host["owner_task"]
+    if change == "no-ticket-store":
+        # This host gives no ticket: the entry's `open` would get a refusal from it.
+        host["browser_entry"] = None
+    elif change == "started-by-a-person":
+        del host["owner_task"]                              # No task started this host.
+    elif change == "another-data-folder":
+        # The Start-menu entry opens `<root>/app` only.
+        host["service"].data_dir = task.data_dir = root / "data"
+    elif change == "another-launcher":
+        task.python = str(root / "other" / "Scripts" / "pythonw.exe")
+    elif change == "another-workspace":
+        task.workspace = str(root / "elsewhere")
+    elif change == "entry-test-fails":
+        from amplifier_web import windows_consumer_shell
+
+        def unreadable(folder):
+            raise PermissionError("The record cannot be read")
+        monkeypatch.setattr(windows_consumer_shell, "listed", unreadable)
+    assert step(host) == "Open Amplifier again on the Windows PC that runs it."
+    # The record is read only when this host is the one that the entry opens.
+    assert looked == ([root] if change == "no-entry" else [])
+
+
+@pytest.mark.parametrize("options", [
+    {"at": REMOTE},                                         # Another name than this computer's.
+    {"peer": "192.0.2.20"},                                 # The other end is not this computer.
+    {"sock": "192.0.2.5"},                                  # This end is not a local address.
+    {"connected": False}])
+def test_a_request_that_is_not_from_this_computer_reads_no_file(host, monkeypatch, options):
+    root, looked = from_setup(host, monkeypatch)
+    assert step(host, **options) == entry.ON_THE_PC
+    assert looked == []
+
+
+def test_the_texts_name_no_command_on_windows_and_other_systems_keep_theirs(host, monkeypatch):
+    for text in (entry.START_MENU, entry.ON_THE_PC):
+        assert "amplifier-unified" not in text and "\\" not in text
         assert "launcher" not in text and "candidate" not in text and "host" not in text
+    from_setup(host, monkeypatch)
+    monkeypatch.setattr(entry, "is_windows", lambda: False)
+    # macOS and Linux have no Start-menu entry; their text is the earlier one.
+    assert step(host) == "To open Amplifier, run this: amplifier-unified open."
 
 
-@pytest.mark.parametrize("windows,step", [
-    (True, "Open Amplifier from the Start menu: Amplifier Unified. "
-           "If the Start menu has no such entry, run this: amplifier-unified open."),
-    (False, "To open Amplifier, run this: amplifier-unified open.")])
-def test_a_browser_that_does_not_open_gets_the_next_step_of_its_platform(tmp_path, monkeypatch, windows, step):
+def test_the_password_form_on_windows_gives_the_same_next_step(host, monkeypatch):
+    host.router.add_post("/login", auth.post_login)
+    csrf = auth.new_csrf(host["session_secret"])
+    form = dict(method="POST", headers={"Content-Type": FORM, "Cookie": f"{auth.CSRF_COOKIE}={csrf}"},
+                body=urlencode({"csrf": csrf}))
+    refused = call(host, "/login", **form)
+    assert refused.status == 403 and refused.text == entry.ON_THE_PC
+    from_setup(host, monkeypatch)
+    assert call(host, "/login", **form).text == entry.START_MENU
+
+
+def with_marks(monkeypatch):
+    """The sign-in page as the client's change makes it: marks for the step and for the wanted address."""
+    read = Path.read_text
+
+    def page(self, *args, **options):
+        text = read(self, *args, **options)
+        if self.name != "windows-login.html":
+            return text
+        marked, count = re.subn(r'(<p id="entry-status" role="status">).*?(</p>)', r"\1__REOPEN__\2", text, flags=re.S)
+        assert count == 1
+        return marked.replace("<main>", '<main data-next="__NEXT__">')
+    monkeypatch.setattr(Path, "read_text", page)
+
+
+def test_the_sign_in_page_shows_the_step_in_its_own_place(host, monkeypatch):
+    with_marks(monkeypatch)
+    page = call(host, "/login", method="GET", origin=None).text
+    assert f'<p id="entry-status" role="status">{entry.ON_THE_PC}</p>' in page and "__REOPEN__" not in page
+    root, looked = from_setup(host, monkeypatch)
+    page = call(host, "/login", method="GET", origin=None).text
+    assert f'<p id="entry-status" role="status">{entry.START_MENU}</p>' in page and looked == [root]
+    # The text is data in the page, never markup.
+    monkeypatch.setattr(entry, "next_step", lambda request: 'a <b> & "c"')
+    page = call(host, "/login", method="GET", origin=None).text
+    assert '<p id="entry-status" role="status">a &lt;b&gt; &amp; &quot;c&quot;</p>' in page and "<b>" not in page
+    # The step is in the page before any value of the request: a wanted address cannot name the mark.
+    monkeypatch.setattr(entry, "next_step", lambda request: "the step")
+    page = call(host, "/login?next=%2F__REOPEN__", method="GET", origin=None).text
+    assert '<main data-next="/__REOPEN__">' in page and page.count("the step") == 1
+
+
+def test_a_sign_in_page_without_the_mark_is_not_changed_and_reads_nothing(host, monkeypatch):
+    """A page of a client that has no place for the step, whatever the selected client's page has."""
+    read = Path.read_text
+    plain = read(Path(auth.__file__).parent / "static" / "windows-login.html", encoding="utf-8").replace(
+        "__REOPEN__", "The client's own sentence.")
+    monkeypatch.setattr(Path, "read_text", lambda self, *args, **options: (
+        plain if self.name == "windows-login.html" else read(self, *args, **options)))
+    from_setup(host, monkeypatch)
+    monkeypatch.setattr(entry, "next_step", lambda request: pytest.fail("The step was worked out for nothing"))
+    page = call(host, "/login", method="GET", origin=None)
+    csrf = page.cookies[auth.CSRF_COOKIE].value
+    # The three marks that the host filled before this change, and nothing else.
+    earlier = plain.replace("__CSRF__", csrf).replace("__NEXT__", "/").replace("__ERROR__", "")
+    assert page.text == host["service"].instance_branding.document(earlier, login=True)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="The real private store of Windows and the real record of the entries")
+def test_the_host_reads_the_real_start_menu_record(home):
+    """No stand-in: the host's own look at `<root>\\consumer-shell.json` through the private folder check.
+
+    The entry itself is a plain file here. Real shortcuts are the uninstall
+    cases' part; `listed` reads only that the file is there.
+    """
+    from amplifier_web import windows_consumer_shell as shell
+    from amplifier_web.deployment import write_private
+    from amplifier_web.windows_files import address, current_process_sid
+    from amplifier_web.windows_service import TaskSpec
+    root = home
+    folder = root / "entries"
+    folder.mkdir()
+    app = web.Application()
+    app["browser_entry"] = entry.GrantStore()
+    app["service"] = SimpleNamespace(data_dir=address(root / "app"))
+    # The real definition type, with paths in the form that a registration gives them.
+    app["owner_task"] = TaskSpec(
+        sid=current_process_sid(), registration_id=uuid.uuid4().hex, tool_path=str(root),
+        python=str(address(root / "tools" / "amplifier-unified" / "Scripts" / "pythonw.exe")),
+        data_dir=str(address(root / "app")), workspace=str(address(root / "workspace")),
+        state_home=str(address(root / "state")))
+
+    def now():
+        return entry.next_step(asyncio.run(build(app, "/login", method="GET", origin=None)))
+    assert now() == entry.ON_THE_PC                         # No record: setup made no entry.
+    write_private(root / shell.FILE, json.dumps({"schema": 1, "root": str(root), "folder": str(folder),
+                                                 "status": "installed", "links": {}, "registry": {}}),
+                  owned_root=root)
+    assert now() == entry.ON_THE_PC                         # The record alone is not the entry.
+    (folder / next(iter(shell.LINKS))).write_bytes(b"")
+    assert now() == entry.START_MENU
+    (folder / next(iter(shell.LINKS))).unlink()             # A person deleted the entry while the host runs.
+    assert now() == entry.ON_THE_PC
+
+
+# What `amplifier-unified open` says when it cannot open the browser.
+
+@pytest.mark.parametrize("windows,again", [(True, ""), (False, " To open Amplifier, run this: amplifier-unified open.")])
+def test_a_browser_that_does_not_open_gets_the_cause_and_on_windows_no_command(tmp_path, monkeypatch, windows, again):
     from argparse import Namespace
     from amplifier_web import cli, update_readiness
     monkeypatch.setattr(entry, "is_windows", lambda: windows)
@@ -769,15 +947,187 @@ def test_a_browser_that_does_not_open_gets_the_next_step_of_its_platform(tmp_pat
     monkeypatch.setattr(cli.webbrowser, "open", lambda url: False)
     with pytest.raises(entry.BrowserEntryUnavailable) as refused:
         cli._open_browser(Namespace(no_open=False), tmp_path, {"port": 8941, "public_origins": []})
-    assert str(refused.value) == "The browser did not accept the open request. " + step
+    assert str(refused.value) == "The browser did not accept the open request." + again
+
+    def broken(url):
+        raise OSError(url)
+    monkeypatch.setattr(cli.webbrowser, "open", broken)
+    with pytest.raises(entry.BrowserEntryUnavailable) as failed:
+        cli._open_browser(Namespace(no_open=False), tmp_path, {"port": 8941, "public_origins": []})
+    assert str(failed.value) == "Could not open the browser." + again
 
 
-def test_a_refused_ticket_names_the_start_menu_first(host):
-    # The reply that a browser on the PC shows when its one-use ticket opens nothing.
-    refused = open_ticket(host, "a" * 43)
-    assert refused.status == 403 and auth.SESSION_COOKIE not in refused.cookies
-    assert refused.text == ("Open Amplifier from the Start menu: Amplifier Unified. "
-                            "If the Start menu has no such entry, run this: amplifier-unified open.")
+@pytest.mark.parametrize("windows,again", [(True, ""), (False, " To open Amplifier, run this: amplifier-unified open.")])
+def test_an_open_command_that_cannot_start_names_no_command_on_windows(home, monkeypatch, windows, again):
+    from amplifier_web import application_generations, deployment, host_dependencies
+    monkeypatch.setattr(host_dependencies, "prepare_environment", lambda: None)
+    monkeypatch.setattr(application_generations, "delegate", lambda: None)
+    monkeypatch.setattr(entry, "is_windows", lambda: windows)
+    monkeypatch.setattr(deployment, "load_server_config", lambda data_dir, overrides=None: {"port": 8941})
+
+    def unreadable(*a, **kw):
+        raise OSError("private storage")
+    monkeypatch.setattr(cli, "_open_browser", unreadable)
+    monkeypatch.setattr(sys, "argv", ["amplifier-unified", "--data-dir", str(home), "open"])
+    with pytest.raises(SystemExit) as stopped:
+        cli.main()
+    assert str(stopped.value) == "Cannot open the owned host." + again
+
+
+def owner_request(home, monkeypatch, answer, *, health=True):
+    """The pinned owner request of `open` and of `browsers code` against a host that gives `answer`."""
+    from amplifier_web import update_readiness
+    pin = aiohttp.Fingerprint(bytes(range(32)))
+    monkeypatch.setattr(entry, "_owner_probe_targets", lambda *a: ([LOCAL + "/api/health"], pin))
+    monkeypatch.setattr(entry, "current_owner_sid", lambda: SID)
+    monkeypatch.setattr(entry, "read_owner_control_token", lambda *a: TOKEN)
+    monkeypatch.setattr(update_readiness, "running_identity", lambda: {"version": __version__, "revision": REVISION})
+    body = {**HEALTH, "dataIdentity": auth.data_identity(home)}
+
+    class Client:
+        def __init__(self, **options):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *error):
+            pass
+
+        def get(self, url, **options):
+            async def reply():
+                return web.json_response(body if health else {"ok": True, "app": "amplifier-unified"})
+            return Reply(reply)
+
+        def post(self, url, **options):
+            async def reply():
+                if isinstance(answer, Exception):
+                    raise answer
+                return answer
+            return Reply(reply)
+    monkeypatch.setattr(aiohttp, "ClientSession", Client)
+
+
+def said(operation):
+    with pytest.raises(entry.BrowserEntryUnavailable) as stopped:
+        asyncio.run(operation)
+    return str(stopped.value)
+
+
+OPEN_ANSWERS = [
+    # The host's own reason, as the host wrote it.
+    (web.json_response({"error": entry.BUSY}, status=503), entry.BUSY),
+    (web.json_response({"error": "The owner host identity changed."}, status=409), "The owner host identity changed."),
+    (web.json_response({"error": "Invalid owner entry request."}, status=400), "Invalid owner entry request."),
+    # An answer with no reason that can be shown.
+    (web.json_response({}, status=503), "Amplifier refused the request. Try again."),
+    (web.json_response({"error": ""}, status=503), entry.REFUSED),
+    (web.json_response({"error": 5}, status=503), entry.REFUSED),
+    (web.json_response(["refused"], status=503), entry.REFUSED),
+    (web.json_response({"error": "x" * 301}, status=503), entry.REFUSED),
+    (web.json_response({"error": "two\nlines"}, status=503), entry.REFUSED),
+    (web.Response(text="not JSON", status=502), entry.REFUSED),
+    # No confirmed answer.
+    (TimeoutError("unknown"), "Amplifier's answer was not confirmed. The request was not repeated. Try again."),
+    (web.json_response({"ticket": "short"}), entry.UNCONFIRMED)]
+
+
+@pytest.mark.parametrize("answer,message", OPEN_ANSWERS)
+def test_open_says_what_it_knows_and_never_names_itself(home, monkeypatch, answer, message):
+    owner_request(home, monkeypatch, answer)
+    text = said(entry.owner_browser_url(home, {}))
+    assert text == message
+    assert "amplifier-unified open" not in text and "Start menu" not in text and TOKEN not in text
+
+
+def test_open_with_no_host_of_its_version_says_so(home, monkeypatch):
+    owner_request(home, monkeypatch, pytest.fail, health=False)
+    text = said(entry.owner_browser_url(home, {}))
+    assert text == ("No Amplifier of this version and this data folder answered on this PC. "
+                    "Make sure that Amplifier is running. If it is updating, wait one minute. Then try again.")
+    assert "amplifier-unified open" not in text and "Start menu" not in text
+
+
+def test_a_wrong_owner_credential_file_gives_its_cause_and_no_step(home, monkeypatch):
+    owner_request(home, monkeypatch, pytest.fail)
+    monkeypatch.setattr(entry, "read_owner_control_token", lambda *a: "not the stored form")
+    for operation in (entry.owner_browser_url(home, {}), entry.owner_browser_code(home, {}, REMOTE)):
+        assert said(operation) == "Cannot read the verified private owner credential."
+
+
+@pytest.mark.parametrize("answer,message", [
+    (web.json_response({"error": entry.BUSY}, status=503), "The owner host refused browser entry. "),
+    (web.json_response({}, status=409), "The owner host refused browser entry. "),
+    (TimeoutError("unknown"), "Browser entry response was not confirmed; no retry was made. "),
+    (web.json_response({"code": "short"}), "Browser entry response was not confirmed; no retry was made. ")])
+def test_the_typed_code_command_keeps_its_texts(home, monkeypatch, answer, message):
+    step = "Make sure that Amplifier is running on this PC. Then run this again: amplifier-unified browsers code."
+    owner_request(home, monkeypatch, answer)
+    assert said(entry.owner_browser_code(home, {}, REMOTE)) == message + step
+    owner_request(home, monkeypatch, pytest.fail, health=False)
+    assert said(entry.owner_browser_code(home, {}, REMOTE)) == (
+        "The owned local host is not reachable or its identity does not match. " + step)
+    owner_request(home, monkeypatch, web.json_response({"error": "Invalid owner entry request. " + step}, status=400))
+    assert said(entry.owner_browser_code(home, {}, REMOTE)) == (
+        "The running Amplifier does not use this address yet. Stop Amplifier and start it again. "
+        "Then run this again: amplifier-unified browsers code.")
+
+
+def ticket_answer(app, **changes):
+    body = issue_body(app, **changes)
+    del body["origin"]
+    response = call(app, entry.ISSUE_PATH, headers=BEARER, body=body)
+    return response.status, json.loads(response.body)["error"]
+
+
+def code_answer(app, **changes):
+    response = call(app, entry.CODE_PATH, headers=BEARER, body=issue_body(app, **changes))
+    return response.status, json.loads(response.body)["error"]
+
+
+def test_the_host_answers_a_ticket_request_with_the_cause_only_and_a_code_request_as_before(host, monkeypatch):
+    step = " " + entry.NEW_CODE
+    assert ticket_answer(host, version="wrong") == (409, "The owner host identity changed.")
+    assert code_answer(host, version="wrong") == (409, "The owner host identity changed." + step)
+    broken = call(host, entry.ISSUE_PATH, headers={**BEARER, "Content-Type": "application/json"}, body="{")
+    assert (broken.status, json.loads(broken.body)["error"]) == (400, "Invalid owner entry request.")
+    assert code_answer(host, origin=LOCAL) == (400, "Invalid owner entry request." + step)
+    read, identity = entry.read_owner_control_token, auth.data_identity
+    monkeypatch.setattr(entry, "read_owner_control_token", lambda *a: "d" * 64)    # The private credential changed.
+    assert ticket_answer(host) == code_answer(host) == (503, "The owner control credential changed.")
+    monkeypatch.setattr(entry, "read_owner_control_token", read)
+
+    body = issue_body(host)
+    del body["origin"]
+
+    def gone(data_dir):
+        raise OSError("The data folder cannot be read")
+    monkeypatch.setattr(auth, "data_identity", gone)
+    unread = call(host, entry.ISSUE_PATH, headers=BEARER, body=body)
+    assert (unread.status, json.loads(unread.body)["error"]) == (
+        503, "The private owner data identity is unavailable.")
+    monkeypatch.setattr(auth, "data_identity", identity)
+    for _ in range(host["browser_entry"].capacity):
+        local_ticket(host)
+    assert ticket_answer(host) == (
+        503, "Amplifier has too many browser openings in progress. Wait one minute. Then try again.")
+    host["browser_entry"] = host["browser_codes"] = None
+    assert ticket_answer(host) == (503, "Windows owner browser entry is not available.")
+    assert code_answer(host) == (503, "Windows owner browser entry is not available." + step)
+
+
+def test_open_prints_the_real_reason_of_the_real_host(host, monkeypatch):
+    """The whole way: the real handler refuses, and `open` says the handler's sentence."""
+    for _ in range(host["browser_entry"].capacity):
+        local_ticket(host)                                  # Every place for a ticket is taken.
+    home = host["service"].data_dir
+    owner_request(home, monkeypatch, None)
+
+    def post(self, url, **options):
+        return Reply(lambda: send(host, entry.ISSUE_PATH, headers=options["headers"], body=options["json"]))
+    monkeypatch.setattr(aiohttp.ClientSession, "post", post)
+    assert said(entry.owner_browser_url(home, {})) == entry.BUSY
+
 
 def test_remote_address_gets_the_code_form_and_the_local_page_is_unchanged(host):
     for at in (LOCAL, "https://localhost:8941", "https://[::1]:8941"):
