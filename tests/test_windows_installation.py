@@ -482,11 +482,22 @@ async def test_captured_cli_children_never_need_a_windows_console(monkeypatch, n
     from amplifier_web.update_diagnostics import CommandFailure
     calls = []
 
+    class Pipe:
+        def __init__(self, data):
+            self.chunks = [data] if data else []
+
+        async def read(self, size):
+            return self.chunks.pop() if self.chunks else b""
+
     class Child:
+        # The process reads both pipes to their end and waits itself (#2307).
         returncode = exit_code
 
-        async def communicate(self):
-            return b"fixture output", b""
+        def __init__(self):
+            self.stdout, self.stderr = Pipe(b"fixture output"), Pipe(b"")
+
+        async def wait(self):
+            return exit_code
 
     async def spawn(*args, **kwargs):
         calls.append((args, kwargs))

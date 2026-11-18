@@ -2235,12 +2235,28 @@ def test_workflow_keeps_old_lane_commands_and_bounded_installed_candidate_job():
     # tests/test_windows_task_runtime.py (#1920). New checks go in a new job.
     golden = {"passive-process-check": "fa89a68443d5cbbda12ea3513cd5cfa12bb5cb42adbf0f7744f240fdeb3b3d8b",
               "windows-private-config-tls": "7a355e16976e1ff7fc3423f58f6dd637b14ed0fb91f7d42d6465bb705bae7980"}
+    # Accepted since the freeze: three steps that each run native cases with no
+    # skip (#2247, #2269), and the general command leaves out the case that one
+    # of them runs alone (#2247). The case takes exactly these out and compares
+    # the rest with the frozen hashes, so every older command stays as it was.
+    added = {"passive-process-check": ["Require the native replaced-while-read cases with no skip"],
+             "windows-private-config-tls": ["Require the native replaced-root record cases with no skip",
+                                            "Require the stop command's reads against a writing host with no skip"]}
+    left_out = " and not stop_reads_the_receipt_while_the_host_writes_its_phases"
     for name, expected in golden.items():
         job = copy.deepcopy(workflow["jobs"][name])
         assert job.pop("if") == "${{ !inputs.bootstrap_only && !inputs.foreground_only && !inputs.storage_only }}"
+        assert [step.get("name") for step in job["steps"] if step.get("name") in added[name]] == added[name]
+        job["steps"] = [step for step in job["steps"] if step.get("name") not in added[name]]
         if name == "windows-private-config-tls":
             job["steps"][-1]["run"] = job["steps"][-1]["run"].rstrip("\n")
-        assert hashlib.sha256(json.dumps(job, sort_keys=True).encode()).hexdigest() == expected
+            general = next(step for step in job["steps"] if step.get("name", "").startswith("Check private configuration"))
+            assert general["run"].count(left_out) == 1
+            general["run"] = general["run"].replace(left_out, "")
+        found = hashlib.sha256(json.dumps(job, sort_keys=True).encode()).hexdigest()
+        assert found == expected, (
+            f"The job {name} of platform-mechanisms.yml differs from its frozen commands. Put a new check into "
+            f"a new job. For an accepted new step of this job, add its name to `added` above.")
     job = workflow["jobs"]["windows-user-trial"]
     assert job["timeout-minutes"] == 15 and job["runs-on"] == "windows-latest"
     commands = "\n".join(step.get("run", "") for step in job["steps"])
