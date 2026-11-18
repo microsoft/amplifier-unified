@@ -628,6 +628,7 @@ async def test_ordinary_sdk_model_transition_counts_compacts_and_dispatches_sele
 
 async def sdk_transition_process_phase(directory, phase):
     """Two exited interpreters use only durable host files and the real SDK seam."""
+    import os
     target_model = 'gpt-6.1-astra'
     class PausedWire(RecoveryWire):
         async def transport(self, request):
@@ -685,6 +686,7 @@ async def sdk_transition_process_phase(directory, phase):
                        for body, _, _ in wire.compactions)
             assert len(wire.completions) == 1 and wire.effects == 1 and wire.unknown_invocations == 0
         return {'phase': phase, 'state': case.adapter.recovery_status()['state'],
+                'pid': os.getpid(),
                 'compactions': len(wire.compactions), 'effects': wire.effects,
                 'logicalCalls': case.adapter.recovery_status()['logicalCalls'],
                 'requests': [call['report']['requestSha256'] for call in case.adapter._recovery_record()['calls']]}
@@ -708,6 +710,8 @@ async def test_sdk_transition_confirmed_progress_survives_two_exited_interpreter
     assert reports[1]['logicalCalls'] == reports[0]['logicalCalls'] + reports[1]['compactions']
     assert reports[1]['requests'][:reports[0]['logicalCalls']] == reports[0]['requests']
     assert len(set(reports[1]['requests'])) == len(reports[1]['requests'])
+    assert reports[0]['pid'] != reports[1]['pid']
+    print(json.dumps({'twoExitedInterpreterEvidence': reports}, sort_keys=True))
 
 
 def recovery_command(wire, command_id='recover-once'):
@@ -1406,9 +1410,17 @@ async def test_transition_lost_install_ack_reconciles_exact_digest_without_secon
     assert len(writes) == 1 and len(case.raw.compactions) == calls
 
 
-async def test_transition_final_commit_failure_reconciles_already_active_exact_candidate(tmp_path, monkeypatch):
+@pytest.mark.parametrize('checkpointless', [False, True], ids=['checkpoint', 'canonical-originals'])
+async def test_transition_final_commit_failure_reconciles_already_active_exact_candidate(tmp_path, monkeypatch, checkpointless):
     from amplifier_web import context_continuity
     case = await target_transition_fixture(tmp_path)
+    if checkpointless:
+        directory = tmp_path / 'checkpointless'
+        directory.mkdir()
+        case.origin['originals'] = True
+        case.coordinator.register_capability('web.context_transition.originals', True)
+        case.adapter = context_continuity.ContextContinuity(case.coordinator, 'session', directory,
+            AsyncMock(), writer_guard=case.gate.check_current)
     write = context_continuity.write_private
     failed, writes = [], []
     def fail_final(path, text):
