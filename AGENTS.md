@@ -343,6 +343,38 @@ at least 1 hour old. A one-time reason must end by a fact that the owner keeps
 (`_start_check_open`, ended when a check passes its admission), never by
 comparing a saved time with the start time: a clock that was ahead at the start
 and is corrected later would name the reason again on every pass.
+The update check's selection witness (`update_sequence.app_selection`) and the
+configuration key (`runtime_profiles.configuration_key`) are hashes of JSON
+text in which the installation's folders are replaced. Both get that text
+from `runtime_profiles.app_folders`. JSON writes each backslash of a Windows
+path twice and a letter outside ASCII in another form, so such a folder is
+never found in the text as plain text. Do not look for it there in another
+form either: JSON text does not show where the name of a folder ends (a
+folder beside it, a name with `#` or a backslash, and the name of an entry
+were each taken for it). The function changes the values before it writes
+them: only a text value that is the folder or a path below it, with a path
+separator of the system after the folder, also after `file://`; never the
+name of an entry, and never a value with `..` after the folder (or with `%`
+there in an address), which can name a place outside it. A doubt leaves the
+value as it is: that is what the code before did for such a folder. For a
+folder that JSON writes as it is, it replaces the
+text wherever it stands in the JSON text, also in the name of a folder beside
+it and in the name of an entry, because installations have saved those
+values. The address of a Windows file
+on a drive (`Path.as_uri()`) is `file:///C:/...`: it has no server name, and
+its path part has a slash before the drive. On Windows take that one slash
+away, only for an address with no server name, and change nothing else. Do not
+use `urllib.request.url2pathname` there: on every system (read in Python
+3.13.11) it also takes `//localhost` away, and it does not look at a server name, so an address that
+was not the shipped file's becomes it and the witness of a Linux installation
+can move. The address of an app in a network folder (`file://server/share/...`)
+is not read as the shipped file's on Windows. An installation saves both
+values and compares them later. A change of either function must keep the
+values in `tests/test_effective_behavior_updates.py` for settings that name no
+folder; else every saved row and qualification record counts as changed. The
+witness also holds the address of the shipped behavior file, and so the app's
+folder: it changes with each app update, and the first check of the new app
+makes new rows. `other-test-files.yml` runs that test file on native Windows.
 A reader of a private file can hold an object that another process replaced
 (`publish_private(replace=True)`). Windows then reports 0 links and a path below
 `$Extend\$Deleted` for it. That is `PrivateFileUnlinked` in `windows_files.py`,
