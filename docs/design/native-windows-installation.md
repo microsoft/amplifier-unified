@@ -1801,12 +1801,11 @@ seconds for them. A write that is still refused does not fail a finished
 uninstall, because every entry is already gone; it is saved as a failed
 `receipt` step.
 
-Everything in this section about a second setup run is for a folder with no
-entry of the journal's name (`unified-uninstall.json`). When setup's look
-finds such an entry, setup starts no launcher (see "A second setup run on a
-folder with the
-launcher's start program" under "Uninstall can delete the installation
-folder").
+Everything in this section about a second setup run is for a run in which
+setup's look finds no entry with the journal's name
+(`unified-uninstall.json`). When setup's look finds such an entry, setup
+starts no launcher (see "A second setup run on a folder with the launcher's
+start program" under "Uninstall can delete the installation folder").
 After an uninstall, a second setup run adds the Start-menu and Apps-list
 entries again (the entry record with the status `removed` permits exactly
 that), then starts the launcher and waits for it. Setup's window with the
@@ -2392,8 +2391,10 @@ limit as not blocking.
   entry with the journal's name, no message of setup says that Amplifier
   keeps the person's chats and settings in the folder, that they are kept,
   or that Amplifier opens. (When Windows gives that look no answer, setup
-  asks and starts as before, without those sentences about chats and
-  settings.) A folder that the person moved or
+  does what it does on a folder with no such entry, without the sentences
+  about chats and settings: with the launcher's start program it asks, and
+  on Yes it starts that program; without that program it shows the third
+  text of Leftovers below.) A folder that the person moved or
   renamed on that step keeps what it held: both records, and Amplifier's
   program files when the last step did not remove them. Nothing removes
   them.
@@ -2608,8 +2609,9 @@ looks choose between three texts:
   more looks (`Signs`). Each is one step on one path, and setup holds nothing
   between them. First it looks at the attributes of the entry with the
   journal's name. It does not open that entry, and it does not follow a link.
-  Any entry there answers `removal`: a file (also an empty one, and one that
-  another program holds for itself), a folder, a link. Only when Windows
+  Any entry whose attributes Windows gives answers `removal`: a file (also an
+  empty one, and one that another program holds for itself), a folder, a
+  link. Only when Windows
   answers that no file has that name does setup make the second look, at the
   attributes of the entry `app`: a folder that is no link answers `kept`.
   Setup does not look into that folder. Every other answer of Windows to
@@ -2681,8 +2683,9 @@ this version of setup has no repair. Before this rule setup said in all of
 these states "Keep that folder. It holds your chats and settings."
 In one of these states "Keep that folder" leads to no installation: the PC
 lost power between the last two deletions of the step after exit, so the
-journal is gone, and setup's record and that step's emptied folders are
-left (L3). Setup's looks do not tell that state from a folder whose data
+journal is gone, and setup's record, that step's flat folder and its two
+kept files are left (L3). Setup's looks do not tell that state from a folder
+whose data
 stayed without the folder `app`, so the text is the same, and L3's step
 (the person deletes the folder by hand, or moves it away) is not in it.
 
@@ -2742,10 +2745,10 @@ there). Then it makes the two looks of `Signs` once, before its
 first message of the run. Each text of this run says what setup found in
 this run, what setup does, or the next step.
 
-No entry with the journal's name, or a look without an answer (`kept`,
-`other`): setup asks, and on Yes it adds missing entries and starts the
-launcher, as described under "Uninstall stops the app before it removes an
-entry".
+The look finds no entry with the journal's name, or Windows gives it no
+answer (`kept`, `other`): setup asks, and on Yes it runs the entries step
+when it found no Start-menu entry, and then the start of the launcher, as
+described under "Uninstall stops the app before it removes an entry".
 
 - Listed, the question: "Amplifier is already installed on this PC.", "Select
   Yes to open it now." and "You can also open it from the Start menu:
@@ -2769,9 +2772,10 @@ entry".
 "setup did not find it in the Start menu" is what setup looked for. Before,
 the text also said that Amplifier does not start when the person signs in; a
 second setup run does not read the start-at-sign-in task. With `other`
-because Windows gave the look for the journal's name no answer, setup starts
-the launcher as before. The launcher's own look counts the same refusal as no
-journal (`os.path.lexists`), so it starts too.
+because Windows gave the look for the journal's name no answer, setup asks
+as before, and on Yes it starts the launcher. The launcher's own look counts
+the same refusal as no journal (`os.path.lexists`), so the launcher does not
+refuse because of a journal then.
 
 The look finds an entry with the journal's name (`removal`): the launcher
 does not open Amplifier from such a folder (`Refused("removing")` in
@@ -2816,11 +2820,15 @@ and setup does not read it for these texts.
 
 The text with the step to move the folder is for a removal that setup cannot
 finish and for which it has no entry to offer. Before it shows its last
-message, an uninstall with the delete choice deletes the records that the
-entries program needs, when it can delete them (a record that another
-program holds stays; see "One case remains" below). Without those records
-no entry can be added, and setup installs nothing in a folder that has its
-completion record. An uninstall whose last message is still open can finish
+message, an uninstall with the delete choice deletes the person's data, and
+the folder `workspace` is one of the seven names. Setup starts the entries
+program with `workspace` as its working folder (`AddEntries`), and Windows
+does not start a program whose working folder is not there. The uninstall
+also deletes the records that the entries program reads, when it can delete
+them. So an entry is added only when a folder `workspace` is there and those
+records stayed (see "One case remains" below). Setup installs nothing in a
+folder that has its completion record. An uninstall whose last message is
+still open can finish
 the removal itself; when the PC was switched off while that message was
 open, nothing in the product finishes it. Setup makes that look after the
 entries step, directly
@@ -2843,7 +2851,9 @@ no limit of time. When the person renames the folder while something still
 holds it, Windows refuses the rename. When the PC was switched
 off while the message was open, no message is open afterwards, the last step
 never ran, and the folder stays (L3). The person then moves or renames the
-folder, and the next setup run finds no folder and installs. The text does
+folder, and the next setup run finds no folder and goes on as for a first
+installation, with the checks of one (a second run does not check the free
+disk space, for example). The text does
 not tell the person to delete the folder, for the reason of the first text
 above. The folder that the person moved or renamed keeps what it held: both
 records, and Amplifier's program files (`python`, `tools`) when the last
@@ -2851,6 +2861,8 @@ step did not remove them. Nothing removes them.
 
 The entries program adds the entries only when the installation's own
 records are whole and no entry exists, and it does not look for the journal.
+Setup starts it with the folder `workspace` as its working folder; without
+that folder Windows does not start it, and the entries step fails.
 
 Which of these states a person reaches by ordinary means (read from the
 source of both programs; none was seen on a PC):
@@ -2861,16 +2873,23 @@ source of both programs; none was seen on a PC):
   uninstall again.
 - `removal`, not listed, the entries not added: the last message of an
   uninstall with the delete choice is still open, or the PC was switched off
-  while it was open. The launcher's records are deleted by then, when the
-  uninstall could delete them, so the entries program refuses. The person's
-  data is deleted by then too, so the look finds none, and setup gives the
-  step to move the folder. By ordinary means this is where the question
-  without a Start-menu entry leads: setup cannot add the entries that it
-  offers to add.
-- `removal`, not listed, the entries added: the launcher's records stayed
-  because another program held them, and the uninstall's last message is
-  open (the case "One case remains" below). The uninstall then removes its
-  program files, and the entries name a program that is gone.
+  while it was open. The person's data is deleted by then, and the folder
+  `workspace` with it, so Windows does not start the entries program. (When
+  a program keeps the emptied folder `workspace` as its current folder, the
+  entries program starts, and it refuses when the uninstall deleted the
+  launcher's records.) The look finds no data, and setup gives the step to
+  move the folder. By ordinary means this is where the question without a
+  Start-menu entry leads: setup cannot add the entries that it offers to
+  add. The same texts follow when an uninstall with the delete choice
+  stopped after its data step (the PC lost power, for example) and setup
+  finds no Start-menu entry; no uninstall message is open then.
+- `removal`, not listed, the entries added: by ordinary means none was
+  found. The entries step needs a folder `workspace`, whole records and no
+  entry. An uninstall with the delete choice deletes `workspace` before it
+  removes its entries, and it deletes the records after them, when it can
+  ("One case remains" below). The text also appears when a file with the
+  journal's name that is no record of a delete is in the folder of a whole
+  installation and an uninstall removed the entries (L4).
 - `removal`, not listed, the entries not added, and the look finds no
   journal of a delete or finds data: "Restart Windows. Then run this setup
   file again." A restart helps when a program held something for a moment
@@ -2898,9 +2917,10 @@ does not open afterwards.
 Proven on a Windows runner (the same native case): each text of this
 section, complete; that `SecondRun` without a start runs the entries program
 and no launcher, shows its progress window and no message box, and gives 0
-when the entries program ended with 0 and 1 when it failed; that the last
-text gives the step to move the folder with the journal of a delete and no
-data, and the restart with no such journal and with data. Not proven: that
+when the entries program ended with 0 and 1 when it failed; that the
+entries program is not started on a folder without `workspace`; that the
+last text gives the step to move the folder with the journal of a delete and
+no data, and the restart with no such journal and with data. Not proven: that
 Windows refuses to
 rename the folder while the last message of an uninstall is open; these
 texts in setup's real window, the question and the choice between the
@@ -2920,7 +2940,13 @@ the check reads stayed in the folder, because another program held it. The
 uninstall's last message is open, so the lock is free. A setup run in that
 time adds the entries, as it does after a removal that stopped. The uninstall
 then removes its own program files, and the entries name a program that is
-gone. No file of the person is involved. The program does not look for the
+gone. No file of the person is involved. This case needs one thing more: a
+folder `workspace`. Setup starts the program with that folder as its working
+folder, and the uninstall deleted it with the person's data. So a program
+must have kept the emptied folder (as its current folder, for example), or
+something must have made the folder again. Without it Windows does not start
+the program, and setup says that it could not add Amplifier to the Start
+menu. The program does not look for the
 journal here: after a removal that stopped, the entries are what lets the
 person uninstall again.
 

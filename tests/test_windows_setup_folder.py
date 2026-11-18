@@ -352,7 +352,7 @@ def test_setup_without_a_launcher_program_says_what_its_own_look_finds():
         assert "Move or rename" not in text and "delete that" not in text.lower() and "run this setup" not in text
         assert text.split("\n\n")[-1].startswith("Keep that folder. ")
         assert text.endswith(" This version of setup cannot repair it.")
-    # Only the second names the person's chats and settings, and it says where Amplifier keeps them.
+    # Only the second says that Amplifier keeps the person's chats and settings in the folder.
     assert "Amplifier keeps your chats and settings in it." in WHOLE and "holds" not in WHOLE
     assert "chats" not in BARE and "settings" not in BARE and "already installed" not in BARE
     assert "Setup deletes nothing in it." in BARE and BARE.split(":\n", 1)[0] == EMPTIED.split(":\n", 1)[0].replace(
@@ -431,8 +431,8 @@ def test_setup_without_a_launcher_program_says_what_its_own_look_finds():
             "and settings in the folder.",
             "(The first says that setup found none.)",
             "In one of these states \"Keep that folder\" leads to no installation: the PC lost power between the "
-            "last two deletions of the step after exit, so the journal is gone, and setup's record and that "
-            "step's emptied folders are left (L3).",
+            "last two deletions of the step after exit, so the journal is gone, and setup's record, that step's "
+            "flat folder and its two kept files are left (L3).",
             "It says where Amplifier keeps them.",
             "It does not say that a chat is there: setup does not look into `app`.",
             "The text names no chats and no settings: an entry with the journal's name is there, or Windows gave "
@@ -762,6 +762,10 @@ def test_a_second_setup_run_says_that_chats_and_settings_are_kept_only_where_its
     assert SOURCE.count("Your chats and settings are kept.") == 2 and SOURCE.count(ending) == 2
     assert "It holds your chats and settings" not in SOURCE
     assert KEPT == " Your chats and settings are kept."
+    # The one function that shows a message box of setup shows the text that it gets. (No case shows a
+    # message box; the texts are compared as what the text functions return.)
+    assert ("        static DialogResult Say(string text, MessageBoxButtons buttons, MessageBoxIcon icon) {\n"
+            '            return MessageBox.Show(text,"Amplifier Unified Setup",buttons,icon);\n        }\n') in SOURCE
     # What setup found: it read the entry record and looked for the entry. A second setup run does not
     # read the start-at-sign-in task, so the text does not say that Amplifier does not start at sign-in.
     assert "setup did not find it in the Start menu" in ADD and "sign in" not in ADD
@@ -782,8 +786,8 @@ def test_a_second_setup_run_says_that_chats_and_settings_are_kept_only_where_its
             "Each is one step on one path, and setup holds nothing between them.",
             "First it looks at the attributes of the entry with the journal's name.",
             "It does not open that entry, and it does not follow a link.",
-            "Any entry there answers `removal`: a file (also an empty one, and one that another program holds "
-            "for itself), a folder, a link.",
+            "Any entry whose attributes Windows gives answers `removal`: a file (also an empty one, and one "
+            "that another program holds for itself), a folder, a link.",
             "Only when Windows answers that no file has that name does setup make the second look, at the "
             "attributes of the entry `app`: a folder that is no link answers `kept`.",
             "Setup does not look into that folder.",
@@ -798,8 +802,10 @@ def test_a_second_setup_run_says_that_chats_and_settings_are_kept_only_where_its
             "sentence; setup then says the third text.",
             "Where Windows ignores the case of letters, a folder `App` answers the look for `app`.",
             "a second setup run does not read the start-at-sign-in task.",
-            "With `other` because Windows gave the look for the journal's name no answer, setup starts the "
-            "launcher as before.",
+            "With `other` because Windows gave the look for the journal's name no answer, setup asks as before, "
+            "and on Yes it starts the launcher.",
+            "The launcher's own look counts the same refusal as no journal (`os.path.lexists`), so the launcher "
+            "does not refuse because of a journal then.",
             "Setup looks once, before its first message: an uninstall that begins after the look is not seen, "
             "setup starts the launcher, and the launcher refuses with its own text.",
             "\"Your chats and settings are kept.\" in the message after a failed entries step rests on that look, "
@@ -843,24 +849,29 @@ def test_a_second_setup_run_says_that_chats_and_settings_are_kept_only_where_its
 
 
 def test_a_second_setup_run_starts_no_launcher_on_a_folder_with_an_uninstall_record():
-    """Setup's texts and its start while an entry with the journal's name is in the folder (follow-up A55).
+    """Setup's texts and its start when its look finds an entry with the journal's name (follow-up A55).
 
-    Read from the source on November 18, 2026, not seen on a PC: the launcher does not open Amplifier while
-    any entry with the journal's name is in the folder. Setup said in that state "Select Yes to open it
-    now.", "... and start it now." and "Amplifier starts now.", started the launcher, and the launcher
-    refused. Setup now starts no launcher there. It says that it found an uninstall record and gives the
-    launcher's own step. Without a Start-menu entry it asks whether it adds the entries again: after a
-    removal that stopped, the entries are what lets the person uninstall again. The states of this case:
-    with a Start-menu entry; without one, after No; after Yes with the entries added; after Yes with the
-    entries not added, with and without the journal of a delete and no data. The native check runs the
-    entries step without a start.
+    Read from the source on November 18, 2026: the launcher does not open Amplifier when its look finds an
+    entry with the journal's name. Setup said in that state "Select Yes to open it now.", "... and start it
+    now." and "Amplifier starts now.", started the launcher, and the launcher refused (then seen on a PC
+    with the earlier texts, with a file of that name that a tool wrote: clean room 7). Setup now starts no
+    launcher when its own look finds such an entry (`Signs` answers `removal`). It says that it found an
+    uninstall record and gives the launcher's own step. Without a Start-menu entry it asks whether it adds
+    the entries again: after a removal that stopped, the entries are what lets the person uninstall again.
+    The states of this case: with a Start-menu entry; without one, after No; after Yes with the entries
+    added; after Yes with the entries not added, with and without the journal of a delete and no data. The
+    native check runs the entries step without a start.
 
-    The last state: an uninstall with the delete choice deletes the records that the entries step needs
-    before its last message. When that message is open, or the PC was switched off while it was open,
-    setup can add no entry and installs nothing in the folder, and "Restart Windows. Then run this setup
-    file again." brings the same message. With the journal of a delete and none of the person's data
-    (`Emptied`, the look of follow-up A24, unchanged) setup gives the step of that follow-up's text: move
-    or rename the folder. It names the other Amplifier message first, and it never says "delete".
+    The last state: before its last message an uninstall with the delete choice deletes the person's data,
+    and the folder `workspace` with it. Setup starts the entries program with that folder as its working
+    folder, and Windows does not start a program whose working folder is not there (the native check holds
+    that). The uninstall also deletes the records that the entries program reads, when it can delete them.
+    So when that message is open, or the PC was switched off while it was open, setup adds an entry only
+    when a folder `workspace` is there and those records stayed. Setup installs nothing in the folder, and
+    "Restart Windows. Then run this setup file again." brings the same message. With the journal of a
+    delete and none of the person's data (`Emptied`, the look of follow-up A24, unchanged) setup gives the
+    step of that follow-up's text: move or rename the folder. It names the other Amplifier message first,
+    and it never says "delete".
     """
     import inspect
     from amplifier_web import windows_consumer, windows_uninstall
@@ -910,7 +921,8 @@ def test_a_second_setup_run_starts_no_launcher_on_a_folder_with_an_uninstall_rec
     assert MOVED.endswith("\n\n" + open_message + " If the folder is still there a few minutes later, move or "
                           "rename it. Then run this setup file again.")
     # "a few minutes later": after the answer the uninstall's last step holds the folder while it works. The
-    # step after exit begins no pass later than 120 seconds after its start.
+    # step after exit begins no pass later than 120 seconds after it took over the two kept files (it sets
+    # that time directly after it wrote `ready`).
     from amplifier_web import windows_removal
     assert windows_uninstall.SECONDS_AFTER_EXIT == 120
     assert "seconds=SECONDS_AFTER_EXIT, choice=choice)" in inspect.getsource(windows_uninstall.finish)
@@ -922,9 +934,21 @@ def test_a_second_setup_run_starts_no_launcher_on_a_folder_with_an_uninstall_rec
         "        } while ((Get-Date) -lt $until)\n")]
     assert order == sorted(order) and script.count("$until") == 3
     assert "Restart Windows" not in MOVED and "delete" not in MOVED.lower() and "your chats" not in MOVED
-    # An uninstall deletes the records that the entries step reads, when it can delete them, before its
-    # last message. (`remove_program` returns what stayed, and `remove` goes on.)
+    # Before its last message an uninstall deletes the person's data, and the folder `workspace` with it;
+    # then it removes the entries; then it deletes the records that the entries step reads, when it can
+    # (`remove_program` returns what stayed, and `remove` goes on). Setup starts the entries program with
+    # `workspace` as its working folder.
+    assert "workspace" in windows_uninstall.DATA
+    assert 'WorkingDirectory=Path.Combine(root,"workspace")};\n                Process entries;' in between(
+        "internal static bool AddEntries(", "internal static Process StartApp(")
+    # A program can keep the emptied folder: to the uninstall such a folder holds nothing, so it goes on.
+    assert ("neither does a real folder with nothing in it: Windows keeps such a folder while a program uses it "
+            "as its current folder.") in " ".join(inspect.getsource(windows_removal.Folder.holding).split())
     removal = inspect.getsource(windows_uninstall.remove)
+    steps = [removal.index(line) for line in (
+        "data(owned, wait=wait)", "finish()  # The Apps-list entry, the shortcuts, their receipt.",
+        "remove_program(owned, last=True, wait=wait, short=short)")]
+    assert steps == sorted(steps)
     assert removal.index("remove_program(owned, last=True, wait=wait, short=short)") < removal.index("return {")
     assert "consumer-install.json" in windows_uninstall.LAST and windows_consumer.RECEIPT == "consumer-install.json"
     assert "value = json.loads(owned.read_private(RECEIPT, limit=256 * 1024))" in inspect.getsource(
@@ -960,11 +984,31 @@ def test_a_second_setup_run_starts_no_launcher_on_a_folder_with_an_uninstall_rec
             "\"Restart Windows. Then run this setup file again.\"",
             "The text with the step to move the folder is for a removal that setup cannot finish and for which "
             "it has no entry to offer.",
-            "Before it shows its last message, an uninstall with the delete choice deletes the records that the "
-            "entries program needs, when it can delete them (a record that another program holds stays; see "
-            "\"One case remains\" below).",
-            "Without those records no entry can be added, and setup installs nothing in a folder that has its "
-            "completion record.",
+            "Before it shows its last message, an uninstall with the delete choice deletes the person's data, "
+            "and the folder `workspace` is one of the seven names.",
+            "Setup starts the entries program with `workspace` as its working folder (`AddEntries`), and Windows "
+            "does not start a program whose working folder is not there.",
+            "The uninstall also deletes the records that the entries program reads, when it can delete them.",
+            "So an entry is added only when a folder `workspace` is there and those records stayed (see \"One "
+            "case remains\" below).",
+            "Setup installs nothing in a folder that has its completion record.",
+            "(When a program keeps the emptied folder `workspace` as its current folder, the entries program "
+            "starts, and it refuses when the uninstall deleted the launcher's records.)",
+            "The same texts follow when an uninstall with the delete choice stopped after its data step (the PC "
+            "lost power, for example) and setup finds no Start-menu entry; no uninstall message is open then.",
+            "The person then moves or renames the folder, and the next setup run finds no folder and goes on as "
+            "for a first installation, with the checks of one (a second run does not check the free disk space, "
+            "for example).",
+            "`removal`, not listed, the entries added: by ordinary means none was found.",
+            "The entries step needs a folder `workspace`, whole records and no entry.",
+            "An uninstall with the delete choice deletes `workspace` before it removes its entries, and it "
+            "deletes the records after them, when it can (\"One case remains\" below).",
+            "This case needs one thing more: a folder `workspace`.",
+            "So a program must have kept the emptied folder (as its current folder, for example), or something "
+            "must have made the folder again.",
+            "Without it Windows does not start the program, and setup says that it could not add Amplifier to "
+            "the Start menu.",
+            "that the entries program is not started on a folder without `workspace`;",
             "An uninstall whose last message is still open can finish the removal itself; when the PC was "
             "switched off while that message was open, nothing in the product finishes it.",
             "Setup makes that look after the entries step, directly before the message; it is a separate step, "
@@ -1022,13 +1066,16 @@ def test_a_second_setup_run_starts_no_launcher_on_a_folder_with_an_uninstall_rec
             "In a run in which setup's look finds an entry with the journal's name, no message of setup says "
             "that Amplifier keeps the person's chats and settings in the folder, that they are kept, or that "
             "Amplifier opens.",
-            "(When Windows gives that look no answer, setup asks and starts as before, without those sentences "
-            "about chats and settings.)",
+            "(When Windows gives that look no answer, setup does what it does on a folder with no such entry, "
+            "without the sentences about chats and settings: with the launcher's start program it asks, and on "
+            "Yes it starts that program; without that program it shows the third text of Leftovers below.)",
+            "Everything in this section about a second setup run is for a run in which setup's look finds no "
+            "entry with the journal's name (`unified-uninstall.json`).",
             "that `SecondRun` without a start runs the entries program and no launcher, shows its progress "
             "window and no message box, and "
-            "gives 0 when the entries program ended with 0 and 1 when it failed; that the last text gives the "
-            "step to move the folder with the journal of a delete and no data, and the restart with no such "
-            "journal and with data."):
+            "gives 0 when the entries program ended with 0 and 1 when it failed;",
+            "that the last text gives the step to move the folder with the journal of a delete and no data, "
+            "and the restart with no such journal and with data."):
         assert sentence in design, sentence
     # The native check: the same texts, and the window's work without a start.
     native = (ROOT / "tests/windows/native_setup.Tests.cs").read_text(encoding="utf-8")
@@ -1043,6 +1090,10 @@ def test_a_second_setup_run_starts_no_launcher_on_a_folder_with_an_uninstall_rec
             "after the entries step, with the journal of a delete and data"):
         assert f'"{message}");' in native, message
     assert 'if(ran!=null) File.AppendAllText(ran,integrate?"entries,":"start,");' in native
+    assert ('Need(!NativeInstaller.AddEntries(second) && !File.Exists(ran),'
+            '"entries step: without the folder workspace the program is not started");') in native
+    assert ('Need(NativeInstaller.AddEntries(second) && File.ReadAllText(ran)=="entries,",'
+            '"entries step: with the folder workspace again the program is started");') in native
     assert ("var thread=new Thread(()=>{ result=NativeInstaller.SecondRun(root,listed,start,false); });"
             in native.split("static int Window(string root, bool listed, bool start) {", 1)[1].split("static int ", 1)[0])
     # Each run of the window with the stand-in's record of the commands that ran, in the case's order:

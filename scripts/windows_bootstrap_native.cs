@@ -783,10 +783,10 @@ namespace UnifiedBootstrap {
             // First: the attributes of the entry with the journal's name.
             // The entry is not opened and not read, and a link is not
             // followed. A file, a folder and a link all answer "removal":
-            // the launcher does not open Amplifier while any entry has that
-            // name (windows_uninstall.unfinished). Only Windows' answer that
-            // no file has that name goes on to the second look. Every other
-            // answer is "other".
+            // the launcher does not open Amplifier when its look finds an
+            // entry with that name (windows_uninstall.unfinished). Only
+            // Windows' answer that no file has that name goes on to the
+            // second look. Every other answer is "other".
             // Second: the attributes of the entry "app". A folder that is no
             // link answers "kept"; setup does not look into it. An uninstall
             // that deletes the folder writes its journal before it deletes
@@ -880,9 +880,11 @@ namespace UnifiedBootstrap {
             // entries could not be added and setup's look finds the journal
             // of a delete and none of the person's data (Emptied), setup
             // cannot finish that removal, and it has no entry to offer for
-            // the launcher's step. An uninstall with the delete choice
-            // deletes the records that the entries step needs, when it can
-            // delete them, before its last message. An uninstall whose last
+            // the launcher's step. Before its last message an uninstall with
+            // the delete choice deletes the folder "workspace" with the
+            // person's data, and AddEntries starts the entries program with
+            // that folder as its working folder. It also deletes the records
+            // that that program reads, when it can. An uninstall whose last
             // message is still open in another window can finish the
             // removal itself, so the text names that message first; until
             // the answer that uninstall runs from the folder, and Windows

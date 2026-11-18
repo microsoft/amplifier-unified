@@ -324,6 +324,25 @@ namespace UnifiedBootstrap {
                 Need(shown==1 && clock.ElapsedMilliseconds<9000,"second run: the window closes on request while the launcher runs (result "+shown+")");
                 Environment.SetEnvironmentVariable("AMPLIFIER_SETUP_TEST_WAIT_MS",null);
                 while(clock.ElapsedMilliseconds<11500) Thread.Sleep(250);
+                // Without the folder workspace: an uninstall with the delete choice
+                // deletes it with the person's data, before its last message. Setup
+                // starts the entries program with that folder as its working
+                // folder, and Windows does not start a program whose working
+                // folder is not there. (The program would end with 0 here.)
+                Environment.SetEnvironmentVariable("AMPLIFIER_SETUP_TEST_RAN",ran);
+                File.Delete(ran);
+                // The stand-in of the case before can still end: Windows keeps
+                // its working folder until then.
+                for(int attempt=0;attempt<40;attempt++) {
+                    try { Directory.Delete(Path.Combine(second,"workspace")); break; }
+                    catch(IOException) { Thread.Sleep(250); }
+                }
+                Need(!Directory.Exists(Path.Combine(second,"workspace")),"the folder workspace is gone");
+                Need(!NativeInstaller.AddEntries(second) && !File.Exists(ran),"entries step: without the folder workspace the program is not started");
+                // Only that folder made the difference.
+                Directory.CreateDirectory(Path.Combine(second,"workspace"));
+                Need(NativeInstaller.AddEntries(second) && File.ReadAllText(ran)=="entries,","entries step: with the folder workspace again the program is started");
+                Environment.SetEnvironmentVariable("AMPLIFIER_SETUP_TEST_RAN",null);
                 // A finished installation whose programs are missing: no start.
                 using(var storage=new InstallStorage(work,"Empty")) {
                     empty=storage.Root;
@@ -369,7 +388,7 @@ namespace UnifiedBootstrap {
                 File.WriteAllText(journal,record);
                 string journalFacts=facts(journal);
                 Need(NativeInstaller.Emptied(left) && NativeInstaller.Unopened(left)==emptied,"a delete journal and no data: the text with the next step");
-                Need(facts(journal)==journalFacts,"the first looks change no time and no attribute of the journal");
+                Need(facts(journal)==journalFacts,"the first looks change no creation time, no write time and no attribute of the journal");
                 // What stays when the last step did not finish: program files.
                 Directory.CreateDirectory(Path.Combine(left,"unified-uninstall-last"));
                 File.WriteAllText(Path.Combine(left,"unified-uninstall-last","python313.dll"),"program");
@@ -453,7 +472,7 @@ namespace UnifiedBootstrap {
                 File.WriteAllText(journal,largest);
                 journalFacts=facts(journal);
                 Need(new FileInfo(journal).Length==4096 && NativeInstaller.Unopened(left)==emptied,"a journal of 4096 bytes is read");
-                Need(facts(journal)==journalFacts,"the look at a journal of 4096 bytes changes no time and no attribute of it");
+                Need(facts(journal)==journalFacts,"the look at a journal of 4096 bytes changes no creation time, no write time and no attribute of it");
                 // Bytes that are not UTF-8 are no journal.
                 File.WriteAllBytes(journal,new byte[]{0x7b,0xff,0x7d});
                 Need(NativeInstaller.Unopened(left)==bare(left),"bytes that are not UTF-8");
@@ -512,7 +531,8 @@ namespace UnifiedBootstrap {
                     "Keep that folder. Amplifier keeps your chats and settings in it. This version of setup cannot repair it.";
                 Need(NativeInstaller.Signs(seen)=="other" && NativeInstaller.Unopened(seen)==bare(seen),"no journal entry and no folder app");
                 // No entry with the journal's name, and the folder app: the one
-                // state in which a text names the person's chats and settings.
+                // state in which a text says that Amplifier keeps the person's
+                // chats and settings in the folder.
                 Directory.CreateDirectory(seenApp);
                 Need(NativeInstaller.Signs(seen)=="kept" && NativeInstaller.Unopened(seen)==whole,"no journal entry, and the folder app: the text that names chats and settings");
                 File.WriteAllText(Path.Combine(seenApp,"unified.sqlite3"),"data");
