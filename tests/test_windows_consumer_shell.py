@@ -770,6 +770,32 @@ def test_entries_are_not_added_where_one_of_them_or_something_foreign_is_there(m
 
 
 @pytest.mark.parametrize("record", ['{"status":"removed"}', None])
+def test_entries_are_not_added_when_windows_refuses_the_look_at_the_folder(model, monkeypatch, record):
+    # A look that Windows refuses does not say that nothing is there. The folder holds only the
+    # person's file, so the entries would be added if the refusal counted as "absent".
+    root, programs, state = model
+    if record:
+        (root / shell.FILE).write_text(record)
+    folder = programs / ("Amplifier Unified - " + shell.identity(root))
+    folder.mkdir()
+    (folder / "My own note.txt").write_bytes(b"mine")
+    before = _everything(programs)
+    look = os.lstat
+    def refused(path, *args, **options):
+        if Path(path) == folder:
+            raise PermissionError(13, "Windows refused the look at this path")
+        return look(path, *args, **options)
+    with monkeypatch.context() as patch:
+        patch.setattr(shell.os, "lstat", refused)
+        with pytest.raises(ValueError) as stopped:
+            shell.install(root, "1.0.0")
+    assert str(stopped.value) == EXIST
+    assert _everything(programs) == before and state["registry"] is None
+    assert not state["links"] and not state["writes"]
+    assert (root / shell.FILE).read_text() == record if record else not (root / shell.FILE).exists()
+
+
+@pytest.mark.parametrize("record", ['{"status":"removed"}', None])
 @pytest.mark.parametrize("there", ["nothing", "own-file", "own-folder-and-near-names"])
 def test_entries_are_added_to_a_start_menu_folder_that_stayed_and_holds_none_of_them(model, there, record):
     # The folder stays after an uninstall when the person put a file into it, and when another program
@@ -1879,6 +1905,8 @@ def _native_entries(folder):
     """What is at the Start-menu folder's path: each entry directly in it, with a file's bytes and time of change."""
     if os.path.isjunction(folder):
         return ["a link to", os.readlink(folder)]
+    if folder.is_file():
+        return ["a file", folder.read_bytes(), folder.stat().st_mtime_ns]
     return sorted((path.name, "folder" if path.is_dir() else "file",
                    None if path.is_dir() else (path.read_bytes(), path.stat().st_mtime_ns))
                   for path in folder.iterdir())
@@ -1922,8 +1950,8 @@ def test_native_entries_are_added_again_beside_a_file_that_the_person_put_into_t
 
 
 @pytest.mark.parametrize("there", ["shortcut-name-in-other-letter-case", "folder-with-a-shortcut-name",
-                                   "link-to-another-folder", "link-to-nothing", "folder-that-everyone-can-change",
-                                   "apps-list-entry"])
+                                   "three-of-the-four-shortcut-names", "link-to-another-folder", "link-to-nothing",
+                                   "file-at-the-folder-path", "folder-that-everyone-can-change", "apps-list-entry"])
 def test_native_entries_are_not_added_where_one_of_them_or_something_foreign_is_there(native_uninstall, there):
     """Each of these refuses on the real folder, and nothing is written: no shortcut, no record, no Apps-list entry."""
     import _winapi
@@ -1944,6 +1972,8 @@ def test_native_entries_are_not_added_where_one_of_them_or_something_foreign_is_
             _winapi.CreateJunction(str(gone), str(folder))
             gone.rmdir()
             assert os.path.lexists(folder) and not folder.exists()
+        elif there == "file-at-the-folder-path":
+            folder.write_bytes(b"a file, not a folder")
         else:
             # The folder as the first installation makes it: this account's own private folder.
             with windows_files.directory(folder, owned_root=folder, create=True):
@@ -1953,6 +1983,10 @@ def test_native_entries_are_not_added_where_one_of_them_or_something_foreign_is_
             (folder / "AMPLIFIER Status.LNK").write_bytes(b"not this installation's")
         elif there == "folder-with-a-shortcut-name":
             (folder / "Uninstall Amplifier.lnk").mkdir()
+        elif there == "three-of-the-four-shortcut-names":
+            # As after an installation folder that was deleted by hand, and one shortcut with it.
+            for name in list(shell.LINKS)[1:]:
+                (folder / name).write_bytes(b"of an earlier installation")
         elif there == "folder-that-everyone-can-change":
             # The group Everyone (S-1-1-0) gets the right to change the folder: it is not private any more.
             granted = subprocess.run([str(Path(os.environ["SystemRoot"]) / "System32" / "icacls.exe"), str(folder),
@@ -1973,15 +2007,38 @@ def test_native_entries_are_not_added_where_one_of_them_or_something_foreign_is_
     finally:
         if os.path.isjunction(folder):
             os.rmdir(folder)  # The link itself, never its target.
+        elif folder.is_file():
+            folder.unlink()
 
 
-def test_native_shortcut_name_that_appears_after_the_check_is_not_overwritten(native_uninstall, monkeypatch):
-    """The real writer refuses a name that exists: a file that appears after the check keeps its bytes.
+def test_native_set_from_which_a_person_deleted_one_shortcut_is_refused_by_its_record(native_uninstall):
+    """The record says that the entries are installed, and three of them are there: nothing is added or changed."""
+    native, root, folder = native_uninstall, native_uninstall.root, native_uninstall.folder
+    (folder / "Amplifier status.lnk").unlink()
+    before = _native_record(root), shell.registry(root), _native_entries(folder)
+    assert before[0]["status"] == "installed" and len(before[2]) == 3
+    with pytest.raises(ValueError) as refused:
+        shell.install(root, "1.0.0")
+    assert str(refused.value) == "Windows shell integration already has a receipt; inspect it before retrying."
+    assert (_native_record(root), shell.registry(root), _native_entries(folder)) == before
+
+
+@pytest.mark.parametrize("made", ["as-a-private-file-of-this-account", "as-a-plain-file"])
+def test_native_shortcut_name_that_appears_after_the_check_is_not_overwritten(native_uninstall, monkeypatch, made):
+    """The real writer refuses a name that exists: a file that appears after the look keeps its bytes.
 
     Another program makes a file with a shortcut's name in the instant after
     setup's step looked at the folder and before it writes that shortcut. The
     step stops with the writer's refusal. It adds no Apps-list entry, and its
     record does not say that the entries are installed.
+
+    The other program's file is made in two ways. As a private file of this
+    account (its owner is this account, as for a person's own program on a
+    PC): the writer answers that the name exists. As a plain file: on a
+    runner whose account is elevated such a file belongs to the Administrators
+    group, and the writer can refuse it at its own check of the owner before
+    it answers that the name exists. Both are the writer's refusals, and
+    neither carries a Windows error code. The case prints which one it got.
     """
     from amplifier_web import windows_files
     native, root, folder = native_uninstall, native_uninstall.root, native_uninstall.folder
@@ -1991,11 +2048,21 @@ def test_native_shortcut_name_that_appears_after_the_check_is_not_overwritten(na
     publish = windows_files.PinnedDirectory.publish_private
     def appears(self, entry, content, *, replace=False):
         if entry == name and not (folder / name).exists():
-            (folder / name).write_bytes(theirs)
+            if made == "as-a-plain-file":
+                (folder / name).write_bytes(theirs)
+            else:
+                publish(self, name, theirs)
         return publish(self, entry, content, replace=replace)
     monkeypatch.setattr(windows_files.PinnedDirectory, "publish_private", appears)
-    with pytest.raises(OSError):
+    with pytest.raises((FileExistsError, PermissionError)) as refused:
         shell.install(root, "1.0.0")
+    print("NAME_APPEARED " + json.dumps({"made": made, "refusal": type(refused.value).__name__,
+                                         "code": getattr(refused.value, "winerror", None)}))
+    assert getattr(refused.value, "winerror", None) is None, refused.value  # Not a sharing refusal of Windows.
+    if made != "as-a-plain-file":
+        assert type(refused.value) is FileExistsError, refused.value
     assert (folder / name).read_bytes() == theirs and (folder / "My own note.txt").read_bytes() == b"mine"
+    assert sorted(path.name for path in folder.iterdir()) == sorted(
+        ["My own note.txt", name, next(iter(shell.LINKS))])  # The first shortcut was written before the stop.
     assert shell.registry(root) is None and not shell.listed(root)
     assert _native_record(root)["status"] != "installed"

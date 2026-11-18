@@ -415,20 +415,33 @@ def _free(folder):
     folder, a link), and names are compared without letter case. The folder
     stays when the person put a file into it, and when another program still
     had a shortcut open. An entry of another name is the person's: it is not
-    opened, changed or removed, here or later.
+    opened, changed or removed here.
 
-    Every doubt is False: a link or a file at that path, a folder that
-    another account owns or can change, a folder that cannot be listed.
+    Private means: a real folder and no link, owned by this account, with
+    access rules that name only this account, SYSTEM, the Administrators
+    group and TrustedInstaller.
+
+    Every doubt is False: a link or a file at that path, a folder that fails
+    that check, a folder that cannot be listed, and a path that Windows does
+    not let this program look at.
     """
     from .windows_files import directory
     from .windows_removal import same_name
-    if not os.path.lexists(folder):
+    try:
+        os.lstat(folder)  # The entry itself: a link that leads to nothing is an entry.
+    except FileNotFoundError:
         return True
+    except OSError:
+        return False  # Windows refused the look. That does not say that nothing is there.
     ours = {same_name(name) for name in LINKS}
     try:
         with directory(folder, owned_root=folder), os.scandir(folder) as listing:
             return not any(same_name(entry.name) in ours for entry in listing)
     except (OSError, ValueError, RuntimeError):
+        # OSError: the check refused the folder, Windows refused the listing,
+        # or the folder went away after the look above (a later run then adds
+        # the entries). ValueError: a path that the private-file boundary does
+        # not take. RuntimeError: that boundary is not available here.
         return False
 
 
@@ -445,8 +458,8 @@ def install(root, version):
         # record names, so that a record of entries in another place is never
         # replaced. The check below also refuses when the Apps-list entry
         # exists, or when today's Start-menu folder holds one of the
-        # shortcuts or is not this account's own (`_free`). So nothing is
-        # ever overwritten. Every other record is refused.
+        # shortcuts or is not this account's own (`_free`). Every other
+        # record is refused.
         try:
             row = _receipt(root)
             status = row.get("status") if isinstance(row, dict) else None
@@ -471,7 +484,11 @@ def install(root, version):
             path = folder / name
             # The private directory is pinned, no pre-existing file is adopted:
             # the writer refuses a name that exists, also one that appeared
-            # after the check above.
+            # after the check above. Then the Windows shell saves the shortcut
+            # to that new, empty file by its path. Between the two, only the
+            # path names the file: a program of this account that puts another
+            # file there in that moment gets that file written over. A first
+            # installation has the same moment.
             owned.publish_private(name, b"")
             with shell_link() as link:
                 link.create(path, python, args, root / "workspace")
@@ -489,9 +506,10 @@ def _held(code):
     """Try again, for a bounded time, while another program has a shortcut open.
 
     Windows refuses the pin of a shortcut with error 32 while another open of
-    that file does not share deleting. On hosted runners `explorer.exe` had a
-    new shortcut open at the moment of such a refusal; how it had opened the
-    file was not observed. Windows refuses the delete through the pinned handle
+    that file does not share deleting. On hosted runners, asked which program
+    had the shortcut open, Windows named `explorer.exe` after 7 of 92 such
+    refusals and no program after the others; how `explorer.exe` had opened
+    the file was not observed. Windows refuses the delete through the pinned handle
     with error 5 while a view of the file is mapped. It gives the same error 5
     for a shortcut with a read-only attribute, which no wait cures: that one
     stops the uninstall after the wait. Only a PermissionError that carries

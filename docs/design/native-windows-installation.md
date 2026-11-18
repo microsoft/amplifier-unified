@@ -1833,22 +1833,31 @@ after an uninstall when the person put a file into it (uninstall removes only
 an empty folder), and when another program still had a shortcut open in a way
 that let the delete pass. Setup's step uses that folder again when both hold:
 
-- It is this account's own private folder: not a link, owned by this account,
-  and changeable only by this account and Windows' own system accounts. This
-  is the check that the first installation and every uninstall make.
+- It is this account's own private folder: a real folder and no link, owned
+  by this account, with access rules that name only this account, SYSTEM, the
+  Administrators group and TrustedInstaller. This is the check that the first
+  installation and every uninstall make.
 - No entry directly in it has the name of one of the four shortcuts. Such an
   entry counts whatever it is (a file, a folder, a link), and the names are
   compared without letter case.
 
-Every other entry in that folder is the person's. Setup does not open, change
-or remove it, and writes the four shortcuts beside it. Nothing is overwritten
-or adopted: the step looks before its first write, the writer of a shortcut
-refuses a name that exists (also one that appeared after the look), and the
-Apps-list entry is a key that the step itself creates new. In every other
-case the step refuses as before, with its record unchanged: a partly damaged
-set (a person deleted one shortcut), an Apps-list entry, a link or a file at
-the folder's path, a folder that fails the check. Setup then says that it
-could not add the entries, and starts the app.
+Every other entry in that folder is the person's. Setup's step does not open,
+change or remove it, and writes the four shortcuts beside it. The step
+replaces and takes over nothing that it finds: it looks before its first
+write, the writer of a shortcut refuses a name that exists (also one that
+appeared after the look), and the Apps-list entry is a key that the step
+itself creates new. One moment is not covered, and a first installation has
+the same moment: the writer makes each shortcut as a new, empty file, and the
+Windows shell then saves the shortcut to that file by its path. A program of
+this account that puts another file at that path between the two gets that
+file written over.
+
+In every other case the step refuses with its record unchanged: an entry with
+a shortcut's name in the folder, an Apps-list entry, a link or a file at the
+folder's path, a folder that fails the check, a path that Windows does not
+let the step look at. A partly damaged set whose record still says
+`installed` (a person deleted one shortcut) is refused by that record, as
+before. Setup then says that it could not add the entries, and starts the app.
 
 This rule replaced an earlier one, under which the entries were added again
 only when the Start-menu folder was gone too. A folder that stayed then kept
@@ -1857,10 +1866,14 @@ stop or uninstall Amplifier. One state is still refused: a record that says
 `installed` (its last write was refused) beside a folder that stayed.
 
 The native cases in the `windows-local-connection` job run the step on the
-real Start-menu folder: after an uninstall that left a person's file there,
-the four shortcuts and the Apps-list entry are added beside the file; each
-refusal above leaves the folder, the record and the Apps list as they were.
-No hosted runner runs the setup program itself, which refuses Windows Server.
+real Start-menu folder. After an uninstall that left a person's file there,
+the four shortcuts and the Apps-list entry are added beside the file. Each
+refusal of the paragraph before the last has a case there, with one
+exception: the path that Windows does not let the step look at has a case
+with a stand-in. Each case finds the folder, the record and the Apps list as
+they were. The folder that fails the check is, in these cases, one that the
+group Everyone can change. No hosted runner runs the setup program itself,
+which refuses Windows Server.
 
 `.github/workflows/windows-start-again.yml` runs this path on a Windows
 runner with the product's own commands in setup's order: entries, first
