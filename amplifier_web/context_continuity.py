@@ -94,6 +94,7 @@ class ContextContinuity:
         self.recovery_path = Path(directory) / "context-recovery.json"
         self._journal = None
         self._recovery_busy = False
+        self._pending_busy = False
         self._recovery_guard = None
         self._suppress_save = False
         self._accepted_record = None
@@ -139,6 +140,8 @@ class ContextContinuity:
         guard = self._recovery_guard
         previous_identity = self._preserved_identity
         await _guarded(guard, self.refresh_identity)
+        if previous_identity != self._identity:
+            self._prepared_identity = None
         self._preserved_identity = copy.deepcopy(self._identity)
         # Read before checkpoint(): that callback can itself call save(). An
         # unloaded accepted checkpoint must never be replaced by active defaults.
@@ -166,7 +169,8 @@ class ContextContinuity:
                 self._suppress_save = True
                 # A prepared originals view is not a source checkpoint. Its
                 # confirmed target binding prevents another historical campaign.
-                if self._prepared_identity == self._identity:
+                if (self._prepared_identity == self._identity
+                        and classified.get("status") == "transition_required"):
                     self._transition = None
                     self.status.update(status="prepared-originals")
         elif accepted is not None and previous_identity != self._identity and self.loaded:
@@ -234,6 +238,7 @@ class ContextContinuity:
                 self._check_writer()
             write_private(self.path, text)
             self._accepted_record = copy.deepcopy(record)
+            self._prepared_identity = None
             self._suppress_save = False
             self.status = {"supported": True, "status": "progress_saved" if record.get("progress") else "saved", "sourceRevision": record["sourceRevision"], "originalsAvailable": True}
 
@@ -273,6 +278,7 @@ class ContextContinuity:
                     if row.get("kind") == "model-transition":
                         calls = row.get("calls")
                         checkpoint = row.get("sourceCheckpoint")
+                        retired = row["state"] == "committed"
                         if (type(row.get("maxCalls")) is not int or row["maxCalls"] < 1
                                 or not isinstance(calls, list) or len(calls) > row["maxCalls"]
                                 or any(not isinstance(call, dict) or call.get("state") not in {"reserved", "completed"}
@@ -280,12 +286,12 @@ class ContextContinuity:
                                 or not isinstance(row.get("foreground"), dict)
                                 or not row["foreground"].get("selectionRevision")
                                 or not row["foreground"].get("inputId")
-                                or row.get("sourceCheckpointDigest") != digest(checkpoint)
+                                or not retired and row.get("sourceCheckpointDigest") != digest(checkpoint)
                                 or checkpoint is not None and (
                                     not isinstance(checkpoint, dict)
                                     or checkpoint.get("sha256") != digest({k: v for k, v in checkpoint.items() if k != "sha256"}))
                                 or any(call["report"].get("targetIdentity") != row["identity"]
-                                       or call["report"].get("sourceCheckpointSha256") != (checkpoint or {}).get("sha256")
+                                       or call["report"].get("sourceCheckpointSha256") != row.get("sourceCheckpointSha256")
                                        for call in calls)):
                             raise ValueError()
             except FileNotFoundError:
@@ -452,13 +458,22 @@ class ContextContinuity:
     def _transition_guard(self, record):
         check, contract = self._fresh_guard()
         foreground = self._foreground()
+        loop = self.coordinator.get("orchestrator")
+        selected = getattr(loop, "root_provider", None)
+        options = copy.deepcopy(getattr(selected, "selection", None))
+        providers = dict(self.coordinator.get("providers") or {})
         if contract != record["contract"]:
             raise ContextRecoveryError("recovery_contract_changed")
         if foreground != record["foreground"]:
             raise ContextRecoveryError("transition_input_changed")
         def guard():
             check()
-            if self._foreground() != foreground:
+            mounted = self.coordinator.get("providers") or {}
+            if (self._foreground() != foreground or self.coordinator.get("orchestrator") is not loop
+                    or getattr(loop, "root_provider", None) is not selected
+                    or getattr(selected, "selection", None) != options
+                    or set(mounted) != set(providers)
+                    or any(mounted[key] is not value for key, value in providers.items())):
                 raise ContextRecoveryError("transition_input_changed")
         guard()
         return guard
@@ -523,10 +538,13 @@ class ContextContinuity:
                 if digest(messages[:source["messages"]]) != source["sha256"]:
                     raise ContextRecoveryError("recovery_source_changed")
                 if existing.get("outcome") == "prepared-originals":
-                    self._prepared_identity = copy.deepcopy(self._identity)
-                    self._transition = None
-                    self.status.update(status="prepared-originals")
-                    return None
+                    # A cold/reverted context must stage and measure originals
+                    # again, not pretend its old in-memory view still exists.
+                    existing.update(state="pending", foreground=foreground, originalsOnly=True,
+                                    sourceCheckpoint=checkpoint)
+                    self._journal["current"] = command
+                    self._write_recovery()
+                    return existing
             # Only acknowledged completed progress can continue on another
             # legitimate foreground input. Never repeat a reserved/unknown call.
             if (existing["state"] not in {"failed", "refused"}
@@ -558,6 +576,7 @@ class ContextContinuity:
             "identity": copy.deepcopy(self._identity), "foreground": foreground,
             "sourceRevision": {"messages": len(messages), "sha256": digest(messages)},
             "sourceCheckpointDigest": source_digest, "sourceCheckpoint": checkpoint,
+            "sourceCheckpointSha256": (checkpoint or {}).get("sha256"),
             "progress": None, "completedParts": 0, "calls": [], "maxCalls": maximum}
         self._journal["attempts"][command] = record
         self._journal["current"] = command
@@ -566,6 +585,18 @@ class ContextContinuity:
         return record
 
     async def run_pending(self, *, provider, retain_contents=(), count_view):
+        # Own the whole transaction before its first await. A second request
+        # must never replace a record that a paid callback is already updating.
+        if self._pending_busy:
+            raise ContextRecoveryError("recovery_unreconciled")
+        self._pending_busy = True
+        try:
+            return await self._run_pending(provider=provider, retain_contents=retain_contents,
+                                           count_view=count_view)
+        finally:
+            self._pending_busy = False
+
+    async def _run_pending(self, *, provider, retain_contents=(), count_view):
         record = self._recovery_record()
         transition = record is not None and record.get("kind") == "model-transition"
         if transition and record["state"] != "committed" and record.get("candidateSha256"):
@@ -609,6 +640,7 @@ class ContextContinuity:
         self._recovery_busy = True
         entered = False
         compaction_error = ()
+        retired_payload = None
         try:
             record.update(state="running", code=None)
             self._write_recovery()  # Consume durably before any provider callback.
@@ -637,14 +669,15 @@ class ContextContinuity:
 
             def admit_call(report):
                 guard()
+                if record.get("originalsOnly"):
+                    raise ContextRecoveryError("transition_budget_exhausted")
                 self._check_transition_file(record)
                 calls = record["calls"]
                 if (len(calls) >= record["maxCalls"]
                         or any(call["state"] != "completed" for call in calls)):
                     raise ContextRecoveryError("transition_budget_exhausted")
                 if (not isinstance(report, dict) or report.get("targetIdentity") != record["identity"]
-                        or report.get("sourceCheckpointSha256") != (
-                            (record["sourceCheckpoint"] or {}).get("sha256"))
+                        or report.get("sourceCheckpointSha256") != record["sourceCheckpointSha256"]
                         or report.get("method") not in {"native", "semantic"}
                         or type(report.get("maxOutputTokens")) is not int or report["maxOutputTokens"] < 1
                         or not isinstance(report.get("requestSha256"), str) or len(report["requestSha256"]) != 64):
@@ -706,8 +739,6 @@ class ContextContinuity:
                 guard()
                 return {"sha256": sha}
 
-            if transition and len(record["calls"]) >= record["maxCalls"] and record is not self._reconciling:
-                raise ContextRecoveryError("transition_budget_exhausted")
             # This optional dependency is needed only for an explicitly armed
             # operation. Ordinary continuity never imports the recovery module.
             from amplifier_module_context_managed.errors import CompactionError
@@ -721,7 +752,10 @@ class ContextContinuity:
                 **({"source_checkpoint": copy.deepcopy(record["sourceCheckpoint"]),
                     "transition_source": ({"kind": "canonical-originals", "sourceRevision": copy.deepcopy(source)}
                                           if record["sourceCheckpoint"] is None else None),
-                    "admit_call": admit_call, "max_calls": record["maxCalls"] - len(record["calls"])}
+                    **({"installed_candidate_sha256": record["candidateSha256"]}
+                       if record is self._reconciling else {}),
+                    "admit_call": admit_call, "max_calls": (0 if record.get("originalsOnly") else
+                                                          record["maxCalls"] - len(record["calls"]))}
                    if transition else {}))
             await check_stop()
             verification = result.get("recovery", {})
@@ -741,15 +775,23 @@ class ContextContinuity:
                 raise ContextRecoveryError("recovery_install_unconfirmed")
             else:
                 self._accepted_record = json.loads(self.path.read_text())
+                self._prepared_identity = None
                 self.status = {"supported": True, "status": "saved", "originalsAvailable": True}
                 record["outcome"] = "checkpoint-installed"
             record.update(state="committed", code=None)
+            if transition:
+                # Keep transaction evidence, not a hidden per-model checkpoint
+                # bank. The newly accepted checkpoint is now the sole source.
+                retired_payload = (record.pop("sourceCheckpoint", None), record["progress"])
+                record["progress"] = None
             self._write_recovery()
             guard()
             self._suppress_save = False
             self._transition = None
             return result
         except BaseException as exc:
+            if retired_payload is not None:
+                record["sourceCheckpoint"], record["progress"] = retired_payload
             # Provider/host effects cannot be rolled back. In particular, never
             # overwrite a candidate after storage succeeded but activation failed.
             state = "unknown" if entered or self._suppress_save else "failed"

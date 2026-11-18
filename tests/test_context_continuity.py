@@ -1060,7 +1060,8 @@ async def test_foreground_target_transition_keeps_originals_tool_pairs_and_singl
     assert 0 < status['logicalCalls'] <= status['maxCalls'] == 16
     journal = json.loads(case.adapter.recovery_path.read_text())
     row = journal['attempts'][journal['current']]
-    assert row['sourceCheckpoint'] == json.loads(case.accepted)
+    assert row['sourceCheckpointDigest'] == digest(json.loads(case.accepted))
+    assert 'sourceCheckpoint' not in row and row['progress'] is None
     assert all(call['state'] == 'completed' for call in row['calls'])
     assert all(call['report']['targetIdentity']['model'] == 'target-model' for call in row['calls'])
     assert json.loads(case.adapter.path.read_text())['identity']['model'] == 'target-model'
@@ -1072,7 +1073,94 @@ async def test_foreground_target_transition_keeps_originals_tool_pairs_and_singl
     assert len(case.raw.compactions) == before
 
 
-@pytest.mark.parametrize('change', ['source', 'config', 'selection', 'stop'])
+async def test_host_native_to_supported_portable_transition_shares_durable_call_budget(tmp_path):
+    class PortableTarget(SyntheticNativeProvider):
+        def supports_native_compaction(self):
+            return False
+        def request_budget(self, request, **kwargs):
+            budget = super().request_budget(request, **kwargs)
+            # Synthetic summary endpoint has its own admitted input ceiling;
+            # the ordinary target request remains constrained to 3000.
+            if (request.metadata or {}).get('purpose') == 'context-compaction':
+                budget['input_limit_tokens'] = 20000
+                budget['context_token_budget'] = 20000
+            return budget
+        async def complete(self, request, **kwargs):
+            self.sent.append(request.model_copy(deep=True))
+            return SimpleNamespace(content=[SimpleNamespace(type='text', text=(
+                'Build report; keep originals. Verified result report-v1 completed once. '
+                'Correction report-v2; uncertain-op unknown, inspect never replay.'))])
+    raw = PortableTarget()
+    case = await target_transition_fixture(tmp_path, raw=raw)
+    result = await case.prepare()
+    assert result['outcome'] == 'transitioned'
+    status = case.adapter.recovery_status()
+    assert status['state'] == 'committed'
+    assert 0 < status['logicalCalls'] == len(raw.sent) <= status['maxCalls']
+    assert raw.compactions == []
+    assert all(call['report']['method'] == 'semantic' for call in case.adapter._recovery_record()['calls'])
+    checkpoint = json.loads(case.adapter.path.read_text())
+    assert checkpoint['summary']['text'] and checkpoint['identity']['model'] == 'target-model'
+    assert await case.coordinator.context.get_messages() == case.source
+
+
+async def test_concurrent_transition_preparations_cannot_replace_journal_transaction(tmp_path):
+    import asyncio
+    case = await target_transition_fixture(tmp_path)
+    entered, release = asyncio.Event(), asyncio.Event()
+    original = case.adapter._interruption_revision
+    async def delayed():
+        if not entered.is_set():
+            entered.set()
+            await release.wait()
+        return await original()
+    case.adapter._interruption_revision = delayed
+    first = asyncio.create_task(case.prepare())
+    await asyncio.wait_for(entered.wait(), 3)
+    with pytest.raises(RuntimeError, match='recovery_unreconciled'):
+        await case.prepare()
+    release.set()
+    assert (await first)['outcome'] == 'transitioned'
+    journal = json.loads(case.adapter.recovery_path.read_text())
+    row = journal['attempts'][journal['current']]
+    assert row['state'] == 'committed' and len(journal['attempts']) == 1
+    assert len(row['calls']) == len(case.raw.compactions) > 0
+    assert all(call['state'] == 'completed' for call in row['calls'])
+    assert row['installedCandidate'] == json.loads(case.adapter.path.read_text())['sha256']
+
+
+async def test_prepared_originals_b_a_b_revalidates_active_source_instead_of_stale_marker(tmp_path):
+    from amplifier_core import ChatRequest, Message
+    from amplifier_web.host.session import SelectedProvider
+    case = await target_transition_fixture(tmp_path)
+    case.raw.input_limit = 50000
+    assert (await case.prepare())['outcome'] == 'transition_fitted'
+    source = SelectedProvider(case.raw, {'instance': 'fixture', 'model': 'selected-model'})
+    case.coordinator.loop.root_provider = source
+    async def count(rows):
+        request = ChatRequest(model='selected-model', messages=[Message(**row) for row in rows])
+        return {'dispatch': request, 'budget_decision': source.request_budget(request)}
+    await case.coordinator.context.get_measured_request_view(
+        provider=source, retain_contents=(), count_view=count)
+    assert case.coordinator.context.summary_identity['model'] == 'selected-model'
+    case.coordinator.loop.root_provider = case.selected
+    case.origin.update(selectionRevision='new-B-choice', inputId='new-B-input', generationId='new-B-generation')
+    case.contract['selectionRevision'] = 'new-B-choice'
+    assert (await case.prepare())['outcome'] == 'transition_fitted'
+    assert case.coordinator.context.summary is None
+    assert case.adapter.public()['status'] == 'prepared-originals'
+    assert case.raw.compactions == []
+    # A cold reader of the same completed zero-paid receipt also remeasures,
+    # never activates a nonexistent saved target checkpoint or buys work.
+    case.adapter._prepared_identity = None
+    case.adapter.loaded = False
+    case.adapter._journal = None
+    case.origin.update(inputId='cold-B-input', generationId='cold-B-generation')
+    assert (await case.prepare())['outcome'] == 'transition_fitted'
+    assert case.raw.compactions == []
+
+
+@pytest.mark.parametrize('change', ['source', 'config', 'selection', 'mounted-options', 'stop'])
 async def test_transition_after_last_fit_guard_keeps_exact_source_checkpoint(tmp_path, change):
     case = await target_transition_fixture(tmp_path)
     recover = case.coordinator.get_capability('context.recovery.recover')
@@ -1085,6 +1173,8 @@ async def test_transition_after_last_fit_guard_keeps_exact_source_checkpoint(tmp
                 case.contract['changed'] = True
             elif change == 'selection':
                 case.origin['selectionRevision'] = 'newer-choice'
+            elif change == 'mounted-options':
+                case.selected.selection['effort'] = 'high'
             else:
                 case.gate.release(case.gate.current())
             return await install(candidate, verification)
@@ -1117,7 +1207,8 @@ async def test_transition_unknown_paid_reservation_cannot_reset_on_fresh_input_o
     assert case.adapter.recovery_status()['logicalCalls'] == 1
 
 
-async def test_transition_lost_install_ack_reconciles_exact_digest_without_second_write(tmp_path, monkeypatch):
+@pytest.mark.parametrize('appended', [False, True], ids=['same-source', 'new-foreground-and-refs'])
+async def test_transition_lost_install_ack_reconciles_exact_digest_without_second_write(tmp_path, monkeypatch, appended):
     from amplifier_web import context_continuity
     case = await target_transition_fixture(tmp_path)
     recover = case.coordinator.get_capability('context.recovery.recover')
@@ -1145,11 +1236,128 @@ async def test_transition_lost_install_ack_reconciles_exact_digest_without_secon
         await case.prepare()  # Same input is never another reconciliation intent.
     case.coordinator.register_capability('context.recovery.recover', recover)
     case.origin.update(inputId='fresh-reconciliation', generationId='fresh-generation')
+    if appended:
+        await case.coordinator.context.add_message({'role': 'assistant', 'content': 'New settled tail.'})
+        await case.coordinator.context.add_message({'role': 'user', 'content': 'New authorized foreground input.'})
+        await case.coordinator.context.add_message({'role': 'assistant', 'content': 'Tail acknowledged.'})
+        preserve = case.coordinator.get_capability('context.preserve_evidence')
+        async def fresh_refs(messages):
+            return [*(await preserve(messages)), {'kind': 'fixture-fresh-reference', 'revision': 'new'}]
+        case.coordinator.register_capability('context.preserve_evidence', fresh_refs)
+        # Boundary captured preserve at mount, as the production registration
+        # contract does; replace that binding deliberately for this new request.
+        case.coordinator.context.preserve_evidence = fresh_refs
     result = await case.prepare()
     assert result['outcome'] == 'transitioned'
     assert case.adapter.recovery_status()['state'] == 'committed'
     assert case.adapter.path.read_bytes() == candidate
     assert len(writes) == 1 and len(case.raw.compactions) == calls
+
+
+async def test_transition_completed_progress_does_not_reset_total_call_cap(tmp_path):
+    case = await target_transition_fixture(tmp_path)
+    case.coordinator.context.config['summary_max_calls'] = 1
+    with pytest.raises(RuntimeError, match='summary_work_paused'):
+        await case.prepare()
+    row = case.adapter._recovery_record()
+    assert row['state'] == 'refused' and row['completedParts'] == 1
+    assert row['calls'][0]['state'] == 'completed' and row['progress']
+    paid = len(case.raw.compactions)
+    case.origin.update(inputId='new-resume-input', generationId='new-generation')
+    with pytest.raises(RuntimeError, match='summary_work_paused'):
+        await case.prepare()
+    assert case.adapter.recovery_status()['logicalCalls'] == paid == 1
+    assert case.adapter.path.read_bytes() == case.accepted
+    case.adapter._journal = None
+    case.origin.update(inputId='another-resume-input')
+    with pytest.raises(RuntimeError, match='summary_work_paused'):
+        await case.prepare()
+    assert len(case.raw.compactions) == 1
+
+
+async def test_transition_cancelled_paid_call_keeps_source_and_unknown_reservation(tmp_path):
+    import asyncio
+    case = await target_transition_fixture(tmp_path)
+    async def cancel(request):
+        raise asyncio.CancelledError()
+    case.raw.compact_context = cancel
+    with pytest.raises(asyncio.CancelledError):
+        await case.prepare()
+    assert case.adapter.path.read_bytes() == case.accepted
+    assert case.adapter.recovery_status()['state'] == 'unknown'
+    assert case.adapter._recovery_record()['calls'][-1]['state'] == 'reserved'
+
+
+async def test_checkpointless_fork_transition_binds_actual_originals_not_fake_checkpoint(tmp_path):
+    from amplifier_web.context_continuity import ContextContinuity
+    case = await target_transition_fixture(tmp_path / 'source')
+    directory = tmp_path / 'checkpointless'
+    directory.mkdir()
+    coordinator = case.coordinator
+    coordinator.register_capability('web.context_transition.originals', True)
+    case.origin['originals'] = True
+    async def checkpoint():
+        return None
+    adapter = ContextContinuity(coordinator, 'session', directory, checkpoint,
+                                writer_guard=case.gate.check_current)
+    result = await case.prepare()
+    assert result['outcome'] == 'transitioned'
+    assert adapter.recovery_status()['state'] == 'committed'
+    row = adapter._recovery_record()
+    assert row['sourceCheckpointDigest'] == digest(None)
+    assert row['sourceCheckpointSha256'] is None and 'sourceCheckpoint' not in row
+    assert row['sourceRevision'] == {'messages': len(case.source), 'sha256': digest(case.source)}
+    assert all(call['report']['sourceCheckpointSha256'] is None for call in row['calls'])
+
+
+@pytest.mark.parametrize('phase', ['reserve', 'progress'])
+async def test_transition_unconfirmed_journal_write_never_replays_paid_step(tmp_path, monkeypatch, phase):
+    from amplifier_web import context_continuity
+    case = await target_transition_fixture(tmp_path)
+    write = context_continuity.write_private
+    failed = []
+    def fail(path, text):
+        if path == case.adapter.recovery_path:
+            journal = json.loads(text)
+            row = journal['attempts'][journal['current']]
+            calls = row.get('calls', [])
+            if calls and not failed and calls[-1]['state'] == ('reserved' if phase == 'reserve' else 'completed'):
+                failed.append(True)
+                raise OSError('synthetic persistence lost')
+        return write(path, text)
+    monkeypatch.setattr(context_continuity, 'write_private', fail)
+    with pytest.raises(OSError, match='persistence lost'):
+        await case.prepare()
+    assert failed and case.adapter.recovery_status()['state'] == 'unknown'
+    assert case.adapter._recovery_record()['calls'][-1]['state'] == 'reserved'
+    paid = len(case.raw.compactions)
+    assert paid == (0 if phase == 'reserve' else 1)
+    case.origin.update(inputId='fresh-input-after-uncertain-write')
+    with pytest.raises(RuntimeError, match='recovery_unreconciled'):
+        await case.prepare()
+    assert len(case.raw.compactions) == paid
+    assert case.adapter.path.read_bytes() == case.accepted
+
+
+async def test_transition_foreign_refusal_does_not_brick_fully_valid_source_identity(tmp_path):
+    from amplifier_core import ChatRequest, Message
+    from amplifier_web.host.session import SelectedProvider
+    case = await target_transition_fixture(tmp_path)
+    case.raw.nonreducing = True
+    with pytest.raises(RuntimeError):
+        await case.prepare()
+    assert case.adapter.recovery_status()['state'] == 'refused'
+    source_provider = SelectedProvider(case.raw, {'instance': 'fixture', 'model': 'selected-model'})
+    case.coordinator.loop.root_provider = source_provider
+    async def count(rows):
+        request = ChatRequest(model='selected-model', messages=[Message(**row) for row in rows])
+        return {'dispatch': request, 'budget_decision': source_provider.request_budget(request)}
+    paid = len(case.raw.compactions)
+    result = await case.coordinator.context.get_measured_request_view(
+        provider=source_provider, retain_contents=(), count_view=count)
+    assert result['final_attempt']['dispatch'].model == 'selected-model'
+    assert len(case.raw.compactions) == paid
+    assert case.adapter.path.read_bytes() == case.accepted
 
 
 async def test_transition_fitting_originals_has_no_paid_work_or_fake_install(tmp_path):

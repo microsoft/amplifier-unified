@@ -98,3 +98,50 @@ observations to make it valid. This is not append-only continuity across turns:
 necessary invalidation can lose reasoning and incur provider latency/token costs.
 Host and provider qualification must distinguish unchanged-prefix preservation
 from successful requests that discarded incompatible reasoning.
+
+## A deliberate model change in an existing conversation
+
+Saving a model choice does no provider work. On a genuinely new ordinary
+foreground input, the host may admit bounded context preparation for the saved
+target connection/model/options. Mounted selection acknowledgement is not proof
+that context fits or that the turn completed. Startup, status reads, retries,
+steering and automatic job/scheduled continuations do not create this admission.
+
+A derived checkpoint is reusable only under its exact identity and validated
+canonical prefix/configuration. A structured identity-only transition
+classification is not an import authorization: corrupt digests, changed source
+or configuration, and incompatible paid progress remain rejected. Historical
+source-provider envelope attestation may be unavailable; structural validation
+does not claim that attestation. Target preparation never sends the old model's
+opaque state to the new model, including for counting, and never falls back to
+the old model or a larger cost/context tier.
+
+The existing recovery journal binds the source checkpoint, canonical prefix,
+selection revision, target options, execution input and Stop/configuration
+boundaries. Target work is detached from the accepted source state. Native and
+supported portable compaction share the configured `summary_max_calls` allowance
+(default 16) for the whole transition, with a durable reservation before each
+logical paid call. Repeated preparation and restarts do not reset it. Provider
+SDK retries retain their own bounded policy: a logical-call bound is not a claim
+about physical HTTP requests or exactly-once billing. Completed acknowledged
+progress survives; unknown paid calls never automatically replay.
+
+The complete target request must fit under the unchanged allowance. Immediately
+before installing its derived checkpoint, recheck source, selection, options,
+configuration, execution ownership and Stop. One atomic checkpoint write and
+exact digest readback precede activation. A lost installation acknowledgement
+requires a new legitimate foreground input and exact candidate-digest
+reconciliation; it cannot repeat a paid call or rewrite the candidate.
+If original history already fits, report **prepared originals**, not checkpoint
+installation: buy no compaction, preserve the old checkpoint inactive, and
+activate only the guarded measured target view. Later ordinary target
+compaction retains its normal trigger policy.
+
+An unchanged full fork may carry a prefix-bound accepted checkpoint, but never
+the source recovery journal, execution ownership or call reservations. Partial,
+readable-recovery and configuration-converted forks retain originals only.
+Forking itself runs no provider work. A checkpointless historical fork needs
+its own explicit saved target choice and new foreground input for bounded
+canonical-originals preparation; it cannot invent a valid old checkpoint.
+These are offline-qualified mechanisms, not a claim of live device recovery,
+complete archive migration, or model summary quality.
