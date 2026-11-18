@@ -1031,9 +1031,10 @@ def test_a_question_of_the_watch_that_fails_is_an_answer_and_the_list_has_a_limi
 def test_the_watch_asks_in_a_thread_of_its_own_and_ends_when_it_is_stopped(case):
     # The watch's real thread runs here. A real thread runs in four more cases: the two with a question that the
     # test holds back, the case of the lock, and the case of an error of the watch's own code. Each wait for such
-    # a thread to ask a question or to end has a limit of 60 seconds. Three waits are short on purpose: the two
-    # stops of 0.05 second and the 0.2 second of the lock case. A limit of 60 seconds ends a case whose thread
-    # does not ask or does not end. A machine that gives the thread no time for that long fails the case too.
+    # a thread to ask a question or to end has a limit: 60 seconds, and in three cases a stop after it, which
+    # waits up to 10 seconds more. Three waits are short on purpose: the two stops of 0.05 second and the 0.2
+    # second of the lock case. A case whose thread does not ask or does not end within its limits fails. A
+    # machine that gives the thread no time for that long fails the case too.
     asked, enough = [], case.threading.Event()
 
     def probe():
@@ -1075,8 +1076,8 @@ def test_a_watch_whose_thread_does_not_end_says_so(case):
         assert kept["started"] is True and kept["ended"] is False
     finally:
         release.set()
-        watch._thread.join(60)  # After the test let the question go, the thread has 60 seconds to end.
-    assert watch.stop()["ended"] is True
+        watch._thread.join(60)  # Up to 60 seconds for the thread's end, after the test let the question go.
+    assert watch.stop()["ended"] is True  # This stop waits up to 10 seconds more.
 
 
 def test_the_seconds_of_a_question_do_not_hold_the_read_of_the_processor_time_before_it(case):
@@ -1123,7 +1124,7 @@ def test_what_a_stopped_watch_gave_does_not_change_while_its_thread_still_asks(c
         given = copy.deepcopy(kept)
     finally:
         release.set()
-        watch._thread.join(60)  # After the test let the question go, the thread has 60 seconds to end.
+        watch._thread.join(60)  # Up to 60 seconds for the thread's end, after the test let the question go.
     # The second question had the same answer, and it took some time (the stop waited 0.05 second for its thread
     # meanwhile). So the entry now has it as `slowest`, the slowest of the questions that follow a change.
     assert watch.questions == 2 and "slowest" in watch.changes[0]
@@ -1160,8 +1161,8 @@ def test_an_error_of_the_watchs_own_code_ends_the_watch_and_the_stop_says_it(cas
     # A read of the processor time that gives no record: the watch's own code fails at the late answer.
     ticks = iter([0.0, 3.0, 3.5])
     watch = case.ListenerWatch(lambda: "trusted", gauge=lambda owners: 5, timer=lambda: next(ticks), every=0.01)
-    watch.start()._thread.join(60)  # The thread has 60 seconds to end by its own error.
-    kept = watch.stop()
+    watch.start()._thread.join(60)  # Up to 60 seconds for the thread's end by its own error.
+    kept = watch.stop()  # This stop waits up to 10 seconds more.
     assert kept["started"] is True and kept["ended"] is True and kept["questions"] == 0 and kept["changes"] == []
     assert kept["endedBy"]["errorType"] == "TypeError"
     # A watch without such an error has no such entry.
@@ -1301,13 +1302,46 @@ SILENCE = {"changes": [changed(100.0, "unreachable", [4500], 2.07), changed(102.
 TOOK = "the app had answered, and then one question to its listener took"
 
 
+NEXT = "The question that got the next answer began"
+
+
 def test_the_runs_page_names_the_first_question_of_a_silence_after_the_app_had_answered(case):
-    # One text for the silence: the question that began it. The questions that follow it have no answer before
-    # them, and the question of the start has no owner of the port before it. The next answer came when its
-    # question ended: that question began 7.9 seconds after the first one and took 0.07 second.
+    # One text for the silence: the question that began it. The questions that follow it are of the same
+    # silence, and the question of the start has no answer of the watch before it.
     assert case.late_answers({"listener": SILENCE}, "the second sign-in") == [
-        f'After "the second sign-in": {TOOK} 2.08 seconds and got no answer. The next answer came '
-        "8.0 seconds after that question began."]
+        f'After "the second sign-in": {TOOK} 2.08 seconds and got no answer. {NEXT} 7.9 seconds after that '
+        "question began."]
+    # A silence whose first question with no answer was quick (a connection that the app cut off). The text is
+    # for the first question of 2 seconds or more, and the one after it gets none.
+    quick = {"changes": [changed(100.0, "trusted", [4500]), changed(103.0, "unreachable", [4500], 1.9),
+                         changed(110.8, "trusted", [4500])],
+             "late": [asked_late(103.0, 1.9), asked_late(105.4, 2.1), asked_late(108.0, 2.2)]}
+    assert case.late_answers({"listener": quick}, "x") == [
+        f'After "x": {TOOK} 2.1 seconds and got no answer. {NEXT} 5.4 seconds after that question began.']
+    # The host went away after the quick question: no text.
+    gone = {"changes": [changed(100.0, "trusted", [4500]), changed(103.0, "unreachable", [4500], 1.9),
+                        changed(105.4, "unreachable", [], 2.1)],
+            "late": [asked_late(103.0, 1.9), asked_late(105.4, 2.1)]}
+    assert case.late_answers({"listener": gone}, "x") == []
+    # The answer that ends such a silence came late, and no question of the silence took 2 seconds: one text.
+    ended = {"changes": [changed(100.0, "trusted", [4500]), changed(103.0, "unreachable", [4500], 1.9),
+                         changed(105.4, "trusted", [4500], 2.4)],
+             "late": [asked_late(103.0, 1.9), asked_late(105.4, 2.4, "trusted")]}
+    assert case.late_answers({"listener": ended}, "x") == [f'After "x": {TOOK} 2.4 seconds.']
+    # The answer that ends a silence came late, and the silence has its text already: no second text.
+    both = {"changes": SILENCE["changes"][:3] + [changed(112.9, "trusted", [4500], 2.4)],
+            "late": SILENCE["late"] + [asked_late(112.9, 2.4, "trusted")]}
+    assert case.late_answers({"listener": both}, "x") == [
+        f'After "x": {TOOK} 2.08 seconds and got no answer. {NEXT} 7.9 seconds after that question began.']
+    # Two late answers with no change of the answer between them are two questions: two texts.
+    twice = {"changes": [changed(100.0, "trusted", [4500])],
+             "late": [asked_late(103.0, 2.4, "trusted"), asked_late(130.0, 2.5, "trusted")]}
+    assert case.late_answers({"listener": twice}, "x") == [
+        f'After "x": {TOOK} 2.4 seconds.', f'After "x": {TOOK} 2.5 seconds.']
+    # An entry of the late answers that has another form is left out.
+    odd = {"changes": [changed(100.0, "trusted", [4500])],
+           "late": ["a text", {"seconds": 3.0}, asked_late(103.0, 2.4, "trusted")]}
+    assert case.late_answers({"listener": odd}, "x") == [f'After "x": {TOOK} 2.4 seconds.']
 
 
 @pytest.mark.parametrize("changes, late, said", [
@@ -1318,12 +1352,16 @@ def test_the_runs_page_names_the_first_question_of_a_silence_after_the_app_had_a
     ([changed(100.0, "trusted", [4500])], asked_late(103.0, 1.999, "trusted"), None),
     # The answer before can be "untrusted": the listener answered.
     ([changed(100.0, "untrusted", [4500])], asked_late(103.0, 2.4, "untrusted"), " 2.4 seconds."),
-    # No process owned the port at the question before, or the processor time was not read.
-    ([changed(100.0, "trusted", [4500])], asked_late(103.0, 2.4, "trusted", owners=()), None),
-    ([changed(100.0, "trusted", [4500])], {**asked_late(103.0, 2.4), "used": {"errorType": "OSError", "error": "x"}},
-     None),
-    # A host that has the port and has not answered yet: it starts.
+    # The processor time of the question names no process, or it was not read: the owners of the port in the
+    # changes that the watch kept decide, and the text is the same.
+    ([changed(100.0, "trusted", [4500])], asked_late(103.0, 2.4, "trusted", owners=()), " 2.4 seconds."),
+    ([changed(100.0, "trusted", [4500])],
+     {**asked_late(103.0, 2.4, "trusted"), "used": {"errorType": "OSError", "error": "PRIVATE-SENTINEL"}},
+     " 2.4 seconds."),
+    # A host that has the port and has not answered yet: it starts. Its first answer can be late too.
     ([changed(100.0, "unreachable", [4500], 2.07)], asked_late(102.6, 2.07), None),
+    ([changed(100.0, "unreachable", [4500], 2.07), changed(102.6, "trusted", [4500], 2.4)],
+     asked_late(102.6, 2.4, "trusted"), None),
     # The watch kept no change before the question.
     ([], asked_late(100.0, 2.3, "trusted"), None),
     # The host went away at that question, or another process has the port after it.
@@ -1336,26 +1374,22 @@ def test_the_runs_page_names_the_first_question_of_a_silence_after_the_app_had_a
     # No answer, and the watch ended before the next change.
     ([changed(100.0, "trusted", [4500]), changed(103.0, "unreachable", [4500], 2.07)], asked_late(103.0, 2.07),
      " 2.07 seconds and got no answer."),
-    # No answer, and then the next answer: "untrusted" is an answer of the listener too. That answer came when
-    # its question ended: the question began 2.6 seconds after the first one and took 1.2 seconds.
+    # No answer, and then the next answer: "untrusted" is an answer of the listener too. The text gives the
+    # start of the question that got it: the record has that time for every kept change.
     ([changed(100.0, "trusted", [4500]), changed(103.0, "unreachable", [4500], 2.07),
       changed(105.6, "untrusted", [4500], 1.2)], asked_late(103.0, 2.07),
-     " 2.07 seconds and got no answer. The next answer came 3.8 seconds after that question began."),
-    # No answer, and the watch's next change is not an answer: the host went away (the question that saw it began
-    # 8 seconds later and took 2.07 seconds), or the next question ended with an error. The watch keeps a change
-    # of the owners of the port too.
+     " 2.07 seconds and got no answer. The question that got the next answer began 2.6 seconds after that "
+     "question began."),
+    # No answer, and the watch's next change is not an answer: the host went away, or the next question ended
+    # with an error. The watch keeps a change of the owners of the port too.
     ([changed(100.0, "trusted", [4500]), changed(103.0, "unreachable", [4500], 2.07),
       changed(111.0, "unreachable", [], 2.07), changed(120.0, "trusted", [7000])], asked_late(103.0, 2.07),
-     " 2.07 seconds and got no answer. The watch's next change came 10.1 seconds after that question began, and it "
-     "was not an answer."),
+     " 2.07 seconds and got no answer. The watch's next change was not an answer; its question began 8.0 seconds "
+     "after that question began."),
     ([changed(100.0, "trusted", [4500]), changed(103.0, "unreachable", [4500], 2.07),
       changed(105.6, {"errorType": "OSError", "error": "PRIVATE-SENTINEL"}, [4500], 0.4)], asked_late(103.0, 2.07),
-     " 2.07 seconds and got no answer. The watch's next change came 3.0 seconds after that question began, and it "
-     "was not an answer."),
-    # A change of another form, with no seconds: the time is that of its question's start.
-    ([changed(100.0, "trusted", [4500]), changed(103.0, "unreachable", [4500], 2.07),
-      {"at": 105.6, "answer": "trusted", "owner": [4500], "seconds": None}], asked_late(103.0, 2.07),
-     " 2.07 seconds and got no answer. The next answer came 2.6 seconds after that question began."),
+     " 2.07 seconds and got no answer. The watch's next change was not an answer; its question began 2.6 seconds "
+     "after that question began."),
     # A question that ended with an error: the text has the seconds and not the error.
     ([changed(100.0, "trusted", [4500]),
       changed(103.0, {"errorType": "OSError", "error": "PRIVATE-SENTINEL"}, [4500], 2.2)],
@@ -1372,8 +1406,8 @@ def test_a_late_answer_is_named_with_what_the_case_did_then_and_not_while_the_ca
                             changed(103.0, "unreachable", [4500], 2.07), changed(105.6, "trusted", [4500])],
                 "late": [asked_late(103.0, 2.07)]}
     assert case.late_answers({"listener": watch("the certificate step")}, "the first start") == [
-        f'After "the certificate step": {TOOK} 2.07 seconds and got no answer. The next answer came '
-        "2.7 seconds after that question began."]
+        f'After "the certificate step": {TOOK} 2.07 seconds and got no answer. {NEXT} 2.6 seconds after that '
+        "question began."]
     # The case stops the app itself after these two marks. A question with no answer is no late answer there.
     assert case.STOPS == ("Stop Amplifier", "the uninstall that keeps the folder")
     source = FIXTURE.read_text(encoding="utf-8")
@@ -1421,10 +1455,9 @@ def test_the_runs_page_names_each_read_of_the_trust_read_after_the_sign_in_that_
     texts = case.late_answers({"listener": SILENCE, "signInTrust": {**waited, "before": one, "after": one}}, "x")
     failed = "failed or got no answer: host (AssertionError)."
     assert texts == [
-        f'After "x": {TOOK} 2.08 seconds and got no answer. The next answer came 8.0 seconds after that question '
-        "began.",
+        f'After "x": {TOOK} 2.08 seconds and got no answer. {NEXT} 7.9 seconds after that question began.',
         f"{read}: 1 read(s) for the record before its first question {failed}",
-        f"{read}: 1 read(s) for the record after its answer {failed}",
+        f"{read}: 1 read(s) for the record after its last question {failed}",
         f"{read} waited: 2 question(s) got no answer, and the read ended after 6.3 seconds."]
     # A report without these records, or with an error in their place, gives no text.
     for report in ({}, {"listener": {"errorType": "OSError", "error": "x"}}, {"signInTrust": "x", "listener": None},
@@ -1443,8 +1476,8 @@ def test_the_lines_for_the_runs_page_are_one_line_each_in_the_form_that_github_r
                                                               "seconds": 60.0}}}
     assert case.page_warnings(report) == [
         f'{start}After "the first start": {TOOK} 2.4 seconds.',
-        f'{start}After "the second sign-in": {TOOK} 2.08 seconds and got no answer. The next answer came 8.0 '
-        "seconds after that question began.",
+        f'{start}After "the second sign-in": {TOOK} 2.08 seconds and got no answer. {NEXT} 7.9 seconds after '
+        "that question began.",
         f"{start}The read of trust after the sign-in waited: 1 question(s) got no answer, and the read ended "
         "after 60.0 seconds."]
     # A mark is a text of the record. A line stays one line, in GitHub's own codes.
@@ -1463,12 +1496,12 @@ def test_the_run_keeps_and_prints_the_lines_for_its_page_after_every_step_has_it
     first = ('    report["lines"] = lines(report)\n'
              '    save("result.json", report)\n'
              '    print("\\n".join(report["lines"]), flush=True)\n')
-    # Then the lines for the page. Each part goes through `attempt`: making them, the second save of the result
-    # (the result has a size limit) and the print. So no error of a part changes a line or the status.
-    then = ('    report["warnings"] = attempt(lambda: page_warnings(report))\n'
-            '    attempt(lambda: save("result.json", report))\n'
-            '    if isinstance(report["warnings"], list) and report["warnings"]:\n'
-            '        attempt(lambda: print("\\n".join(report["warnings"]), flush=True))\n'
+    # Then the lines for the page. Each part goes through `attempt`: making them, their save into a file of
+    # their own, and the print. So no error of a part changes a line or the status.
+    then = ('    warnings = attempt(lambda: page_warnings(report))\n'
+            '    attempt(lambda: save("page-warnings.json", warnings))\n'
+            '    if isinstance(warnings, list) and warnings:\n'
+            '        attempt(lambda: print("\\n".join(warnings), flush=True))\n'
             '    print(json.dumps({key: report.get(key) for key in ("status", "stage", "errorType", "error")}), '
             "flush=True)\n"
             '    return report["status"] == "PASS"\n')
@@ -1477,6 +1510,10 @@ def test_the_run_keeps_and_prints_the_lines_for_its_page_after_every_step_has_it
     # Between the two there is only a comment. The second part is the end of `run()`.
     between = run[run.index(first) + len(first):run.index(then)]
     assert between.strip() and all(line.strip().startswith("#") for line in between.splitlines())
+    # The result is not written again after its lines are printed, and the lines for the page are not put into
+    # it: a write that fails cannot harm the saved result.
+    assert "result.json" not in then and "report[" not in then.replace('report["status"] == "PASS"', "")
+    assert source.count("page-warnings.json") == 1
     assert source.count("page_warnings(") == 2 and source.count("late_answers(") == 3  # A definition and its calls.
 
 
@@ -1684,7 +1721,8 @@ def test_every_read_after_a_host_start_is_made_through_the_record_and_keeps_its_
     # Each start: Task Scheduler's answer and the app's status, each with its read and with the rule of its step.
     # The line breaks of a call do not count here.
     # A status read that waits: for the host that the sign-in starts (120 seconds), and with the product's own
-    # wait of a start (60 seconds, `prepare_background`). After a failed step the record makes one read.
+    # wait of a start (60 seconds, `prepare_background`). After a failed step the record makes one read with no
+    # wait, when the answer of the waiting read was not as required.
     one = 'later=lambda: again.cli(root, "service", "status", "--json"))'
     waiting = ('lambda: again.cli(root, "service", "status", "--wait", "120", "--json", timeout=180), again.healthy, '
                + one)
@@ -1719,7 +1757,7 @@ def test_every_read_after_a_host_start_is_made_through_the_record_and_keeps_its_
     # After the sign-in the read is `sign_in_trust`: it waits as the product waits and keeps its own observation.
     settled = "lambda: sign_in_trust(steps, again, root, home, urls, pin, status, state)"
     # After the start that follows the uninstall the read is the product's `settled_trust`. After a failed step
-    # the record makes one read.
+    # the record makes one read with no wait, when the answer of the waiting read was not as required.
     as_the_product = "lambda: windows_installation.settled_trust(urls, pin)"
     for part, name, read, required, later in (
             (certificate, "trust before the Windows question", once, "untrusted", ""),
@@ -3273,7 +3311,7 @@ def test_second_sign_in_evidence_capture_error_is_kept_for_the_record_and_fails_
     # The run's page gets a text for each side.
     assert case.late_answers({"signInTrust": observation}, "the second sign-in") == [
         f"The read of trust after the sign-in: 1 read(s) for the record {when} failed or got no answer: "
-        f"{part} ({error})." for when in ("before its first question", "after its answer")]
+        f"{part} ({error})." for when in ("before its first question", "after its last question")]
 
 
 def test_second_sign_in_capture_errors_do_not_replace_the_text_of_a_read_of_trust_that_fails(sign_in_probe):
@@ -3326,8 +3364,8 @@ def test_a_status_read_with_no_answer_in_the_snapshot_after_the_read_of_trust_fa
         "ok": False, "processVerified": False, "responding": False, "probeAttempted": True}
     assert observation["after"]["captureErrors"] == [{"part": "host", "errorType": "AssertionError"}]
     assert case.late_answers({"signInTrust": observation}, "the second sign-in") == [
-        "The read of trust after the sign-in: 1 read(s) for the record after its answer failed or got no "
-        "answer: host (AssertionError)."]
+        "The read of trust after the sign-in: 1 read(s) for the record after its last question failed or got "
+        "no answer: host (AssertionError)."]
 
 
 def test_second_sign_in_observations_omit_private_fields_messages_and_raw_tails(sign_in_probe):

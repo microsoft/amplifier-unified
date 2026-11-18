@@ -2918,8 +2918,9 @@ job can skip.
    not run. After the sign-in the task's own trigger starts a new host on the
    same port, with no launcher command, and Windows still trusts the
    connection. The case reads the connection with the product's own wait
-   (`settled_trust`, up to 60 seconds), and after it the app's status with
-   the product's wait of a start (`service status --wait 60`).
+   (`settled_trust`: it asks again for 60 seconds while it gets no answer),
+   and after it the app's status with the product's wait of a start
+   (`service status --wait 60`).
 8. Uninstall with the choice that keeps the folder. Windows asks whether to
    delete the certificate; the test selects No, and the certificate stays in
    Windows' own list. Then the entries again and a start, as setup's second
@@ -2936,22 +2937,27 @@ First result (November 17, 2026): every step passed. In these steps the case
 found nothing that a standard account cannot do.
 
 Later runs found one thing about the app, not about the account. Some seconds
-after a start, the app can give no answer for some seconds: 2.6 to 15.7
-seconds in nine failed runs that kept a record, and 19 seconds in one later
-run. A read with a limit of 2 seconds then gets no answer. Until pull request
-2316 the case made such reads after the second sign-in and after the start
-that follows the first uninstall, and 15 of the 257 runs that had ended by
-November 17, 2026 failed there. Those two steps now read as the Start-menu
-start reads its app: the status with a wait of up to 60 seconds, and the
-connection with a wait of up to 60 seconds. An answer within that wait fails
-no step. The case keeps a record of its reads after a start, and it asks the
-app's listener beside its steps. When one of those questions took 2 seconds or
-more after the app had answered, the page of the run gets a warning. The
-warning is for a question, not for the silence itself: a silence that ends
-before a question has waited 2 seconds gets none, and that can be a silence of
-up to about 2.6 seconds. After the first start and after the second start of
-the first sign-in, the case still makes one status read each; none of those
-257 runs failed there.
+after a start, the app can give no answer for some seconds. In nine failed
+runs that kept a record, the questions that the case asks the app's listener
+beside its steps got no answer for 2.6 to 15.7 seconds, and in one later run
+for 19 seconds (from the start of the first question with no answer to the
+start of the question that got the next answer). A read with a limit of 2
+seconds then gets no answer. Until pull request 2316 such reads decided two
+steps: the one after the second sign-in and the one after the start that
+follows the first uninstall. 15 of the 257 runs that had ended by November 17,
+2026 failed there. In those two steps the case now reads the status with the
+product's wait of 60 seconds (`service status --wait 60`) and the connection
+with the product's wait of 60 seconds (`settled_trust`). These are the two
+waits of the Start-menu start; after the second sign-in the connection comes
+first. The time that an answer takes within its wait fails no step; the answer
+decides as before. The record of the second sign-in still makes short reads,
+and they fail no step. The page of the run can get a warning, which fails
+nothing: for a question to the listener that took 2 seconds or more after the
+app had answered, and for a read of that record that failed or got no answer.
+A warning is for a question, not for the silence itself: a silence that ends
+before a question has taken 2 seconds gets none. After the first start and
+after the second start of the first sign-in, the case still makes one status
+read each; none of those 257 runs failed there.
 
 The case does not show these parts. The result names each of them with its
 reason.

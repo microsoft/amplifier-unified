@@ -21,8 +21,8 @@ name: Windows standard account
 # PC's own screen, and an answer of the app to one read with a limit of 2
 # seconds at every moment after a start. After the second sign-in and after
 # the start that follows the first uninstall the case waits as the product
-# waits. The run's page gets a warning when a question of the case's watch
-# took 2 seconds or more after the app had answered.
+# waits. The run's page can get a warning for a question of the case's
+# watch that took 2 seconds or more after the app had answered.
 on:
   workflow_dispatch:
   pull_request:
