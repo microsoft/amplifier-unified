@@ -18,7 +18,10 @@ name: Windows standard account
 # hosted x64 runner is Windows Server), a person's own answer to the Windows
 # certificate question, the browser, a click on a Start-menu entry and the
 # messages of the windowless launcher, a chat, Windows 11, a sign-in at the
-# PC's own screen.
+# PC's own screen, and an answer of the app to one read with a limit of 2
+# seconds at every moment after a start. After the second sign-in and after
+# the start that follows the first uninstall the case waits as the product
+# waits; a late answer there is a warning on the run's page.
 on:
   workflow_dispatch:
   pull_request:
