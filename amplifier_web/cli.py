@@ -433,6 +433,9 @@ def _serve_listeners(args, data_dir, config, secure, sockets, *, task_runner=Non
             async def managed_app():
                 app = await create_app(data_dir, workspace=args.workspace, server_config=config)
                 task_runner.attach(app)
+                # The definition of the Windows task that started this host. The
+                # host compared it with the Task Scheduler's before it served.
+                app["owner_task"] = task_runner.spec
                 return app
             app = managed_app()
         web.run_app(app,
@@ -461,6 +464,11 @@ def _say_waiting():
         pass  # Nobody reads this output any more. The wait itself goes on.
 
 
+def _open_again():
+    """The next step after a failed `open`. On Windows none: the command does not name itself."""
+    return "" if browser_entry.is_windows() else " " + browser_entry.RUN_OPEN
+
+
 def _open_browser(args, data_dir, config, *, wait=0.0):
     if args.no_open:
         print("Browser opening disabled; no browser grant was issued.")
@@ -477,9 +485,9 @@ def _open_browser(args, data_dir, config, *, wait=0.0):
         opened = webbrowser.open(url)
     except Exception:
         # Some browser backends include the URL (and grant) in exceptions.
-        raise browser_entry.BrowserEntryUnavailable("Could not open the browser. " + browser_entry.reopen()) from None
+        raise browser_entry.BrowserEntryUnavailable("Could not open the browser." + _open_again()) from None
     if not opened:
-        raise browser_entry.BrowserEntryUnavailable("The browser did not accept the open request. " + browser_entry.reopen())
+        raise browser_entry.BrowserEntryUnavailable("The browser did not accept the open request." + _open_again())
 
 
 def _code_origin(config, given):
@@ -752,7 +760,7 @@ def main():
             # update. Wait for it, then open the browser once.
             _open_browser(args, data_dir, config, wait=browser_entry.HOST_WAIT)
         except (OSError, ValueError):
-            raise SystemExit("Cannot open the owned host. " + browser_entry.reopen()) from None
+            raise SystemExit("Cannot open the owned host." + _open_again()) from None
         except browser_entry.BrowserEntryUnavailable as exc:
             raise SystemExit(str(exc)) from None
         if not args.no_open:

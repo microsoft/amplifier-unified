@@ -532,8 +532,9 @@ def test_native_open_ends_at_its_limit_when_no_host_of_this_version_comes(instal
 
     async def waited(limit):
         started = time.monotonic()
-        with pytest.raises(entry.BrowserEntryUnavailable, match="not reachable or its identity"):
+        with pytest.raises(entry.BrowserEntryUnavailable) as stopped:
             await entry.owner_browser_url(installation.home, installation.config, wait=limit)
+        assert str(stopped.value) == entry.NO_ANSWER
         return time.monotonic() - started
 
     async def both():
