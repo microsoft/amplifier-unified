@@ -1438,16 +1438,24 @@ def test_the_lines_for_the_runs_page_are_one_line_each_in_the_form_that_github_r
 def test_the_run_keeps_and_prints_the_lines_for_its_page_after_every_step_has_its_line():
     source = FIXTURE.read_text(encoding="utf-8")
     run = source[source.index("def run():"):source.index("PROFILE = ")]
-    end = ('    report["lines"] = lines(report)\n'
-           "    # For the run's page only. An error here is kept in the result, and it changes no line and no status.\n"
-           '    report["warnings"] = attempt(lambda: page_warnings(report))\n'
-           '    save("result.json", report)\n'
-           '    print("\\n".join(report["lines"]), flush=True)\n'
-           '    if isinstance(report["warnings"], list) and report["warnings"]:\n'
-           '        print("\\n".join(report["warnings"]), flush=True)\n')
-    # After the status is decided, and through `attempt`: the lines for the page change nothing of the result.
-    assert run.count(end) == 1 and run.index('report.update(status="PASS", stage="Complete")') < run.index(end)
-    assert run.rstrip().endswith('return report["status"] == "PASS"')
+    # As on main: the result is saved with every step's line, and the lines are printed.
+    first = ('    report["lines"] = lines(report)\n'
+             '    save("result.json", report)\n'
+             '    print("\\n".join(report["lines"]), flush=True)\n')
+    # Then the lines for the page. Each part goes through `attempt`: making them, the second save of the result
+    # (the result has a size limit) and the print. So no error of a part changes a line or the status.
+    then = ('    report["warnings"] = attempt(lambda: page_warnings(report))\n'
+            '    attempt(lambda: save("result.json", report))\n'
+            '    if isinstance(report["warnings"], list) and report["warnings"]:\n'
+            '        attempt(lambda: print("\\n".join(report["warnings"]), flush=True))\n'
+            '    print(json.dumps({key: report.get(key) for key in ("status", "stage", "errorType", "error")}), '
+            "flush=True)\n"
+            '    return report["status"] == "PASS"\n')
+    assert run.count(first) == 1 and run.count(then) == 1 and run.rstrip().endswith(then.rstrip())
+    assert run.index('report.update(status="PASS", stage="Complete")') < run.index(first) < run.index(then)
+    # Between the two there is only a comment, and the result is saved under that name nowhere after them.
+    between = run[run.index(first) + len(first):run.index(then)]
+    assert between.strip() and all(line.strip().startswith("#") for line in between.splitlines())
     assert source.count("page_warnings(") == 2 and source.count("late_answers(") == 3  # A definition and its calls.
 
 

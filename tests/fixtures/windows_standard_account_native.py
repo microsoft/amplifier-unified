@@ -135,8 +135,8 @@ NOT_SHOWN = (
     ("Windows 11, and a sign-in at the PC's own screen",
      "the runner is Windows Server, and the user signs in through Remote Desktop to the same computer."),
     ("That the app answers one read with a limit of 2 seconds at every moment after a start",
-     "the app can give no answer for some seconds, some seconds after a start (on hosted runners: up to 15.7 "
-     "seconds). After the second sign-in and after the start that follows the first uninstall, the case "
+     "the app can give no answer for some seconds, some seconds after a start (seen on hosted runners: up to "
+     "15.7 seconds). After the second sign-in and after the start that follows the first uninstall, the case "
      "reads the status and the connection as the Start-menu start reads them: each with the product's "
      "wait of 60 seconds. An answer within that wait fails no step. The run's page gets a warning when a "
      "question of the case's watch took 2 seconds or more after the app had answered."),
@@ -1079,12 +1079,15 @@ def late_answers(report, begins):
     - The same read. A question of it got no answer ("unreachable"), so it
       used the product's wait.
 
-    After a question and its reads the watch pauses for half a second, and a
-    question has a limit of 2 seconds. So a silence of the app that is
-    shorter than 2 seconds gets no text here: it shows in the record as a
-    shorter late answer, or not at all. A silence of 2 to about 2.6 seconds
-    gets a text or none; that depends on when the watch's question began.
-    The watch keeps at most 40 late answers; one after those gets no text.
+    A text of the first kind is for one question, not for the silence of the
+    app itself. After a question and its reads the watch pauses for half a
+    second, and a question has a limit of 2 seconds. A silence that ends
+    before a question has waited 2 seconds gets no text here: it shows in the
+    record as a shorter late answer, or not at all. That can be a silence of
+    up to about 2.6 seconds; it depends on when the watch's question began.
+    The watch keeps at most 40 late answers and at most 400 changes. A late
+    answer after the 40 gets no text. After 400 changes the watch keeps no
+    new change, and a text then rests on the last change that it kept.
 
     A text holds fixed words, numbers, a mark of the record (the marks are
     the texts of this file's `watch.mark` calls), and the names of the
@@ -1265,12 +1268,15 @@ def run():
         except Exception as error:
             report["signedOutAtEnd"] = "failed: " + type(error).__name__
     report["lines"] = lines(report)
-    # For the run's page only. An error here is kept in the result, and it changes no line and no status.
-    report["warnings"] = attempt(lambda: page_warnings(report))
     save("result.json", report)
     print("\n".join(report["lines"]), flush=True)
+    # For the run's page only, after the result is saved and its lines are printed. An error of a part here
+    # changes no line and no status. The result is saved once more with these lines, or with the error that
+    # kept them from being made. When the result is then too large for a save, the file stays as saved above.
+    report["warnings"] = attempt(lambda: page_warnings(report))
+    attempt(lambda: save("result.json", report))
     if isinstance(report["warnings"], list) and report["warnings"]:
-        print("\n".join(report["warnings"]), flush=True)
+        attempt(lambda: print("\n".join(report["warnings"]), flush=True))
     print(json.dumps({key: report.get(key) for key in ("status", "stage", "errorType", "error")}), flush=True)
     return report["status"] == "PASS"
 
@@ -2590,7 +2596,7 @@ def sign_in_trust(steps, again, root, home, urls, pin, status, state):
     or "FAIL" after another answer or an error of the read.
 
     Until pull request 2316 a failed read of a snapshot failed the step. A
-    snapshot reads the app with short limits: one request to the listener
+    snapshot reads the app with short limits: a request to the listener
     with a limit of 3 seconds, and after the answer one status read with a
     limit of 2 seconds. The app can give no answer for longer than that, some
     seconds after a start. One run failed so with "trusted" after 0.065
