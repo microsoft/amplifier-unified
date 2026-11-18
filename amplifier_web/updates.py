@@ -545,6 +545,8 @@ class UpdateManager:
         state['activation'] = activation(self)
         state['forceRestartTarget'] = target(self)
         publish_health(self)
+        from .windows_launcher_follow import project
+        project(self)
         if restart_repair:
             self.diagnostics.record('restart-repair','failed',errorType='ValueError',preserve_last_failure=True)
         else:
@@ -555,6 +557,8 @@ class UpdateManager:
         return await confirm_readiness(self, health, expected=expected)
 
     def awaiting_restart(self):
+        from .windows_launcher_follow import fenced
+        if fenced(self): return True
         from .update_readiness import recovery_candidate
         # A legacy erased-marker receipt must not permanently prevent repairs
         # after an unrelated manual upgrade. Only its active health check gates
@@ -588,6 +592,10 @@ class UpdateManager:
                 and state.get('detail') in (PREPARED_STARTING, PREPARED_WAITING)):
             state['detail'] = PREPARED_STARTING if state['activation'] == 'starting' else PREPARED_WAITING
         publish_health(self)
+        # After the health text, at every place that derives it: the launcher's
+        # text replaces or extends it (no IO; it never raises).
+        from .windows_launcher_follow import project
+        project(self)
         from .update_restart import target
         # Also the identity that task.waitForUpdate names. The page's offer to
         # interrupt work is a matter of its view (update_health.browser_view).
@@ -604,6 +612,8 @@ class UpdateManager:
         self._update_health_initial = True
         from .update_health import publish as publish_health
         publish_health(self)
+        from .windows_launcher_follow import project
+        project(self)
         self.wakeup.set()
         return True
 
@@ -756,6 +766,8 @@ class UpdateManager:
                         **({'pendingApp': {**pending, 'updateIntent': intent}} if pending else {}))
                 await self.app()
             elif action == 'install':
+                from .windows_launcher_follow import request_by_button
+                if await request_by_button(self): return
                 # A click during a check must not disappear at install()'s
                 # busy guard. Join that check, then re-evaluate its inventory.
                 if self.check_task and not self.check_task.done():
@@ -1997,6 +2009,8 @@ class UpdateManager:
                     self.diagnostics.record('background-update','failed',**exception_facts(error))
                 phase=self.diagnostics.state['latest']['phase']
                 await self.publish(phase='activating' if self.service.state['updates'].get('pendingRestart') else 'error',error=failure_guidance(self.diagnostics.state.get('lastFailure', {})) or 'Background update failed during '+phase.replace('-',' ')+'. Review its diagnostic receipt; no work was replayed.')
+            from .windows_launcher_follow import consider
+            await consider(self)  # After the except: a failing tick must not starve an open launcher request.
             state = self.service.state['updates']
             sequence = state.get('sequence', {})
             from .update_health import pending_preparation

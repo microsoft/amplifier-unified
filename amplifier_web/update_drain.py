@@ -405,6 +405,17 @@ def begin_replacement(manager, release):
         'workers': workers, 'messages': []}
 
 
+def hold_for_restart(service, identity, target):
+    """Close admission for a launcher restart, preserving its saved inputs."""
+    prior = service.state['updates'].get('drain') or {}
+    service.state['updates']['drain'] = {
+        'attemptId': identity, 'launcher': identity, 'target': target,
+        'phase': 'replacing', 'hostInstanceId': service.instance_id,
+        'workers': pending_waiters(prior),
+        'messages': prior.get('messages', []) if (
+            prior.get('launcher') == identity and prior.get('phase') == 'replacing') else []}
+
+
 def latest_input(session, excluding_request=None, *, service=None):
     # The existing bounded message view is enough: a new saved input appears
     # before native generation events. Ignore only positively unsent inputs

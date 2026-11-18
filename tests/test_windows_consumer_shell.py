@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import sys
 from types import SimpleNamespace
 import uuid
 
@@ -29,7 +30,7 @@ def model(tmp_path, monkeypatch):
     programs = tmp_path / "Programs"
     programs.mkdir()
     folder = programs / ("Amplifier Unified - " + shell.identity(root))
-    state = {"registry": None, "links": {}, "calls": [], "pins": set()}
+    state = {"registry": None, "links": {}, "calls": [], "pins": set(), "writes": []}
     monkeypatch.setattr(windows_files, "address", Path)
     monkeypatch.setattr(shell, "programs", lambda: programs)
     monkeypatch.setattr(shell, "SETTLE_SECONDS", 0)  # One attempt; the wait has its own test.
@@ -66,6 +67,7 @@ def model(tmp_path, monkeypatch):
         yield SimpleNamespace(read_private=read, removal_private=removal, publish_private=publish)
     monkeypatch.setattr(windows_files, "directory", directory)
     def write_private(path, raw, **kw):
+        state["writes"].append((path, raw, kw))
         if state.get("refuse_write") and state["refuse_write"](path):
             raise PermissionError(13, "The private write was refused", str(path))
         path.parent.mkdir(parents=True, exist_ok=True)  # The real writer creates private folders.
@@ -86,8 +88,26 @@ def model(tmp_path, monkeypatch):
         elif values is not None:
             assert state["registry"] is None
             state["registry"] = values
-        return state["registry"]
+        if state["registry"] is not None:
+            return {name: (value, state.get("registry_types", {}).get(name, 4 if type(value) is int else 1))
+                    for name, value in state["registry"].items()}
     monkeypatch.setattr(shell, "registry", registry)
+    def registry_version(root, earlier, version):
+        state["calls"].append(("registry-version",))
+        if state.get("before_version"):
+            state["before_version"]()
+        expected = {name: (value, 4 if type(value) is int else 1) for name, value in earlier.items()}
+        if registry(root) != expected:
+            raise ValueError("The whole earlier key must match, including its version and types")
+        if state.get("version_error"):
+            raise state["version_error"]
+        # The note and new record must precede the registry transaction.
+        note = json.loads((root / "app/config/services" / shell.NOTE).read_text())
+        row = json.loads((root / shell.FILE).read_text())
+        assert note == {"schema": 1, "root": str(root), "from": earlier["DisplayVersion"], "to": version}
+        assert row["registry"] == {**earlier, "DisplayVersion": version}
+        state["registry"] = {**earlier, "DisplayVersion": version}
+    monkeypatch.setattr(shell, "registry_version", registry_version)
     @contextmanager
     def registry_change(root, values, *, remove=False):
         # Every shortcut that still exists is pinned before the registry is staged.
@@ -103,6 +123,412 @@ def model(tmp_path, monkeypatch):
         yield commit
     monkeypatch.setattr(shell, "registry_change", registry_change)
     return root, programs, state
+
+
+@pytest.fixture
+def versioned(model):
+    root, programs, state = model
+    shell.install(root, "1.0.0")
+    state["writes"].clear()
+    folder = programs / ("Amplifier Unified - " + shell.identity(root))
+    return SimpleNamespace(root=root, home=root / "app", state=state,
+                           row=json.loads((root / shell.FILE).read_text()),
+                           note=root / "app/config/services" / shell.NOTE,
+                           shortcuts={path: path.read_bytes() for path in folder.iterdir()})
+
+
+@pytest.mark.parametrize("change", ["none", "version", "value", "extra", "type", "children", "absent", "commit"])
+def test_registry_version_opens_existing_key_compares_it_whole_and_commits(tmp_path, monkeypatch, change):
+    root = tmp_path / "install"
+    earlier = shell.registration_values(root, "1.0.0")
+    actual = {name: (value, 4 if type(value) is int else 1) for name, value in earlier.items()}
+    if change == "version": actual["DisplayVersion"] = ("8.0.0", 1)
+    elif change == "value": actual["DisplayName"] = ("foreign", 1)
+    elif change == "extra": actual["foreign"] = ("keep", 1)
+    elif change == "type": actual["DisplayVersion"] = ("1.0.0", 2)
+    events, staged = [], []
+    def open_key(hive, key, options, access, handle, transaction, extended):
+        assert key == shell.REGISTRY + shell.identity(root) and transaction == 55
+        assert access == 3  # KEY_READ | KEY_SET_VALUE, no create or delete.
+        events.append("open")
+        handle._obj.value = 101
+        return 2 if change == "absent" else 0
+    def unexpected(*args):
+        pytest.fail("Version changes must not create or delete a key")
+    def set_value(handle, name, reserved, kind, value):
+        assert handle == 101 and (name, reserved, kind, value) == ("DisplayVersion", 0, 1, "2.0.0")
+        staged.append((name, (value, kind)))
+    def commit(transaction):
+        events.append("commit")
+        if change == "commit":
+            return False
+        actual.update(staged)
+        return True
+    def rollback(transaction):
+        events.append("rollback")
+        return True
+    def close_transaction(transaction):
+        events.append("close-transaction")
+        return True
+    def close_key(handle):
+        assert handle == 101
+        events.append("close-key")
+    winreg = SimpleNamespace(
+        HKEY_CURRENT_USER=0x80000001, KEY_READ=1, KEY_SET_VALUE=2, REG_SZ=1, REG_DWORD=4,
+        QueryInfoKey=lambda handle: (int(change == "children"), len(actual), 0),
+        EnumValue=lambda handle, index: (list(actual)[index], *list(actual.values())[index]),
+        SetValueEx=set_value, CloseKey=close_key)
+    libraries = {
+        "kernel32": SimpleNamespace(CloseHandle=close_transaction),
+        "ktmw32": SimpleNamespace(CreateTransaction=lambda *args: 55,
+                                 CommitTransaction=commit, RollbackTransaction=rollback),
+        "advapi32": SimpleNamespace(RegOpenKeyTransactedW=open_key,
+                                   RegCreateKeyTransactedW=unexpected, RegDeleteKeyTransactedW=unexpected)}
+    monkeypatch.setitem(sys.modules, "winreg", winreg)
+    monkeypatch.setattr(shell.C, "WinDLL", lambda name, **options: libraries[name], raising=False)
+    monkeypatch.setattr(shell.C, "WinError", lambda code: OSError(code, "native stand-in"), raising=False)
+    monkeypatch.setattr(shell.C, "get_last_error", lambda: 6800, raising=False)
+    before = dict(actual)
+    if change == "none":
+        shell.registry_version(root, earlier, "2.0.0")
+        assert actual == {**before, "DisplayVersion": ("2.0.0", 1)}
+        assert events == ["open", "commit", "close-key", "close-transaction"]
+    else:
+        with pytest.raises(OSError if change in ("absent", "commit") else ValueError):
+            shell.registry_version(root, earlier, "2.0.0")
+        assert actual == before
+        assert events[-2:] == ["rollback", "close-transaction"]
+        assert staged == ([("DisplayVersion", ("2.0.0", 1))] if change == "commit" else [])
+
+
+def test_confirmed_version_updates_record_and_key_before_uninstall(versioned):
+    v = versioned
+    assert shell.set_version(v.root, "2.3.4", home=v.home) == {
+        "changed": True, "from": "1.0.0", "to": "2.3.4"}
+    assert v.state["registry"] == {**v.row["registry"], "DisplayVersion": "2.3.4"}
+    assert json.loads((v.root / shell.FILE).read_text()) == {
+        **v.row, "registry": v.state["registry"]}
+    assert [(path, options) for path, _, options in v.state["writes"]] == [
+        (v.note, {"owned_root": v.home}), (v.root / shell.FILE, {"owned_root": v.root})]
+    assert not v.note.exists()
+    assert all(path.read_bytes() == raw for path, raw in v.shortcuts.items())
+    assert shell.remove(v.root)["installedAppEntryRemoved"]
+    assert v.state["registry"] is None
+
+
+@pytest.mark.parametrize("version", [None, 123, "", "2.0", "2.0.0.0", "v2.0.0", "2.0.0.dev1", "2.0.0\n"])
+def test_non_release_version_writes_nothing(versioned, version):
+    v = versioned
+    assert shell.set_version(v.root, version, home=v.home) == {"changed": False, "reason": "invalid-version"}
+    assert not v.state["writes"] and not v.state["calls"] and not v.note.exists()
+    assert json.loads((v.root / shell.FILE).read_text()) == v.row
+
+
+@pytest.mark.parametrize("change", [
+    "extra", "schema-bool", "schema-other", "root", "folder", "status", "status-list", "links",
+    "missing-link", "registry", "missing-value", "changed-value", "invalid-version", "bool-value", "not-object"])
+def test_version_and_removal_share_the_closed_record_check(versioned, change):
+    v = versioned
+    row = json.loads(json.dumps(v.row))
+    if change == "extra": row["extra"] = 1
+    elif change == "schema-bool": row["schema"] = True
+    elif change == "schema-other": row["schema"] = 2
+    elif change == "root": row["root"] = str(v.root / "other")
+    elif change == "folder": row["folder"] += "-other"
+    elif change == "status": row["status"] = "preparing"
+    elif change == "status-list": row["status"] = []
+    elif change == "links": row["links"] = []
+    elif change == "missing-link": row["links"].pop(next(iter(shell.LINKS)))
+    elif change == "registry": row["registry"] = []
+    elif change == "missing-value": row["registry"].pop("NoRepair")
+    elif change == "changed-value": row["registry"]["UninstallString"] = "foreign"
+    elif change == "invalid-version": row["registry"]["DisplayVersion"] = "dev"
+    elif change == "bool-value": row["registry"]["NoRepair"] = True
+    else: row = []
+    raw = json.dumps(row)
+    (v.root / shell.FILE).write_text(raw)
+    assert shell.set_version(v.root, "2.0.0", home=v.home) == {"changed": False, "reason": "invalid-record"}
+    with pytest.raises(ValueError):
+        shell.remove(v.root)
+    assert not v.state["writes"] and not v.state["calls"]
+    assert (v.root / shell.FILE).read_text() == raw and not v.note.exists()
+
+
+@pytest.mark.parametrize("status,version,reason", [
+    ("removed", "1.0.0", "not-installed"), ("removed", "dev", "not-installed"),
+    ("installed", "1.0.0", "current")])
+def test_removed_or_current_record_needs_no_registry_read(versioned, monkeypatch, status, version, reason):
+    v = versioned
+    row = {**v.row, "status": status}
+    (v.root / shell.FILE).write_text(json.dumps(row))
+    def unexpected(root):
+        pytest.fail("No key read is needed")
+    monkeypatch.setattr(shell, "registry", unexpected)
+    assert shell.set_version(v.root, version, home=v.home) == {"changed": False, "reason": reason}
+    assert not v.state["writes"] and not v.note.exists()
+
+
+@pytest.mark.parametrize("change", ["absent", "extra", "missing", "value", "type"])
+def test_version_preflight_requires_every_registry_value_and_type(versioned, change):
+    v = versioned
+    if change == "absent": v.state["registry"] = None
+    elif change == "extra": v.state["registry"]["foreign"] = "keep"
+    elif change == "missing": v.state["registry"].pop("NoRepair")
+    elif change == "value": v.state["registry"]["DisplayName"] = "foreign"
+    else: v.state["registry_types"] = {"DisplayName": 2}  # REG_EXPAND_SZ, not REG_SZ.
+    before = dict(v.state["registry"]) if v.state["registry"] is not None else None
+    assert shell.set_version(v.root, "2.0.0", home=v.home) == {"changed": False, "reason": "registry-changed"}
+    assert v.state["registry"] == before and not v.state["writes"] and not v.state["calls"]
+    assert json.loads((v.root / shell.FILE).read_text()) == v.row and not v.note.exists()
+
+
+@pytest.mark.parametrize("change", ["version", "value", "extra", "type", "absent"])
+def test_whole_earlier_key_is_checked_again_inside_the_version_step(versioned, change):
+    v = versioned
+    def race():
+        if change == "version": v.state["registry"]["DisplayVersion"] = "8.0.0"
+        elif change == "value": v.state["registry"]["DisplayName"] = "foreign"
+        elif change == "extra": v.state["registry"]["foreign"] = "keep"
+        elif change == "type": v.state["registry_types"] = {"NoRepair": 1}
+        else: v.state["registry"] = None
+    v.state["before_version"] = race
+    assert shell.set_version(v.root, "2.0.0", home=v.home) == {"changed": False, "reason": "failed"}
+    assert json.loads((v.root / shell.FILE).read_text()) == v.row and not v.note.exists()
+    assert v.state["calls"] == [("registry-version",)]
+    if change == "version":
+        assert v.state["registry"]["DisplayVersion"] == "8.0.0"
+    elif change == "absent":
+        assert v.state["registry"] is None
+    else:
+        assert v.state["registry"]["DisplayVersion"] == "1.0.0"
+
+
+def test_refused_version_record_write_does_not_wait_retry_or_leave_a_note(versioned, monkeypatch):
+    v = versioned
+    v.state["refuse_write"] = lambda path: path == v.root / shell.FILE
+    monkeypatch.setattr(shell.time, "sleep", lambda seconds: pytest.fail("No wait is allowed"))
+    assert shell.set_version(v.root, "2.0.0", home=v.home) == {"changed": False, "reason": "refused"}
+    assert [path for path, _, _ in v.state["writes"]] == [v.note, v.root / shell.FILE]
+    assert v.state["registry"] == v.row["registry"] and not v.state["calls"] and not v.note.exists()
+    assert json.loads((v.root / shell.FILE).read_text()) == v.row
+
+
+@pytest.mark.parametrize("error,reason", [(OSError("key failed"), "failed"), (ValueError("changed"), "failed"),
+                                       (PermissionError("refused"), "refused")])
+def test_failed_key_write_restores_the_record_then_removes_the_note(versioned, error, reason):
+    v = versioned
+    v.state["version_error"] = error
+    assert shell.set_version(v.root, "2.0.0", home=v.home) == {"changed": False, "reason": reason}
+    assert json.loads((v.root / shell.FILE).read_text()) == v.row
+    assert v.state["registry"] == v.row["registry"] and not v.note.exists()
+    assert [path for path, _, _ in v.state["writes"]] == [v.note, v.root / shell.FILE, v.root / shell.FILE]
+
+
+@pytest.mark.parametrize("failure", ["refused", "silent", "readback"])
+def test_rollback_keeps_the_note_until_the_earlier_record_is_read_back(versioned, monkeypatch, failure):
+    from amplifier_web import deployment
+    v = versioned
+    v.state["version_error"] = OSError("key failed")
+    write, receipt = deployment.write_private, shell._receipt
+    def rollback_fails(path, raw, **options):
+        if path == v.root / shell.FILE and json.loads(raw)["registry"]["DisplayVersion"] == "1.0.0":
+            if failure == "refused":
+                raise PermissionError("rollback refused")
+            if failure == "silent":
+                return
+        write(path, raw, **options)
+    def readback(root):
+        if failure == "readback" and v.state["calls"]:
+            raise OSError("readback failed")
+        return receipt(root)
+    monkeypatch.setattr(deployment, "write_private", rollback_fails)
+    monkeypatch.setattr(shell, "_receipt", readback)
+    assert shell.set_version(v.root, "2.0.0", home=v.home) == {
+        "changed": False, "reason": "failed", "noteRetained": True}
+    assert v.note.exists() and v.state["registry"] == v.row["registry"]
+    expected = "1.0.0" if failure == "readback" else "2.0.0"
+    assert json.loads((v.root / shell.FILE).read_text())["registry"]["DisplayVersion"] == expected
+    # With the cause gone, startup either finishes the key or sees agreement.
+    monkeypatch.setattr(deployment, "write_private", write)
+    monkeypatch.setattr(shell, "_receipt", receipt)
+    v.state["version_error"] = None
+    result = shell.settle_version(v.root, home=v.home)
+    assert result["state"] == ("agreed-from" if failure == "readback" else "completed")
+    assert not v.note.exists()
+
+
+@pytest.mark.parametrize("record,key", [
+    (record, key) for record in ("from", "to", "other", "removed", "missing", "invalid")
+    for key in ("from", "to", "other", "absent", "type", "extra")])
+def test_startup_settles_every_record_and_key_state(versioned, record, key):
+    v = versioned
+    versions = {"from": "1.0.0", "to": "2.0.0", "other": "3.0.0"}
+    v.note.parent.mkdir(parents=True)
+    v.note.write_text(json.dumps({"schema": 1, "root": str(v.root), "from": "1.0.0", "to": "2.0.0"}))
+    row = {**v.row, "registry": {**v.row["registry"], "DisplayVersion": versions.get(record, "1.0.0")}}
+    if record == "removed": row["status"] = "removed"
+    (v.root / shell.FILE).write_text(json.dumps(row) if record != "invalid" else "null")
+    if record == "missing": (v.root / shell.FILE).unlink()
+    if key == "absent":
+        v.state["registry"] = None
+    else:
+        v.state["registry"] = {**v.row["registry"], "DisplayVersion": versions.get(
+            key, "2.0.0" if key == "extra" else "1.0.0")}
+        if key == "type": v.state["registry_types"] = {"DisplayName": 2}
+        if key == "extra": v.state["registry"]["foreign"] = "keep"
+    before_key = dict(v.state["registry"]) if v.state["registry"] else None
+    before_row = (v.root / shell.FILE).read_bytes() if record != "missing" else None
+    result = shell.settle_version(v.root, home=v.home)
+    if record in ("missing", "invalid"):
+        expected = "unreadable-entries"
+    elif record in ("removed", "other"):
+        expected = "discarded"
+    elif record == key:
+        expected = "agreed-" + record
+    elif record == "to":
+        expected = "completed" if key == "from" else "rolled-back"
+    else:
+        expected = "discarded"
+    assert result["state"] == expected and not v.note.exists()
+    assert result["changed"] is (expected == "completed")
+    if expected == "completed":
+        assert v.state["registry"]["DisplayVersion"] == "2.0.0"
+    else:
+        assert v.state["registry"] == before_key
+    if expected == "rolled-back":
+        assert json.loads((v.root / shell.FILE).read_text()) == v.row
+    else:
+        assert ((v.root / shell.FILE).read_bytes() if record != "missing" else None) == before_row
+    assert all(path.read_bytes() == raw for path, raw in v.shortcuts.items())
+    assert v.state["calls"] == ([("registry-version",)] if expected == "completed" else [])
+
+
+@pytest.mark.parametrize("refuse_restore", [False, True])
+@pytest.mark.parametrize("race", ["none", "later", "foreign"])
+def test_startup_failed_key_step_rolls_back_or_keeps_the_note(versioned, refuse_restore, race):
+    v = versioned
+    v.state["version_error"] = OSError("key failed")
+    v.state["refuse_write"] = lambda path: path == v.root / shell.FILE and refuse_restore
+    v.note.parent.mkdir(parents=True)
+    v.note.write_text(json.dumps({"schema": 1, "root": str(v.root), "from": "1.0.0", "to": "2.0.0"}))
+    (v.root / shell.FILE).write_text(json.dumps(
+        {**v.row, "registry": {**v.row["registry"], "DisplayVersion": "2.0.0"}}))
+    if race == "later":
+        v.state["before_version"] = lambda: v.state["registry"].update(DisplayVersion="8.0.0")
+    elif race == "foreign":
+        v.state["registry"]["DisplayName"] = "foreign"
+    result = shell.settle_version(v.root, home=v.home)
+    assert result["state"] == ("rollback-pending" if refuse_restore else "rolled-back")
+    assert v.note.exists() is refuse_restore
+    assert v.state["registry"]["DisplayVersion"] == ("8.0.0" if race == "later" else "1.0.0")
+    if race == "foreign":
+        assert v.state["registry"]["DisplayName"] == "foreign" and not v.state["calls"]
+    expected = "2.0.0" if refuse_restore else "1.0.0"
+    assert json.loads((v.root / shell.FILE).read_text())["registry"]["DisplayVersion"] == expected
+
+
+@pytest.mark.parametrize("services_exist", [False, True])
+def test_startup_without_a_note_does_not_read_entries(versioned, monkeypatch, services_exist):
+    v = versioned
+    if services_exist:
+        v.note.parent.mkdir(parents=True)
+    def unexpected(root):
+        pytest.fail("No entry read is needed")
+    monkeypatch.setattr(shell, "_receipt", unexpected)
+    monkeypatch.setattr(shell, "registry", unexpected)
+    assert shell.settle_version(v.root, home=v.home) is None
+
+
+@pytest.mark.parametrize("change,state", [
+    ("root", "foreign-note"), ("root-type", "invalid-note"), ("extra", "invalid-note"),
+    ("schema", "invalid-note"), ("schema-other", "invalid-note"), ("from", "invalid-note"),
+    ("version", "invalid-note"), ("missing", "invalid-note"), ("list", "invalid-note"),
+    ("json", "unreadable-note"), ("bytes", "unreadable-note")])
+def test_startup_discards_foreign_or_invalid_notes_without_entry_writes(versioned, change, state):
+    v = versioned
+    note = {"schema": 1, "root": str(v.root), "from": "1.0.0", "to": "2.0.0"}
+    if change == "root": note["root"] += "-other"
+    elif change == "root-type": note["root"] = 7
+    elif change == "extra": note["extra"] = True
+    elif change == "schema": note["schema"] = True
+    elif change == "schema-other": note["schema"] = 2
+    elif change == "from": note["from"] = "dev"
+    elif change == "version": note["to"] = "dev"
+    elif change == "missing": note.pop("from")
+    elif change == "list": note = []
+    raw = b"not json" if change == "json" else b"\xff" if change == "bytes" else json.dumps(note).encode()
+    v.note.parent.mkdir(parents=True)
+    v.note.write_bytes(raw)
+    assert shell.settle_version(v.root, home=v.home) == {"changed": False, "state": state}
+    assert not v.note.exists() and not v.state["writes"] and not v.state["calls"]
+    assert json.loads((v.root / shell.FILE).read_text()) == v.row
+    assert v.state["registry"] == v.row["registry"]
+
+
+@pytest.mark.parametrize("step", ["note", "record"])
+def test_failed_private_write_never_attempts_the_key_step(versioned, monkeypatch, step):
+    from amplifier_web import deployment
+    v = versioned
+    write = deployment.write_private
+    def fail(path, raw, **options):
+        if path.name == (shell.NOTE if step == "note" else shell.FILE):
+            raise OSError("private write failed")
+        write(path, raw, **options)
+    monkeypatch.setattr(deployment, "write_private", fail)
+    result = shell.set_version(v.root, "2.0.0", home=v.home)
+    assert result == {"changed": False, "reason": "failed", **({"noteRetained": True} if step == "record" else {})}
+    assert v.note.exists() is (step == "record")
+    assert not v.state["calls"] and v.state["registry"] == v.row["registry"]
+    assert json.loads((v.root / shell.FILE).read_text()) == v.row
+    if step == "record":
+        assert shell.settle_version(v.root, home=v.home)["state"] == "agreed-from"
+        assert not v.note.exists()
+
+
+@pytest.mark.parametrize("step", ["note", "record", "key"])
+def test_unreadable_startup_state_is_reported_without_entry_writes(versioned, monkeypatch, step):
+    from amplifier_web import windows_files
+    v = versioned
+    v.note.parent.mkdir(parents=True)
+    v.note.write_text(json.dumps({"schema": 1, "root": str(v.root), "from": "1.0.0", "to": "2.0.0"}))
+    def unreadable(*args, **options):
+        raise PermissionError("read refused")
+    if step == "note":
+        directory = windows_files.directory
+        @contextmanager
+        def unreadable_note(path, **options):
+            with directory(path, **options) as owned:
+                yield SimpleNamespace(read_private=unreadable) if path == v.note.parent else owned
+        monkeypatch.setattr(windows_files, "directory", unreadable_note)
+    else:
+        monkeypatch.setattr(shell, "_receipt" if step == "record" else "registry", unreadable)
+    assert shell.settle_version(v.root, home=v.home) == {
+        "changed": False, "state": "unreadable-note" if step == "note" else "unreadable-entries"}
+    assert not v.note.exists() and not v.state["writes"] and not v.state["calls"]
+    assert json.loads((v.root / shell.FILE).read_text()) == v.row
+    assert v.state["registry"] == v.row["registry"]
+    if step == "record":
+        assert shell.set_version(v.root, "2.0.0", home=v.home)["reason"] == "invalid-record"
+    elif step == "key":
+        assert shell.set_version(v.root, "2.0.0", home=v.home)["reason"] == "failed"
+
+
+def test_note_removal_failure_is_reported_and_a_later_start_removes_it(versioned, monkeypatch):
+    v = versioned
+    unlink = Path.unlink
+    def refuse_note(path, **options):
+        if path == v.note:
+            raise PermissionError("note removal refused")
+        return unlink(path, **options)
+    monkeypatch.setattr(Path, "unlink", refuse_note)
+    assert shell.set_version(v.root, "2.0.0", home=v.home) == {
+        "changed": True, "from": "1.0.0", "to": "2.0.0", "noteRetained": True}
+    assert v.note.exists()
+    assert shell.settle_version(v.root, home=v.home) == {
+        "changed": False, "state": "agreed-to", "noteRetained": True}
+    monkeypatch.setattr(Path, "unlink", unlink)
+    assert shell.settle_version(v.root, home=v.home) == {"changed": False, "state": "agreed-to"}
+    assert not v.note.exists()
 
 
 @pytest.fixture
