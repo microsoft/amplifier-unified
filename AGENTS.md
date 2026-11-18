@@ -392,10 +392,10 @@ that writes bytecode puts `__pycache__` into the object, and Foundation refuses
 the object from then on ("Shared source contents changed"). In 0.106.3 the
 connection check of an "OpenAI Compatible API" connection did that; no chat
 with the connection started and the next component update failed. A helper
-prepares a source only through `source_imports.prepare`, which turns bytecode
-writing off for the rest of that process and for a Python process that it
-starts with its environment (a child started with `-E` or `-I` ignores the
-setting). Call it only in a helper process that ends after its one task, never
+prepares a source only through `source_imports.prepare`. After it an import
+writes no bytecode, for the rest of that process and in a Python process that
+it starts with its environment (a child started with `-E` or `-I` ignores the
+setting; code that calls `py_compile` or `compileall` still writes). Call it only in a helper process that ends after its one task, never
 in the host. Do not give the setting to every child of the host instead.
 Workers write no bytecode (`update_sources.store_environment`), and no
 installation step was found that compiles the worker environment. A helper
@@ -403,6 +403,36 @@ leaves the bytecode of what it imported from that environment before that call
 for the next process; with a host-wide setting it would leave none.
 `tests/test_source_store_bytecode.py` runs the real connection check against
 Foundation's store on a hosted runner.
+A PC that connected such a service on 0.106.5 or earlier already has the
+bytecode in a store object. `source_store_repair.at_host_start` removes it at
+the first start of an app version: only untracked `*.pyc` directly in a
+`__pycache__` of an object that has nothing else changed, then the emptied
+folder. Never widen that rule, and keep "any doubt leaves the object": a link
+that the listing finds anywhere in the object or below its `.git` means that
+Git does not run. Every native step of a run goes through `_Bounded`, which
+lets none begin after the limit of the whole step; give a new step to that
+wrapper, never a call beside it. Any other operation that you add to a run
+gets the same check before it begins, and a place in the case that makes each
+operation of a run the slow one
+(`test_after_an_operation_that_took_the_rest_of_the_time_nothing_else_begins`).
+It runs only in the host that the Windows task started, before that host takes
+its own lock, with that lock held alone; do not call it later in the start or
+from another process. Its limits are stated in the setup design ("Repair of a
+source store object that holds bytecode"). It imports `_Native` from
+`windows_removal` and does not copy it: a change of those steps must keep
+`tests/test_source_store_repair_native.py`. Git runs there with the
+computer's Git configuration, as in Foundation's check: `git status` can
+start a content filter of that configuration. Do not write that Git only
+reads; the design names that limit. The record's change mark is an
+input of `update_inventory_index.signature`. A run works with the record that
+it read after it got the lock, never with an earlier read: another host can
+have written a new mark meanwhile. A run writes the record first; a
+record that cannot be written means that the store is not looked at. A run
+writes a new mark before its first deletion; a mark that cannot be written
+means no deletion. Keep the mark random: a count repeats after a lost record,
+and the update check then keeps its saved rows.
+A hosted runner cannot make the state through the product, so the cases plant
+it with a real import.
 A text that tells a person how to open Amplifier says only what that code
 knows. On Windows the sign-in page and the ticket refusals take the step from
 `browser_entry.next_step`: the Start menu only for a request from this
