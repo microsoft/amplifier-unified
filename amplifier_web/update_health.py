@@ -836,7 +836,10 @@ def publish(manager):
     chosen from such a record is not published in that time; the page gets
     the working value. A failure of the operation itself (an error, or the
     phase `error` or `interrupted`) and every other result are published as
-    they are. The support report reads `projection`, so it is not changed.
+    they are. Only that switch sets and ends this time. Another health read
+    (the owner's pass) can end while the switch runs; it did not read the new
+    selection, so it does not end the time (`refresh` never does).
+    The support report reads `projection`, so it is not changed.
     """
     state = manager.service.state['updates']
     value = projection(manager)
@@ -849,14 +852,6 @@ def publish(manager):
 
 async def refresh(manager):
     """Read the installed proof and the facts beside it; the caller publishes."""
-    try:
-        await _read(manager)
-    finally:
-        # The read ended, with or without a result (see publish).
-        manager._update_proof_unread = False
-
-
-async def _read(manager):
     import asyncio
     revision = manager.service.state.get('configurationRevision')
     # Health accepts a package that the record does not name (active_evidence).

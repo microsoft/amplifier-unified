@@ -1854,6 +1854,7 @@ class UpdateManager:
                 self.diagnostics.record('ecosystem-rollback' if rollback else 'ecosystem-activation','succeeded')
                 from .update_health import refresh as refresh_health
                 await refresh_health(self)
+                self._update_proof_unread = False  # This switch's own read ended, with or without a proof.
                 await self.publish()  # Publish settled attention, not just the preceding installed status.
                 self.inventory=[]
                 if self.cleanup_task is None or self.cleanup_task.done():
@@ -1866,11 +1867,11 @@ class UpdateManager:
                 except OSError:
                     pass
             except asyncio.CancelledError:
-                self._update_proof_unread = False  # No read is coming from here.
+                self._update_proof_unread = False  # The switch ended before its own read ended.
                 await self.service.discard_runtime(candidate)
                 raise
             except Exception as error:
-                self._update_proof_unread = False  # No read is coming from here.
+                self._update_proof_unread = False  # The switch ended before its own read ended.
                 await self.service.discard_runtime(candidate)
                 from .update_diagnostics import exception_facts
                 self.diagnostics.record('ecosystem-activation','failed',**exception_facts(error))

@@ -1030,10 +1030,11 @@ def test_an_unread_proof_holds_back_only_a_result_from_an_earlier_component_reco
 
 
 @pytest.mark.parametrize('read', ['proof', 'nothing', 'raises'])
-async def test_the_health_read_ends_the_unread_mark_with_or_without_a_result(tmp_path, monkeypatch, read):
+async def test_a_health_read_does_not_end_the_unread_mark(tmp_path, monkeypatch, read):
+    """Only the switch ends the mark. Another read (the owner's pass) did not read the new selection."""
     m, _, project, _ = mounted_fixture(tmp_path, monkeypatch)
     u = m.service.state['updates']
-    newest = command_failures(u)
+    command_failures(u)
     m._update_proof_unread = True
     health.publish(m)  # No proof is held, and none is read yet.
     assert u['currentStatus'] == CHECKING_COMPONENTS
@@ -1047,15 +1048,111 @@ async def test_the_health_read_ends_the_unread_mark_with_or_without_a_result(tmp
         if read == 'nothing':
             (project / 'uv.lock').write_text('changed')
         await health.refresh(m)
-    assert m._update_proof_unread is False
+    assert m._update_proof_unread is True
     health.publish(m)
     status = u['currentStatus']
     if read == 'proof':
+        # A result that comes from no failure record is published as it is.
         assert (status['status'], status['title']) == ('current', 'You’re up to date')
     else:
-        # A read that gave no proof does not keep the record back.
-        assert status['title'] == 'Update could not finish' and status['actionRequired']
-        assert status['failureAttemptId'] == newest['attemptId']
+        assert status == CHECKING_COMPONENTS
+
+
+async def earlier_failed_attempt(app, repo):
+    """The real owner with a prepared update, and one earlier failed component attempt in its record."""
+    manager, _ = await prepare(app, repo)
+
+    async def validate(stage, release):
+        pass
+    manager.validate = validate
+    app.state['updates']['sequence'] = {'stage': 'other', 'install': True}
+    app.state['updates']['application']['status'] = 'current'
+    manager.diagnostics.begin('ecosystem', components=['repo'])
+    failure = manager.diagnostics.record('ecosystem-runtime-lock', 'failed', errorType='CommandFailure')
+    await manager.publish()
+    assert app.state['updates']['currentStatus']['title'] == 'Update could not finish'
+    return manager, failure
+
+
+async def test_a_switch_whose_own_read_finds_no_proof_ends_the_mark_and_shows_the_earlier_record(
+        app, repo, monkeypatch):
+    """The mark holds a record back only until the switch's own read ends, also when that read finds nothing."""
+    manager, failure = await earlier_failed_attempt(app, repo)
+    reads = []
+
+    def evidence(m, **options):
+        reads.append((app.state['updates']['phase'], getattr(m, '_update_proof_unread', None)))
+        return {}
+    monkeypatch.setattr(health, 'active_evidence', evidence)
+    await manager.install()
+    assert ('installed', True) in reads  # The switch's own read ran with the mark set.
+    assert manager._update_proof_unread is False
+    state = app.state['updates']
+    assert state['phase'] == 'installed' and not state.get('error')
+    status = state['currentStatus']
+    assert status['title'] == 'Update could not finish' and status['actionRequired']
+    assert status['failureAttemptId'] == failure['attemptId']
+
+
+async def test_a_health_read_that_began_before_the_switch_shows_no_earlier_failure(app, repo, monkeypatch):
+    """The owner's pass reads the proof without the owner's lock; a person's Install runs the switch meanwhile.
+
+    The pass's read began before the switch, so it read no new selection. It ends after the switch's first
+    publication, and the pass publishes. That publication must not tell of the earlier attempt.
+    """
+    import threading
+    from amplifier_web.updates import active_release
+    manager, _ = await earlier_failed_attempt(app, repo)
+    early_started, early_may_end, late_may_end = threading.Event(), threading.Event(), threading.Event()
+    calls = []
+
+    def evidence(m, **options):
+        calls.append(len(calls))
+        if calls[-1] == 0:
+            # The pass's read. It began before the switch: no generation is selected.
+            assert not active_release(m.home).get('current')
+            early_started.set()
+            assert early_may_end.wait(20)
+            return {}
+        assert late_may_end.wait(20)  # The switch's own read ends after the pass's publication.
+        pointer = active_release(m.home)
+        batch = next(row for row in reversed(m.diagnostics.state['completedBatches'])
+                     if row.get('revision') == pointer['current'])
+        return {'generation': pointer['current'], 'verifiedAt': batch['completedAt'],
+                'startedAt': batch['startedAt'], 'configuration': 'a' * 64,
+                'attemptId': batch['attemptId'], 'packages': set(), 'components': set()}
+    monkeypatch.setattr(health, 'active_evidence', evidence)
+
+    async def owner_pass():
+        # The two lines of the owner's pass after a host start or a settings change.
+        await health.refresh(manager)
+        asyncio.get_running_loop().call_later(0, late_may_end.set)
+        await manager.publish()
+    owner = asyncio.create_task(owner_pass())
+    while not early_started.is_set():
+        await asyncio.sleep(0.01)
+    published = []
+    publish = app._publish_changes
+
+    def observe(**kwargs):
+        updates = app.state['updates']
+        published.append((updates['phase'], getattr(manager, '_update_proof_unread', None),
+                          updates['currentStatus']['title']))
+        if updates['phase'] == 'installed':
+            early_may_end.set()  # The pass's read ends after the switch published its selection.
+        return publish(**kwargs)
+    app._publish_changes = observe
+    try:
+        await manager.install()
+        await owner
+    finally:
+        early_may_end.set()
+        late_may_end.set()
+    rows = [row for row in published if row[0] == 'installed']
+    # The switch's first publication, the pass's publication, the switch's last publication.
+    assert rows == [('installed', True, 'Checking components'), ('installed', True, 'Checking components'),
+                    ('installed', False, 'You’re up to date')]
+    assert manager._update_proof_unread is False
 
 
 @pytest.mark.parametrize('where,error', [('read', RuntimeError), ('read', asyncio.CancelledError),
