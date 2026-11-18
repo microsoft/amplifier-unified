@@ -603,6 +603,12 @@ def _apply_host_policy(bundle, config, *, execution_workspace=None):
     workspace = str(Path(execution_workspace or config.workspace).expanduser().resolve())
     history_root = Path(config.workspace).expanduser().resolve()
     execution_root = Path(workspace)
+    # The reference web mount fills this missing default in its supplied
+    # config from session.working_dir. Materialize the same root-host value
+    # before construction snapshots, rather than mutate the plan during mount.
+    for row in bundle.tools:
+        if isinstance(row, dict) and row.get("module") == "tool-web":
+            row.setdefault("config", {}).setdefault("working_dir", workspace)
     policy_keys = {"allowed_write_paths", "denied_write_paths", "allowed_read_paths", "denied_read_paths"}
     def paths(values):
         if not isinstance(values, list) or any(not isinstance(value, str) for value in values):

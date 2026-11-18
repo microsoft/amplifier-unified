@@ -171,3 +171,79 @@ async def test_completed_coordinator_retires_abandoned_fit_not_foreign_completio
         assert not wrapper._media and private.messages == []
     finally:
         await session.cleanup()
+
+
+@pytest.mark.parametrize("format", ["PNG", "JPEG"])
+async def test_real_prepared_host_child_tool_install_keeps_configurator_construction(tmp_path, monkeypatch, format):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    path, original = picture(workspace, format)
+    provider = ScriptedReadProvider(path)
+    session, _, checkpoint, checks, host = await work_root(
+        tmp_path, monkeypatch, provider, prepared_host=True)
+    try:
+        coordinator = session.coordinator
+        assert callable(coordinator.get("context").factory)
+        assert await session.execute("Read the authorized local image") == "offline completion"
+        assert host.sealed
+        assert provider.observed[-1] == [("tool", "call-first-image", original)]
+        assert checks == [("read_file", {"file_path": str(path)})]
+        rows = await checkpoint()
+        assert any(media.NAMESPACE in (row.get("metadata") or {}) for row in rows)
+        assert not coordinator.get_capability("live.children").rows
+        assert not coordinator.get_capability("live.children").admissions
+    finally:
+        await session.cleanup()
+
+
+async def test_raw_delegate_replacement_still_refuses_configuration(tmp_path, monkeypatch):
+    from amplifier_web.host.children import PersistentDelegate
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    provider = ScriptedReadProvider(workspace / "unused", read=False)
+    session, _, _, _, _ = await work_root(
+        tmp_path, monkeypatch, provider, prepared_host=True, configuration_only=True)
+    try:
+        coordinator = session.coordinator
+        previous = coordinator.get("tools", "delegate")
+        await coordinator.mount("tools", PersistentDelegate(
+            previous, coordinator.get_capability("live.children"), coordinator), name="delegate")
+        with pytest.raises(ValueError, match="complete idle open construction"):
+            with media.hook_configuration(coordinator):
+                pytest.fail("An unrecorded delegate replacement acquired a construction phase")
+        assert provider.calls == 0
+    finally:
+        await session.cleanup()
+
+
+async def test_real_prepared_root_configuration_phase_preserves_complete_idle_graph(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    provider = ScriptedReadProvider(workspace / "unused", read=False)
+    session, _, _, _, _ = await work_root(
+        tmp_path, monkeypatch, provider, prepared_host=True, configuration_only=True)
+    try:
+        coordinator = session.coordinator
+        _, graph, _ = coordinator.get_capability("web.media.construction")
+        evidence = graph.participants_evidence()
+        assert evidence["state"] == "open"
+        assert len(evidence["loads"]) == 23 and all(row["mounted"] for row in evidence["loads"])
+        assert all(row["completed"] for row in evidence["ready"])
+        assert any(row["slot"] == ("tools", "delegate")
+                   and row["participant"] == "unified-host" for row in evidence["adapters"])
+        assert callable(coordinator.get("context").factory)
+        assert provider.calls == 0 and not coordinator.get_capability(media.NAMESPACE).enabled
+        assert not coordinator.get_capability("live.children").sessions.keys() - {session.session_id}
+    finally:
+        await session.cleanup()
+
+
+@pytest.mark.parametrize("configured", [None, "explicit-relative", "/synthetic/explicit"])
+def test_web_working_directory_default_is_materialized_without_changing_explicit_choice(tmp_path, configured):
+    from types import SimpleNamespace
+    from amplifier_web.host.session import _apply_host_policy
+    values = {} if configured is None else {"working_dir": configured}
+    bundle = SimpleNamespace(tools=[{"module": "tool-web", "config": values}], agents={})
+    config = SimpleNamespace(settings={}, workspace=tmp_path, access_mode="ask")
+    _apply_host_policy(bundle, config)
+    assert bundle.tools[0]["config"]["working_dir"] == (str(tmp_path) if configured is None else configured)

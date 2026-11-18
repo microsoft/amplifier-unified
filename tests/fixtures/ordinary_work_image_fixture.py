@@ -104,10 +104,12 @@ async def compose_work(tmp_path, monkeypatch):
     assert {row["module"] for row in plan["hooks"]} == set(WORK_HOOKS)
     assert set(plan["agents"]) == WORK_AGENTS
     assert len(config.app_bundles) == 5
+    assert next(row for row in plan["tools"] if row["module"] == "tool-web")["config"]["working_dir"] == str(workspace)
     return bundle, plan, roots
 
 
-async def work_root(tmp_path, monkeypatch, provider, *, store=None, post=None, deny_work=False):
+async def work_root(tmp_path, monkeypatch, provider, *, store=None, post=None, deny_work=False,
+                    prepared_host=False, configuration_only=False):
     bundle, plan, roots = await compose_work(tmp_path, monkeypatch)
     # Discovery sees the same selected public resources, mirrored offline. No
     # real home/project scans and no deferred Git source download at first turn.
@@ -141,13 +143,27 @@ async def work_root(tmp_path, monkeypatch, provider, *, store=None, post=None, d
     files += [Path(importlib.import_module(name).__file__) for name in (
         "amplifier_web.host.media", "amplifier_web.host.session", "amplifier_web.app_guidance",
         "amplifier_web.runtime_worker")]
-    session = AmplifierSession(plan, session_id="ordinary-work-media")
-    session.coordinator.loader = WorkLoader(provider)
     store = store or SessionStore(tmp_path / "sessions")
-    selection = ReviewedRootRecipe(session.config, {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in files})
-    media.bind_media(session, store, selection=selection)
+    def initialize_media(session):
+        session.coordinator.loader = WorkLoader(provider)
+        selection = ReviewedRootRecipe(session.config, {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in files})
+        media.bind_media(session, store, selection=selection)
+    if prepared_host:
+        from amplifier_foundation.bundle import PreparedBundle
+        # Source exports/entry points are already selected above. The real
+        # PreparedBundle lifecycle installs mentions, prompt factory and ready
+        # metadata; no activator, installation or remote provider is required.
+        prepared = PreparedBundle(plan, resolver=object(), bundle=bundle)
+        async def before_initialize(session):
+            initialize_media(session)
+        session = await prepared.create_session(session_id="ordinary-work-media",
+            session_cwd=tmp_path / "workspace", before_initialize=before_initialize)
+    else:
+        session = AmplifierSession(plan, session_id="ordinary-work-media")
+        initialize_media(session)
     try:
-        await session.initialize()
+        if not prepared_host:
+            await session.initialize()
         coordinator = session.coordinator
         cap = coordinator.get_capability(media.NAMESPACE)
         assert cap is not None
@@ -158,6 +174,22 @@ async def work_root(tmp_path, monkeypatch, provider, *, store=None, post=None, d
         assert type(coordinator.get("context")).__name__ == "BoundaryContextManager"
         assert "computer" not in coordinator.get("tools") and "desktop" not in coordinator.get("tools")
         assert cap.report("test", event="readiness", outcome="inspect")["consumers"]["loop-live"]["ready"] is False
+        if prepared_host:
+            from amplifier_web.host.children import install_children
+            from amplifier_foundation import SessionConfigurator
+            from types import SimpleNamespace
+            runtime = SimpleNamespace(session_id=session.session_id, generation={})
+            delegate = coordinator.get("tools", "delegate")
+            registry = await install_children(session, prepared, runtime, store, approvals=None)
+            assert coordinator.get("tools", "delegate").original is delegate
+            assert coordinator.get("tools", "live_worker").registry is registry
+            configurator = SessionConfigurator(session, prepared)
+            # This is the actual prepare_manager ordering, including the
+            # configuration phase even when saved overrides are empty.
+            with media.hook_configuration(coordinator):
+                await configurator.apply_saved_settings({})
+            if configuration_only:
+                return session, store, None, [], None
         provider.capability = cap
         snapshots, checks = [], []
         async def checkpoint(**kwargs):
