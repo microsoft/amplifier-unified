@@ -7,7 +7,7 @@
   "provider-jev": "git+https://github.com/microsoft/amplifier-module-provider-jev@main",
   "provider-local-decisions": "git+https://github.com/microsoft/amplifier-module-provider-local-decisions@main",
   "provider-ollama": "git+https://github.com/microsoft/amplifier-module-provider-ollama@main",
-  "provider-openai": "git+https://github.com/microsoft/amplifier-module-provider-openai@0640ac5f42bd6aa437f94cc0256a1c5090cb0a34",
+  "provider-openai": "git+https://github.com/microsoft/amplifier-module-provider-openai@main",
   "provider-openai-chatgpt": "git+https://github.com/microsoft/amplifier-module-provider-openai-chatgpt@main",
   "provider-vllm": "git+https://github.com/microsoft/amplifier-module-provider-vllm@main"
 }
