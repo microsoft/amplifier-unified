@@ -253,7 +253,7 @@ class SetupManager:
     def provider_rows(self,workspace):
         config=self.config(workspace)
         rows=[]
-        for value in config.configured_connections:
+        for value in config.saved_connections:
             identity=value.get('id') or value.get('instance_id') or value['module'].removeprefix('provider-')
             raw=value.get('config',{})
             refs=[]
@@ -287,7 +287,9 @@ class SetupManager:
         """
         from .provider_catalog import model_key
         with self.read_snapshot(workspace):
-            rows = [row for row in self.provider_rows(workspace) if row['enabled']
+            chat_ids = {row.get('id') or row.get('instance_id') or row['module'].removeprefix('provider-')
+                        for row in self.config(workspace).configured_connections}
+            rows = [row for row in self.provider_rows(workspace) if row['id'] in chat_ids and row['enabled']
                     and (not selected_only or row['id'] == instance)]
             for row in rows:
                 row['sharedCatalogKey'] = self.catalog_key({'id': row['id']}, workspace)
@@ -322,7 +324,7 @@ class SetupManager:
         entries = dict(await asyncio.gather(*(discover(row) for row in rows)))
         with self.read_snapshot(workspace):
             current = {row['id']: self.catalog_key({'id': row['id']}, workspace)
-                       for row in self.provider_rows(workspace) if row['enabled']
+                       for row in self.provider_rows(workspace) if row['id'] in chat_ids and row['enabled']
                        and (not selected_only or row['id'] == instance)}
         if current != {row['id']: row['sharedCatalogKey'] for row in rows}:
             raise ValueError('Configured connections changed during discovery. Reopen model settings.')
@@ -346,7 +348,7 @@ class SetupManager:
             # host composition, even before any runtime receipt exists.
             # Do NOT apply this fallback to discovery reuse: an implicit probe
             # must still prove its installed implementation independently.
-            rows = [value for value in config.configured_connections if value.get('enabled', True)]
+            rows = [value for value in config.saved_connections if value.get('enabled', True)]
             source = provider_mount_sources(rows, config.settings).get(args.get('id'))
         return identity(workspace,module,raw,source,home=self.home,
             **({'_legacy_visibility':True} if binding and _legacy_visibility else {}),
@@ -530,19 +532,38 @@ class SetupManager:
         identity=safe_name(args.get('id') or args.get('module','').removeprefix('provider-'))
         effective=self.config(workspace)
         def signature(config):
-            return fingerprint([config.providers,
-                [configuration_key(workspace,row['module'],row.get('config',{}),config.module_sources.get(row['module']) or row.get('source'),home=self.home) for row in config.providers],
+            return fingerprint([config.connections,
+                [configuration_key(workspace,row['module'],row.get('config',{}),config.module_sources.get(row['module']) or row.get('source'),home=self.home) for row in config.connections],
                 config.settings.get('configurator',{}).get('disabled',{}).get('providers',[]), config.settings.get('image_generation')])
         before=signature(effective)
-        existing=next((row for row in effective.providers if (row.get('id') or row.get('instance_id') or row['module'].removeprefix('provider-'))==identity),None)
+        existing=next((row for row in effective.connections if (row.get('id') or row.get('instance_id') or row['module'].removeprefix('provider-'))==identity),None)
         def mutate(settings):
             if image_mode is not None:
                 settings['image_generation']={'mode':image_mode}
-            rows=settings.setdefault('config',{}).setdefault('providers',[])
+            from .decision_namespace import connections, decision_only, key
+            from .decision_settings import catalogs
+            candidate = {'module': args.get('module') or (existing or {}).get('module'),
+                         'config': args.get('config', (existing or {}).get('config', {}))}
+            definitions = catalogs(unique=True)
+            previously_dedicated = any('provider' not in value and key(value) == key(existing or {})
+                                       for value in connections(effective.settings).values())
+            if (existing and not remove and
+                    ((previously_dedicated and candidate['module'] != existing['module']) or
+                     decision_only(existing, definitions) != decision_only(candidate, definitions))):
+                raise ValueError('Changing a saved connection between chat and decision-only roles needs a new connection.')
+            dedicated = decision_only(candidate, definitions) or previously_dedicated
+            if dedicated:
+                accounts = settings.setdefault('decision_models', {}).setdefault('connections', {})
+                account_key = key(existing) if existing else identity
+                rows = [accounts[account_key]] if account_key in accounts else []
+            else:
+                rows=settings.setdefault('config',{}).setdefault('providers',[])
             index=next((i for i,row in enumerate(rows) if (row.get('id') or row.get('instance_id') or row['module'].removeprefix('provider-'))==identity),None)
             if remove:
                 if not existing: raise ValueError('Provider instance does not exist.')
                 row={'id':identity,'module':existing['module']}
+                if dedicated and existing.get('config', {}).get('chat_enabled') is False:
+                    row['config'] = {'chat_enabled': False}
             else:
                 module=safe_name(args.get('module') or (existing or {}).get('module',''))
                 if not module.startswith('provider-'): raise ValueError('Choose a provider module.')
@@ -602,15 +623,43 @@ class SetupManager:
                     unchanged_source = existing and existing['module'] == module and existing.get('source') == source
                     row['source'] = source if unchanged_source else validate_uri(source)
                 if updates:self._keys(updates)
+            if existing and not existing.get('id'):
+                row.pop('id', None)
+                if existing.get('instance_id'):
+                    row['instance_id'] = existing['instance_id']
             if index is None:rows.append(row)
             else:rows[index]=row
+            if dedicated:
+                # A removal remains a scoped tombstone; it cannot reveal an
+                # inherited account or change a saved backend's connection.
+                if existing:
+                    row.pop('id', None)
+                    row.update({name: existing[name] for name in ('id', 'instance_id') if name in existing})
+                accounts[account_key] = row
+            elif not remove and 'decisions' in row.get('config', {}):
+                # The advanced editor accepts a complete logical connection.
+                # Route its explicit decision edit to the same scoped owner;
+                # do not treat an intentional save as a legacy collision.
+                identity_key = key(row)
+                decisions = row['config'].pop('decisions')
+                settings.setdefault('decision_models', {}).setdefault('connections', {})[identity_key] = {
+                    'provider': identity_key, 'module': row['module'], 'config': {'decisions': decisions}}
+            elif not remove:
+                # The advanced editor replaces this scope's complete config.
+                # Omitting its decision field removes this scope's reference,
+                # just as omitting it from the old provider config did; broader
+                # scope options still inherit through the ordinary overlay.
+                identity_key = key(row)
+                scoped_accounts = settings.get('decision_models', {}).get('connections', {})
+                if scoped_accounts.get(identity_key, {}).get('provider') == identity_key:
+                    del scoped_accounts[identity_key]
             disabled=set(overlay(effective.settings,settings).get('configurator',{}).get('disabled',{}).get('providers',[]))
             if remove:disabled.add(identity)
             else:disabled.discard(identity)
             settings.setdefault('configurator',{}).setdefault('disabled',{})['providers']=sorted(disabled)
             # Clear the older Unified-only flag when editing an existing entry.
             settings.get('overrides',{}).get(identity,{}).pop('enabled',None)
-        self.store.update(workspace,scope,mutate)
+        self.store.update(workspace,scope,mutate,migrate_decisions=True)
         with self.read_snapshot(workspace):
             current=self.config(workspace)
             changed=before!=signature(current)
@@ -756,7 +805,7 @@ class SetupManager:
         if action in {'providers.move','providers.reorder'}:
             current=self.config(workspace)
             enabled={row['id'] for row in self.provider_rows(workspace) if row['enabled']}
-            rows=[row for row in current.providers if (row.get('id') or row.get('instance_id') or row['module'].removeprefix('provider-')) in enabled]
+            rows=[row for row in current.connections if (row.get('id') or row.get('instance_id') or row['module'].removeprefix('provider-')) in enabled]
             ids=[row.get('id') or row.get('instance_id') or row['module'].removeprefix('provider-') for row in rows]
             if action=='providers.reorder':
                 ordered=args['ids']
@@ -772,15 +821,22 @@ class SetupManager:
                     ids.remove(identity);ids.insert(ids.index(before) if before else len(ids),identity)
             if changed:
                 def reorder(settings):
+                    from .decision_namespace import connections, key as storage_key
+                    dedicated = {key for key, row in connections(current.settings).items() if 'provider' not in row}
                     scoped=settings.setdefault('config',{}).setdefault('providers',[])
                     for priority, key in enumerate(ids,1):
                         source=next(row for row in rows if (row.get('id') or row.get('instance_id') or row['module'].removeprefix('provider-'))==key)
+                        if storage_key(source) in dedicated:
+                            mapping = settings.setdefault('decision_models', {}).setdefault('connections', {})
+                            row = mapping.setdefault(storage_key(source), {k: source[k] for k in ('id', 'instance_id', 'module') if k in source})
+                            row.setdefault('config', {})['priority'] = priority
+                            continue
                         row=next((row for row in scoped if (row.get('id') or row.get('instance_id') or row['module'].removeprefix('provider-'))==key),None)
                         if row is None:
                             row={k:source[k] for k in ('id','module') if k in source};scoped.append(row)
                         row.setdefault('config',{})['priority']=priority
                     settings.pop('provider_order',None)
-                self.store.update(workspace,scope,reorder)
+                self.store.update(workspace,scope,reorder,migrate_decisions=True)
             return {'providers':self.provider_rows(workspace),'scope':scope}
         if action=='providers.save':
             if args.get('useGitHubCli'):

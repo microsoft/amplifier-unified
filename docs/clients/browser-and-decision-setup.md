@@ -46,8 +46,9 @@ that normal update is verified and activated.
 Then choose a saved connection in **AI connections & decision models**, select
 the decision model for browser or computer tasks, and approve the observation
 transfer described there. OpenAI and Azure reuse their existing account
-configuration. Jev uses a TypeSafe connection. A local service needs its address
-and access token; this package does not install model weights or a model server.
+configuration through a reference to the same saved account. Jev uses a TypeSafe
+connection. A local service needs its address and access token; this package does
+not install model weights or a model server.
 Start a new chat for a changed decision configuration.
 
 Decision-only connections keep the same saved account setup. Their support
@@ -62,6 +63,55 @@ rejected backend available.
 An explicitly configured decision model is preferred. Ordinary selection remains
 available as an override and as the configured fallback. Package presence and
 saved keys alone do not activate decision inference.
+
+### Shared settings and the CLI
+
+Decision service connections and backend options belong to
+`decision_models.connections`, beside the existing `decision_models.selection`.
+They are not LLM provider declarations. The CLI continues to read only ordinary
+`config.providers`; adding a decision-only connection does not change its model
+provider list. The Settings connection inventory still manages both kinds.
+
+A decision-only entry keeps its original connection declaration, including its
+ID, module, source, credential references, enabled state and opaque options. A
+shared chat account keeps its credentials and ordinary options in
+`config.providers`; its decision entry contains a `provider` reference using that
+settings identity and only `config.decisions`. Runtime assembly reconstructs the
+same logical account before the existing credential/source/hook binding. No new
+credential store, backend ID, model choice or observation consent is created.
+
+Settings identities use `id`, otherwise the full module name, matching the
+shared loader. Public/runtime identities still use `id`, then `instance_id`,
+then the short provider name. `decision_models.connection_order` preserves
+pre-migration declaration order where equal-priority account sources depend on
+it; it does not select a new preferred chat provider.
+
+Startup and explicit connection/decision writes migrate recognized
+installed-adapter declarations in their existing global/project/local owner.
+Unrelated preference writes do not migrate accounts. Reads never migrate or
+import adapters. Scope fragments stay in their scope: mappings overlay in
+global → project → local → session order, with the same ordinary provider
+identity merge and disabled tombstones. Existing session files are not swept;
+new session-scoped writes use the dedicated owner. Existing saved runtime plans
+are not rewritten or rebound.
+
+Each settings file uses the shared lock and atomic replacement. Repeating a
+successful migration is a no-op, and interruption can leave earlier files
+committed and later files unchanged; composition accepts that known intermediate
+form. This is not a multi-file transaction. Unknown, unavailable or ambiguous
+adapter metadata leaves declarations untouched. Duplicate identities, conflicting old
+and new declarations, malformed options, read-only files, and scope changes
+between chat-capable and decision-only roles require review rather than guessing.
+Preflight refuses an ambiguous known scope lineage before its first write,
+including all workspaces supplied to startup before their shared global owner.
+A scoped connection save that depends on a broader owner not yet migrated is
+refused before publication; migrate or repair that broader owner first.
+Changing an existing conditional account's chat/decision-only role requires a
+new connection rather than silently reclassifying a saved selection.
+startup reports an incomplete migration without blocking unrelated chat setup.
+Until that migration is repaired, retained legacy rows can still affect the CLI.
+Removing a connection disables it in the chosen scope; it does not erase shared
+credentials or silently bind an existing selected backend to another account.
 
 ## Deployment ownership
 
