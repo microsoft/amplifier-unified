@@ -62,6 +62,7 @@ on:
       # The helper that the chat-setup job starts and measures in each new worker environment.
       - amplifier_web/decision_accounts.py
       - amplifier_web/decision_account_catalog.py
+      - tests/test_decision_accounts.py
       # What a stop or a time limit of a preparation command ends, and what the launcher's Job ends.
       - amplifier_web/windows_jobs.py
       - tests/test_windows_stopped_command.py
@@ -198,6 +199,15 @@ jobs:
           .\.venv\Scripts\python.exe -B -m pytest -q -rA -p no:cacheprovider tests/test_windows_stopped_command.py | Tee-Object -Variable lines
           if ($LASTEXITCODE -ne 0) { throw 'A stop or a time limit did not end the command, or the Job did not end what the command started.' }
           if (-not ($lines -match '(^|\s)4 passed')) { throw 'Not all four cases ran.' }
+      # The app's own start of its decision-catalog helper, with a real helper that does not end. The start
+      # returns at its time limit, and the helper is ended. The interpreter is the python.exe of an
+      # environment that uv made, as a worker environment has it.
+      - name: Let the app's start of a decision-catalog helper that does not end reach its time limit
+        shell: pwsh
+        run: |
+          .\.venv\Scripts\python.exe -B -m pytest -q -rA -p no:cacheprovider "tests/test_decision_accounts.py::test_a_catalog_helper_that_does_not_end_is_ended_at_the_limit" | Tee-Object -Variable lines
+          if ($LASTEXITCODE -ne 0) { throw 'The start of a helper that does not end did not return at its time limit, or the helper was not ended.' }
+          if (-not ($lines -match '(^|\s)1 passed')) { throw 'The case did not run.' }
       - name: Turn Windows long paths off for new processes
         id: long_paths
         shell: pwsh
