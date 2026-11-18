@@ -1761,7 +1761,8 @@ class UpdateManager:
                 self.service._publish_changes(globals={'updates','settings'})
             candidate = None
             # True while the page has the publication of the new selection and
-            # not yet the result of this switch's own read of its proof.
+            # not yet the last publication of this switch: the result of its
+            # own read of the proof, or its own failure.
             unsettled = False
             try:
                 # New work is gated during this short phase. Old sessions remain
@@ -1872,26 +1873,29 @@ class UpdateManager:
                 except OSError:
                     pass
             except asyncio.CancelledError:
-                # The mark ends with the switch. When the switch had published
-                # its selection and not yet the result of its own read (the
-                # cancellation came in that read, or in the publication after
-                # it), the page can hold "Checking components" with nothing
-                # that checks. Nothing can be published for sure in a cancelled
-                # task. So the switch asks the update owner for that read: the
-                # owner's next pass that no hold stops reads and publishes
-                # (tick), as after a settings change. The owner is woken for it.
-                self._update_proof_unread = False
-                if unsettled:
-                    self._update_health_initial = True
-                    self.wakeup.set()
+                self._update_proof_unread = False  # The mark ends with the switch.
                 await self.service.discard_runtime(candidate)
                 raise
             except Exception as error:
-                self._update_proof_unread = False  # The switch ended before its own read ended.
+                self._update_proof_unread = False  # The mark ends with the switch.
                 await self.service.discard_runtime(candidate)
                 from .update_diagnostics import exception_facts
                 self.diagnostics.record('ecosystem-activation','failed',**exception_facts(error))
                 await self.publish(phase='error',error='Could not activate the ecosystem update; review its diagnostic receipt before retrying.')
+                unsettled = False  # The page has this switch's own failure now.
+            finally:
+                if unsettled:
+                    # The switch ends, and the page has its selection without its
+                    # last publication: it was cancelled in its own read, in the
+                    # publication after that read, or in the publication of its
+                    # own failure. The page can then hold "Checking components"
+                    # with nothing that checks. Nothing can be published for
+                    # sure in a task that ends this way. So the switch asks the
+                    # update owner for the read: the owner's next pass that no
+                    # hold stops reads and publishes (tick), as after a settings
+                    # change. The owner is woken for it.
+                    self._update_health_initial = True
+                    self.wakeup.set()
 
     async def installSmartTools(self):
         from .smart_tool_update_batch import stage

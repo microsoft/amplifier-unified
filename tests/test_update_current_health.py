@@ -1535,24 +1535,37 @@ async def test_a_switch_that_ends_with_an_error_leaves_no_unread_mark_and_shows_
     assert status['failurePhase'] == 'ecosystem-activation'
 
 
-@pytest.mark.parametrize('where', ['its own read', 'the publication after its own read'])
-@pytest.mark.parametrize('found', ['a proof', 'no proof'])
-async def test_a_switch_that_is_cancelled_before_it_published_the_result_of_its_own_read_leaves_that_to_the_owner(
+@pytest.mark.parametrize('where,found', [
+    ('its own read', 'a proof'), ('its own read', 'no proof'),
+    ('the publication after its own read', 'a proof'), ('the publication after its own read', 'no proof'),
+    ('the publication of its own failure', 'a proof'), ('the publication of its own failure', 'no proof')])
+async def test_a_switch_that_is_cancelled_before_its_last_publication_leaves_the_read_to_the_owner(
         app, repo, monkeypatch, where, found):
-    """The task of the switch is cancelled in its own read, or in the publication after that read.
+    """The task of the switch is cancelled after it published its selection and before its last publication.
+
+    Three places. In its own read: nothing read the proof of the new
+    selection. In the publication after that read: the read ended and the
+    mark ended, and the publication of its result waits for the service's
+    lock. In the publication of its own failure: the read ended with an error,
+    and the publication of that failure waits for the service's lock. The
+    case records each call of the owner's ``publish`` and each read, and it
+    asserts that the task waits at the named place when it is cancelled.
 
     An earlier failed attempt is in the record. At the cancellation the page
-    holds "Checking components". In the first place nothing read the proof of
-    the new selection. In the second place the read ended and the mark ended,
-    and the publication of its result waits for the service's lock. The
-    cancelled switch publishes nothing (the case records every publication
-    from before the switch). It ends the mark, it asks the update owner for
-    the read, and it wakes the owner. The real pass then reads and publishes
-    what it found as its first publication: "You're up to date" with a proof
-    of the new selection, the earlier attempt without one. That pass is quiet
-    otherwise (no check is due, the sequence is complete): the same pass with
-    no such request publishes nothing, so without the request the page would
-    keep "Checking components".
+    holds "Checking components". After the cancellation the switch publishes
+    nothing more (the case records every publication from before the switch).
+    It ends the mark, it asks the update owner for the read, and it wakes the
+    owner.
+
+    Then two passes of the owner from the same state, which is quiet (no
+    check is due, the sequence is complete, the count of workers is the
+    published one, the first preparation is noted as over). First a control
+    with the request taken away: the real
+    pass reads nothing and publishes nothing, and the page keeps "Checking
+    components". Then the request is put back as the switch left it: the real
+    pass makes one read and one publication. That publication is "You're up
+    to date" with a proof of the new selection, the earlier attempt without
+    one, and the failure of the switch itself in the third place.
     """
     import time
     from amplifier_web.updates import active_release
@@ -1570,73 +1583,107 @@ async def test_a_switch_that_is_cancelled_before_it_published_the_result_of_its_
                 'startedAt': batch['startedAt'], 'configuration': 'a' * 64,
                 'attemptId': batch['attemptId'], 'packages': set(), 'components': set()}
     monkeypatch.setattr(health, 'active_evidence', evidence)
-    read, reads, reached, never = health.refresh, [], asyncio.Event(), asyncio.Event()
+    read, reads, steps = health.refresh, [], []
+    reached, never, took = asyncio.Event(), asyncio.Event(), []
 
     async def refresh(m):
         reads.append(getattr(m, '_update_proof_unread', None))
+        steps.append(('read', None))
         if len(reads) > 1:
             return await read(m)   # The owner's pass: the real read.
         if where == 'its own read':
             reached.set()
             await never.wait()     # The cancellation comes here, inside the switch's read.
         await read(m)              # The switch's read ends.
-        await app.lock.acquire()   # Its publication must now wait for the service's lock.
+        await app.lock.acquire()   # The switch's next publication must now wait for the service's lock.
+        took.append(True)
         reached.set()
+        if where == 'the publication of its own failure':
+            raise RuntimeError('the read ended with an error')
     monkeypatch.setattr(health, 'refresh', refresh)
-    published, publish = [], app._publish_changes
+    publish_of_the_owner = manager.publish
+
+    async def publish(**values):
+        steps.append(('publish', values.get('phase')))
+        await publish_of_the_owner(**values)
+        steps.append(('published', values.get('phase')))
+    manager.publish = publish
+    published, publish_changes = [], app._publish_changes
 
     def observe(**kwargs):
         published.append((app.state['updates']['phase'], copy.deepcopy(app.state['updates']['currentStatus']),
                           [item['id'] for item in snapshot(app.state)['items']]))
-        return publish(**kwargs)
+        return publish_changes(**kwargs)
     app._publish_changes = observe
+    waits_at = {'its own read': ('read', None), 'the publication after its own read': ('publish', None),
+                'the publication of its own failure': ('publish', 'error')}[where]
     manager._update_health_initial = False   # The first read of this host is over.
     switch = asyncio.create_task(manager.install())
     try:
         await asyncio.wait_for(reached.wait(), 60)
+        for _ in range(200):
+            if steps[-1] == waits_at:
+                break
+            await asyncio.sleep(0)
         for _ in range(10):
             await asyncio.sleep(0)   # The switch is at its wait now.
-        # What the page holds when the cancellation comes, and where the switch is.
+        # Where the switch waits, and what the page holds, when the cancellation comes.
         at_cancel = len(published)
-        assert published[-1][:2] == ('installed', CHECKING_COMPONENTS) and not switch.done()
+        assert steps[-1] == waits_at and not switch.done()
+        assert published[-1][:2] == ('installed', CHECKING_COMPONENTS)
         assert manager._update_proof_unread is (where == 'its own read')
         assert app.lock.locked() is (where != 'its own read')
         manager.wakeup.clear()
         switch.cancel()
         await asyncio.wait({switch}, timeout=60)
     finally:
-        if app.lock.locked():
+        # Every way out of the block: the task of the switch has ended, and the lock that the case took is free.
+        switch.cancel()
+        await asyncio.wait({switch}, timeout=60)
+        if took and app.lock.locked():
             app.lock.release()
         never.set()
     assert switch.cancelled()
-    # The cancelled switch published nothing: the page still holds the working value.
+    # After the cancellation the switch published nothing more: the page still holds the working value.
     assert len(published) == at_cancel and app.state['updates']['currentStatus'] == CHECKING_COMPONENTS
     assert manager._update_proof_unread is False
     # It asked the owner for the read, and it woke the owner.
     assert manager._update_health_initial is True and manager.wakeup.is_set()
-    # An otherwise quiet pass: no check is due, the sequence is complete, no storage pass is due.
-    app.state['updates'].update(lastCheck=time.time(), sequence={'stage': 'complete', 'install': False})
+    # A quiet state: no check is due, the sequence is complete, no storage pass is due, the count of
+    # workers is the published one, and the first preparation is noted as over. A pass publishes each
+    # of the last two by itself when it differs, with or without a request.
+    usage = getattr(app.runtime, 'generation_usage', lambda: [])()
+    app.state['updates'].update(
+        lastCheck=time.time(), sequence={'stage': 'complete', 'install': False}, initialPreparation=False,
+        adoption={'activeWorkers': len(usage), 'pendingWorkers': sum(row['updatePending'] for row in usage)})
     manager._start_check_open = False
     manager._storage_last_pass, manager._storage_policy_due = time.time(), False
+    # Control: the same pass from this state with the request taken away. It reads nothing and
+    # publishes nothing, so the page keeps the working value.
+    manager._update_health_initial = False
     await manager.tick()   # The real pass.
+    assert len(reads) == 1 and len(published) == at_cancel
+    assert app.state['updates']['currentStatus'] == CHECKING_COMPONENTS
+    # The request, as the switch left it: the real pass makes one read and one publication.
+    manager._update_health_initial = True
+    await manager.tick()
     after = published[at_cancel:]
     assert reads[1:] == [False] and manager._update_health_initial is False
-    # Its first publication is the result of its read, and no publication of it is the working value.
-    assert after and CHECKING_COMPONENTS not in [row[1] for row in after]
+    assert len(after) == 1
     _, status, attention = after[0]
-    if found == 'a proof':
+    assert status != CHECKING_COMPONENTS and app.state['updates']['currentStatus'] == status
+    if where == 'the publication of its own failure':
+        # The failure of the switch itself, which its own publication did not bring to the page.
+        assert status['title'] == 'Update could not finish' and status['actionRequired']
+        assert status['failurePhase'] == 'ecosystem-activation' and 'updates:current' in attention
+    elif found == 'a proof':
         assert (status['status'], status['title'], status['actionRequired']) == ('current', 'You\u2019re up to date', False)
         assert 'updates:current' not in attention
     else:
         assert status['title'] == 'Update could not finish' and status['actionRequired']
         assert status['failureAttemptId'] == failure['attemptId']
-    assert app.state['updates']['currentStatus'] == status
     # The earlier attempt stays in the record.
     assert failure in manager.diagnostics.state['events']
-    # The same pass with no request for a read: it reads nothing and publishes nothing.
-    count = len(published)
-    await manager.tick()
-    assert len(reads) == 2 and len(published) == count
 
 
 async def test_a_switch_that_is_cancelled_before_it_publishes_its_selection_asks_for_no_read(app, repo, monkeypatch):
