@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        sample: [1, 2, 3]
+        sample: [1, 2, 3, 4]
     env:
       PYTHONDONTWRITEBYTECODE: '1'
       PYTHONUTF8: '1'
@@ -32,7 +32,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           python -m venv .native-test-venv
-          .\.native-test-venv\Scripts\python.exe -m pip install --index-url https://pypi.org/simple --only-binary=:all: "PyYAML>=6.0.3,<7" "filelock>=4.2.1,<5"
+          .\.native-test-venv\Scripts\python.exe -m pip install --index-url https://pypi.org/simple --only-binary=:all: "PyYAML>=6.0.3,<7" "filelock>=4.2.1,<5" "cryptography>=44,<51" "aiohttp==3.14.4" "certifi>=2025.1.31"
           if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed.' }
       - name: Which shell and scanner programs run here
         shell: pwsh

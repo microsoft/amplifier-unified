@@ -281,10 +281,22 @@ def plain(index, delay):
     finally:
         windows_files._API.open, windows_files._API.discard = opened, discard
         left = sorted(path.name for path in folder.iterdir()) if folder.exists() else None
+        gone = None
+        if outcome == "removed" and left is not None:
+            # The removal reported success and its Start-menu folder is still there. For how long?
+            began = time.perf_counter()
+            while folder.exists() and time.perf_counter() - began < 3:
+                time.sleep(0.01)
+            gone = {"folderGoneAfter": round(time.perf_counter() - began, 3) if not folder.exists() else None,
+                    "then": sorted(path.name for path in folder.iterdir()) if folder.exists() else None}
         clean(root, folder)
-    if outcome != "removed" or notes:
-        say("plain", index=index, delay=delay, at=at, outcome=outcome, steps=steps, notes=notes, left=left)
-    return outcome == "removed"
+    if outcome != "removed" or notes or left is not None:
+        say("plain", index=index, delay=delay, at=at, outcome=outcome, steps=steps, notes=notes, left=left,
+            folder=gone)
+    return {"delay": delay, "outcome": "removed" if outcome == "removed" else outcome.get("winerror"),
+            "step": steps[-1] if steps and outcome != "removed" else ("entries-check" if outcome != "removed" else None),
+            "calls": sorted({note["call"] + ":" + str(note.get("winerror")) for note in notes}),
+            "folderLeft": left is not None and outcome == "removed"}
 
 
 def attempt(root, folder):
@@ -357,35 +369,57 @@ def controlled():
         clean(root, folder)
 
 
+def fixture_seconds():
+    """How long the failing cases' fixture takes between the entries and the uninstall's process.
+
+    tests/test_windows_uninstall.py, `native_installation`: it makes the entries, then a venv, then a
+    tree of files, then starts the uninstall in a new process that imports the product.
+    """
+    import subprocess
+    import sysconfig
+    import tempfile
+    base = Path(tempfile.mkdtemp(prefix="au-probe-venv-"))
+    try:
+        began = time.perf_counter()
+        made = subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(base / "v")],
+                              capture_output=True, timeout=120)
+        venv = time.perf_counter() - began
+        began = time.perf_counter()
+        ran = subprocess.run(
+            [str(base / "v" / "Scripts" / "python.exe"), "-I", "-c",
+             "import sys; sys.path[:0] = sys.argv[1:3]\n"
+             "from amplifier_web import installation_health, windows_consumer, windows_consumer_shell\n"
+             "from amplifier_web import windows_files, windows_installation, windows_removal, windows_service\n"
+             "from amplifier_web import windows_uninstall\n",
+             str(REPO), sysconfig.get_paths()["purelib"]], capture_output=True, timeout=120)
+        imports = time.perf_counter() - began
+        return {"venvSeconds": round(venv, 3), "venvExit": made.returncode,
+                "processAndImportsSeconds": round(imports, 3), "importsExit": ran.returncode,
+                "importsError": ran.stderr.decode("utf-8", "replace")[-300:] if ran.returncode else ""}
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
 def main():
     say("start", pid=OWN, session=session(OWN), python=sys.version.split()[0], programs=str(shell.programs()))
-    try:
-        controlled()
-    except Exception as error:  # noqa: BLE001
-        say("controlled-failed", **failure(error))
-    everything = []
-    for mode, count, window in (("passive", 10, 8.0), ("active", 10, 8.0), ("com", 4, 5.0)):
-        for index in range(count):
-            try:
-                everything += [{"mode": mode, **event} for event in cycle(mode, index, window)]
-            except Exception as error:  # noqa: BLE001
-                say("cycle-failed", mode=mode, index=index, **failure(error))
-    fine = 0
-    for index in range(40):
+    for index in range(3):
         try:
-            fine += plain(index, (index % 20) * 0.3)
+            say("fixture", index=index, **fixture_seconds())
+        except Exception as error:  # noqa: BLE001
+            say("fixture-failed", **failure(error))
+    # The product's own removal, started at a dense grid of delays around the two moments of the first probe.
+    delays = [round(2.90 + 0.004 * step, 3) for step in range(46)] + [round(3.24 + 0.004 * step, 3) for step in range(46)]
+    rows = []
+    for index, delay in enumerate(delays):
+        try:
+            rows.append(plain(index, delay))
         except Exception as error:  # noqa: BLE001
             say("plain-failed", index=index, **failure(error))
-    summary = {}
-    for event in everything:
-        who = event.get("process") or ",".join(event.get("holders") or ["nobody else"])
-        key = f"{event['mode']} | {event.get('what', 'open')} | {event['file']} | {who}"
-        row = summary.setdefault(key, {"count": 0, "earliest": event["from"], "latest": event["from"], "longest": 0.0})
-        row["count"] += 1
-        row["earliest"], row["latest"] = min(row["earliest"], event["from"]), max(row["latest"], event["from"])
-        if event.get("to") is not None:
-            row["longest"] = max(row["longest"], round(event["to"] - event["from"], 4))
-    say("summary", plainRemoved=fine, plainCycles=40, rows=summary)
+    table = {}
+    for row in rows:
+        key = f"{row['outcome']} at {row['step']} by {','.join(row['calls']) or '-'}" + (" folder left" if row["folderLeft"] else "")
+        table.setdefault(key, []).append(row["delay"])
+    say("summary", runs=len(rows), table={key: {"count": len(value), "delays": value[:40]} for key, value in table.items()})
 
 
 if __name__ == "__main__":
