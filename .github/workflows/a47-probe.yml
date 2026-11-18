@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        sample: [1, 2, 3, 4]
+        sample: [1, 2, 3]
     env:
       PYTHONDONTWRITEBYTECODE: '1'
       PYTHONUTF8: '1'

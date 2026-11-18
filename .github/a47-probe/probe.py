@@ -400,26 +400,92 @@ def fixture_seconds():
         shutil.rmtree(base, ignore_errors=True)
 
 
+def refusals(files, window):
+    """The product's exact pin, again and again, for `window` seconds from now. Compact rows."""
+    events, polls = active(files, time.perf_counter(), window)
+    return {"polls": polls, "refused": [[event["what"], event["code"], event["file"], event["from"], event["to"]]
+                                        for event in events[:12]], "count": len(events)}
+
+
+def trigger(index):
+    """What makes the shell open this installation's shortcuts: 3 s after which change of the Start menu?"""
+    import winreg
+    out = {}
+    time.sleep(8)  # No change of the Start menu for 8 s before each step.
+    root, folder, _ = make()
+    files = [folder / link for link in shell.LINKS]
+    try:
+        out["its own entries are made"] = refusals(files, 6)
+        time.sleep(8)
+        out["nothing changes"] = refusals(files, 6)
+        time.sleep(8)
+        other, other_folder, _ = make()
+        try:
+            out["another installation's entries are made"] = refusals(files, 6)
+            time.sleep(8)
+        finally:
+            removed = clean(other, other_folder)
+        out["another installation's entries are removed"] = {**refusals(files, 6), "removal": removed}
+        time.sleep(8)
+        extra = shell.programs() / ("au-probe-other-" + uuid.uuid4().hex[:8])
+        extra.mkdir()
+        (extra / "note.txt").write_text("not a shortcut")
+        try:
+            out["a folder with a text file is made in Programs"] = refusals(files, 6)
+        finally:
+            shutil.rmtree(extra, ignore_errors=True)
+        time.sleep(8)
+        # A file of this installation's own Start-menu folder is touched by nobody; its folder gets a new file.
+        (folder / "My own note.txt").write_text("mine")
+        out["a text file is made in its own Start-menu folder"] = refusals(files, 6)
+        (folder / "My own note.txt").unlink()
+    finally:
+        clean(root, folder)
+    say("trigger", index=index, **out)
+
+
+def folder_left():
+    """F1: another program has a shortcut open and shares everything. What stays, and can setup add entries again?"""
+    root, folder, _ = make()
+    try:
+        second = k32.CreateFileW(str(folder / "Amplifier status.lnk"), 0x80000000, 7, None, 3, 0, None)
+        assert not bad(second), C.get_last_error()
+        first = attempt(root, folder)
+        with windows_files.directory(root, owned_root=root) as owned:
+            record = json.loads(owned.read_private(shell.FILE, limit=65536))["status"]
+        k32.CloseHandle(second)
+        time.sleep(0.5)
+        after = sorted(path.name for path in folder.iterdir()) if folder.exists() else None
+        try:
+            shell.install(root, "1.0.0")
+            again = "installed"
+        except Exception as error:  # noqa: BLE001
+            again = failure(error)
+        without = None
+        if again != "installed" and folder.exists() and not list(folder.iterdir()):
+            os.rmdir(folder)
+            try:
+                shell.install(root, "1.0.0")
+                without = "installed"
+            except Exception as error:  # noqa: BLE001
+                without = failure(error)
+        say("folder-left", whileHeld=first, record=record, afterTheOtherProgramClosed=after,
+            installAgain=again, installAgainWithoutTheEmptyFolder=without, listed=shell.listed(root))
+    finally:
+        clean(root, folder)
+
+
 def main():
     say("start", pid=OWN, session=session(OWN), python=sys.version.split()[0], programs=str(shell.programs()))
-    for index in range(3):
+    try:
+        folder_left()
+    except Exception as error:  # noqa: BLE001
+        say("folder-left-failed", **failure(error))
+    for index in range(2):
         try:
-            say("fixture", index=index, **fixture_seconds())
+            trigger(index)
         except Exception as error:  # noqa: BLE001
-            say("fixture-failed", **failure(error))
-    # The product's own removal, started at a dense grid of delays around the two moments of the first probe.
-    delays = [round(2.90 + 0.004 * step, 3) for step in range(46)] + [round(3.24 + 0.004 * step, 3) for step in range(46)]
-    rows = []
-    for index, delay in enumerate(delays):
-        try:
-            rows.append(plain(index, delay))
-        except Exception as error:  # noqa: BLE001
-            say("plain-failed", index=index, **failure(error))
-    table = {}
-    for row in rows:
-        key = f"{row['outcome']} at {row['step']} by {','.join(row['calls']) or '-'}" + (" folder left" if row["folderLeft"] else "")
-        table.setdefault(key, []).append(row["delay"])
-    say("summary", runs=len(rows), table={key: {"count": len(value), "delays": value[:40]} for key, value in table.items()})
+            say("trigger-failed", index=index, **failure(error))
 
 
 if __name__ == "__main__":
