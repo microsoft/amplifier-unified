@@ -209,6 +209,7 @@ def _doctor_details(data_dir: Path) -> None:
     from .tls import ca_bytes, ca_fingerprint, tls_ready
     print(f"Amplifier Unified {__version__}")
     print(f"Configuration: {data_dir / 'config' / 'server.yaml'}")
+    print(f"Private update command details (review before sharing): {data_dir / 'updates' / 'command-details'}")
     print("PAM:", pam_state)
     print("TLS local CA:", "configured" if ca_bytes(data_dir) else "not configured")
     print("TLS listener:", "ready" if tls_ready(data_dir, config) else "not configured or not startable")

@@ -193,6 +193,34 @@ def command_facts(stdout,stderr,returncode,duration):
     return facts
 
 
+def command_attempts(value):
+    """Closed exported facts for each physical attempt; never arbitrary text."""
+    if not isinstance(value, list):
+        return []
+    attempts = []
+    for row in value[:2]:
+        if not isinstance(row, dict):
+            continue
+        safe = {key: row[key] for key in ('exitCode', 'durationMs', 'stdoutBytes', 'stderrBytes')
+                if type(row.get(key)) is int and
+                (-(2**31) if key == 'exitCode' else 0) <= row[key] < 10**15}
+        for key in ('timedOut', 'stdoutTruncated', 'stderrTruncated', 'outputLimitExceeded'):
+            if type(row.get(key)) is bool:
+                safe[key] = row[key]
+        if isinstance(row.get('errorType'), str) and row['errorType'] in ERROR_TYPES:
+            safe['errorType'] = row['errorType']
+        if safe:
+            attempts.append(safe)
+    return attempts
+
+
+class CommandBytes(bytes):
+    def __new__(cls, value, facts):
+        result = super().__new__(cls, value)
+        result.diagnostic_facts = facts
+        return result
+
+
 class CommandOutput(str):
     def __new__(cls,value,facts=None):
         result=super().__new__(cls,value);result.diagnostic_facts=facts or {};return result
@@ -470,6 +498,14 @@ class UpdateDiagnostics:
         if failure_location(facts.get('failureLocation')):event['failureLocation']=facts['failureLocation']
         if type(facts.get('timedOut')) is bool:event['timedOut']=facts['timedOut']
         if type(facts.get('anonymousRetry')) is bool:event['anonymousRetry']=facts['anonymousRetry']
+        attempts = command_attempts(facts.get('commandAttempts'))
+        if attempts:event['commandAttempts'] = attempts
+        for key in ('stdoutTruncated', 'stderrTruncated', 'outputLimitExceeded'):
+            if type(facts.get(key)) is bool:event[key] = facts[key]
+        if facts.get('localDetailStatus') in ('saved', 'unavailable'):
+            event['localDetailStatus'] = facts['localDetailStatus']
+            if type(facts.get('localDetailSlot')) is int and 0 <= facts['localDetailSlot'] < 16:
+                event['localDetailSlot'] = facts['localDetailSlot']
         if isinstance(facts.get('commandId'),str) and re.fullmatch(r'[a-f0-9]{32}',facts['commandId']):event['commandId']=facts['commandId']
         for key in ('expectedVersion','observedVersion'):
             if isinstance(facts.get(key),str) and re.fullmatch(r'\d+\.\d+\.\d+',facts[key]):event[key]=facts[key]
@@ -543,6 +579,7 @@ class UpdateDiagnostics:
         return result
 
     async def run(self,phase,operation,*args,_context=None,**kwargs):
+        from .update_command_details import retain
         command_id=uuid.uuid4().hex
         context = _context or {}
         self.record(phase,'started',commandId=command_id,**context)
@@ -551,10 +588,12 @@ class UpdateDiagnostics:
         except BaseException as error:
             facts={'durationMs':round((time.monotonic()-started)*1000),
                    **getattr(error,'diagnostic_facts',{}), **exception_facts(error)}
+            facts.update(retain(self, error, command_id, phase))
             self.record(phase,'interrupted' if type(error).__name__=='CancelledError' else 'failed',commandId=command_id,**{**context,**facts})
             raise
         facts={'durationMs':round((time.monotonic()-started)*1000)}
         facts.update(getattr(result,'diagnostic_facts',{}))
+        facts.update(retain(self, result, command_id, phase))
         if isinstance(result,(str,bytes)):
             probe=probe_record(result)
             if probe:facts['probe']=probe
