@@ -1824,11 +1824,43 @@ the folder that the record names; setup's second run decides by the same two
 facts. Otherwise the next step is to run the setup file again. The record
 alone is not enough: the last write of an uninstall can be refused after every
 entry is gone. For the same reason the entries can be added again over a
-record that still says `installed`, when the folder that the record names,
-today's Start-menu folder and the Apps-list entry are all absent. The entries
-are added again only when all of them are gone. A partly damaged set (a person
-deleted one shortcut) is refused and nothing is overwritten; setup then says
-that it could not add the entries, and starts the app.
+record that still says `installed`, when the folder that the record names is
+absent.
+
+The entries are added again when no shortcut of this installation and no
+Apps-list entry is there. The Start-menu folder itself can be there. It stays
+after an uninstall when the person put a file into it (uninstall removes only
+an empty folder), and when another program still had a shortcut open in a way
+that let the delete pass. Setup's step uses that folder again when both hold:
+
+- It is this account's own private folder: not a link, owned by this account,
+  and changeable only by this account and Windows' own system accounts. This
+  is the check that the first installation and every uninstall make.
+- No entry directly in it has the name of one of the four shortcuts. Such an
+  entry counts whatever it is (a file, a folder, a link), and the names are
+  compared without letter case.
+
+Every other entry in that folder is the person's. Setup does not open, change
+or remove it, and writes the four shortcuts beside it. Nothing is overwritten
+or adopted: the step looks before its first write, the writer of a shortcut
+refuses a name that exists (also one that appeared after the look), and the
+Apps-list entry is a key that the step itself creates new. In every other
+case the step refuses as before, with its record unchanged: a partly damaged
+set (a person deleted one shortcut), an Apps-list entry, a link or a file at
+the folder's path, a folder that fails the check. Setup then says that it
+could not add the entries, and starts the app.
+
+This rule replaced an earlier one, under which the entries were added again
+only when the Start-menu folder was gone too. A folder that stayed then kept
+every later setup run from adding them, and the person had no entry to open,
+stop or uninstall Amplifier. One state is still refused: a record that says
+`installed` (its last write was refused) beside a folder that stayed.
+
+The native cases in the `windows-local-connection` job run the step on the
+real Start-menu folder: after an uninstall that left a person's file there,
+the four shortcuts and the Apps-list entry are added beside the file; each
+refusal above leaves the folder, the record and the Apps list as they were.
+No hosted runner runs the setup program itself, which refuses Windows Server.
 
 `.github/workflows/windows-start-again.yml` runs this path on a Windows
 runner with the product's own commands in setup's order: entries, first

@@ -818,6 +818,20 @@ def test_file_that_the_person_put_into_the_start_menu_folder_no_longer_keeps_the
     assert _everything(folder) == mine and state["registry"] is None
 
 
+def test_record_that_still_says_installed_beside_a_folder_that_stayed_is_still_refused(uninstaller):
+    # Two things at one uninstall: the person's file kept the folder, and the last write of the record
+    # was refused. The record then names a folder that exists, and it is not replaced.
+    root, folder, state = uninstaller.root, uninstaller.folder, uninstaller.state
+    installed = (root / shell.FILE).read_text()
+    (folder / "My own note.txt").write_bytes(b"mine")
+    assert uninstaller.run()["ok"]
+    (root / shell.FILE).write_text(installed)  # As if that last write had been refused.
+    with pytest.raises(ValueError, match="^Windows shell integration already has a receipt; inspect it before retrying\\.$"):
+        shell.install(root, "1.0.0")
+    assert [path.name for path in folder.iterdir()] == ["My own note.txt"] and state["registry"] is None
+    assert (root / shell.FILE).read_text() == installed and not shell.listed(root)
+
+
 def test_shortcut_that_another_program_still_lists_refuses_once_and_then_the_entries_are_added(uninstaller):
     # Another program had a shortcut open and shared deleting: the uninstall finished, and Windows
     # removed the shortcut only when that program closed it. Until then the folder still lists it.
