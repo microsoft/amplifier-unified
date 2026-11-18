@@ -10,6 +10,7 @@ import pytest
 from amplifier_web import update_health as health
 from amplifier_web.attention import snapshot
 from amplifier_web.update_diagnostics import UpdateDiagnostics
+from test_updates import app, prepare, repo  # noqa: F401 -- existing real manager fixture
 
 CAPTURE = Path(__file__).parent / 'fixtures/update-current-health-captured060.json'
 
@@ -840,3 +841,257 @@ async def test_component_fence_allows_health_storage_adoption_and_independent_ap
     assert calls=={'health':1,'storage':1,'app':1}
     assert m.service.state['updates']['adoption']=={'activeWorkers':0,'pendingWorkers':0}
     assert health.pending_preparation(m.diagnostics.state)
+
+
+# Follow-up A35: "Update could not finish" for a component update that did not fail.
+
+# What the page gets while the proof of a new selection is not read yet.
+CHECKING_COMPONENTS = {'status': 'working', 'title': 'Checking components',
+                       'detail': 'Amplifier is checking the components that it uses now.',
+                       'actionRequired': False, 'action': None, 'component': None}
+# The record of mounted_fixture already names the package of the PC
+# (amplifier-module-provider-chat-completions), so another provider is the added one.
+ADDED_PACKAGE = {'name': 'amplifier-module-provider-ollama', 'version': '1.0.0'}
+
+
+def command_failures(updates):
+    """The record of the PC: a command of an earlier attempt failed; no reason, no package."""
+    for group in updates['diagnostics']['activeFailures'].values():
+        for key in ('reason', 'package'):
+            group['latest'].pop(key, None)
+        group['latest'].update(phase='ecosystem-runtime-lock', errorType='CommandFailure')
+    return max((group['latest'] for group in updates['diagnostics']['activeFailures'].values()),
+               key=lambda row: row['at'])
+
+
+@pytest.mark.parametrize('record', ['command', 'source'])
+async def test_a_package_that_the_record_does_not_name_keeps_the_health_proof(tmp_path, monkeypatch, record):
+    """Second form: a connection check installed one more package into the selected environment."""
+    from amplifier_web import runtime_qualification
+    from amplifier_web.update_partial import Preparation
+    m, stage, _, source = mounted_fixture(tmp_path, monkeypatch)
+    u = m.service.state['updates']
+    if record == 'command':
+        command_failures(u)  # Else as captured: a source conflict, "Component source needs review".
+    recorded = source['runtime-installed.json']
+    installed = copy.deepcopy(recorded)
+    monkeypatch.setattr(runtime_qualification, 'installed_graph', lambda p: copy.deepcopy(installed))
+    await health.refresh(m)
+    health.publish(m)
+    assert u['currentStatus']['title'] == 'You’re up to date'
+    installed.insert(4, dict(ADDED_PACKAGE))
+    assert [row['name'] for row in installed] == sorted(row['name'] for row in installed)
+    before = copy.deepcopy(m.diagnostics.state)
+    await health.refresh(m)
+    health.publish(m)
+    status = u['currentStatus']
+    assert status['title'] not in {'Update could not finish', 'Component source needs review'}
+    assert 'failureAttemptId' not in status and 'selectedFailure' not in status
+    assert (status['status'], status['title'], status['actionRequired']) == ('current', 'You’re up to date', False)
+    attention = snapshot(m.service.state)
+    assert not any(item.get('id') == 'updates:current' for item in attention['items'])
+    assert attention['pages'].get('updates', 0) == 0
+    # The proof names the recorded packages only.
+    assert m._active_update_evidence['packages'] == {row['name'] for row in recorded}
+    # The default compares exactly, and a preparation asks with the default.
+    assert health.active_evidence(m) == {}
+    assert health.active_evidence(m, explain_configuration=True) == {}
+    with pytest.raises(ValueError, match='verified working component generation'):
+        await Preparation(m, stage, []).verify_baseline()
+    assert m.diagnostics.state == before  # No failure record was removed or settled.
+
+
+@pytest.mark.parametrize('recorded_package', ['changed', 'missing'])
+async def test_a_changed_or_missing_recorded_package_ends_the_health_proof_beside_an_added_one(
+        tmp_path, monkeypatch, recorded_package):
+    from amplifier_web import runtime_qualification
+    m, _, _, source = mounted_fixture(tmp_path, monkeypatch)
+    u = m.service.state['updates']
+    newest = command_failures(u)
+    installed = copy.deepcopy(source['runtime-installed.json'])
+    installed.insert(4, dict(ADDED_PACKAGE))
+    if recorded_package == 'changed':
+        installed[0]['version'] = '0.0.0+changed'
+    else:
+        del installed[1]
+    monkeypatch.setattr(runtime_qualification, 'installed_graph', lambda p: copy.deepcopy(installed))
+    await health.refresh(m)
+    health.publish(m)
+    status = u['currentStatus']
+    assert m._active_update_evidence == {}
+    assert status['status'] != 'current' and status['actionRequired']
+    assert status['failureAttemptId'] == newest['attemptId']
+    assert any(item.get('id') == 'updates:current' for item in snapshot(m.service.state)['items'])
+
+
+async def test_a_switch_publishes_no_earlier_failure_before_the_proof_of_the_new_selection_is_read(
+        app, repo, monkeypatch):
+    """First form: the owner's real switch, with an earlier failed component attempt in the record."""
+    from amplifier_web.updates import active_release
+    manager, _ = await prepare(app, repo)
+
+    async def validate(stage, release):
+        pass
+    manager.validate = validate
+    # As after a complete check: the sequence is at its last stage and the app is current.
+    app.state['updates']['sequence'] = {'stage': 'other', 'install': True}
+    app.state['updates']['application']['status'] = 'current'
+    manager.diagnostics.begin('ecosystem', components=['repo'])
+    failure = manager.diagnostics.record('ecosystem-runtime-lock', 'failed', errorType='CommandFailure')
+    await manager.publish()
+    assert app.state['updates']['currentStatus']['title'] == 'Update could not finish'
+    assert app.state['updates']['currentStatus']['failureAttemptId'] == failure['attemptId']
+    reads = []
+
+    def evidence(m, **options):
+        # This staging fixture stubs qualification, so the real read finds no
+        # package record. The stand-in keeps the real rule for the time: the
+        # proof is the completed activation of the generation that the pointer names.
+        pointer = active_release(m.home)
+        batch = next((row for row in reversed(m.diagnostics.state.get('completedBatches', []))
+                      if row.get('revision') == pointer.get('current')
+                      and row.get('phase') == 'ecosystem-activation'), None)
+        reads.append((app.state['updates']['phase'], getattr(m, '_update_proof_unread', None),
+                      bool(batch), options.get('allow_additions')))
+        if batch is None:
+            return {}
+        return {'generation': pointer['current'], 'verifiedAt': batch['completedAt'],
+                'startedAt': batch['startedAt'], 'configuration': 'a' * 64,
+                'attemptId': batch['attemptId'], 'packages': set(), 'components': set()}
+    monkeypatch.setattr(health, 'active_evidence', evidence)
+    published = []
+    publish = app._publish_changes
+
+    def observe(**kwargs):
+        published.append({'phase': app.state['updates']['phase'],
+                          'status': copy.deepcopy(app.state['updates']['currentStatus']),
+                          'attention': [item['id'] for item in snapshot(app.state)['items']]})
+        return publish(**kwargs)
+    app._publish_changes = observe
+    await manager.install()
+    installed = [row for row in published if row['phase'] == 'installed']
+    assert installed
+    # No publication of the new selection tells of the earlier attempt.
+    assert [row['status']['title'] for row in installed
+            if row['status']['title'] == 'Update could not finish' or 'failureAttemptId' in row['status']] == []
+    assert not any('updates:current' in row['attention'] for row in installed)
+    assert installed[0]['status'] == CHECKING_COMPONENTS
+    # The health read came after that publication, found the new proof, and ended the mark.
+    assert [row for row in reads if row[0] == 'installed'] == [('installed', True, True, True)]
+    assert manager._update_proof_unread is False
+    last = app.state['updates']['currentStatus']
+    assert installed[-1]['status'] == last
+    assert (last['status'], last['title'], last['actionRequired']) == ('current', 'You’re up to date', False)
+    # The earlier attempt stays in the record.
+    assert failure in manager.diagnostics.state['events']
+    assert [group['latest'] for group in manager.diagnostics.state['activeFailures'].values()] == [failure]
+
+
+@pytest.mark.parametrize('case', ['record', 'source-record', 'after-app-update', 'error', 'phase-error',
+                                  'phase-interrupted', 'application-record', 'no-record'])
+def test_an_unread_proof_holds_back_only_a_result_from_an_earlier_component_record(case):
+    failure = {'id': '1' * 32, 'attemptId': '2' * 32, 'kind': 'ecosystem', 'status': 'failed',
+               'phase': 'ecosystem-runtime-lock', 'at': 10}
+    state = {'phase': 'installed', 'error': None, 'release': 'a' * 32, 'available': 0, 'items': [],
+             'sequence': {'stage': 'complete', 'install': False}, 'application': {'status': 'current'},
+             'diagnostics': {'activeFailures': {'ecosystem:' + 'f' * 64: {'latest': failure}}}}
+    evidence = {}
+    if case == 'source-record':
+        failure['reason'] = 'runtime-source-conflict'
+    elif case == 'after-app-update':
+        state, evidence = acknowledged_app_with_old_component_history()
+    elif case == 'error':
+        state['error'] = 'Could not activate the ecosystem update; review its diagnostic receipt before retrying.'
+    elif case == 'phase-error':
+        state['phase'] = 'error'
+    elif case == 'phase-interrupted':
+        state['phase'] = 'interrupted'
+    elif case == 'application-record':
+        failure['kind'] = 'application'
+    elif case == 'no-record':
+        state['diagnostics']['activeFailures'] = {}
+        state['available'] = 1
+    manager = SimpleNamespace(service=SimpleNamespace(state={'updates': state}), _active_update_evidence=evidence)
+    health.publish(manager)
+    plain = copy.deepcopy(state['currentStatus'])
+    assert plain['title'] == {'source-record': 'Component source needs review', 'no-record': 'Updates available',
+        'after-app-update': 'Application updated; earlier component issue needs review'}.get(
+            case, 'Update could not finish')
+    assert plain.get('failureKind') == {'no-record': None, 'application-record': 'application'}.get(case, 'ecosystem')
+    manager._update_proof_unread = True
+    health.publish(manager)
+    if case in {'record', 'source-record', 'after-app-update'}:
+        assert state['currentStatus'] == CHECKING_COMPONENTS
+    else:
+        # A failure of the operation itself, and a result from no component record, stay.
+        assert state['currentStatus'] == plain
+    # The support report's selection is the same with the mark.
+    assert health.projection(manager) == plain
+
+
+@pytest.mark.parametrize('read', ['proof', 'nothing', 'raises'])
+async def test_the_health_read_ends_the_unread_mark_with_or_without_a_result(tmp_path, monkeypatch, read):
+    m, _, project, _ = mounted_fixture(tmp_path, monkeypatch)
+    u = m.service.state['updates']
+    newest = command_failures(u)
+    m._update_proof_unread = True
+    health.publish(m)  # No proof is held, and none is read yet.
+    assert u['currentStatus'] == CHECKING_COMPONENTS
+    if read == 'raises':
+        def broken(manager, **options):
+            raise RuntimeError('the read ended with an error')
+        monkeypatch.setattr(health, 'active_evidence', broken)
+        with pytest.raises(RuntimeError):
+            await health.refresh(m)
+    else:
+        if read == 'nothing':
+            (project / 'uv.lock').write_text('changed')
+        await health.refresh(m)
+    assert m._update_proof_unread is False
+    health.publish(m)
+    status = u['currentStatus']
+    if read == 'proof':
+        assert (status['status'], status['title']) == ('current', 'You’re up to date')
+    else:
+        # A read that gave no proof does not keep the record back.
+        assert status['title'] == 'Update could not finish' and status['actionRequired']
+        assert status['failureAttemptId'] == newest['attemptId']
+
+
+@pytest.mark.parametrize('where,error', [('read', RuntimeError), ('read', asyncio.CancelledError),
+                                         ('publication', RuntimeError)])
+async def test_a_switch_that_ends_with_an_error_leaves_no_unread_mark_and_shows_its_failure(
+        app, repo, monkeypatch, where, error):
+    manager, _ = await prepare(app, repo)
+
+    async def validate(stage, release):
+        pass
+    manager.validate = validate
+    seen = []
+    if where == 'read':
+        async def refresh(m):
+            seen.append(getattr(m, '_update_proof_unread', None))
+            raise error('the read ended with an error')
+        monkeypatch.setattr(health, 'refresh', refresh)
+    else:
+        publish = app._publish_changes
+
+        def refuse(**kwargs):
+            if app.state['updates']['phase'] == 'installed':
+                seen.append(getattr(manager, '_update_proof_unread', None))
+                raise error('the publication ended with an error')
+            return publish(**kwargs)
+        app._publish_changes = refuse
+    if error is asyncio.CancelledError:
+        with pytest.raises(asyncio.CancelledError):
+            await manager.install()
+    else:
+        await manager.install()  # It raises nothing.
+    assert seen == [True]  # The mark was set when the error came.
+    assert manager._update_proof_unread is False
+    if error is not asyncio.CancelledError:
+        state = app.state['updates']
+        assert state['phase'] == 'error'
+        status = state['currentStatus']
+        assert status['title'] == 'Update could not finish' and status['actionRequired']
+        assert status['failurePhase'] == 'ecosystem-activation'

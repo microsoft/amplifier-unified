@@ -1836,6 +1836,11 @@ class UpdateManager:
                         sequence.update(nextStage='other', other=tier_summary)
                     else:
                         sequence.update(stage='complete', install=False, other=tier_summary)
+                # The selection is new, and its proof is not read yet: the held
+                # proof is the one of the generation before. Until the read
+                # below ends, the page gets no result from an earlier component
+                # failure record (update_health.publish).
+                self._update_proof_unread = True
                 await self.publish(phase='installed',release=target,pendingRelease=None,canRollback=True,items=items,error=None,
                     componentResults=public_results(partial, adopted=True),
                     includedCanProceed=False,
@@ -1861,9 +1866,11 @@ class UpdateManager:
                 except OSError:
                     pass
             except asyncio.CancelledError:
+                self._update_proof_unread = False  # No read is coming from here.
                 await self.service.discard_runtime(candidate)
                 raise
             except Exception as error:
+                self._update_proof_unread = False  # No read is coming from here.
                 await self.service.discard_runtime(candidate)
                 from .update_diagnostics import exception_facts
                 self.diagnostics.record('ecosystem-activation','failed',**exception_facts(error))
