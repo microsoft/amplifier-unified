@@ -239,6 +239,9 @@ async def test_source_edit_added_after_check_blocks_staging(repository, service)
     assert not (cache/'AGENTS.md').is_symlink()
 
 
+LONG_PATH = chr(92) * 2 + '?' + chr(92)
+
+
 def test_registry_preparation_never_imports_cli_cache(tmp_path, repository):
     legacy = tmp_path / 'legacy'
     shutil.copytree(repository, legacy / 'cache/repository', symlinks=True)
@@ -255,7 +258,8 @@ def test_registry_preparation_never_imports_cli_cache(tmp_path, repository):
     assert not (home / 'foundation/registry.json').exists()
     assert (legacy / 'registry.json').read_text() == 'not valid json'
     assert (legacy / 'cache/repository/AGENTS.md').is_symlink()
-    assert (legacy / 'cache/repository/external').readlink() == outside
+    # On Windows readlink() gives the target in its long-path form, with a prefix.
+    assert Path(str((legacy / 'cache/repository/external').readlink()).removeprefix(LONG_PATH)) == outside
     assert (outside / 'notes.txt').read_text() == 'private'
 
 
@@ -391,10 +395,11 @@ async def test_uncertain_transitive_module_and_skill_caches_survive_staging(repo
     (skill/'untracked.txt').write_text('keep this too\n')
     manager = service.update_manager
     rows = await manager.inventory_sources()
-    unknown = next(r for r in rows if r.get('path') == 'cache/transitive-module')
+    # A row's path is relative to the Foundation folder, with the separator of the system.
+    unknown = next(r for r in rows if r.get('path') == str(Path('cache/transitive-module')))
     assert unknown['status'] == 'local_changes' and unknown['usage'] == 'unknown'
     assert not unknown['eligible']
-    row = next(r for r in rows if r.get('path') == 'cache/repo')
+    row = next(r for r in rows if r.get('path') == str(Path('cache/repo')))
     manager.inventory = [{**row, 'latest': row['current'], 'status': 'update'}]
     async def validate(stage, release):
         assert (stage/'foundation/cache/transitive-module/bundle.py').read_bytes() == (module/'bundle.py').read_bytes()
@@ -463,7 +468,8 @@ async def test_branch_identity_and_nested_copies_are_not_guessed(repository, ser
     shutil.copytree(main, old, symlinks=True)
     shutil.copytree(main, nested, symlinks=True)
     (old/'.amplifier_cache_meta.json').write_text(json.dumps({'git_url': 'https://example.invalid/repo.git', 'ref': 'master'}))
-    rows = {r['path']: r for r in await service.update_manager.inventory_sources() if r.get('path')}
+    # A row's path has the separator of the system.
+    rows = {Path(r['path']).as_posix(): r for r in await service.update_manager.inventory_sources() if r.get('path')}
     assert rows['cache/repo']['eligible']
     assert rows['cache/skills/repo']['eligible']
     assert rows['cache/old-branch']['usage'] == 'unknown' and rows['cache/old-branch']['eligible']
@@ -704,8 +710,9 @@ async def test_unproven_wiki_versions_stay_protected(wiki_repository, tmp_path, 
                   'backend-path', 'wrong-build-requires', 'invalid-toml', 'invalid-project-shape'}:
         version.write_bytes(wiki_generated(root))
     protected, artifacts = await cache_changes(root)
-    assert str(version.relative_to(root)) in protected
-    assert str(version.relative_to(root)) not in artifacts
+    # The lists hold Git's paths, which have "/" on every system.
+    assert version.relative_to(root).as_posix() in protected
+    assert version.relative_to(root).as_posix() not in artifacts
 
 
 @pytest.mark.parametrize(('command', 'output'), [
