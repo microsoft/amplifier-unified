@@ -28,10 +28,11 @@ name: Source store bytecode
 #
 # tests/test_module_failures.py holds the text that a person reads when a
 # connection's component could not be prepared
-# (amplifier_web/module_failures.py). No workflow named that file, so its cases
-# did not run on a pull request. It runs on the Linux job only: one of its
-# cases is for POSIX file permissions and skips on Windows, and the Windows job
-# allows no skip.
+# (amplifier_web/module_failures.py). No pull-request workflow named that
+# file. It is named here so that its cases run on a pull request that changes
+# it or a product file that its cases use. It runs on the Linux job only: two
+# of its cases (one function with two parameters) are for POSIX file
+# permissions and skip on Windows, and the Windows job allows no skip.
 #
 # It is not setup-file or clean-account acceptance: no installation, no app,
 # no real provider module and no chat.
@@ -71,9 +72,16 @@ on:
       - tests/test_source_store_bytecode.py
       - tests/test_source_store_repair.py
       - tests/test_source_store_repair_native.py
-      # The text for a connection whose component could not be prepared.
+      # tests/test_module_failures.py: the texts, the file that makes a
+      # provider's sentence, and every product file that its cases import by
+      # name (deployment.py and windows_files.py are above).
       - amplifier_web/module_failures.py
       - amplifier_web/provider_failure_diagnostics.py
+      - amplifier_web/runtime.py
+      - amplifier_web/service.py
+      - amplifier_web/session_health.py
+      - amplifier_web/host/config.py
+      - amplifier_web/host/storage.py
       - tests/test_module_failures.py
       # A dependency change can bring a Foundation with another store rule.
       - pyproject.toml
