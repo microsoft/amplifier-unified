@@ -909,6 +909,28 @@ def test_the_store_handle_is_given_back_when_the_check_of_the_folders_above_it_e
     assert begun == ['root', ('inside', 7), ('close', 7)]
 
 
+def test_a_check_of_the_folders_above_the_store_that_fails_at_its_start_opens_nothing_and_closes_nothing(
+        monkeypatch):
+    """The check can refuse a folder above the store before the store is opened: then no handle of the store exists."""
+    from amplifier_web import windows_files
+    begun = []
+
+    @contextmanager
+    def directory(path, *, owned_root, create=False):
+        raise PermissionError(5, 'a folder above the store is refused')
+        yield  # Never reached: the check fails at its start.
+    monkeypatch.setattr(windows_files, 'address', lambda path: path)
+    monkeypatch.setattr(windows_files, 'directory', directory)
+    api = SimpleNamespace(root=lambda path: begun.append('root') or 7,
+                          close=lambda handle: begun.append(('close', handle)))
+    held = repair._held
+    assert held.__module__ == repair.__name__  # The product's own, not a fixture's.
+    with pytest.raises(PermissionError):
+        with held(api, 'store'):
+            begun.append('inside')
+    assert begun == []  # The store is not opened, the body does not run, and no handle that never was is closed.
+
+
 async def test_a_handle_that_cannot_be_given_back_does_not_keep_the_others_or_stop_the_run(installation):
     target = await broken(installation)
     real, closed = installation.api.close, []
