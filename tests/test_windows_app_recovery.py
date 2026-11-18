@@ -272,3 +272,104 @@ async def test_only_verified_old_host_can_reopen_after_rollback(transaction, mon
         assert recovery.automatic_retry_held(state)
         state["application"]["revision"] = "0" * 40
         assert not recovery.automatic_retry_held(state)
+
+
+def rolled_back_host(transaction, monkeypatch):
+    """The earlier app, started again after the launcher restored it. The owner question is held."""
+    import asyncio
+    from amplifier_web import app_component_graph as components, app_updates, auth
+    from test_update_readiness import HeldOwner
+    t = transaction
+    recovery.prepare(t.spec, t.restart, t.old)
+    recovery.restore(t.spec, t.restart)
+    state = {"pendingRestart": {**t.restart["target"], "version": "2.0.0",
+                               "sourceInstanceId": t.old["identity"]["instanceId"]},
+             "pendingReplacement": None, "phase": "activating", "settingsPreserved": True}
+    identity = {**t.old["identity"], "instanceId": "9" * 32}
+    monkeypatch.setattr(recovery.os, "getpid", lambda: 123)
+    saved, events = [], []
+    manager = SimpleNamespace(home=t.spec.data_dir, running_identity=identity, lock=asyncio.Lock(),
+        service=SimpleNamespace(state={"updates": state}, lock=asyncio.Lock(),
+                                _publish_changes=lambda **kwargs: saved.append(copy.deepcopy(state))),
+        diagnostics=SimpleNamespace(record=lambda *a, **kw: events.append((a, kw))),
+        wakeup=asyncio.Event())
+    owner = HeldOwner(t.spec, questions=1)
+    monkeypatch.setattr(service, "update_owner", owner)
+    monkeypatch.setattr(auth, "data_identity", lambda home: "same-data")
+    monkeypatch.setattr(runtime, "observe", lambda spec: {**t.restart["run"], "run": "8" * 32})
+    monkeypatch.setattr(app_updates, "installed_extras", lambda: [])
+    async def graph(*a, **kw):
+        return t.old["graph"]
+    monkeypatch.setattr(components, "read_graph", graph)
+    health = {"ok": True, "app": "amplifier-unified", "dataIdentity": "same-data", **identity}
+    return SimpleNamespace(manager=manager, health=health, state=state, saved=saved, events=events, owner=owner)
+
+
+@pytest.mark.asyncio
+async def test_the_loop_runs_while_the_owner_question_of_a_rollback_confirmation_runs(transaction, monkeypatch):
+    import asyncio
+    host = rolled_back_host(transaction, monkeypatch)
+    before = copy.deepcopy(host.state)
+    task = asyncio.create_task(recovery.confirm(host.manager, host.health))
+    try:
+        # This wait runs on the loop while the question's thread is held.
+        await host.owner.started(0)
+        assert not task.done() and host.state == before and not host.saved and not host.events
+        host.owner.go(0)
+        assert await asyncio.wait_for(task, 10) is True
+        assert host.owner.on_loop == [False]
+        assert host.state["pendingRestart"] is None and host.state["phase"] == "error"
+        assert "applicationResult" not in host.state
+        assert host.state["applicationRecovery"]["failedTarget"] == transaction.restart["target"]
+        assert len(host.saved) == 1 and host.manager.wakeup.is_set()
+    finally:
+        host.owner.go()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_a_restart_target_that_changes_during_the_owner_question_does_not_reopen_after_rollback(
+        transaction, monkeypatch):
+    import asyncio
+    host = rolled_back_host(transaction, monkeypatch)
+    task = asyncio.create_task(recovery.confirm(host.manager, host.health))
+    try:
+        await host.owner.started(0)
+        # Another task of the host, while the question's thread runs: a later attempt is now pending.
+        host.state["pendingRestart"]["attemptId"] = "0" * 32
+        before = copy.deepcopy(host.state)
+        host.owner.go(0)
+        assert await asyncio.wait_for(task, 10) is False
+        assert host.state == before and not host.saved and not host.events
+        assert not host.manager.wakeup.is_set()
+        assert transaction.state["receipt"]["status"] == "restored"
+    finally:
+        host.owner.go()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_a_rollback_confirmation_that_is_cancelled_during_the_owner_question_changes_nothing(
+        transaction, monkeypatch):
+    import asyncio
+    host = rolled_back_host(transaction, monkeypatch)
+    before = copy.deepcopy(host.state)
+    task = asyncio.create_task(recovery.confirm(host.manager, host.health))
+    try:
+        await host.owner.started(0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        # The thread ends later. Nothing uses its answer.
+        host.owner.go()
+        await asyncio.sleep(.05)
+        assert host.state == before and not host.saved and not host.events
+        assert not host.manager.wakeup.is_set()
+        assert not host.manager.lock.locked() and not host.manager.service.lock.locked()
+        assert transaction.state["receipt"]["status"] == "restored"
+    finally:
+        host.owner.go()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
