@@ -178,8 +178,10 @@ admission receipt remains `outcome_unknown` on import and cannot replay its work
 
 ## Boundaries and implementation
 
-[`amplifier_portability`](../components/portability/README.md) owns signed protocol
-records and bounded Git packages.
+[`amplifier_portability`](https://github.com/microsoft/amplifier-portability) owns
+signed protocol records, retained receipt recovery and bounded Git packages.
+Unified consumes its selected artifact through the
+[paired delivery boundary](../components/README.md#select-worktrees-and-portability-artifacts).
 `amplifier_web.portability` supplies host admission and transport-file actions;
 `portability_data` projects supported task data. Foundation owns the native writer
 fence shared by supported consumers. There is no second execution scheduler.

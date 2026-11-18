@@ -1,6 +1,6 @@
 [project]
 name = "amplifier-unified"
-version = "0.111.0"
+version = "0.111.1"
 description = "A local voice-first Amplifier workspace with a shared user and agent interface"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -70,13 +70,10 @@ exclude = [
 [tool.hatch.build.targets.sdist]
 exclude = [
     "/.ci/**",
-    "/components/publishing/build/**", "/components/publishing/dist/**",
-    "/components/publishing/.venv/**", "/components/publishing/*.egg-info/**",
-    "/components/portability/build/**", "/components/portability/dist/**",
-    "/components/portability/.venv/**", "/components/portability/*.egg-info/**",
 ]
 
 [tool.hatch.build.targets.wheel.force-include]
+"components/shell-sdk.source.json" = "amplifier_web/component_delivery/shell-sdk.json"
 "components/status-emitter.source.json" = "amplifier_web/component_delivery/status-emitter.json"
 "amplifier_web/status_protocol/LICENSE" = "amplifier_web/component_delivery/status-emitter-LICENSE"
 "components/outputs.source.json" = "amplifier_web/component_delivery/outputs.json"
@@ -108,6 +105,12 @@ exclude = [
 "packages/shell-sdk/package.json" = "amplifier_web/bundle_data/packages/shell-sdk/package.json"
 "packages/shell-sdk/README.md" = "amplifier_web/bundle_data/packages/shell-sdk/README.md"
 "packages/shell-sdk/LICENSE" = "amplifier_web/bundle_data/packages/shell-sdk/LICENSE"
+"packages/shell-sdk/ORIGIN.json" = "amplifier_web/bundle_data/packages/shell-sdk/ORIGIN.json"
+"packages/shell-sdk/examples/shell-controls/index.js" = "amplifier_web/bundle_data/packages/shell-sdk/examples/shell-controls/index.js"
+"packages/shell-sdk/examples/shell-controls/manifest.json" = "amplifier_web/bundle_data/packages/shell-sdk/examples/shell-controls/manifest.json"
+"packages/shell-sdk/examples/shell-controls/README.md" = "amplifier_web/bundle_data/packages/shell-sdk/examples/shell-controls/README.md"
+"packages/shell-sdk/examples/shell-controls/package.json" = "amplifier_web/bundle_data/packages/shell-sdk/examples/shell-controls/package.json"
+"packages/shell-sdk/examples/shell-controls/build.mjs" = "amplifier_web/bundle_data/packages/shell-sdk/examples/shell-controls/build.mjs"
 "examples/shell-navigator" = "amplifier_web/bundle_data/examples/shell-navigator"
 "examples/shell-reader" = "amplifier_web/bundle_data/examples/shell-reader"
 "examples/shell-controls/index.js" = "amplifier_web/bundle_data/examples/shell-controls/index.js"

@@ -83,6 +83,8 @@ class TransferNode:
                 durable(key, {'privateKey': base64.b64encode(self.key.private_bytes_raw()).decode()})
         public = self.key.public_key().public_bytes_raw()
         self.identity = {'id': digest(public), 'label': label, 'publicKey': base64.b64encode(public).decode()}
+        from .index import ReceiptIndex
+        with self.lock:self.index = ReceiptIndex(self)
 
     def peers(self):
         path = self.directory / 'peers.json'
@@ -130,21 +132,34 @@ class TransferNode:
         return row
 
     def records(self, sid=None):
-        rows = [json.loads(path.read_text()) for path in sorted((self.directory / 'receipts').glob('*.json'))]
-        return [row for row in rows if sid is None or row['sessionId'] == sid]
+        # Compatibility export: callers requesting all records explicitly pay
+        # for full hydration. Admission paths use latest()/page() instead.
+        rows=[];cursor=None
+        while True:
+            page=self.page(sid=sid,cursor=cursor,limit=100)
+            rows.extend(self.get(row['id']) for row in page['items']);cursor=page['nextCursor']
+            if not cursor:return sorted(rows,key=lambda row:row['id'])
+
+    def page(self, *, sid=None, cursor=None, limit=50, phases=None):
+        return self.index.page(sid=sid,cursor=cursor,limit=limit,phases=phases)
+
+    def latest(self, sid):
+        return self.index.latest(sid)
+
+    def rebuild_index(self):
+        return self.index.rebuild()
 
     def save(self, row):
         row['updatedAt'] = time.time()
-        durable(self.path(row['id']), row)
+        with self.lock:
+            self.index.prepare(row)
+            durable(self.path(row['id']), row)
+            self.index.committed(row)
         return copy.deepcopy(row)
 
     def fenced(self, sid):
-        rows = self.records(sid)
-        if not rows:
-            return False
-        # Generations serialize round trips; a later local activation supersedes
-        # an older outgoing tombstone but never a newer unfinished transfer.
-        latest = max(rows, key=lambda row: (row['generation'], row['createdAt']))
+        latest = self.latest(sid)
+        if latest is None:return False
         return latest['phase'] not in {'active', 'cancelled'}
 
     def begin(self, sid, destination, command_id, request):
@@ -158,10 +173,10 @@ class TransferNode:
                 if row['requestHash'] != signature:
                     raise ValueError('This transfer command already has different contents')
                 return {**row, 'duplicate': True}
-            previous = self.records(sid)
+            previous = self.latest(sid)
             if previous and self.fenced(sid):
                 raise ValueError('This task has an unresolved or released transfer; inspect its receipt')
-            generation = max((row['generation'] for row in previous), default=0) + 1
+            generation = (previous['generation'] if previous else 0) + 1
             row = {'id': identity, 'sessionId': sid, 'generation': generation, 'source': self.identity['id'],
                    'destination': destination, 'direction': 'outgoing', 'phase': 'preparing', 'revision': 1,
                    'requestHash': signature, 'createdAt': time.time(), 'inputsReplayed': False}
@@ -195,9 +210,8 @@ class TransferNode:
                 if row.get('capsuleHash') != digest(encoded(body)) or row.get('requestHash') != digest(request):
                     raise ValueError('This transfer was already staged with different contents or destination')
                 return {**row, 'duplicate': True}
-            previous = self.records(body['sessionId'])
-            if previous:
-                latest = max(previous, key=lambda row: (row['generation'], row['createdAt']))
+            latest = self.latest(body['sessionId'])
+            if latest:
                 allowed = (latest['phase'] == 'released' and latest['destination'] == body['source']) or (latest['phase'] == 'discarded' and latest['source'] == body['source'])
                 if not allowed or body['generation'] <= latest['generation']:
                     raise ValueError('Destination already owns this task or has an unresolved transfer')
@@ -343,6 +357,12 @@ class TransferNode:
             return row
 
     def recover(self):
-        for row in self.records():
-            if row['phase'] in {'preparing', 'staging', 'activating', 'releasing'}:
-                self.unknown(row['id'])
+        # Legacy JSON receipts need lookup metadata once, without a separate user
+        # maintenance step. Healthy stores keep the existing indexed recovery.
+        self.index.recover()
+        # Mutation invalidates cursors; consume a bounded transient page each
+        # time. A ready index does not hydrate terminal historical receipts.
+        while True:
+            page=self.page(limit=100,phases=['preparing','staging','activating','releasing'])
+            if not page['items']:return
+            for row in page['items']:self.unknown(row['id'])

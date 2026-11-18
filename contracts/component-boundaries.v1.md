@@ -100,6 +100,21 @@ receipt must match the selected Worktrees receipt exactly. This moves no user
 files or ownership/transfer records and does not extract the whole resource
 lifecycle domain. Source publication and app adoption remain separate.
 
+## Portability authoring and delivery
+
+[microsoft/amplifier-portability](https://github.com/microsoft/amplifier-portability)
+owns signed receipt mechanisms, workspace capsules, retained JSON recovery and
+public selected-read/payload/evidence APIs. Unified selects a reviewed artifact
+and remains the sole installed owner. Its embedded Worktrees receipt must equal
+the selected Worktrees source, artifacts and runtime identity; public dependency
+ranges do not replace the host's tighter constraints. Admission, native writer
+fencing, execution authority, transport and data projection remain in the host.
+Source handoff and publication do not change the selected default, replay uncertain
+effects, rewrite historical evidence or authorize a user-state migration. Retained
+receipts and newer state survive ordinary app rollback. The
+[selection guide](../components/README.md#select-worktrees-and-portability-artifacts)
+records the current artifact and any pending delivery qualification.
+
 ## Current output mechanism delivery
 
 [amplifier-platform-resources](https://github.com/bkrabach/amplifier-platform-resources)
@@ -135,6 +150,31 @@ Unified's private selected copy, preserving coinstallation and uninstall isolati
 Unified is the sole installed owner of its Kernels copy; ACP's separately selected
 artifact is unchanged. No user records or active work move with these authoring
 handoffs. Publication, app selection and live adoption remain distinct.
+
+## Current shell SDK delivery
+
+[amplifier-shell-sdk](https://github.com/bkrabach/amplifier-shell-sdk) owns the
+public JavaScript API, types, direct package tests and controls example. Unified
+selects the original public tarball and qualification receipt, preserving the
+`packages/shell-sdk` and `examples/shell-controls` compatibility paths as generated
+delivery inputs. Ordinary wheel, editable and Git-free source builds verify these
+selected bytes offline; installing Unified does not require Node or npm.
+Unified retains host/browser integration, authority and trusted-component policy.
+Client source locks must select the same three SDK build inputs; no lock bypass
+or second SDK author is introduced. Component publication and app adoption remain
+separate. See [SDK delivery](../docs/shell/sdk-delivery.md).
+
+## Current Publishing mechanism delivery
+
+[microsoft/amplifier-publishing](https://github.com/microsoft/amplifier-publishing)
+owns immutable static releases, private serving, lifecycle receipts and direct
+mechanism tests. Unified selects its published artifact as the sole installed
+owner and retains task scope, authorization, policy and remote-target integration.
+The existing public Python API and Unified's durable store formats, optional
+retention, pins, reader settlement, expired-body history and unknown-outcome
+recovery remain supported. Selection moves no user data, enables no policy and
+replays no effect. Historical publication receipts remain valid; source acceptance,
+standalone publication, app selection and live adoption are distinct.
 
 ## Not in v1
 

@@ -39,7 +39,7 @@ chat list shows All chats, without discarding the manager's view state.
 | Bounded navigation queries | Adapters over the existing workspace/chat projections | Existing 206-chat browser fixture; no additional conversation store |
 | Loading, subscriptions, component errors and browser status | [src/shell/runtime.jsx](https://github.com/microsoft/amplifier-client-web/blob/main/src/shell/runtime.jsx) | Production browser proof and validation harness |
 | Workspace and chat controls | [src/shell/navigation-components.jsx](https://github.com/microsoft/amplifier-client-web/blob/main/src/shell/navigation-components.jsx) | Existing component tests run against public host fixtures |
-| Public authoring API | `packages/shell-sdk` | External navigator in `examples/shell-navigator` |
+| Public authoring API | [Public SDK](https://github.com/bkrabach/amplifier-shell-sdk), selected at `packages/shell-sdk` | External navigator in `examples/shell-navigator` |
 | Theme tokens and layout presentation | Host root and existing panel layout | Live preview, CSS reordering, revert and stable iframe checks |
 | Artifact card, disclosure, viewer and saved-output controls | [Artifact controls and reuse](../canvas.md#artifact-controls-and-reuse) | Exact-version presentation, control parity, dirty-state and narrow-layout checks |
 
@@ -242,6 +242,10 @@ renderers do not grant tool capabilities, add arbitrary Canvas pane counts or
 provide automatic state-schema migration.
 
 ### Renderer package and public SDK
+
+The [SDK delivery record](sdk-delivery.md) identifies the independently published
+SDK used by this app. Its local package and controls example are generated
+delivery inputs; author SDK changes in the public repository.
 
 Use the same `shell.packages.stage` and `shell.packages.validate` sequence.
 A renderer manifest adds a label and its supported resource kinds:
