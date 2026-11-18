@@ -122,6 +122,7 @@ async def test_actual_worker_completes_two_ordinary_turns_after_omission(
         'web_bundles': {'excluded': list(DEFAULT_BEHAVIORS)},
         'sources': {'modules': modules},
     }))
+    monkeypatch.setenv('AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH', str(root / 'capture'))
     events = []
     worker = Worker()
 
@@ -187,13 +188,16 @@ async def test_actual_worker_completes_two_ordinary_turns_after_omission(
             await worker.command({'op': 'send', 'id': f'send-{number}',
                                   'input_id': f'input-{number}', 'text': text})
             await until(lambda: worker.idle() and any(
-                e.get('type') == 'generation.finished' and f'input-{number}' in e.get('input_ids', [])
-                for e in events))
+                e.get('type') in {'generation.finished', 'generation.failed'}
+                and f'input-{number}' in e.get('input_ids', []) for e in events))
+            assert not any(e.get('type') == 'generation.failed' for e in events), [
+                e for e in events if e.get('type') == 'generation.failed']
         assert [event['text'] for event in events if event.get('type') == 'assistant.message'] == [
             'Ordinary answer completed.', 'Ordinary answer completed.']
         assert not any(e.get('type') in {'runtime.error', 'generation.failed'} for e in events)
         assert raw.compactions <= 1
-        assert effects == (['once'] if shape == 'same-turn' else [])
+        assert effects == (['once'] if shape == 'same-turn' else []), [
+            [(m.role, str(m.content)[:160]) for m in request.messages] for request in raw.sent]
         canonical = await context.get_messages()
         assert canonical[:len(source)] == source
         if shape == 'same-turn':
