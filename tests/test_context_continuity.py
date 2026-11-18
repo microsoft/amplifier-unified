@@ -1940,8 +1940,9 @@ def test_transition_errors_give_distinct_actionable_guidance():
     rejected = str(ContextRecoveryError('recovery_checkpoint_rejected'))
     assert 'explicit model connection' in missing and 'new ordinary message' in missing
     assert 'schedules' in missing and 'retries' in missing
-    assert 'compatible validated source' in rejected and 'explicit recovery' in rejected
-    assert 'may not repair' in rejected
+    assert 'Preserve the original history' in rejected and 'compatible validated source' in rejected
+    assert 'explicit recovery' not in rejected
+    assert 'Choosing a model does not repair corruption' in rejected
 
 
 async def test_h2_zero_reservation_refusal_can_retry_only_new_foreground_same_binding(tmp_path):
@@ -1985,6 +1986,64 @@ async def test_h2_settled_originals_tool_continuation_uses_ordinary_compaction(t
     assert case.raw.compactions, 'ordinary target trigger must remain enabled'
     recover.assert_not_awaited()
     assert case.adapter.recovery_path.read_bytes() == journal
+
+
+@pytest.mark.parametrize('source', ['checkpoint', 'canonical-originals', 'canonical-unknown'])
+async def test_empty_originals_ordinary_failure_keeps_cooldown_without_rearming(tmp_path, source):
+    from amplifier_core import ChatRequest, Message
+    from amplifier_core.llm_errors import LLMError
+    from amplifier_web.context_continuity import ContextContinuity
+    from amplifier_web.host.session import SelectedProvider
+    case = await target_transition_fixture(tmp_path)
+    if source != 'checkpoint':
+        directory = tmp_path / 'fork'
+        directory.mkdir()
+        case.origin['originals'] = True
+        case.coordinator.register_capability('web.context_transition.originals', True)
+        case.adapter = ContextContinuity(case.coordinator, 'session', directory,
+            AsyncMock(), writer_guard=case.gate.check_current)
+    selected = case.selected
+    prepare = case.prepare
+    if source == 'canonical-unknown':
+        async def lost(request):
+            raise RuntimeError('original target UNKNOWN')
+        case.raw.compact_context = lost
+        with pytest.raises(RuntimeError, match='original target UNKNOWN'):
+            await case.prepare()
+        selected = SelectedProvider(case.raw, {'instance': 'fixture', 'model': 'other-canonical-model'})
+        case.coordinator.loop.root_provider = selected
+        case.origin.update(inputId='different-input', generationId='different-generation',
+            selectionRevision='different-choice', selection=selected.selection)
+        async def count(rows):
+            request = ChatRequest(model='other-canonical-model', messages=[Message(**row) for row in rows])
+            return {'dispatch': request, 'budget_decision': selected.request_budget(request)}
+        async def prepare():
+            return await case.coordinator.context.get_measured_request_view(
+                provider=selected, retain_contents=(), count_view=count)
+    else:
+        case.raw.input_limit = 50000
+        assert (await prepare())['outcome'] == 'transition_fitted'
+    case.raw.input_limit = 50000
+    journal = case.adapter.recovery_path.read_bytes()
+    checkpoint = case.adapter.path.read_bytes() if case.adapter.path.exists() else None
+    recover = AsyncMock(side_effect=AssertionError('ordinary failure rearmed historical transition'))
+    case.coordinator.register_capability('context.recovery.recover', recover)
+    failed = AsyncMock(side_effect=LLMError('temporary ordinary target outage', retryable=True))
+    case.raw.compact_context = failed
+    with pytest.raises(RuntimeError):
+        await prepare()
+    failure = copy.deepcopy(case.coordinator.context.summary_failure)
+    assert failure and failure['retryable'] and failed.await_count == 1
+    assert case.coordinator.context.summary is None
+    assert case.coordinator.context._summary_progress is None
+    assert case.adapter.recovery_path.read_bytes() == journal
+    with pytest.raises(RuntimeError, match='previous_failure'):
+        await prepare()
+    assert case.coordinator.context.summary_failure == failure
+    assert failed.await_count == 1
+    recover.assert_not_awaited()
+    assert case.adapter.recovery_path.read_bytes() == journal
+    assert (case.adapter.path.read_bytes() if case.adapter.path.exists() else None) == checkpoint
 
 
 async def test_h2_cold_settled_originals_needs_no_new_selection_intent_or_old_contract(tmp_path):
@@ -2106,6 +2165,38 @@ async def test_transition_rejects_invalid_source_without_laundering_identity(tmp
         await case.prepare()
     assert case.adapter.path.read_bytes() == saved
     assert case.raw.compactions == [] and not case.adapter.recovery_path.exists()
+
+
+@pytest.mark.parametrize('prior_unknown', [False, True], ids=['no-attempt', 'unknown-target'])
+async def test_known_rejected_foreign_checkpoint_cannot_arm_generic_explicit_recovery(tmp_path, prior_unknown):
+    case = await target_transition_fixture(tmp_path)
+    if prior_unknown:
+        async def lost(request):
+            raise RuntimeError('unknown existing target')
+        case.raw.compact_context = lost
+        with pytest.raises(RuntimeError, match='unknown existing target'):
+            await case.prepare()
+    journal = case.adapter.recovery_path.read_bytes() if prior_unknown else None
+    record = json.loads(case.accepted)
+    record['summary']['message']['content'] += ' corrupt'
+    case.adapter.path.write_text(json.dumps(record))
+    if prior_unknown:
+        case.adapter._accepted_record = record
+    await case.adapter.preserve(await case.coordinator.context.get_messages())
+    assert case.adapter._foreign_rejected
+    saved = case.adapter.path.read_bytes()
+    with pytest.raises(RuntimeError, match='recovery_checkpoint_rejected'):
+        await case.adapter.request_recovery('not-a-foreign-salvage-route', 0)
+    assert case.adapter.path.read_bytes() == saved
+    assert (case.adapter.recovery_path.read_bytes() if prior_unknown else None) == journal
+    if prior_unknown:
+        row = case.adapter._recovery_record()
+        # A repeated exact command remains an idempotent read, not a new attempt.
+        await case.adapter.request_recovery(row['commandId'], row['interruptionRevision'], row['targetBytes'])
+        assert case.adapter.recovery_path.read_bytes() == journal
+    else:
+        assert not case.adapter.recovery_path.exists()
+    assert case.raw.compactions == [] and case.raw.sent == []
 
 
 @pytest.mark.parametrize('warm', [False, True], ids=['cold', 'warm'])

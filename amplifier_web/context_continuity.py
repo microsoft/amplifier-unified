@@ -55,8 +55,8 @@ class ContextRecoveryError(RuntimeError):
                 "Choose an explicit model connection, then send a new ordinary message. "
                 "Default drift, schedules, peer/control input and retries do not authorize transition preparation."),
             "recovery_checkpoint_rejected": (
-                "The saved checkpoint cannot establish a model transition. Restore a compatible validated source "
-                "or use the supported explicit recovery path; merely choosing a model may not repair this record."),
+                "The saved checkpoint cannot establish a model transition. Preserve the original history "
+                "and use a compatible validated source. Choosing a model does not repair corruption or changed source."),
             "transition_unsupported": "The mounted context does not support this model-transition preparation.",
         }.get(code, "Inspect the retained recovery receipt; no automatic retry is permitted.")
         super().__init__(f"Context recovery stopped [{code}]. {guidance}")
@@ -434,6 +434,8 @@ class ContextContinuity:
             if (existing["interruptionRevision"], existing["targetBytes"]) != (interruption_revision, target_bytes):
                 raise ContextRecoveryError("recovery_command_changed")
             return self._recovery_public(existing)
+        if self._foreign_rejected:
+            raise ContextRecoveryError("recovery_checkpoint_rejected")
         if self._recovery_busy or current and current["state"] in {"pending", "running", "installing", "unknown"}:
             raise ContextRecoveryError("recovery_unreconciled")
         self._recovery_busy = True

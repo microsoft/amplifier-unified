@@ -137,6 +137,10 @@ on a new genuine foreground input under the same binding and cumulative budget.
 That effect-free retry may use a newly authorized tool/request contract, retaining
 the prior failed preparation's provenance in the existing journal. Paid progress
 and uncertain effects cannot use this exception.
+An altered earlier canonical prefix still refuses, even when the failed
+preparation bought nothing. Request/tool changes do not authorize rewriting the
+source bound to a retained attempt; preserve the originals and establish a
+compatible validated source rather than retrying that attempt.
 
 Eligible confirmed-progress continuation and exact candidate readback on a
 genuinely new authorized foreground input bind the current interruption epoch
@@ -160,7 +164,9 @@ Current identity, saved choice/account, exact retained checkpoint, canonical
 prefix and an empty derived unit must verify; an old identity-only marker cannot
 hide changed source/configuration or a foreign active summary/paid partial.
 Current ordinary request fitting still applies, with ordinary target compaction
-and persistence enabled.
+and persistence enabled. An ordinary target failure/cooldown latch without a
+derived result is not a foreign derived unit: preserve that latch and let the
+ordinary retry policy decide, without rearming the settled transition.
 
 An invalid same-identity checkpoint may be reconstructed from canonical
 originals through ordinary preparation. It is never transition provenance.
@@ -169,8 +175,11 @@ revision only after verification of the mounted connection; restoring a default,
 an absent selection or an explicit null fork revision does not grant admission.
 Missing transition intent tells the person to choose an explicit connection/model
 and send a new ordinary message. A rejected foreign checkpoint instead needs a
-compatible validated source or supported explicit recovery; choosing a model is
-not claimed to repair corruption. Default drift, peer/control input, schedules
+compatible validated source and preserved originals. Generic explicit recovery
+is not a salvage path for that rejected foreign provenance, and known rejection
+cannot arm a new generic recovery command. Returning to the previous model works
+only if its source still validates; choosing a model does not repair corruption
+or changed history. Default drift, peer/control input, schedules
 and retries do not authorize a new paid transition campaign. This is not general
 self-repair for every historical conversation or input route.
 
