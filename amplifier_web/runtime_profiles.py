@@ -68,7 +68,8 @@ def configuration_key(settings, *roots):
     for root in sorted(
         {str(Path(root).resolve()) for root in roots}, key=len, reverse=True
     ):
-        text = text.replace(root, "$APP")
+        # In the form that JSON text has: a backslash is written twice there.
+        text = text.replace(json.dumps(root)[1:-1], "$APP")
     return hashlib.sha256(text.encode()).hexdigest()
 
 

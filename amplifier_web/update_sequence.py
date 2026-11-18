@@ -64,7 +64,8 @@ def app_selection(home, *, config=None, original_home=None):
     from .builtin_behaviors import resolve_builtin_behavior, resource_root
     from .runtime_profiles import configuration_key
     from .updates import source_key
-    from urllib.parse import parse_qs, unquote
+    from urllib.parse import parse_qs
+    from urllib.request import url2pathname
     import yaml
 
     config = config or read_config(home, home=home, global_only=True)
@@ -104,7 +105,14 @@ def app_selection(home, *, config=None, original_home=None):
         parsed = urlsplit(reference)
         if parsed.scheme == 'file':
             sub = parse_qs(parsed.fragment).get('subdirectory', [''])[0]
-            path = Path(unquote(parsed.path)) / sub
+            # The address of a Windows file is file:///C:/...; its path part
+            # alone is no Windows path. The conversion refuses an address
+            # that is no path of this system (on Windows with an IndexError
+            # for a path part that starts with a colon).
+            try:
+                path = Path(url2pathname(parsed.path)) / sub
+            except (OSError, IndexError):
+                continue  # Not the shipped file.
             if path.parent == resource_root() / 'behaviors' and path.suffix == '.yaml':
                 shipped(yaml.safe_load(path.read_text()))
     # Only the source roots that installation actually relocates are equivalent.
@@ -116,7 +124,8 @@ def app_selection(home, *, config=None, original_home=None):
     text = json.dumps([configuration_key(config.settings, *roots),
                        references], sort_keys=True)
     for root in sorted(roots, key=len, reverse=True):
-        text = text.replace(root, '$APP')
+        # In the form that JSON text has: a backslash is written twice there.
+        text = text.replace(json.dumps(root)[1:-1], '$APP')
     return {'sources': list(sources.values()), 'witness': hashlib.sha256(text.encode()).hexdigest()}
 
 

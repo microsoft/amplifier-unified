@@ -343,6 +343,19 @@ at least 1 hour old. A one-time reason must end by a fact that the owner keeps
 (`_start_check_open`, ended when a check passes its admission), never by
 comparing a saved time with the start time: a clock that was ahead at the start
 and is corrected later would name the reason again on every pass.
+The update check's selection witness (`update_sequence.app_selection`) and the
+configuration key (`runtime_profiles.configuration_key`) replace the
+installation's folders inside JSON text. JSON writes each backslash of a
+Windows path twice: look for a folder there in the form
+`json.dumps(folder)[1:-1]`, never as plain text. The address of a Windows file
+(`Path.as_uri()`) is `file:///C:/...`, and its path part alone has no drive:
+make the path with `urllib.request.url2pathname`. An installation saves both
+values and compares them later. A change of either function must keep the
+values in `tests/test_effective_behavior_updates.py` for settings that name no
+folder; else every saved row and qualification record counts as changed. The
+witness also holds the address of the shipped behavior file, and so the app's
+folder: it changes with each app update, and the first check of the new app
+makes new rows. `other-test-files.yml` runs that test file on native Windows.
 A reader of a private file can hold an object that another process replaced
 (`publish_private(replace=True)`). Windows then reports 0 links and a path below
 `$Extend\$Deleted` for it. That is `PrivateFileUnlinked` in `windows_files.py`,
