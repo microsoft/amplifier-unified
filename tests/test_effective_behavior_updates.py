@@ -132,8 +132,9 @@ def test_only_the_address_that_the_app_makes_is_read_as_the_shipped_file(tmp_pat
         other = address.replace('file:///', 'file:////localhost/', 1)
         assert selection(tmp_path, settings([other + file]))['sources'] == []
     # The same address with a server name. On Windows the app's own address has none, and only
-    # that form is read; a general conversion does not look at the server name. Linux and
-    # macOS do not read the server name of a file address.
+    # an address with no server name loses the slash before its drive; a general conversion
+    # does not look at the server name. Linux and macOS do not read the server name of a file
+    # address.
     if os.name == 'nt':
         other = address.replace('file:///', 'file://another-computer/', 1)
         assert selection(tmp_path, settings([other + file]))['sources'] == []
@@ -254,6 +255,52 @@ def test_an_installation_and_its_stage_have_one_configuration_key_and_one_witnes
             != update_sequence.app_selection(home, config=live)['witness'])
 
 
+def named(source):
+    return settings([URI], sources={'modules': {'local-tool': str(source)}})
+
+
+def witness_of(root, source, original=None):
+    config = HostConfig(root, root, named(source), root/'foundation',
+                        root/('shared' if original is None else 'shared-config'), True)
+    return update_sequence.app_selection(root, config=config, original_home=original)['witness']
+
+
+@pytest.mark.parametrize('name', ['app', 'caf\u00e9 app'])
+def test_a_folder_beside_a_named_folder_keeps_its_own_path(tmp_path, name):
+    # "<data folder>-extra" and "foundation-extra" are not below the data folder or the
+    # Foundation folder. So an installation and its stage must not give one value for them.
+    # One exception stays as it was: a folder path that JSON text writes as it is (no
+    # backslash, only ASCII). The replacement for such a folder never looked at where the
+    # folder's name ends, and installations have saved values that it made (the last case
+    # of this group holds some).
+    from amplifier_web.runtime_profiles import configuration_key
+    home = tmp_path.resolve()/name
+    stage = home/'updates/releases'/('b'*32)
+    as_before = json.dumps(str(home))[1:-1] == str(home)
+    assert (configuration_key(named(Path(str(home) + '-extra')/'tool'), home, stage)
+            == configuration_key(named(Path(str(stage) + '-extra')/'tool'), home, stage)) == as_before
+    assert (witness_of(home, home/'foundation-extra/tool')
+            == witness_of(stage, stage/'foundation-extra/tool', home)) == as_before
+    # A text that only has the folder's path in it is no path below the folder.
+    assert (witness_of(home, '--from=' + str(home/'foundation/cache/tool'))
+            == witness_of(stage, '--from=' + str(stage/'foundation/cache/tool'), home)) == as_before
+    # "file://" and the path is a form of a local bundle (host.bundle_paths.local_bundle_path).
+    assert (witness_of(home, 'file://' + str(home/'foundation/cache/tool'))
+            == witness_of(stage, 'file://' + str(stage/'foundation/cache/tool'), home))
+
+    # The same for an enabled app behavior that is a file beside the Foundation folder: the
+    # selection itself names that path, not only the settings.
+    def beside(root):
+        path = root/'foundation-extra/behavior.yaml'
+        path.parent.mkdir(parents=True)
+        path.write_text('bundle: {name: fixture}\n')
+        return settings([str(path)])
+    live = HostConfig(home, home, beside(home), home/'foundation', home/'shared', True)
+    staged = HostConfig(stage, stage, beside(stage), stage/'foundation', stage/'shared-config', True)
+    assert (update_sequence.app_selection(home, config=live)['witness']
+            == update_sequence.app_selection(stage, config=staged, original_home=home)['witness']) == as_before
+
+
 @pytest.mark.parametrize('name', ['app', 'caf\u00e9 app'])
 def test_settings_that_name_no_folder_keep_their_configuration_key_and_witness(tmp_path, name):
     # Most installations: the settings name Git addresses only. The two values
@@ -287,6 +334,21 @@ def test_a_linux_installation_keeps_its_selection_witness_and_configuration_key(
     key='d3ecd70527a165b03ef15d1b8428bf9797e525644617a723ede05866cdcbe9e1'
     assert configuration_key(below(home),home,stage)==key
     assert configuration_key(below(stage),home,stage)==key
+    # The same for a folder beside a named folder, for a text that only has the path in it,
+    # and for "file://" and the path. These paths are written as JSON writes them, so the
+    # replacement for them is the one of before, also where it takes more than the folder.
+    beside='e45ebae9ff7e3aeb4d926ae7aa1583e0a1df64228804b57477f611c8ced62cd3'
+    assert configuration_key(named('/srv/unified-extra/tool'),home,stage)==beside
+    assert configuration_key(named(str(stage)+'-extra/tool'),home,stage)==beside
+    inside='0381d296f9338d81fe5a1179966f2fcf70ce3ea7fc140361015ca36898f84cea'
+    assert configuration_key(named('--from=/srv/unified/foundation/cache/tool'),home,stage)==inside
+    assert configuration_key(named('--from='+str(stage/'foundation/cache/tool')),home,stage)==inside
+    beside='0eb48737eca44dc5bd4a2d980ef14745e5fec33ba15ccfc464bd73e95b7d1d97'
+    assert witness_of(home,'/srv/unified/foundation-extra/tool')==beside
+    assert witness_of(stage,str(stage/'foundation-extra/tool'),home)==beside
+    address='07793ce887e6bbe5d82004e6fc43db875f06bb5e2070a86cb8be77647b620bcd'
+    assert witness_of(home,'file:///srv/unified/foundation/cache/tool')==address
+    assert witness_of(stage,'file://'+str(stage/'foundation/cache/tool'),home)==address
 
 
 async def test_index_invalidates_on_effective_selection_not_history_size(tmp_path,monkeypatch):

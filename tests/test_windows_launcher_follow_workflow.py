@@ -209,9 +209,19 @@ ELSEWHERE = {"tests/test_service.py": "coordination.yml",
 def starts_pytest(line, name):
     """A line of a step that starts pytest with this file: `uv run ... pytest` or `<python> ... -m pytest`.
 
-    A comment, or another command that only has the words, is no run.
+    A comment, or another command that only has the words, is no run. A line can hold more
+    than one command; the file must be an argument of the command that starts pytest.
     """
-    words = list(itertools.takewhile(lambda word: not word.startswith("#"), line.split()))
+    words = list(itertools.takewhile(lambda word: not word.startswith("#"), line.replace(";", " ; ").split()))
+    # A pipe or "||" after a command can take its result away.
+    if {"|", "||"} & set(words):
+        return False
+    commands = [list(group) for between, group in itertools.groupby(words, lambda word: word in (";", "&&", "&"))
+                if not between]
+    return any(_starts_pytest(command, name) for command in commands)
+
+
+def _starts_pytest(words, name):
     if "pytest" not in words:
         return False
     before, after = words[:words.index("pytest")], words[words.index("pytest"):]
@@ -223,8 +233,8 @@ def starts_pytest(line, name):
               and all(word.startswith("-") for word in before[1:]))
     if not (wrapper and not before or python):
         return False
-    # Not a run of the file's cases: a command whose failure is thrown away, or a collection only.
-    if {"||", "--collect-only", "--co"} & set(after):
+    # A collection only runs no case.
+    if {"--collect-only", "--co"} & set(after):
         return False
     return any(word == name and after[index - 1] not in ("--ignore", "--ignore-glob", "--deselect")
                for index, word in enumerate(after))
@@ -251,6 +261,10 @@ def command_lines(run):
     ("uv run pytest --collect-only tests/test_one.py", False),
     ("uv run pytest tests/test_one.py::test_x", False),
     ("uv run pytest tests/test_two.py\necho tests/test_one.py", False),
+    ("uv run pytest tests/test_two.py; echo tests/test_one.py", False),
+    ("uv run pytest tests/test_two.py && echo tests/test_one.py", False),
+    ("uv run pytest tests/test_one.py | tee log", False),
+    ("echo start; uv run pytest tests/test_one.py; echo done", True),
 ])
 def test_a_line_that_starts_pytest_with_a_file_is_told_from_a_line_that_has_the_words(text, runs):
     assert any(starts_pytest(line, "tests/test_one.py") for line in command_lines(text)) == runs
@@ -342,9 +356,10 @@ def test_a_pull_request_runs_every_launcher_case_file():
     # And the other way: the step runs every test file that the path filter names. A name below
     # `paths:` that nothing runs is the gap that this workflow closes. The only others are test
     # files that a run file imports. An import runs none of their cases, so each has a line that
-    # starts pytest with it, in a step with no condition, in another workflow that starts for a
-    # pull request. Not read here: the condition of that step's job, and whether that workflow
-    # starts for a change of the file alone.
+    # starts pytest with it, in a step with no condition whose failure fails its job, in another
+    # workflow that starts for a pull request. Not read here: the condition of that step's job,
+    # and whether that workflow starts for a change of the file alone. A command form that this
+    # case does not know fails it; that does not say that the file is not run.
     named = [path for path in paths if path.startswith("tests/test_") and "*" not in path]
     assert sorted(set(named) - set(run)) == sorted(ELSEWHERE)
     for name, workflow in ELSEWHERE.items():
@@ -352,7 +367,8 @@ def test_a_pull_request_runs_every_launcher_case_file():
         other = yaml.safe_load((ROOT / ".github/workflows" / workflow).read_text(encoding="utf-8"))
         assert "pull_request" in other[True], workflow
         assert [job for job, body in other["jobs"].items() for step in body.get("steps", [])
-                if "if" not in step and any(starts_pytest(line, name) for line in command_lines(step.get("run", "")))
+                if "if" not in step and not step.get("continue-on-error") and not body.get("continue-on-error")
+                and any(starts_pytest(line, name) for line in command_lines(step.get("run", "")))
                 ], (name, workflow)
     assert [path for path in paths if "*" not in path and not (ROOT / path).is_file()] == []
 
