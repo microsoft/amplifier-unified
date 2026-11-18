@@ -63,11 +63,19 @@ Scheduling is authored in the public
 repository. Its selected artifact remains in generated `components/scheduling-delivery`,
 bound by `components/scheduling.source.json`; see the
 [selection guide](../components/README.md#select-a-scheduling-artifact).
-Portability and publishing artifact snapshots follow the same author/delivery
-distinction: `components/<name>` is authored, while `components/<name>-delivery`
-is generated and opt-in. Visible `components/<name>.source.json` records the
-selected public wheel. Use `--all --under components/<name>-delivery` to inspect
-it; a new component source edit or publication does not silently refresh the copy.
+Publishing is authored in public
+[microsoft/amplifier-publishing](https://github.com/microsoft/amplifier-publishing).
+Its generated `components/publishing-delivery` snapshot is bound by
+`components/publishing.source.json`; follow the
+[selection guide](../components/README.md#select-a-publishing-artifact).
+Portability is authored in public
+[microsoft/amplifier-portability](https://github.com/microsoft/amplifier-portability).
+Its generated `components/portability-delivery` snapshot and
+`components/portability.source.json` remain paired with the exact Worktrees receipt;
+see the [selection guide](../components/README.md#select-worktrees-and-portability-artifacts).
+Visible source records bind selected public artifacts; author edits and publication
+never silently refresh them. Use `--all --under components/<name>-delivery` to
+inspect selected runtime bytes.
 Recall storage is authored in public
 [amplifier-platform-recall](https://github.com/bkrabach/amplifier-platform-recall).
 Unified's generated `components/recall-delivery` snapshot and `recall.source.json`
@@ -134,7 +142,7 @@ guides remain visible for current direction, reproduction and evidence limits.
 | Domain capabilities | Relevant `amplifier_web` handler, portable `amplifier_*` package, frontend consumer and domain tests | Domain guide under `docs/`; [component boundaries](../contracts/component-boundaries.v1.md) |
 | Output relationships and review evidence | [public mechanisms](https://github.com/bkrabach/amplifier-platform-resources), [host outputs](../amplifier_web/outputs.py), [transfer reader](../amplifier_web/portability_data.py) | [Output guide](OUTPUTS.md); host owns authorization, transactions, resource integrity and retention |
 | Workspace registration and selection | [metadata owner](https://github.com/bkrabach/amplifier-platform-workspaces), [host selection](../amplifier_web/workspace_selection.py), [placement](../amplifier_web/workspace_placement.py) | [Placement](workspaces/contracts/placement.v1.md), [context](workspaces/contracts/context.v1.md); selection preserves native history identity and existing Canvas visibility |
-| Shell, canvas and appearance | [Canvas rendering](../amplifier_web/workspace_canvas.py), [appearance package and CSS validation](../amplifier_web/appearance_packages.py), [shell](shell), [SDK](../packages/shell-sdk), [frontend shell](https://github.com/microsoft/amplifier-client-web/blob/main/src/shell) | Public extension/appearance contracts; saved user skins and independent components remain consumers |
+| Shell, canvas and appearance | [Canvas rendering](../amplifier_web/workspace_canvas.py), [appearance package and CSS validation](../amplifier_web/appearance_packages.py), [shell](shell), [SDK owner](https://github.com/bkrabach/amplifier-shell-sdk), [selected SDK delivery](shell/sdk-delivery.md), [frontend shell](https://github.com/microsoft/amplifier-client-web/blob/main/src/shell) | Public extension/appearance contracts; saved user skins and independent components remain consumers |
 | Test and release mechanisms | [Python tests](../tests), [browser registry](../tests/web/browser-checks.json), [scripts](../scripts) | [Performance validation](validation/performance.md), [release qualification](validation/release-qualification.md); exact evidence and independent modes remain distinct |
 
 The [family vision](architecture/VISION.md) and [client direction index](clients/direction.md)

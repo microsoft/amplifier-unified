@@ -102,6 +102,67 @@ def _read_file(root, path, expected_size):
         os.close(fd)
 
 
+# Original complete authority profiles; receipt JSON has its own legacy contract.
+_LEDGER_COLUMNS = {
+    "publisher": {"records": [("kind", "TEXT", 0, 1), ("id", "TEXT", 0, 2), ("body", "TEXT", 1, 0)],
+                  "receipts": [("session", "TEXT", 0, 1), ("request", "TEXT", 0, 2), ("fingerprint", "TEXT", 1, 0), ("body", "TEXT", 1, 0)]},
+    "service": {"imports": [("session", "TEXT", 0, 1), ("request", "TEXT", 0, 2), ("fingerprint", "TEXT", 1, 0), ("body", "TEXT", 1, 0)],
+                "rpc_receipts": [("session", "TEXT", 0, 1), ("request", "TEXT", 0, 2), ("payload_digest", "TEXT", 1, 0), ("body", "TEXT", 1, 0)],
+                "identity": [("singleton", "INTEGER", 0, 1), ("service_id", "TEXT", 1, 0)]},
+}
+
+
+def _ledger_unconfirmed():
+    raise PublishingError("ledger_unconfirmed", "Publishing authority is incomplete; retained evidence requires inspection")
+
+
+def _validate_ledger(db, profile, *, fresh=False):
+    expected = _LEDGER_COLUMNS[profile]
+    version = db.execute("PRAGMA user_version").fetchone()[0]
+    names = [row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' LIMIT 4")]
+    if fresh and version == 0 and not names:
+        return
+    if version != 0 or set(names) != set(expected) or len(names) != len(expected):
+        _ledger_unconfirmed()
+    for table, columns in expected.items():
+        actual = [(name, kind.upper(), required, key) for name, kind, required, key in
+                  db.execute('SELECT name,type,"notnull",pk FROM pragma_table_info(?) LIMIT ?', (table, len(columns) + 1))]
+        if actual != columns:
+            _ledger_unconfirmed()
+    if profile == "service":
+        row = db.execute("SELECT CASE WHEN length(CAST(service_id AS BLOB))<=256 THEN service_id END FROM identity WHERE singleton=1").fetchone()
+        if not row or not isinstance(row[0], str) or not re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", row[0]):
+            _ledger_unconfirmed()
+        sql = db.execute("SELECT CASE WHEN length(sql)<=8192 THEN sql END FROM sqlite_master WHERE type='table' AND name='identity'").fetchone()[0]
+        if not isinstance(sql, str) or not re.search(r"CHECK\s*\(\s*singleton\s*=\s*1\s*\)", sql, re.I):
+            _ledger_unconfirmed()
+
+
+def _ledger_fresh(path, profile):
+    # lstat counts empty and dangling journal evidence, and rejects special files.
+    entries = []
+    for candidate in (path, *(Path(str(path) + suffix) for suffix in ("-wal", "-shm", "-journal"))):
+        try:
+            info = candidate.lstat()
+        except FileNotFoundError:
+            entries.append(None)
+        else:
+            if not stat.S_ISREG(info.st_mode):
+                _ledger_unconfirmed()
+            entries.append(info)
+    if entries[0] is None:
+        if any(entry is not None for entry in entries[1:]):
+            _ledger_unconfirmed()
+        return True
+    # mode=ro observes committed WAL. immutable mode would hide that authority.
+    db = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, isolation_level=None)
+    try:
+        _validate_ledger(db, profile)
+    finally:
+        db.close()
+    return False
+
+
 class _Server(ThreadingHTTPServer):
     daemon_threads = True
     block_on_close = False
@@ -271,15 +332,25 @@ class Publisher:
             self._lock_file.close()
             raise PublishingError("root_busy", "Publishing root requires one active owner on a POSIX host") from exc
         try:
+            fresh = self._preflight_storage()
             self._content = self.root / "releases"
             self._content.mkdir(exist_ok=True, mode=0o700)
             self._staging = self.root / "staging"
             self._staging.mkdir(exist_ok=True, mode=0o700)
             self._db = sqlite3.connect(self.root / "state.sqlite3", check_same_thread=False, isolation_level=None)
-            self._db.execute("PRAGMA journal_mode=WAL")
+            if fresh:
+                self._db.execute("PRAGMA journal_mode=WAL")
             self._db.execute("PRAGMA synchronous=FULL")
+            self._db.execute("BEGIN IMMEDIATE")
+            _validate_ledger(self._db, "publisher", fresh=fresh)
             self._db.execute("CREATE TABLE IF NOT EXISTS records (kind TEXT, id TEXT, body TEXT NOT NULL, PRIMARY KEY(kind,id))")
             self._db.execute("CREATE TABLE IF NOT EXISTS receipts (session TEXT, request TEXT, fingerprint TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(session,request))")
+            self._db.execute("CREATE INDEX IF NOT EXISTS records_scope ON records(kind,json_extract(body,'$.sessionId'),id)")
+            self._db.execute("CREATE INDEX IF NOT EXISTS records_site ON records(kind,json_extract(body,'$.sessionId'),json_extract(body,'$.siteId'),id)")
+            self._db.execute("CREATE INDEX IF NOT EXISTS records_running ON records(kind,json_extract(body,'$.status'),id)")
+            self._db.execute("CREATE INDEX IF NOT EXISTS receipts_state ON receipts(json_extract(body,'$.state'))")
+            self._db.execute("CREATE INDEX IF NOT EXISTS receipts_site ON receipts(session,json_extract(body,'$.siteId'),request)")
+            self._db.execute("CREATE INDEX IF NOT EXISTS records_site_owner ON records(kind,json_extract(body,'$.siteId'),json_extract(body,'$.sessionId'))")
             self._db.execute("CREATE INDEX IF NOT EXISTS publishing_resources ON records(json_extract(body,'$.sessionId'),kind,id)")
             self._db.execute("CREATE INDEX IF NOT EXISTS publishing_pins ON records(json_extract(body,'$.sessionId'),json_extract(body,'$.siteId'),id) "
                              "WHERE kind='retention' AND json_extract(body,'$.pinned')=1 AND json_extract(body,'$.availability')='available'")
@@ -289,22 +360,39 @@ class Publisher:
             self._db.execute("CREATE INDEX IF NOT EXISTS publishing_unsettled ON receipts(session,json_extract(body,'$.siteId')) "
                              "WHERE json_extract(body,'$.state') IN ('running','unknown') AND json_extract(body,'$.action')!='retire' "
                              "AND (json_extract(body,'$.state')='running' OR json_extract(body,'$.action') NOT IN ('deploy','rollback','stop','remove'))")
+            self._db.execute("COMMIT")
             self._recover()
             self.reconcile_retirements()
         except BaseException:
-            self._lock_file.close()
             if hasattr(self, "_db"):
                 self._db.close()
+            self._lock_file.close()
             raise
+
+    def _preflight_storage(self):
+        return _ledger_fresh(self.root / "state.sqlite3", "publisher")
 
     @property
     def capabilities(self):
         return {"bindHost": self._bind_host, "accessPolicy": self._access_policy, "authentication": "none", "previewAccessPolicy": "loopback-only", "publicPublishing": False}
 
-    def _check_open(self):
+    def inspect_lifetime(self):
+        """Read process-owned listener counts without touching stored history.
+
+        Callers must separately fence new operations before treating this as an
+        idle observation. Existing listeners are live responsibilities even when
+        no HTTP request is currently active. No URLs or session IDs are exposed.
+        """
+        with self._mutex:
+            self._check_open(settle=False)
+            return {"sites": len(self._sites), "previews": len(self._previews),
+                    "listeners": len(self._sites) + len(self._previews)}
+
+    def _check_open(self, *, settle=True):
         if self._closed or self._closing:
             raise PublishingError("closed", "Publisher is closed")
-        self._settle_body_reads()
+        if settle:
+            self._settle_body_reads()
 
     def _consumer_released(self, identity, observed_at=None):
         state = self._get('retention', identity)
@@ -361,6 +449,14 @@ class Publisher:
     def _all(self, kind):
         return [json.loads(row[0]) for row in self._db.execute("SELECT body FROM records WHERE kind=? ORDER BY rowid", (kind,))]
 
+    def _session_records(self, kind, session_id):
+        # Preserve legacy export order while filtering through records_scope
+        # before decoding. Other sessions never become this caller's working set.
+        return [json.loads(row[0]) for row in self._db.execute(
+            "SELECT body FROM records WHERE kind=? AND json_extract(body,'$.sessionId')=? ORDER BY rowid",
+            (kind, session_id),
+        )]
+
     def _save_receipt(self, receipt, fingerprint):
         self._db.execute("INSERT OR REPLACE INTO receipts VALUES (?,?,?,?)", (receipt["sessionId"], receipt["requestId"], fingerprint, _json(receipt)))
 
@@ -373,10 +469,11 @@ class Publisher:
                              "WHERE kind='retention' AND json_type(body,'$.policy')='object' "
                              "AND json_extract(body,'$.availability')='available' AND json_type(body,'$.unusedSince') IS NULL", (_now(),))
             for kind in ("site", "preview"):
-                for record in self._all(kind):
+                for (body,) in self._db.execute("SELECT body FROM records WHERE kind=? AND json_extract(body,'$.status')='running'", (kind,)).fetchall():
+                    record = json.loads(body)
                     if record["status"] == "running":
                         self._interrupted(kind, record)
-            rows = self._db.execute("SELECT fingerprint,body FROM receipts").fetchall()
+            rows = self._db.execute("SELECT fingerprint,body FROM receipts WHERE json_extract(body,'$.state')='running'").fetchall()
             for fingerprint, body in rows:
                 receipt = json.loads(body)
                 if receipt["state"] == "running":
@@ -574,9 +671,8 @@ class Publisher:
             if site:
                 self._scope(site, session_id, "Site")
             # A release reserves the site name to its owner before first deploy.
-            for existing in self._all("release"):
-                if existing["siteId"] == site_id and existing["sessionId"] != session_id:
-                    raise PublishingError("not_found", "Site is not available in this session")
+            if self._db.execute("SELECT 1 FROM records WHERE kind='release' AND json_extract(body,'$.siteId')=? AND json_extract(body,'$.sessionId')<>? LIMIT 1", (site_id,session_id)).fetchone():
+                raise PublishingError("not_found", "Site is not available in this session")
             try:
                 staging, manifest, total = self._snapshot(source)
             except OSError as exc:
@@ -780,21 +876,20 @@ class Publisher:
         def end(_receipt):
             site = self._site(site_id, session_id, expected_revision, allow_unknown=True)
             # A preview-only site is still owned by the release's session.
-            for release in self._all("release"):
-                if release["siteId"] == site_id:
-                    self._scope(release, session_id, "Site")
+            if self._db.execute("SELECT 1 FROM records WHERE kind='release' AND json_extract(body,'$.siteId')=? AND json_extract(body,'$.sessionId')<>? LIMIT 1", (site_id,session_id)).fetchone():
+                raise PublishingError("not_found", "Site is not available in this session")
             self._stop_listeners(site_id)
             if action == 'remove' and site.get('releaseId'):
                 self._consumer_released(site['releaseId'])
             site.update(status="removed" if action == "remove" else "stopped", url=None, accessPolicy=self._access_policy, revision=site["revision"] + 1, updatedAt=_now())
             site.pop("unknownRequestIds", None)
             self._put("site", site)
-            for preview in self._all("preview"):
-                if preview["siteId"] == site_id:
-                    if preview['status'] == 'running':
-                        self._consumer_released(preview['releaseId'])
-                    preview.update(status="stopped", url=None, updatedAt=_now())
-                    self._put("preview", preview)
+            for (body,) in self._db.execute("SELECT body FROM records WHERE kind='preview' AND json_extract(body,'$.siteId')=? AND json_extract(body,'$.status')<>'stopped'", (site_id,)).fetchall():
+                preview=json.loads(body)
+                if preview['status'] == 'running':
+                    self._consumer_released(preview['releaseId'])
+                preview.update(status="stopped", url=None, updatedAt=_now())
+                self._put("preview", preview)
             return site
         return self._operation(action, session_id, request_id, {"siteId": site_id, "expectedRevision": expected_revision}, end)
 
@@ -835,12 +930,11 @@ class Publisher:
                 'previousReleaseAvailable': site.get('previousReleaseId') in candidates}
 
     def _refresh_liveness(self):
-        # Process-owned listener objects are the only authority for a live URL.
         for kind, listeners in (("site", self._sites), ("preview", self._previews)):
-            for record in self._all(kind):
-                if record["status"] != "running":
-                    continue
-                server = listeners.get(record["id"])
+            # Indexed active set, independent of historical release count.
+            rows = self._db.execute("SELECT body FROM records WHERE kind=? AND json_extract(body,'$.status')='running'", (kind,)).fetchall()
+            for (body,) in rows:
+                record = json.loads(body); identity = record["id"]; server = listeners.get(identity)
                 if server is None or not server.thread.is_alive():
                     stale = listeners.pop(record["id"], None)
                     if stale:
@@ -960,11 +1054,66 @@ class Publisher:
                 if staging.exists():
                     shutil.rmtree(staging)
 
+    @staticmethod
+    def summary(record):
+        """Small metadata projection; exact selected reads retain full evidence."""
+        row = dict(record)
+        if isinstance(row.get("files"), list):
+            row["fileCount"] = len(row.pop("files"))
+        if isinstance(row.get("result"), dict):
+            row["result"] = Publisher.summary(row["result"])
+        return row
+
+    def receipt(self, request_id, session_id):
+        with self._mutex:
+            self._check_open(settle=False)
+            row = self._db.execute("SELECT body FROM receipts WHERE session=? AND request=?", (session_id, request_id)).fetchone()
+            return json.loads(row[0]) if row else None
+
+    def release(self, release_id, session_id):
+        with self._mutex:
+            self._check_open(); self._refresh_liveness()
+            return self._project_release(self._release(release_id, session_id))
+
+    def page(self, session_id, *, collection="sites", limit=25, cursor=None, site_id=None):
+        """Indexed lexical-ID keyset page. Cursor is scoped to its query, not an offset."""
+        import base64
+        if collection not in {"sites", "releases", "receipts"} or type(limit) is not int or not 1 <= limit <= 100:
+            raise PublishingError("invalid_argument", "Page requires sites/releases/receipts and limit 1..100")
+        after = ""
+        scope = [session_id, collection, site_id]
+        if cursor is not None:
+            try:
+                if not isinstance(cursor, str) or len(cursor) > 2048: raise ValueError()
+                value = json.loads(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))
+                if value[0] != scope or not isinstance(value[1], str): raise ValueError()
+                after = value[1]
+            except Exception as exc:
+                raise PublishingError("invalid_argument", "Page cursor does not match this query") from exc
+        with self._mutex:
+            self._check_open(); self._refresh_liveness()
+            if collection == "receipts":
+                query = "SELECT request,body FROM receipts WHERE session=? AND request>?"
+                values = [session_id, after]
+            else:
+                query = "SELECT id,body FROM records WHERE kind=? AND json_extract(body,'$.sessionId')=? AND id>?"
+                values = ["site" if collection == "sites" else "release", session_id, after]
+            if site_id is not None:
+                query += " AND " + ("id=?" if collection == "sites" else "json_extract(body,'$.siteId')=?")
+                values.append(site_id)
+            query += " ORDER BY " + ("request" if collection == "receipts" else "id") + " LIMIT ?"
+            rows = self._db.execute(query, (*values, limit + 1)).fetchall()
+            items = [json.loads(body) for _, body in rows[:limit]]
+            if collection == "releases": items = [self._project_release(row) for row in items]
+            elif collection == "sites": items = [self._project_site(row) for row in items]
+            next_cursor = base64.urlsafe_b64encode(_json([scope, rows[limit-1][0]]).encode()).decode().rstrip("=") if len(rows) > limit else None
+            return {"items": [self.summary(row) for row in items], "nextCursor": next_cursor, "collection": collection}
+
     def list(self, session_id):
         with self._mutex:
             self._check_open()
             self._refresh_liveness()
-            return [self._project_site(site) for site in self._all("site") if site["sessionId"] == session_id]
+            return [self._project_site(site) for site in self._session_records("site", session_id)]
 
     def status(self, site_id, session_id):
         with self._mutex:
@@ -976,20 +1125,12 @@ class Publisher:
         with self._mutex:
             self._check_open()
             self._refresh_liveness()
-            return [self._project_release(release) for release in self._all("release") if release["sessionId"] == session_id]
+            return [self._project_release(release) for release in self._session_records("release", session_id)]
 
     def receipts(self, session_id):
         with self._mutex:
             self._check_open()
             return [json.loads(row[0]) for row in self._db.execute("SELECT body FROM receipts WHERE session=? ORDER BY rowid", (session_id,))]
-
-    def receipt(self, session_id, request_id):
-        with self._mutex:
-            self._check_open()
-            _identifier(session_id, 'sessionId')
-            _identifier(request_id, 'requestId')
-            row = self._db.execute('SELECT body FROM receipts WHERE session=? AND request=?', (session_id, request_id)).fetchone()
-            return json.loads(row[0]) if row else None
 
     def retirement_candidates(self, session_id, *, policy, limit=25, after=None):
         from .retirement import candidates
@@ -1023,7 +1164,8 @@ class Publisher:
                 self._settle_body_reads()
                 self._db.execute("BEGIN IMMEDIATE")
                 for kind in ("site", "preview"):
-                    for record in self._all(kind):
+                    for (body,) in self._db.execute("SELECT body FROM records WHERE kind=? AND json_extract(body,'$.status')='running'", (kind,)).fetchall():
+                        record = json.loads(body)
                         if record["status"] == "running":
                             record.update(status="stopped", previousUrl=record["url"], url=None, updatedAt=_now())
                             if kind == "site":

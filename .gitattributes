@@ -20,21 +20,10 @@
 /components/recall-delivery/** source-context=generated linguist-vendored=true linguist-generated=true -text
 /components/scheduling.source.json source-context=configuration
 /components/scheduling-delivery/** source-context=generated linguist-vendored=true linguist-generated=true -text
-/components/publishing/amplifier_publishing/** source-context=source
-/components/publishing/tests/** source-context=tests
-/components/publishing/MANIFEST.in source-context=configuration
-/components/publishing/.gitignore source-context=configuration
-/components/publishing/LICENSE source-context=documentation
 /components/publishing.source.json source-context=configuration
 /components/publishing-delivery/** source-context=generated linguist-vendored=true linguist-generated=true -text
 /components/worktrees.source.json source-context=configuration
-/components/portability/worktrees-source.json source-context=configuration
 /components/worktrees-delivery/** source-context=generated linguist-vendored=true linguist-generated=true -text
-/components/portability/amplifier_portability/** source-context=source
-/components/portability/tests/** source-context=tests
-/components/portability/MANIFEST.in source-context=configuration
-/components/portability/.gitignore source-context=configuration
-/components/portability/LICENSE source-context=documentation
 /components/portability.source.json source-context=configuration
 /components/portability-delivery/** source-context=generated linguist-vendored=true linguist-generated=true -text
 /components/outputs.source.json source-context=configuration
@@ -125,3 +114,8 @@ package-lock.json source-context=locks
 /amplifier_operations/** source-context=generated linguist-vendored=true linguist-generated=true -text
 /components/kernels.source.json source-context=configuration
 /amplifier_kernels/** source-context=generated linguist-vendored=true linguist-generated=true -text
+
+# Public SDK artifact and authoring-example projection; edit in its public owner.
+/components/shell-sdk.source.json source-context=configuration
+/packages/shell-sdk/** source-context=generated linguist-vendored=true linguist-generated=true -text
+/examples/shell-controls/** source-context=generated linguist-vendored=true linguist-generated=true -text

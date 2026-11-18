@@ -35,16 +35,16 @@ do not refresh the app selection. Do not restore an author copy here; follow the
 [selection instructions](README.md#select-an-outputs-artifact).
 This package is not the whole resources domain.
 
-`components/portability/` is temporarily authored here as an independently
-buildable Python project. Preserve `amplifier_portability` imports and its existing
-worktree dependency. Its signed-journal and Git-capsule tests stay with the package;
-Unified retains task admission, data projection, native fencing and account probes.
-Unified consumes only `portability-delivery/` selected by `portability.source.json`,
-which binds the exact published dependency to `worktrees.source.json`. Authoring
-and publication do not change those selected defaults. Standalone delivery selects
-an exact public worktrees artifact through `portability/worktrees-source.json`;
-install both selected wheels explicitly, never alongside their Unified-owned copies.
-Never edit either generated delivery copy by hand.
+[microsoft/amplifier-portability](https://github.com/microsoft/amplifier-portability)
+is the sole Portability source and standalone-test owner. Preserve
+`amplifier_portability` imports, signed receipts, retained JSON recovery and public
+payload/evidence APIs. Unified retains admission, data projection, native fencing,
+account probes and tighter host dependency constraints. It consumes only generated
+`portability-delivery/`, recorded by `portability.source.json`, whose embedded
+Worktrees receipt must equal `worktrees.source.json` exactly. Publication does not
+refresh these selections. Never restore an author copy or publisher here, edit
+selected bytes by hand, or coinstall the standalone distribution with Unified.
+Follow the [paired selection guide](README.md#select-worktrees-and-portability-artifacts).
 
 [amplifier-platform-worktrees](https://github.com/bkrabach/amplifier-platform-worktrees)
 is the sole Worktrees author and owns its real-Git mechanism tests. Preserve
@@ -56,13 +56,15 @@ receipt; follow the [paired selection guide](README.md#select-worktrees-and-port
 Never restore an author copy, edit generated delivery or coinstall the standalone
 distribution with Unified.
 
-`components/publishing/` is temporarily authored here as its independently
-buildable Python project. Preserve its `amplifier_publishing` imports and existing
-module entrypoint. Unified consumes only the published artifact selected into
+[microsoft/amplifier-publishing](https://github.com/microsoft/amplifier-publishing)
+is the sole Publishing author and owns its lifecycle, storage and private-service
+mechanism tests. Preserve `amplifier_publishing` imports and the service module
+entrypoint. Unified consumes only the published artifact selected into
 `publishing-delivery/` by `publishing.source.json`, as the sole installed owner.
-Never edit that generated copy by hand or coinstall the standalone distribution.
-Author edits and publication do not refresh the app selection. Its POSIX mechanism
-tests stay with the package; host authorization, policy and integration stay in Unified.
+Never restore an author copy here, edit generated delivery by hand or coinstall the
+standalone distribution. Source acceptance and publication do not refresh the app
+selection. Host authorization, policy and integration remain in Unified; follow
+the [selection instructions](README.md#select-a-publishing-artifact).
 
 Author Scheduling's policy/store and standalone tests in
 [amplifier-platform-scheduling](https://github.com/bkrabach/amplifier-platform-scheduling).

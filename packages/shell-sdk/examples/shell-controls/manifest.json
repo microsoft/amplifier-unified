@@ -1,0 +1,10 @@
+{
+  "id": "example.shell-controls",
+  "label": "Presentation controls",
+  "version": "1.0.0",
+  "apiVersion": "1.0",
+  "profile": "trusted-native-component-v1",
+  "stateSchema": "shell-component-v1",
+  "slots": ["app.actions", "app.status", "composer.actions", "canvas.toolbar", "settings.section"],
+  "capabilities": ["shell.read", "conversation.summary", "panels.open", "presentation.update"]
+}

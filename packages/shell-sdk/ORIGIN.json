@@ -1,0 +1,48 @@
+{
+  "status": "Initial import provenance; hashes identify original Unified inputs, not subsequent SDK revisions",
+  "repository": "https://github.com/microsoft/amplifier-unified",
+  "revision": "db63d8bd4fff4b7de28f5dc4f4b4641f42771d06",
+  "history": "https://github.com/microsoft/amplifier-unified/commits/db63d8bd4fff4b7de28f5dc4f4b4641f42771d06/packages/shell-sdk",
+  "files": {
+    "index.js": {
+      "sourcePath": "packages/shell-sdk/index.js",
+      "sha256": "1b358735db3b8de9802370cbe9c03911388b78ae36c20ed44fcba68fb915bbae"
+    },
+    "index.d.ts": {
+      "sourcePath": "packages/shell-sdk/index.d.ts",
+      "sha256": "05bc58960c9b23dbc597a1fc457d8049d74c82c958760be0b0b51e2ae76a465c"
+    },
+    "LICENSE": {
+      "sourcePath": "packages/shell-sdk/LICENSE",
+      "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+    },
+    "README.md": {
+      "sourcePath": "packages/shell-sdk/README.md",
+      "sha256": "6cf28bba6a300b75559b43ec3cf1e974adb70229dc19a71e2fc56092a9eb1798"
+    },
+    "package.json": {
+      "sourcePath": "packages/shell-sdk/package.json",
+      "sha256": "9c2c1873712905bf1babdd4cf06c36558c7bf2ae404a673fbfe08a1c168007d9"
+    },
+    "examples/shell-controls/index.js": {
+      "sourcePath": "examples/shell-controls/index.js",
+      "sha256": "3ccc480a87c6353fc63e3f538e811f785dce570336113c7978e4685731761a92"
+    },
+    "examples/shell-controls/manifest.json": {
+      "sourcePath": "examples/shell-controls/manifest.json",
+      "sha256": "5b244070622710d8a7e81200818ea51bedbd6d8d2611237e3ceb1388ecddadc5"
+    },
+    "examples/shell-controls/README.md": {
+      "sourcePath": "examples/shell-controls/README.md",
+      "sha256": "345e90fd605c383ea3e0b2c5e1e84e04b1c177fe40c44e827720eb51ba19f228"
+    },
+    "examples/shell-controls/build.mjs": {
+      "sourcePath": "examples/shell-controls/build.mjs",
+      "sha256": "f6f2dd632beccea1b5e2f035fad1ba340414a5385a77ac589dd20a66b16adcc1"
+    },
+    "examples/shell-controls/package.json": {
+      "sourcePath": "examples/shell-controls/package.json",
+      "sha256": "e586d73a5175bb22815043203bf9429e63875baf7d50ef4136403092dc99ae89"
+    }
+  }
+}

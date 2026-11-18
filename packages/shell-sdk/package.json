@@ -6,10 +6,26 @@
   "type": "module",
   "exports": "./index.js",
   "types": "./index.d.ts",
-  "files": ["index.js", "index.d.ts", "README.md", "LICENSE"],
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "README.md",
+    "LICENSE",
+    "ORIGIN.json",
+    "examples/shell-controls/index.js",
+    "examples/shell-controls/manifest.json",
+    "examples/shell-controls/README.md",
+    "examples/shell-controls/build.mjs",
+    "examples/shell-controls/package.json"
+  ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/microsoft/amplifier-unified.git",
-    "directory": "packages/shell-sdk"
+    "url": "https://github.com/bkrabach/amplifier-shell-sdk.git"
+  },
+  "scripts": {
+    "test": "node scripts/qualify.mjs"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
   }
 }
