@@ -304,6 +304,7 @@ def test_portability_dependency_receipt_is_bound_to_published_source(selected_pa
     ("operations", "components/operations"),
     ("operations", "."),
     ("kernels", "amplifier_kernels"),
+    ("kernels", "."),
 ])
 def flat_selection(tmp_path, request):
     component, subdirectory = request.param
@@ -316,7 +317,7 @@ def flat_selection(tmp_path, request):
     receipt = json.loads(receipt_path.read_bytes())
     receipt["subdirectory"] = subdirectory
     if subdirectory == ".":
-        receipt.update(repository="bkrabach/amplifier-platform-operations", component=component)
+        receipt.update(repository=f"bkrabach/amplifier-platform-{component}", component=component)
     receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
     (dist / "SHA256SUMS").write_text("".join(
         f"{release.sha((dist / name).read_bytes())}  {name}\n"
@@ -476,9 +477,17 @@ def test_nested_selection_can_restore_original_artifact(nested_selection):
     assert delivery.inventory(root / f"components/{component}-delivery") == before
 
 
-@pytest.fixture
-def status_selection(tmp_path):
+@pytest.fixture(params=["monorepo", "repository-root"])
+def status_selection(tmp_path, request):
     producer, revision, dist, _ = make_candidate(tmp_path, "status-emitter")
+    if request.param == "repository-root":
+        receipt_path = dist / "status-emitter-source.json"
+        receipt = json.loads(receipt_path.read_bytes())
+        receipt.update(repository="bkrabach/amplifier-platform-status", subdirectory=".", component="status-emitter")
+        receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
+        (dist / "SHA256SUMS").write_text("".join(
+            f"{release.sha((dist / name).read_bytes())}  {name}\n"
+            for name in (*release.artifact_names(receipt), receipt_path.name)))
     root = tmp_path / "status-consumer"
     (root / "components").mkdir(parents=True)
     (root / "amplifier_web").mkdir()
@@ -495,7 +504,7 @@ def test_status_private_delivery_ignores_author_and_preserves_original_receipt(s
     root, _, dist, _ = status_selection
     before = delivery.verify(root, component="status-emitter")
     assert before["source"] == json.loads((dist / "status-emitter-source.json").read_bytes())
-    assert before["source"]["subdirectory"] == "amplifier_web/status_protocol"
+    assert before["source"]["subdirectory"] in {"amplifier_web/status_protocol", "."}
     assert set(before["files"]) == {"LICENSE", "__init__.py"}
     assert not (root / ".git").exists()
     author = root / "components/status"; author.mkdir()
@@ -506,6 +515,18 @@ def test_status_private_delivery_ignores_author_and_preserves_original_receipt(s
         cwd=root, text=True)
     assert result.splitlines() == ["selected", str(root / "amplifier_web/status_protocol/__init__.py")]
     assert not (root / "amplifier_status").exists()
+
+
+def test_status_selection_can_restore_original_artifact(status_selection):
+    root, revision, dist, _ = status_selection
+    before = delivery.inventory(root / "amplifier_web/status_protocol")
+    (dist / "status-emitter-source.json").unlink()
+    (dist / "SHA256SUMS").unlink()
+    historical = release.seal(root.parent / "repo", revision, dist, component="status-emitter")
+    checksum = delivery.sha((dist / "status-emitter-source.json").read_bytes())
+    delivery.select(root, dist, revision, checksum, component="status-emitter")
+    assert delivery.verify(root, component="status-emitter")["source"] == historical
+    assert delivery.inventory(root / "amplifier_web/status_protocol") == before
 
 
 @pytest.mark.parametrize("extra", ["components/status", "amplifier_status", "amplifier_web/status_protocol"])

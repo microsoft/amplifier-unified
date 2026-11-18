@@ -124,6 +124,18 @@ no user data and does not replace native history or Foundation's separate option
 Recall API. Publication and app selection remain separate; historical receipts
 and newer user state survive ordinary app rollback.
 
+## Current Status and Kernels delivery
+
+[amplifier-platform-status](https://github.com/bkrabach/amplifier-platform-status)
+and [amplifier-platform-kernels](https://github.com/bkrabach/amplifier-platform-kernels)
+own their source, direct mechanism tests and independent publication. Unified
+selects their original public artifacts and retains host enablement, permissions,
+process lifecycle and recovery. Status's public import/CLI remain separate from
+Unified's private selected copy, preserving coinstallation and uninstall isolation.
+Unified is the sole installed owner of its Kernels copy; ACP's separately selected
+artifact is unchanged. No user records or active work move with these authoring
+handoffs. Publication, app selection and live adoption remain distinct.
+
 ## Not in v1
 
 Mandatory microservices or a new central runtime framework; promote only when a

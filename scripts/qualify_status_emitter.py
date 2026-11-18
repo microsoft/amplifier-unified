@@ -186,7 +186,7 @@ def main(argv=None):
         receipt['wheelSourceFiles'] = {
             'unified': {package: matching_source(wheels['amplifier-unified']['path'], package, ROOT/package, force_include)
                         for package in project['tool']['hatch']['build']['targets']['wheel']['packages']},
-            'status': matching_source(wheels['amplifier-status-emitter']['path'], 'amplifier_status', ROOT/'components/status')}
+            'status': matching_source(wheels['amplifier-status-emitter']['path'], 'amplifier_status', ROOT/'amplifier_web/status_protocol')}
         minimum = next(item.removeprefix('amplifier-core>=') for item in
                        project['project']['dependencies']
                        if item.startswith('amplifier-core>='))

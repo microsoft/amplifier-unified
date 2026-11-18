@@ -79,7 +79,7 @@ def test_exact_source_and_built_payload_round_trip(candidate):
     assert len(result["artifacts"]) == 2
 
 
-@pytest.mark.parametrize("component", [None, "portability", "status-emitter", "unknown"])
+@pytest.mark.parametrize("component", [None, "portability", "unknown"])
 def test_repository_root_requires_supported_explicit_identity(component):
     selected = {"repository": "bkrabach/amplifier-platform-scheduling", "subdirectory": "."}
     if component is not None:
