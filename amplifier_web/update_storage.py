@@ -163,19 +163,20 @@ def _posix_remove_tree(parent, name, device, work, still, depth=0):
     ``still()`` raises when a folder above this one is no longer the entry of
     its name. Directly before each removal the walk asks it and looks at this
     folder's own name again. A folder that was moved or replaced ends the walk
-    of the stage (_Moved). No call can stop another process of the same account
-    from moving a folder between that look and the removal, as for the keys
-    file (remove_stage_keys). Such a removal then still takes only an entry of
-    a folder that was this copy when the walk opened it, or an empty folder
-    that has the copy's name at that moment.
+    of the stage (_Moved). The walk looks at these folders one after another.
+    No call can stop another process of the same account from moving a folder
+    after the walk looked at it and before the removal, as for the keys file
+    (remove_stage_keys). Such a removal then still takes only an entry of a
+    folder that was this copy when the walk opened it, or an empty folder that
+    has the copy's name at that moment.
 
     A folder of another device is refused. A mount of the same device at an
     entry of the copy is not told apart from a folder; only an administrator
     can make one.
     """
     reason = _posix_tree(parent, name, device, work, still, depth)
-    if reason not in (None, 'more'):
-        work.stayed += 1  # This folder stays.
+    if reason not in (None, 'more') and not work.full():
+        work.stayed += 1  # This folder stays. The count never passes its limit.
     return reason
 
 
@@ -264,8 +265,8 @@ def _windows_remove_tree(folder, home, work, depth=0):
     when it is empty, or a junction itself, and never what a junction names.
     """
     reason = _windows_tree(folder, home, work, depth)
-    if reason not in (None, 'more'):
-        work.stayed += 1  # This folder stays.
+    if reason not in (None, 'more') and not work.full():
+        work.stayed += 1  # This folder stays. The count never passes its limit.
     return reason
 
 
@@ -417,7 +418,9 @@ def remove_stage_config(home, stage, *, expected=None, limit=STAGE_CONFIG_ENTRIE
     retryable and is no update failure.
 
     A later call lists each folder from its start again. So a folder whose
-    first ``limit`` listed entries all stay is not handled further.
+    first ``limit`` listed entries all stay is not handled further: the
+    entries behind them stay too, and so does a folder of the copy that the
+    walk reaches only after that folder.
     """
     work = _Work(limit)
     return _remove_stage_config(home, stage, expected, work), work.removed
@@ -543,7 +546,10 @@ def _scrub_stage_config(manager, root, protected):
     between two stages, as for the keys file. One pass goes at most once around
     the stages, and it starts where the pass before stopped. So a copy that was
     cut, or a stage whose entries stay, gets its next turn after every other
-    stage. It handles every stage that still has such an entry: with or without
+    stage. The pass reads the list of stages twice, and it handles no stage
+    twice, also when another process changes the list between the two
+    readings; a stage that is added then can wait for a later pass.
+    It handles every stage that still has such an entry: with or without
     a receipt, a keys file or shared-config, and at every age, because nothing
     reads the copies. It leaves the stage of a preparation that is not
     reconciled. It never raises.
@@ -551,7 +557,7 @@ def _scrub_stage_config(manager, root, protected):
     try:
         start = getattr(manager, '_stage_config_offset', 0)
         deadline, stages, work = time.monotonic() + 1, 0, _Work(STAGE_CONFIG_ENTRIES)
-        progressed = False
+        progressed, handled = False, set()
         # From the saved place to the end of the listing, then from its start to the saved place.
         for first, end in ((start, None), (0, start)) if start else ((0, None),):
             with os.scandir(root) as entries:
@@ -565,7 +571,8 @@ def _scrub_stage_config(manager, root, protected):
                         return
                     progressed = True
                     manager._stage_config_offset = index + 1
-                    if not re.fullmatch('[a-f0-9]{32}', entry.name) or entry.name in protected:
+                    if (not re.fullmatch('[a-f0-9]{32}', entry.name) or entry.name in protected
+                            or entry.name in handled):
                         continue
                     stage = root / entry.name
                     try:
@@ -576,6 +583,7 @@ def _scrub_stage_config(manager, root, protected):
                     except OSError:
                         continue
                     stages += 1
+                    handled.add(entry.name)
                     _remove_stage_config(manager.home, stage, {stage: _identity(info)}, work)
             if end is None:
                 manager._stage_config_offset = 0

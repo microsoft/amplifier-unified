@@ -470,7 +470,9 @@ pass handles at most eight stages with such a copy and at most 64 entries
 (files, links and folders): an entry that it removes, and an entry that it must
 leave. A larger copy goes on when a later pass comes to its stage again, after
 the other stages. An entry that cannot be removed stays, and a later pass tries
-again: no update, retry or restore fails or waits because of it. A link is
+again: no update, retry or restore fails or waits because of it. A pass lists
+each folder from its start again. So when the first 64 listed entries of a
+folder all stay, the entries behind them stay too. A link is
 never followed: an entry `config` or `routing` that is a link, a junction or no
 folder stays, and a link inside a copy is removed as a link (on Windows it
 stays).

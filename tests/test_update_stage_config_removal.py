@@ -316,7 +316,23 @@ async def test_the_pass_handles_eight_stages_and_the_next_pass_goes_on(app):
 
 
 async def test_the_copies_and_the_keys_files_have_separate_bounds_of_eight_stages(app):
-    """Nine settled stages with a copy and a keys file. Each of the two removals handles eight stages in one pass."""
+    """Eight settled stages with a copy and no keys file, and eight with a keys file and no copy.
+
+    One pass handles all sixteen: eight for each of the two removals. With one
+    bound of eight stages for both, a pass would handle eight of them.
+    """
+    manager = app.update_manager
+    with_copy = [small_stage(manager.home, f'{number:032x}') for number in range(100, 108)]
+    with_keys = [stage_at(manager.home, f'{number:032x}', validated=True) for number in range(200, 208)]
+    assert all(not (stage / 'shared-config/keys.env').exists() for stage in with_copy)
+    assert all(gone(stage) and (stage / 'shared-config/keys.env').is_file() for stage in with_keys)
+    await storage.scrub_stage_keys(manager)
+    assert all(gone(stage) for stage in with_copy)
+    assert all(not (stage / 'shared-config/keys.env').exists() for stage in with_keys)
+
+
+async def test_each_of_the_two_removals_handles_eight_stages_in_one_pass(app):
+    """Nine settled stages with a copy and a keys file: eight lose the copy and eight lose the keys file."""
     manager = app.update_manager
     stages = [small_stage(manager.home, f'{number:032x}', keys=True) for number in range(100, 109)]
     await storage.scrub_stage_keys(manager)
@@ -383,6 +399,45 @@ async def test_the_pass_stops_at_its_count_of_entries_and_comes_back_to_a_stage_
         assert copied(alone) == remaining
     for stage in (*stages, alone):
         assert (stage / 'validated.json').is_file() and (stage / 'shared-config/settings.yaml').is_file()
+
+
+async def test_a_stage_is_handled_once_in_a_pass_when_the_list_of_stages_changes(app, tmp_path, monkeypatch):
+    """The pass reads the list of stages twice: from its saved place to the end, then from the start to that place.
+
+    Another process takes the first stage away between the two readings. The
+    second reading then has a stage of the first reading at its first place.
+    That stage still has an entry that stays. The pass does not handle it again.
+    """
+    manager = app.update_manager
+    root = manager.directory / 'releases'
+    first, second, third = (small_stage(manager.home, name * 32) for name in 'abc')
+    scandir, remove, calls = os.scandir, storage._remove_stage_config, []
+
+    @contextmanager
+    def by_name(folder):
+        # The folder's own order is not fixed. The pass gets the stages by name.
+        with scandir(folder) as listing:
+            entries = list(listing)
+        if folder == root:
+            entries.sort(key=lambda entry: entry.name)
+        yield iter(entries)
+
+    def record(home, stage, expected, work):
+        calls.append(stage)
+        reason = remove(home, stage, expected, work)
+        if stage == third:
+            first.rename(tmp_path / 'taken-away')
+        return reason
+
+    manager._stage_config_offset = 1
+    with monkeypatch.context() as patch:
+        patch.setattr(os, 'scandir', by_name)
+        patch.setattr(storage, '_remove_stage_config', record)
+        with refusing(monkeypatch, 'control-token'):
+            await storage.scrub_stage_keys(manager)
+    assert calls == [second, third]
+    # The second stage still has the entry that stayed: a second turn in this pass would have found it.
+    assert left(second) == ['config', 'config/auth', 'config/auth/control-token']
 
 
 async def test_the_pass_gives_the_removal_the_stage_that_it_saw_and_the_entries_that_are_left(app, monkeypatch):
@@ -748,43 +803,84 @@ def test_the_listing_of_a_folder_takes_no_more_entries_than_a_call_may_handle(tm
     assert held(home) == before
 
 
+@posix
+def test_the_entries_that_a_call_handles_never_pass_its_limit(tmp_path, monkeypatch):
+    """No file of the copy can be removed, so every file and every folder stays.
+
+    A folder that stays is one of the entries too. The count of removed and
+    left entries is at most the limit, for each limit.
+    """
+    home = tmp_path / 'app'
+    before = app_files(home)
+    stage = earlier_stage(home, 'a' * 32)
+    copies, total, unlink = held(stage), copied(stage), os.unlink
+
+    def refuse(path, *args, **settings):
+        if settings.get('dir_fd') is None:
+            return unlink(path, *args, **settings)
+        raise PermissionError('made-up private text')
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, 'unlink', refuse)
+        for limit in range(total + 3):
+            work = storage._Work(limit)
+            reason = storage._remove_stage_config(home, stage, None, work)
+            assert work.removed == 0 and work.stayed == min(limit, total), limit
+            # A walk that ends at its last folder with a full count leaves that folder and does not count it.
+            assert reason in (('more', 'refused') if 0 < limit < total else ('refused',) if limit else ('more',)), limit
+    assert held(stage) == copies and held(home) == before
+
+
 # A folder that another process moves or replaces while the walk has it open.
 
 @posix
+@pytest.mark.parametrize('when', ['after the second file', 'after the last file of a folder'])
 @pytest.mark.parametrize('moved, takes_the_name', [
     ('the copy', None), ('the copy', 'an empty folder'), ('the copy', 'a folder with a file'), ('the stage', None)])
 def test_a_copy_or_a_stage_that_is_moved_during_the_walk_loses_no_further_entry(
-        tmp_path, monkeypatch, moved, takes_the_name):
-    """Another process moves a folder away while the walk has it open, after two files of the copy are gone.
+        tmp_path, monkeypatch, moved, takes_the_name, when):
+    """Another process moves a folder away while the walk has it open, after a file of the copy is gone.
 
     The walk looks at its folders again before each removal. It stops there:
     what was moved keeps its other entries, and a folder that took the name is
-    not touched.
+    not touched. After the last file of a folder the next removal would be that
+    folder itself; after the second file it would be a file.
     """
     home = tmp_path / 'app'
     before = app_files(home)
     stage = earlier_stage(home, 'a' * 32)
     source = stage if moved == 'the stage' else stage / 'config'
-    away, total, unlink, calls = tmp_path / 'away', entries(source), os.unlink, []
+    away, total, unlink, rmdir = tmp_path / 'away', entries(source), os.unlink, os.rmdir
+    removals = {'before the move': 0, 'after the move': 0}
+    state = {'files': 0, 'moved': False}
 
-    def unlink_then_move(path, *args, **settings):
-        result = unlink(path, *args, **settings)
-        if settings.get('dir_fd') is not None:
-            calls.append(path)
-            if len(calls) == 2:
-                source.rename(away)
-                if takes_the_name:
-                    source.mkdir()
-                if takes_the_name == 'a folder with a file':
-                    (source / 'made-up').write_text('made-up file of another process')
-        return result
+    def count(call):
+        def counted(path, *args, **settings):
+            inside = settings.get('dir_fd') is not None  # A removal of the walk.
+            result = call(path, *args, **settings)
+            if inside:
+                removals['after the move' if state['moved'] else 'before the move'] += 1
+            if inside and call is unlink and not state['moved']:
+                state['files'] += 1
+                if (state['files'] == 2 if when == 'after the second file'
+                        else not os.listdir(settings['dir_fd'])):
+                    state['moved'] = True
+                    source.rename(away)
+                    if takes_the_name:
+                        source.mkdir()
+                    if takes_the_name == 'a folder with a file':
+                        (source / 'made-up').write_text('made-up file of another process')
+            return result
+        return counted
 
     with monkeypatch.context() as patch:
-        patch.setattr(os, 'unlink', unlink_then_move)
-        reason, count = storage.remove_stage_config(home, stage)   # No exception.
-    # No removal came after the move: two files, and the folders that were empty before the second one.
-    assert reason == 'refused' and len(calls) == 2 and count >= 2
-    assert entries(away) == total - count
+        patch.setattr(os, 'unlink', count(unlink))
+        patch.setattr(os, 'rmdir', count(rmdir))
+        reason, gone_entries = storage.remove_stage_config(home, stage)   # No exception.
+    # No removal came after the move: no file and no folder.
+    assert state['moved'] and reason == 'refused'
+    assert removals['after the move'] == 0 and gone_entries == removals['before the move']
+    assert entries(away) == total - gone_entries
     if takes_the_name:
         assert sorted(path.name for path in source.iterdir()) == (
             ['made-up'] if takes_the_name == 'a folder with a file' else [])
@@ -983,6 +1079,19 @@ def test_the_walk_of_the_private_boundary_with_a_stand_in_for_the_boundary(tmp_p
     total = copied(stage)
     assert storage.remove_stage_config(home, stage) == ('refused', total - 2)
     assert left(stage) == ['config', 'config/tls'] and list(away.iterdir()) == [] and not hooks and not pins
+
+    # No file can be removed: the count of the entries that a call handles never passes its limit.
+    stage = earlier_stage(home, 'f' * 32)
+    total = copied(stage)
+    refused.update(path.name for folder in COPIES for path in (stage / folder).rglob('*') if path.is_file())
+    for limit in range(total + 3):
+        work = storage._Work(limit)
+        reason = storage._remove_stage_config(home, stage, None, work)
+        assert work.removed == 0 and work.stayed == min(limit, total), limit
+        # A walk that ends at its last folder with a full count leaves that folder and does not count it.
+        assert reason in (('more', 'refused') if 0 < limit < total else ('refused',) if limit else ('more',)), limit
+    refused.clear()
+    assert copied(stage) == total and not pins
     assert held(home) == before
 
 
