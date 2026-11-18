@@ -110,6 +110,10 @@ async def test_stage_activate_and_rollback_preserve_original_cache(app,repo):
     await manager.rollback()
     assert active_release(app.data_dir)['current'] is None
     assert foundation_home(app.data_dir)==app.data_dir/'foundation'
+    # The text names the box that a person sees, and the restore did switch its setting off.
+    assert app.state['updates']['detail']==('Amplifier went back to the earlier components. "Keep Amplifier up to date" '
+        'is now off, so that the same update is not installed again by itself.')
+    assert app.state['settings']['updates']['autoInstall'] is False
 
 async def test_failed_validation_does_not_activate_or_close_sessions(app,repo):
     manager,root=await prepare(app,repo)
