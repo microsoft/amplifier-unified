@@ -422,8 +422,15 @@ source store object that holds bytecode"). It imports `_Native` from
 `windows_removal` and does not copy it: a change of those steps must keep
 `tests/test_source_store_repair_native.py`. Git runs there with the
 computer's Git configuration, as in Foundation's check: `git status` can
-start a content filter of that configuration. Do not write that Git only
-reads; the design names that limit. The record's change mark is an
+start a content filter of that configuration. Any attribute file that Git
+reads can give a file that filter: the object's `.gitattributes`, its
+`.git\info\attributes`, or the computer's global or system attribute file.
+The repair removes every `GIT_*` name from Git's environment and Foundation's
+check keeps the names of its process, so the two can read different
+configurations. Do not write that the command only reads, or that it starts
+only what Foundation's check starts: Git itself only reads the object
+(`--no-optional-locks`), a filter program is not bound, and the design names
+both limits. The record's change mark is an
 input of `update_inventory_index.signature`. A run works with the record that
 it read after it got the lock, never with an earlier read: another host can
 have written a new mark meanwhile. A run writes the record first; a

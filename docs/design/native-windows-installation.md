@@ -1549,8 +1549,11 @@ imports that class and does not copy it;
 `tests/test_source_store_repair_native.py` pins each step that it uses. Git
 decides with the two commands of Foundation's `clean_checkout`, with
 `--git-dir` and `--work-tree` fixed, every `GIT_*` name out of the
-environment, and `core.fsmonitor=false`. The folders of the object's path stay
-open while Git runs. What is deleted is checked again on handles.
+environment, `core.fsmonitor=false`, and for both commands
+`--no-optional-locks` (Foundation gives it to `git status`): without it
+`git status` can write the object's index again, and with it Git itself only
+reads the object. The folders of the object's path stay open while Git runs.
+What is deleted is checked again on handles.
 
 **When.** Only on Windows, only in the host that the start-at-sign-in task
 started, only on the store of the installation that the host belongs to, in
@@ -1581,16 +1584,35 @@ list of running programs.
 One more limit is Git's own. Git runs with the Git configuration of this
 computer, as it does in Foundation's check. The step tells it to start no
 file system monitor, because that program would stay after the command. It
-does not stop a content filter. When an attribute file of the object gives a
-tracked file a filter, and the computer's Git configuration names a program
-for that filter (Git LFS is the usual one; a repository cannot name the
-program itself), `git status` can start that program for a file whose content
-it must compare. Foundation's `clean_checkout` starts the same command in the
-same object at every check of the object, so the step starts no program that
-does not start there already; it adds at most one such command for each try
-of an object. The second command (`ls-files --others`) starts no filter. What
-such a program does is not bound by the rule of what the step deletes. The
-four provider modules had no attribute file when this was written.
+does not stop a content filter. When an attribute file that Git reads for the
+object gives a tracked file a filter, and a Git configuration that Git reads
+names a program for that filter (Git LFS is the usual one), `git status` can
+start that program for a file whose content it must compare. Git reads four
+attribute sources for an object: a `.gitattributes` file of the object, the
+object's `.git\info\attributes`, and the computer's global and system
+attribute files. So a filter needs no attribute file in a module: the four
+provider modules had no `.gitattributes` file when this was written (November
+17, 2026), and that says nothing about the other three sources on a PC. The
+committed content of a repository cannot name the program. A configuration
+names it: the computer's, or the `.git\config` of the object's folder.
+
+Foundation's `clean_checkout` starts the same command in the same object at
+every check of the object. Where both read the same configuration and the
+same attribute files, the step starts no program that does not start there
+already; it adds at most one such command for each try of an object. That
+condition is a stated limit, because they do not always read the same ones:
+the step removes every `GIT_*` name from Git's environment, and Foundation's
+check starts Git with the environment of its process as it is. Some of those
+names change the configuration that Git reads: `GIT_CONFIG_GLOBAL`,
+`GIT_CONFIG_SYSTEM` and `GIT_CONFIG_NOSYSTEM` name or drop a file, and
+`GIT_CONFIG_COUNT` adds values. A person's environment can have one, and the
+app gives some to child processes that it starts
+(`reset.repository_environment`; with anonymous GitHub access, an empty
+global and system configuration). Against a check in a process that has such
+a name, the step can start a filter program that the check does not start, or
+start none where the check starts one. The second command
+(`ls-files --others`) starts no filter. What such a program does is not bound
+by the rule of what the step deletes.
 
 **Cost and record.** `<data>\updates\source-store-repair.json` holds the app
 version, whether the pass is complete, a change mark, the tries of each object
@@ -1621,8 +1643,8 @@ lock, so a run never writes back a change mark that another host's run has
 replaced); after it the step gives the lock back. At its limit
 the step ends the Git program that it started and stops waiting; the installation's
 `git\cmd\git.exe` is Git's starter program, so the Git program behind it can
-run on until its read ends. Git itself only reads there, and that object is
-left.
+run on until its read ends. Git itself only reads there (a content filter
+that it started is another program), and that object is left.
 
 A bound reached ends the run and a later start goes on. The object in which a
 run reaches a bound gets one try when it is the first object of that run, also
