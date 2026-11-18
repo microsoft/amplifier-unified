@@ -94,10 +94,12 @@ its generated selection stays
 at top-level `amplifier_operations` to preserve editable and isolated-worker import
 paths. `components/operations.source.json` records its published artifact.
 Use `--all --under amplifier_operations` to inspect that selected runtime.
-Kernels follows the same root-layout rule: author in `components/kernels`,
+Kernels follows the same root-layout rule: author in public
+[amplifier-platform-kernels](https://github.com/bkrabach/amplifier-platform-kernels),
 select through `components/kernels.source.json`, and use
 `--all --under amplifier_kernels` to inspect the generated Python/Node runtime.
-Status is authored in `components/status`; the selected public artifact supplies
+Status is authored in public
+[amplifier-platform-status](https://github.com/bkrabach/amplifier-platform-status); the selected public artifact supplies
 generated `amplifier_web/status_protocol`, bound by
 `components/status-emitter.source.json`. Use
 `--all --under amplifier_web/status_protocol` to inspect that private runtime. Its standalone

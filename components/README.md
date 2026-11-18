@@ -7,7 +7,7 @@ editable and isolated-worker imports. The host retains admission, permissions,
 Stop, cancellation and execution policy. Publication does not change the app's
 selected default; follow the [artifact selection instructions](#select-an-operations-artifact).
 
-[`status/`](status/README.md) authors the dependency-free local status publisher,
+[amplifier-platform-status](https://github.com/bkrabach/amplifier-platform-status) authors the dependency-free local status publisher,
 reader and optional hook. Unified selects the published artifact into generated
 `amplifier_web/status_protocol`, bound by `status-emitter.source.json`. Its private
 import and CLI remain distinct from standalone `amplifier_status` and
@@ -34,13 +34,13 @@ distribution must not be coinstalled with Unified. This metadata boundary does
 not extract the full workspace domain. See the
 [artifact selection instructions](#select-a-workspace-metadata-artifact).
 
-[`kernels/`](kernels/README.md) authors the independently buildable computation
+[amplifier-platform-kernels](https://github.com/bkrabach/amplifier-platform-kernels) authors the independently buildable computation
 mechanism. Unified consumes its published artifact at generated
 `amplifier_kernels/`, selected by `kernels.source.json`; the root location preserves
 runtime bootstrap origin checks. Its real Python/Node tests use selected process
 and operation-journal peers without starting Unified. The host retains authority,
 question and recovery tests. Author changes and publication do not update the app
-selection or ACP's separate public Git dependency. Unified remains the sole
+selection or ACP's separate immutable wheel selection. Unified remains the sole
 installed owner; do not coinstall the standalone distribution.
 
 [amplifier-platform-resources](https://github.com/bkrabach/amplifier-platform-resources)
@@ -199,6 +199,48 @@ standalone distribution with Unified.
 This selection preserves operation receipts, retry identities and delivery
 cursors. Ordinary app rollback restores code while preserving newer caller-owned
 state; it never authorizes replay of effects.
+
+## Select a Status artifact
+
+[amplifier-platform-status](https://github.com/bkrabach/amplifier-platform-status)
+owns publication. Download its wheel, source archive, `status-emitter-source.json`
+and `SHA256SUMS` into a private directory. Verify the original receipt against the
+reviewed public release, then select it:
+
+```sh
+python scripts/scheduling_delivery.py select --component status-emitter \
+  --dist /path/to/release-assets --revision FULL_PUBLISHED_SOURCE_SHA \
+  --receipt-sha256 REVIEWED_RECEIPT_SHA256
+python scripts/scheduling_delivery.py verify --component status-emitter
+```
+
+The selected snapshot remains private `amplifier_web.status_protocol` with the
+`amplifier-unified-status` command. Standalone `amplifier_status`, `amplifier-status`
+and its optional hook stay independently installable and removable. Qualify that
+coinstallation boundary before release; do not edit the generated snapshot.
+Selection neither enables emission nor changes host authority or stored records.
+Historical receipts retain their original source identities and remain verifiable.
+The old Unified author project and publisher are retired.
+
+## Select a Kernels artifact
+
+[amplifier-platform-kernels](https://github.com/bkrabach/amplifier-platform-kernels)
+owns publication. Download its wheel, source archive, `kernels-source.json` and
+`SHA256SUMS`; verify the original receipt against the reviewed public release:
+
+```sh
+python scripts/scheduling_delivery.py select --component kernels \
+  --dist /path/to/release-assets --revision FULL_PUBLISHED_SOURCE_SHA \
+  --receipt-sha256 REVIEWED_RECEIPT_SHA256
+python scripts/scheduling_delivery.py verify --component kernels
+```
+
+Unified remains the sole installed owner of the selected `amplifier_kernels`
+snapshot, including its Node runner. Normal, editable and Git-free source-archive
+builds verify it offline; do not coinstall the standalone distribution or restore
+an author copy here. The old Unified publisher is retired. This selection does not
+change ACP's independent immutable wheel selection, process permissions, ongoing
+work or recovery. App rollback preserves original receipts and newer user state.
 
 ## Select a workspace metadata artifact
 
