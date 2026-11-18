@@ -13,8 +13,10 @@ name: Test files that no other check runs
 # that on this runner. So on Windows a case that needs Windows cannot be
 # skipped.
 #
-# The Windows job leaves out a few files and cases by name. The step lists
-# each one with its reason and prints the list. Linux runs all of them.
+# The Windows job leaves out some files and cases by name: they are written
+# for Linux, or they fail on a Windows runner and nobody has read why yet.
+# The step lists each one with its reason and prints the list. Linux runs
+# all of them.
 #
 # A new test file belongs in the workflow that owns its code. Add it here
 # only when there is none.
@@ -167,15 +169,40 @@ jobs:
 
           windows = sys.platform == "win32"
           # What the Windows job leaves out, each with its reason. Linux runs it.
+          # The counts are from the first runs of these files on a Windows runner.
+          POSIX_STATUS = ("the case is for the status that Linux and macOS give; on Windows another function gives it, "
+                          "and platform-mechanisms.yml runs its cases")
+          NOT_ESTABLISHED = "cases fail on a Windows runner and pass on Linux; the cause is not established"
           NOT_ON_WINDOWS = {
               "tests/test_reset.py":
                   "the reset command is for Linux, WSL and macOS; on Windows it says so and stops",
               "tests/test_host_dependencies.py":
-                  "the cases make their stand-ins for uv as shell scripts",
+                  "the cases make their stand-ins for uv as shell scripts, which Windows does not run",
+              "tests/test_windows_launcher_refresh.py":
+                  "the cases turn the refresh module's Windows switch off, and the app's file writer on Windows "
+                  "then refuses their writes; windows-launcher-refresh.yml runs the native case",
+              "tests/test_update_partial_review.py":
+                  "its fixture writes the shared settings file with the app's writer and names no owner folder, "
+                  "which that writer needs on Windows",
+              "tests/test_updates_cache.py":
+                  "57 of 107 " + NOT_ESTABLISHED + "; 41 of them compare a path that has the runner's separator",
+              "tests/test_update_core_lookup_failure.py": "9 of 10 " + NOT_ESTABLISHED,
+              "tests/test_update_health_first_install.py": "5 of 5 " + NOT_ESTABLISHED,
+              "tests/test_effective_behavior_updates.py": "4 of 23 " + NOT_ESTABLISHED,
+              "tests/test_application_generations.py::test_qualified_launch_preserves_arguments_and_data_scope":
+                  "the case stands in for os.execv; on Windows the app starts a child and waits for it",
+              "tests/test_installation_health.py::test_status_reports_every_verified_listener_and_partial_failure":
+                  POSIX_STATUS,
+              "tests/test_installation_health.py::test_named_and_ipv6_wildcard_binds_verify_only_reached_numeric_addresses":
+                  POSIX_STATUS,
+              "tests/test_installation_health.py::test_unassigned_bind_and_untrusted_dns_cannot_receive_control_token":
+                  POSIX_STATUS,
+              "tests/test_installation_health.py::test_listener_collection_bounds_concurrency_but_does_not_truncate_binds":
+                  POSIX_STATUS,
               "tests/test_browser_entry.py::test_tls_negative_lifetime_on_actual_pytest_fixtures_without_listeners":
-                  "the case's model of pytest's fixtures has an event loop with no socket, and Windows cannot wait on none",
+                  "its model of pytest's fixtures fails in setup on a Windows runner; the cause is not established",
               "tests/test_windows_user_trial_probe.py::test_actual_private_constructor_refusal_offsets_are_safe_with_inert_api":
-                  "the case gives the app's private-folder check POSIX paths, which that check refuses on Windows first",
+                  "the case gives the app's private-folder check a path with no drive, which that check refuses on Windows first",
           }
           left_out = NOT_ON_WINDOWS if windows else {}
           # A skip that this step expects, by its reason, and whether this
@@ -199,7 +226,7 @@ jobs:
               for row in ("yaml", "module-shape", "recursive-yaml")}
 
           result = pathlib.Path(os.environ["RUNNER_TEMP"]) / "listed-test-files.xml"
-          print("Python", sys.version, flush=True)
+          print("Python", sys.version)
           assert sys.version_info[:2] == (3, 13), sys.version
           owner = contextlib.nullcontext()
           if sys.platform == "win32":
@@ -215,6 +242,7 @@ jobs:
           for name, reason in left_out.items():
               print(f"left out on this runner: {name}: {reason}")
           files = [file for file in [*FILES, *CASES] if file not in left_out]
+          sys.stdout.flush()  # Before pytest writes, so that the log keeps the order.
           with owner:
               status = subprocess.run([
                   sys.executable, "-m", "pytest", "-q", "-rfEsxX", "--tb=short", "-p", "no:cacheprovider",
