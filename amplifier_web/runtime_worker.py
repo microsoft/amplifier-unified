@@ -313,6 +313,20 @@ class Worker:
                               'costUsd': 0, 'costSource': 'host: provider not invoked'}})
             return {'allowed': False, 'state': 'cancelled',
                     'reasons': ['The native child execution changed before provider invocation.']}
+        from amplifier_web.execution_events import CALL_PURPOSE
+        if (result.get('allowed') and not CALL_PURPOSE.get() and not row.get('purpose')
+                and row.get('lifecycle') != 'background'):
+            # Some providers emit no provider:request hook. Successful ordinary
+            # admission supersedes optional preparation activity, not its
+            # retained failure diagnostics or any terminal generation outcome.
+            if row.get('sessionId') == self.session.session_id:
+                publish({'type': 'runtime.activity', 'phase': 'model', 'detail': 'Thinking...'})
+            else:
+                child_row = registry.rows.get(row['sessionId'], {})
+                publish({'type': 'worker.activity', 'workerId': row['sessionId'],
+                         'phase': 'model', 'detail': 'Thinking...',
+                         'name': child_row.get('agent', 'Worker'), 'callId': child_row.get('callId'),
+                         'runId': row.get('runId'), 'time': time.time()})
         return result
 
     def app_access_bridge(self, coordinator, *, assignment=None):

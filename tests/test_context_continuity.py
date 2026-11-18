@@ -48,6 +48,50 @@ async def mount(directory, messages, *, context_config=None):
     return coordinator, provider, adapter, checkpoint, transcript
 
 
+@pytest.mark.parametrize('concurrent_change', [False, True])
+async def test_warm_idle_model_switch_binds_current_identity_before_fitting(
+        tmp_path, monkeypatch, concurrent_change):
+    from amplifier_core import ProviderInfo
+    from amplifier_web.host.session import SelectedProvider
+    original = [{'role': 'user', 'content': 'Retain originals and answer.'}]
+    coordinator, raw, adapter, _, _ = await mount(tmp_path, original,
+        context_config={'durable_checkpoints': True, 'foreground_continuation': True,
+                        'max_tokens': 6000, 'summarize_trigger': .9, 'archive_recovery': False})
+    raw.name = 'fixture'
+    raw.get_info = lambda: ProviderInfo(id='fixture', display_name='Fixture',
+                                      defaults={'model': 'model-a'})
+    providers = {'connection': raw}
+    get = coordinator.get
+    coordinator.get = lambda name: providers if name == 'providers' else get(name)
+    coordinator.loop.root_provider = SelectedProvider(raw, {'instance': 'connection', 'model': 'model-a'})
+    await adapter.preserve(original)  # Warm A is already cached.
+    assert adapter._identity == {'provider': 'connection', 'model': 'model-a'}
+    coordinator.loop.root_provider = SelectedProvider(raw, {'instance': 'connection', 'model': 'model-b'})
+    selected = coordinator.loop.root_provider
+    assert selected.default_model == 'model-b'
+    counted = []
+
+    async def count(view):
+        from amplifier_core.message_models import ChatRequest, Message
+        counted.append(copy.deepcopy(view))
+        if concurrent_change:
+            coordinator.loop.root_provider = SelectedProvider(raw, {'instance': 'connection', 'model': 'model-c'})
+        return {'dispatch': ChatRequest(messages=[Message(**row) for row in view]),
+                'budget_decision': None}
+
+    if concurrent_change:
+        with pytest.raises(RuntimeError, match='Request contract changed'):
+            await coordinator.context.get_measured_request_view(
+                provider=selected, count_view=count, retain_contents=[])
+    else:
+        view = await coordinator.context.get_measured_request_view(
+            provider=selected, count_view=count, retain_contents=[])
+        assert view and counted
+        assert adapter._identity == {'provider': 'connection', 'model': 'model-b'}
+    assert await coordinator.context.get_messages() == original
+    raw.complete.assert_not_awaited()
+
+
 async def test_actual_context_multiple_compactions_restart_and_saved_task(tmp_path, monkeypatch):
     monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path / 'home'))
     original = [{'role': 'user', 'content': 'Build the report without replacing originals.'},

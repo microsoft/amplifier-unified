@@ -202,3 +202,134 @@ async def test_compaction_activity_preserves_identity_and_auxiliary_scope(compac
         assert await compaction_activity(event, {'outcome': 'completed'}) is None
     finally:
         CALL_PURPOSE.reset(token)
+
+
+@pytest.mark.parametrize('identity', ['root', 'child'])
+@pytest.mark.parametrize('auxiliary', [None, 'context_compaction', 'session_naming', 'prompt_completion'])
+async def test_admitted_ordinary_model_supersedes_optional_compaction_failure(
+        tmp_path, monkeypatch, identity, auxiliary):
+    from unittest.mock import AsyncMock
+    from amplifier_web.execution_events import ExecutionEvents, CALL_PURPOSE
+    from amplifier_web.service import AppService
+
+    observed, callbacks = [], {}
+    scope = {'runId': 'child-run', 'generationId': 'generation'}
+    capabilities = {'web.worker_run': 'child-run', 'web.child_execution': lambda: scope}
+    coordinator = SimpleNamespace(
+        session_id=identity, get=lambda _: {}, get_capability=capabilities.get,
+        register_capability=capabilities.__setitem__,
+        hooks=SimpleNamespace(register=lambda event, fn, **_: callbacks.update({event: fn})))
+    registry = SimpleNamespace(
+        rows={'child': {'agent': 'fixture:worker', 'callId': 'tool-1'}},
+        sessions={'child': SimpleNamespace(coordinator=coordinator)})
+    capabilities['live.children'] = registry
+    worker = Worker()
+    worker.session = SimpleNamespace(session_id='root', coordinator=coordinator)
+    worker.runtime = SimpleNamespace(session_id='root', generation={'id': 'generation'})
+    worker.bridge = AsyncMock(return_value={'allowed': True, 'budgetRevision': 1})
+    worker.install_activity(coordinator)
+    monkeypatch.setattr('amplifier_web.runtime_worker.publish', lambda row: observed.append(deepcopy(row)))
+    data = {'session_id': identity, 'outcome': 'failed', 'failure': {'message': 'PRIVATE'}}
+    await callbacks['context:compaction_finished']('context:compaction_finished', data)
+    failure = deepcopy(observed[-1])
+    assert failure['detail'] == 'Context preparation failed.'
+
+    class Provider:
+        def get_info(self): return SimpleNamespace(id='fixture', defaults={'model': 'model'})
+        async def complete(self, request):
+            assert observed[-1]['detail'] == (
+                'Context preparation failed.' if auxiliary else 'Thinking...')
+            return SimpleNamespace(usage={})
+
+    telemetry = ExecutionEvents('root', lambda row: None)
+    async def admit(row):
+        result = await worker.admit_model(row)
+        assert result['allowed']
+    telemetry.admission_guard = admit
+    token = CALL_PURPOSE.set({'label': auxiliary, 'purpose': auxiliary} if auxiliary else None)
+    try:
+        await telemetry.provider_call(identity, Provider(), SimpleNamespace(model=None, metadata={}),
+            lambda: Provider().complete(None), run_id='child-run' if identity == 'child' else None)
+    finally:
+        CALL_PURPOSE.reset(token)
+    assert data['outcome'] == 'failed' and data['failure'] == {'message': 'PRIVATE'}
+    assert observed[0] == failure  # Historical failure remains diagnostic evidence.
+    if auxiliary:
+        assert observed == [failure]
+        return
+    assert observed[-1]['phase'] == 'model'
+    if identity == 'child':
+        assert observed[-1]['runId'] == 'child-run'
+        assert observed[-1]['callId'] == 'tool-1'
+        return
+    app = AppService(tmp_path, workspace=tmp_path)
+    session = app._new_session({'workspace': str(tmp_path)})
+    session['id'] = 'root'
+    session['status'] = 'working'
+    app.state['sessions'].append(session)
+    try:
+        for row in observed:
+            await app.on_runtime_event(*normalize_event(row, 'root'))
+        assert session['activity']['label'] == 'Thinking...'
+        await app.on_runtime_event(*normalize_event({'type': 'session.idle'}, 'root'))
+        assert session['status'] == 'idle' and session['activity']['label'] == 'Ready'
+        assert not session.get('failure')
+    finally:
+        await app.close()
+
+
+@pytest.mark.parametrize('admission', ['denied', 'failed', 'child-changed', 'background'])
+async def test_model_admission_does_not_fabricate_continuation_activity(monkeypatch, admission):
+    from unittest.mock import AsyncMock
+    worker = Worker()
+    scope = {'runId': 'run', 'generationId': 'generation'}
+    current = [scope]
+    child = SimpleNamespace(coordinator=SimpleNamespace(
+        get_capability=lambda _: lambda: current[0]))
+    registry = SimpleNamespace(sessions={'child': child}, rows={'child': {}})
+    worker.session = SimpleNamespace(session_id='root', coordinator=SimpleNamespace(
+        get_capability=lambda _: registry))
+    worker.runtime = SimpleNamespace(generation={})
+    worker.telemetry = Mock()
+    observed = []
+    monkeypatch.setattr('amplifier_web.runtime_worker.publish', observed.append)
+
+    async def bridge(*args):
+        if admission == 'failed':
+            raise TimeoutError('Unconfirmed bridge; do not replay')
+        if admission == 'child-changed':
+            current[0] = {**scope, 'runId': 'new-run'}
+        return {'allowed': admission != 'denied', 'budgetRevision': 1}
+    worker.bridge = bridge
+    row = {'sessionId': 'child', 'runId': 'run',
+           'lifecycle': 'background' if admission == 'background' else 'turn'}
+    if admission == 'failed':
+        with pytest.raises(TimeoutError):
+            await worker.admit_model(row)
+    else:
+        result = await worker.admit_model(row)
+        assert result['allowed'] is (admission == 'background')
+    assert observed == []
+
+
+async def test_terminal_compaction_failure_survives_idle_and_late_activity(tmp_path):
+    from amplifier_web.service import AppService
+    app = AppService(tmp_path, workspace=tmp_path)
+    session = app._new_session({'workspace': str(tmp_path)})
+    session['id'], session['status'] = 'root', 'working'
+    app.state['sessions'].append(session)
+    try:
+        await app.on_runtime_event(*normalize_event({
+            'type': 'generation.failed', 'generation_id': 'failed',
+            'input_ids': ['input'], 'error_category': 'context_compaction',
+            'error_code': 'native_input_oversized', 'error_type': 'CompactionError',
+            'error_stage': 'context_preparation', 'retryable': False}, 'root'))
+        failure = deepcopy(session['failure'])
+        await app.on_runtime_event('runtime.error', {
+            'sessionId': 'root', 'error': 'Conversation context preparation failed.'})
+        await app.on_runtime_event(*normalize_event({'type': 'session.idle'}, 'root'))
+        await app.on_runtime_event(*normalize_event({
+            'type': 'runtime.activity', 'phase': 'model', 'detail': 'Thinking...'}, 'root'))
+        assert session['status'] == 'error' and session['failure'] == failure
+    finally:
+        await app.close()
