@@ -118,9 +118,9 @@ def test_shipped_shell_is_read_from_an_app_folder_whose_address_is_quoted(tmp_pa
     assert result['sources'] == [{'url':'https://github.com/microsoft/amplifier-bundle-skills', 'ref':'main'}]
 
 
-def test_a_file_address_that_is_no_path_of_this_system_selects_nothing(tmp_path):
-    # On Windows the part "a:b" cannot be in a path. The reference stays in the selection as it is.
-    reference = 'file:///C:/a:b/behaviors/behavior.yaml'
+@pytest.mark.parametrize('reference', ['file:///C:/a:b/behaviors/behavior.yaml', 'file::b/behaviors/behavior.yaml'])
+def test_a_file_address_that_is_no_path_of_this_system_selects_nothing(tmp_path, reference):
+    # On Windows neither address gives a path. The check goes on, and the reference stays in the selection as it is.
     assert selection(tmp_path, settings([reference]))['sources'] == []
     assert selection(tmp_path, settings([reference]))['witness'] != selection(tmp_path, settings())['witness']
 
@@ -215,6 +215,21 @@ def test_an_installation_and_its_stage_have_one_configuration_key_and_one_witnes
     # A source outside the named folders keeps its own path.
     other = tmp_path.resolve()/'another folder'
     assert configuration_key(below(home), home, stage) != configuration_key(below(other), home, stage)
+
+    # An enabled app behavior that is a file below the Foundation folder: the
+    # selection itself names the path then, not only the settings.
+    def behavior(root):
+        path = root/'foundation/cache/behavior/behavior.yaml'
+        path.parent.mkdir(parents=True)
+        path.write_text('bundle: {name: fixture}\n')
+        return settings([str(path)])
+    live = HostConfig(home, home, behavior(home), home/'foundation', home/'shared', True)
+    staged = HostConfig(stage, stage, behavior(stage), stage/'foundation', stage/'shared-config', True)
+    assert (update_sequence.app_selection(home, config=live)['witness']
+            == update_sequence.app_selection(stage, config=staged, original_home=home)['witness'])
+    elsewhere = HostConfig(home, home, behavior(other), home/'foundation', home/'shared', True)
+    assert (update_sequence.app_selection(home, config=elsewhere)['witness']
+            != update_sequence.app_selection(home, config=live)['witness'])
 
 
 def test_settings_that_name_no_folder_keep_their_configuration_key_and_witness(tmp_path):
