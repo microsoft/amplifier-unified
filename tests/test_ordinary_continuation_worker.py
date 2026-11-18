@@ -175,7 +175,12 @@ async def test_actual_worker_completes_two_ordinary_turns_after_omission(
         context = coordinator.get('context')
         raw = coordinator.get_capability('fixture.provider')
         await coordinator.mount('tools', LargeResult(), name='large_result')
-        original = [{'role': 'user', 'content': 'Original objective: preserve Stop and originals.'}]
+        original = [
+            {'role': 'user', 'content': 'Original objective: preserve Stop and originals.'},
+            {'role': 'assistant', 'content': 'Settled historical evidence ' + 'h' * 100000},
+            {'role': 'user', 'content': 'Settled correction: never replay completed work.'},
+            {'role': 'assistant', 'content': 'Accepted.'},
+        ]
         if shape == 'recovery-references':
             for index in range(244):
                 original.append({'role': 'user', 'content': json.dumps({
@@ -200,7 +205,7 @@ async def test_actual_worker_completes_two_ordinary_turns_after_omission(
         assert [event['text'] for event in events if event.get('type') == 'assistant.message'] == [
             'Ordinary answer completed.', 'Ordinary answer completed.']
         assert not any(e.get('type') in {'runtime.error', 'generation.failed'} for e in events)
-        assert raw.compactions <= 1
+        assert raw.compactions == 1  # One failed optional request, never rebought.
         assert effects == (['once'] if shape == 'same-turn' else []), [
             [(m.role, str(m.content)[:160]) for m in request.messages] for request in raw.sent]
         canonical = await context.get_messages()
