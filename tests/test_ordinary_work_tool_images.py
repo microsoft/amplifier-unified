@@ -139,7 +139,7 @@ async def test_ordinary_work_read_policy_and_work_refusal_keep_text_usable(tmp_p
         return (HookResult(action="modify", data={"result": None})
                 if denial == "post-null" and data["tool_call_id"] == "call-first-image" else HookResult())
     session, _, checkpoint, _, host = await work_root(tmp_path, monkeypatch, provider,
-        prepared_host=True, deny_work=denial == "work", post=post)
+        prepared_host=True, worker_observers=True, deny_work=denial == "work", post=post)
     try:
         if denial == "read-policy":
             from amplifier_web.read_policy import mounted_read_file
@@ -184,7 +184,7 @@ async def test_real_prepared_host_child_tool_install_keeps_configurator_construc
     path, original = picture(workspace, format)
     provider = ScriptedReadProvider(path)
     session, store, checkpoint, checks, host = await work_root(
-        tmp_path, monkeypatch, provider, prepared_host=True)
+        tmp_path, monkeypatch, provider, prepared_host=True, worker_observers=True)
     try:
         coordinator = session.coordinator
         assert callable(coordinator.get("context").factory)
@@ -193,8 +193,22 @@ async def test_real_prepared_host_child_tool_install_keeps_configurator_construc
         original_worker = coordinator.get_capability("web.work_inspect_tool")("live_worker", worker)
         assert type(original_worker).__name__ == "WorkerControl"
         assert original_worker.registry is coordinator.get_capability("live.children")
+        assert coordinator.get_capability("web.collaboration.checkpoint") is True
+        assert coordinator.get_capability("web.computer_episodes") is host.worker.computer_episodes.sponsors[coordinator]
+        assert coordinator.get_capability("web.activity") is True
+        ui_tool = coordinator.get("tools", "ui_use")
+        assert type(ui_tool).__name__ == "WorkCheckedTool"
+        original_ui = coordinator.get_capability("web.work_inspect_tool")("ui_use", ui_tool)
+        assert type(original_ui).__name__ == "UIUseTool"
+        assert type(coordinator.get_capability("web.file_source_guard")).__name__ == "FileSourceGuard"
+        transformed = coordinator.get_capability("web.provider_transform")(provider)
+        assert type(transformed).__name__ == "SurfaceProvider"
+        assert type(transformed.original).__name__ == "WorkRecoveringProvider"
+        assert provider._amplifier_web_observed is True
         assert await session.execute("Read the authorized local image") == "offline completion"
         assert host.sealed
+        assert coordinator.get("tools", "ui_use") is ui_tool
+        assert not coordinator.get_capability("web.media.adapters")
         assert provider.observed[-1] == [("tool", "call-first-image", original)]
         assert checks == [("read_file", {"file_path": str(path)})]
         rows = await checkpoint()
@@ -219,7 +233,7 @@ async def test_real_prepared_host_child_tool_install_keeps_configurator_construc
     loaded, _ = reopened.load("ordinary-work-media")
     reload_provider = ScriptedReadProvider(path, read=False)
     resumed, _, checkpoint, checks, host = await work_root(
-        tmp_path, monkeypatch, reload_provider, prepared_host=True, store=reopened)
+        tmp_path, monkeypatch, reload_provider, prepared_host=True, worker_observers=True, store=reopened)
     try:
         await resumed.coordinator.get("context").set_messages(loaded)
         await checkpoint()
@@ -229,6 +243,29 @@ async def test_real_prepared_host_child_tool_install_keeps_configurator_construc
         assert not resumed.coordinator.get_capability("web.provider_transform")(reload_provider)._media
     finally:
         await resumed.cleanup()
+
+
+async def test_app_access_does_not_accept_an_interposed_adapter_endpoint(tmp_path, monkeypatch):
+    from amplifier_web.app_guidance import install_app_access
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    provider = ScriptedReadProvider(workspace / "unused", read=False)
+    session, _, _, _, _ = await work_root(
+        tmp_path, monkeypatch, provider, prepared_host=True, configuration_only=True)
+    try:
+        coordinator = session.coordinator
+        # An unrelated queued edge cannot be forgiven by settling app access:
+        # the actual Foundation prior/current/source guard must still refuse.
+        media.replace_adapter(coordinator, "tools", "ui_use", object(), object())
+        async def bridge(operation, args):
+            pytest.fail("No app operation belongs to failed construction")
+        with pytest.raises(ValueError, match="adapter prior endpoint does not match actual loaded slot"):
+            await install_app_access(coordinator, bridge, execution_role="root")
+        assert not coordinator.get_capability("web.app_access")
+        assert not coordinator.get_capability(media.NAMESPACE).enabled
+        assert provider.calls == 0
+    finally:
+        await session.cleanup()
 
 
 async def test_raw_delegate_replacement_still_refuses_configuration(tmp_path, monkeypatch):

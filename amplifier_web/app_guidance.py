@@ -402,4 +402,10 @@ async def install_app_access(coordinator, bridge, *, execution_role):
                 return HookResult(action='deny',reason='The user paused UI access. Resume from Browser & computer controls before further input.')
         return HookResult()
     coordinator.hooks.register('tool:pre',ui_stop_guard,priority=-100,name='web-ui-stop')
+    # Synchronous Worker observers (notably the computer sponsor) inspect the
+    # current endpoints immediately after this installer returns. Settle our
+    # exact Work edges first, so they cannot replace a still-raw endpoint under
+    # a queued adapter or wrap outside the Work-authorized body.
+    from .host.media import flush_adapters
+    await flush_adapters(coordinator)
     coordinator.register_capability('web.app_access', True)

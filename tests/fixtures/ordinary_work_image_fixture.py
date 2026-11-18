@@ -109,7 +109,7 @@ async def compose_work(tmp_path, monkeypatch):
 
 
 async def work_root(tmp_path, monkeypatch, provider, *, store=None, post=None, deny_work=False,
-                    prepared_host=False, configuration_only=False):
+                    prepared_host=False, configuration_only=False, worker_observers=False):
     bundle, plan, roots = await compose_work(tmp_path, monkeypatch)
     # Discovery sees the same selected public resources, mirrored offline. No
     # real home/project scans and no deferred Git source download at first turn.
@@ -142,7 +142,8 @@ async def work_root(tmp_path, monkeypatch, provider, *, store=None, post=None, d
         files.extend(Path(package.__file__).parent.rglob("*.py"))
     files += [Path(importlib.import_module(name).__file__) for name in (
         "amplifier_web.host.media", "amplifier_web.host.session", "amplifier_web.app_guidance",
-        "amplifier_web.runtime_worker")]
+        "amplifier_web.runtime_worker", "amplifier_web.computer_episodes",
+        "amplifier_web.execution_events")]
     store = store or SessionStore(tmp_path / "sessions")
     def initialize_media(session):
         session.coordinator.loader = WorkLoader(provider)
@@ -213,10 +214,51 @@ async def work_root(tmp_path, monkeypatch, provider, *, store=None, post=None, d
             return {"surfaces": [], "inputIds": []} if operation == "context.manifest" else {}
         coordinator.register_capability("web.work_effect_check", work_check)
         await install_app_access(coordinator, app_bridge, execution_role="root")
+        if worker_observers:
+            from amplifier_web import runtime_worker
+            from amplifier_web.execution_events import ExecutionEvents
+            # Invoke the actual late Worker installers, in start() order,
+            # without process pipes, preparation/install or any app operation.
+            emitted = []
+            monkeypatch.setattr(runtime_worker, "publish", emitted.append)
+            worker = runtime_worker.Worker()
+            worker.session, worker.runtime = session, runtime
+            runtime.generation = {}
+            worker.bridge = app_bridge
+            worker.telemetry = ExecutionEvents(session.session_id, emitted.append)
+            ui_tool = coordinator.get("tools", "ui_use")
+            assert type(ui_tool).__name__ == "WorkCheckedTool"
+            assert not coordinator.get_capability("web.media.adapters")
+            worker.computer_episodes.install(coordinator, lambda: None)
+            # The sponsor runs inside the issued Work body, never as an
+            # unrecorded raw replacement of a pending Work edge.
+            assert coordinator.get("tools", "ui_use") is ui_tool
+            coordinator.register_capability("live.checkpoint", checkpoint)
+            worker.install_collaboration_checkpoint(coordinator)
+            worker.install_activity(coordinator)
         await media.flush_adapters(coordinator)
         if post:
             media.registration_hooks(coordinator).register("tool:post", post, priority=900, name="ordinary-post")
-        host = FiniteSourceHost(coordinator)
+        if worker_observers:
+            class ObserverSourceHost(FiniteSourceHost):
+                """Finite test host; production Worker installers are not mocked.
+
+                This does not claim Worker.start/pipe/LIVE-manager execution.
+                Reapply its late observer sequence within the actual loop-owned
+                registration to cover first-turn and subsequent-turn closure.
+                """
+                async def prepare_execution(self, loop, view, providers):
+                    result = await super().prepare_execution(loop, view, providers)
+                    worker.install_activity(coordinator)
+                    worker.install_collaboration_checkpoint(coordinator)
+                    await install_app_access(coordinator, app_bridge, execution_role="root")
+                    worker.computer_episodes.install(coordinator, lambda: None)
+                    await media.flush_adapters(coordinator)
+                    return result
+            host = ObserverSourceHost(coordinator)
+            host.worker, host.emitted = worker, emitted
+        else:
+            host = FiniteSourceHost(coordinator)
         coordinator.register_capability("live.host", host)
         assert type(coordinator.get_capability("tools.dispatch")).__name__ == "BoundDispatch"
         return session, store, checkpoint, checks, host
