@@ -18,6 +18,8 @@ import os
 from pathlib import Path
 import shutil
 import stat
+import subprocess
+import sys
 import time
 import uuid
 
@@ -1004,19 +1006,20 @@ async def test_a_restore_to_a_stage_of_an_earlier_app_version_after_the_pass_rem
 
 @posix
 def test_the_walk_of_the_private_boundary_with_a_stand_in_for_the_boundary(tmp_path, monkeypatch):
-    """The steps of ``_windows_stage_config`` on this platform, with a stand-in for ``windows_files.directory``.
+    """The steps of ``_windows_stage_config`` on this platform, with stand-ins for the boundary and for the hold.
 
-    Shown: which entries the walk gives to the boundary and in which order it
-    removes folders, its counts, its limit, and what a refusal leaves. The
-    stand-in refuses the removal of a folder while a pin of that folder is
-    open: the walk must close a folder's pin first. Not shown: anything that
-    Windows itself does (the ACL check, the pins, the delete of an open file,
-    a junction). The native cases below show that on a hosted runner.
+    Shown: the order of the walk for each folder (its hold, its pin, its
+    entries, the end of its pin, its removal through the hold, the end of its
+    hold), which entries the walk gives to the boundary, its counts, its limit,
+    and what a refusal leaves. The walk removes no folder by its path. Not
+    shown: anything that Windows itself does (the ACL check, the pins, what a
+    hold refuses to another program, the delete of an open object, a
+    junction). The native cases below show that on a hosted runner.
     """
     from amplifier_web import windows_files
     home = tmp_path / 'app'
     before = app_files(home)
-    pins, refused, reads, hooks = [], set(), [], {}
+    pins, holds, refused, reads, events, by_path = [], [], set(), [], [], []
 
     class Pinned:
         def __init__(self, path):
@@ -1038,25 +1041,44 @@ def test_the_walk_of_the_private_boundary_with_a_stand_in_for_the_boundary(tmp_p
     @contextmanager
     def directory(path, *, owned_root, create=False):
         assert owned_root == home and create is False
-        hooks.pop(('before the pin', path), lambda: None)()
+        # The walk holds a folder of a copy before the boundary pins it. The stage itself has no hold.
+        assert path in holds or path.parent == home / 'updates/releases'
         if not path.is_dir():
             raise FileNotFoundError('made-up private text')
         pins.append(path)
+        events.append(('pin', path))
         try:
             yield Pinned(path)
         finally:
             pins.remove(path)
-            hooks.pop(('after the pin', path), lambda: None)()
+            events.append(('end of the pin', path))
 
     rmdir = os.rmdir
 
-    def unpinned_rmdir(path, *args, **settings):
-        if path in pins:
-            raise PermissionError('made-up private text')
+    @contextmanager
+    def hold(folder):
+        info = os.lstat(folder)   # No such entry: FileNotFoundError, as from the real hold.
+        if not stat.S_ISDIR(info.st_mode):
+            raise PermissionError('made-up private text')   # A link or a file: the real hold refuses it.
+        holds.append(folder)
+        events.append(('hold', folder))
+        try:
+            def remove():
+                assert folder not in pins   # The pin of a folder is closed before the folder is removed.
+                events.append(('removal through the hold', folder))
+                rmdir(folder)
+            yield remove
+        finally:
+            holds.remove(folder)
+            events.append(('end of the hold', folder))
+
+    def rmdir_by_path(path, *args, **settings):
+        by_path.append(path)
         return rmdir(path, *args, **settings)
 
     monkeypatch.setattr(windows_files, 'directory', directory)
-    monkeypatch.setattr(os, 'rmdir', unpinned_rmdir)
+    monkeypatch.setattr(storage, '_windows_hold', hold)
+    monkeypatch.setattr(os, 'rmdir', rmdir_by_path)
     monkeypatch.setattr(storage, '_posix_stage_config', lambda stage, expected, removed:
                         storage._windows_stage_config(home, stage, expected, removed))
 
@@ -1067,7 +1089,7 @@ def test_the_walk_of_the_private_boundary_with_a_stand_in_for_the_boundary(tmp_p
     assert storage.remove_stage_config(home, stage, expected={stage: (0, 0)}) == ('refused', 0)
     assert storage.remove_stage_config(home, stage, limit=4) == ('more', 4)
     assert storage.remove_stage_config(home, stage, expected=identity) == (None, total - 4)
-    assert gone(stage) and rest(stage) == kept and not pins
+    assert gone(stage) and rest(stage) == kept and not pins and not holds
     assert storage.remove_stage_config(home, stage) == (None, 0)
 
     # A file that the boundary refuses, a file above 1 MiB and a link: each stays with its folders.
@@ -1098,33 +1120,21 @@ def test_the_walk_of_the_private_boundary_with_a_stand_in_for_the_boundary(tmp_p
     assert (stage / 'config').is_symlink() and not os.path.lexists(stage / 'routing')
     assert held(home) == before
 
-    # Another folder takes the name of a folder between the walk's look and its pin: nothing of it goes.
+    # The order of the walk for each folder of the copies, and no removal of a folder by its path.
     stage = earlier_stage(home, 'd' * 32)
-    other, first = tmp_path / 'other-tls', tmp_path / 'first-tls'
-    shutil.copytree(home / 'config/tls', other)
-
-    def replace():
-        (stage / 'config/tls').rename(first)
-        other.rename(stage / 'config/tls')
-
-    hooks[('before the pin', stage / 'config/tls')] = replace
+    folders = [path for folder in COPIES for path in (stage / folder, *(stage / folder).rglob('*')) if path.is_dir()]
     total = copied(stage)
-    stays = ['config', 'config/tls', 'config/tls/ca.crt', 'config/tls/leaf.crt', 'config/tls/leaf.key']
-    assert storage.remove_stage_config(home, stage) == ('refused', total - len(stays))
-    assert left(stage) == stays and entries(first) == 4 and not hooks and not pins
-
-    # An empty folder takes the name after the pin is closed, before the folder is removed: it stays.
-    stage = earlier_stage(home, 'e' * 32)
-    away = tmp_path / 'away-tls'
-
-    def replace_with_an_empty_folder():
-        (stage / 'config/tls').rename(away)
-        (stage / 'config/tls').mkdir()
-
-    hooks[('after the pin', stage / 'config/tls')] = replace_with_an_empty_folder
-    total = copied(stage)
-    assert storage.remove_stage_config(home, stage) == ('refused', total - 2)
-    assert left(stage) == ['config', 'config/tls'] and list(away.iterdir()) == [] and not hooks and not pins
+    del events[:], by_path[:]
+    assert len(folders) >= 6 and storage.remove_stage_config(home, stage) == (None, total)
+    assert gone(stage) and not by_path and not pins and not holds
+    for folder in folders:
+        assert [name for name, path in events if path == folder] == [
+            'hold', 'pin', 'end of the pin', 'removal through the hold', 'end of the hold'], folder
+    # A folder of the copy is handled inside the pin and the hold of the folder above it.
+    at = {event: place for place, event in enumerate(events)}
+    config, tls = stage / 'config', stage / 'config/tls'
+    assert at[('hold', config)] < at[('pin', config)] < at[('hold', tls)]
+    assert at[('end of the hold', tls)] < at[('end of the pin', config)] < at[('removal through the hold', config)]
 
     # No file can be removed: the count of the entries that a call handles never passes its limit.
     stage = earlier_stage(home, 'f' * 32)
@@ -1284,42 +1294,160 @@ def test_native_windows_stage_config_junction_is_refused_and_never_followed(nati
     assert gone(stage) and held(home) == before
 
 
-@pytest.mark.skipif(os.name != 'nt', reason='requires native Windows private files')
-def test_native_windows_stage_config_folder_that_is_replaced_before_its_pin_is_refused(native_stage, monkeypatch):
-    """Another folder takes the name of a folder of the copy between the walk's look and its pin.
+RENAME = ("import os, sys\n"
+          "try:\n"
+          "    os.rename(sys.argv[1], sys.argv[2])\n"
+          "    print('renamed')\n"
+          "except OSError as error:\n"
+          "    print('winerror', error.winerror)\n")
 
-    The boundary accepts the other folder: it is private too, and the last
-    step of this case shows that. The walk compares the pinned folder with the
-    folder that it looked at, and refuses.
+
+def refusal(action):
+    """The Windows error of an action that must fail; 0 when it did not fail."""
+    try:
+        action()
+    except OSError as error:
+        return error.winerror
+    return 0
+
+
+def rename_by_another_process(source, target):
+    done = subprocess.run([sys.executable, '-I', '-c', RENAME, str(source), str(target)],
+                          capture_output=True, text=True, timeout=60)
+    return done.stdout.strip() or done.stderr.strip()[-300:]
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='requires native Windows private files')
+def test_native_windows_stage_config_hold_keeps_a_folder_at_its_path_and_removes_it_as_an_object(native_stage):
+    """What the walk's hold of a folder does on Windows. The walk on Windows rests on each line.
+
+    While the hold is open: no rename and no removal of the folder, by this
+    process or by another one, and no rename of a folder above it. The
+    boundary still pins the held folder and reads and removes its files. The
+    removal through the hold takes the folder only when it is empty. A
+    junction, a folder below a junction, a file and a missing name get no hold.
+    """
+    import _winapi
+    from amplifier_web import windows_files as wf
+    home, stage, before = native_stage()
+    config, tls, releases = stage / 'config', stage / 'config' / 'tls', stage.parent
+    away, other_stage = home / 'away', stage.parent / ('b' * 32)
+    # Why the walk needs a hold: the boundary's own pin of a folder does not keep the folder at its path.
+    # Windows lets the rename pass. The boundary then refuses its next read, and the walk would list the path.
+    routing = stage / 'routing'
+    with wf.directory(routing, owned_root=home, create=False) as pinned:
+        os.rename(routing, away)
+        with pytest.raises(PermissionError):
+            pinned.read_private('custom.yaml', limit=1024 * 1024)
+        os.rename(away, routing)
+        assert pinned.read_private('custom.yaml', limit=1024 * 1024)
+    with storage._windows_hold(config), storage._windows_hold(tls) as remove:
+        refusals = {
+            'rename of the held folder': refusal(lambda: os.rename(tls, away)),
+            'removal of the held folder by its path': refusal(lambda: os.rmdir(tls)),
+            'rename of the held folder above it': refusal(lambda: os.rename(config, away)),
+            'rename of the stage': refusal(lambda: os.rename(stage, other_stage)),
+            'rename of the folder of the stages': refusal(lambda: os.rename(releases, releases.with_name('away'))),
+            'removal through the hold while a file is left': refusal(remove),
+        }
+        assert refusals == {
+            'rename of the held folder': 32, 'removal of the held folder by its path': 32,
+            'rename of the held folder above it': 32, 'rename of the stage': 5,
+            'rename of the folder of the stages': 5, 'removal through the hold while a file is left': 145}, refusals
+        assert rename_by_another_process(tls, away) == 'winerror 32'
+        assert rename_by_another_process(stage, other_stage) == 'winerror 5'
+        # The boundary works on a held folder: it pins it, and it reads and removes each file.
+        with wf.directory(tls, owned_root=home, create=False) as pinned:
+            for name in sorted(entry.name for entry in os.scandir(tls)):
+                content = pinned.read_private(name, limit=1024 * 1024)
+                pinned.remove_private(name, hashlib.sha256(content).hexdigest())
+        assert sorted(entry.name for entry in os.scandir(tls)) == []
+        remove()
+    assert not os.path.lexists(tls) and not os.path.lexists(away) and not os.path.lexists(other_stage)
+    assert config.is_dir() and stage.is_dir()
+
+    junction = stage / 'junction'
+    _winapi.CreateJunction(str(home / 'config'), str(junction))
+    try:
+        for path, error in ((junction, PermissionError), (junction / 'auth', PermissionError),
+                            (stage / 'validated.json', PermissionError), (stage / 'no-such-entry', FileNotFoundError)):
+            with pytest.raises(error):
+                with storage._windows_hold(path):
+                    pass
+    finally:
+        os.rmdir(junction)   # The junction itself.
+    assert held(home) == before
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='requires native Windows private files')
+def test_native_windows_stage_config_walk_holds_a_folder_while_it_lists_and_empties_it(native_stage, monkeypatch):
+    """A program tries to move a folder of the copy away while the walk works on it.
+
+    The moment is the pin of the folder, directly before its listing. With the
+    boundary's pin alone Windows lets such a rename pass, and a junction at the
+    name would then be listed. The walk holds the folder, and the folder of
+    the copy above it, so each try is refused and nothing can take a name on
+    the walk's path. The whole copy goes, and the app's own files stay.
     """
     from amplifier_web import windows_files as wf
     home, stage, before = native_stage()
-    tls, first, other = stage / 'config' / 'tls', home / 'first-tls', home / 'other-tls'
-    with ordinary_default_owner():
-        shutil.copytree(home / 'config' / 'tls', other)
-    total, real, replaced = copied(stage), wf.directory, []
+    config, tls = stage / 'config', stage / 'config' / 'tls'
+    away, other_stage = home / 'away', stage.parent / ('b' * 32)
+    total, real, tries = copied(stage), wf.directory, {}
 
-    def replace_then_pin(path, **settings):
-        if Path(path) == tls and not replaced:
-            replaced.append(path)
-            tls.rename(first)
-            other.rename(tls)
+    def try_then_pin(path, **settings):
+        if Path(path) == tls and not tries:
+            tries.update({
+                'rename of the folder': refusal(lambda: os.rename(tls, away)),
+                'rename of the folder by another process': rename_by_another_process(tls, away),
+                'removal of the folder by its path': refusal(lambda: os.rmdir(tls)),
+                'rename of the folder of the copy above it': refusal(lambda: os.rename(config, away)),
+                'rename of the stage': refusal(lambda: os.rename(stage, other_stage)),
+            })
         return real(path, **settings)
 
     with monkeypatch.context() as patch:
-        patch.setattr(wf, 'directory', replace_then_pin)
+        patch.setattr(wf, 'directory', try_then_pin)
         result = storage.remove_stage_config(home, stage)
-    stays = ['config', 'config/tls', 'config/tls/ca.crt', 'config/tls/leaf.crt', 'config/tls/leaf.key']
-    assert replaced and result == ('refused', total - len(stays)), (
-        f'The removal with a replaced folder returned {result!r}; left {left(stage)}; '
-        f'the boundary refuses {boundary_refusals(home, stage)}')
-    # The folder that took the name is complete, and so is the folder that had it.
-    assert left(stage) == stays
-    assert sorted(path.name for path in first.iterdir()) == ['ca.crt', 'leaf.crt', 'leaf.key']
+    assert tries == {
+        'rename of the folder': 32, 'rename of the folder by another process': 'winerror 32',
+        'removal of the folder by its path': 32, 'rename of the folder of the copy above it': 32,
+        'rename of the stage': 5}, tries
+    assert result == (None, total), (
+        f'The removal returned {result!r}; left {left(stage)}; the boundary refuses {boundary_refusals(home, stage)}')
+    assert gone(stage) and not os.path.lexists(away) and not os.path.lexists(other_stage)
     assert held(home) == before
-    # The folder is the stage's now: a later call removes it through the boundary.
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='requires native Windows private files')
+def test_native_windows_stage_config_stage_times_go_back_through_a_handle_and_never_through_a_junction(native_stage):
+    """The removal puts the write time of the stage folder back, through a handle of that folder."""
+    import _winapi
+    home, stage, before = native_stage()
+    info, total = os.lstat(stage), copied(stage)
     result = storage.remove_stage_config(home, stage)
-    assert result == (None, len(stays)), (
-        f'The removal of the folder that took the name returned {result!r}; left {left(stage)}; '
-        f'the boundary refuses {boundary_refusals(home, stage)}')
-    assert gone(stage) and held(home) == before
+    assert result == (None, total), (
+        f'The removal returned {result!r}; left {left(stage)}; the boundary refuses {boundary_refusals(home, stage)}')
+    assert os.lstat(stage).st_mtime_ns == info.st_mtime_ns
+    # Control: an entry that comes and goes directly in the stage changes that time when nothing puts it back.
+    (stage / 'made-up-entry').write_text('made-up')
+    (stage / 'made-up-entry').unlink()
+    assert os.lstat(stage).st_mtime_ns != info.st_mtime_ns
+
+    # A junction at the path: no time is written, not the junction's and not the time of what it names.
+    from types import SimpleNamespace
+    target, junction = home / 'config', stage / 'junction'
+    _winapi.CreateJunction(str(target), str(junction))
+    try:
+        was = os.lstat(target).st_mtime_ns
+        earlier = SimpleNamespace(st_atime_ns=was - 10 ** 12, st_mtime_ns=was - 10 ** 12)   # 1000 seconds before.
+        with pytest.raises(PermissionError):
+            storage._windows_times(junction, earlier)
+        storage._keep_times(junction, earlier)   # No exception.
+        assert os.lstat(target).st_mtime_ns == was
+        # Control: the same call on the folder itself writes that time.
+        storage._keep_times(target, earlier)
+        assert os.lstat(target).st_mtime_ns == earlier.st_mtime_ns
+    finally:
+        os.rmdir(junction)   # The junction itself.
+    assert held(home) == before

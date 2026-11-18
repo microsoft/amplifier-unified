@@ -247,30 +247,58 @@ def _posix_tree(parent, name, device, work, still, depth):
         return 'io'
 
 
+@contextmanager
+def _windows_hold(folder):
+    """Windows: open one folder of a copy as that exact object, and give the removal of that object.
+
+    The private-file boundary pins a folder with a handle that asks for its
+    attributes only. Windows lets another program rename a folder that has
+    only such a handle. So the walk opens its own handle first. The open
+    refuses a junction (and each other reparse point, by the same test), a
+    file, and a path that goes through a junction (windows_files). The handle
+    asks for the right to delete and shares reading only. While it is open,
+    Windows refuses every program the rename of this folder and its removal by
+    its path, and the rename of a folder above it: the path of the folder
+    names this object until the handle is closed. The function that this gives
+    removes the folder through the handle: this object, only when it is empty,
+    and never what its path names at that moment.
+
+    A native case shows each of these on a hosted Windows runner: the rename
+    that passes with the boundary's pin alone, the refusals while the handle
+    is open (by this process and by another one), the removal through the
+    handle, and the three refusals of the open.
+    """
+    import ctypes
+    from .windows_files import BYTE, _API
+    api = _API()
+    handle = api.open(folder, directory=True, cleanup=True)
+    try:
+        def remove():
+            delete = BYTE(1)  # FileDispositionInfo: delete this open object when its last handle is closed.
+            api.ok(api.SetFileInformationByHandle(handle, 4, ctypes.byref(delete), ctypes.sizeof(delete)))
+        yield remove
+    finally:
+        api.close(handle)
+
+
 def _windows_remove_tree(folder, home, work, depth=0):
     """Windows: remove one folder through the private-file boundary, the deepest entries first.
 
-    The boundary pins the folder and every folder above it, checks their ACLs,
-    and deletes each file as the exact object whose bytes it read. A link, a
-    junction, a file above 1 MiB, a file with an ACL that is not private and a
-    file that another program holds open all stay, with their folders, and each
-    counts; the other entries are still handled. The listing of a folder takes
-    no more entries than the work may still handle, and one more.
+    The walk holds the folder first (_windows_hold), and every folder of the
+    copy above it is held in the same way. Then the boundary pins the folder
+    and every folder above it, checks their ACLs, and deletes each file as the
+    exact object whose bytes it read. A link, a junction, a file above 1 MiB,
+    a file with an ACL that is not private and a file that another program
+    holds open all stay, with their folders, and each counts; the other
+    entries are still handled. The listing of a folder takes no more entries
+    than the work may still handle, and one more.
 
-    The pinned folder must be the folder that the walk looked at before the
-    pin. Before each read and each removal of a file the boundary checks that
-    every pinned folder is still at its path, so a file goes only from the
-    folder that the walk pinned. The listing, and the step into a folder of
-    the copy, go by the path. It is not tested whether Windows lets another
-    process of the same account move a pinned folder. If one does, and puts
-    another folder at the path while the pin is open, the files directly in
-    that folder stay, and the walk handles its folders as folders of the
-    copy. A later pass handles every folder with the name of a copy that way.
-    A folder is removed only when it is empty and is no link, and only
-    after its own pin is closed; the walk looks at it again directly before.
-    Between that look and the removal another process of the same account can
-    still put another folder at the name. The removal then takes that folder
-    when it is empty, or a junction itself, and never what a junction names.
+    The pin, the listing and the step into a folder of the copy go by the
+    path. The hold keeps that path on the held folder for all of that time. A
+    folder is removed only when it is empty, after its own pin is closed, and
+    through its hold: never by its path. What takes a name of the copy before
+    the walk comes to that name is handled as what it is: a folder as a folder
+    of the copy, a link or a junction not at all.
     """
     reason = _windows_tree(folder, home, work, depth)
     if reason not in (None, 'more') and not work.full():
@@ -281,57 +309,52 @@ def _windows_remove_tree(folder, home, work, depth=0):
 def _windows_tree(folder, home, work, depth):
     from .windows_files import directory
     try:
-        info = folder.lstat()
-        if _reparse(info) or not stat.S_ISDIR(info.st_mode) or depth >= _STAGE_CONFIG_DEPTH:
+        if depth >= _STAGE_CONFIG_DEPTH:
             return 'refused'
-        reason = None
-        with directory(folder, owned_root=home, create=False) as pinned:
-            if _identity(folder.lstat()) != _identity(info):
-                return 'refused'  # Another folder took the name between the look and the pin.
-            with os.scandir(folder) as listing:
-                entries = list(itertools.islice(listing, work.remaining() + 1))
-            cut = len(entries) > work.remaining()
-            for entry in entries:
-                if work.full():
-                    return 'more'
-                try:
-                    child = entry.stat(follow_symlinks=False)
-                    if _reparse(child):
+        with _windows_hold(folder) as remove:
+            reason = None
+            with directory(folder, owned_root=home, create=False) as pinned:
+                with os.scandir(folder) as listing:
+                    entries = list(itertools.islice(listing, work.remaining() + 1))
+                cut = len(entries) > work.remaining()
+                for entry in entries:
+                    if work.full():
+                        return 'more'
+                    try:
+                        child = entry.stat(follow_symlinks=False)
+                        if _reparse(child):
+                            work.stayed += 1
+                            reason = reason or 'refused'
+                        elif stat.S_ISDIR(child.st_mode):
+                            result = _windows_remove_tree(folder / entry.name, home, work, depth + 1)
+                            if result == 'more':
+                                return result
+                            reason = reason or result
+                        else:
+                            digest = hashlib.sha256(
+                                pinned.read_private(entry.name, limit=1024 * 1024)).hexdigest()
+                            pinned.remove_private(entry.name, digest)
+                            work.removed += 1
+                    except FileNotFoundError:
+                        pass
+                    except PermissionError:
                         work.stayed += 1
                         reason = reason or 'refused'
-                    elif stat.S_ISDIR(child.st_mode):
-                        result = _windows_remove_tree(folder / entry.name, home, work, depth + 1)
-                        if result == 'more':
-                            return result
-                        reason = reason or result
-                    else:
-                        digest = hashlib.sha256(
-                            pinned.read_private(entry.name, limit=1024 * 1024)).hexdigest()
-                        pinned.remove_private(entry.name, digest)
-                        work.removed += 1
-                except FileNotFoundError:
-                    pass
-                except PermissionError:
-                    work.stayed += 1
-                    reason = reason or 'refused'
-                except OSError:
-                    work.stayed += 1
-                    reason = reason or 'io'
-                except Exception:
-                    work.stayed += 1
-                    reason = reason or 'refused'
-        if cut:
-            return 'more'
-        if reason:
-            return reason
-        if work.full():
-            return 'more'
-        now = folder.lstat()
-        if _reparse(now) or _identity(now) != _identity(info):
-            return 'refused'  # Another entry took the name after the pin was closed.
-        os.rmdir(folder)
-        work.removed += 1
-        return None
+                    except OSError:
+                        work.stayed += 1
+                        reason = reason or 'io'
+                    except Exception:
+                        work.stayed += 1
+                        reason = reason or 'refused'
+            if cut:
+                return 'more'
+            if reason:
+                return reason
+            if work.full():
+                return 'more'
+            remove()
+            work.removed += 1
+            return None
     except FileNotFoundError:
         return None
     except PermissionError:
@@ -342,15 +365,46 @@ def _windows_tree(folder, home, work, depth):
         return 'refused'
 
 
+def _windows_times(folder, info):
+    """Windows: write a folder's times through a handle of that folder.
+
+    ``os.utime`` with a path follows a link or a junction at the path, and on
+    Windows it has no other form. The handle is of the entry itself. A link, a
+    junction and a path that names the folder through another spelling are
+    refused (windows_files), and then no time is written.
+    """
+    import ctypes
+    import struct
+    from .windows_files import _API, _INVALID
+    api = _API()
+    # READ_CONTROL, and the attributes to read and to write. The entry itself, and a folder.
+    handle = api.CreateFileW(str(folder), 0x20180, 7, None, 3, 0x2200000, None)
+    if handle == _INVALID:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        api.info(handle, folder, directory=True)
+        epoch = 116444736000000000  # 1970, in the units of 100 ns since 1601 that Windows keeps.
+        # FILE_BASIC_INFO: creation, access, write, change, attributes. A zero leaves a value as it is.
+        times = struct.pack('<qqqqI4x', 0, info.st_atime_ns // 100 + epoch, info.st_mtime_ns // 100 + epoch, 0, 0)
+        buffer = ctypes.create_string_buffer(times, len(times))
+        api.ok(api.SetFileInformationByHandle(handle, 0, buffer, len(times)))
+    finally:
+        api.close(handle)
+
+
 def _keep_times(folder, info):
     """Put a stage folder's times back after a removal directly below it.
 
     A keys file of a stage with no receipt waits 24 hours from that time
     (scrub_stage_keys). Those hours are for what a preparation wrote: this
-    removal must not start them again. ``folder`` is an open folder or a path.
+    removal must not start them again. ``folder`` is an open folder, or on
+    Windows a path.
     """
     try:
-        os.utime(folder, ns=(info.st_atime_ns, info.st_mtime_ns))
+        if os.name == 'nt':
+            _windows_times(folder, info)
+        else:
+            os.utime(folder, ns=(info.st_atime_ns, info.st_mtime_ns))
     except Exception:
         pass  # The keys file then waits its 24 hours from this removal.
 
@@ -558,10 +612,11 @@ def _scrub_stage_config(manager, root, protected):
     between two stages, as for the keys file. One pass goes at most once around
     the stages, and it starts where the pass before stopped. So a copy that was
     cut, or a stage whose entries stay, gets its next turn after every other
-    stage. A pass that starts at a saved place reads the list of stages twice:
-    from that place to the end, then from the start to that place. It handles
-    no stage twice, also when another process changes the list between the two
-    readings; one stage can then wait for the next pass.
+    stage. A pass that starts at a saved place reads the list of stages from
+    that place to the end and then, when its bounds permit, from the start to
+    that place: at most two readings. It handles no stage twice, also when
+    another process changes the list between the two readings; a stage can
+    then wait for the next pass.
     It handles every stage that still has such an entry: with or without
     a receipt, a keys file or shared-config, and at every age, because nothing
     reads the copies. It leaves the stage of a preparation that is not
