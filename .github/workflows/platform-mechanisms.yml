@@ -424,11 +424,13 @@ jobs:
       # Two cases hold a shortcut as another program can: an open that does not
       # share deleting (Windows error 32 at the pin) and a mapped view (error 5
       # at the delete). The uninstall waits its bounded time and stops; when the
-      # other program lets go, it finishes. Each case prints what it saw.
+      # other program lets go, it finishes. Each case prints what it saw, and
+      # `-raP` shows that line for a case that passed. No `-s` here: without
+      # pytest's own capture, an earlier case of this file leaves a closed stream.
       - name: Check uninstall order, a failed stop, a held shortcut and restored real Windows entries
         shell: pwsh
         run: |
-          .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -s -p no:cacheprovider tests/test_windows_consumer_shell.py | Tee-Object -Variable report
+          .\.native-test-venv\Scripts\python.exe -B -m pytest -q -raP -p no:cacheprovider tests/test_windows_consumer_shell.py | Tee-Object -Variable report
           if ($LASTEXITCODE -ne 0) { throw 'Windows uninstall entry checks failed.' }
           $text = $report -join "`n"
           if ($text -match '\d+ skipped') { throw 'A native uninstall entry case was skipped; on this lane it must run.' }

@@ -1065,7 +1065,7 @@ def test_failed_shortcut_removal_is_finished_by_a_second_uninstall(uninstaller):
 
 # Another program (the shell, a search index, a scanner) can have a shortcut open for a moment. Windows
 # then refuses the uninstall's pin with error 32 (the other open does not share deleting) and its delete
-# with error 5 (the other program holds a view of the file). Seen on hosted runners, follow-up A47.
+# with error 5 (a view of the file is mapped). Both were seen on hosted Windows runners.
 HELD = [("pin", 32, "entries-check"), ("delete", 5, "shortcuts")]
 
 
@@ -1608,7 +1608,7 @@ def _another_program_holds(path, *, mapped):
 @pytest.mark.parametrize("mapped", [False, True], ids=["open-without-delete-sharing", "mapped-view"])
 def test_native_shortcut_that_another_program_holds_is_waited_for_and_the_wait_has_an_end(
         native_uninstall, monkeypatch, mapped):
-    """The two stops of follow-up A47, made on purpose with real NTFS handles.
+    """The two stops that hosted Windows runners showed, made on purpose with real NTFS handles.
 
     An open without delete sharing refuses the uninstall's pin: Windows error
     32 at `entries-check`, and nothing is changed. A mapped view lets the pin

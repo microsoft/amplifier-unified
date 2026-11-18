@@ -1711,10 +1711,16 @@ So the order is:
    work). An app that does not answer, or an older app that reports no count,
    gets no second question.
 3. Check and pin every Start-menu shortcut and the Apps-list entry. A changed
-   entry stops here, before the app is touched.
+   entry stops here, before the app is touched. Another program can have a
+   shortcut open at that moment (the Windows shell opens a new shortcut for a
+   moment). Windows then refuses the pin, and uninstall tries again for up to
+   5 seconds before it stops here.
 4. Stop the app normally and remove its sign-in task. There is no forced stop.
 5. Remove the Apps-list entry, then the shortcuts ("Uninstall Amplifier" last),
-   then the emptied Start-menu folder.
+   then the emptied Start-menu folder. A delete that Windows refuses while a
+   view of the shortcut is mapped is tried again for up to 5 seconds. A
+   shortcut that is still held then stops the uninstall with "Uninstall
+   Amplifier" still in the Start menu, and a second uninstall finishes.
 6. If Windows trusts this installation's own key-less certificate for this
    person, ask Windows to delete it, and each root that `setup-tls force`
    replaced and Windows still holds (`windows_trust.forget_roots`): one
@@ -1902,7 +1908,9 @@ The native check in the `windows-local-connection` job uses the real
 shortcuts, the real registry transaction, private files and NTFS sharing on a
 Windows runner. It holds the throwaway installation folder open without write
 sharing to get the same refusal, and it uses a stand-in for Task Scheduler,
-because a runner cannot register the sign-in task. A real stop with a live
+because a runner cannot register the sign-in task. Two cases hold a shortcut
+as another program can (an open that does not share deleting, and a mapped
+view) and check the wait and its end. A real stop with a live
 conversation worker remains clean-room acceptance.
 
 ### Uninstall can delete the installation folder

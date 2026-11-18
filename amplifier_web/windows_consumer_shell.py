@@ -24,11 +24,12 @@ FILE = "consumer-shell.json"
 NOTE = "apps-list-version.json"
 SETTLE_SECONDS = 15  # Longest wait for a closing app to release the installation folder.
 # Longest wait for another program to close a Start-menu shortcut: once for the
-# step that pins the shortcuts, and once for the step that deletes them. On
-# hosted Windows runners the Windows shell had a shortcut open for 0.01 s (the
-# pin was refused) and for up to 0.25 s (the delete was refused). This is twenty
-# times the longest of those. A shortcut that is still held then stops the
-# uninstall as before.
+# step that pins the shortcuts, and once for the step that deletes them.
+# Measured on hosted Windows runners, about 3 seconds after the shortcuts were
+# made: the pin was refused for 0.01 s (Windows named explorer.exe as the
+# program that had the file open), and the delete was refused for at most
+# 0.25 s (Windows named no program). This is twenty times the longest of those.
+# A shortcut that is still held then stops the uninstall as before.
 HOLD_SECONDS = 5
 LINKS = {"Amplifier Unified.lnk": "", "Amplifier status.lnk": " --status",
          "Stop Amplifier.lnk": " --stop", "Uninstall Amplifier.lnk": " --uninstall"}
@@ -454,11 +455,13 @@ def _held(code):
     """Try again, for a bounded time, while another program has a shortcut open.
 
     Windows refuses the pin of a shortcut with error 32 while another open of
-    that file does not share deleting. It refuses the delete through the
-    pinned handle with error 5 while another program holds a view of the
-    file. The Windows shell opens a shortcut like that for a moment. Only a
-    PermissionError that carries exactly `code` is tried again. Every other
-    refusal, and a shortcut that differs from setup's record, raises at once.
+    that file does not share deleting; the Windows shell opens a new shortcut
+    like that for a moment. It refuses the delete through the pinned handle
+    with error 5 while a view of the file is mapped. It gives the same error 5
+    for a shortcut with a read-only attribute, which no wait cures: that one
+    stops the uninstall after the wait. Only a PermissionError that carries
+    exactly `code` is tried again. Every other refusal, and a shortcut that
+    differs from setup's record, raises at once.
 
     The returned function counts its waits for all shortcuts of one step
     together: HOLD_SECONDS in all, a tenth of a second each. It limits the
