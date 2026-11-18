@@ -792,9 +792,9 @@ that the record does not name. When no earlier rule decides and neither of
 those two holds, the value is "Check for updates" / "The full desired
 component state has not been checked.", also with the status `unchecked`. The
 bundled page shows a quiet health value when no update operation runs or
-waits; while one does, the page shows its own text of that operation. This
-text ends when a check lists an update, or when the settings again have the
-key of the record. For the other key a check's
+waits; while one does, the page shows its own text of that operation. The
+text of this state ends when a check lists an update, or when the settings
+again have the key of the record. For the other key a check's
 inventory adds the row "Qualify current component configuration", unless it
 already lists a row for the worker environment; each such row is an update.
 A health read is not an update check, and no rule for a check reads this

@@ -869,8 +869,8 @@ async def test_a_second_ai_connection_gives_the_quiet_text_until_an_update_is_li
         settings.write_text(json.dumps({'config': {'providers': rows}}))
         keys.append(real_key(health.configuration(m)[1].settings, m.home, stage))
     assert keys[2] == keys[3] and len({qualified, *keys}) == 4
-    # The settings now hold a second connection, and the revision moved. (The save action and its
-    # publication are not run here.)
+    # The settings now hold a second connection. The save action and the publication of changes that
+    # wakes the update owner are not run here: the revision is set by hand, and the health value is published.
     assert json.loads(settings.read_text()) == {'config': {'providers': [first, second]}}
     m.service.state['configurationRevision'] = 2
     health.publish(m)
