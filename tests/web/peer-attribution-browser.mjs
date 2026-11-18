@@ -244,7 +244,44 @@ try{
  await page.reload();await expect(article(facts.agent).locator('.a-message-attribution')).toHaveText(caption);
  await expect(article(facts.notification).locator('.a-message-attribution')).toHaveText('Amplifier update');
  assert.ok((await page.request.post(new URL('/api/fixture/extendHistory',page.url()).href,{headers:{Origin:target}})).ok());
+ // Deliberately read the oldest peer through the maintained paging control.
+ // Save its anchor after the extension has reached the UI, so a live latest-
+ // window update cannot race the reading position that reload must restore.
+ await page.getByRole('button',{name:'Load earlier conversation',exact:true}).click();
+ const olderPeer=article(facts.older);
+ const readingPosition=()=>page.evaluate(()=>JSON.parse(sessionStorage.getItem('amplifier.chat-reading.v1')||'{}').receiving);
+ const previousSeenAt=(await readingPosition())?.seenAt;
+ await olderPeer.evaluate(node=>{
+  const pane=node.closest('.a-messages');
+  pane.dispatchEvent(new WheelEvent('wheel',{deltaY:-1}));
+  node.scrollIntoView({block:'start'});pane.dispatchEvent(new Event('scroll'));
+ });
+ await expect(olderPeer).toBeInViewport();
+ await expect.poll(async()=>{
+  const position=await readingPosition();
+  return position?.messageId===facts.older&&position.seenAt!==previousSeenAt;
+ },{message:'Fresh older peer reading anchor persisted'}).toBe(true);
+ const savedReading=await readingPosition();
+ const restoration=page.waitForResponse(response=>{
+  const url=new URL(response.url());
+  return url.pathname==='/api/conversation/navigation'&&url.searchParams.get('sessionId')==='receiving'&&
+   url.searchParams.get('messageId')===facts.older&&url.searchParams.get('window')==='true';
+ });
  await page.reload();
+ const restoredResponse=await restoration;assert.ok(restoredResponse.ok());
+ const restored=await restoredResponse.json(),restoredIds=restored.messages.map(row=>row.id);
+ assert.ok(restoredIds.includes(facts.older));
+ assert.equal(restoredIds.includes(facts.agent),false,'The restored older window excludes the newer peer');
+ await expect(olderPeer).toBeInViewport();
+ const anchorOffset=()=>olderPeer.evaluate(node=>node.getBoundingClientRect().top-node.closest('.a-messages').getBoundingClientRect().top);
+ await expect.poll(async()=>Math.abs(await anchorOffset()-savedReading.offset),{message:'Older peer reading offset restored'}).toBeLessThan(3);
+ await expect(summary).toHaveCount(0);
+ const returnToLatest=page.getByRole('button',{name:'Return to latest',exact:true});
+ await expect(returnToLatest).toBeEnabled();
+ const historyTransition={savedReading,restored:{messageIds:restoredIds,anchorOffset:await anchorOffset()}};
+ console.log('PEER_OLDER_RESTORED '+JSON.stringify(historyTransition));
+ await returnToLatest.click();
+ await expect(returnToLatest).toHaveCount(0);await expect(olderPeer).toHaveCount(0);
  await expect(summary).toHaveAttribute('aria-expanded','false');
  const state=await page.evaluate(()=>window.amplifier.getState());
  const receiving=state.sessions.find(row=>row.id===state.selectedSessionId);
@@ -272,6 +309,9 @@ try{
  assert.equal(older.items.find(row=>row.id===facts.older).attribution,undefined,'A partial page cannot prove global input uniqueness');
  console.log('PEER_EXTENDED_WINDOW '+JSON.stringify({savedCount:109,recentCount:receiving.messages.length,
   olderCount:older.items.length,olderHasEarlier:older.hasEarlier,gaps:older.unavailableRanges}));
+ historyTransition.latest={messageIds:receiving.messages.map(row=>row.id),newerPeerCollapsed:await summary.getAttribute('aria-expanded')};
+ console.log('PEER_RETURNED_LATEST '+JSON.stringify(historyTransition.latest));
+ if(process.env.AMPLIFIER_PROOF_DIR)writeFileSync(join(process.env.AMPLIFIER_PROOF_DIR,'peer-history-transition.json'),JSON.stringify(historyTransition,null,2));
  // The focused rail is another receiving boundary, not a compact-text lookup.
  const focused=await (await page.request.get(new URL(`/api/conversation/navigation?sessionId=receiving&messageId=${encodeURIComponent(facts.agent)}&window=true`,page.url()).href,{headers})).json();
  assert.equal(focused.messages.find(row=>row.id===facts.agent).attribution?.caption,caption);

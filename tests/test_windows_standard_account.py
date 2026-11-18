@@ -18,6 +18,7 @@ import string
 import sys
 import time
 import tokenize
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -1166,6 +1167,28 @@ def test_the_watch_of_an_installation_asks_its_saved_address_and_reads_the_owner
     assert asked[:2] == [("trust", ["https://127.0.0.1:27595/api/health"], "the pin"), ("owners", "127.0.0.1", 27595)]
 
 
+def test_the_watch_asks_with_the_products_function_of_its_start_and_not_with_one_put_in_its_place(
+        case, tmp_path, monkeypatch):
+    # After the second sign-in the trust read of the step (`sign_in_trust`) puts a function of its own in the
+    # place of the product's `trust_state` while it reads, and keeps each call of it as a read of the step. The
+    # watch asks beside it, from its own thread. Its questions are no reads of a step.
+    from amplifier_web import windows_installation, windows_task_runtime
+    asked = []
+    monkeypatch.setattr(case, "trust_targets", lambda home: (["https://127.0.0.1:27595/api/health"], "the pin"))
+    monkeypatch.setattr(windows_installation, "saved_port", lambda home: 27595)
+    monkeypatch.setattr(windows_installation, "trust_state",
+                        lambda urls, pin: asked.append(("the product's", urls, pin)) or "trusted")
+    monkeypatch.setattr(windows_task_runtime, "listener_owners", lambda host, port: {4500})
+    monkeypatch.setattr(case, "cpu_seconds", lambda owners: {"busy": 0, "all": 0, "processes": {}})
+    watch = case.watch_listener(tmp_path)
+    assert watch.stop()["ended"] is True
+    asked.clear()
+    monkeypatch.setattr(windows_installation, "trust_state",
+                        lambda urls, pin: asked.append("the step's") or "unreachable")
+    assert watch.probe() == "trusted"
+    assert asked == [("the product's", ["https://127.0.0.1:27595/api/health"], "the pin")]
+
+
 def product_database(folder, state):
     """An app database as the product writes its state: its tables and its own save of a global record."""
     import sqlite3
@@ -1363,7 +1386,7 @@ def test_each_later_start_is_accepted_through_the_check_that_names_the_answer():
 def test_every_read_after_a_host_start_is_made_through_the_record_and_keeps_its_condition():
     source = FIXTURE.read_text(encoding="utf-8")
     journey = phase(source, "journey", "def trust_targets(home):")
-    certificate = phase(source, "certificate", "def second(stage, exchange, account, token):")
+    certificate = phase(source, "certificate", "def sign_in_snapshot(")
     second = phase(source, "second", "def delete_everything(")
     # Each start: Task Scheduler's answer and the app's status, each with its read and with the rule of its step.
     # The line breaks of a call do not count here.
@@ -1385,14 +1408,19 @@ def test_every_read_after_a_host_start_is_made_through_the_record_and_keeps_its_
             'lambda value: value["exitCode"] == 0 and (value["json"] or {}).get("ok") is True)'
             ) in " ".join(journey.split())
     # Each read of trust, with the answer that its step requires.
-    for part, name, required in ((certificate, "trust before the Windows question", "untrusted"),
-                                 (certificate, "trust after Yes", "trusted"),
-                                 (second, "trust after the sign-in", "trusted"),
-                                 (second, "trust after the start that follows the uninstall", "trusted")):
+    once = "lambda: windows_installation.trust_state(urls, pin)"
+    # After the sign-in the read is `sign_in_trust`: it waits as the product waits and keeps its own observation.
+    settled = "lambda: sign_in_trust(steps, again, root, home, urls, pin, status, state)"
+    for part, name, read, required in ((certificate, "trust before the Windows question", once, "untrusted"),
+                                       (certificate, "trust after Yes", once, "trusted"),
+                                       (second, "trust after the sign-in", settled, "trusted"),
+                                       (second, "trust after the start that follows the uninstall", once, "trusted")):
         call = part[part.index(f'observed(steps, home, "{name}"'):]
         call = call[:call.index("\n        need(")]
-        assert "lambda: windows_installation.trust_state(urls, pin)" in call
+        assert read in call and (once in call) == (read is once)
         assert f'lambda value: value == "{required}")' in call
+    # That read is made once, and only through the record: its definition and this one call.
+    assert second.count("sign_in_trust(") == 1 and source.count("sign_in_trust(") == 2
     # No read of trust, of Task Scheduler together with the status, or of the waiting status is made beside the record.
     for part in (journey, certificate, second):
         assert part.count("windows_installation.trust_state(urls, pin)") == part.count(
@@ -1411,8 +1439,10 @@ def test_every_read_after_a_host_start_is_made_through_the_record_and_keeps_its_
                           '             "After Yes, Windows does not trust the connection"'),
             (second, 'need(again.running(state) and again.healthy(status),\n'
                      '             "After the sign-in the task did not start a host that answers"'),
-            (second, 'need(trusted == "trusted", "After the new sign-in Windows does not trust the connection. It read",'
-                     ' trusted)'),
+            (second, 'need(again.running(after["task"]) and again.healthy(after["serviceStatus"]),\n'
+                     '             "After the TLS probe the task no longer has a verified responsive host", after)'),
+            (second, 'need(after["host"] != list(before["hostBeforeSignOut"]) and after["savedPort"] == before["port"],\n'
+                     '             "After the TLS probe the host is not a new host on the same port", after)'),
             (second, 'need(trusted == "trusted", "After the start Windows does not trust the connection. It read",'
                      ' trusted)')):
         assert part.count(condition) == 1
@@ -2689,3 +2719,351 @@ def test_a_list_that_windows_does_not_give_is_not_read_as_no_certificate(case, m
     with pytest.raises(AssertionError) as failed:
         case.windows_root_has(THUMBPRINT)
     assert "Windows did not list this user's root certificates" in str(failed.value)
+
+
+@pytest.fixture
+def sign_in_probe(case, monkeypatch, tmp_path):
+    """The real settling loop and public predicates, with every Windows read replaced."""
+    from amplifier_web import windows_installation as installation
+    again = case.load("standard_account_observation_helpers", ROOT / "tests/fixtures/windows_start_again_native.py")
+    steps = case.Steps(tmp_path / "second.json", case.SECOND)
+    steps.begin(case.SECOND[0])
+    root, home, urls, pin = tmp_path / "installation", tmp_path / "installation/app", ["https://127.0.0.1:443"], object()
+    state = {"managed": True, "state": "running", "instances": 1, "taskPath": r"\AmplifierUnified-test",
+             "lastResult": 0}
+    status = {"exitCode": 0, "json": {"ok": True, "processVerified": True, "responding": True,
+                                    "pid": 22, "created": "220", "token": "PRIVATE-SENTINEL"},
+              "stdout": "PRIVATE-SENTINEL", "stderr": "PRIVATE-SENTINEL"}
+    run = SimpleNamespace(steps=steps, root=root, home=home, urls=urls, pin=pin, status=status, state=state,
+                          again=again, installation=installation, calls=[], sleeps=[], now=0.0,
+                          states=["trusted"], seen=[], post_status=None, ports=[443, 443], broken=None)
+
+    def cli(folder, *args, **kwargs):
+        assert folder == root
+        run.calls.append(("cli", args, kwargs))
+        if args == ("service", "logs"):
+            if run.broken == "logs":
+                raise OSError("PRIVATE-SENTINEL")
+            return {"exitCode": 0, "stdout": "PRIVATE-SENTINEL\nStarted server process [42] PRIVATE-SENTINEL\n"
+                                          "Application startup complete.\n"}
+        assert args in (("service", "status", "--json"), ("service", "status", "--wait", "120", "--json"))
+        return run.post_status or status
+
+    async def listener(folder):
+        assert folder == home
+        if run.broken == "listener":
+            raise RuntimeError("PRIVATE-SENTINEL")
+        return True
+
+    def probe(targets, fingerprint):
+        assert targets is urls and fingerprint is pin  # No replacement pin, URL or trust path.
+        saved = json.loads(steps.path.read_text())
+        assert saved["signInTrust"]["stage"] == "BEFORE PROBE" and "before" in saved["signInTrust"]
+        run.seen.append(saved["signInTrust"])
+        value = run.states[min(len(run.seen) - 1, len(run.states) - 1)]
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    def sleep(seconds):
+        run.sleeps.append(seconds)
+        run.now += seconds
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("An observation tried to launch, sign in, or mutate certificate/trust state")
+
+    monkeypatch.setattr(again, "cli", cli)
+    monkeypatch.setattr(again, "listener_answers", listener)
+    monkeypatch.setattr(again, "task_facts", lambda folder: dict(state))
+    monkeypatch.setattr(again, "preparation_facts", lambda folder: {
+        "releaseCount": 1, "install-failure.json": {"locals": "PRIVATE-SENTINEL"},
+        "install-progress.json": ["install: started", "PRIVATE-SENTINEL", "qualify: passed"]})
+    monkeypatch.setattr(installation, "saved_port", lambda folder: run.ports.pop(0))
+    monkeypatch.setattr(installation, "trust_state", probe)
+    monkeypatch.setattr(case.time, "monotonic", lambda: run.now)
+    monkeypatch.setattr(case.time, "sleep", sleep)
+    for owner, name in ((again, "launcher"), (case, "sign_in"), (case, "certificate"),
+                        (installation, "review_browser_trust"), (installation, "_export_certificate"),
+                        (installation, "owner_notice")):
+        monkeypatch.setattr(owner, name, forbidden)
+
+    def observe():
+        try:
+            return case.sign_in_trust(steps, again, root, home, urls, pin, status, state)
+        except Exception as error:
+            steps.failed(error)
+            raise
+        finally:
+            assert installation.trust_state is probe
+
+    run.observe = observe
+    return run
+
+
+def test_second_sign_in_settles_only_unreachable_with_the_maintained_defaults(sign_in_probe):
+    run = sign_in_probe
+    run.states = ["unreachable", "unreachable", "trusted"]
+    # A host can restart during observation; retain both identities, not a claimed cause.
+    run.post_status = {"exitCode": 0, "json": {**run.status["json"], "pid": 33, "created": "330"}}
+    assert run.observe() == "trusted"
+    observation = json.loads(run.steps.path.read_text())["signInTrust"]
+    assert observation["probes"] == [{"seconds": 0.0, "state": "unreachable"},
+                                     {"seconds": 1.0, "state": "unreachable"},
+                                     {"seconds": 2.0, "state": "trusted"}]
+    assert run.sleeps == [1.0, 1.0] and observation["seconds"] == 2.0
+    assert observation["stage"] == "AFTER PROBE" and observation["hostChanged"] is True
+    assert observation["before"]["host"] == [22, "220"] and observation["after"]["host"] == [33, "330"]
+    for side in ("before", "after"):
+        facts = observation[side]
+        assert facts["serviceStatus"]["json"]["processVerified"] is True
+        assert facts["task"] == run.state and facts["savedPort"] == 443 and facts["listenerAnswers"] is True
+        assert facts["captureErrors"] == []
+    # Two bounded snapshots, no polling of diagnostics inside the TLS loop.
+    assert [args for _, args, _ in run.calls] == [
+        ("service", "logs"), ("service", "status", "--json"), ("service", "logs")]
+
+
+@pytest.mark.parametrize("states, seconds, probes, message", [
+    (["untrusted", "trusted"], 0, 1, "Windows returned an untrusted connection"),
+    (["unreachable", "untrusted", "trusted"], 1, 2, "Windows returned an untrusted connection"),
+    (["unreachable"], 60, 61, "listener stayed unreachable during the bounded wait; trust was not established"),
+])
+def test_second_sign_in_trust_failures_keep_pre_post_and_never_retry_untrusted(sign_in_probe, states, seconds, probes, message):
+    run = sign_in_probe
+    run.states = states
+    with pytest.raises(AssertionError, match=message):
+        run.observe()
+    report = json.loads(run.steps.path.read_text())
+    observation = report["signInTrust"]
+    assert observation["stage"] == "FAIL" and observation["seconds"] == seconds
+    assert len(observation["probes"]) == probes and run.sleeps == [1.0] * seconds
+    assert observation["before"]["host"] == observation["after"]["host"] == [22, "220"]
+    assert report["steps"][0]["status"] == "FAIL" and message in report["steps"][0]["reason"]
+    assert all(step["reason"] == "Not reached" for step in report["steps"][1:])
+
+
+def test_second_sign_in_probe_error_restores_the_reader_and_saves_failure_observations(sign_in_probe):
+    run = sign_in_probe
+    run.states = [OSError("PRIVATE-SENTINEL")]
+    with pytest.raises(RuntimeError, match="TLS trust probe or its evidence capture failed: OSError"):
+        run.observe()
+    observation = json.loads(run.steps.path.read_text())["signInTrust"]
+    assert observation["probeErrorType"] == "OSError" and observation["stage"] == "FAIL"
+    assert observation["before"]["host"] == observation["after"]["host"] == [22, "220"]
+    assert run.sleeps == [] and "PRIVATE-SENTINEL" not in run.steps.path.read_text()
+
+
+@pytest.mark.parametrize("broken", ["logs", "listener"])
+def test_second_sign_in_evidence_capture_error_is_explicit_and_not_a_pass(sign_in_probe, broken):
+    run = sign_in_probe
+    run.broken = broken
+    with pytest.raises(AssertionError, match="Before-probe evidence capture failed"):
+        run.observe()
+    observation = json.loads(run.steps.path.read_text())["signInTrust"]
+    assert observation["before"]["captureErrors"] and observation["probes"] == [] and observation["stage"] == "FAIL"
+    assert run.seen == [] and run.sleeps == []
+    assert "PRIVATE-SENTINEL" not in run.steps.path.read_text()
+
+
+def test_second_sign_in_post_probe_evidence_error_cannot_turn_trusted_into_a_pass(sign_in_probe, monkeypatch):
+    run = sign_in_probe
+    cli = run.again.cli
+    reads = []
+
+    def read(root, *args, **kwargs):
+        if args == ("service", "logs"):
+            reads.append(args)
+            if len(reads) == 2:
+                raise OSError("PRIVATE-SENTINEL")
+        return cli(root, *args, **kwargs)
+
+    monkeypatch.setattr(run.again, "cli", read)
+    with pytest.raises(AssertionError, match="After-probe evidence capture failed"):
+        run.observe()
+    observation = json.loads(run.steps.path.read_text())["signInTrust"]
+    assert observation["stage"] == "FAIL" and observation["state"] == "trusted"
+    assert observation["before"]["captureErrors"] == []
+    assert observation["after"]["captureErrors"] == [{"part": "taskOutputTail", "errorType": "OSError"}]
+    assert observation["before"]["host"] == observation["after"]["host"] == [22, "220"]
+    assert "PRIVATE-SENTINEL" not in run.steps.path.read_text()
+
+
+def test_second_sign_in_observations_omit_private_fields_messages_and_raw_tails(sign_in_probe):
+    run = sign_in_probe
+    assert run.observe() == "trusted"
+    text = run.steps.path.read_text()
+    assert "PRIVATE-SENTINEL" not in text and '"token"' not in text and '"locals"' not in text
+    facts = json.loads(text)["signInTrust"]["before"]
+    assert facts["preparation"] == {"releaseCount": 1, "failureRecorded": True,
+                                     "phaseTail": ["install: started", "[phase omitted]", "qualify: passed"]}
+    assert facts["taskOutputTail"] == {
+        "linesExamined": 3, "rawTextOmitted": True, "markers": [
+            {"tailLine": 1, "marker": "Started server process"},
+            {"tailLine": 2, "marker": "Application startup complete."}]}
+
+
+@pytest.mark.parametrize("change, message", [
+    ("token", "not a standard user"),
+    ("same-host", "not a new host on the same port"),
+    ("port", "not a new host on the same port"),
+    ("post-host", "After the TLS probe the host is not a new host on the same port"),
+    ("post-port", "After the TLS probe the host is not a new host on the same port"),
+    ("post-ready", "no longer has a verified responsive host"),
+    ("root", "does not list the certificate among this user's root certificates"),
+])
+def test_second_sign_in_keeps_standard_user_identity_port_readiness_and_root_oracles(
+        case, monkeypatch, tmp_path, sign_in_probe, change, message):
+    import amplifier_web
+    run = sign_in_probe
+    for name in ("windows_consumer", "windows_consumer_shell", "windows_uninstall"):
+        monkeypatch.setattr(amplifier_web, name, SimpleNamespace(
+            environment=lambda *args: {}, installation=lambda root: (None, {})), raising=False)
+    monkeypatch.setattr(case, "installation_folder", lambda: run.root)
+    monkeypatch.setattr(case, "product", lambda stage, root: (run.home, run.again))
+    monkeypatch.setattr(case, "trust_targets", lambda home: (run.urls, run.pin))
+    monkeypatch.setattr(case, "certificate_marks", lambda home: MARKS)
+    monkeypatch.setattr(case, "windows_root_has", lambda thumbprint: False)
+    # The record beside the steps is not the subject here. Its watch would read the saved port once more and ask
+    # the stand-in for the trust read from a thread of its own, and after a failed step it waits 20 seconds.
+    monkeypatch.setattr(case, "watch_listener", lambda home: case.ListenerWatch())
+    monkeypatch.setattr(case, "keep_after_failure", lambda steps, watch: None)
+    before = {"hostBeforeSignOut": [22, "220"] if change == "same-host" else [11, "110"], "port": 443}
+    (tmp_path / "journey.json").write_text(json.dumps(before))
+    if change == "port":
+        run.ports = [444]
+    elif change == "post-port":
+        run.ports = [443, 443, 444]  # Original oracle, pre snapshot, post snapshot.
+    else:
+        run.ports = [443] * 3
+    if change == "post-host":
+        run.post_status = {"exitCode": 0, "json": {**run.status["json"], "pid": 11, "created": "110"}}
+    elif change == "post-ready":
+        run.post_status = {"exitCode": 1, "json": {**run.status["json"], "ok": False}}
+    # The initial --wait read is the original ready host, not the post-probe observation.
+    cli = run.again.cli
+    monkeypatch.setattr(run.again, "cli", lambda root, *args, **kwargs:
+                        run.status if "--wait" in args else cli(root, *args, **kwargs))
+    token = {**STANDARD, "memberOfAdministrators": True} if change == "token" else STANDARD
+    assert case.second(tmp_path, tmp_path, ACCOUNT, token) is False
+    report = json.loads((tmp_path / "second.json").read_text())
+    assert message in report["steps"][0]["reason"]
+    assert report["finished"] is True and all(step["reason"] == "Not reached" for step in report["steps"][1:])
+    if change in ("token", "same-host", "port"):
+        assert run.seen == []  # No retry can erase the original identity/port refusal.
+
+
+@pytest.mark.parametrize("states, probes, said, kept", [
+    (["trusted"], 1, "does not list the certificate among this user's root certificates",
+     {"answer": "trusted", "asRequired": True}),
+    (["unreachable"], 61, "the TLS listener stayed unreachable during the bounded wait", {"failed": "AssertionError"}),
+])
+def test_the_record_keeps_the_trust_read_after_the_sign_in_and_never_makes_it_a_second_time(
+        case, monkeypatch, tmp_path, sign_in_probe, states, probes, said, kept):
+    import amplifier_web
+    run = sign_in_probe
+    for name in ("windows_consumer", "windows_consumer_shell", "windows_uninstall"):
+        monkeypatch.setattr(amplifier_web, name, SimpleNamespace(
+            environment=lambda *args: {}, installation=lambda root: (None, {})), raising=False)
+    monkeypatch.setattr(case, "installation_folder", lambda: run.root)
+    monkeypatch.setattr(case, "product", lambda stage, root: (run.home, run.again))
+    monkeypatch.setattr(case, "trust_targets", lambda home: (run.urls, run.pin))
+    monkeypatch.setattr(case, "certificate_marks", lambda home: MARKS)
+    monkeypatch.setattr(case, "windows_root_has", lambda thumbprint: False)  # The step fails after the trust read.
+    # The watch has its own cases. Here it never starts: its thread would ask the stand-in for the trust read.
+    monkeypatch.setattr(case, "watch_listener", lambda home: case.ListenerWatch())
+    waits, keep = [], case.keep_after_failure
+    monkeypatch.setattr(case, "keep_after_failure", lambda steps, watch: keep(steps, watch, wait=waits.append))
+    (tmp_path / "journey.json").write_text(json.dumps({"hostBeforeSignOut": [11, "110"], "port": 443}))
+    run.ports, run.states = [443] * 3, states
+    cli = run.again.cli
+    monkeypatch.setattr(run.again, "cli", lambda root, *args, **kwargs:
+                        run.status if "--wait" in args else cli(root, *args, **kwargs))
+    assert case.second(tmp_path, tmp_path, ACCOUNT, STANDARD) is False
+    report = json.loads((tmp_path / "second.json").read_text())
+    # The step has the text of its own condition, or of the trust read: the record changes neither.
+    assert said in report["steps"][0]["reason"] and report["finished"] is True
+    reads = report["reads"]
+    assert [read["read"] for read in reads] == [
+        "the app's status after the sign-in", "Task Scheduler after the sign-in", "trust after the sign-in"]
+    assert {name: reads[2].get(name) for name in kept} == kept and isinstance(reads[2]["seconds"], float)
+    # The trust read kept its own observation, once. After the failed step the record waits its 20 seconds and
+    # makes no read of trust again: a second one would put another observation in the place of the first.
+    assert len(report["signInTrust"]["probes"]) == len(run.seen) == probes
+    assert waits == [20] and all("later" not in read for read in reads)
+    assert len([call for call in run.calls if call[1] == ("service", "logs")]) == 2  # Before and after, once each.
+
+
+@pytest.mark.parametrize("created", ["134394376612506112", "18446744073709551615"])
+def test_second_sign_in_preserves_exact_decimal_string_creation_identities(sign_in_probe, created):
+    run = sign_in_probe
+    run.status["json"]["created"] = created
+    # A one-tick change must survive JSON and comparison, without float/numeric normalization.
+    run.post_status = {"exitCode": 0, "json": {**run.status["json"], "created": "134394376612506113"}}
+    assert run.observe() == "trusted"
+    observation = json.loads(run.steps.path.read_text())["signInTrust"]
+    assert observation["before"]["host"] == [22, created]
+    assert observation["after"]["host"] == [22, "134394376612506113"]
+    assert observation["before"]["serviceStatus"]["json"]["created"] == created
+    assert observation["hostChanged"] is True
+    assert observation["before"]["captureErrors"] == observation["after"]["captureErrors"] == []
+
+
+@pytest.mark.parametrize("side", ["before", "after"])
+@pytest.mark.parametrize("change", [
+    {}, {"created": None}, {"created": ""}, {"created": 134394376612506112}, {"created": True},
+    {"created": "0"}, {"created": "0220"}, {"created": "-220"}, {"created": "220.0"},
+    {"created": "２２０"}, {"created": "220\n"}, {"created": "18446744073709551616"},
+    {"created": "1" * 21}, {"created": "PRIVATE-SENTINEL"},
+])
+def test_second_sign_in_missing_or_invalid_creation_identity_is_a_capture_failure(sign_in_probe, side, change):
+    run = sign_in_probe
+    value = {key: item for key, item in run.status["json"].items() if key != "created"}
+    value.update(change)
+    if side == "before":
+        run.status["json"] = value
+    else:
+        run.post_status = {"exitCode": 0, "json": value}
+    with pytest.raises(AssertionError, match=("Before" if side == "before" else "After") + "-probe evidence capture failed"):
+        run.observe()
+    observation = json.loads(run.steps.path.read_text())["signInTrust"]
+    assert observation["stage"] == "FAIL"
+    assert observation[side]["captureErrors"] == [{"part": "host", "errorType": "AssertionError"}]
+    assert observation[side]["host"] is None
+    assert "created" not in observation[side]["serviceStatus"]["json"]
+    assert len(run.seen) == (0 if side == "before" else 1)
+    assert "PRIVATE-SENTINEL" not in run.steps.path.read_text()
+
+
+def test_second_sign_in_log_snapshot_accepts_the_real_public_helpers_plain_text_shape(
+        case, sign_in_probe, monkeypatch, capsys):
+    from amplifier_web import windows_service, windows_task_runtime
+    run = sign_in_probe
+    text = "Started server process [42] PRIVATE-SENTINEL\nApplication startup complete.\n"
+    spec = object()
+    monkeypatch.setattr(windows_service, "_read", lambda home: ({}, spec))
+    monkeypatch.setattr(windows_task_runtime, "read_log", lambda actual: text if actual is spec else pytest.fail("wrong spec"))
+    windows_service.command("logs", run.home)  # No Windows call: task read and log read are replaced.
+    output = capsys.readouterr().out
+    assert output == text
+
+    helper = case.load("standard_account_log_shape_helper", ROOT / "tests/fixtures/windows_start_again_native.py")
+    calls = []
+
+    def completed(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return SimpleNamespace(returncode=0, stdout=output, stderr="")
+
+    monkeypatch.setattr(helper.subprocess, "run", completed)
+    result = helper.cli(run.root, "service", "logs", timeout=30)
+    assert result["exitCode"] == 0 and result["json"] is None and result["stdout"] == text
+    assert calls[0][0] == list(map(str, [
+        run.root / "tools/amplifier-unified/Scripts/amplifier-unified.exe",
+        "--data-dir", run.home, "--workspace", run.root / "workspace", "service", "logs"]))
+    assert calls[0][1]["timeout"] == 30 and calls[0][1]["cwd"] == run.root
+    monkeypatch.setattr(run.again, "cli", helper.cli)
+    facts = case.sign_in_snapshot(run.again, run.root, run.home, status=run.status, state=run.state)
+    assert facts["captureErrors"] == []
+    assert facts["taskOutputTail"]["markers"] == [
+        {"tailLine": 0, "marker": "Started server process"},
+        {"tailLine": 1, "marker": "Application startup complete."}]
+    assert "PRIVATE-SENTINEL" not in json.dumps(facts)
