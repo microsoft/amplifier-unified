@@ -302,6 +302,18 @@ def the_updates_folder(installation):
     return folder
 
 
+def a_record_with_this_text(installation, text):
+    """A record that the app wrote, with a content that is not a whole record (for example a damaged disk).
+
+    Written with the app's private writer, as every record on a PC is. A file from an ordinary write on a
+    hosted runner belongs to the Administrators group, and the app's private writer refuses to replace it.
+    """
+    from amplifier_web.host.config import write_private
+    path = installation.data / 'updates' / repair.RECORD
+    write_private(path, text, owned_root=installation.data)
+    return path
+
+
 def mark(installation):
     """The change mark of the record: None, or 32 hexadecimal digits that a run made."""
     value = repair.change(installation.data / 'updates')
@@ -1381,7 +1393,7 @@ async def test_it_never_raises_into_the_host_start(installation, monkeypatch):
 
 
 def test_a_record_that_cannot_be_read_is_an_empty_record(installation):
-    path = the_updates_folder(installation) / repair.RECORD
+    path = the_updates_folder(installation) / repair.RECORD  # This case only reads the record.
     empty = {'schema': 1, 'version': None, 'complete': False, 'change': None, 'runs': 0, 'tries': {}, 'next': None,
              'last': None}
     last = dict.fromkeys(repair.MEASURES, 0)
@@ -1412,14 +1424,14 @@ async def test_a_record_that_is_not_whole_does_not_stop_the_update_check_or_the_
     """The update check reads the record for its signature. A reader that raises would end the check."""
     from amplifier_web.update_inventory_index import inventory, signature
     target = await broken(installation)
-    path = the_updates_folder(installation) / repair.RECORD
-    path.write_text(text, encoding='utf-8')
+    a_record_with_this_text(installation, text)
     manager = SimpleNamespace(home=installation.data, directory=installation.data / 'updates',
                               service=SimpleNamespace(state={'settings': {'bundle': 'work'}}))
     before = signature(manager)
     scan = AsyncMock(return_value=[{'id': 'binding'}])
     assert await inventory(manager, scan) == [{'id': 'binding'}] and scan.await_count == 1
     result = installation.start()  # It reads the same record as an empty one, and repairs.
+    assert result is not None, installation.lines
     assert facts(result, 'repaired', 'files', 'complete', 'change') == (1, 2, True, True)
     assert signature(manager) != before and target.verify() == 'accepted'
 
