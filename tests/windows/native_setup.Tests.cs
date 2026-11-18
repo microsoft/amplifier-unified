@@ -318,7 +318,7 @@ namespace UnifiedBootstrap {
                 string damaged="Amplifier is already installed in "+left+", but setup cannot open it: a program file is missing.\n\n"+
                     "Keep that folder. It holds your chats and settings. This version of setup cannot repair it.";
                 string emptied="Setup cannot install Amplifier yet. Setup found an installation record in this folder:\n"+left+"\n\n"+
-                    "Setup cannot open Amplifier from that folder: a program file is missing. "+
+                    "Setup cannot find a program file that it needs to open Amplifier from that folder. "+
                     "Setup found no chats or settings in the folder. "+
                     "It does not change the folder, because the folder can hold files or folders that are not Amplifier's.\n\n"+
                     "Move or rename that folder. Then run this setup file again.";
@@ -326,6 +326,9 @@ namespace UnifiedBootstrap {
                 string record="{\"schema\": 1, \"choice\": \"delete\", \"token\": \"0123456789abcdef0123456789abcdef\"}";
                 Need(NativeInstaller.Journal=="unified-uninstall.json" && String.Join(",",NativeInstaller.Data)==
                     "shared,app,capture,ownership,import,workspace,export","uninstall's names");
+                // The case's own list of the seven names. Its folders do not follow
+                // setup's list, and the looks must leave setup's list as it is.
+                string[] seven={"shared","app","capture","ownership","import","workspace","export"};
                 Need(!NativeInstaller.Emptied(left) && NativeInstaller.Unopened(left)==damaged,"no journal: the text of a damaged installation");
                 // What an uninstall with the delete choice leaves when the folder
                 // holds a file of the person: that file, setup's record, the journal.
@@ -341,7 +344,7 @@ namespace UnifiedBootstrap {
                 Need(NativeInstaller.Unopened(left)==emptied,"program files that stayed are not data");
                 // Each data name: an empty folder is not data; a folder with
                 // anything in it, and a file of that name, are data.
-                foreach(string name in NativeInstaller.Data) {
+                foreach(string name in seven) {
                     string entry=Path.Combine(left,name);
                     Directory.CreateDirectory(entry);
                     Need(NativeInstaller.Unopened(left)==emptied,"an empty data folder is not data: "+name);
@@ -451,6 +454,7 @@ namespace UnifiedBootstrap {
                     File.ReadAllText(Path.Combine(left,NativeInstaller.Complete))=="{}","the person's file and both records are unchanged");
                 Need(facts(journal)==journalFacts && facts(Path.Combine(left,NativeInstaller.Complete))==completeFacts &&
                     facts(notes)==notesFacts,"a look changes no creation time, no write time and no attribute of the journal, of setup's record and of the person's file");
+                Need(String.Join(",",NativeInstaller.Data)==String.Join(",",seven),"the looks leave setup's list of the seven names as it was");
                 Need(NativeInstaller.RootState(left)=="installed","setup still takes the folder for a finished installation");
 
                 // A folder above the target that other accounts can change is named.

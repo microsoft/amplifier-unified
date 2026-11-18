@@ -2474,8 +2474,10 @@ between two texts:
   when the look at its attributes shows a file or a link, or when the
   listing of the folder shows anything in it. Setup lists an entry only
   after that look showed a folder that is no link. An emptied folder that
-  Windows still keeps for a program is not data, as in the removal itself.
-  Setup looks for chats and settings under these seven names only.
+  Windows still keeps for a program is not data when Windows answers the look
+  at its attributes and its listing, as in the removal itself; an entry that
+  Windows does not let setup examine counts as data, also as there. Setup
+  looks for chats and settings under these seven names only.
 - The look is a row of separate steps on paths. Setup does not take the
   installation's lock for it, and it holds no handle on the folder or on an
   entry between two of those steps. A program of this account that replaces
@@ -2485,9 +2487,9 @@ between two texts:
   text.
 - When the look finds such a journal and no data, setup says: "Setup cannot
   install Amplifier yet. Setup found an installation record in this
-  folder:", the folder, then "Setup cannot open Amplifier from that folder:
-  a program file is missing. Setup found no chats or settings in the folder.
-  It does not change the folder, because the folder can hold files or
+  folder:", the folder, then "Setup cannot find a program file that it needs
+  to open Amplifier from that folder. Setup found no chats or settings in the
+  folder. It does not change the folder, because the folder can hold files or
   folders that are not Amplifier's." and "Move or rename that folder. Then
   run this setup file again."
 - In every other case, and when any part of the look fails, setup says what
@@ -2504,20 +2506,23 @@ which setup writes at the end of an installation. Setup does not read that
 file in this look, and it knows no more about the folder's history. The text
 does not say that an installation was made in the folder. (The second text
 says "Amplifier is already installed in" on the same evidence, as it did
-before.) "a program file is missing": setup's look for the launcher's start
-program found no file (`File.Exists`), as for the second text. That look also
-finds no file when Windows does not let setup see one that is there; the text
-then says "missing" for a file that setup cannot see. "Setup found no chats or
-settings in the folder": none of the seven names held anything at the look.
-The text does not say that Amplifier was uninstalled, and it does not say that
-Amplifier cannot start: a file that reads as a journal is no proof of an
-uninstall (a program of this account can write one), and setup looked for one
-program file only. The text tells the person to move or rename the folder, not
-to delete it: the folder can hold something of the person's that the look did
-not see, and a program can put data into it after the look. Setup's stop for a
-damaged folder names the same step. A setup run that finds no folder at that
-path goes on as for a first installation. The look only chooses a text. With
-either text setup installs nothing, deletes nothing and ends with status 1.
+before.) "Setup cannot find a program file that it needs to open Amplifier
+from that folder": setup's look for the launcher's start program found no file
+(`File.Exists`). That look also finds no file when Windows does not let setup
+see one that is there, so the first text says "cannot find" and not "is
+missing". The second text says "a program file is missing" for the same look,
+as it did before; that is not true for a file that setup cannot see. "Setup
+found no chats or settings in the folder": none of the seven names held
+anything at the look. The text does not say that Amplifier was uninstalled,
+and it does not say that Amplifier cannot start: a file that reads as a
+journal is no proof of an uninstall (a program of this account can write one),
+and setup looked for one program file only. The text tells the person to move
+or rename the folder, not to delete it: the folder can hold something of the
+person's that the look did not see, and a program can put data into it after
+the look. Setup's stop for a damaged folder names the same step. A setup run
+that finds no folder at that path goes on as for a first installation. The
+look only chooses a text. With either text setup installs nothing, deletes
+nothing and ends with status 1.
 
 Three states give the first text (a program of this account can make
 others): an uninstall with the delete choice left the folder because it holds

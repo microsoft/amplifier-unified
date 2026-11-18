@@ -790,7 +790,7 @@ namespace UnifiedBootstrap {
             // the person's that this look did not see.
             if(Emptied(root)) return
                 "Setup cannot install Amplifier yet. Setup found an installation record in this folder:\n"+root+"\n\n"+
-                "Setup cannot open Amplifier from that folder: a program file is missing. "+
+                "Setup cannot find a program file that it needs to open Amplifier from that folder. "+
                 "Setup found no chats or settings in the folder. "+
                 "It does not change the folder, because the folder can hold files or folders that are not Amplifier's.\n\n"+
                 "Move or rename that folder. Then run this setup file again.";

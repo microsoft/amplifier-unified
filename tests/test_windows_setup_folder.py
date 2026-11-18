@@ -139,7 +139,7 @@ def test_unfinished_attempts_are_removed_and_installations_never_are():
 
 
 EMPTIED = ("Setup cannot install Amplifier yet. Setup found an installation record in this folder:\n{root}\n\n"
-           "Setup cannot open Amplifier from that folder: a program file is missing. "
+           "Setup cannot find a program file that it needs to open Amplifier from that folder. "
            "Setup found no chats or settings in the folder. "
            "It does not change the folder, because the folder can hold files or folders that are not Amplifier's.\n\n"
            "Move or rename that folder. Then run this setup file again.")
@@ -160,7 +160,8 @@ def test_setup_without_a_launcher_program_says_what_its_own_look_finds():
     the person was in it. The next setup run said "Keep that folder. It holds your chats and settings." The
     chats and settings were deleted, and the text named no next step. Setup now looks: with a journal that
     records the delete choice, and with none of the person's data, it says what it found and gives the next
-    step: move or rename the folder, as at setup's other stops. It does not tell the person to delete the
+    step: move or rename the folder, as at setup's stop for a damaged folder. It does not tell the person to
+    delete the
     folder, which can hold something of the person's that the look did not see. Every other case keeps the
     earlier text. Setup still installs nothing there and deletes nothing.
     The native check compiles these functions and runs them on real folders (tests/windows/native_setup.Tests.cs).
@@ -222,9 +223,9 @@ def test_setup_without_a_launcher_program_says_what_its_own_look_finds():
             assert change not in operations, change
     # A list of words does not name every operation (a property of a `FileInfo`, for example). So the
     # case also holds, for the two functions and for the one function of setup that they call: each name
-    # that stands before a `(`, with the number of its uses, and that nothing is assigned to a member.
-    # These are checks of the source text. They do not prove what a call does. The native case holds what
-    # the looks leave in the folder.
+    # that stands before a `(`, with the number of its uses, and that every assignment is to one of the
+    # look's own local names. These are checks of the source text. They do not prove what a call does.
+    # The native case holds what the looks leave in the folder and in setup's list of names.
     def text(body):
         lines = "\n".join(line for line in body.splitlines() if not line.strip().startswith("//"))
         return re.sub(r'"(?:[^"\\]|\\.)*"', '""', lines)
@@ -242,8 +243,14 @@ def test_setup_without_a_launcher_program_says_what_its_own_look_finds():
     assert calls(reads) == {"Need": 1, "map.TryGetValue": 1, "return": 1}  # `return (string)value;`
     assert ("static void Need(bool value, string message) "
             "{ if (!value) throw new InvalidDataException(message); }") in SOURCE
+    # A name, with or without an index, before `=` or before an operator with `=`. Not `==`, `!=`, `<=`,
+    # `>=` and not `=>`. No field of setup (`Stage`, `Data[6]`) and no member gets a value.
+    target = r"(?<![A-Za-z0-9_.])([A-Za-z_][A-Za-z0-9_.]*)(?:\s*\[[^\]]*\])?\s*(?:[-+*/%|&^]|<<|>>)?=(?![=>])"
+    assert set(re.findall(target, text(emptied))) == {
+        "journal", "bytes", "count", "read", "file", "record", "token", "kind", "entry"}
+    for body in (unopened, reads):
+        assert not re.findall(target, text(body))
     for body in (emptied, unopened, reads):
-        assert not re.search(r"\.\s*[A-Za-z_][A-Za-z0-9_]*\s*(?:[-+*/%|&^]|<<|>>)?=(?!=)", text(body))
         assert "++" not in text(body) and "--" not in text(body)
     assert re.findall(r"\bnew\s+[A-Za-z_][A-Za-z0-9_.]*", text(emptied)) == ["new byte", "new FileStream"]
     assert "new" not in re.findall(r"[A-Za-z_]+", text(unopened) + text(reads))
@@ -252,6 +259,9 @@ def test_setup_without_a_launcher_program_says_what_its_own_look_finds():
     assert opened.index("if(!File.Exists(AppStart(root).FileName)) {\n"
                         "                Say(Unopened(root),MessageBoxButtons.OK,MessageBoxIcon.Warning);\n"
                         "                return 1;\n            }") < opened.index("bool listed=false;")
+    # Nothing but comments stands before that look in `OpenInstalled`.
+    first = [line.strip() for line in opened.splitlines() if line.strip() and not line.strip().startswith("//")]
+    assert first[:2] == ["string root) {", "if(!File.Exists(AppStart(root).FileName)) {"]
     assert SOURCE.count("Unopened(") == 2 and SOURCE.count("Emptied(") == 2
     # What the new text does not say.
     assert "your chats and settings" not in EMPTIED and "already installed" not in EMPTIED
@@ -265,6 +275,8 @@ def test_setup_without_a_launcher_program_says_what_its_own_look_finds():
     assert "PrivateText(Path.Combine(root,Complete),Json.Serialize(" in SOURCE
     assert "uninstall" not in EMPTIED.lower()  # A file that reads as a journal is no proof of an uninstall.
     assert "cannot start" not in EMPTIED  # Setup looked for one program file only.
+    # `File.Exists` also answers no for a file that Windows does not let setup see.
+    assert "missing" not in EMPTIED and "cannot find a program file" in EMPTIED
     # The next step loses nothing: the text tells nobody to delete anything.
     assert "delete" not in EMPTIED.lower() and EMPTIED.endswith(
         "\n\nMove or rename that folder. Then run this setup file again.")
@@ -307,10 +319,14 @@ def test_setup_without_a_launcher_program_says_what_its_own_look_finds():
             "sentences are the next step.",
             "Setup found the record's name when it classified the folder, and it looked for the launcher's start "
             "program directly before this look.",
-            "setup's look for the launcher's start program found no file (`File.Exists`), as for the second "
-            "text.",
-            "That look also finds no file when Windows does not let setup see one that is there; the text then "
-            "says \"missing\" for a file that setup cannot see.",
+            "setup's look for the launcher's start program found no file (`File.Exists`).",
+            "That look also finds no file when Windows does not let setup see one that is there, so the first "
+            "text says \"cannot find\" and not \"is missing\".",
+            "The second text says \"a program file is missing\" for the same look, as it did before; that is not "
+            "true for a file that setup cannot see.",
+            "An emptied folder that Windows still keeps for a program is not data when Windows answers the look "
+            "at its attributes and its listing, as in the removal itself; an entry that Windows does not let "
+            "setup examine counts as data, also as there.",
             "Setup does not read that file in this look, and it knows no more about the folder's history.",
             "The text does not say that an installation was made in the folder.",
             "In every other case, and when any part of the look fails, setup says what it said before:",
@@ -346,9 +362,12 @@ def test_the_check_that_runs_this_file_requires_every_case_to_run_and_pass(tmp_p
 
     Before, no check ran this file: its workflow named it only as a path that starts the workflow. The step
     must fail when a case did not run or did not pass. pytest ends with status 0 also for a skipped case and
-    for an expected failure, and a case with that mark can be set not to run. So the step requires that the
-    last line of pytest's output names passed cases only. This case runs pytest on small files and gives each
-    real last line to the step's own expression. It does not run the step: a hosted runner does that.
+    for an expected failure, a case with that mark can be set not to run, and a case can end the run early
+    with status 0. So the step reads pytest's own lines: exactly one line "collected N items", and a last
+    line that names passed cases only, with the same N. This case runs pytest on small files and gives each
+    real output to the step's two expressions, with the step's rule. It does not run the step: a hosted
+    runner does that. The step does not see a case that pytest never collects (a function that lost its
+    `test_` name, for example).
     """
     import os
     import subprocess
@@ -358,15 +377,27 @@ def test_the_check_that_runs_this_file_requires_every_case_to_run_and_pass(tmp_p
         "      - name: Check setup's folder rules and texts against its source and the design\n", 1)[1].split(
         "\n      - name: ", 1)[0]
     order = [step.index(line) for line in (
-        " -B -m pytest -q -ra --color=no -p no:cacheprovider tests/test_windows_setup_folder.py"
+        " -B -m pytest -ra --color=no -p no:cacheprovider tests/test_windows_setup_folder.py"
         " | Tee-Object -Variable log\n",
         "          if ($LASTEXITCODE -ne 0) { throw 'Setup folder and text checks failed.' }\n",
         '          $lines = @($log | ForEach-Object { "$_".Trim() } | Where-Object { $_ })\n',
         "          $summary = if ($lines.Count) { $lines[-1] } else { '' }\n",
-        "          if ($summary -notmatch '")]
+        "          $listed = [regex]::Match((@($lines | Where-Object { $_.StartsWith('collected ') }) -join \"`n\"), '",
+        "          $passed = [regex]::Match($summary, '",
+        "          if (-not ($listed.Success -and $passed.Success -and "
+        "$listed.Groups[1].Value -eq $passed.Groups[1].Value)) { throw \"")]
     assert order == sorted(order)
     assert "-k " not in step and "--deselect" not in step and "continue-on-error" not in step
-    expression = re.search(r"if \(\$summary -notmatch '([^']+)'\) \{ throw \"", step).group(1)
+    assert " -q" not in step  # With `-q` pytest does not write the line with the number of collected cases.
+    listed = re.search(r"\$listed = \[regex\]::Match\(\(.+\), '([^']+)'\)\n", step).group(1)
+    passed = re.search(r"\$passed = \[regex\]::Match\(\$summary, '([^']+)'\)\n", step).group(1)
+
+    def accepts(output):
+        """The step's rule for the output of a pytest run that ended with status 0."""
+        lines = [line.strip() for line in output.splitlines() if line.strip()]
+        first = re.search(listed, "\n".join(line for line in lines if line.startswith("collected ")))
+        last = re.search(passed, lines[-1] if lines else "")
+        return bool(first and last and first.group(1) == last.group(1))
     # A change of a file that these cases read starts the workflow.
     paths = workflow.split("    paths:\n", 1)[1].split("permissions:", 1)[0]
     for name in (".github/workflows/windows-private-shell.yml", "scripts/windows_bootstrap_native.cs",
@@ -376,33 +407,52 @@ def test_the_check_that_runs_this_file_requires_every_case_to_run_and_pass(tmp_p
                  "tests/test_windows_setup_folder.py", "docs/design/native-windows-installation.md"):
         assert f"      - {name}\n" in paths, name
     (tmp_path / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
-    passing = "import pytest\n\n\ndef test_passes():\n    assert True\n\n\n"
+    before = "import pytest\n\n\ndef test_first():\n    assert True\n\n\n"
+    after = "\n\ndef test_last():\n    assert True\n"
     outcomes = {
-        "passed": ("", 0),
+        "passed": ("def test_other():\n    assert True\n", 0),
         "xfail_not_run": ("@pytest.mark.xfail(run=False)\ndef test_other():\n    assert False\n", 0),
         "xfail": ("@pytest.mark.xfail\ndef test_other():\n    assert False\n", 0),
         "xpass": ("@pytest.mark.xfail\ndef test_other():\n    assert True\n", 0),
         "skip": ("@pytest.mark.skip\ndef test_other():\n    assert False\n", 0),
+        # The run ends here with status 0; `test_last` does not run.
+        "exit": ("def test_other():\n    pytest.exit(\"stop\", returncode=0)\n", 0),
         "fail": ("def test_other():\n    assert False\n", 1)}
     # The step's options. Options that a person's environment adds to every pytest run are left out.
     environment = {name: value for name, value in os.environ.items() if name != "PYTEST_ADDOPTS"}
     for name, (other, status) in outcomes.items():
-        (tmp_path / f"test_{name}.py").write_text(passing + other, encoding="utf-8")
+        (tmp_path / f"test_{name}.py").write_text(before + other + after, encoding="utf-8")
         run = subprocess.run(
-            [sys.executable, "-B", "-m", "pytest", "-q", "-ra", "--color=no", "-p", "no:cacheprovider",
-             f"test_{name}.py"],
+            [sys.executable, "-B", "-m", "pytest", "-ra", "--color=no", "-p", "no:cacheprovider", f"test_{name}.py"],
             cwd=tmp_path, env=environment, capture_output=True, text=True, encoding="utf-8", timeout=120)
-        lines = [line.strip() for line in run.stdout.splitlines() if line.strip()]
         # pytest's status alone does not tell a case that did not run or did not pass.
         assert run.returncode == status, (name, run.stdout, run.stderr)
-        assert bool(re.search(expression, lines[-1])) == (name == "passed"), (name, lines[-1])
-    for line in ("11 passed in 0.32s", "11 passed, 1 warning in 0.32s",
-                 "1592 passed, 2 warnings in 64.17s (0:01:04)"):
-        assert re.search(expression, line), line
-    for line in ("", "no tests ran in 0.01s", "10 passed, 1 deselected in 0.10s", "1 failed, 10 passed in 0.10s",
-                 "10 passed, 1 warning, 1 error in 0.10s", "10 passed, 1 skipped, 1 warning in 0.10s",
-                 "x 11 passed in 0.32s", "11 passed"):
-        assert not re.search(expression, line), line
+        assert "\ncollected 3 items\n" in run.stdout, (name, run.stdout)
+        assert accepts(run.stdout) == (name == "passed"), (name, run.stdout)
+    for output in ("collected 12 items\n===== 12 passed in 0.32s =====",
+                   "collected 1 item\n= 1 passed, 1 warning in 0.32s =",
+                   "collected 1592 items\n== 1592 passed, 2 warnings in 64.17s (0:01:04) =="):
+        assert accepts(output), output
+    for output in ("", "collected 12 items", "== 12 passed in 0.10s ==",
+                   # Fewer cases passed than pytest collected.
+                   "collected 12 items\n== 11 passed in 0.10s ==",
+                   "collected 12 items / 1 deselected / 11 selected\n== 11 passed, 1 deselected in 0.10s ==",
+                   "collected 12 items / 1 deselected / 11 selected\n== 12 passed in 0.10s ==",
+                   "collected 12 items\ncollected 12 items\n== 12 passed in 0.10s ==",
+                   # A line after pytest's summary.
+                   "collected 12 items\n== 12 passed in 0.10s ==\n!!!!! _pytest.outcomes.Exit: stop !!!!!",
+                   "collected 12 items\n== 1 failed, 11 passed in 0.10s ==",
+                   "collected 12 items\n== 12 passed, 1 warning, 1 error in 0.10s ==",
+                   "collected 12 items\n== 11 passed, 1 skipped in 0.10s ==",
+                   "collected 12 items\n== 11 passed, 1 xfailed in 0.10s ==",
+                   "collected 12 items\n== 12 passed, 1 xpassed in 0.10s ==",
+                   "collected 12 items\n== no tests ran in 0.01s ==",
+                   # The last line holds more than pytest's summary.
+                   "collected 12 items\nx == 12 passed in 0.10s ==", "collected 12 items\n== 12 passed in 0.10s == x",
+                   # The form of `-q`, and other letter cases.
+                   "collected 12 items\n12 passed in 0.32s",
+                   "collected 12 items\n== 12 Passed in 0.10s ==", "Collected 12 items\n== 12 passed in 0.10s =="):
+        assert not accepts(output), output
 
 
 def test_second_setup_restores_entries_before_start_and_waits_without_pins():
