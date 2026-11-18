@@ -1320,6 +1320,7 @@
     "legacy-outbox-notice",
     "delivery-reconciliation",
     "delivery-new-chat",
+    "retained-activity",
     "canvas-media",
     "inline-media-transition",
     "artifact-one-surface",
