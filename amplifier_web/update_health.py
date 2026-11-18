@@ -141,12 +141,22 @@ def read_connection(manager):
         return {}
 
 
-def active_evidence(manager, *, explain_configuration=False):
+def active_evidence(manager, *, explain_configuration=False, allow_additions=False):
     """Verify the selected graph, never prepare it or admit changed declarations.
 
     Preparation requires the default, configuration-matching proof. The health
     owner can also explain a verified older installation whose current settings
     no longer match, without resurrecting failures predating its activation.
+
+    `allow_additions` is about a package that the generation's record does not
+    name. The default compares exactly, and a preparation asks that way
+    (update_partial.Preparation.verify_baseline): one package more ends its
+    proof. Only the health read (refresh) asks with True, as a
+    conversation-worker start does (runtime_qualification.active_install_overrides).
+    A connection check can install one more package into this environment, and
+    that is not a failed update. A recorded package that is missing or changed
+    ends the proof with either value. The proof names the recorded packages
+    only, never an added one.
     """
     from .updates import active_release
     from .runtime_environment import project_path
@@ -195,7 +205,7 @@ def active_evidence(manager, *, explain_configuration=False):
             return {}
         # Compare with the record that was read and validated above: a record
         # that disappears after that read must not skip the comparison.
-        verify_recorded(project, stage, expected=graph)
+        verify_recorded(project, stage, expected=graph, allow_additions=allow_additions)
         # An observation that raced a new pointer/configuration is not evidence
         # for whichever installation won that race.
         if active_release(manager.home) != pointer:
@@ -811,14 +821,47 @@ def projection(manager, *, state=None, evidence=None):
                     if getattr(manager, '_update_health_configuration_revision', revision) == revision else None))
 
 
+PROOF_UNREAD = {'status': 'working', 'title': 'Checking components',
+                'detail': 'Amplifier is checking the components that it uses now.',
+                'actionRequired': False, 'action': None, 'component': None}
+
+
 def publish(manager):
-    manager.service.state['updates']['currentStatus'] = projection(manager)
+    """Write the page's value of the selection.
+
+    The owner selects a component generation and publishes that before it has
+    read the proof of that generation (updates._activate). Until that read
+    ends, the held proof is the one of the generation before. It cannot say
+    whether an earlier component failure record is history. A result that was
+    chosen from such a record is not published in that time; the page gets
+    the working value. A failure of the operation itself (an error, or the
+    phase `error` or `interrupted`) and every other result are published as
+    they are. Only that switch sets and ends this time. Another health read
+    (the owner's pass) can end while the switch runs; it did not read the new
+    selection, so it does not end the time (`refresh` never does).
+    A switch that is cancelled ends that time too. When a switch ends with
+    its selection published and without its last publication (the result of
+    its own read, or its own failure), it asks the update owner for the read:
+    the owner's next pass that no hold stops reads and publishes the result
+    (updates._activate, tick).
+    The support report reads `projection`, so it is not changed.
+    """
+    state = manager.service.state['updates']
+    value = projection(manager)
+    if (getattr(manager, '_update_proof_unread', False) and not state.get('error')
+            and state.get('phase') not in {'error', 'interrupted'}
+            and value.get('failureKind') == 'ecosystem'):
+        value = dict(PROOF_UNREAD)
+    state['currentStatus'] = value
 
 
 async def refresh(manager):
+    """Read the installed proof and the facts beside it; the caller publishes."""
     import asyncio
     revision = manager.service.state.get('configurationRevision')
-    evidence = await asyncio.to_thread(active_evidence, manager, explain_configuration=True)
+    # Health accepts a package that the record does not name (active_evidence).
+    evidence = await asyncio.to_thread(active_evidence, manager, explain_configuration=True,
+                                       allow_additions=True)
     if not evidence:
         # With no selected generation, setup's record is the only installed proof.
         evidence = await asyncio.to_thread(setup_evidence, manager)

@@ -135,6 +135,47 @@ async def test_exact_restart_intent_controls_component_continuation(tmp_path, mo
         await service.close()
 
 
+@pytest.mark.parametrize('latest, sentence', [
+    ('v' + __version__, 'The latest published application release is installed.'),
+    # A newer release was found in the meantime: the row's own sentence stays, and it is true.
+    ('v9999.0.0', 'A newer application release is available; installation restarts the host when idle.')])
+async def test_a_confirmed_app_replacement_leaves_no_sentence_about_newer_components(
+        tmp_path, monkeypatch, latest, sentence):
+    """The app replaced itself for newer components of the release that it has, and the new host confirms its start.
+
+    Until then the app row holds what the check before the replacement found:
+    the status "update", the list of those components and the sentence "Newer
+    application components are available; ...". The owner's next check is of
+    the components and takes the row as it is, so only a later check of the
+    app release would write a new sentence. The confirmation writes it.
+    Seen on a PC with "Advanced details" open, under the headline "You're up
+    to date" (November 17, 11:50 PM).
+    """
+    offered = ('Newer application components are available; installation restarts the host when idle.'
+               if latest == 'v' + __version__ else sentence)
+    row = {'id': 'application', 'label': 'Amplifier Unified', 'status': 'update', 'latest': latest,
+           'revision': REVISION, 'detail': offered, 'componentUpdates': [{'name': 'made-up-component'}]}
+    service, manager = make_manager(tmp_path, monkeypatch, state={
+        'phase': 'activating', 'pendingRestart': TARGET, 'appAvailable': True,
+        'application': deepcopy(row), 'items': [deepcopy(row)]})
+    try:
+        application = service.state['updates']['application']
+        # The start of the host leaves the row: the replacement is not confirmed yet.
+        assert (application['status'], application['detail']) == ('update', offered)
+        assert application['componentUpdates']
+        assert await manager.confirm_readiness(health(manager))
+        state = service.state['updates']
+        application = state['application']
+        assert 'componentUpdates' not in application
+        assert (application['status'], application['current']) == ('current', __version__)
+        assert application['detail'] == sentence
+        # The row of the page's list is the same row.
+        assert [item for item in state['items'] if item.get('id') == 'application'] == [application]
+        assert state['appAvailable'] is False and state['available'] == 0
+    finally:
+        await service.close()
+
+
 @pytest.mark.parametrize('outcome', ['pass','failed','changed-target'])
 async def test_successor_of_old_updater_proves_browser_recovery_before_clearing_attention(tmp_path,monkeypatch,outcome):
     from amplifier_web import app_updates, app_replacement
