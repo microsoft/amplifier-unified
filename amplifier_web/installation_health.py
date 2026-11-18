@@ -294,13 +294,13 @@ async def windows_working(home, *, wait=15.0):
       round, when one starts.
     - Its answer has status 200, this app's name, this installation's data
       identity and an `activity` dictionary: the function ends. The result
-      is `working` of that dictionary when that is a whole number of 0 or
-      more, and None when it is not.
-    - It ends with another `aiohttp.ClientError`, `OSError` or `ValueError`
-      (a refused connection, a connection that is cut off, an answer that is
-      not JSON), or its answer is another one (a status that is not 200,
-      another app or installation, no `activity` dictionary): its address
-      is in no later round.
+      is `working` of that dictionary when that is an `int` (no `bool`) of 0
+      or more, and None when it is not.
+    - It ends with an `aiohttp.ClientError`, `OSError` or `ValueError` that
+      is no `TimeoutError` (a refused connection, a connection that is cut
+      off, an answer that is not JSON), or its answer is another one (a
+      status that is not 200, another app or installation, no `activity`
+      dictionary): its address is in no later round.
     - It ends with an error of another kind: the function ends, as before
       this change. Its last clause gives None for a `RuntimeError` and a
       `yaml.YAMLError`; any other error goes to the caller.
@@ -308,10 +308,10 @@ async def windows_working(home, *, wait=15.0):
     A round starts after the first only when a read of the round before
     ended by its limit, and only while fewer than `wait` seconds have gone
     by since the clock was read before the first read. The bound does not
-    end a round that has started. An installation from the setup file has one address:
-    when each read ends by its limit, that is five reads and about 15
-    seconds. When no further round starts, the result is None, as it was
-    after one read.
+    end a round that has started. An installation from the setup file has
+    one address: with the default `wait`, when each read ends by its limit,
+    that is five reads and about 15 seconds. When no further round starts,
+    the result is None, as it was after one read.
 
     Only a time limit brings another read. It does not prove that a host is
     there: the limit can end a read while it connects, and while it waits for
