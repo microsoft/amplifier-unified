@@ -737,9 +737,10 @@ failure summaries, total/omitted counts, and activation/configuration proof
 limitations. It does not rename the selected record as the last failure or
 discard history. A missing older activation receipt alone remains neutral,
 does not request reinstallation, and does not claim full component verification.
-If the selected installation's graph, lock and activation still verify but its
-source-configuration key no longer matches, nothing failed and nothing is
-required of the person. A saved AI connection for all folders can give this
+If the selected installation's graph and lock still verify, and its activation
+receipt verifies or is no longer kept, but its source-configuration key no
+longer matches, that alone is no failure and requires nothing of the person.
+A saved AI connection for all folders can give this
 state: a second connection, a connection of another kind, or another order of
 connections of different kinds changes the key; another model for the same
 connection does not. A new app version that computes another key for the same
@@ -753,13 +754,21 @@ read while the outcome of a manual hand-over commit is not known, and while
 `awaiting_restart()` holds. Until a health read for the new revision ends,
 health gives "Checking current configuration" when the proof that it holds,
 with this limit taken out, gives a quiet value (`projection`). After that
-read, health gives this state the quiet status `unchecked`, with no attention
-item for it, so the Settings entry
-gets no unread mark from it: "The components need a new check for your current
-settings" / "The installed components are as recorded. Amplifier has no record
-that it checked them with your current AI connections and other settings. A
-new AI connection is one cause. The next update check looks for the components
-that your current settings need. To check now, select Check for updates." The
+read, an earlier rule of `current()` can decide the value, for example an
+operation that runs or waits, a failure that the proof does not cover, a
+listed update or a failed application check. When none does, and the check
+sequence is complete with the application current, or a local source change
+is listed, the value has the quiet status `unchecked`, with no attention item
+for it, so the Settings entry gets no unread mark from it: "The components
+need a new check for your current settings" / "The components that Amplifier
+recorded are installed as recorded. Amplifier has no record that it checked
+them with your current AI connections and other settings. A new AI connection
+is one cause. The next update check looks for the components that your current
+settings need. To check now, select Check for updates." The first sentence
+speaks of the recorded components because the health proof accepts a package
+that the record does not name. When no earlier rule decides and neither of
+those two holds, the value is "Check for updates" / "The full desired
+component state has not been checked.", also with the status `unchecked`. The
 bundled page shows a quiet health value when no update operation runs or
 waits; while one does, the page shows its own text of that operation. The
 state ends when a check lists an update. For the other key a check's

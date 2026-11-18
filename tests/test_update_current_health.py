@@ -677,9 +677,10 @@ async def test_real_global_configuration_change_explains_retained_failure(tmp_pa
 # in the record of the component check. A saved AI connection gives this state.
 # Nothing failed, and nothing is required of the person.
 NEW_CHECK = ('unchecked', 'The components need a new check for your current settings',
-             'The installed components are as recorded. Amplifier has no record that it checked them with your '
-             'current AI connections and other settings. A new AI connection is one cause. The next update check '
-             'looks for the components that your current settings need. To check now, select Check for updates.')
+             'The components that Amplifier recorded are installed as recorded. Amplifier has no record that it '
+             'checked them with your current AI connections and other settings. A new AI connection is one cause. '
+             'The next update check looks for the components that your current settings need. To check now, select '
+             'Check for updates.')
 # What the state said before, with the unread mark.
 ALARM = ('unverified', 'Component verification is incomplete',
          'The active installation still matches its recorded graph, but the current source configuration differs '
@@ -724,13 +725,17 @@ def settings_entry(state):
             [item['id'] for item in attention['items'] if item['id'] == 'updates:current'])
 
 
-@pytest.mark.parametrize('also', ['nothing', 'receipt-gone', 'local-source', 'covered-failure'])
+@pytest.mark.parametrize('also', ['nothing', 'receipt-gone', 'local-source', 'local-source-no-complete-check',
+                                  'covered-failure'])
 def test_settings_with_another_key_on_an_installation_that_matches_its_record_are_no_alarm(also):
     state, proof = settled(), generation_proof(configurationChanged=True)
     if also == 'receipt-gone':
         proof = receipt_gone(configurationChanged=True)
     elif also == 'local-source':
         state = settled(items=[dict(LOCAL_SOURCE)])
+    elif also == 'local-source-no-complete-check':
+        # A listed local source change reaches the same rule without a complete check.
+        state = settled(items=[dict(LOCAL_SOURCE)], sequence={})
     elif also == 'covered-failure':
         state = settled(diagnostics=component_failure(at=5))  # Before the activation of this generation.
     before = copy.deepcopy(state)
@@ -864,7 +869,8 @@ async def test_a_second_ai_connection_gives_the_quiet_text_until_an_update_is_li
         settings.write_text(json.dumps({'config': {'providers': rows}}))
         keys.append(real_key(health.configuration(m)[1].settings, m.home, stage))
     assert keys[2] == keys[3] and len({qualified, *keys}) == 4
-    # "Save and check connection" for a second connection: the settings change, and the owner is told.
+    # The settings now hold a second connection, and the revision moved. (The save action and its
+    # publication are not run here.)
     assert json.loads(settings.read_text()) == {'config': {'providers': [first, second]}}
     m.service.state['configurationRevision'] = 2
     health.publish(m)
