@@ -284,6 +284,9 @@ def alias_input_originals(session, native, *, peer_only=False):
 def same_native_message(native, visible):
     if native.get('role') != visible.get('role'):
         return False
+    if visible.get('inputId') and native.get('nativeInputId'):
+        if visible['inputId'] != native['nativeInputId'] or native.get('nativeInputAmbiguous'):
+            return False
     if visible.get('nativeMessageId'):
         return visible['nativeMessageId'] == native['id']
     if native.get('voiceDelegation'):

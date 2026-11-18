@@ -237,3 +237,61 @@ def test_steering_boundary_conflicts_still_refuse_fork(tmp_path, change):
         fork_session(tmp_path, source, 'fork', before_message_id=source['messages'][2]['id'])
     assert not store.directory('fork').exists()
     assert store.load('original')[0] == rows
+
+
+def test_equal_text_from_different_inputs_keeps_separate_display_rows(tmp_path):
+    _, rows, source = history(tmp_path)
+    rows[0]['metadata'] = {'amplifier_input': {'version': 1, 'kind': 'user', 'id': 'saved-input'}}
+    source['messages'][0]['inputId'] = 'other-submission'
+    merge_web_history(source, [display_message(row, index, source) for index, row in enumerate(rows)])
+    first, canonical = source['messages'][:2]
+    assert first['text'] == canonical['text'] == 'First'
+    assert first['inputId'] == 'other-submission' and 'nativeIndex' not in first
+    assert canonical['nativeInputId'] == 'saved-input' and canonical['nativeIndex'] == 0
+
+
+@pytest.mark.parametrize('conflict', [
+    'legacy-prefix', 'edit-alias', 'unknown-target', 'displaced-target',
+    'strong-binding', 'actual-rewrite', 'intervening-turn',
+])
+def test_later_edit_with_legacy_text_matched_prefix(tmp_path, conflict):
+    from amplifier_web.automatic_history import revision
+    from amplifier_web.session_files import project_slug
+    from amplifier_web.session_store import capture_edit_context
+
+    store, rows, source = history(tmp_path)
+    rows[0]['metadata'] = {'amplifier_input': {'version': 1, 'kind': 'user', 'id': 'saved-first'}}
+    rows[2]['metadata'] = {'amplifier_input': {'version': 1, 'kind': 'user', 'id': 'later'}}
+    store.save(source['id'], rows, {}, preserve_system=True)
+    source.update(nativeProject=project_slug(source['workspace']))
+    source['nativeRevision'] = revision(source)
+    first, _, later, _ = source['messages']
+    first.update(inputId='different-first', nativeIndex=0, via='chat')
+    later.update(inputId='later', nativeIndex=2, via='chat',
+                 nativeMessageId=display_message(rows[2], 2, source)['id'])
+    digest = capture_edit_context(tmp_path, source)
+    target = first if conflict == 'edit-alias' else later
+    if conflict == 'unknown-target':
+        later.update(text='', inputId='missing-target', nativeMessageId='unknown')
+    if conflict == 'displaced-target':
+        later['nativeIndex'] = 0
+    if conflict == 'intervening-turn':
+        rows.append({'role': 'assistant', 'content': 'Newer saved reply'})
+        store.save(source['id'], rows, {}, preserve_system=True)
+    if conflict == 'strong-binding':
+        first['nativeMessageId'] = display_message(rows[0], 0, source)['id']
+    if conflict == 'actual-rewrite':
+        rows[1]['content'] = 'Changed after the editor opened'
+        store.save(source['id'], rows, {}, preserve_system=True)
+    original = copy.deepcopy(source)
+    kwargs = dict(before_message_id=target['id'], prepare_only=True, expected_context_digest=digest)
+    if conflict == 'legacy-prefix':
+        result = fork_session(tmp_path, source, source['id'], **kwargs)
+        assert result['context'] == rows[:2]
+        retained = result['messages'][0]
+        assert retained['id'] == first['id'] and retained['inputId'] == 'different-first'
+        assert 'nativeIndex' not in retained and 'nativeMessageId' not in retained
+    else:
+        with pytest.raises(ValueError, match='saved transcript changed'):
+            fork_session(tmp_path, source, source['id'], **kwargs)
+    assert source == original and store.load(source['id'])[0] == rows
