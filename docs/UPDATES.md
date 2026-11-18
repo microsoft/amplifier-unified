@@ -461,16 +461,19 @@ neither folder: its settings and routing are in `shared-config`, with the
 temporary copy of the keys file that the next paragraph describes.
 An earlier version of the app made such copies. Idle maintenance removes the
 entries `config` and `routing` from every stage that still has them, whether
-the stage settled or failed, and at every age. It does that in the pass that
-removes a stage's keys file (next paragraph): after an activation, after a
-start of the app and then about each hour, never while an update operation runs
-or waits, and not in the stage of an unresolved preparation. One pass handles
-at most eight stages and removes at most 256 entries (files, links and
-folders); the next pass goes on with the rest. An entry that cannot be removed
-stays, and a later pass tries again: no update, retry or restore fails or waits
-because of it. A link is never followed: an entry `config` or `routing` that is
-a link, a junction or no folder stays, and a link inside a copy is removed as a
-link (on Windows it stays).
+the stage settled or failed, and at every age. It does that before it looks for
+keys files (next paragraph), with the same admission: after an activation,
+after a start of the app and then about each hour, never while an update
+operation runs or waits, and not in the stage of an unresolved preparation.
+This removal has its own bounds, and it changes no rule of a keys file. One
+pass handles at most eight stages with such a copy and at most 64 entries
+(files, links and folders): an entry that it removes, and an entry that it must
+leave. A larger copy goes on when a later pass comes to its stage again, after
+the other stages. An entry that cannot be removed stays, and a later pass tries
+again: no update, retry or restore fails or waits because of it. A link is
+never followed: an entry `config` or `routing` that is a link, a junction or no
+folder stays, and a link inside a copy is removed as a link (on Windows it
+stays).
 
 Component qualification uses a temporary `shared-config/keys.env` copy.
 The manager removes only that file after qualification succeeds or a handled
