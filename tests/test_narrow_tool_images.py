@@ -5,21 +5,19 @@ import copy
 import hashlib
 import io
 import json
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-pytest.importorskip("amplifier_foundation.session.media_hook_bridge")
+pytest.importorskip("amplifier_foundation.session.media_host")
 from amplifier_core import AmplifierSession, HookResult
 from amplifier_core.message_models import ChatRequest, Message
 from PIL import Image
 
 from amplifier_web.host import media
-from amplifier_web.host.media_assembly import ReviewedRootRecipe, select_root, supported_plan
 from amplifier_web.host.storage import SessionStore
 from amplifier_web.surface_delivery import SurfaceProvider
-from fixtures.narrow_tool_image_fixture import FixtureLoader, MediaOnlyDelivery, RecordingProvider, source_files
+from fixtures.narrow_tool_image_fixture import FixtureLoader, MediaOnlyDelivery, RecordingProvider
 
 
 def picture(tmp_path, format="PNG"):
@@ -33,24 +31,21 @@ def picture(tmp_path, format="PNG"):
     return path, output.getvalue()
 
 
-async def root(tmp_path, *, store=None, post=None,
+async def root(tmp_path, *, store=None, post=None, provider=None,
                consumer_readiness={"role": "loop", "contract": 1, "ready": True},
                expected_enabled=True):
-    provider = RecordingProvider()
+    if provider is None:
+        provider = RecordingProvider()
     plan = {"session": {"orchestrator": {"module": "loop-live", "config": {"configured_bundle": True}},
                         "context": {"module": "context-simple"}},
             "providers": [{"module": "provider-openai", "config": {
-                "default_model": "gpt-6.1-sol"}}],
+                "default_model": provider.default_model}}],
             "tools": [{"module": "tool-filesystem", "config": {
                 "working_dir": str(tmp_path), "allowed_read_paths": [str(tmp_path)]}}]}
     session = AmplifierSession(plan, session_id="root-media")
     session.coordinator.loader = FixtureLoader(provider, consumer_readiness=consumer_readiness)
-    # Synthetic source selection, separate from the pending production manifest.
-    files = [*source_files(), Path(__file__).resolve()]
-    selected = ReviewedRootRecipe(session.config, {
-        str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in files})
     store = store or SessionStore(tmp_path / "sessions")
-    media.bind_media(session, store, selection=selected)
+    media.bind_media(session, store)
     await session.initialize()
     coordinator = session.coordinator
     if post:
@@ -82,7 +77,7 @@ async def test_loop_readiness_requires_literal_true_on_actual_construction(tmp_p
     expected = facts is not None and facts.get("ready") is True
     current = await root(tmp_path, consumer_readiness=facts, expected_enabled=expected)
     try:
-        bridge, _, _ = current.coordinator.get_capability("web.media.construction")
+        bridge = current.coordinator.get_capability("web.media.construction").bridge
         assert bridge.validate_receipt(bridge.graph_receipt)
         assert callable(current.coordinator.get_capability("session.durable_checkpoint"))
         assert current.provider.capability.enabled is expected
@@ -298,19 +293,6 @@ async def test_mixed_direct_upload_and_tool_ref_keep_exact_positions(tmp_path, m
         assert current.provider.observations[-1][2] == [(2, "tool", "call-image", original)]
     finally:
         await current.session.cleanup()
-
-
-def test_recipe_is_explicit_and_shipped_pins_are_pending():
-    plan = {"session": {"orchestrator": "loop-live", "context": "context-simple"},
-            "tools": [{"module": "tool-filesystem"}],
-            "providers": [{"module": "provider-openai", "config": {
-                "default_model": "gpt-6.1-sol"}}]}
-    assert supported_plan(plan)
-    assert select_root(plan) is None
-    for extra in ("tool-delegate", "unknown-tool"):
-        changed = copy.deepcopy(plan)
-        changed["tools"].append({"module": extra})
-        assert not supported_plan(changed)
 
 
 @pytest.mark.parametrize("restriction", ["size", "pagination", "gif", "corrupt"])

@@ -5,11 +5,9 @@ import socket
 
 import pytest
 
-pytest.importorskip("amplifier_foundation.session.media_hook_bridge")
 from amplifier_core import HookResult
 from amplifier_web.host import media
-from amplifier_web.host.media_assembly import ordinary_work_plan, root_participants, supported_plan, WORK_PARTICIPANTS
-from fixtures.ordinary_work_image_fixture import compose_work, work_root
+from fixtures.ordinary_work_image_fixture import work_root
 from test_narrow_tool_images import picture
 from test_tool_image_consumer_join import ScriptedReadProvider
 
@@ -21,32 +19,6 @@ def no_remote_calls(monkeypatch):
     monkeypatch.setattr(socket.socket, "connect", refuse)
     monkeypatch.setattr(socket.socket, "connect_ex", refuse)
     monkeypatch.setattr(socket, "getaddrinfo", refuse)
-
-
-async def test_ordinary_work_actual_composition_and_finite_shape(tmp_path, monkeypatch):
-    _, plan, _ = await compose_work(tmp_path, monkeypatch)
-    assert ordinary_work_plan(plan) and supported_plan(plan)
-    assert root_participants(plan) == WORK_PARTICIPANTS
-    assert len(WORK_PARTICIPANTS) == len(set(WORK_PARTICIPANTS)) == 24
-    for section in ("tools", "hooks"):
-        for mutation in ("extra", "duplicate", "instance"):
-            changed = copy.deepcopy(plan)
-            if mutation == "extra":
-                changed[section].append({"module": "unreviewed"})
-            elif mutation == "duplicate":
-                changed[section].append(copy.deepcopy(changed[section][0]))
-            else:
-                changed[section][0]["id"] = "another-instance"
-            assert not supported_plan(changed)
-    changed = copy.deepcopy(plan)
-    changed["agents"]["extra:agent"] = {}
-    assert not supported_plan(changed)
-    for name, config in (("tool-image", {"builtin": True}), ("tool-image", {"backend": "legacy"}),
-                         ("tool-computer-use", {"target": "ssh://synthetic.invalid"}),
-                         ("tool-ui-use", {"browser": {"enabled": True}})):
-        changed = copy.deepcopy(plan)
-        next(row for row in changed["tools"] if row["module"] == name)["config"].update(config)
-        assert not supported_plan(changed)
 
 
 @pytest.mark.parametrize("format", ["PNG", "JPEG"])
@@ -68,7 +40,8 @@ async def test_ordinary_work_first_image_post_ack_deleted_source_reload(tmp_path
     session, store, checkpoint, checks, host = await work_root(tmp_path, monkeypatch, provider, post=post)
     try:
         assert await session.execute("Read the authorized local image") == "offline completion"
-        bridge, graph, _ = session.coordinator.get_capability("web.media.construction")
+        binding = session.coordinator.get_capability("web.media.construction")
+        bridge, graph = binding.bridge, binding.graph
         assert bridge.validate_receipt(bridge.graph_receipt), graph.participants_evidence()["state"]
         evidence = graph.participants_evidence()
         print("ORDINARY_WORK_SOURCE_FACTS " + json.dumps({
@@ -296,7 +269,7 @@ async def test_real_prepared_root_configuration_phase_preserves_complete_idle_gr
         tmp_path, monkeypatch, provider, prepared_host=True, configuration_only=True)
     try:
         coordinator = session.coordinator
-        _, graph, _ = coordinator.get_capability("web.media.construction")
+        graph = coordinator.get_capability("web.media.construction").graph
         evidence = graph.participants_evidence()
         assert evidence["state"] == "open"
         assert len(evidence["loads"]) == 23 and all(row["mounted"] for row in evidence["loads"])

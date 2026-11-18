@@ -128,6 +128,7 @@ def _import_image(store, path, row, input_id):
         staged = store.ingest_sync({'stream': source, 'mime': row['mime']},
                                    source_format='image-bytes', origin=origin,
                                    policy={'max_bytes': row['size']})
+    store.classify_origin(origin, classification='composer-upload')
     return store.publish_sync(staged['staged_refs'], origin=origin, disposition='retain')['refs'][0]
 
 
@@ -144,9 +145,11 @@ class MediaAttachmentContext:
         content = message.get('content')
         if type(content) is not _MediaContent:
             return await self.context.add_message(message)
-        from .host.media import NAMESPACE
+        from .host.media import NAMESPACE, registration_coordinator
         metadata = message.get('metadata') or {}
-        if (message.get('role') != 'user' or content.owner is not self.coordinator
+        if (message.get('role') != 'user'
+                or (content.owner is not self.coordinator
+                    and content.owner is not registration_coordinator(self.coordinator))
                 or (metadata.get('amplifier_input') or {}).get('id') != content.input_id
                 or NAMESPACE in metadata):
             raise ValueError('The attachment does not belong to this input')
@@ -159,13 +162,27 @@ class MediaAttachmentContext:
         return result
 
 
+async def install_media_context(coordinator):
+    from .host.media import hook_configuration, registration_coordinator
+    store = coordinator.get_capability('web.media.store')
+    if store is not None:
+        context = coordinator.get('context')
+        with hook_configuration(coordinator):
+            await registration_coordinator(coordinator).mount_adapter(
+                'context', MediaAttachmentContext(context, coordinator),
+                previous=context, name=None)
+        coordinator.register_capability('web.media.composer', store)
+
+
 def encode(command, coordinator=None):
     home = Path(os.environ.get('AMPLIFIER_WEB_HOME', Path.home() / '.amplifier-unified'))
     if len(command.attachments) > MAX_FILES:
         raise ValueError('Attach up to 8 files per message')
     content = [{'type': 'text', 'text': command.text}]
+    from .host.media import NAMESPACE
+    capability = coordinator.get_capability(NAMESPACE) if coordinator is not None else None
     store = (coordinator.get_capability('web.media.composer')
-             if coordinator is not None else None)
+             if capability is not None and capability.enabled is True else None)
     refs = []
     remaining_text = MAX_INLINE_TEXT_BYTES
     for attachment in command.attachments:

@@ -51,7 +51,8 @@ async def test_composer_import_persists_reference_and_original(tmp_path, monkeyp
         store.acknowledge_checkpoint(receipt)
 
     store = SessionMediaStore(media_path, 's1', checkpoint_verifier=verified_checkpoint_refs)
-    capabilities = {'web.media.composer': store, 'session.durable_checkpoint': checkpoint}
+    capabilities = {'web.media.composer': store, 'session.durable_checkpoint': checkpoint,
+                    NAMESPACE: SimpleNamespace(enabled=True)}
     coordinator = SimpleNamespace(get_capability=capabilities.get)
     try:
         ctx = attachments.MediaAttachmentContext(SimpleNamespace(add_message=append), coordinator)

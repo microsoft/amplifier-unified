@@ -1307,10 +1307,9 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         def retain_session(constructing):
             nonlocal session
             session = constructing
-        from .media import bind_media
-        from .media_assembly import select_root
+        from .media import bind_media, hook_configuration
         def media(constructing):
-            bind_media(constructing, store, selection=select_root(constructing.config))
+            bind_media(constructing, store)
         initialization = initialization_hooks(isolation=isolation, decision_accounts=decision_accounts,
                                               routing=routing, retain=retain_session,
                                               ephemeral_servers=ephemeral_mcp_servers,
@@ -1365,7 +1364,6 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                                         copy.deepcopy(coordinator.config.get("agents", {})))
         with startup_timing.phase('manager.settings'):
             if not snapshot:
-                from .media import hook_configuration
                 with hook_configuration(coordinator):
                     await configurator.apply_saved_settings(config.settings.get("configurator") or {})
             configurator.take_snapshot()
@@ -1488,6 +1486,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         coordinator.register_capability("live.checkpoint", checkpoint)
         coordinator.register_capability("session.durable_checkpoint",
                                         partial(checkpoint, capture_messages=False))
+        from ..attachments import install_media_context
+        await install_media_context(coordinator)
         from ..context_continuity import install as install_continuity
         continuity = install_continuity(coordinator, runtime.session_id, edited_path.parent,
                                        partial(checkpoint, capture_messages=False), writer_guard=recovery_write_guard)

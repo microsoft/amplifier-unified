@@ -8,8 +8,6 @@ hooks and agent declarations survive composition; no other tool is called.
 """
 import copy
 import hashlib
-import importlib
-import inspect
 import json
 import os
 from pathlib import Path
@@ -21,13 +19,29 @@ from amplifier_core import AmplifierSession
 from amplifier_core.loader import ModuleLoader
 from amplifier_foundation.paths.resolution import ResolvedSource
 from amplifier_foundation.sources import SimpleSourceResolver
+from amplifier_web.app_guidance import install_app_access
+from amplifier_web.host import media
 from amplifier_web.host.config import HostConfig
 from amplifier_web.host.session import load_root_bundle, live_plan
-from amplifier_web.host import media
-from amplifier_web.host.media_assembly import ReviewedRootRecipe, WORK_TOOLS, WORK_HOOKS, WORK_AGENTS
 from amplifier_web.host.storage import SessionStore
-from amplifier_web.app_guidance import install_app_access
 from test_tool_image_consumer_join import FiniteSourceHost
+
+# These expectations describe the offline Work fixture, not media admission.
+WORK_TOOLS = (
+    "tool-transcript", "tool-skills", "tool-bash", "tool-exec", "tool-web",
+    "tool-ui-use", "tool-filesystem", "tool-apply-patch", "tool-search",
+    "tool-delegate", "tool-image", "tool-computer-use",
+    "tool-context-intelligence-transcript", "tool-mode",
+    "tool-context-intelligence-set-filters",
+)
+WORK_HOOKS = (
+    "hook-computer-use", "hooks-mode", "hooks-approval",
+    "hook-context-intelligence", "hooks-routing",
+)
+WORK_AGENTS = {
+    "computer-use:computer-operator", "context-intelligence:graph-analyst",
+    "context-intelligence:session-navigator", "context-intelligence:server-data-ops",
+}
 
 REPOSITORIES = {
     "amplifier-bundle-work": "work", "amplifier-foundation": "foundation",
@@ -136,29 +150,10 @@ async def work_root(tmp_path, monkeypatch, provider, *, store=None, post=None, d
             for key in ("skills", "search_paths"):
                 if key in config:
                     config[key] = [local(v) for v in config[key]]
-    # Explicit package owner list, never inferred from the mounted graph.
-    names = ["amplifier_module_" + name.replace("-", "_") for name in
-             ("loop-live", "loop-streaming", "context-managed", "context-simple", *WORK_TOOLS, *WORK_HOOKS)]
-    files = [Path(__file__).resolve(), Path(__file__).parents[1] / "test_ordinary_work_tool_images.py",
-             Path(importlib.import_module("test_tool_image_consumer_join").__file__).resolve(),
-             Path(importlib.import_module("amplifier_core.loader").__file__).resolve()]
-    for name in names:
-        package = importlib.import_module(name)
-        files.extend(Path(package.__file__).parent.rglob("*.py"))
-    if provider is None:
-        package = importlib.import_module("amplifier_module_provider_openai")
-        files.extend(Path(package.__file__).parent.rglob("*.py"))
-    if provider_setup is not None:
-        files.append(Path(inspect.getsourcefile(provider_setup)).resolve())
-    files += [Path(importlib.import_module(name).__file__) for name in (
-        "amplifier_web.host.media", "amplifier_web.host.session", "amplifier_web.app_guidance",
-        "amplifier_web.runtime_worker", "amplifier_web.computer_episodes",
-        "amplifier_web.execution_events")]
     store = store or SessionStore(tmp_path / "sessions")
     def initialize_media(session):
         session.coordinator.loader = WorkLoader(provider)
-        selection = ReviewedRootRecipe(session.config, {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in files})
-        media.bind_media(session, store, selection=selection)
+        media.bind_media(session, store)
     if prepared_host:
         from amplifier_foundation.bundle import PreparedBundle
         # Source exports/entry points are already selected above. The real
@@ -182,7 +177,7 @@ async def work_root(tmp_path, monkeypatch, provider, *, store=None, post=None, d
             provider = coordinator.get("providers", "openai")
             assert type(provider).__name__ == "OpenAIProvider"
             provider_setup(provider)
-        bridge, graph, _ = coordinator.get_capability("web.media.construction")
+        graph = coordinator.get_capability("web.media.construction").graph
         evidence = graph.participants_evidence()
         assert len(evidence["loads"]) == 23 and all(row["mounted"] for row in evidence["loads"])
         assert evidence["ready"] and all(row["completed"] for row in evidence["ready"])
