@@ -876,11 +876,16 @@ a certificate, and the earlier certificate's bytes were gone from disk.
   program does not know whether Windows holds it, and one text serves every
   case of `blocked`. Only for the person's No (`declined`) does it say that
   Windows kept the certificate. With several certificates neither outcome
-  tells which one stays, so the text then says "at least one" or "one or
-  more" of their number. `add_root` keeps its plain first search: a failure
-  there leads to the add, which Windows decides and the check after it
-  confirms. If the record is still full, `force` stops with a
-  plain text and changes nothing (`windows_tls.ReplacedRecord`). A record that is too long to
+  tells which one stays, so the text then says "at least one" or "one or more"
+  of their number. These sentences are part of the last message of an
+  uninstall that keeps the folder, of the confirmation of an uninstall that
+  deletes it, and of the further message for either. An uninstall with the
+  delete choice asks Windows before it writes its journal. When a step between
+  that question and the confirmation fails, the text of that step has no
+  sentence about a certificate. `add_root` keeps its plain first search: a
+  failure there leads to the add, which Windows decides and the check after it
+  confirms. If the record is still full, `force` stops with a plain text and
+  changes nothing (`windows_tls.ReplacedRecord`). A record that is too long to
   read stops `force` in the same way: Amplifier never writes one of that
   length, and it does not replace a file that it cannot read. The readers get
   an empty list from such a file. When `force` writes the record again, it
@@ -1797,19 +1802,21 @@ does.
    and that Amplifier starts to remove its last program files when the person
    closes the message. When the last listing of the folder showed entries that
    are not Amplifier's, the message names up to five of them, with the number
-   of the others when there are more, and says that the folder stays. When the
-   folder could not be listed at the end, the message says that the folder can
-   still exist afterwards. Otherwise it says that the person can delete the
-   folder if it still exists a minute later. If Windows does not show that
-   message, the uninstall stops there, before its last step. So it does not
-   delete `python`, `tools`, the journal or setup's completion record, and it
-   tries to write a private note of that failure. The uninstall program then
-   tries once more to show a message. That message says that the data is
-   deleted and that the last program files were not removed. It is never the
-   message of an uninstall that changed nothing. The same holds for the last
-   message of an uninstall that keeps the folder: the further message is that
-   last message again. When Windows does not show the further message either,
-   the person gets no message of the uninstall program after its questions.
+   of the others when there are more, and says that the folder stays. When
+   that listing showed none, the message says that the person can delete the
+   folder if it still exists a minute later. When the removal has no such
+   listing, because the listing or the deletion directly before it stopped
+   with an error, the message says that the folder can still exist afterwards.
+   If Windows does not show that message, the uninstall stops there, before
+   its last step. So it does not delete `python`, `tools`, the journal or
+   setup's completion record, and it tries to write a private note of that
+   failure. The uninstall program then tries once more to show a message. That
+   message says that the data is deleted and that the last program files were
+   not removed. It is never the message of an uninstall that changed nothing.
+   The same holds for the last message of an uninstall that keeps the folder:
+   the further message is that last message again. When Windows does not show
+   the further message either, the person gets no message of the uninstall
+   program after its questions.
 10. The last step (`windows_uninstall.finish`), under the lock and with the
     folder proven and pinned again: create the flat folder
     `unified-uninstall-last` and two kept files, one in the installation
@@ -1897,27 +1904,30 @@ journal before its questions looks again under the lock, and refuses when that
 look finds one (step 1 of the order). It looks once more when one of its
 steps, from the lock to the removal of the Windows entries, stops with an
 error before those steps gave their result. When that look finds a journal,
-the failed step shows a text of a removal that did not finish, and the place
-of the failure note is the installation folder itself. After that result the
-uninstall does not look again: for a refused write of setup's entry record,
-for another error there, and for a last message that Windows does not show,
-the place of the note follows the look before the questions. An uninstall with
-the delete choice has no such refusal: a journal that appeared does not stop
-it, as it does not stop a second uninstall. Its own checks can still stop it.
-It looks for the journal's name when a step before the write of its own
-journal stops with an error, and directly before that write. If the first of
-these looks finds a journal, the failed step shows a text of a removal that
-did not finish, not the step's own text. If the second finds one, a failure of
-that write shows the text of a removal that did not finish too. A lock that
-another window holds is a refusal, not such an error: neither uninstall looks
-then. An uninstall that found no journal before its questions also looks when
-Windows does not show one of them; that look chooses only the place of the
-failure note. So does the look at a failure that no step and no question
-names, and at a preparation that fails after the check of the installation
-files. Of the looks that this paragraph names, only the one under the lock
-decides a refusal, as it did before the others were added. The others choose
-only a text and the place of the failure note. They change nothing that an
-uninstall deletes or removes.
+the failed step shows a text of a removal that did not finish, and the
+uninstall tries to write the failure note into the installation folder itself,
+not beside the app's service records. After that result the uninstall does not
+look again: for a refused write of setup's entry record, for another error
+there, and for a last message that Windows does not show, it tries to write
+the note where the look before the questions chose. An uninstall with the
+delete choice has no such refusal: a journal that appeared does not stop it,
+as it does not stop a second uninstall. Its own checks can still stop it. It
+looks for the journal's name when a step before the write of its own journal
+stops with an error, and directly before that write. If the first of these
+looks finds a journal, the failed step shows a text of a removal that did not
+finish, not the step's own text. If the second finds one, a failure of that
+write shows the text of a removal that did not finish too. A lock that another
+window holds is a refusal, not such an error: neither uninstall looks then. An
+uninstall that found no journal before its questions also looks when Windows
+does not show one of them; that look chooses only the place of the failure
+note. So does the look at a failure that no step and no question names, and at
+a preparation that fails after the check of the installation files. Of the
+looks that this paragraph names, only the one under the lock decides a
+refusal, as it did before the others were added. The others choose only a text
+and the place of the failure note. They change nothing that an uninstall
+deletes or removes. "The place of the failure note" is the folder into which
+the uninstall first tries to write that note. The write is only tried: when
+Windows refuses it, there can be no note.
 
 Each of these looks, and the launcher's look before it opens Amplifier, asks
 only whether the journal's name is in the folder. A look that Windows does not
@@ -2144,7 +2154,7 @@ limit as not blocking.
 - **The journal is not held open.** The uninstall program writes the journal
   and then looks once, by its name, whether it is in the folder. When that
   look does not find it, this uninstall stops, and it has deleted nothing in
-  the folder. What an earlier uninstall deleted stays deleted. (The
+  the folder. An earlier uninstall can have deleted files there. (The
   private-file writer reports a publication as done also when the file lost
   its name directly afterwards, since pull request 2247; before, the writer
   itself stopped the removal then.) After that look the uninstall program
@@ -2194,31 +2204,31 @@ limit as not blocking.
     twice. It removes the Windows entries through setup's record of them: when
     it finds no such record in the folder, or the record says that they are
     removed already, it removes none. It also tries to delete the caches and
-    the other program files, and it goes on when Windows does not let one of
-    them go. When step 9 did not stop the uninstall, the last step
-    (`windows_uninstall.finish`) follows. Once it has the lock and the folder,
-    it reads the journal again through the private-file boundary, before it
-    starts the step after exit. It refuses a file that it cannot read there, a
-    file that is not a journal, a journal that records another choice, and a
-    journal with another token. Then the last step deletes nothing: not
-    `python`, not `tools`, not that file and not setup's completion record.
-    The uninstall program tries to show a message that the last program files
-    could not be removed. When Windows does not show that message, the program
-    tries once more. When Windows does not show it then either, the person
-    gets no message after the confirmation of step 9. When the removal deleted
-    everything that it tried to delete, and no program changed the folder
-    further, the folder is then the leftover of L3 (see Leftovers below), with
-    the other program's file in the place of the journal. A file that the last
-    step can read there as a journal (`schema` 1), and that records the delete
-    choice and this removal's own token, passes. The step after exit compares
-    the same values (`FINISH_SCRIPT` in `windows_removal.py`: schema, choice,
-    token) and refuses a journal whose creation time, as Windows reports it,
-    is later than the step's own start. When it accepts the file too, the
-    removal goes on as it does without a replacement. In each case nothing
-    more is deleted than the person chose. For a later uninstall the other
-    program's file is a journal like any other: what that uninstall does
-    follows its own look and its own read (see "While the journal exists"
-    above, and L4).
+    the other program files. When that attempt ends with files still there,
+    the removal goes on; an error of the attempt is a failed step. When step 9
+    did not stop the uninstall, the last step (`windows_uninstall.finish`)
+    follows. Once it has the lock and the folder, it reads the journal again
+    through the private-file boundary, before it starts the step after exit.
+    It refuses a file that it cannot read there, a file that is not a journal,
+    a journal that records another choice, and a journal with another token.
+    Then the last step deletes nothing: not `python`, not `tools`, not that
+    file and not setup's completion record. It makes no flat folder and does
+    not start the step after exit. The uninstall program tries to show a
+    message that the last program files could not be removed. When Windows
+    does not show that message, the program tries once more. When Windows does
+    not show it then either, the person gets no message after the confirmation
+    of step 9. A file that the last step can read there as a journal (`schema`
+    1), and that records the delete choice and this removal's own token,
+    passes. The step after exit compares the same values (`FINISH_SCRIPT` in
+    `windows_removal.py`: schema, choice, token) and refuses a journal whose
+    creation time, as Windows reports it, is later than the step's own start.
+    When it accepts the file too, the removal goes on as it does without a
+    replacement, and the step after exit treats the other program's file as
+    the journal. In each case the uninstall deletes no entry that it does not
+    delete with its own journal. For a later uninstall that reaches the look
+    before its questions, the other program's file is a journal like any
+    other: what that uninstall does follows that look and its own read (see
+    "While the journal exists" above, and L4).
 
   Such a program runs as the person and can delete the person's data itself.
   That is the condition of this limit, not a protection against it.
