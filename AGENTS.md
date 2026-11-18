@@ -420,10 +420,21 @@ its own lock, with that lock held alone; do not call it later in the start or
 from another process. Its limits are stated in the setup design ("Repair of a
 source store object that holds bytecode"). It imports `_Native` from
 `windows_removal` and does not copy it: a change of those steps must keep
-`tests/test_source_store_repair_native.py`. Git runs there with the
-computer's Git configuration, as in Foundation's check: `git status` can
-start a content filter of that configuration. Do not write that Git only
-reads; the design names that limit. The record's change mark is an
+`tests/test_source_store_repair_native.py`. Git runs there with its
+configuration files, as in Foundation's check: `git status` can start a
+content filter that they name. Any attribute file that Git reads can give a
+file that filter, for example a `.gitattributes` of the object, its
+`.git\info\attributes`, the person's global attribute file or the Git
+installation's system attribute file. The repair removes every `GIT_*` name
+from Git's environment. Foundation's check keeps the names of its process.
+So the two can read different configurations, different attribute files or
+another index. Do not write that Git only reads there. The repair tells Git
+to start no file system monitor (`core.fsmonitor=false`). It gives both
+commands `--no-optional-locks`, so `git status` leaves out its optional
+write of the object's index. Git can still write a trace file, start a
+filter program or start a second Git in a submodule. Do not write that the
+repair starts only what Foundation's check starts. The design names both
+limits. The record's change mark is an
 input of `update_inventory_index.signature`. A run works with the record that
 it read after it got the lock, never with an earlier read: another host can
 have written a new mark meanwhile. A run writes the record first; a
