@@ -750,8 +750,20 @@ class ContextContinuity:
             from amplifier_module_context_managed.errors import CompactionError
             compaction_error = CompactionError
             entered = True
+            async def selected_count(rows):
+                envelope = await _guarded(guard, count_view, rows)
+                from .host.session import SelectedProvider
+                selected = getattr(self.coordinator.get("orchestrator"), "root_provider", None)
+                if (provider is selected and isinstance(selected, SelectedProvider)
+                        and selected.selection.get("instance") == self._identity["provider"]
+                        and selected.selection.get("model") == self._identity["model"]):
+                    # Bind the provider that assembled and measured this exact
+                    # request. Preserve dispatch identity for Surface refit/cache.
+                    envelope = {**envelope, "effective_identity": copy.deepcopy(self._identity)}
+                return envelope
             result = await _guarded(guard, self.coordinator.get_capability("context.recovery.recover"),
-                provider=provider, count_view=count_view, identity=copy.deepcopy(self._identity),
+                provider=provider, count_view=selected_count if transition else count_view,
+                identity=copy.deepcopy(self._identity),
                 save_progress=save_progress, install=install_candidate, guard=guard,
                 retain_contents=retain_contents, target_bytes=record["targetBytes"],
                 progress=record["progress"], source_revision=copy.deepcopy(source),

@@ -179,24 +179,42 @@ async def test_cold_selection_override_revisions_once_then_identical_mounted_ack
 
 
 async def test_cold_choice_only_override_then_bound_ack_keeps_one_revision(tmp_path, monkeypatch):
-    from amplifier_web import provider_catalog
     monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
-    monkeypatch.setattr(provider_catalog, 'require_mounted_binding', lambda *args: None)
+    def bind(controls, key):
+        original = controls.coordinator.get_capability
+        catalog = {'connectionKeys': {'terra': key}}
+        controls.coordinator.get_capability = lambda name: catalog if name == 'web.provider_catalog' else original(name)
     first, _, _ = mounted_controls(SELECTION)
+    bind(first, 'account-A')
     await first.perform('provider.select', {**SELECTION, 'expectedConnectionKey': 'account-A'})
     old = first.selection_revision
     await first.close()
     other = {**SELECTION, 'model': 'new-target'}
     resumed, _, _ = mounted_controls(other)
+    bind(resumed, 'account-B')
     await resumed.restore(selection_override=other)
     mounted = resumed.selection_revision
     assert mounted != old
+    assert json.loads(resumed.state_path().read_text())['selectionBindingPending'] is True
+    await resumed.close()
+    resumed, _, _ = mounted_controls(other)
+    bind(resumed, 'account-B')
+    await resumed.restore(selection_override=other)
+    assert resumed.selection_revision == mounted
+    before = json.loads(resumed.state_path().read_text())
+    import pytest
+    with pytest.raises(ValueError, match='mounted connection differs'):
+        await resumed.perform('provider.select', {**other, 'expectedConnectionKey': 'wrong-account'})
+    assert json.loads(resumed.state_path().read_text()) == before
     await resumed.perform('provider.select', {**other, 'expectedConnectionKey': 'account-B'})
     assert resumed.selection_revision == mounted
     assert resumed.selection_binding == 'account-B'
     await resumed.close()
     again, _, _ = mounted_controls(other)
+    bind(again, 'account-B')
     await again.restore()
+    assert again.selection_revision == mounted and again.selection_binding == 'account-B'
+    await again.restore(selection_override=other)
     assert again.selection_revision == mounted and again.selection_binding == 'account-B'
     await again.close()
 def test_selected_provider_info_reports_effort_without_mutating_bundle_defaults():

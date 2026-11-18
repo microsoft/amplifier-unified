@@ -193,6 +193,7 @@ class RuntimeControls:
     async def _restore_saved(self, saved, *, selection_override=None):
         self.selection_revision = saved.get("selectionRevision")
         self.selection_binding = saved.get("selectionBinding")
+        self._selection_unbound_override = saved.get("selectionBindingPending") is True
         if self.configurator:
             await self.configurator.apply_saved_settings(saved.get("configurator", {}))
         self.coordinator.session_state["goal"] = saved.get("goal")
@@ -216,7 +217,8 @@ class RuntimeControls:
         if selection_override is not None:
             await self._perform("provider.select", selection_override)
             if (saved.get("selection") != self.selection
-                    or saved.get("selectionBinding") != selection_override.get("expectedConnectionKey")):
+                    or selection_override.get("expectedConnectionKey") is not None
+                    and saved.get("selectionBinding") != selection_override["expectedConnectionKey"]):
                 self.selection_revision = str(uuid.uuid4())
                 self.selection_binding = selection_override.get("expectedConnectionKey")
                 self._selection_unbound_override = self.selection_binding is None
@@ -243,6 +245,7 @@ class RuntimeControls:
             "goal":self.coordinator.session_state.get("goal"),"task":self.coordinator.session_state.get("task"),"taskReceipts":self.tasks.receipts,"taskHistory":self.tasks.history,"mode":self.coordinator.session_state.get("active_mode"),
             "selection":None if self.selection_cleared else self.selection or previous.get("selection"),"budget":budget,
             "selectionRevision":self.selection_revision,"selectionBinding":self.selection_binding,
+            "selectionBindingPending":self._selection_unbound_override,
             "configurationCheckpoint": self.coordinator.session_state.get("configurationCheckpoint")},default=str))
         if task_only:
             return
@@ -612,6 +615,7 @@ class RuntimeControls:
             if not self._restoring:
                 self.selection_revision = None
                 self.selection_binding = None
+                self._selection_unbound_override = False
             self.persist()
             return {'selection':None,'scope':'main session'}
         if operation == "provider.verifyConnection":

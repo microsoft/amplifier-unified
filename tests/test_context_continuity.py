@@ -594,6 +594,7 @@ async def test_ordinary_sdk_model_transition_counts_compacts_and_dispatches_sele
             coordinator = case.session.coordinator
             # Real ordinary Streaming selects its mounted map, not loop-live's
             # root override. Change both through the actual mounted selection.
+            await coordinator.mount('providers', case.raw, name='openai')
             await case.controls.perform('provider.select', {'instance': 'openai', 'model': target_model, 'effort': 'high'})
             target = coordinator.get('orchestrator').root_provider
             await coordinator.mount('providers', target, name='openai')
@@ -644,6 +645,8 @@ async def sdk_transition_process_phase(directory, phase):
         canonical = json.loads((directory / 'transcript.json').read_text())
         wire.effects = 1  # Durable fixture effect counter, not another execution.
     async with ordinary_recovery_case(directory, wire, canonical) as case:
+        await case.session.coordinator.mount('providers', case.raw, name='openai')
+        before_calls = 0
         if phase == 'prepare':
             await case.session.execute('SEED-EFFECT: preserve ORBIT.')
             await append_recovery_evidence(case.context, ['A'])
@@ -653,6 +656,7 @@ async def sdk_transition_process_phase(directory, phase):
             await case.controls.perform('provider.select', {'instance': 'openai', 'model': target_model, 'effort': 'high'})
         else:
             await case.controls.restore()
+            before_calls = case.adapter.recovery_status()['logicalCalls']
         coordinator = case.session.coordinator
         target = coordinator.get('orchestrator').root_provider
         await coordinator.mount('providers', target, name='openai')
@@ -674,11 +678,16 @@ async def sdk_transition_process_phase(directory, phase):
         else:
             assert 'Usable continuation' in await case.session.execute('New authorized input after actual interpreter restart.')
             assert case.adapter.recovery_status()['state'] == 'committed'
-            assert wire.compactions == []  # Completed paid target progress reused.
+            # New input advances eligible coverage. Only new pieces may be
+            # bought; the old acknowledged native prefix stays the seed.
+            assert case.adapter.recovery_status()['logicalCalls'] == before_calls + len(wire.compactions)
+            assert all(any(item.get('type') == 'compaction' for item in body['input'])
+                       for body, _, _ in wire.compactions)
             assert len(wire.completions) == 1 and wire.effects == 1 and wire.unknown_invocations == 0
         return {'phase': phase, 'state': case.adapter.recovery_status()['state'],
                 'compactions': len(wire.compactions), 'effects': wire.effects,
-                'logicalCalls': case.adapter.recovery_status()['logicalCalls']}
+                'logicalCalls': case.adapter.recovery_status()['logicalCalls'],
+                'requests': [call['report']['requestSha256'] for call in case.adapter._recovery_record()['calls']]}
 
 
 async def test_sdk_transition_confirmed_progress_survives_two_exited_interpreters(tmp_path):
@@ -695,8 +704,10 @@ async def test_sdk_transition_confirmed_progress_survives_two_exited_interpreter
         assert process.returncode == 0, (stdout.decode(), stderr.decode())
         reports.append(json.loads(stdout.decode().splitlines()[-1]))
     assert [row['state'] for row in reports] == ['refused', 'committed']
-    assert reports[0]['compactions'] > 0 and reports[1]['compactions'] == 0
-    assert reports[0]['logicalCalls'] == reports[1]['logicalCalls']
+    assert reports[0]['compactions'] > 0
+    assert reports[1]['logicalCalls'] == reports[0]['logicalCalls'] + reports[1]['compactions']
+    assert reports[1]['requests'][:reports[0]['logicalCalls']] == reports[0]['requests']
+    assert len(set(reports[1]['requests'])) == len(reports[1]['requests'])
 
 
 def recovery_command(wire, command_id='recover-once'):

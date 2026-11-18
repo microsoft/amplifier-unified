@@ -571,6 +571,7 @@ def fork_session(home, source, target_id, *, turn=None, after_message_id=None, b
                 # revision on the independent fork.
                 data.pop("selectionRevision", None)
                 data.pop("selectionBinding", None)
+                data.pop("selectionBindingPending", None)
                 if bundle:
                     from .bundle_selection import reset_controls
                     data = reset_controls(data, reset_model=reset_model)
@@ -600,12 +601,14 @@ def fork_session(home, source, target_id, *, turn=None, after_message_id=None, b
             # worker or duplicate the module's prompt/configuration algorithm.
             plan = json.loads(copied["configuration.json"])
             declaration = plan.get("session", {}).get("context")
-            if not isinstance(declaration, dict) or declaration.get("module") != "context-managed":
+            if (not isinstance(declaration, dict) or declaration.get("module") != "context-managed"
+                    or declaration.get("config", {}).get("engine", "boundary") != "boundary"):
                 raise ValueError("Fork checkpoint configuration is not verifiable")
             from amplifier_module_context_managed.boundary import BoundaryContextManager
             validator = BoundaryContextManager(declaration.get("config", {}))
-            if validator.checkpoint_configuration() != record["configuration"]:
-                raise ValueError("Fork checkpoint configuration changed")
+            validator.messages = messages
+            if validator.restore_checkpoint(record, record.get("identity"))["status"] != "restored":
+                raise ValueError("Fork checkpoint or configuration changed")
             if (settled and not record.get("progress") and record.get("summary")
                     and type(end) is int and 0 < end <= len(messages)
                     and record.get("sha256") == digest({k: v for k, v in record.items() if k != "sha256"})
