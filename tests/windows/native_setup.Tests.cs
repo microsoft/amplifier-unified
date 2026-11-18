@@ -36,6 +36,14 @@ namespace UnifiedBootstrap {
             process.WaitForExit();
             Need(process.ExitCode==0,"junction created");
         }
+        static void FileLink(string link, string target) {
+            // A symbolic link to a file. Windows creates one for an elevated
+            // account (a hosted runner's) or with Developer Mode on.
+            var process=Process.Start(new ProcessStartInfo("cmd.exe","/d /c mklink \""+link+"\" \""+target+"\"") {
+                UseShellExecute=false,CreateNoWindow=true});
+            process.WaitForExit();
+            Need(process.ExitCode==0,"file link created (this needs an elevated account or Developer Mode)");
+        }
         static void OpenToOthers(string folder) {
             var security=Directory.GetAccessControl(folder);
             security.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(WellKnownSidType.BuiltinUsersSid,null),
@@ -292,8 +300,9 @@ namespace UnifiedBootstrap {
                 string damaged="Amplifier is already installed in "+left+", but setup cannot open it: a program file is missing.\n\n"+
                     "Keep that folder. It holds your chats and settings. This version of setup cannot repair it.";
                 string emptied="Setup cannot install Amplifier yet. The folder of an earlier installation is still on this PC:\n"+left+"\n\n"+
-                    "Amplifier cannot start from that folder, and setup found no chats or settings in it. "+
-                    "Setup does not change the folder: it can hold files that are not Amplifier's.\n\n"+
+                    "Setup cannot open Amplifier from that folder: a program file is missing. "+
+                    "Setup found no chats or settings in the folder. "+
+                    "It does not change the folder, because the folder can hold files that are not Amplifier's.\n\n"+
                     "If a file in the folder is yours, move it to another place. Then delete the folder and run this setup file again.";
                 string journal=Path.Combine(left,NativeInstaller.Journal), notes=Path.Combine(left,"my notes.txt");
                 string record="{\"schema\": 1, \"choice\": \"delete\", \"token\": \"0123456789abcdef0123456789abcdef\"}";
@@ -326,6 +335,25 @@ namespace UnifiedBootstrap {
                     File.Delete(entry);
                     Need(NativeInstaller.Unopened(left)==emptied,"without that entry: "+name);
                 }
+                // A link with a data name is a doubt, also when it leads to an
+                // empty folder: the look never follows a link.
+                string elsewhere=Path.Combine(work,"elsewhere"); Directory.CreateDirectory(elsewhere);
+                Junction(Path.Combine(left,"app"),elsewhere);
+                Need(NativeInstaller.Unopened(left)==damaged,"a link with a data name is data");
+                Directory.Delete(Path.Combine(left,"app"),false);
+                Need(Directory.Exists(elsewhere) && NativeInstaller.Unopened(left)==emptied,"without the link; its target stays");
+                // A link with the journal's name is no journal, also when it leads
+                // to a file that is one.
+                File.Move(journal,Path.Combine(elsewhere,"journal.json"));
+                FileLink(journal,Path.Combine(elsewhere,"journal.json"));
+                Need(File.ReadAllText(journal)==record,"the link leads to a journal");
+                Need(NativeInstaller.Unopened(left)==damaged,"a file link with the journal's name");
+                File.Delete(journal);
+                Junction(journal,elsewhere);
+                Need(NativeInstaller.Unopened(left)==damaged,"a folder link with the journal's name");
+                Directory.Delete(journal,false);
+                File.Move(Path.Combine(elsewhere,"journal.json"),journal);
+                Need(NativeInstaller.Unopened(left)==emptied,"the journal is back");
                 // A file that uninstall does not read as a journal with the
                 // delete choice: the text of a damaged installation.
                 string[] others={"","{","[]","null","\"delete\"",
@@ -348,10 +376,33 @@ namespace UnifiedBootstrap {
                 string largest=record.Replace("{","{\"more\": \""+new string('x',4096-record.Length-12)+"\", ");
                 File.WriteAllText(journal,largest);
                 Need(new FileInfo(journal).Length==4096 && NativeInstaller.Unopened(left)==emptied,"a journal of 4096 bytes is read");
+                // Bytes that are not UTF-8 are no journal.
+                File.WriteAllBytes(journal,new byte[]{0x7b,0xff,0x7d});
+                Need(NativeInstaller.Unopened(left)==damaged,"bytes that are not UTF-8");
                 // A folder with the journal's name is no journal.
                 File.Delete(journal); Directory.CreateDirectory(journal);
                 Need(NativeInstaller.Unopened(left)==damaged,"a folder with the journal's name");
                 Directory.Delete(journal); File.WriteAllText(journal,record);
+                // The look shares the journal with every other access. A program
+                // that has it open for writing does not stop the look, and while
+                // the look's kind of handle is open, the file can be deleted (the
+                // last step of a removal deletes it).
+                using(new FileStream(journal,FileMode.Open,FileAccess.ReadWrite,FileShare.ReadWrite|FileShare.Delete))
+                    Need(NativeInstaller.Unopened(left)==emptied,"a journal that another program has open for writing is read");
+                using(new FileStream(journal,FileMode.Open,FileAccess.Read,FileShare.ReadWrite|FileShare.Delete)) {
+                    File.Delete(journal);
+                    // The name goes at once, also while that handle is open: the
+                    // last step lists the folder directly after its deletion.
+                    Need(!Directory.GetFileSystemEntries(left).Any(entry=>Path.GetFileName(entry)==NativeInstaller.Journal),
+                        "the journal's name is gone while a handle of the look's kind is open");
+                    Need(NativeInstaller.Unopened(left)==damaged,"a journal that was deleted is no journal");
+                }
+                Need(!File.Exists(journal),"the journal could be deleted while a handle of the look's kind was open");
+                File.WriteAllText(journal,record);
+                // A journal that another program holds for itself is a doubt.
+                using(new FileStream(journal,FileMode.Open,FileAccess.ReadWrite,FileShare.None))
+                    Need(NativeInstaller.Unopened(left)==damaged,"a journal that cannot be opened");
+                Need(NativeInstaller.Unopened(left)==emptied,"the journal is read again");
                 // The looks changed nothing in the folder.
                 string[] names=Directory.GetFileSystemEntries(left).Select(entry=>Path.GetFileName(entry)).OrderBy(name=>name,StringComparer.Ordinal).ToArray();
                 Need(String.Join("|",names)=="my notes.txt|unified-setup-complete.json|unified-uninstall-last|unified-uninstall.json",

@@ -738,21 +738,34 @@ namespace UnifiedBootstrap {
             // choice leaves: a journal that records that choice, with the values
             // that uninstall's own reader requires (at most 4096 bytes, schema 1,
             // the choice, a token of 32 hexadecimal digits), and none of the
-            // person's data. A data name counts as data when it is a file, or a
-            // folder with anything in it. Every doubt answers no: a file that is
-            // missing, too large or not such a record, and a folder that Windows
-            // does not list.
+            // person's data. A data name counts as data when it is a file, a
+            // link, or a folder with anything in it. Every doubt answers no: a
+            // journal that is missing, a link, too large, not UTF-8 or not such a
+            // record, and a folder that Windows does not list.
             try {
                 string journal=Path.Combine(root,Journal);
-                if(new FileInfo(journal).Length>4096) return false;
-                var record=Json.Deserialize<Dictionary<string,object>>(File.ReadAllText(journal));
+                if((File.GetAttributes(journal)&(FileAttributes.Directory|FileAttributes.ReparsePoint))!=0) return false;
+                // At most one byte more than the limit is read. The file is opened
+                // with every sharing mode: the step after exit of a removal deletes
+                // the journal, and this look must not make that deletion fail.
+                var bytes=new byte[4097]; int count=0, read;
+                using(var file=new FileStream(journal,FileMode.Open,FileAccess.Read,FileShare.ReadWrite|FileShare.Delete))
+                    while(count<bytes.Length && (read=file.Read(bytes,count,bytes.Length-count))>0) count+=read;
+                if(count>4096) return false;
+                var record=Json.Deserialize<Dictionary<string,object>>(Utf8.GetString(bytes,0,count));
                 object schema;
                 if(record==null || !record.TryGetValue("schema",out schema) || !(schema is int) || (int)schema!=1) return false;
                 string token=Text(record,"token");
                 if(Text(record,"choice")!="delete" || !Regex.IsMatch(token,"\\A[0-9a-f]{32}\\z")) return false;
-                return !Data.Any(name=>{
+                foreach(string name in Data) {
                     string entry=Path.Combine(root,name);
-                    return File.Exists(entry) || (Directory.Exists(entry) && Directory.EnumerateFileSystemEntries(entry).Any());});
+                    FileAttributes kind;
+                    try { kind=File.GetAttributes(entry); } catch(FileNotFoundException) { continue; }
+                    // Only a real folder is listed; a link is never followed.
+                    if((kind&(FileAttributes.Directory|FileAttributes.ReparsePoint))!=FileAttributes.Directory ||
+                        Directory.EnumerateFileSystemEntries(entry).Any()) return false;
+                }
+                return true;
             } catch(Exception) { return false; }
         }
         internal static string Unopened(string root) {
@@ -766,8 +779,9 @@ namespace UnifiedBootstrap {
             // setup found at this look, or what setup does.
             if(Emptied(root)) return
                 "Setup cannot install Amplifier yet. The folder of an earlier installation is still on this PC:\n"+root+"\n\n"+
-                "Amplifier cannot start from that folder, and setup found no chats or settings in it. "+
-                "Setup does not change the folder: it can hold files that are not Amplifier's.\n\n"+
+                "Setup cannot open Amplifier from that folder: a program file is missing. "+
+                "Setup found no chats or settings in the folder. "+
+                "It does not change the folder, because the folder can hold files that are not Amplifier's.\n\n"+
                 "If a file in the folder is yours, move it to another place. Then delete the folder and run this setup file again.";
             return "Amplifier is already installed in "+root+", but setup cannot open it: a program file is missing.\n\n"+
                 "Keep that folder. It holds your chats and settings. This version of setup cannot repair it.";

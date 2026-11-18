@@ -139,8 +139,9 @@ def test_unfinished_attempts_are_removed_and_installations_never_are():
 
 
 EMPTIED = ("Setup cannot install Amplifier yet. The folder of an earlier installation is still on this PC:\n{root}\n\n"
-           "Amplifier cannot start from that folder, and setup found no chats or settings in it. "
-           "Setup does not change the folder: it can hold files that are not Amplifier's.\n\n"
+           "Setup cannot open Amplifier from that folder: a program file is missing. "
+           "Setup found no chats or settings in the folder. "
+           "It does not change the folder, because the folder can hold files that are not Amplifier's.\n\n"
            "If a file in the folder is yours, move it to another place. Then delete the folder and run this setup "
            "file again.")
 DAMAGED = ("Amplifier is already installed in {root}, but setup cannot open it: a program file is missing.\n\n"
@@ -176,24 +177,40 @@ def test_setup_without_a_launcher_program_says_what_its_own_look_finds():
     emptied = between("internal static bool Emptied(", "internal static string Unopened(")
     order = [emptied.index(text) for text in (
         "string journal=Path.Combine(root,Journal);",
-        "if(new FileInfo(journal).Length>4096) return false;",
-        "Json.Deserialize<Dictionary<string,object>>(File.ReadAllText(journal));",
+        "if((File.GetAttributes(journal)&(FileAttributes.Directory|FileAttributes.ReparsePoint))!=0) return false;",
+        "var bytes=new byte[4097]; int count=0, read;",
+        # Shared with every other access: the last step of a removal deletes the journal.
+        "new FileStream(journal,FileMode.Open,FileAccess.Read,FileShare.ReadWrite|FileShare.Delete))",
+        "while(count<bytes.Length && (read=file.Read(bytes,count,bytes.Length-count))>0) count+=read;",
+        "if(count>4096) return false;",
+        "Json.Deserialize<Dictionary<string,object>>(Utf8.GetString(bytes,0,count));",
         'if(record==null || !record.TryGetValue("schema",out schema) || !(schema is int) || (int)schema!=1) return false;',
         r'if(Text(record,"choice")!="delete" || !Regex.IsMatch(token,"\\A[0-9a-f]{32}\\z")) return false;',
-        "return !Data.Any(name=>{",
-        "return File.Exists(entry) || (Directory.Exists(entry) && Directory.EnumerateFileSystemEntries(entry).Any());});",
+        "foreach(string name in Data) {",
+        "try { kind=File.GetAttributes(entry); } catch(FileNotFoundException) { continue; }",
+        # A file and a link are data. Only a real folder is listed.
+        "if((kind&(FileAttributes.Directory|FileAttributes.ReparsePoint))!=FileAttributes.Directory ||",
+        "Directory.EnumerateFileSystemEntries(entry).Any()) return false;",
+        "return true;",
         "} catch(Exception) { return false; }")]
     assert order == sorted(order)
-    assert emptied.count("return") == 6  # Four refusals, the answer, and the look at one data name.
+    assert emptied.count("return false;") == 6 and emptied.count("return") == 7  # One yes, after every look.
+    # Strict UTF-8: bytes that are not UTF-8 are an error, and an error answers no.
+    assert "static readonly UTF8Encoding Utf8 = new UTF8Encoding(false, true);" in SOURCE
     # The two texts, complete. The one with the next step only after the look said yes.
     unopened = between("internal static string Unopened(", "static int OpenInstalled(")
     code = "\n".join(line for line in unopened.splitlines() if not line.strip().startswith("//"))
     first, second = code.split("if(Emptied(root)) return", 1)[1].split(";\n            return ", 1)
     assert literal(first) == EMPTIED and literal(second.split(";", 1)[0]) == DAMAGED
     assert code.count("return") == 2 and code.count("Emptied(") == 1
-    # They only look and build a text.
-    for body in (emptied, code):
-        for change in ("Delete", "Write", "Create", "Move", "Remove", "Process", "Say(", "Install", "Storage"):
+    # They only look and build a text. The one open is for reading, and it allows a deletion by another
+    # program (`FileShare.Delete` is a sharing mode, not a deletion).
+    assert emptied.count("FileStream(") == 1 and emptied.count("FileShare.Delete") == 1
+    looks = "\n".join(line for line in emptied.splitlines() if not line.strip().startswith("//")).replace(
+        "FileMode.Open,FileAccess.Read,FileShare.ReadWrite|FileShare.Delete", "")
+    for body in (looks, code):
+        for change in ("Delete", "Write", "Create", "Move", "Remove", "Process", "Say(", "Install", "Storage",
+                       "FileMode", "FileAccess", "SetAttributes"):
             assert change not in body, change
     # The one place that shows the text: a finished installation with no launcher program. Setup ends with 1.
     opened = between("static int OpenInstalled(", "static int ConsumerWindow()")
@@ -204,13 +221,43 @@ def test_setup_without_a_launcher_program_says_what_its_own_look_finds():
     # What the new text does not say.
     assert "your chats and settings" not in EMPTIED and "already installed" not in EMPTIED
     assert "uninstall" not in EMPTIED.lower()  # A file that reads as a journal is no proof of an uninstall.
+    assert "cannot start" not in EMPTIED  # Setup looked for one program file only.
     # The launcher's program, which the Start-menu entry also starts.
     from amplifier_web import windows_consumer_shell
     assert 'Path.Combine(root,"tools","amplifier-unified","Scripts","pythonw.exe")' in between(
         "static ProcessStartInfo AppStart(", "internal static bool AddEntries(")
     assert '"tools/amplifier-unified/Scripts/pythonw.exe"' in inspect.getsource(windows_consumer_shell.entries)
-    # The native check has the same two texts.
+    # The design has both texts, sentence for sentence, and what the look reads.
+    design = " ".join(DESIGN.split())
+    for text in (EMPTIED, DAMAGED):
+        for part in text.replace("{root}", "\n").split("\n"):
+            # The design names the folder between two quoted parts, so a part can begin with ", ".
+            for sentence in re.split(r"(?<=[.:]) ", part.strip().removeprefix(", ")):
+                assert sentence in design, sentence
+    for sentence in (
+            "When the launcher's start program is gone, setup shows one message and ends.",
+            "a plain file (no folder, no link) of at most 4096 bytes of UTF-8 that holds a record with `schema` 1, "
+            "the choice `delete` and a token of 32 hexadecimal digits",
+            "A name counts as data when it is a file, a link, or a folder with anything in it.",
+            "In every other case, and when any part of the look fails, setup says what it said before:",
+            "The text does not say that Amplifier was uninstalled, and it does not say that Amplifier cannot start: "
+            "a file that reads as a journal is no proof of an uninstall (a program of this account can write one), "
+            "and setup looked for one program file only.",
+            "With either text setup installs nothing, deletes nothing and ends with status 1.",
+            "Setup opens the file for reading with every sharing mode, so Windows does not refuse another program's "
+            "deletion of the journal because of this handle",
+            "Setup reads the journal for one purpose only: to choose the text of one message (see Leftovers)."):
+        assert sentence in design, sentence
+    # The numbers of the design's sentence on the native check.
     native = (ROOT / "tests/windows/native_setup.Tests.cs").read_text(encoding="utf-8")
+    others = native.split("string[] others={", 1)[1].split("};", 1)[0]
+    assert "nineteen files that are not such a journal" in design
+    # Five literal files in the first line, then one file for each `record.Replace(...)`, then the file
+    # that is one byte too large.
+    assert others.split("\n", 1)[0] == '"","{","[]","null","\\"delete\\"",'
+    assert 5 + others.count("record.Replace(") + others.count("record+new string(") == 19
+    assert len(windows_uninstall.DATA) == 7 and "the seven names of the person's data" in design
+    # The native check has the same two texts.
     cases = native.split('string left=Make(work,"Left");', 1)[1]
     assert literal(cases.split("string damaged=", 1)[1].split(";", 1)[0].replace("left", "root")) == DAMAGED
     assert literal(cases.split("string emptied=", 1)[1].split(";", 1)[0].replace("left", "root")) == EMPTIED
