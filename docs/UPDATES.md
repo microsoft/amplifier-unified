@@ -459,7 +459,28 @@ A stage holds no copy of the app's own `config` or `routing` folder. `config`
 holds the sign-in secrets and the TLS key of the installation, and a stage reads
 neither folder: its settings and routing are in `shared-config`, with the
 temporary copy of the keys file that the next paragraph describes.
-A stage that an earlier version of the app prepared can still hold such a copy.
+An earlier version of the app made such copies. Idle maintenance removes the
+entries `config` and `routing` from every stage that still has them, whether
+the stage settled or failed, and at every age. It does that before it looks for
+keys files (next paragraph), with the same admission: after an activation,
+after a start of the app and then about each hour, never while an update
+operation runs or waits, and not in the stage of an unresolved preparation.
+This removal has its own bounds, and it changes no rule of a keys file. One
+pass handles at most eight stages with such a copy and at most 64 entries
+(files, links and folders): an entry that it removes, and an entry that it must
+leave. A larger copy goes on when a later pass comes to its stage again, after
+the other stages. An entry that cannot be removed stays, and a later pass tries
+again: no update, retry or restore fails or waits because of it. A pass lists
+each folder from its start again. So when the first 64 listed entries of a
+folder all stay, the entries behind them stay too. A link is
+never followed: an entry `config` or `routing` that is a link, a junction or no
+folder stays, and a link inside a copy is removed as a link (on Windows it
+stays). This removal reads the list of stages, and it looks at each stage, through
+an open folder and not by a path: at a link or a junction that has the name of
+the folder of the stages, or of a stage, it lists nothing and handles nothing.
+On Windows a folder of a copy that another program has open in a way that does
+not permit its deletion, for example as its working folder, stays with
+everything below it until that program lets it go.
 
 Component qualification uses a temporary `shared-config/keys.env` copy.
 The manager removes only that file after qualification succeeds or a handled
