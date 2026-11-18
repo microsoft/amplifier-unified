@@ -71,12 +71,15 @@ listing, open, look at a kind and deletion goes through one wrapper
 (``_Bounded``) that checks the limit first. The look for Git into each
 folder of PATH, each Git command and the write of a change mark have the same
 check, and a Git command
-is started only when half a second is left. So after an operation that took
-the rest of the time, whether it worked or failed, the run only gives its
-handles back and writes the record a last time. One operation has no time
-limit of its own, and neither has the first check of the folders above the
-store. No handle of this step reaches the Git program: each is opened without
-inheritance.
+is started only when half a second is left. The check of the folders above
+the store does not begin after the limit either. So after an operation that
+took the rest of the time, whether it worked or failed, the run only gives
+its handles back, writes the record a last time and writes its one line into
+the log. One operation has no time limit of its own. The limit counts from
+the start of a run: before it the step reads its record, looks for setup's
+receipt, takes the lock, reads the record again and loads the native steps,
+each once; after it the step gives the lock back. No handle of this step
+reaches the Git program: each is opened without inheritance.
 
 ``at_host_start`` raises no error into the host's start. A stop of the
 process (``KeyboardInterrupt``, ``SystemExit``) passes through it.
@@ -243,6 +246,7 @@ class _Budget:
 
     @contextmanager
     def aside(self):
+        """Time that does not count as search: one Git command, or one deletion. Never one inside another."""
         self.since = self.clock()
         try:
             yield
@@ -263,7 +267,7 @@ class _Bounded:
     Every listing, open, look at a kind and deletion of a run goes through
     here, also the open of the store folder. So after an operation that took
     the rest of the time, whether it worked or failed, no other begins.
-    ``close`` has no check: a handle is always given back.
+    ``close`` has no check and raises no error: a handle is always given back.
     """
 
     def __init__(self, api, budget):
@@ -292,7 +296,10 @@ class _Bounded:
         self._api.delete(handle)
 
     def close(self, handle):
-        self._api.close(handle)
+        try:
+            self._api.close(handle)
+        except OSError:
+            pass  # It stays open until the host ends. The other handles are still given back.
 
 
 def _walk(api, handle, *, top=True, trail=()):
@@ -521,6 +528,7 @@ def _run(api, store, data_dir, record, clock, log):
 
     reason, refused = "", set()  # The source folders that could not be listed in this run.
     try:
+        budget.deadline()  # The first write of the record can have taken the time of the whole step.
         with ExitStack() as stack:
             top = stack.enter_context(_held(api, store))
             try:
@@ -618,8 +626,6 @@ def _at_host_start(data_dir, clock, log):
     if (not (root / RECEIPT).is_file()
             or same(store) not in {same(root / SOURCE_STORE), same(root / EARLIER_SOURCE_STORE)}):
         return None  # Not an installation from the setup file, or a store elsewhere: never touched.
-    if record["version"] != __version__:
-        record.update(version=__version__, complete=False, runs=0, tries={}, next=None)  # The mark stays.
     from .reset import repair_lock
     with ExitStack() as stack:
         try:
@@ -627,6 +633,13 @@ def _at_host_start(data_dir, clock, log):
             stack.enter_context(repair_lock(data_dir))
         except (RuntimeError, ValueError, OSError):
             return None  # Another host or a reset uses this data folder.
+        # The record again, under the lock: another host of this data folder can
+        # have had its run since the first read. Its change mark must not be lost.
+        record = read(data_dir)
+        if record["version"] == __version__ and record["complete"]:
+            return None
+        if record["version"] != __version__:
+            record.update(version=__version__, complete=False, runs=0, tries={}, next=None)  # The mark stays.
         return _run(_steps(), os.path.abspath(store), data_dir, record, clock, log)
 
 

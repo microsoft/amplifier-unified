@@ -1570,7 +1570,7 @@ After a complete pass a start of the same app version reads that file and does
 nothing more. The first start of an app version lists every folder of every
 object outside `.git` and starts no Git on a store with no `__pycache__`
 folder. An object that has such a folder costs more: the step lists every
-folder below its `.git` for links and starts two Git commands. One run has
+folder below its `.git` for links and starts at most two Git commands. One run has
 these bounds: 20,000 listings, 400,000 entries, 3 seconds of search, 5 seconds
 for one Git command, 8 seconds in all (ending a Git that passed its limit can
 add one second).
@@ -1579,11 +1579,16 @@ No native step of a run begins after those 8 seconds: every listing, open,
 look at a kind and deletion goes through one wrapper (`_Bounded`) that checks
 the limit first. The look for Git into each folder of PATH, each Git command
 and the write of a change mark have the same check, and a Git command is
-started only when half a second is left. So after an operation that took the rest of the time, whether it
-worked or failed, the run only gives its handles back and writes the record a
-last time. One operation has no time limit of its own, and neither has the
-first check of the folders above the store. At its limit the step ends the Git
-program that it started and stops waiting; the installation's
+started only when half a second is left. The check of the folders above the store does not begin after the
+limit either. So after an operation that took the rest of the time, whether it
+worked or failed, the run only gives its handles back, writes the record a
+last time and writes its one line into the log. One operation has no time
+limit of its own. The limit counts from the start of a run: before it the step
+reads its record, looks for setup's receipt, takes the lock, reads the record
+again and loads the native steps, each once (the second read is under the
+lock, so a run never writes back a change mark that another host's run has
+replaced); after it the step gives the lock back. At its limit
+the step ends the Git program that it started and stops waiting; the installation's
 `git\cmd\git.exe` is Git's starter program, so the Git program behind it can
 run on until its read ends. It only reads, and that object is left.
 

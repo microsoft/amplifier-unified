@@ -411,14 +411,19 @@ folder. Never widen that rule, and keep "any doubt leaves the object": a link
 that the listing finds anywhere in the object or below its `.git` means that
 Git does not run. Every native step of a run goes through `_Bounded`, which
 lets none begin after the limit of the whole step; give a new step to that
-wrapper, never a call beside it. It
-runs only in the host that the Windows task started, before that host takes
+wrapper, never a call beside it. Any other operation that you add to a run
+gets the same check before it begins, and a place in the case that makes each
+operation of a run the slow one
+(`test_after_an_operation_that_took_the_rest_of_the_time_nothing_else_begins`).
+It runs only in the host that the Windows task started, before that host takes
 its own lock, with that lock held alone; do not call it later in the start or
 from another process. Its limits are stated in the setup design ("Repair of a
 source store object that holds bytecode"). It imports `_Native` from
 `windows_removal` and does not copy it: a change of those steps must keep
 `tests/test_source_store_repair_native.py`. The record's change mark is an
-input of `update_inventory_index.signature`. A run writes the record first; a
+input of `update_inventory_index.signature`. A run works with the record that
+it read after it got the lock, never with an earlier read: another host can
+have written a new mark meanwhile. A run writes the record first; a
 record that cannot be written means that the store is not looked at. A run
 writes a new mark before its first deletion; a mark that cannot be written
 means no deletion. Keep the mark random: a count repeats after a lost record,

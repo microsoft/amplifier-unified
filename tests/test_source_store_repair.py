@@ -877,6 +877,58 @@ def test_no_native_step_begins_at_the_limit_and_a_handle_is_always_given_back():
     steps.close(1)
     assert begun == ['close']
 
+    def refuses(handle):
+        raise OSError(6, 'Windows says that the handle is not valid')
+    api.close = refuses
+    steps.close(1)  # A handle that cannot be given back raises nothing.
+
+
+async def test_a_handle_that_cannot_be_given_back_does_not_keep_the_others_or_stop_the_run(installation):
+    target = await broken(installation)
+    real, closed = installation.api.close, []
+
+    def close(handle):
+        real(handle)
+        closed.append(handle)
+        raise OSError(6, 'Windows says that the handle is not valid')
+    installation.api.close = close
+    try:
+        result = installation.start()
+    finally:
+        installation.api.close = real
+    assert facts(result, 'files', 'folders', 'repaired', 'later', 'complete') == (2, 1, 1, 0, True)
+    assert len(closed) > 10 and target.verify() == 'accepted'
+    assert installation.lines[-1].endswith(' ms=' + str(result['ms']) + '.')  # No reason: the run was whole.
+    if installation.steps:
+        assert not installation.steps.handles  # Each handle was given back.
+
+
+async def test_the_record_is_read_again_under_the_lock_and_another_hosts_change_mark_is_not_lost(
+        installation, monkeypatch):
+    """Two hosts of one data folder start together. The second read its record before the first wrote.
+
+    The first repairs and writes a new change mark. The second then gets the lock. It must take the
+    record as it is now: with the record that it read before the lock it would find nothing to delete
+    and write the earlier mark back, and the update check would keep its saved rows.
+    """
+    from amplifier_web import reset
+    target = await broken(installation)
+    real, seen = reset.repair_lock, []
+
+    @contextmanager
+    def after_another_hosts_run(home, **options):
+        with monkeypatch.context() as patch:
+            patch.setattr(reset, 'repair_lock', real)
+            assert facts(installation.start(), 'files', 'complete', 'change') == (2, True, True)
+        seen.append((mark(installation), record(installation)))
+        with real(home, **options):
+            yield
+    monkeypatch.setattr(reset, 'repair_lock', after_another_hosts_run)
+    assert installation.start() is None  # The record under the lock says: this app version is complete.
+    assert len(seen) == 1 and seen[0][0] is not None
+    assert (mark(installation), record(installation)) == seen[0]  # Not written again.
+    assert len(installation.lines) == 1 and target.verify() == 'accepted'
+
 
 def test_time_in_git_and_in_a_deletion_does_not_count_as_search():
     now = [0.0]
@@ -1133,22 +1185,28 @@ async def test_an_object_that_became_a_link_after_the_listing_of_its_source_is_l
 
 
 NATIVE_STEPS = ('root', 'children', 'open', 'kind', 'delete')
+WRITE, CHECK = 'a write of the record', 'the check of the folders above the store'
+LOOK, GIT = 'a look for Git into a folder of PATH', 'a Git command'
 
 
 class Recorded:
-    """The steps of the fixture, with every step that begins written down. One step can be made slow."""
+    """The steps of the fixture, with every operation that begins written down. One operation can be made slow."""
 
     def __init__(self, api, now, events):
         self.api, self.now, self.events = api, now, events
         self.count, self.slow, self.fail = 0, None, False
 
-    def _step(self, name, function, *arguments, **options):
+    def begin(self, name, error=None):
+        """An operation of a run begins. The slow one takes as long as the whole step may; then it works or fails."""
         self.count += 1
         self.events.append(name)
         if self.count == self.slow:
-            self.now[0] += repair.TOTAL_SECONDS  # This one step takes as long as the whole step may.
-            if self.fail:
-                raise PermissionError(13, 'another program holds it')
+            self.now[0] += repair.TOTAL_SECONDS
+            if self.fail and error is not None:
+                raise error
+
+    def _step(self, name, function, *arguments, **options):
+        self.begin(name, PermissionError(13, 'another program holds it'))
         return function(*arguments, **options)
 
     def root(self, path):
@@ -1171,36 +1229,58 @@ class Recorded:
         self.api.close(handle)
 
 
-async def test_after_a_step_that_took_the_rest_of_the_time_nothing_else_begins(
+async def test_after_an_operation_that_took_the_rest_of_the_time_nothing_else_begins(
         installation, monkeypatch, tmp_path, capsys):
-    """Every native step of a real repair of two objects, one after the other, is the slow one.
+    """Every operation of a real repair of two objects, one after the other, is the slow one.
 
-    Once it works slowly, once it fails slowly. After it the run may give handles back and write the
-    record a last time. It may begin no listing, open, look at a kind, deletion, look for Git into a
-    folder of PATH, Git command or other write of the record.
+    The operations of a run: each write of the record, the check of the folders above the store, each
+    native step, each look for Git into a folder of PATH, each Git command. Once the slow one works, once
+    it fails. After it the run may give handles back and write the record a last time. It may begin
+    nothing else.
     """
     targets = [await broken(installation), await broken(installation, repository(tmp_path / 'another-repository'))]
     now, events = [0.0], []
     recorded = Recorded(installation.api, now, events)
     monkeypatch.setattr(repair, '_steps', lambda: recorded)
-    real = SimpleNamespace(program=repair._program, save=repair._save, popen=subprocess.Popen)
+    real = SimpleNamespace(program=repair._program, save=repair._save, popen=subprocess.Popen, held=repair._held)
+    # The first folder of PATH has no Git: a look that finds nothing. The second has it.
+    monkeypatch.setenv('PATH', os.pathsep.join(
+        [str(installation.outside), str(Path(repair._program()).parent), os.environ['PATH']]))
 
-    def noted(name, function):
-        def call(*arguments, **options):
-            events.append(name)
-            return function(*arguments, **options)
-        return call
+    def save(data_dir, value):
+        recorded.begin(WRITE, OSError(28, 'the disk is full'))
+        return real.save(data_dir, value)
 
     def look_for_git(check):
-        def then_note():
+        def then_look():
             check()  # At the limit this raises, and no folder of PATH is looked into.
-            events.append('a look for Git into a folder of PATH')
-        return real.program(then_note)
+            recorded.begin(LOOK)
+        return real.program(then_look)
+
+    def popen(*arguments, **options):
+        recorded.begin(GIT, OSError(8, 'the program cannot be started'))
+        return real.popen(*arguments, **options)
+
+    if NATIVE:  # The real check: windows_files.directory for the store folder, with the store as its own root.
+        from amplifier_web import windows_files
+        store, directory = os.path.normcase(str(windows_files.address(installation.store))), windows_files.directory
+
+        def checked(path, *, owned_root, create=False):
+            if os.path.normcase(str(path)) == store == os.path.normcase(str(owned_root)):
+                recorded.begin(CHECK, PermissionError(5, 'a folder above the store is refused'))
+            return directory(path, owned_root=owned_root, create=create)
+        monkeypatch.setattr(windows_files, 'directory', checked)
+    else:  # The stand-in has no such check. Its place is directly before the open of the store folder.
+        @contextmanager
+        def held(api, path):
+            recorded.begin(CHECK, PermissionError(13, 'a folder above the store is refused'))
+            with real.held(api, path) as handle:
+                yield handle
+        monkeypatch.setattr(repair, '_held', held)
     monkeypatch.setattr(repair, '_program', look_for_git)
-    monkeypatch.setattr(repair, '_save', noted('a write of the record', real.save))
+    monkeypatch.setattr(repair, '_save', save)
     monkeypatch.setattr(repair, 'subprocess', SimpleNamespace(
-        Popen=noted('a Git command', real.popen), PIPE=subprocess.PIPE, DEVNULL=subprocess.DEVNULL,
-        TimeoutExpired=subprocess.TimeoutExpired))
+        Popen=popen, PIPE=subprocess.PIPE, DEVNULL=subprocess.DEVNULL, TimeoutExpired=subprocess.TimeoutExpired))
 
     def run(slow=None, fail=False):
         (installation.data / 'updates' / repair.RECORD).unlink(missing_ok=True)
@@ -1212,22 +1292,30 @@ async def test_after_a_step_that_took_the_rest_of_the_time_nothing_else_begins(
         return repair.at_host_start(installation.data, clock=lambda: now[0], log=installation.lines.append)
 
     assert facts(run(), 'repaired', 'files', 'folders', 'git', 'complete') == (2, 4, 2, 4, True)
-    steps = [name for name in events if name in NATIVE_STEPS]
-    assert set(steps) == set(NATIVE_STEPS) and events.count('a Git command') == 4
-    # The record is written three times in a run that deletes: first of all, with the new change mark
-    # before the first deletion, and at the end.
-    assert events.count('a look for Git into a folder of PATH') >= 2 and events.count('a write of the record') == 3
+    plain = [name for name in events if name != 'close']
+    # A run that deletes writes the record three times: first of all, with the new change mark before the
+    # first deletion, and at the end. The check of the folders above the store comes directly after the first.
+    assert plain[:3] == [WRITE, CHECK, 'root'] and plain[-1] == WRITE and plain.count(WRITE) == 3
+    assert set(plain) == {*NATIVE_STEPS, WRITE, CHECK, LOOK, GIT}
+    assert plain.count(CHECK) == 1 and plain.count(GIT) == 4 and plain.count(LOOK) == 4  # Two for each object.
     wrong = []
     for fail in (False, True):
-        for slow in range(1, len(steps) + 1):
+        for slow, name in enumerate(plain, 1):
             run(slow, fail)
-            position = [index for index, name in enumerate(events) if name in NATIVE_STEPS][slow - 1]
-            after = [name for name in events[position + 1:] if name != 'close']
-            if after != ['a write of the record']:
-                wrong.append((('fails' if fail else 'works'), slow, events[position], after[:6]))
-    assert not wrong, f'{len(wrong)} of {2 * len(steps)}: {wrong[:5]}'
+            begun = [index for index, event in enumerate(events) if event != 'close']
+            after = [event for event in events[begun[slow - 1] + 1:] if event != 'close']
+            # After the last write nothing comes. A first write that fails: the store is not looked at.
+            expected = [] if slow == len(plain) or (slow == 1 and fail) else [WRITE]
+            # The record of the run can be read, also after a last write that failed. Without a first write: none.
+            written = repair.read(installation.data)['runs'] == (0 if slow == 1 and fail else 1)
+            if after != expected or not written:
+                wrong.append((('fails' if fail else 'works'), slow, name, after[:6], written))
+    assert not wrong, f'{len(wrong)} of {2 * len(plain)}: {wrong[:5]}'
+    native = sum(name in NATIVE_STEPS for name in plain)
     with capsys.disabled():
-        print(f'\nEVERY STEP: {len(steps)} native steps in a repair of two objects; each was the slow one twice.')
+        print(f'\nEVERY OPERATION: {len(plain)} operations in a repair of two objects ({native} native steps, '
+              f'3 writes of the record, the check of the folders above the store, 4 looks for Git, '
+              f'4 Git commands); each was the slow one twice.')
 
 
 async def test_a_link_that_appears_between_the_listing_and_git_is_not_deleted_through(installation, monkeypatch):

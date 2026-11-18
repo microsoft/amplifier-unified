@@ -4,8 +4,9 @@
 ``windows_removal`` and does not copy its steps. It deletes files, so it
 rests on what each step does: a name comes from the listing of an open
 handle; an entry is opened relative to its parent's handle, as itself; a link
-of any kind is seen as a link and never entered; an open folder cannot be
-renamed or replaced; a file that another program has open refuses; a deletion
+of any kind (a junction, a symbolic link to a folder or to a file) is seen as a
+link on its handle and never entered; an open folder cannot be renamed or
+replaced; a file that another program has open refuses; a deletion
 goes through the handle. A change of one of these in ``windows_removal`` must
 fail here.
 
@@ -119,6 +120,61 @@ def test_each_native_step_that_the_repair_uses(installation):  # noqa: F811
         'after the two deletions the folder lists': ['busy.pyc', 'inner', 'junction'],
     }
     assert snapshot(outside) == before and (store / 'plain' / 'inner' / 'deep.txt').read_text() == 'deep'
+
+
+def test_a_link_of_each_kind_is_a_link_on_its_handle_in_each_way_that_the_repair_opens_an_entry(
+        installation):  # noqa: F811
+    """The repair opens a folder with ``enter=True`` (with and without delete) and a file with ``enter=False``.
+
+    Then it reads the kind on the handle and goes on only for "folder" or "file". A junction, a symbolic
+    link to a folder and a symbolic link to a file must each be "link" there. A second name of a file
+    elsewhere (a hard link) is a plain file: the deletion takes this name only.
+    """
+    api = repair._steps()
+    store, outside = installation.store, installation.outside
+    (store / 'plain').mkdir()
+    installation.link(outside, store / 'plain' / 'junction')
+    os.symlink(outside, store / 'plain' / 'folder-link', target_is_directory=True)
+    os.symlink(outside / 'precious.txt', store / 'plain' / 'file-link.pyc')
+    os.link(outside / 'precious.txt', store / 'plain' / 'second-name.pyc')
+    before, facts = snapshot(outside), {}
+    try:
+        with repair._held(api, str(store)) as top:
+            plain = api.open(top, 'plain', enter=True, delete=False)
+            try:
+                listed = dict(api.children(plain))
+                for name in sorted(listed):  # (the link attribute, the folder attribute)
+                    facts[name] = (bool(listed[name] & 0x400), bool(listed[name] & 0x10))
+                for name, enter, delete in (
+                        ('junction', True, False), ('junction', True, True),
+                        ('folder-link', True, False), ('folder-link', True, True),
+                        ('file-link.pyc', False, True), ('second-name.pyc', False, True)):
+                    handle = api.open(plain, name, enter=enter, delete=delete)
+                    try:
+                        facts[name, enter, delete] = api.kind(handle)
+                        if name == 'second-name.pyc':
+                            api.delete(handle)
+                    finally:
+                        api.close(handle)
+                facts['after the deletion the folder lists'] = sorted(dict(api.children(plain)))
+            finally:
+                api.close(plain)
+    finally:
+        for remove, name in ((os.unlink, 'file-link.pyc'), (os.rmdir, 'folder-link')):
+            try:
+                remove(store / 'plain' / name)
+            except OSError:
+                pass
+    assert facts == {
+        'junction': (True, True), 'folder-link': (True, True),
+        'file-link.pyc': (True, False), 'second-name.pyc': (False, False),
+        ('junction', True, False): 'link', ('junction', True, True): 'link',
+        ('folder-link', True, False): 'link', ('folder-link', True, True): 'link',
+        ('file-link.pyc', False, True): 'link', ('second-name.pyc', False, True): 'file',
+        'after the deletion the folder lists': ['file-link.pyc', 'folder-link', 'junction'],
+    }
+    # Nothing behind a link changed, and the file elsewhere keeps its content under its own name.
+    assert snapshot(outside) == before and (outside / 'precious.txt').read_text(encoding='utf-8') == 'keep me'
 
 
 def test_the_store_folder_is_refused_when_it_is_a_link_or_absent(installation):  # noqa: F811
