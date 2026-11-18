@@ -126,70 +126,8 @@ class InstallationGuidanceTests(unittest.TestCase):
         self.assertLess(number(without), number(first))
         self.assertLessEqual(number(first), number(tested))
         self.assertLessEqual(number(tested), number(current))
-        # Uninstall: the questions and the three buttons are the product's own, and each answer has its result.
-        # A sentence of the product can continue in the next string of its source.
-        consumer = re.sub(r'"\s*\n\s*"', "", source("amplifier_web/windows_consumer.py"))
-        item = section.split("\n- **Uninstall:**", 1)[1].split("\n\nThe [native Windows design", 1)[0]
-        opening, *bullets = re.split(r"\n  - \*\*", item)
-        bullets[-1], rest = bullets[-1].split("\n\n", 1)
-        answers = {bullet.split("**", 1)[0]: " ".join(bullet.split("**", 1)[1].split()) for bullet in bullets}
-        opening, rest = " ".join(opening.split()), " ".join(rest.split())
-        self.assertEqual(list(answers), ["No", "Yes", "Cancel"])  # The three buttons of the first question.
-        first = re.search(r'(Do you also want to delete [^"\\]+\?)', consumer).group(1)
-        second = re.search(r'(Delete everything that Amplifier keeps in this folder\?)', consumer).group(1)
-        self.assertTrue(opening.endswith(f'Amplifier first asks: "{first}"'), opening)
-        for button, product, results in (
-                ("No", ("Select No to keep them.",),
-                 ("uninstalls Amplifier and keeps the folder.",
-                  "Your chats, settings and accounts stay there, together with the program files")),
-                ("Yes", ("Select Yes to delete them, together with the program files.",
-                         "Amplifier asks you once more before it deletes anything.", "your stored keys.",
-                         "files that Amplifier or you saved in its workspace", "This cannot be undone.",
-                         "Select No to change nothing. Amplifier stays installed."),
-                 (f'leads to a second question: "{second}"',
-                  "**Yes** there uninstalls Amplifier and deletes your chats, settings, saved accounts and stored keys, "
-                  "the files that Amplifier or you saved in its workspace folder, and the program files.",
-                  "This cannot be undone.", "**No** there changes nothing.")),
-                ("Cancel", ("Select Cancel to keep Amplifier installed.",),
-                 ("changes nothing. Amplifier stays installed.",))):
-            with self.subTest(button=button):
-                for sentence in product:
-                    self.assertIn(sentence, consumer)
-                self.assertTrue(answers[button].startswith(results[0]), answers[button])
-                for result in results[1:]:
-                    self.assertIn(result, answers[button])
-        # A delete is said only under Yes.
-        for button in ("No", "Cancel"):
-            self.assertNotIn("delete", answers[button])
-        for product, stated in (
-                ("Select Yes to stop that work and uninstall now.",
-                 "If Amplifier is working on a chat, it asks before it stops that work."),
-                ("Its entries in the Start menu and the Apps list will be removed.",
-                 "An uninstall stops Amplifier and removes it from the Start menu and the Apps list."),
-                # Windows asks only when it trusts the certificate.
-                ("Windows asks whether to delete the certificate",
-                 "If Windows asks whether to delete the certificate, select **Yes**."),
-                ("Amplifier is uninstalled. It no longer runs, and it no longer starts when you sign in.",
-                 'After a delete, Amplifier says "Amplifier is uninstalled."'),
-                ("When you close this message, Amplifier starts to remove its last program files.",
-                 "When you close that message, it starts to remove its last program files and then the folder."),
-                # A delete that stopped: the person's next step, and that Amplifier stays closed.
-                ("Close other programs or restart this PC. Then uninstall Amplifier again to finish. "
-                 "Until then Amplifier does not open.",
-                 "If Amplifier says that it could not finish, close other programs or restart the PC, then uninstall "
-                 "again. Until then Amplifier does not open."),
-                ("The folder itself stays, because it holds entries that are not Amplifier's.",
-                 "A file or folder directly in the Amplifier folder whose name Amplifier does not use stays, and then "
-                 "the folder stays too."),
-                # The earlier question: an earlier launcher, or a folder without setup's record.
-                ("Your chats, settings, accounts and the program files stay in this folder:",
-                 'Amplifier can also ask only "Uninstall Amplifier?" with **Yes** and **No**, for example in an '
-                 "installation from an earlier setup file. There, **Yes** uninstalls and leaves the folder, and **No** "
-                 "changes nothing.")):
-            with self.subTest(stated=stated):
-                self.assertIn(product, consumer)
-                self.assertIn(stated, rest)
-        self.assertNotIn("It leaves the folder with your chats", plain)
+        # The item "Uninstall" has its own case, which compares every sentence with what the product shows:
+        # tests/test_windows_uninstall.py, test_readme_uninstall_item_is_sentence_for_sentence_what_the_product_shows.
         self.assertNotIn("Native Windows is not yet supported", readme)
         # The design stays a record of what is tested, not a support claim.
         self.assertIn("(docs/design/native-windows-installation.md)", section)

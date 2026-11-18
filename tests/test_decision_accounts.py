@@ -441,7 +441,7 @@ def test_catalog_helper_failure_is_cached_without_credentials_or_parent_imports(
     calls = []
     def fail(command, **kwargs):
         calls.append((command, kwargs))
-        raise subprocess.TimeoutExpired(command, 10)
+        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
     monkeypatch.setenv("SYNTHETIC_PRIVATE_API_KEY", "must-not-cross")
     monkeypatch.setattr(accounts.subprocess, "run", fail)
     try:
@@ -470,12 +470,12 @@ def test_catalog_failure_facts_survive_probe_without_private_output(monkeypatch,
     calls = []
     def run(command, **kwargs):
         calls.append(kwargs)
-        assert kwargs["timeout"] == 10 and kwargs["check"] is True
+        assert kwargs["timeout"] == accounts._CATALOG_START_SECONDS == 120 and kwargs["check"] is True
         assert kwargs["creationflags"] == getattr(subprocess, "CREATE_NO_WINDOW", 0)
         if case == "spawn":
             raise OSError(errno.EACCES, secret.decode())
         if case == "timeout":
-            raise subprocess.TimeoutExpired(command, 10, output=secret, stderr=secret)
+            raise subprocess.TimeoutExpired(command, kwargs["timeout"], output=secret, stderr=secret)
         if case == "exit":
             raise subprocess.CalledProcessError(37, command, output=secret, stderr=secret)
         if case == "subprocess":
@@ -522,6 +522,98 @@ def test_catalog_valid_empty_and_copy_semantics(monkeypatch, real_catalogs):
             assert len(calls) == 1
         finally:
             accounts._catalog_snapshot.cache_clear()
+
+
+def test_a_first_start_of_the_catalog_helper_as_slow_as_the_slowest_measured_one_gives_the_catalog(
+        monkeypatch, real_catalogs):
+    """In a new worker environment the first start of the helper compiles the provider packages. Of 85 such
+    starts that ``tests/test_windows_chat_setup.py`` measured on a hosted Windows runner, the slowest took
+    28.44 s (run 44203691661). A start over the limit fails the start of the conversation.
+
+    The helper here is made up. It answers only a caller that waits at least as long as that start took.
+    """
+    import subprocess
+    slowest, limits = 28.44, []
+
+    def run(command, **kwargs):
+        limits.append(kwargs["timeout"])
+        if kwargs["timeout"] < slowest:
+            raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+        return subprocess.CompletedProcess(command, 0, stdout=b'{"provider-test": "hooks-test"}')
+
+    monkeypatch.setattr(accounts.subprocess, "run", run)
+    accounts._catalog_snapshot.cache_clear()
+    try:
+        assert accounts.catalogs() == {"provider-test": "hooks-test"}
+        assert limits == [accounts._CATALOG_START_SECONDS]   # one start, with the app's limit
+    finally:
+        accounts._catalog_snapshot.cache_clear()
+
+
+def test_a_catalog_helper_that_does_not_end_is_ended_at_the_limit(monkeypatch, real_catalogs, tmp_path):
+    """A real helper, started as the app starts it. It connects to this case, sends one byte, and then waits
+    until the connection ends. Only that one process has its end of the connection. So the byte shows that
+    the helper ran. The end of the connection, which this case does not cause, shows that the process ended.
+
+    The limit is 4 s here. The start must return not before it, and in less than 9 s. So a start with another
+    limit (the 10 s of before, or none) fails this case.
+
+    The CI job ``.github/workflows/windows-path-length.yml`` also runs this case on native Windows, with the
+    python.exe of an environment that uv made, as a worker environment has it.
+    """
+    import socket
+    import threading
+    limit = 4
+    listener = socket.create_server(("127.0.0.1", 0))
+    listener.settimeout(60)
+    script = tmp_path / "catalog.py"
+    script.write_text("import socket\n"
+                      f"link = socket.create_connection(('127.0.0.1', {listener.getsockname()[1]}))\n"
+                      "link.sendall(b'r')\n"
+                      "link.recv(1)\n", encoding="utf-8")
+    monkeypatch.setattr(accounts, "Path", lambda _: SimpleNamespace(with_name=lambda _: script))
+    monkeypatch.setattr(accounts, "_CATALOG_START_SECONDS", limit)
+    accounts._catalog_snapshot.cache_clear()
+    outcome, link = [], None
+
+    def start():
+        try:
+            outcome.append(accounts.catalogs())
+        except ValueError as error:
+            outcome.append(error)
+
+    # In a thread, so that a start that does not return fails this case with a message.
+    call = threading.Thread(target=start, daemon=True)
+    call.start()
+    try:
+        try:
+            link, _ = listener.accept()
+        except TimeoutError:
+            pytest.fail(f"The helper did not connect to this case in 60 s. The start gave: {outcome}")
+        link.settimeout(60)
+        assert link.recv(1) == b"r"   # the helper runs
+        call.join(90)
+        assert not call.is_alive(), "The start of a helper that does not end did not return in 90 s."
+        assert len(outcome) == 1 and isinstance(outcome[0], ValueError), outcome
+        facts = outcome[0].diagnostic_facts["decisionCatalog"]
+        assert facts["category"] == "timeout", facts
+        assert limit * 1000 <= facts["elapsedMs"] < 9000, facts
+        # The helper process ended: its connection ended, and this case did not end it.
+        try:
+            ended = link.recv(1) == b""
+        except ConnectionError:
+            ended = True
+        except TimeoutError:
+            ended = False
+        assert ended, "The helper still had its connection 60 s after the start returned."
+    finally:
+        # A helper that still runs ends when this case ends the connection. Then the start returns.
+        for used in (link, listener):
+            if used is not None:
+                used.close()
+        call.join(60)
+        accounts._catalog_snapshot.cache_clear()
+        assert not call.is_alive(), "The start still runs 60 s after this case ended the helper's connection."
 
 
 @pytest.mark.parametrize("value", [

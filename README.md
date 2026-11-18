@@ -121,16 +121,28 @@ Limits of this preview:
     undone. **No** there changes nothing.
   - **Cancel** changes nothing. Amplifier stays installed.
 
-  If Amplifier is working on a chat, it asks before it stops that work. An
-  uninstall stops Amplifier and removes it from the Start menu and the Apps
-  list. If Windows asks whether to delete the certificate, select **Yes**.
+  These are the results of an uninstall that finishes. If Amplifier finds that
+  it is working on a chat, it asks before it stops that work. An uninstall
+  stops Amplifier and removes it from the Start menu and the Apps list. If
+  Windows asks whether to delete a certificate, select **Yes** each time.
 
   After a delete, Amplifier says "Amplifier is uninstalled." When you close
   that message, it starts to remove its last program files and then the
   folder. A file or folder directly in the Amplifier folder whose name
-  Amplifier does not use stays, and then the folder stays too. If Amplifier
-  says that it could not finish, close other programs or restart the PC, then
-  uninstall again. Until then Amplifier does not open.
+  Amplifier does not use stays, and then the folder stays too. If that last
+  step does not finish, the folder stays, and some program files can stay in
+  it.
+
+  An uninstall can stop before its end. If Amplifier then shows a message,
+  the message says what happened and what to do next. If it says that
+  Amplifier "could not begin to delete its folder", that uninstall deleted
+  nothing in the folder. If it says that Amplifier "could not finish its
+  removal from this PC", or that some of your chats, settings or saved
+  accounts "could not be deleted", a part of the folder can already be
+  deleted: do not open Amplifier, and uninstall again. At that next uninstall,
+  the first question can be another one: "The removal of Amplifier from this
+  PC did not finish." **Yes** there leads to the second question above, and
+  **No** changes nothing.
 
   Amplifier can also ask only "Uninstall Amplifier?" with **Yes** and **No**,
   for example in an installation from an earlier setup file. There, **Yes**

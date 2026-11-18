@@ -52,17 +52,39 @@ resized gets the remaining room. Keyboard users can focus a divider and use
 arrows (20 pixels), Home (minimum), or End (maximum). On narrow windows, the
 canvas covers the workspace instead of squeezing both panes.
 
-Canvas has one document navigation row: **Overview** and the open documents. Overview
-stays at the leading edge while the document strip scrolls; its label contracts
-to an icon without resizing the strip. **Open documents** offers the same open
-items in a bounded, searchable list, with named close actions. Each tab also has
-an always-visible **Close tab [title]** button beside its title. Closing a tab
-keeps its saved output. Arrow keys move tab focus; Enter selects and Delete closes
-a focused document tab.
+Canvas offers **Auto**, **Tabs** and **Compact** document navigation. Auto is the
+default: it uses Tabs when the outer Canvas panel is wide and tall, and Compact
+when it is narrow or short. Separate switching boundaries avoid oscillation
+near a boundary; viewer content and Details do not determine that measurement.
+**More canvas options → Navigation** keeps all three choices available in both
+layouts. Tabs or Compact overrides Auto across resizing and reloads in this
+browser. Auto restores adaptation. If browser storage is unavailable, the
+choice remains usable for this visit but may not survive reload.
 
-The artifact's compact action row keeps version identity, Copy, Download and
-**Details** together. Details retains exact-version, renderer, source and
-format-specific controls. Images, PDFs and diagrams retain their dedicated tools.
+Tabs keeps the named Overview icon at the leading edge beside the open documents.
+The left/right scroll buttons and wheel over the strip scroll without selecting
+another document. Ctrl+wheel stays available for browser zoom; wheel input over
+the viewer retains normal document scrolling. Arrow keys move tab focus; Enter
+selects and Delete closes the focused document. Compact replaces the strip with
+one current-document picker and a distinct close-current-document button.
+**Open documents** offers the same open items in both layouts: full-title search,
+matching and total counts, no-match feedback and inline named close buttons.
+Closing a document keeps its saved output.
+
+Automatic switching waits for open navigation menus, pending operations and
+active pointer/key interaction. After a short quiet period, focus on a tab that
+will be hidden transfers to the stable document picker. Layout changes retain
+the selected document, mounted viewer/iframe, reading position, unsaved edits,
+exact-version selection and renderer lease. They do not reload content or
+reconnect a tool server.
+
+The compact action row keeps version identity, Preview/Source where applicable,
+Download and **Details** together without repeating the document title. Details
+retains Copy, Refresh, exact-version, renderer, source and format-specific
+controls. Consequential pending/error/unconfirmed and retained-preview Load
+feedback remains visible with Details closed. Mouse header controls are compact;
+touch controls and the document list retain 44px targets. Images, PDFs and
+diagrams retain their dedicated tools.
 Rendering failures stay visible when Details is closed. HTML, browser and MCP
 App views retain their unpadded content area; documents retain readable margins.
 
@@ -72,14 +94,13 @@ in the originating browser tab, scoped to the chat, across document visits and
 Canvas hide/reopen. The overview has one bounded scroll region through Publishing;
 Outputs is not a second nested scroller. The container-header Canvas button hides
 or shows the panel without closing the selected artifact or discarding edits.
-The labeled **Close Canvas** button in the Canvas header uses that same visibility
+The named hide icon in the Canvas header uses that same visibility
 operation to return to chat, preserving open tabs, saved versions and unsaved
-viewer state. Narrow panes place the header actions below the document strip so
-close controls keep their 44px targets. Reopen with the container-header Canvas
+viewer state. Reopen with the container-header Canvas
 button; reopen a closed document from Overview's saved outputs.
 
-The short Overview-label transition respects `prefers-reduced-motion`, including
-runtime changes. This revision has no separate app-level Less motion setting.
+Overview stays a fixed icon rather than animating a second title. This revision
+has no separate app-level Less motion setting.
 
 **Focus canvas** fills the space below the container header; **Exit canvas focus** returns to the split
 layout. Escape also exits when focus is in the host UI (embedded apps may consume
@@ -89,7 +110,9 @@ still follows the viewer's normal lifecycle. The container-header Canvas toggle
 remains reachable in focused and narrow views. A nested dialog handles Escape
 before the focused Canvas does.
 
-All layout controls use `view.update` and are available to agents:
+The following pane layout controls use `view.update` and are available to agents.
+Auto/Tabs/Compact navigation is a browser-local presentation preference, not a
+field in this table:
 
 | Patch field | Meaning |
 | --- | --- |
@@ -99,7 +122,7 @@ All layout controls use `view.update` and are available to agents:
 | `canvasFocused` | Full-frame view; false restores the split layout |
 | `canvasControlsPinned`, `canvasControlsExpanded` | Keep controls visible or reveal temporarily |
 
-Preferences persist in `/view`; browser snapshots in `/devices` include actual
+These `view.update` preferences persist in `/view`; browser snapshots in `/devices` include actual
 pane bounds and divider minimum/maximum/current widths. Closing the canvas clears
 full-frame mode while retaining preferred split widths.
 
@@ -143,10 +166,11 @@ controls, reuse the owning entry or record the necessary semantic difference.
 
 | Control / owner | Variants, state and reuse boundary | Accessibility / focused evidence |
 | --- | --- | --- |
-| Document close and panel dismissal: [src/canvas-library.jsx](https://github.com/microsoft/amplifier-client-web/blob/main/src/canvas-library.jsx) (`CanvasTabs.remove`), `shell-panels.jsx`, `canvas-experience.css` | The tab's visible close button and Open documents list share guarded `canvas.tabClose`; saved artifacts/versions remain. Labeled Close Canvas and the container-header toggle share `canvas.visibility`, retaining mounted viewers and open tabs. No new state owner or deletion action. | Named native buttons, 44px targets, keyboard focus and refused-close feedback; `canvas-close-browser.mjs`, `canvas-dirty-browser.mjs`, `canvas-overview.test.mjs`, `shell-panels.test.mjs`. |
+| Adaptive document navigation: [src/canvas-navigation.jsx](https://github.com/microsoft/amplifier-client-web/blob/main/src/canvas-navigation.jsx), `canvas-navigation.js`, `canvas-library.jsx`, `shell-panels.jsx` | Auto measures outer Canvas width and height with hysteresis; More exposes the browser-local override. Tabs scroll controls do not select documents; Compact has one picker. Switching retains viewer/iframe, dirty state, reading position, exact version and renderer lease. No second viewer or server preference. | Named controls, full-title search/counts/no-match feedback, inline 44px list-close targets and touch controls; menu/interaction deferral and focus handoff. Maintained `canvas-chrome-browser.mjs`, `canvas-close-browser.mjs`, `canvas-dirty-browser.mjs` exercise these boundaries; execution evidence remains separately bound to exact source. |
+| Document close and panel dismissal: [src/canvas-library.jsx](https://github.com/microsoft/amplifier-client-web/blob/main/src/canvas-library.jsx) (`CanvasTabs.remove`), `shell-panels.jsx`, `canvas-experience.css` | Visible tab, current-document and Open documents close buttons share guarded `canvas.tabClose`; saved artifacts/versions remain. The named hide icon and container-header toggle share `canvas.visibility`, retaining mounted viewers and open tabs. No new state owner or deletion action. | Named native buttons, compact mouse targets of at least 24px with separation, 44px touch/list targets, keyboard focus and refused-close feedback; `canvas-close-browser.mjs`, `canvas-dirty-browser.mjs`, `canvas-overview.test.mjs`, `shell-panels.test.mjs`. |
 | Compact exact-version card and disclosure: [src/inline-artifacts.jsx](https://github.com/microsoft/amplifier-client-web/blob/main/src/inline-artifacts.jsx) (`DocumentOutput`, `Preview`, `ArtifactLinks`), shared `artifact-file-details.jsx` | HTML, documents, diagrams and images share title/type/version/open/disclosure; image gallery and specialized renderer bodies remain distinct. File details reads the exact saved definition without mounting a preview: Copy full path and Copy relative path copy plain provenance paths, relative to the conversation's current working folder with its base shown. Saved-only artifacts explicitly have no backing path; outside-base paths have no relative copy. Download fetches retained bytes with visible refusal/start feedback, never executes HTML. Client-local placement, pending/error and explicit HTML reset are not generic card state. | Native disclosure/buttons, 44px targets, shared clipboard completion/error feedback and exact-version download; `tests/test_canvas_paths.py`, `tests/test_canvas_downloads.py`, `tests/web/generated-file-controls-browser.mjs`, plus `tests/test_artifact_presentation.py` and `tests/web/artifact-one-surface-browser.mjs`. |
-| Viewer controls: [src/canvas-controls.jsx](https://github.com/microsoft/amplifier-client-web/blob/main/src/canvas-controls.jsx), `canvas-viewer.jsx`, `canvas-workspace.jsx`, shared `artifact-file-details.jsx` | Existing renderer host, exact source binding, source/copy/download, portal placement and inline toolbar suppression. The primary Download action and File details reuse the same saved-version download owner as chat cards, bound to the running definition when an executable preview retains an older version; original-file reveal keeps its existing host/view guard. Refresh uses `canvas.views.inspect`; executable previews retain their running definition while discovering new versions. Explicit UI-only `canvas.views.loadVersion` binds both the outgoing view and exact incoming version, with visible reset/code consequences and dirty protection. Current/historical/retained, pending, failed and unconfirmed feedback stays visible. Live apps and websites retain their controls. No competing viewer/registry. | Native named Refresh/Load/Download buttons, live status, 44px targets and keyboard/dirty guards; `tests/test_canvas_views.py`, `tests/test_canvas_versions.py`, `generated-file-controls-browser.mjs`, `tests/web/canvas-refresh-browser.mjs`, `canvas-refresh-catchup-browser.mjs`. |
-| Canvas Details inspector: [src/shell-panels.jsx](https://github.com/microsoft/amplifier-client-web/blob/main/src/shell-panels.jsx), `canvas-experience.css` | The existing control portal stays mounted beside the reader at Canvas widths of 720px or more. Narrower panes use the same bounded right-hand sheet below the single navigation bar; only the covered reader is inert. The compact version/copy/download/Details row and format-specific viewers remain their existing owners. No new renderer or preference is introduced. | Named region, 44px controls, Escape/close focus restoration, retained header toggle and document navigation. [tests/shell-panels.test.mjs](https://github.com/microsoft/amplifier-client-web/blob/main/tests/shell-panels.test.mjs), `canvas-chrome-browser.mjs` geometry/old-top-band negative and `canvas-dirty-browser.mjs` retained-editor checks. |
+| Viewer controls: [src/canvas-controls.jsx](https://github.com/microsoft/amplifier-client-web/blob/main/src/canvas-controls.jsx), `canvas-viewer.jsx`, `canvas-workspace.jsx`, shared `artifact-file-details.jsx` | Existing renderer host, exact source binding, source/copy/download, portal placement and inline toolbar suppression. Primary Preview/Source and Download remain discoverable; routine Copy/Refresh and successful checks disclose in Details. Download and File details reuse the same saved-version owner as chat cards, bound to the running definition when an executable preview retains an older version; original-file reveal keeps its existing host/view guard. Refresh uses `canvas.views.inspect`; executable previews retain their running definition while discovering versions. Explicit UI-only `canvas.views.loadVersion` binds outgoing view and exact incoming version, with visible reset/code consequences and dirty protection. Historical identity, retained-preview, pending, failed and unconfirmed feedback remains visible without Details. Live apps and websites retain their controls. No competing viewer/registry. | Native named controls, compact mouse headers, 44px touch/Details/Load targets and keyboard/dirty guards; `tests/test_canvas_views.py`, `tests/test_canvas_versions.py`, `generated-file-controls-browser.mjs`, `tests/web/canvas-refresh-browser.mjs`, `canvas-refresh-catchup-browser.mjs`. |
+| Canvas Details inspector: [src/shell-panels.jsx](https://github.com/microsoft/amplifier-client-web/blob/main/src/shell-panels.jsx), `canvas-experience.css` | The existing control portal stays mounted beside the reader at Canvas widths of 720px or more. Narrower panes use the same bounded right-hand sheet below Canvas chrome; only the covered reader is inert. Primary version/Preview/Source/Download/Details and format-specific viewers remain their existing owners. No new renderer is introduced. | Named region, 44px inspector controls, Escape/close focus restoration, retained header toggle and document navigation. [tests/shell-panels.test.mjs](https://github.com/microsoft/amplifier-client-web/blob/main/tests/shell-panels.test.mjs), `canvas-chrome-browser.mjs` geometry/old-top-band negative and `canvas-dirty-browser.mjs` retained-editor checks. |
 | Saved output inspection: [src/outputs.jsx](https://github.com/microsoft/amplifier-client-web/blob/main/src/outputs.jsx), shared `image-actions.jsx` | Snapshot read/download/lineage and image follow-up; output HTML is **not** an executable preview. See [Outputs](OUTPUTS.md). | Exact-target download and draft-preserving follow-up; `tests/test_output_images.py` and inline-artifact browser tests. |
 
 When changing these owners, format routing, placement or action semantics,
@@ -377,7 +401,7 @@ saved version. Live apps and websites keep their separate lifecycle controls.
 
 For an already-open executable **HTML or Babylon** preview, Latest discovers new
 saved versions but retains the exact running definition and its unfinished input.
-The row distinguishes **Viewing v1 · v2 available · preview retained**. Only the
+The feedback distinguishes **Viewing v1 · v2 available · preview retained**. Only the
 explicit **Load v2 — resets preview and runs its code** control replaces that
 preview with the named saved definition. Changing executable versions through
 Details also offers **Keep current preview** before an explicit reset. Declared
