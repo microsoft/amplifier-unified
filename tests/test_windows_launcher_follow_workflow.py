@@ -1,9 +1,12 @@
 """The native "launcher follows the app" case: what can be checked without Windows.
 
-The case itself runs only on a Windows runner (`windows-launcher-follow.yml`).
+The case itself runs only on a Windows runner (`windows-launcher-follow.yml`),
+as two jobs: the refresh that starts by itself, and the refresh with "Keep
+Amplifier up to date" off.
 These cases fail on every platform when the workflow could pass with a failed
-check, when the fixture reads a name that the product does not have, or when
-the fixture's reader of the app's saved state does not match the app's writer.
+check, when the fixture reads a name that the product does not have, when
+the fixture's reader of the app's saved state does not match the app's writer,
+or when the second job sends another request than the bundled page sends.
 The last two cases are about the launcher's portable cases themselves: a pull
 request must run them, and the job that runs them must stop for a wrong result.
 """
@@ -48,32 +51,48 @@ def job():
 def test_the_job_fails_when_a_check_fails_or_is_not_reached(fixture):
     document, name, value = job()
     assert name == "windows-launcher-follow" and "continue-on-error" not in json.dumps(document)
+    # One job for each case of the fixture, with that case's number of checks. A case that fails
+    # does not end the other one.
+    rows = value["strategy"]["matrix"]["include"]
+    assert len(rows) == len(fixture.CASES) and value["strategy"]["fail-fast"] is False
+    assert {row["case"]: row["checks"] for row in rows} == {case: len(names) for case, names in fixture.CASES.items()}
+    assert fixture.CASES["follow"] is fixture.CHECKS and len(fixture.CHECKS) == 10
     steps = {step["name"]: step for step in value["steps"] if "name" in step}
     run, = [step for step in steps.values() if "windows_launcher_follow_native.py run" in step.get("run", "")]
+    assert "windows_launcher_follow_native.py run --case ${{ matrix.case }}" in run["run"]
     required = steps["Require every check"]
     cleanup, = [step for step in steps.values() if "windows_launcher_follow_native.py cleanup" in step.get("run", "")]
     # The case and the requirement run only after success; the cleanup always.
     assert "if" not in run and "if" not in required and cleanup["if"] == "always()"
     for step in (run, cleanup):
         assert "$LASTEXITCODE -ne 0" in step["run"] and "throw" in step["run"]
-    # Every check by number, the whole status, and no check that is not PASS.
-    count = len(fixture.CHECKS)
-    assert [name.split(".")[0] for name in fixture.CHECKS] == [str(number) for number in range(1, count + 1)]
-    assert f"$report.checks.Count -ne {count}" in required["run"]
+    # Every check by number, the whole status, the job's own case, and no check that is not PASS.
+    for names in fixture.CASES.values():
+        assert [name.split(".")[0] for name in names] == [str(number) for number in range(1, len(names) + 1)]
+    assert "$report.checks.Count -ne ${{ matrix.checks }}" in required["run"]
+    assert "$report.case -ne '${{ matrix.case }}'" in required["run"]
     assert "$report.status -ne 'PASS'" in required["run"] and "$_.status -ne 'PASS'" in required["run"]
     order = list(steps)
     assert order.index(run["name"]) < order.index(cleanup["name"]) < order.index("Require every check")
     assert sum(step.get("timeout-minutes", 0) for step in value["steps"]) <= value["timeout-minutes"] + 10
+    # Two jobs of one run keep their evidence: each has its own name for it.
+    upload, = [step for step in value["steps"] if "upload-artifact" in step.get("uses", "")]
+    assert upload["if"] == "always()" and upload["with"]["name"] == "windows-launcher-${{ matrix.case }}"
 
 
 def test_the_report_is_complete_only_after_the_folder_is_removed(fixture):
     source = FIXTURE.read_text(encoding="utf-8")
-    run = source[source.index("def run():"):source.index("def uninstall():")]
+    run = source[source.index('def run(case="follow"):'):source.index("def uninstall():")]
     cleanup = source[source.index("def cleanup():"):]
     # `run` never says PASS: the last check belongs to the cleanup.
     assert 'status="PASS"' not in run and 'status="PENDING"' in run and 'return report["status"] == "PENDING"' in run
+    # Each case ends at one place, and the report is saved for both: the second case returns inside the block.
+    assert run.count('report.update(status="PENDING", stage="Folder cleanup pending")') == len(fixture.CASES)
+    assert run.index("    finally:") < run.index('save("result.json", report)\n        print(json.dumps(report), flush=True)')
     assert 'report.update(status="PASS", stage="Complete")' in cleanup
     assert 'all(check["status"] == "PASS" for check in report["checks"])' in cleanup
+    # The cleanup gives the folder check the name of the report's own case.
+    assert 'names = CASES[report["case"]]' in cleanup and 'report["checks"][-1] = {"name": names[-1]' in cleanup
     assert "skip" not in source.lower().replace("skipped", "").replace("no check is\nskipped", "")
 
 
@@ -85,7 +104,9 @@ def test_the_workflow_starts_for_the_code_that_the_case_runs():
             "tests/fixtures/manual_app_handoff_native.py", "amplifier_web/windows_launcher_follow.py",
             "amplifier_web/windows_launcher_refresh.py", "amplifier_web/windows_launcher_task.py",
             "amplifier_web/windows_launcher_files.py", "amplifier_web/windows_consumer_shell.py",
-            "amplifier_web/windows_service.py", "amplifier_web/update_drain.py"} <= paths
+            "amplifier_web/windows_service.py", "amplifier_web/update_drain.py",
+            # The update owner's loop: when the request starts, and what the page says after it.
+            "amplifier_web/updates.py"} <= paths
     assert all((ROOT / path).is_file() for path in paths)
 
 
@@ -109,6 +130,8 @@ MODULES = {
     "refresher": "windows_launcher_refresh", "task": "windows_launcher_task",
     "windows_service": "windows_service", "runtime": "windows_task_runtime",
     "windows_uninstall": "windows_uninstall",
+    # The second case: the owner's browser session, and the launcher's own offer on the page.
+    "auth": "auth", "browser_entry": "browser_entry", "offer": "windows_launcher_follow",
 }
 
 
@@ -126,7 +149,8 @@ def test_every_product_name_that_the_fixture_reads_exists():
     missing = sorted(f"{MODULES[alias]}.{name}" for alias, names in read.items() for name in names
                      if not hasattr(importlib.import_module("amplifier_web." + MODULES[alias]), name))
     assert missing == []
-    for module, name in (("deployment", "write_private"), ("installation_health", "status"), ("updates", "process")):
+    for module, name in (("deployment", "write_private"), ("deployment", "load_server_config"),
+                         ("installation_health", "status"), ("updates", "process")):
         assert hasattr(importlib.import_module("amplifier_web." + module), name)
     # The two other fixtures, by the names that this one calls.
     for path, names in (("windows_launcher_refresh_native.py", {"helpers", "command", "require_ci"}),
@@ -147,6 +171,36 @@ def test_every_product_name_that_the_fixture_reads_exists():
     version = tomllib.loads(project)["project"]["version"]
     assert release.version_at(ROOT) == version
     assert tomllib.loads(release.replace_version(project, "version", version, "0.999.0"))["project"]["version"] == "0.999.0"
+
+
+def test_no_function_of_the_fixture_hides_a_name_of_its_module():
+    """A name that a function assigns is that function's own name in its whole body.
+
+    The first run of the second case ended in its check 3: a variable `saved`
+    of the first case's check 6 hid a module function `saved` for every helper
+    inside `run`. Python says so only when the line runs, and that line runs
+    only on the Windows runner, after several minutes. Find it here.
+    """
+    import symtable
+    source = FIXTURE.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    top = {node.name for node in tree.body if isinstance(node, ast.FunctionDef)} | {
+        target.id for node in tree.body if isinstance(node, ast.Assign)
+        for target in node.targets if isinstance(target, ast.Name)}
+    assert {"saved_part", "saved_updates", "read", "save", "calls", "CASES"} <= top
+    hidden = []
+
+    def walk(table, path):
+        here = path + [table.get_name()]
+        if table.get_type() == "function":
+            hidden.extend("/".join(here) + ": " + symbol.get_name() for symbol in table.get_symbols()
+                          if symbol.is_local() and symbol.get_name() in top)
+        for child in table.get_children():
+            walk(child, here)
+
+    for child in symtable.symtable(source, str(FIXTURE), "exec").get_children():
+        walk(child, [])
+    assert hidden == []
 
 
 def test_the_fixture_reads_the_update_state_that_the_app_saves(fixture, tmp_path):
@@ -170,8 +224,48 @@ def test_the_fixture_reads_the_update_state_that_the_app_saves(fixture, tmp_path
     state_records.save(database, state, {}, [], global_keys=["updates"])
     database.commit()
     assert fixture.saved_updates(tmp_path) == {}
+    # The second case reads the update switches from the same store.
+    assert fixture.saved_part(tmp_path, "settings") == {}
+    state["settings"] = {"updates": {"autoCheck": True, "autoInstall": False, "intervalHours": 4}}
+    state_records.save(database, state, {}, [], global_keys=["settings"])
+    database.commit()
+    assert fixture.saved_part(tmp_path, "settings") == state["settings"] == state_records.load(database)["settings"]
     database.close()
     assert "errorType" in fixture.app_state(tmp_path / "absent")
+
+
+def test_the_setting_case_sends_the_requests_that_the_bundled_page_sends():
+    """The second native case signs in as a browser and sends two requests. They are the page's own.
+
+    The switch "Keep Amplifier up to date" and the install button of the Updates
+    section, as the bundled page sends them. When the page sends another
+    request, the native case shows nothing about the page any more.
+    """
+    import amplifier_web
+    assets = sorted((Path(amplifier_web.__file__).parent / "static/assets").glob("app-*.js"),
+                    key=lambda path: path.stat().st_size)
+    assert assets, "The bundled page is not built."
+    script = assets[-1].read_text(encoding="utf-8")
+    changed = ("The bundled page sends this request in another way now. Read the new form, and change the "
+               "request of the native case (page_request in the fixture) together with this case.")
+    # The switch, turned off: only `autoInstall: false`, as a patch of the update settings.
+    switch = re.search(r'onChange:([\w$]+)=>([\w$]+)\(\1\.target\.checked\?\{autoCheck:!0,autoInstall:!0\}:'
+                       r'\{autoInstall:!1\}\)\}\),"Keep Amplifier up to date"', script)
+    assert switch, changed
+    assert re.search(r'(?<![\w$])' + re.escape(switch.group(2))
+                     + r'=([\w$]+)=>[\w$]+\("settings\.update",\{patch:\{updates:\1\}\}\)', script), changed
+    # The install button: the action alone, with no argument. The host reads a request
+    # with no arguments as one with empty arguments, which is what the native case sends.
+    assert re.search(r'"data-action":"updates\.install",onClick:\(\)=>[\w$]+\("updates\.install"\)', script), changed
+    assert 'payload.get("args", {})' in (Path(amplifier_web.__file__).parent / "server.py").read_text(encoding="utf-8")
+    source = FIXTURE.read_text(encoding="utf-8")
+    assert 'page_request("settings.update", {"patch": {"updates": {"autoInstall": False}}})' in source
+    assert 'page_request("updates.install", {})' in source and source.count("page_request(") == 3
+    # The action goes with the session cookie of a redeemed ticket, never with the control credential.
+    request = source[source.index("def page_request(action, args):"):source.index("def settle(what):")]
+    assert "Authorization" not in request and "control_token" not in request
+    assert "browser_entry.owner_browser_url(home, config)" in request and "browser_entry.REDEEM_PATH" in request
+    assert 'headers = {"Origin": origin, "Cookie": f"{auth.SESSION_COOKIE}={session}"}' in request
 
 
 def test_the_stand_in_for_uv_is_put_in_place_and_taken_away(fixture, tmp_path, monkeypatch):
