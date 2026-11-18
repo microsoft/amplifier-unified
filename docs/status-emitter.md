@@ -27,7 +27,7 @@ publication do not change that default. Follow the
 [selection instructions](../components/README.md#select-a-status-artifact); preserve the
 original source receipt, even when it names the historical nested author path.
 
-Independent artifact delivery uses the public repository's **Package** workflow
+Independent artifact delivery uses the public repository's **Status package** workflow
 with a full merged main commit SHA. It
 builds the wheel and source archive once, binds their contents to that source,
 and verifies the installed standalone package before publication. Assets use the
