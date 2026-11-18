@@ -777,10 +777,13 @@ def current(state, evidence=None, *, manual_verified=None, explicit_retry=False,
         if evidence.get('configurationChanged'):
             # Nothing failed, and nothing is required of the person: a saved AI
             # connection gives this state. A quiet status, so no unread mark.
-            # The text holds with automatic checks on and off, and it promises
-            # no result of the next check.
-            return result('unchecked', 'Your settings changed since the components were checked',
-                          'The installed components are as recorded. Your AI connections or other settings that choose components changed after Amplifier checked these components. The next update check looks for the components that the changed settings need. To check now, select Check for updates.',
+            # Known here: the key of the settings is not the key of the record.
+            # Not known: that the person changed a setting. A new app version
+            # can compute another key for the same settings. The text holds
+            # with automatic checks on and off, and it promises no result of
+            # the next check.
+            return result('unchecked', 'The components need a new check for your current settings',
+                          'The installed components are as recorded. Amplifier has no record that it checked them with your current AI connections and other settings. A new AI connection is one cause. The next update check looks for the components that your current settings need. To check now, select Check for updates.',
                           action='check')
         if evidence.get('activationUnknown'):
             return result('unchecked', 'Application is up to date' if application_success else 'Current components kept',
