@@ -63,15 +63,19 @@ def holds_the_mark(stage):
 def watch(manager):
     """Read the entries of every stage at each publication of the update owner; the list of those readings.
 
-    A reading is (the moment, the stage's entries). The owner publishes when
-    the preparation starts, after its copies, after its plan, and at its end.
-    These are the moments that a case sees. Between two of them it sees nothing.
+    A reading is (the moment, the stage's entries). The moment is the phase
+    that the publication carries ('staging', 'validating', 'staged', 'error',
+    'installed'), or 'publication' for one that carries none (a download
+    detail, the plan, the publication after the switch). These are the moments
+    that a case sees. Between two of them it sees nothing. ``no_copy`` rests on
+    the 'validating' reading: it comes after the place of the copies.
     """
     seen, publish = [], manager.publish
+    releases = manager.directory / 'releases'
 
     async def observe(**values):
         moment = values.get('phase') or 'publication'
-        for stage in sorted((manager.directory / 'releases').iterdir()):
+        for stage in sorted(releases.iterdir()) if releases.is_dir() else ():
             seen.append((moment, sorted(path.name for path in stage.iterdir())))
         return await publish(**values)
 
@@ -194,7 +198,9 @@ async def test_a_stage_of_an_earlier_app_version_is_validated_and_selected_with_
     child process with the stage as its app home.
 
     Not real: the stage has the updater's layout from the probe fixture, not a
-    whole prepared update, and its record names no checked selection (the
+    whole prepared update. For Install the case itself writes the prepared
+    state (``staged``, ``pendingRelease``) into the owner's state; no
+    preparation published it. The stage's record names no checked selection (the
     settled case above checks the selection of a stage with no copies at its
     activation). The worker environment, its installer policy file and the
     check of its recorded packages are stand-ins. The probe runs in the test

@@ -457,9 +457,9 @@ Local data: `updates/inventory.json` (private source details), `updates/releases
 
 A stage holds no copy of the app's own `config` or `routing` folder. `config`
 holds the sign-in secrets and the TLS key of the installation, and a stage reads
-neither folder: its settings and routing are in `shared-config`, and its keys
-file is there only during a qualification (next paragraph). A stage that an
-earlier version of the app prepared can still hold such a copy.
+neither folder: its settings and routing are in `shared-config`, with the
+temporary copy of the keys file that the next paragraph describes.
+A stage that an earlier version of the app prepared can still hold such a copy.
 
 Component qualification uses a temporary `shared-config/keys.env` copy.
 The manager removes only that file after qualification succeeds or a handled
