@@ -443,6 +443,35 @@ new candidate's policy, never the old generation's receipts. Explicit pins, tags
 external resolver policy do not acquire branch authority from an `originalRef`
 spelling or matching commit.
 
+A provider module has one reference in the app's own files. A profile composes a
+provider that has no source of its own from `amplifier_web/provider_sources.json`.
+The worker environment declares the same repository in
+`amplifier_web/runtime_deps/pyproject.toml`; a decision support pack adds rows
+from `runtime_deps/features.toml`. A component update that prepares a worker
+environment compares the two references of each provider that a profile
+composes, and it refuses the update when they differ, also when both name the
+same commit (`runtime_source_alignment.verify_checked_selection`, reason
+`protected-runtime-source`). Releases 0.108.0 and 0.109.0 named a commit for the
+OpenAI module in the list and the branch in the manifest. On an installation
+whose "OpenAI API" connection takes its source from the list, no component
+update that prepares a worker environment could complete. An installation whose
+settings name the module's branch themselves was not affected: its profile does
+not take that module's source from the list. Change the two files together;
+`tests/test_provider_source_alignment.py` fails when they differ and names both.
+A commit in both files does not repair an installed PC: a new candidate keeps
+the reference that the installation already has
+(`runtime_environment.augmented_manifest`), so the worker manifest's sources are
+branches (`tests/test_standalone.py`). The list is also an input of the web
+client: the selected client records its hash, and the built client holds its
+text. A change of the list needs a client revision whose
+`build-inputs.lock.json` has the new hash, that selection in
+`components/web-client.source.json`, and the normal client build. One more file
+depends on the module's commit: `amplifier_web/host/media_sources.json` holds
+the hashes of the module files that the reviewed image route of ordinary Work
+accepts (`host/media_assembly.select_root`). While the list follows a branch,
+that route can be on only while the branch has exactly those files. On Windows
+it is off in every case (`host/media.bind_media`).
+
 The worker's transitive Foundation override names the distribution without
 independently declaring a URL/ref. The effective `tool.uv.sources` choice owns
 that identity, including an installed fork or pin carried into a new candidate.
