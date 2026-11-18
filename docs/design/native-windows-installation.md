@@ -2447,8 +2447,8 @@ between two texts:
   link. The look then answers for what it read. It still only chooses a
   text.
 - When the look finds such a journal and no data, setup says: "Setup cannot
-  install Amplifier yet. The folder of an earlier installation is still on
-  this PC:", the folder, then "Setup cannot open Amplifier from that folder:
+  install Amplifier yet. Setup found an installation record in this
+  folder:", the folder, then "Setup cannot open Amplifier from that folder:
   a program file is missing. Setup found no chats or settings in the folder.
   It does not change the folder, because the folder can hold files or
   folders that are not Amplifier's." and "Move or rename that folder. Then
@@ -2459,11 +2459,13 @@ between two texts:
   chats and settings. This version of setup cannot repair it."
 
 Each statement of the first text is what setup found at that look, or what
-setup does; its last two sentences are the next step. "The folder of an
-earlier installation": the folder has a file with the name of setup's
-completion record, which setup writes at the end of an installation. Setup
-knows no more about the folder's history; the second text says "Amplifier is
-already installed in" on the same evidence. "a program file is missing": the
+setup does; its last two sentences are the next step. "Setup found an
+installation record in this folder": the folder has a file with the name of
+setup's completion record, which setup writes at the end of an installation.
+Setup does not read that file in this look, and it knows no more about the
+folder's history. The text does not say that an installation was made in the
+folder. (The second text says "Amplifier is already installed in" on the same
+evidence, as it did before.) "a program file is missing": the
 launcher's start program is not there, as in the second text. "Setup found no
 chats or settings in the folder": none of the seven names held anything at
 the look. The text does not say that Amplifier was uninstalled, and it does
@@ -2501,11 +2503,12 @@ journal, bytes that are not UTF-8, a record with one byte in a text value
 that is not UTF-8, and a folder with the journal's name; a journal of exactly
 4096 bytes; a journal that another program has open for writing, one that is
 deleted while a handle of the look's kind is open, and one that another
-program holds for itself; and that the folder holds afterwards what the case
-put there. Not proven: the message in setup's real window, the three states
-on a PC with this text, the look on Windows 11, a program that replaces an
-entry during the look, and a setup run in the instant in which the step
-after exit deletes the journal.
+program holds for itself; that the folder holds afterwards what the case put
+there; and that a look changes no creation time and no write time of the
+journal, of setup's record and of the person's file. Not proven: the message
+in setup's real window, the three states on a PC with this text, the look on
+Windows 11, a program that replaces an entry during the look, and a setup run
+in the instant in which the step after exit deletes the journal.
 
 When the launcher's start program is still there (a removal that
 stopped before its last step), setup asks, and on Yes it lets the

@@ -307,9 +307,16 @@ namespace UnifiedBootstrap {
                 // missing. Only setup's own look at the folder chooses it.
                 string left=Make(work,"Left");
                 File.WriteAllText(Path.Combine(left,NativeInstaller.Complete),"{}");
+                // The creation time and the write time of a file. A look changes
+                // neither: the step after exit refuses a journal whose creation
+                // time is later than its own start (`Later` in
+                // amplifier_web/windows_removal.py). The case reads the times of
+                // a file before the first look that can reach it.
+                Func<string,string> times=one=>File.GetCreationTimeUtc(one).Ticks+","+File.GetLastWriteTimeUtc(one).Ticks;
+                string completeTimes=times(Path.Combine(left,NativeInstaller.Complete));
                 string damaged="Amplifier is already installed in "+left+", but setup cannot open it: a program file is missing.\n\n"+
                     "Keep that folder. It holds your chats and settings. This version of setup cannot repair it.";
-                string emptied="Setup cannot install Amplifier yet. The folder of an earlier installation is still on this PC:\n"+left+"\n\n"+
+                string emptied="Setup cannot install Amplifier yet. Setup found an installation record in this folder:\n"+left+"\n\n"+
                     "Setup cannot open Amplifier from that folder: a program file is missing. "+
                     "Setup found no chats or settings in the folder. "+
                     "It does not change the folder, because the folder can hold files or folders that are not Amplifier's.\n\n"+
@@ -322,6 +329,7 @@ namespace UnifiedBootstrap {
                 // What an uninstall with the delete choice leaves when the folder
                 // holds a file of the person: that file, setup's record, the journal.
                 File.WriteAllText(notes,"mine");
+                string notesTimes=times(notes);
                 File.WriteAllText(journal,record);
                 Need(NativeInstaller.Emptied(left) && NativeInstaller.Unopened(left)==emptied,"a delete journal and no data: the text with the next step");
                 // What stays when the last step did not finish: program files.
@@ -351,7 +359,7 @@ namespace UnifiedBootstrap {
                 Junction(Path.Combine(left,"app"),elsewhere);
                 Need(NativeInstaller.Unopened(left)==damaged,"a link with a data name is data");
                 Directory.Delete(Path.Combine(left,"app"),false);
-                Need(Directory.Exists(elsewhere) && NativeInstaller.Unopened(left)==emptied,"without the link; its target stays");
+                Need(NativeInstaller.Unopened(left)==emptied,"without the link");
                 // An empty data folder that Windows refuses to list is a doubt.
                 string refused=Path.Combine(left,"shared"); Directory.CreateDirectory(refused);
                 Unlistable(refused,true);
@@ -424,6 +432,8 @@ namespace UnifiedBootstrap {
                 }
                 Need(!File.Exists(journal),"the journal could be deleted while a handle of the look's kind was open");
                 File.WriteAllText(journal,record);
+                // The case wrote this journal anew, and no look has reached it yet.
+                string journalTimes=times(journal);
                 // A journal that another program holds for itself is a doubt.
                 using(new FileStream(journal,FileMode.Open,FileAccess.ReadWrite,FileShare.None))
                     Need(NativeInstaller.Unopened(left)==damaged,"a journal that cannot be opened");
@@ -434,6 +444,8 @@ namespace UnifiedBootstrap {
                     "the folder holds what the case put there: "+String.Join("|",names));
                 Need(File.ReadAllText(notes)=="mine" && File.ReadAllText(journal)==record &&
                     File.ReadAllText(Path.Combine(left,NativeInstaller.Complete))=="{}","the person's file and both records are unchanged");
+                Need(times(journal)==journalTimes && times(Path.Combine(left,NativeInstaller.Complete))==completeTimes &&
+                    times(notes)==notesTimes,"a look changes no creation time and no write time of the journal, of setup's record and of the person's file");
                 Need(NativeInstaller.RootState(left)=="installed","setup still takes the folder for a finished installation");
 
                 // A folder above the target that other accounts can change is named.

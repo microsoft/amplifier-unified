@@ -138,7 +138,7 @@ def test_unfinished_attempts_are_removed_and_installations_never_are():
     assert "Directory.CreateDirectory" not in saved and "File.Copy" not in saved
 
 
-EMPTIED = ("Setup cannot install Amplifier yet. The folder of an earlier installation is still on this PC:\n{root}\n\n"
+EMPTIED = ("Setup cannot install Amplifier yet. Setup found an installation record in this folder:\n{root}\n\n"
            "Setup cannot open Amplifier from that folder: a program file is missing. "
            "Setup found no chats or settings in the folder. "
            "It does not change the folder, because the folder can hold files or folders that are not Amplifier's.\n\n"
@@ -218,7 +218,7 @@ def test_setup_without_a_launcher_program_says_what_its_own_look_finds():
     for body in (looks, code):
         operations = re.sub(r'"(?:[^"\\]|\\.)*"', '""', body)
         for change in ("Delete", "Write", "Create", "Move", "Remove", "Process", "Say(", "Install", "Storage",
-                       "FileMode", "FileAccess", "SetAttributes"):
+                       "FileMode", "FileAccess", "Set"):
             assert change not in operations, change
     # The one place that shows the text: a finished installation with no launcher program. Setup ends with 1.
     opened = between("static int OpenInstalled(", "static int ConsumerWindow()")
@@ -228,6 +228,14 @@ def test_setup_without_a_launcher_program_says_what_its_own_look_finds():
     assert SOURCE.count("Unopened(") == 2 and SOURCE.count("Emptied(") == 2
     # What the new text does not say.
     assert "your chats and settings" not in EMPTIED and "already installed" not in EMPTIED
+    # Nothing about the folder's history: setup knows only that a file with the record's name is there.
+    assert "earlier installation" not in EMPTIED and "was installed" not in EMPTIED
+    marked = between("static string Marked(", "internal static void RemoveUnfinished(")
+    assert 'if(File.Exists(Path.Combine(root,Complete))) return "installed";' in marked
+    # Setup names that file in three places: the name, this look for the name, and the write at the end
+    # of an installation. It reads the file nowhere.
+    assert len(re.findall(r"\bComplete\b", SOURCE)) == 3
+    assert "PrivateText(Path.Combine(root,Complete),Json.Serialize(" in SOURCE
     assert "uninstall" not in EMPTIED.lower()  # A file that reads as a journal is no proof of an uninstall.
     assert "cannot start" not in EMPTIED  # Setup looked for one program file only.
     # The next step loses nothing: the text tells nobody to delete anything.
@@ -236,8 +244,12 @@ def test_setup_without_a_launcher_program_says_what_its_own_look_finds():
     # The same step as at setup's stop for a damaged folder.
     damaged = between('if(state=="damaged") throw new SetupStop(', "string program=null;")
     assert '"Move or rename that folder. Then run setup again.");' in damaged
-    # Setup's own lock is against a second setup run. It is not the installation's lock.
-    assert "AmplifierUnified-installation" not in SOURCE and SOURCE.count("Mutex(") == 1
+    # Setup's own lock is against a second setup run. It is not the installation's lock, whose name
+    # uninstall gives.
+    lock = re.search(r'with named\("Global\\\\([^"]+)", root, wait=wait\):',
+                     inspect.getsource(windows_uninstall.single)).group(1)
+    assert lock == "AmplifierUnified-installation-"
+    assert lock.rstrip("-") not in SOURCE and SOURCE.count("Mutex(") == 1
     # The launcher's program, which the Start-menu entry also starts.
     from amplifier_web import windows_consumer_shell
     assert 'Path.Combine(root,"tools","amplifier-unified","Scripts","pythonw.exe")' in between(
@@ -264,6 +276,8 @@ def test_setup_without_a_launcher_program_says_what_its_own_look_finds():
             "entry between two of those steps.",
             "Setup's stop for a damaged folder names the same step.",
             "The text tells the person to move or rename the folder, not to delete it:",
+            "Setup does not read that file in this look, and it knows no more about the folder's history.",
+            "The text does not say that an installation was made in the folder.",
             "In every other case, and when any part of the look fails, setup says what it said before:",
             "The text does not say that Amplifier was uninstalled, and it does not say that Amplifier cannot start: "
             "a file that reads as a journal is no proof of an uninstall (a program of this account can write one), "
@@ -277,6 +291,10 @@ def test_setup_without_a_launcher_program_says_what_its_own_look_finds():
     native = (ROOT / "tests/windows/native_setup.Tests.cs").read_text(encoding="utf-8")
     others = native.split("string[] others={", 1)[1].split("};", 1)[0]
     assert "nineteen files that are not such a journal" in design
+    assert ("that a look changes no creation time and no write time of the journal, of setup's record and of "
+            "the person's file") in design
+    assert ("a look changes no creation time and no write time of the journal, of setup's record and of the "
+            "person's file") in native
     # Five literal files in the first line, then one file for each `record.Replace(...)`, then the file
     # that is one byte too large.
     assert others.split("\n", 1)[0] == '"","{","[]","null","\\"delete\\"",'

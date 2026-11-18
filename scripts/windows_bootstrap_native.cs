@@ -781,13 +781,15 @@ namespace UnifiedBootstrap {
             // stay: it holds something that is not Amplifier's, or the last step
             // of the removal did not finish. Then the text of a damaged
             // installation is not true ("It holds your chats and settings"), and
-            // it names no next step. Each sentence of the other text is what
-            // setup found at this look, or what setup does. Its next step is to
+            // it names no next step. Each statement of the other text is what
+            // setup found at this look, or what setup does. It says nothing
+            // about the folder's history: setup knows only that a file with the
+            // name of its completion record is there. Its next step is to
             // move or rename the folder, as at setup's stop for a damaged
             // folder, and not to delete it: the folder can hold something of
             // the person's that this look did not see.
             if(Emptied(root)) return
-                "Setup cannot install Amplifier yet. The folder of an earlier installation is still on this PC:\n"+root+"\n\n"+
+                "Setup cannot install Amplifier yet. Setup found an installation record in this folder:\n"+root+"\n\n"+
                 "Setup cannot open Amplifier from that folder: a program file is missing. "+
                 "Setup found no chats or settings in the folder. "+
                 "It does not change the folder, because the folder can hold files or folders that are not Amplifier's.\n\n"+
