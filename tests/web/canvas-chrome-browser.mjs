@@ -3,11 +3,12 @@
 import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
-import {mkdir,mkdtemp,writeFile} from 'node:fs/promises';
+import {mkdir,mkdtemp,readFile,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 import {acceptedCanvasReceipt,settleCanvasReceipts,assertCanvasVisibility,acceptedCanvasVisibility} from './canvas-test-receipts.mjs';
 
 const root=fileURLToPath(new URL('../../',import.meta.url));
@@ -27,6 +28,10 @@ const unwrap=body=>body?.action==='shell.command'?(body.args.command||body.args)
 const isAction=request=>request.method()==='POST'&&new URL(request.url()).pathname==='/api/actions';
 const errorText=error=>error?.stack||String(error);
 async function check(name,run){
+ if(process.env.CANVAS_CHROME_ADAPTIVE_ONLY==='1'&&!/^(30 saved outputs|Auto uses|layout switches|browser preview keeps|unavailable navigation storage)/.test(name)){
+  report.checks.push({name,status:'not_run',reason:'Focused adaptive continuation; unchanged earlier checks retain their original report'});
+  return;
+ }
  const row={name,status:'running'};report.checks.push(row);
  try{row.observation=await run();row.status='passed'}catch(error){row.status='failed';row.error=errorText(error);throw error}
 }
@@ -65,6 +70,25 @@ try{
  };
  const state=()=>page.evaluate(()=>window.amplifier.getState());
  await page.goto(url);await showFixtureConversation(page,{navPinned:false});
+ const fixtureIdentity=await (await page.request.get(url+'/fixture')).json();
+ if(process.env.AMPLIFIER_TEST_PACKAGE_ROOT)assert.equal(fixtureIdentity.installedPackageVerified,true,'Browser fixture must import the exact installed package');
+ const componentResponse=await page.request.get(url+'/client-component.json');assert.equal(componentResponse.status(),200);
+ const component=await componentResponse.json(),served={};
+ const entry=await page.request.get(url+'/');assert.equal(entry.status(),200);
+ const index=await entry.body(),packagedIndex=await readFile(join(process.env.AMPLIFIER_TEST_PACKAGE_ROOT||join(root,'amplifier_web'),'static/index.html'));
+ assert.equal(createHash('sha256').update(packagedIndex).digest('hex'),component.assets['index.html'].sha256);
+ // The normal host entry applies instance branding. Bind its JS/CSS references
+ // to the packaged entry, rather than pretending the branded HTML is byte-equal.
+ const entryAssets=bytes=>[...bytes.toString().matchAll(/(?:src|href)=["'](\/[^"']+\.(?:js|css)(?:\?[^"']*)?)["']/g)].map(match=>match[1]);
+ assert.deepEqual(entryAssets(index),entryAssets(packagedIndex));
+ served['/']={bytes:index.length,sha256:createHash('sha256').update(index).digest('hex'),transform:'host instance branding',packagedSha256:component.assets['index.html'].sha256};
+ for(const path of entryAssets(index).concat('/build.json')){
+  const response=await page.request.get(url+path);assert.equal(response.status(),200);
+  const bytes=await response.body(),name=new URL(url+path).pathname.slice(1),sha256=createHash('sha256').update(bytes).digest('hex');
+  assert.equal(sha256,component.assets[name].sha256,'Served entry asset must match packaged client provenance');
+  served[path]={bytes:bytes.length,sha256};
+ }
+ report.pairedIdentity={installedPackageVerified:fixtureIdentity.installedPackageVerified,packageRoot:process.env.AMPLIFIER_TEST_PACKAGE_ROOT||null,source:component.source,build:component.build,served};
  await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  await action('session.create');
  const sessionId=(await state()).selectedSessionId;
@@ -75,6 +99,17 @@ try{
  const section=id=>overview.locator(`details[data-overview-section="${id}"]`);
  const summary=id=>section(id).locator(':scope > summary');
  const documents=()=>panel.locator('button.a-open-documents');
+ const navigation=async value=>{
+  const menu=panel.locator('.a-canvas-more');
+  if(!await menu.evaluate(el=>el.open))await menu.locator('summary').click();
+  await menu.getByRole('combobox',{name:'Canvas navigation',exact:true}).selectOption(value);
+  await expect(panel).toHaveAttribute('data-navigation-preference',value);
+  await page.keyboard.press('Escape');
+  await toggle.focus();
+  if(value!=='auto')await expect(panel).toHaveAttribute('data-navigation',value);
+ };
+ // Existing strip/keyboard checks deliberately exercise Tabs, not hidden DOM
+ // left behind by Compact. Auto/Compact have their own rendered checks below.
  const serverSnapshot=async clientId=>{
   const response=await page.request.get(url+'/api/state?clientId='+encodeURIComponent(clientId),{timeout:8000});
   assert.equal(response.status(),200,'Read the same client directly from the host');
@@ -141,7 +176,7 @@ try{
  // Partially visible document tabs are intentional; fixed controls are not.
  const navigationGeometry=()=>panel.evaluate(el=>{
   const box=node=>{const r=node.getBoundingClientRect();return {left:r.left,top:r.top,right:r.right,bottom:r.bottom,width:r.width,height:r.height}};
-  const header=el.querySelector('.a-canvas-head'),reader=el.querySelector('.a-canvas-overview-page');
+  const header=el.querySelector('.a-canvas-chrome'),reader=el.querySelector('.a-canvas-overview-page');
   const controls=[el.querySelector('.a-chat-overview-trigger'),el.querySelector('.a-open-documents'),header.querySelector('[aria-label="Focus canvas"]')].map(node=>{
    const r=box(node),points=[[r.left+4,r.top+4],[r.right-4,r.top+4],[r.left+4,r.bottom-4],[r.right-4,r.bottom-4]];
    return {name:node.getAttribute('aria-label'),box:r,hit:points.every(([x,y])=>node.contains(document.elementFromPoint(x,y))),
@@ -166,7 +201,7 @@ try{
   const box=node=>{const r=node.getBoundingClientRect();return {left:r.left,top:r.top,right:r.right,bottom:r.bottom,width:r.width,height:r.height}};
   const content=el.querySelector('.a-canvas-content'),reader=el.querySelector('.a-canvas-reader'),inspector=el.querySelector('#canvas-options');
   return {panel:box(el),content:box(content),reader:box(reader),body:box(el.querySelector('.a-canvas-body')),inspector:box(inspector),
-   navigation:box(el.querySelector('.a-canvas-head')),overlay:content.dataset.detailsOverlay==='true',readerInert:reader.inert,
+   navigation:box(el.querySelector('.a-canvas-chrome')),overlay:content.dataset.detailsOverlay==='true',readerInert:reader.inert,
    inspectorScrollWidth:inspector.scrollWidth,inspectorClientWidth:inspector.clientWidth,overflow:getComputedStyle(inspector).overflowY,
    viewport:{width:innerWidth,height:innerHeight}};
  });
@@ -242,6 +277,7 @@ try{
   assert.equal(response.ok(),true);assert.equal((await response.json()).ok,true);
   for(const [index,title] of titles.entries()){
    await action('canvas.show',{kind:'markdown',title,content:`# Document ${index+1}\n\nRetained source ${index+1}.`});
+   if(index===0)await navigation('tabs');
    ids.push((await state()).canvas.id);
   }
   assert.equal(new Set(ids).size,30);
@@ -266,6 +302,38 @@ try{
    await capture('negative-broken-wrapper');
   }finally{await broken.evaluate(el=>el.remove())}
   await assertBoundedOverflow();return {good,negative};
+ });
+ await check('mouse arrows and vertical wheel scroll without selecting; Ctrl wheel is not consumed',async()=>{
+  const selected=(await state()).canvas.id,beforeDraft=(await state()).view.draft;
+  const arrow=direction=>panel.getByRole('button',{name:'Scroll document tabs '+direction,exact:true});
+  const sample=()=>strip.evaluate(el=>({left:el.scrollLeft,max:el.scrollWidth-el.clientWidth}));
+  await requireReachable(arrow('left'),'Left scroll arrow');await requireReachable(arrow('right'),'Right scroll arrow');
+  // Bring the strip to its start using actual mouse controls, never DOM writes.
+  for(let i=0;i<30&&(await sample()).left>1;i++)await arrow('left').click();
+  await expect(arrow('left')).toBeDisabled();await expect(arrow('right')).toBeEnabled();
+  const start=await sample();assert.ok(start.max>0,'Twelve real document tabs must overflow');
+  await arrow('right').click();await expect.poll(async()=>(await sample()).left).toBeGreaterThan(start.left);
+  const right=await sample();await arrow('left').click();
+  await expect.poll(async()=>(await sample()).left).toBeLessThan(right.left);
+  const left=await sample();await wheel(strip,0,180);
+  await expect.poll(async()=>(await sample()).left).toBeGreaterThan(left.left);
+  const vertical=await sample();await wheel(strip,150,0);
+  await expect.poll(async()=>(await sample()).left).toBeGreaterThan(vertical.left);
+  // Observe the trusted native event after the owning strip handler has run.
+  await page.evaluate(()=>{
+   window.canvasCtrlWheel=[];
+   window.canvasWheelObserver=event=>{if(event.ctrlKey)window.canvasCtrlWheel.push({trusted:event.isTrusted,prevented:event.defaultPrevented})};
+   document.addEventListener('wheel',window.canvasWheelObserver,{passive:true});
+  });
+  try{
+   await page.keyboard.down('Control');try{await wheel(strip,0,60)}finally{await page.keyboard.up('Control')}
+   await expect.poll(()=>page.evaluate(()=>window.canvasCtrlWheel.length)).toBeGreaterThan(0);
+   const events=await page.evaluate(()=>window.canvasCtrlWheel);
+   assert.ok(events.every(event=>event.trusted&&!event.prevented),'Leave Ctrl-wheel to the browser, not tab scrolling');
+   report.ctrlWheel={events,limit:'Native wheel not prevented; not a browser-toolbar or physical zoom claim'};
+  }finally{await page.evaluate(()=>{document.removeEventListener('wheel',window.canvasWheelObserver);delete window.canvasWheelObserver;delete window.canvasCtrlWheel})}
+  assert.equal((await state()).canvas.id,selected);assert.equal((await state()).view.draft,beforeDraft);
+  return {start,right,vertical,after:await sample(),selectionUnchanged:true};
  });
  await check('delivery navigation reaches and focuses its real lower section',async()=>{
   const draft=(await state()).view.canvasDraft||{};
@@ -304,13 +372,18 @@ try{
   for(const id of ['review','publishing']){await revealByWheel(summary(id));await summary(id).click();await expect(section(id)).not.toHaveAttribute('open','')}
   await assertBoundedOverflow();return {sectionIds,retainedAfterReload:true};
  });
- await check('pinned Overview, native horizontal wheel, reading retention and runtime reduced motion',async()=>{
+ await check('fixed icon Overview, native horizontal wheel, reading retention and runtime reduced motion',async()=>{
   await page.emulateMedia({reducedMotion:'no-preference'});
   await wheel(strip,-100000,0);await expect.poll(()=>strip.evaluate(el=>el.scrollLeft)).toBeLessThanOrEqual(1);
   const transition=()=>overviewTab.evaluate(el=>({width:getComputedStyle(el).transitionDuration,label:getComputedStyle(el.querySelector('span')).transitionDuration,property:getComputedStyle(el).transitionProperty}));
   const milliseconds=value=>value.split(',').map(part=>parseFloat(part)*(part.trim().endsWith('ms')?1:1000));
-  const normal=await transition();assert.ok(milliseconds(normal.width).some(ms=>ms>0));assert.match(normal.property,/width|all/);
-  await expect.poll(()=>overviewTab.evaluate(el=>el.getBoundingClientRect().width)).toBeGreaterThan(100);
+  // Approved density change removes the former expanding Overview label, not
+  // its accessible name, pinned reachability or reading/focus semantics.
+  const normal=await transition();
+  await expect(overviewTab).toHaveAccessibleName('Chat overview');
+  await expect(overviewTab.locator('span')).toBeHidden();
+  const iconWidth=await overviewTab.evaluate(el=>el.getBoundingClientRect().width);
+  assert.ok(iconWidth>=32&&iconWidth<=44);
   await top();await wheel(overview,0,600);await expect.poll(()=>overview.evaluate(el=>el.scrollTop)).toBeGreaterThan(100);
   const vertical=await overview.evaluate(el=>el.scrollTop);
   await wheel(strip,100000,0);
@@ -321,14 +394,14 @@ try{
   await page.emulateMedia({reducedMotion:'reduce'});
   await expect.poll(async()=>milliseconds((await transition()).width).every(ms=>ms===0)).toBe(true);
   const reduced=await transition();assert.ok(milliseconds(reduced.label).every(ms=>ms===0));
-  const compactNavigation=await assertNavigation(),alignment=await overviewTab.evaluate(el=>el.style.justifyContent);
+  const compactNavigation=await assertNavigation(),transform=await overviewTab.locator('svg').evaluate(el=>el.style.transform);
   try{
-   await overviewTab.evaluate(el=>{el.style.justifyContent='center'});
+   await overviewTab.locator('svg').evaluate(el=>{el.style.transform='translateX(-40px)'});
    const broken=await navigationGeometry();
    assert.ok(navigationViolations(broken).includes('Chat overview clips svg'));
    await assert.rejects(assertNavigation(),/FIXED_CANVAS_NAVIGATION/);
    report.compactIconNegative={sample:broken,rejected:true};
-  }finally{await overviewTab.evaluate((el,value)=>{el.style.justifyContent=value},alignment)}
+  }finally{await overviewTab.locator('svg').evaluate((el,value)=>{el.style.transform=value},transform)}
   await assertNavigation();
   const lastTab=strip.getByRole('tab',{name:titles[29],exact:true});
   await requireReachable(lastTab,'Far document');await lastTab.click();await expect(lastTab).toHaveAttribute('aria-selected','true');
@@ -341,7 +414,7 @@ try{
   await expect.poll(()=>strip.evaluate(el=>el.scrollLeft)).toBeCloseTo(horizontal,0);
   await expect.poll(()=>overview.evaluate(el=>el.scrollTop)).toBeCloseTo(vertical,0);
   await page.emulateMedia({reducedMotion:'no-preference'});
-  await expect.poll(async()=>milliseconds((await transition()).width).some(ms=>ms>0)).toBe(true);
+  assert.equal(await overviewTab.evaluate(el=>el.getBoundingClientRect().width),iconWidth,'No expanding-label layout motion to restore');
   await capture('pinned-overview-far-strip');
   // Arrow/Home/End focus tabs; Enter selects. No scrollIntoView helper.
   await panel.evaluate(el=>{
@@ -366,7 +439,7 @@ try{
   await action('shell.changes.apply',{clientId:current.clientId,expectedRevision:current.shell.revision,changeId:prepared.result.id});
   await expect(page.locator('#amp-one')).toHaveAttribute('data-theme-scheme',scheme);
  };
- for(const scheme of ['light','dark']){
+ for(const scheme of process.env.CANVAS_CHROME_ADAPTIVE_ONLY==='1'?[]:['light','dark']){
   await presentation(scheme);
   for(const size of [{name:'desktop-1500',width:1500,pane:720},{name:'split-390',width:1500,pane:390},{name:'mobile-390',width:390,pane:390},{name:'mobile-320',width:320,pane:320}]){
    await check(scheme+' '+size.name+' real wheel/keyboard reachability, toolbar and focused toggle',async()=>{
@@ -410,19 +483,14 @@ try{
     await requireReachable(overviewTab,'Overview tab at the start of the strip');
     await expect(overviewTab.locator('svg')).toBeVisible();
     const overviewBox=await overviewTab.boundingBox();
-    assert.ok(overviewBox.width>=44&&overviewBox.height>=44,'Overview retains a 44px target');
-    if(paneWidth<=600){
-     await expect(overviewLabel).toBeHidden();
-    }else{
-     await expect(overviewLabel).toBeVisible();
-     await expect.poll(()=>overviewLabel.evaluate(el=>getComputedStyle(el).opacity)).toBe('1');
-    }
+    assert.ok(overviewBox.width>=32&&overviewBox.height>=32,'Desktop Overview keeps a compact 32px hit target');
+    await expect(overviewLabel).toBeHidden();
     (report.overviewPresentation??=[]).push({scheme,layout:size.name,paneWidth,labelVisible:await overviewLabel.isVisible(),target:overviewBox});
     await expect(panel.getByRole('heading',{name:'Second version',exact:true})).toBeVisible();
     await expect(page.locator('#canvas-options')).toBeHidden();
-    for(const name of ['Choose artifact version','Copy canvas source','Download canvas source','Canvas details','Focus canvas']){
+    for(const name of ['Choose artifact version','Download canvas source','Canvas details','Focus canvas']){
      const button=panel.getByRole('button',{name,exact:true});await requireReachable(button,name);
-     const box=await button.boundingBox();assert.ok(box.width>=44&&box.height>=44,`${name}: at least 44px target`);
+     const box=await button.boundingBox();assert.ok(box.width>=32&&box.height>=32,`${name}: desktop compact 32px target`);
     }
     const closedInspector=await inspectorGeometry();
     const stableControls=await panel.locator('[data-part="canvas-view-controls"]').elementHandle();
@@ -431,6 +499,10 @@ try{
     await expect(panel.getByRole('combobox',{name:'Artifact version',exact:true})).toBeFocused();
     const details=page.getByRole('region',{name:'Canvas details',exact:true}),closeDetails=details.getByRole('button',{name:'Close canvas details',exact:true});
     await expect(details).toBeVisible();
+    for(const name of ['Refresh document','Copy canvas source']){
+     const control=details.getByRole('button',{name,exact:true});await requireReachable(control,name+' in Details');
+     const box=await control.boundingBox();assert.ok(box.width>=44&&box.height>=44,name+' retains 44px Details target');
+    }
     const openInspector=await assertInspector(closedInspector);
     assert.equal(openInspector.overlay,size.pane<720,'Wide and narrow Canvas use the intended inspector modes');
     await requireReachable(closeDetails,'Details close');await requireReachable(toggle,'Header toggle with Details open');await requireReachable(overviewTab,'Overview with Details open');
@@ -592,7 +664,13 @@ try{
   assert.equal(await dialog.evaluate(el=>el instanceof HTMLDialogElement&&el.open&&el.matches(':modal')),true);
   await expect(dialog.locator('li')).toHaveCount(12);await expect(dialog).toContainText('12 open · 30 saved outputs');
   const search=dialog.getByRole('searchbox',{name:'Find an open document'});
+  await search.fill('not-a-document-title');await expect(dialog.locator('li')).toHaveCount(0);
+  await expect(dialog).toContainText('No matching open documents.');
+  await search.fill('retained research and review notes');await expect(dialog.locator('li')).toHaveCount(12);
+  for(const title of titles.slice(18))await expect(dialog.getByText(title,{exact:true})).toBeVisible();
   await search.fill('Document 19');await expect(dialog.locator('li')).toHaveCount(1);
+  const inlineClose=dialog.getByRole('button',{name:'Close tab '+titles[18],exact:true});
+  const closeBounds=await inlineClose.boundingBox();assert.ok(closeBounds.width>=44&&closeBounds.height>=44);
   // Observe actual application ordering without moving focus from the test.
   await dialog.evaluate((element,id)=>{
    const events=[],nativeClose=element.close;
@@ -647,6 +725,153 @@ try{
   await expect(panel.getByLabel('File in this workspace')).toBeVisible();
   await capture('recovered-file-controls');
   assert.equal((await state()).view.draft,'Retain the Canvas test draft');return {saved:30,open:1,recoveredVersion:2};
+ });
+ await check('Auto uses measured outer width AND height with hysteresis and defers active navigation',async()=>{
+  for(const id of ids.slice(18))await action('canvas.select',{id});
+  await action('view.update',{patch:{canvasFocused:true,canvasControlsExpanded:false}});
+  await navigation('auto');
+  const resize=async(width,height)=>{
+   const samples=[];
+   for(let attempt=0;attempt<3;attempt++){
+    const box=await panel.boundingBox(),viewport=page.viewportSize();
+    samples.push({box,viewport,focused:await panel.getAttribute('data-focused')});
+    if(Math.abs(box.width-width)<=2&&Math.abs(box.height-height)<=2)break;
+    await page.setViewportSize({width:Math.round(viewport.width+width-box.width),height:Math.round(viewport.height+height-box.height)});
+    await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+   }
+   (report.autoResize??=[]).push({requested:{width,height},samples,actual:await panel.boundingBox()});
+   await expect.poll(async()=>{const b=await panel.boundingBox();return Math.abs(b.width-width)<=2&&Math.abs(b.height-height)<=2},{message:'Actual outer Canvas bounds '+JSON.stringify(report.autoResize.at(-1))}).toBe(true);
+   return panel.boundingBox();
+  };
+  const observations=[];
+  for(const [width,height,mode] of [[1100,740,'tabs'],[940,650,'tabs'],[890,740,'compact'],[940,740,'compact'],[1000,650,'tabs'],[1100,555,'compact'],[1100,620,'compact'],[1100,650,'tabs'],[650,900,'compact']]){
+   await toggle.focus();const bounds=await resize(width,height);
+   await expect(panel).toHaveAttribute('data-navigation',mode);
+   observations.push({requested:{width,height},bounds,mode});
+  }
+  await resize(1100,740);await expect(panel).toHaveAttribute('data-navigation','tabs');
+  const menu=panel.locator('.a-canvas-more');await menu.locator('summary').click();
+  await resize(850,740);await expect(panel).toHaveAttribute('data-navigation','tabs');
+  await expect(menu.getByRole('combobox',{name:'Canvas navigation',exact:true})).toBeVisible();
+  await page.keyboard.press('Escape');await expect(menu).not.toHaveAttribute('open','');
+  await expect(panel).toHaveAttribute('data-navigation','compact');
+  await documents().click();await expect(dialog).toBeVisible();
+  await dialog.getByRole('searchbox',{name:'Find an open document'}).focus();
+  await resize(1100,740);await expect(panel).toHaveAttribute('data-navigation','compact');
+  await expect(dialog.getByRole('searchbox',{name:'Find an open document'})).toBeFocused();
+  await page.keyboard.press('Escape');await expect(documents()).toBeFocused();
+  await expect(panel).toHaveAttribute('data-navigation','tabs');
+  const focusedDocument=strip.getByRole('tab',{name:titles[29],exact:true});
+  await focusedDocument.focus();await resize(850,740);
+  const burst=[],started=Date.now();
+  for(let step=0;step<9;step++){
+   await page.keyboard.press('Shift');await page.waitForTimeout(100);
+   burst.push({elapsed:Date.now()-started,mode:await panel.getAttribute('data-navigation'),focused:await focusedDocument.evaluate(el=>el===document.activeElement)});
+  }
+  assert.ok(burst.every(sample=>sample.mode==='tabs'&&sample.focused),'A continuing key burst defers switching beyond one quiet interval');
+  await expect(panel).toHaveAttribute('data-navigation','compact');
+  await expect(documents()).toBeFocused();
+  report.focusedNavigationBurst=burst;
+  await resize(1100,740);await toggle.focus();await expect(panel).toHaveAttribute('data-navigation','tabs');
+  const scrollArrow=panel.getByRole('button',{name:'Scroll document tabs left',exact:true});
+  await expect(scrollArrow).toBeEnabled();await scrollArrow.focus();await expect(scrollArrow).toBeFocused();
+  await resize(850,740);
+  await expect(panel).toHaveAttribute('data-navigation','compact');
+  await expect(documents(),'An idle focused scroll arrow hands focus to the stable picker, never hidden chrome').toBeFocused();
+  assert.equal(await page.evaluate(()=>!!document.activeElement?.closest('[hidden],[inert]')),false);
+  await toggle.focus();await resize(1100,740);await expect(panel).toHaveAttribute('data-navigation','tabs');
+  let releasePending,heldSelection;
+  const gate=new Promise(resolve=>releasePending=resolve);
+  const holdSelection=async route=>{
+   const request=route.request();
+   if(isAction(request)&&unwrap(request.postDataJSON()).action==='canvas.select'){heldSelection=request;await gate}
+   await route.continue();
+  };
+  await page.route('**/api/actions',holdSelection);
+  try{
+   await focusedDocument.click();await expect.poll(()=>!!heldSelection).toBe(true);
+   await resize(850,740);await page.waitForTimeout(850);
+   await expect(panel,'An unaccepted selection defers layout beyond the normal quiet interval').toHaveAttribute('data-navigation','tabs');
+   const accepted=page.waitForResponse(response=>response.request()===heldSelection);
+   releasePending();const response=await accepted;
+   await acceptedCanvasReceipt(observedReceipts.get(response.request()),unwrap(heldSelection.postDataJSON()).id);
+   await expect(panel).toHaveAttribute('data-navigation','compact');await expect(documents()).toBeFocused();
+  }finally{releasePending();await page.unroute('**/api/actions',holdSelection)}
+  await capture('auto-narrow-tall');
+  await navigation('tabs');await expect(strip).toBeVisible();
+  await resize(1100,520);await expect(panel).toHaveAttribute('data-navigation','tabs');
+  await navigation('compact');await resize(1100,740);
+  await expect(panel).toHaveAttribute('data-navigation','compact');await expect(strip).toBeHidden();
+  await settleCanvasReceipts(observedReceipts.values());await page.reload();await showFixtureConversation(page,{navPinned:false});
+  await expect(panel).toHaveAttribute('data-navigation-preference','compact');
+  await expect(panel).toHaveAttribute('data-navigation','compact');
+  await navigation('auto');await toggle.focus();await expect(panel).toHaveAttribute('data-navigation','tabs');
+  await action('view.update',{patch:{canvasFocused:false}});
+  return {observations,moreDeferred:true,dialogDeferred:true,focusedNavigationDeferred:true,manualReloadRetained:true};
+ });
+ await check('layout switches retain an exact historical HTML iframe, input, scroll and view generation',async()=>{
+  await page.setViewportSize({width:1500,height:850});
+  const content='<h1>Retained layout preview</h1><label>Layout unfinished input <input id="edit"></label><output id="token"></output><div style="height:3000px">Long retained document</div><script>document.querySelector("#token").textContent=crypto.randomUUID()</script>';
+  const id=(await action('canvas.show',{kind:'html',title:'Stateful layout document',content})).result.id;
+  await action('canvas.select',{id,version:1});
+  const iframe=panel.locator('[data-canvas-view="primary"] iframe'),frame=page.frameLocator('[data-canvas-view="primary"] iframe');
+  await frame.getByLabel('Layout unfinished input').fill('KEEP ACROSS NAVIGATION LAYOUTS');
+  const node=await iframe.elementHandle();
+  const view=async()=>{const s=await state();return s.canvasWorkspace.views.find(row=>row.viewId==='primary')};
+  const target=v=>Object.fromEntries(['viewId','resourceId','resourceRevision','generation','selectedVersion','runningVersion','renderer'].map(key=>[key,v[key]]));
+  const token=await frame.locator('#token').textContent(),before=target(await view());
+  // Scroll the actual iframe through native wheel input and sample its own
+  // document, not a parent scroller or a replacement frame's saved content.
+  const box=await iframe.boundingBox();await page.mouse.move(box.x+box.width/2,box.y+box.height/2);await page.mouse.wheel(0,420);
+  await expect.poll(()=>frame.locator('html').evaluate(()=>scrollY)).toBeGreaterThan(100);
+  const scroll=await frame.locator('html').evaluate(()=>scrollY);
+  const observations=[];
+  for(const mode of ['tabs','compact','auto','tabs','compact']){
+   await navigation(mode);
+   assert.equal(await node.evaluate(el=>el.isConnected&&el===document.querySelector('[data-canvas-view="primary"] iframe')),true);
+   assert.equal(await frame.locator('#token').textContent(),token);
+   await expect(frame.locator('#edit')).toHaveValue('KEEP ACROSS NAVIGATION LAYOUTS');
+   assert.equal(await frame.locator('html').evaluate(()=>scrollY),scroll);
+   assert.deepEqual(target(await view()),before);
+   observations.push({preference:mode,rendered:await panel.getAttribute('data-navigation'),view:target(await view())});
+  }
+  await node.dispose();await capture('retained-historical-html-layouts');
+  return {before,token,scroll,observations};
+ });
+ await check('browser preview keeps its iframe and URL across Tabs and Compact',async()=>{
+  const previewUrl=url+'/canvas-navigation-site';
+  await page.route(previewUrl,route=>route.fulfill({contentType:'text/html',body:'<h1>Browser layout fixture</h1><label>Website local input <input></label>'}));
+  try{
+   const id=(await action('canvas.show',{kind:'browser',title:'Browser layout fixture',url:previewUrl})).result.id;
+   const iframe=panel.locator('iframe.a-canvas-html'),frame=page.frameLocator('iframe.a-canvas-html');
+   await frame.getByLabel('Website local input').fill('KEEP WEBSITE INPUT');
+   const node=await iframe.elementHandle(),source=await iframe.getAttribute('src');
+   for(const mode of ['tabs','compact','auto']){
+    await navigation(mode);
+    assert.equal(await node.evaluate(el=>el.isConnected&&el===document.querySelector('iframe.a-canvas-html')),true);
+    assert.equal(await iframe.getAttribute('src'),source);await expect(frame.getByLabel('Website local input')).toHaveValue('KEEP WEBSITE INPUT');
+    assert.equal((await state()).canvas.id,id);
+   }
+   await node.dispose();return {id,source,sameIframe:true,inputRetained:true,limit:'Synthetic route-backed website; not external embedding or authentication acceptance'};
+  }finally{await page.unroute(previewUrl)}
+ });
+ await check('unavailable navigation storage is graceful and manual choices still work for this page',async()=>{
+  await page.addInitScript(()=>{
+   for(const method of ['getItem','setItem']){
+    const original=Storage.prototype[method];
+    Storage.prototype[method]=function(key,...args){
+     if(key==='amplifier.canvas-navigation.v1')throw new DOMException('Synthetic unavailable navigation storage','SecurityError');
+     return original.call(this,key,...args);
+    };
+   }
+  });
+  await settleCanvasReceipts(observedReceipts.values());await page.reload();await showFixtureConversation(page,{navPinned:false});
+  await expect(panel).toHaveAttribute('data-navigation-preference','auto');
+  for(const mode of ['tabs','compact']){await navigation(mode);await expect(panel).toHaveAttribute('data-navigation',mode)}
+  await settleCanvasReceipts(observedReceipts.values());await page.reload();await showFixtureConversation(page,{navPinned:false});
+  await expect(panel).toHaveAttribute('data-navigation-preference','auto');
+  await expect(documents()).toBeVisible();await expect(panel.locator('.a-canvas-more summary')).toBeVisible();
+  return {fault:'Only navigation key getItem/setItem throw SecurityError',manualUsable:true,reloadDefault:'auto'};
  });
  await action('canvas.views.inspect');await settleCanvasReceipts(observedReceipts.values());
  assert.deepEqual(report.http.filter(row=>row.transportError||row.readError||row.receiptTimeout||row.status>=400||row.body?.accepted===false),[],'Unexpected action receipt failures');
