@@ -316,10 +316,11 @@ def _windows_hold(folder):
     the folder through the handle: the held folder, never what a junction at
     its path names. The removal looks at the handle again and refuses a folder
     that is a junction by then. Then it removes the folder through the handle:
-    this object, only when it is empty, and never what its path names. A
-    folder that becomes a junction after that look goes as the junction itself.
+    this object, only when it is empty, and never what its path names.
 
-    Native cases show each of these on a hosted Windows runner.
+    Native cases show each of these on a hosted Windows runner. One more fact
+    has a measurement and no case: a folder that becomes a junction after the
+    removal's look goes as the junction itself, and what it names stays whole.
     """
     import ctypes
     from .windows_files import BYTE
@@ -348,7 +349,7 @@ def _windows_stage_hold(stage):
     right to list, and shares reading and writing. While it is open, Windows
     refuses every program the rename of the stage and of a folder above it. It
     asks for no right to delete, so a program that has the stage as its
-    working folder does not stop it.
+    working folder does not stop it. Native cases show each of these.
     """
     import ctypes
     import struct

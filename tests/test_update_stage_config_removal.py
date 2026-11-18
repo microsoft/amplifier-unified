@@ -1574,31 +1574,53 @@ def test_native_windows_stage_config_folder_that_becomes_a_junction_in_place_is_
     assert gone(stage) and held(home) == before
 
 
-@pytest.mark.skipif(os.name != 'nt', reason='requires native Windows private files')
-def test_native_windows_stage_config_folder_that_is_a_working_folder_stays_until_its_program_ends(native_stage):
-    """A program has a folder of the copy as its working folder. Windows then refuses the walk's hold of it.
+@contextmanager
+def program_with_working_folder(folder):
+    """Another process that has this folder as its working folder until the block ends."""
+    program = subprocess.Popen(
+        [sys.executable, '-I', '-c', "import sys; print('ready', flush=True); sys.stdin.read()"],
+        cwd=str(folder), stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    try:
+        assert program.stdout.readline().strip() == 'ready'
+        yield
+    finally:
+        program.communicate('', timeout=60)
 
-    The folder stays with everything below it; the other entries of the copy
-    go. After the program ended, a later call removes the rest.
+
+@pytest.mark.skipif(os.name != 'nt', reason='requires native Windows private files')
+def test_native_windows_stage_config_working_folder_of_a_program_in_the_stage_and_in_a_copy(native_stage):
+    """A program has the stage, or a folder of a copy, as its working folder.
+
+    The stage: the removal goes on, and the copies are gone. The hold of the
+    stage asks for no right to delete, so that program does not stop it.
+
+    A folder of a copy: Windows refuses the walk's hold of it. The folder
+    stays with everything below it and counts as one entry; the other entries
+    of the copy go. After the program ended, a later call removes the rest.
     """
+    home, stage, before = native_stage()
+    total = copied(stage)
+    with program_with_working_folder(stage):
+        result = storage.remove_stage_config(home, stage)
+        assert result == (None, total), (
+            f'The removal returned {result!r}; left {left(stage)}; '
+            f'the boundary refuses {boundary_refusals(home, stage)}')
+    assert gone(stage) and held(home) == before
+
     home, stage, before = native_stage()
     tls, total = stage / 'config' / 'tls', copied(stage)
     stays = ['config', 'config/tls', 'config/tls/ca.crt', 'config/tls/leaf.crt', 'config/tls/leaf.key']
-    program = subprocess.Popen(
-        [sys.executable, '-I', '-c', "import sys; print('ready', flush=True); sys.stdin.read()"],
-        cwd=str(tls), stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
-    try:
-        assert program.stdout.readline().strip() == 'ready'
+    with program_with_working_folder(tls):
         with pytest.raises(PermissionError):
             with storage._windows_hold(tls):
                 pass
-        result = storage.remove_stage_config(home, stage)
-        assert result == ('refused', total - len(stays)), (
-            f'The removal returned {result!r}; left {left(stage)}; '
+        work = storage._Work(storage.STAGE_CONFIG_ENTRIES)
+        reason = storage._remove_stage_config(home, stage, None, work)
+        # Two entries stay for the count: the folder that got no hold, and the folder that holds it.
+        assert (reason, work.removed, work.stayed) == ('refused', total - len(stays), 2), (
+            f'The removal returned {reason!r}, removed {work.removed}, left {work.stayed}; left {left(stage)}; '
             f'the boundary refuses {boundary_refusals(home, stage)}')
         assert left(stage) == stays
-    finally:
-        program.communicate('', timeout=60)
     result = storage.remove_stage_config(home, stage)
     assert result == (None, len(stays)), (
         f'The removal after the program ended returned {result!r}; left {left(stage)}; '
@@ -1611,8 +1633,9 @@ def test_native_windows_stage_config_stage_times_go_back_through_the_hold_of_tha
     """The removal puts the write time of the stage folder back, through the handle that held the stage all the time.
 
     The moment of the tries is after the hold of the last copy is closed,
-    directly before the times are written: the stage cannot be moved away
-    there, so the times go to the folder that they were read from. A junction
+    directly before the times are written: the stage and the folder above it
+    cannot be moved away there, so the times go to the folder that they were
+    read from. A junction
     at the name of a stage gets no hold: no time is written, not the
     junction's own and not the time of the folder that it names.
     """
@@ -1646,6 +1669,8 @@ def test_native_windows_stage_config_stage_times_go_back_through_the_hold_of_tha
                     'the write time of the stage changed': os.lstat(stage).st_mtime_ns != info.st_mtime_ns,
                     'rename of the stage': refusal(lambda: os.rename(stage, other_stage)),
                     'rename of the stage by another process': by_another_process(try_rename, stage, other_stage),
+                    'rename of the folder of the stages': refusal(
+                        lambda: os.rename(stage.parent, stage.parent.with_name('away'))),
                 })
                 restore()
             yield try_then_restore
@@ -1657,7 +1682,8 @@ def test_native_windows_stage_config_stage_times_go_back_through_the_hold_of_tha
         f'The removal returned {result!r}; left {left(stage)}; the boundary refuses {boundary_refusals(home, stage)}')
     assert tries == {
         'the copies are gone': True, 'the write time of the stage changed': True,
-        'rename of the stage': 32, 'rename of the stage by another process': 'winerror 32'}, tries
+        'rename of the stage': 32, 'rename of the stage by another process': 'winerror 32',
+        'rename of the folder of the stages': 5}, tries
     assert os.lstat(stage).st_mtime_ns == info.st_mtime_ns
     # Control: an entry that comes and goes directly in the stage changes that time when nothing puts it back.
     (stage / 'made-up-entry').write_text('made-up')
