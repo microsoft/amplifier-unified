@@ -6,6 +6,8 @@ install packages, or activate any cached source.
 from pathlib import Path
 import hashlib
 import json
+import os
+import re
 import tomllib
 from urllib.parse import urlsplit
 
@@ -64,8 +66,7 @@ def app_selection(home, *, config=None, original_home=None):
     from .builtin_behaviors import resolve_builtin_behavior, resource_root
     from .runtime_profiles import configuration_key
     from .updates import source_key
-    from urllib.parse import parse_qs
-    from urllib.request import url2pathname
+    from urllib.parse import parse_qs, unquote
     import yaml
 
     config = config or read_config(home, home=home, global_only=True)
@@ -105,14 +106,15 @@ def app_selection(home, *, config=None, original_home=None):
         parsed = urlsplit(reference)
         if parsed.scheme == 'file':
             sub = parse_qs(parsed.fragment).get('subdirectory', [''])[0]
-            # The address of a Windows file is file:///C:/...; its path part
-            # alone is no Windows path. The conversion refuses an address
-            # that is no path of this system (on Windows with an IndexError
-            # for a path part that starts with a colon).
-            try:
-                path = Path(url2pathname(parsed.path)) / sub
-            except (OSError, IndexError):
-                continue  # Not the shipped file.
+            text = unquote(parsed.path)
+            # The address of a Windows file is file:///C:/...: its path part
+            # has a slash before the drive. Take only that slash away. A
+            # general conversion (urllib.request.url2pathname) also takes
+            # "//localhost" away, on every system, and an address that was
+            # not the shipped file's would become it.
+            if os.name == 'nt' and re.match('/[A-Za-z]:(/|$)', text):
+                text = text[1:]
+            path = Path(text) / sub
             if path.parent == resource_root() / 'behaviors' and path.suffix == '.yaml':
                 shipped(yaml.safe_load(path.read_text()))
     # Only the source roots that installation actually relocates are equivalent.
