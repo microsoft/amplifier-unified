@@ -172,6 +172,36 @@ def test_every_product_name_that_the_fixture_reads_exists():
     assert tomllib.loads(release.replace_version(project, "version", version, "0.999.0"))["project"]["version"] == "0.999.0"
 
 
+def test_no_function_of_the_fixture_hides_a_name_of_its_module():
+    """A name that a function assigns is that function's own name in its whole body.
+
+    The first run of the second case ended in its check 3: a variable `saved`
+    of the first case's check 6 hid a module function `saved` for every helper
+    inside `run`. Python says so only when the line runs, and that line runs
+    only on the Windows runner, after several minutes. Find it here.
+    """
+    import symtable
+    source = FIXTURE.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    top = {node.name for node in tree.body if isinstance(node, ast.FunctionDef)} | {
+        target.id for node in tree.body if isinstance(node, ast.Assign)
+        for target in node.targets if isinstance(target, ast.Name)}
+    assert {"saved_part", "saved_updates", "read", "save", "calls", "CASES"} <= top
+    hidden = []
+
+    def walk(table, path):
+        here = path + [table.get_name()]
+        if table.get_type() == "function":
+            hidden.extend("/".join(here) + ": " + symbol.get_name() for symbol in table.get_symbols()
+                          if symbol.is_local() and symbol.get_name() in top)
+        for child in table.get_children():
+            walk(child, here)
+
+    for child in symtable.symtable(source, str(FIXTURE), "exec").get_children():
+        walk(child, [])
+    assert hidden == []
+
+
 def test_the_fixture_reads_the_update_state_that_the_app_saves(fixture, tmp_path):
     from amplifier_web import state_records
     database = sqlite3.connect(tmp_path / "app.sqlite3")
@@ -194,11 +224,11 @@ def test_the_fixture_reads_the_update_state_that_the_app_saves(fixture, tmp_path
     database.commit()
     assert fixture.saved_updates(tmp_path) == {}
     # The second case reads the update switches from the same store.
-    assert fixture.saved(tmp_path, "settings") == {}
+    assert fixture.saved_part(tmp_path, "settings") == {}
     state["settings"] = {"updates": {"autoCheck": True, "autoInstall": False, "intervalHours": 4}}
     state_records.save(database, state, {}, [], global_keys=["settings"])
     database.commit()
-    assert fixture.saved(tmp_path, "settings") == state["settings"] == state_records.load(database)["settings"]
+    assert fixture.saved_part(tmp_path, "settings") == state["settings"] == state_records.load(database)["settings"]
     database.close()
     assert "errorType" in fixture.app_state(tmp_path / "absent")
 

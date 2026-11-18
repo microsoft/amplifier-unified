@@ -381,7 +381,7 @@ def bounded(value, limit=6000):
     return value if len(raw) <= limit else {"truncated": raw[:limit]}
 
 
-def saved(home, key):
+def saved_part(home, key):
     """One part of the state that the app last saved. Read only; the app keeps its database open."""
     database = sqlite3.connect((home / "app.sqlite3").as_uri() + "?mode=ro", uri=True, timeout=5)
     try:
@@ -397,7 +397,7 @@ def saved(home, key):
 
 def saved_updates(home):
     """What the app last saved about updates."""
-    return saved(home, "updates")
+    return saved_part(home, "updates")
 
 
 def app_state(home):
@@ -548,11 +548,11 @@ def run(case="follow"):
                         raise
                     time.sleep(1)
 
-        def unhurried(read):
+        def unhurried(look):
             # As follow_state: the app writes its database at any moment.
             for attempt in range(10):
                 try:
-                    return read()
+                    return look()
                 except sqlite3.Error:
                     if attempt == 9:
                         raise
@@ -560,7 +560,7 @@ def run(case="follow"):
 
         def switches():
             """The two update switches as the app saved them."""
-            return unhurried(lambda: (saved(home, "settings") or {}).get("updates") or {})
+            return unhurried(lambda: (saved_part(home, "settings") or {}).get("updates") or {})
 
         def automatic():
             # The app's own rule for "Keep Amplifier up to date": both switches, and each is on when it is absent.
