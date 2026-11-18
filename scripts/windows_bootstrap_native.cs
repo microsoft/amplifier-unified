@@ -54,7 +54,9 @@ namespace UnifiedBootstrap {
         // Uninstall's own names (amplifier_web/windows_uninstall.py): the journal
         // that an uninstall with the delete choice writes before its first
         // deletion, and the entries that hold the person's data. Setup only
-        // looks at them, to choose a text. It never writes or deletes them.
+        // looks at them: to choose a text, and to start no launcher when its
+        // look finds an entry with the journal's name. It never writes or
+        // deletes them.
         internal const string Journal="unified-uninstall.json";
         internal static readonly string[] Data={"shared","app","capture","ownership","import","workspace","export"};
         internal static string Diagnostics;
@@ -774,33 +776,140 @@ namespace UnifiedBootstrap {
                 return true;
             } catch(Exception) { return false; }
         }
+        internal static string Signs(string root) {
+            // What a second setup run looks for besides its own record, in
+            // two looks. Each is one step on one path, and nothing is held
+            // between them. Setup never writes or deletes these entries.
+            // First: the attributes of the entry with the journal's name.
+            // The entry is not opened and not read, and a link is not
+            // followed. A file, a folder and a link all answer "removal":
+            // the launcher does not open Amplifier when its look finds an
+            // entry with that name (windows_uninstall.unfinished). Only
+            // Windows' answer that no file has that name goes on to the
+            // second look. Every other answer is "other".
+            // Second: the attributes of the entry "app". A folder that is no
+            // link answers "kept"; setup does not look into it. An uninstall
+            // that deletes the folder writes its journal before it deletes
+            // anything, and this folder is gone before the journal is. The
+            // launcher uses the same two facts for its sentence on chats and
+            // settings (_setup_again in amplifier_web/windows_consumer.py);
+            // it also reads setup's completion record, and setup knows only
+            // that record's name. Everything else, and every doubt, is
+            // "other".
+            // The answer chooses a text. With "removal" setup also starts no
+            // launcher. Only with "kept" does a text say that Amplifier keeps
+            // the person's chats and settings in the folder, or that they
+            // are kept.
+            try { File.GetAttributes(Path.Combine(root,Journal)); return "removal"; }
+            catch(FileNotFoundException) {}
+            catch(Exception) { return "other"; }
+            try {
+                return (File.GetAttributes(Path.Combine(root,"app"))&(FileAttributes.Directory|FileAttributes.ReparsePoint))==
+                    FileAttributes.Directory?"kept":"other";
+            } catch(Exception) { return "other"; }
+        }
         internal static string Unopened(string root) {
             // The text for a folder that has setup's completion record and no
             // launcher program. Setup installs nothing there and deletes nothing.
+            // Each statement is what setup found in this run, or what setup
+            // does. None says anything about the folder's history: setup
+            // knows only that a file with the name of its completion record
+            // is there.
             // After an uninstall that deleted the person's data, the folder can
             // stay: it holds something that is not Amplifier's, or the last step
-            // of the removal did not finish. Then the text of a damaged
-            // installation is not true ("It holds your chats and settings"), and
-            // it names no next step. Each statement of the other text is what
-            // setup found in this run, or what setup does. It says nothing
-            // about the folder's history: setup knows only that a file with the
-            // name of its completion record is there. Its next step is to
-            // move or rename the folder, as at setup's stop for a damaged
-            // folder, and not to delete it: the folder can hold something of
-            // the person's that this look did not see.
+            // of the removal did not finish. The first text is for that
+            // state. Its next step is to move or rename the folder, as at
+            // setup's stop for a damaged folder, and not to delete it: the
+            // folder can hold something of the person's that this look did
+            // not see.
+            // The second text is the only one that says that Amplifier
+            // keeps the person's chats and settings in the folder (Signs:
+            // "kept"). The third names no chats and no settings: the look
+            // found an entry with the journal's name, or Windows gave that
+            // look no answer, or the folder "app" is not there.
             if(Emptied(root)) return
                 "Setup cannot install Amplifier yet. Setup found an installation record in this folder:\n"+root+"\n\n"+
                 "Setup cannot find a program file that it needs to open Amplifier from that folder. "+
                 "Setup found no chats or settings in the folder. "+
                 "It does not change the folder, because the folder can hold files or folders that are not Amplifier's.\n\n"+
                 "Move or rename that folder. Then run this setup file again.";
-            return "Amplifier is already installed in "+root+", but setup cannot open it: a program file is missing.\n\n"+
-                "Keep that folder. It holds your chats and settings. This version of setup cannot repair it.";
+            if(Signs(root)=="kept") return
+                "Amplifier is already installed in "+root+", but setup cannot open it. "+
+                "Setup cannot find a program file that it needs to open Amplifier from that folder.\n\n"+
+                "Keep that folder. Amplifier keeps your chats and settings in it. This version of setup cannot repair it.";
+            return "Setup cannot open Amplifier. Setup found an installation record in this folder:\n"+root+"\n\n"+
+                "Setup cannot find a program file that it needs to open Amplifier from that folder.\n\n"+
+                "Keep that folder. Setup deletes nothing in it. This version of setup cannot repair it.";
+        }
+        internal static string Offer(bool listed, bool kept) {
+            // The question of a second setup run when Signs did not answer
+            // "removal". `kept`: it answered "kept".
+            if(listed) return "Amplifier is already installed on this PC.\n\nSelect Yes to open it now.\n\n"+
+                "You can also open it from the Start menu: Amplifier Unified.";
+            return "Amplifier is already installed on this PC, but setup did not find it in the Start menu.\n\n"+
+                "Select Yes to add it to the Start menu again and start it now."+(kept?" Your chats and settings are kept.":"");
+        }
+        internal static string Unadded(bool kept) {
+            // After a failed entries step, before the start. `kept` as in
+            // Offer. "tries": the start comes after this message, Windows
+            // can refuse it, and the launcher can refuse to open Amplifier.
+            return "Setup could not add Amplifier to the Start menu. Setup tries to start Amplifier now.\n\n"+
+                "To open it later, run this setup file again."+(kept?" Your chats and settings are kept.":"");
+        }
+        internal static string Removing(string root, bool listed) {
+            // The first text for a folder with the launcher program in which
+            // the look found an entry with the journal's name. The launcher does not open
+            // Amplifier from such a folder, so setup does not start it. A
+            // file with that name is no proof of an uninstall, so the text
+            // says only that setup found the record. The step is the
+            // launcher's own. With `listed` it is a message; without, it is
+            // the question whether setup adds the entries again: after a
+            // removal that stopped, the entries are what lets the person
+            // uninstall again. The question says that setup tries: setup
+            // does not know before the entries step whether it can add them.
+            if(listed) return "Setup found an uninstall record in this folder:\n"+root+"\n\n"+
+                "Amplifier does not open while that record is there. Setup did not start it.\n\n"+
+                "To finish that uninstall, select Uninstall Amplifier in the Start menu or in the Windows Apps list.";
+            return "Setup found an uninstall record in this folder:\n"+root+"\n\n"+
+                "Amplifier does not open while that record is there. Setup does not start it. "+
+                "Setup did not find Amplifier in the Start menu.\n\n"+
+                "Select Yes, and setup tries to add Amplifier to the Start menu again, so that you can finish that uninstall from there.";
+        }
+        internal static string Unstarted(string root, bool added) {
+            // The last text of that state, after the entries step. When the
+            // entries could not be added and setup's look finds the journal
+            // of a delete and none of the person's data (Emptied), setup
+            // cannot finish that removal, and it has no entry to offer for
+            // the launcher's step. Before its last message an uninstall with
+            // the delete choice deletes the folder "workspace" with the
+            // person's data, and AddEntries starts the entries program with
+            // that folder as its working folder. It also deletes the records
+            // that that program reads, when it can. An uninstall whose last
+            // message is still open in another window can finish the
+            // removal itself, so the text names that message first; until
+            // the answer that uninstall runs from the folder, and Windows
+            // refuses to move it. After the answer the uninstall's last
+            // step holds the folder while it works, so the text says "a few
+            // minutes later". Then the step is the one of the first text of
+            // Unopened, to move or rename the folder, and never to delete
+            // it.
+            if(added) return "Setup added Amplifier to the Start menu. "+
+                "Setup did not start Amplifier, because it found an uninstall record in this folder:\n"+root+"\n\n"+
+                "To finish that uninstall, select Uninstall Amplifier in the Start menu.";
+            if(Emptied(root)) return "Setup could not add Amplifier to the Start menu. "+
+                "Setup did not start Amplifier, because it found an uninstall record in this folder:\n"+root+"\n\n"+
+                "Setup found no chats or settings in the folder.\n\n"+
+                "If another Amplifier message is open, answer it first. "+
+                "If the folder is still there a few minutes later, move or rename it. Then run this setup file again.";
+            return "Setup could not add Amplifier to the Start menu. "+
+                "Setup did not start Amplifier, because it found an uninstall record in this folder:\n"+root+"\n\n"+
+                "Restart Windows. Then run this setup file again.";
         }
         static int OpenInstalled(string root) {
             // A second setup run adds missing Start-menu and Apps-list entries
             // again and starts the app. It never installs again and never removes
-            // anything.
+            // anything. When its look finds an entry with the journal's name
+            // it does not start the app: the launcher would refuse.
             if(!File.Exists(AppStart(root).FileName)) {
                 Say(Unopened(root),MessageBoxButtons.OK,MessageBoxIcon.Warning);
                 return 1;
@@ -814,15 +923,24 @@ namespace UnifiedBootstrap {
                 listed=receipt!=null && Text(receipt,"status")=="installed" &&
                     File.Exists(Path.Combine(Text(receipt,"folder"),"Amplifier Unified.lnk"));
             } catch(Exception) {}
-            if(Say(listed
-                ? "Amplifier is already installed on this PC.\n\nSelect Yes to open it now.\n\n"+
-                  "You can also open it from the Start menu: Amplifier Unified."
-                : "Amplifier is already installed on this PC, but it is not in the Start menu and does not start when you sign in.\n\n"+
-                  "Select Yes to add it to the Start menu again and start it now. Your chats and settings are kept.",
-                MessageBoxButtons.YesNo,MessageBoxIcon.Information)!=DialogResult.Yes) return 0;
-            return SecondRun(root,listed);
+            // The two looks that choose the texts from here on. Setup looks
+            // once, before its first message of this run.
+            string signs=Signs(root);
+            if(signs=="removal") {
+                if(listed) { Say(Removing(root,true),MessageBoxButtons.OK,MessageBoxIcon.Warning); return 1; }
+                if(Say(Removing(root,false),MessageBoxButtons.YesNo,MessageBoxIcon.Warning)!=DialogResult.Yes) return 0;
+                bool added=SecondRun(root,false,false,false)==0;
+                Say(Unstarted(root,added),MessageBoxButtons.OK,added?MessageBoxIcon.Information:MessageBoxIcon.Warning);
+                return 1;
+            }
+            if(Say(Offer(listed,signs=="kept"),MessageBoxButtons.YesNo,MessageBoxIcon.Information)!=DialogResult.Yes) return 0;
+            return SecondRun(root,listed,true,signs=="kept");
         }
-        internal static int SecondRun(string root, bool listed) {
+        internal static int SecondRun(string root, bool listed, bool start, bool kept) {
+            // `start`: false when setup's look found an entry with the
+            // journal's name. Setup then adds the entries only, shows no
+            // message box here (its progress window is shown) and starts
+            // nothing; the result is 0 when the entries exist.
             // The person sees that setup works: a start can take minutes, and
             // the launcher has no window of its own.
             Stage=listed?"Starting Amplifier (this can take a few minutes)":"Adding Amplifier to the Start menu";
@@ -832,8 +950,8 @@ namespace UnifiedBootstrap {
                 var bar=new ProgressBar {Left=20,Top=85,Width=500,Style=ProgressBarStyle.Marquee};
                 form.Controls.Add(label);form.Controls.Add(bar);
                 var timer=new System.Windows.Forms.Timer {Interval=250};
-                // The result is 0 only when the entries exist and setup saw the
-                // launcher finish. The launcher does not need setup: once it
+                // With a start, the result is 0 only when the entries exist and
+                // setup saw the launcher finish. The launcher does not need setup: once it
                 // runs, the person can close this window and Amplifier goes on.
                 // Setup did not see the outcome then, and its result stays 1.
                 // The timer sees the launcher's end, so that nothing still waits
@@ -855,21 +973,21 @@ namespace UnifiedBootstrap {
                             listed=await Task.Run(()=>AddEntries(root));
                             // Not a reason to keep the person from the app: it
                             // starts, as it did before this step existed.
-                            if(!listed) Say("Setup could not add Amplifier to the Start menu. Amplifier starts now.\n\n"+
-                                "To open it later, run this setup file again. Your chats and settings are kept.",
-                                MessageBoxButtons.OK,MessageBoxIcon.Warning);
+                            if(!listed && start) Say(Unadded(kept),MessageBoxButtons.OK,MessageBoxIcon.Warning);
                         }
-                        Stage="Starting Amplifier (this can take a few minutes)";
-                        app=await Task.Run(()=>StartApp(root));
-                        started=true;
+                        if(start) {
+                            Stage="Starting Amplifier (this can take a few minutes)";
+                            app=await Task.Run(()=>StartApp(root));
+                            started=true;
+                        }
                     } catch(Exception) {}
                     // The launcher runs. It shows its own messages.
                     if(started && app!=null) { waiting=true; return; }
-                    if(!started) Say("Setup could not start Amplifier.\n\n"+(listed
+                    if(start && !started) Say("Setup could not start Amplifier.\n\n"+(listed
                         ? "Open it from the Start menu: Amplifier Unified."
                         : "Restart Windows. Then run this setup file again."),
                         MessageBoxButtons.OK,MessageBoxIcon.Warning);
-                    else result=listed?0:1;  // Windows gave no process to wait for.
+                    else result=listed?0:1;  // No start was asked for, or Windows gave no process to wait for.
                     settled=true;timer.Stop();form.Close();
                 };
                 Application.Run(form);timer.Dispose();return result;
