@@ -81,7 +81,7 @@ async def test_stage_activate_and_rollback_preserve_original_cache(app,repo):
         assert git(root,'rev-parse','HEAD')==repo[1]
         assert {p.name for p in (stage/'shared-config').iterdir()}=={'settings.yaml','keys.env','routing'}
         assert {name: (stage/'shared-config'/name).read_bytes() for name in inputs}==inputs
-        assert (stage/'config/settings.yaml').read_text()=='{}'
+        assert not (stage/'config').exists() and not (stage/'routing').exists()  # tests/test_update_stage_config.py
     manager.validate=validate
     manager.diagnostics.begin('ecosystem', components=['repo'])
     failure=manager.diagnostics.record('ecosystem-validation','failed',errorType='ValueError')

@@ -1515,6 +1515,146 @@ size from that validation and does not query the name a third time. Nobody but
 the file's owner, SYSTEM and administrators can replace or remove a private
 file: its ACL and its folder's ACL grant no other account any access.
 
+### Repair of a source store object that holds bytecode
+
+On Windows a helper of 0.106.5 or earlier wrote `__pycache__\*.pyc` into an
+object of the installation's source store (the connection check of a
+connection whose module comes from a source: "OpenAI Compatible API", Azure
+OpenAI, Ollama, vLLM). Foundation refuses such an object from then on
+("Shared source contents changed"): no chat with that connection starts, a
+component update fails while the connection exists, and the Updates page keeps
+"A source could not be checked" after the connection is removed. 0.106.6 stops
+new bytecode (`source_imports.prepare`). `source_store_repair.at_host_start`
+makes an object that already has such files equal to its commit again.
+
+**What it deletes.** A file only when all of these hold: it is a plain file
+directly in a folder named `__pycache__`; its name ends with `.pyc`; it is
+below an object of this installation's own store; Git lists it as untracked in
+that object; and the object has no changed tracked file and no other untracked
+entry. One exception, the one that Foundation's own check makes:
+`.amplifier_cache_meta.json` at the object's top, which Foundation writes into
+every object. The step never deletes that file. Then it deletes that
+`__pycache__` folder when this run took a file from it and it is empty. It
+deletes nothing else. Any doubt leaves the object exactly as it is: a link of
+any kind that the listing finds in the object or below its `.git` (Git does
+not run then), a Git error or timeout, a name that Git gives and the listing
+did not have. A link that appears after the listing can be read by Git; the
+deletion still opens each folder of a file's path and the file as themselves
+and checks each on its handle, so nothing behind such a link is deleted.
+
+**How.** It lists and deletes with the native steps of `windows_removal`
+(`_Native`: a name from the listing of an open handle, an entry opened
+relative to its parent's handle as itself, a deletion through the handle). It
+imports that class and does not copy it;
+`tests/test_source_store_repair_native.py` pins each step that it uses. Git
+decides with the two commands of Foundation's `clean_checkout`, with
+`--git-dir` and `--work-tree` fixed, every `GIT_*` name out of the
+environment, and `core.fsmonitor=false`. The folders of the object's path stay
+open while Git runs. What is deleted is checked again on handles.
+
+**When.** Only on Windows, only in the host that the start-at-sign-in task
+started, only on the store of the installation that the host belongs to, in
+`cli._serve` before the host takes its own lock. It takes the data folder's
+host lock alone, without a wait; every host holds that lock shared while it
+serves. This host has started no worker, helper or update stage yet (only the
+holder of its hidden console, which reads nothing of the store). A worker or a
+helper of an earlier host ends with that host (a kill-on-close Job), and the
+task's launcher starts the next host only when the earlier host's process tree
+is empty. One process outside that Job can be alive at this moment: the helper
+that replaces the launcher after an app update (`windows_launcher_refresh`)
+starts the task and waits for this host. It installs the launcher's own
+packages and does not read or write the source store. It waits 180 seconds
+for the host, more than this step's bounds.
+
+**Stated limits.** Three cases are not excluded. Each needs a host that a
+person started with a terminal command on this installation: a child of such a
+host that has no Job of its own (an update command, a transfer check, a
+sign-in helper) and outlived it; such a host with another data folder that
+names this store; such a host in the moment between the end of its lock and
+the end of its process. A process of the current version in them only reads:
+a `.pyc` that it has open stays, and Python reads the `.py` where a `.pyc` is
+gone. A process of an app version before 0.106.6 in them can write new
+bytecode; that object is then refused again until the next app version.
+Nothing outside the rule above is deleted in any of them. The repair keeps no
+list of running programs.
+
+One more limit is Git's own. Git runs with the Git configuration of this
+computer, as it does in Foundation's check. The step tells it to start no
+file system monitor, because that program would stay after the command. It
+does not stop a content filter. When an attribute file of the object gives a
+tracked file a filter, and the computer's Git configuration names a program
+for that filter (Git LFS is the usual one; a repository cannot name the
+program itself), `git status` can start that program for a file whose content
+it must compare. Foundation's `clean_checkout` starts the same command in the
+same object at every check of the object, so the step starts no program that
+does not start there already; it adds at most one such command for each try
+of an object. The second command (`ls-files --others`) starts no filter. What
+such a program does is not bound by the rule of what the step deletes. The
+four provider modules had no attribute file when this was written.
+
+**Cost and record.** `<data>\updates\source-store-repair.json` holds the app
+version, whether the pass is complete, a change mark, the tries of each object
+that was left, and the counts and milliseconds of the last run. It holds no
+path and no time of day. A run writes the record before it looks at the
+store; a record that cannot be written means that the store is not looked at.
+After a complete pass a start of the same app version reads that file and does
+nothing more. The first start of an app version lists every folder of every
+object outside `.git` and starts no Git on a store with no `__pycache__`
+folder. An object that has such a folder costs more: the step lists every
+folder below its `.git` for links and starts at most two Git commands. One run has
+these bounds: 20,000 listings, 400,000 entries, 3 seconds of search, 5 seconds
+for one Git command, 8 seconds in all (ending a Git that passed its limit can
+add one second).
+
+No native step of a run begins after those 8 seconds: every listing, open,
+look at a kind and deletion goes through one wrapper (`_Bounded`) that checks
+the limit first. The look for Git into each folder of PATH, each Git command
+and the write of a change mark have the same check, and a Git command is
+started only when half a second is left. The check of the folders above the store does not begin after the
+limit either. So after an operation that took the rest of the time, whether it
+worked or failed, the run only gives its handles back, writes the record a
+last time and writes its one line into the log. One operation has no time
+limit of its own. The limit counts from the start of a run: before it the step
+reads its record, looks for setup's receipt, takes the lock, reads the record
+again and loads the native steps, each once (the second read is under the
+lock, so a run never writes back a change mark that another host's run has
+replaced); after it the step gives the lock back. At its limit
+the step ends the Git program that it started and stops waiting; the installation's
+`git\cmd\git.exe` is Git's starter program, so the Git program behind it can
+run on until its read ends. Git itself only reads there, and that object is
+left.
+
+A bound reached ends the run and a later start goes on. The object in which a
+run reaches a bound gets one try when it is the first object of that run, also
+when the listings before it used a part of the time; so one large object
+cannot hold the pass at itself. An object that could not be decided (a file in
+use, a Git failure) gets one try too. An object gets at most three tries for
+one app version. One app version gets at most ten runs, also when a run is cut
+before its end (the count is written first). A source folder that cannot be
+opened leaves the pass open; the other sources are still looked at, and its
+objects keep their tries.
+
+Every run that finds a file to delete writes a new change mark, 32 random
+hexadecimal digits, before its first deletion; a mark that cannot be written
+means no deletion. The mark is an input of the update check's scan signature
+(`update_inventory_index.signature`), so the check after a repair asks
+Foundation again and the saved "could not be checked" row goes. The mark is
+random and not a count: after a record that was lost or could not be read, a
+new run cannot write a mark that an earlier check saw. Such a record itself
+gives no mark, as before the first repair; the update check keeps the rows of
+one signature only, so it scans again then too. One sequence keeps saved rows:
+the record is lost, a check saves rows, a run repairs, and the record is lost
+again before the next check. The check's own rule ends that after 4 hours.
+The step raises no error into the host's start; a stop of the process passes
+through it. One line with the counts and the milliseconds goes to the host's
+private log (`config\services\task-output.log`).
+
+Not shown on a PC when this was written: the Updates page texts after a
+repair, whether a chat's saved discovery failure goes without "Refresh this
+connection", and the cost on a cold disk. A hosted runner cannot make the
+state through the product, because a new installation takes the newest app
+release before a person can connect anything.
+
 ### Uninstall stops the app before it removes an entry
 
 Uninstall runs from the Apps list or from "Uninstall Amplifier" in the Start

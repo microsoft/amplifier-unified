@@ -158,6 +158,27 @@ def test_diagnostics_allowlist_persistence(tmp_path,reason):
     assert (tmp_path/'module-load-failures.json').stat().st_mode & 0o077 == 0
 
 
+def test_a_connection_whose_component_could_not_be_prepared_gets_a_step_that_a_person_can_take():
+    """Seen on a PC: "Check this connection\u2019s configured module source and dependencies." names no step.
+
+    The program knows that the preparation failed. A first preparation downloads the component, so the one
+    step that a person can take is to check the network and try again.
+    """
+    text = 'This connection\u2019s component could not be prepared. Check that this computer is online, then try again.'
+    assert REMEDIATION['provider_preparation_failed'] == text
+    error = ConfiguredModuleError([{'module': 'provider-chat-completions', 'type': 'provider', 'instance_id': 'one',
+                                    'reason_code': 'provider_preparation_failed',
+                                    'diagnostic': {'stage': 'preparation', 'category': 'unknown',
+                                                   'errorType': 'ValueError'}}])
+    assert str(error) == 'Configured modules could not be prepared: provider-chat-completions (one): ' + text
+    # A cause that the program does know keeps its own sentence.
+    known = safe_failures([{'module': 'provider-x', 'type': 'provider', 'reason_code': 'provider_preparation_failed',
+                            'diagnostic': {'stage': 'preparation', 'category': 'missing_dependency',
+                                           'errorType': 'ModuleNotFoundError'}}])[0]['guidance']
+    assert known == ('A required Python module is unavailable while preparing this connection. '
+                     'Check its module source and dependencies.')
+
+
 def test_unknown_and_legacy_data_never_echo_untrusted_fields():
     assert safe_failures([{'module':'https://private-token','type':{},'reason_code':{'token':'private-token'}}])==[
         {'module':'unknown','type':'unknown','reason_code':'unknown','guidance':REMEDIATION['unknown']}]

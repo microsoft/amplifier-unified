@@ -273,7 +273,7 @@ def test_a_helper_starts_the_preparation_of_a_bundle_only_through_the_rule():
     (``Bundle.from_dict(...).prepare(``). Another name passes unseen.
     ``host/components.py`` prepares in the process of a conversation worker
     (``runtime_worker.py``) or of an update stage (``update_probe.py``). The
-    host starts both with an environment that turns bytecode writing off
+    host starts both with an environment in which an import writes no bytecode
     (``update_sources.store_environment``).
     """
     package = HELPER.parent
@@ -287,13 +287,27 @@ def test_a_helper_starts_the_preparation_of_a_bundle_only_through_the_rule():
 
 
 def test_only_the_three_helper_files_use_the_rule():
-    """The rule changes its whole process for good, so it is for a process that ends after its one task."""
+    """The rule changes its whole process for good, so it is for a process that ends after its one task.
+
+    A reminder, not a proof: it finds a user by an import statement that names
+    ``source_imports`` in the text of a file. Code that sets the two settings
+    itself passes unseen. A file that only names the rule in a sentence is not
+    a user (``source_store_repair.py`` does).
+    """
     package = HELPER.parent
+    statement = re.compile(r'^\s*(?:from\s+[\w.]*\bsource_imports\s+import\b|import\s+[\w.]*\bsource_imports\b'
+                           r'|from\s+[\w.]+\s+import\s+[^\n#]*\bsource_imports\b)', re.MULTILINE)
+    assert [bool(statement.search(text)) for text in (
+        'from amplifier_web.source_imports import prepare', '    from .source_imports import prepare',
+        'import amplifier_web.source_imports', 'from . import cli, source_imports',
+        'new bytecode (``source_imports.prepare``).', '# from the rule of source_imports')] == [
+            True, True, True, True, False, False]
     users = sorted(
         path.relative_to(package).as_posix() for path in package.rglob('*.py')
         if 'static' not in path.relative_to(package).parts and path.name != 'source_imports.py'
-        and 'source_imports' in path.read_text(encoding='utf-8'))
+        and statement.search(path.read_text(encoding='utf-8')))
     assert users == ['module_validate.py', 'portability_probe.py', 'provider_probe.py'], (
-        'amplifier_web.source_imports.prepare turns bytecode writing off for the rest of its process and for the '
-        'processes that it starts. A new helper process may use it: add its file here. The host must not: '
+        'After amplifier_web.source_imports.prepare an import writes no bytecode, for the rest of its process and '
+        'in a Python process that it starts with its environment. A new helper process may use it: add its file '
+        'here. The host must not: '
         'every child of the host would then keep no bytecode.')
