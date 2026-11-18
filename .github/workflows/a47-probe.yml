@@ -1,0 +1,50 @@
+name: A47 probe (temporary, not for merge)
+# Which process holds a new Start-menu shortcut on a hosted Windows runner.
+# This workflow exists only on a probe branch. It is never merged.
+on:
+  pull_request:
+    paths:
+      - .github/workflows/a47-probe.yml
+      - .github/a47-probe/probe.py
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        sample: [1, 2, 3]
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13'
+          architecture: x64
+      - name: Prepare the product's imports
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python -m venv .native-test-venv
+          .\.native-test-venv\Scripts\python.exe -m pip install --index-url https://pypi.org/simple --only-binary=:all: "PyYAML>=6.0.3,<7" "filelock>=4.2.1,<5"
+          if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed.' }
+      - name: Which shell and scanner programs run here
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          "This step's session: " + (Get-Process -Id $PID).SessionId
+          Get-Process -Name explorer, StartMenuExperienceHost, SearchHost, SearchIndexer, SearchProtocolHost, MsMpEng, ShellExperienceHost, sihost, RuntimeBroker -ErrorAction SilentlyContinue | Select-Object Name, Id, SessionId | Format-Table -AutoSize
+          try { Get-MpComputerStatus | Select-Object AMServiceEnabled, AntivirusEnabled, RealTimeProtectionEnabled, OnAccessProtectionEnabled, BehaviorMonitorEnabled, IoavProtectionEnabled | Format-List } catch { "Get-MpComputerStatus: " + $_.Exception.Message }
+          Get-Service -Name WSearch, WinDefend -ErrorAction SilentlyContinue | Select-Object Name, Status, StartType | Format-Table -AutoSize
+          exit 0
+      - name: Probe
+        shell: pwsh
+        run: |
+          .\.native-test-venv\Scripts\python.exe -B .github/a47-probe/probe.py
+          if ($LASTEXITCODE -ne 0) { throw 'The probe failed.' }
