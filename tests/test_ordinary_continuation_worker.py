@@ -28,6 +28,7 @@ class Provider:
         self.tool_issued = False
     def get_info(self):
         return ProviderInfo(id=self.name, display_name="Offline continuation fixture",
+                            capabilities=["request_budget:provider_count"],
                             defaults={"model": "fixture"})
     async def list_models(self): return []
     def parse_tool_calls(self, response): return response.tool_calls or []
@@ -191,7 +192,7 @@ async def test_actual_worker_completes_two_ordinary_turns_after_omission(
                     f'CURRENT-INPUT-{number}: answer without replay.')
             await worker.command({'op': 'send', 'id': f'send-{number}',
                                   'input_id': f'input-{number}', 'text': text})
-            await until(lambda: worker.idle() and any(
+            await until(lambda: (worker.idle() or worker.execution.done()) and any(
                 e.get('type') in {'generation.finished', 'generation.failed'}
                 and f'input-{number}' in e.get('input_ids', []) for e in events))
             assert not any(e.get('type') == 'generation.failed' for e in events), [
