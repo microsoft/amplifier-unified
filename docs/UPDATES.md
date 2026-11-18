@@ -854,6 +854,37 @@ eligibility, installer concurrency, idle admission or automatic-update policy.
 
 Receipts contain only a fixed set of operational facts: phase/status, correlation IDs, elapsed time, exit status, output byte counts, fixed error classifications and allowlisted probe results. Subprocess text, command arguments, workspace paths, source URLs, exception messages and environment variables are never included. Python probes return framed JSON, so unrelated startup messages cannot be mistaken for the package version. Missing imports, missing assets, package location checks, version mismatches, command failures and timeouts remain distinguishable.
 
+Failed update commands also save a **host-local private explanation**, separately
+from those receipts, in `updates/command-details/00.json` through `15.json` under
+the app data folder. The application-install error identifies its slot. Match the
+file's command and attempt IDs to the receipt: later failures reuse slots, so
+an old receipt is not a promise that its explanation remains available. Files
+are owner-private (0600 on POSIX, private data-root ACLs on Windows). Storage
+failure does not replace the installer result or cause a retry.
+`amplifier-unified doctor --verbose` identifies this folder locally, including
+when a custom app data folder is selected; it does not read or print the excerpts.
+
+These files contain at most two physical attempts, with best-effort redacted
+stderr excerpts of at most 8 KiB each. URLs, paths, recognized credential lines
+and their following text, known secret environment values and terminal escapes
+are removed **before** excerpt truncation. Redaction is not a guarantee that
+arbitrary installer prose is safe to share: review these files locally before
+copying any text. They never enter app state, diagnostic capture destinations,
+the support report or feedback by default. No new browser exposure is implied.
+Both pipes are drained concurrently with bounded retained memory (16 MiB stdout,
+128 KiB stderr); oversized stdout fails explicitly rather than returning corrupt
+partial command data. Captured byte counts cover observed output, not just the
+retained prefix; timeout/cancellation counts may be partial. Incomplete stderr
+lines at the capture boundary are omitted. Truncation is explicit.
+
+An allowed anonymous GitHub retry preserves the first failure and the second
+attempt in order, including when the retry fails, times out or is cancelled.
+Top-level command exit/count/duration facts still describe the final attempt;
+each physical attempt has its own elapsed time.
+Eligibility, the shared deadline, isolation, active-host retention and the
+at-most-one anonymous retry rule are unchanged. These explanations do not infer
+the cause of earlier installer failures whose stderr was discarded.
+
 When the app diagnostic collector is available it owns durable storage and configured routing of these events. Otherwise the updater writes a private `updates/diagnostics.jsonl` fallback (0600), rotated at approximately 1MB with one previous file. App state retains the latest 50 events. There is no automatic replay after an interrupted install, paid call, or uncertain result. Historical failures without command receipts cannot be reconstructed from successful later probes; a successful retry does not establish the original cause.
 
 ## Managed restart handoff and recovery

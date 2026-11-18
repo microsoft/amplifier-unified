@@ -79,6 +79,17 @@ def event(row):
             result['resolutionMismatches'] = fields
     if type(row.get('timedOut')) is bool:
         result['timedOut'] = row['timedOut']
+    from .update_diagnostics import command_attempts
+    attempts = command_attempts(row.get('commandAttempts'))
+    if attempts:
+        result['commandAttempts'] = attempts
+    for key in ('anonymousRetry', 'stdoutTruncated', 'stderrTruncated', 'outputLimitExceeded'):
+        if type(row.get(key)) is bool:
+            result[key] = row[key]
+    if row.get('localDetailStatus') in ('saved', 'unavailable'):
+        result['localDetailStatus'] = row['localDetailStatus']
+        if type(row.get('localDetailSlot')) is int and 0 <= row['localDetailSlot'] < 16:
+            result['localDetailSlot'] = row['localDetailSlot']
     if isinstance(row.get('probe'), dict):
         result['probe'] = probe_record(PROBE_PREFIX + json.dumps(row['probe']))
     if row.get('phase') == 'ecosystem-reconcile' and isinstance(row.get('recoveries'), list):
