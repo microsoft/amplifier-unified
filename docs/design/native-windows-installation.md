@@ -1692,6 +1692,44 @@ connection", and the cost on a cold disk. A hosted runner cannot make the
 state through the product, because a new installation takes the newest app
 release before a person can connect anything.
 
+### A helper process can add or replace a package of the worker environment
+
+**Stated limit. Nothing here repairs it.** Three helper processes of the app
+run with the Python of the worker environment: the connection check ("Save
+and check connection", and what uses the same helper: "Test connection",
+"Send test message", the model lists, a chat name that is made later), the
+transfer readiness check, and the module validation. When such a helper
+prepares a module that the environment lacks, Foundation installs that
+module's package into the environment, with the packages that the module
+needs and the environment lacks. That environment is the selected component
+generation's, and setup's own on an installation that has no generation yet.
+Each has a record of its packages.
+
+- **A package more.** This is what was seen: after "Save and check
+  connection" for an "OpenAI Compatible API" connection, the environment held
+  that module's package (two PCs, one with a selected generation and one
+  without). A conversation worker's start accepts a package that the record
+  does not name, and so does the Updates page's health read (see
+  [Updates](../UPDATES.md)).
+- **A recorded package with another version.** The installer can replace a
+  held package when the module's version range excludes the held version.
+  This was shown only with made-up packages in a test environment
+  (uv 0.13.4). It was not seen on a PC, and with the versions that one PC
+  held, none of the four provider modules that come from a source asks for
+  it. If it happens, the start check of a conversation worker refuses the
+  environment ("The worker graph changed after qualification; its recorded
+  generation was preserved."), with a selected generation and with setup's
+  record, so no chat that uses that environment starts. Only a worker whose
+  environment names an installer override of its own (`UV_OVERRIDE`) skips
+  that check. "Restore previous components" selects a generation with its
+  environment as it is then. A new generation has a new environment and does
+  not change an earlier one.
+
+Five of the six services that the connection page offers have their module
+in the worker's own project: their check prepares nothing. The limit is for
+"OpenAI Compatible API" and for a module that a person adds with a source on
+"Full provider configuration".
+
 ### Uninstall stops the app before it removes an entry
 
 Uninstall runs from the Apps list or from "Uninstall Amplifier" in the Start
