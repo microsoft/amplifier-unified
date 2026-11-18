@@ -50,7 +50,16 @@ class ContextRecoveryError(RuntimeError):
     """Fixed, content-free failure at the host recovery boundary."""
     def __init__(self, code):
         self.code = code
-        super().__init__(f"Context recovery stopped [{code}]. Inspect the retained recovery receipt; no automatic retry is permitted.")
+        guidance = {
+            "transition_intent_required": (
+                "Choose an explicit model connection, then send a new ordinary message. "
+                "Default drift, schedules, peer/control input and retries do not authorize transition preparation."),
+            "recovery_checkpoint_rejected": (
+                "The saved checkpoint cannot establish a model transition. Restore a compatible validated source "
+                "or use the supported explicit recovery path; merely choosing a model may not repair this record."),
+            "transition_unsupported": "The mounted context does not support this model-transition preparation.",
+        }.get(code, "Inspect the retained recovery receipt; no automatic retry is permitted.")
+        super().__init__(f"Context recovery stopped [{code}]. {guidance}")
 
 
 def _sync(callback):
@@ -543,7 +552,36 @@ class ContextContinuity:
         if digest(current) != expected:
             raise ContextRecoveryError("recovery_source_changed")
 
-    def _reconcile_transition(self, record):
+    async def _rebind_transition(self, record, foreground, contract, guard, *, progress=None):
+        """A new admitted input owns its current epoch, never an old Stop token."""
+        prior = record["foreground"]
+        if (foreground["inputId"] == prior["inputId"]
+                or any(foreground.get(key) != prior.get(key)
+                       for key in ("selectionRevision", "selection", "connection"))):
+            raise ContextRecoveryError("recovery_unreconciled")
+        # Bind the exact new foreground/selected provider around the Stop read.
+        admission = {**record, "foreground": foreground, "contract": contract}
+        current_guard = self._transition_guard(admission)
+        guard()
+        self._check_transition_file(record)
+        epoch = await _guarded(current_guard, self._interruption_revision)
+        messages = await _guarded(current_guard, self.coordinator.get_capability("context.history"))
+        source = record["sourceRevision"]
+        if (len(messages) < source["messages"]
+                or _source_digest(messages[:source["messages"]]) != source["sha256"]):
+            raise ContextRecoveryError("recovery_source_changed")
+        self._check_transition_file(record)
+        record.setdefault("preparations", []).append({key: copy.deepcopy(record.get(key)) for key in (
+            "state", "code", "foreground", "contract", "interruptionRevision", "completedParts")})
+        record.update(state="pending", code=None, foreground=copy.deepcopy(foreground),
+                      contract=contract, interruptionRevision=epoch)
+        if progress is not None:
+            record["progress"] = progress
+        self._journal["current"] = record["commandId"]
+        self._write_recovery()
+        current_guard()
+
+    async def _reconcile_transition(self, record):
         """Inspect a possibly committed install, never replay its write or calls."""
         foreground = self._foreground()
         guard, contract = self._fresh_guard()
@@ -558,13 +596,15 @@ class ContextContinuity:
         if (candidate.get("sha256") != record.get("candidateSha256")
                 or candidate.get("sha256") != digest({k: v for k, v in candidate.items() if k != "sha256"})):
             raise ContextRecoveryError("recovery_unreconciled")
-        self._reconciling = record
         self._accepted_record = copy.deepcopy(record["sourceCheckpoint"])
         self.loaded = True  # Do not lazily activate the uncommitted candidate.
         self._suppress_save = True
-        record.update(foreground=foreground, progress=candidate, state="pending")
-        self._write_recovery()
-        guard()
+        self._reconciling = record
+        try:
+            await self._rebind_transition(record, foreground, contract, guard, progress=candidate)
+        except BaseException:
+            self._reconciling = None
+            raise
 
     async def _prepare_transition(self):
         """Create one bounded journal transaction, never a rejected-import escape."""
@@ -598,19 +638,19 @@ class ContextContinuity:
                     return existing
             # Only acknowledged completed progress can continue on another
             # legitimate foreground input. Never repeat a reserved/unknown call.
+            effect_free = (not existing["calls"] and existing.get("progress") is None
+                           and not existing.get("candidateSha256") and not existing.get("installedCandidate"))
             if (existing["state"] not in {"failed", "refused"}
                     or existing["calls"] and not existing.get("progress")
                     or any(call["state"] != "completed" for call in existing["calls"])
                     or existing.get("candidateSha256")
                     or existing["foreground"]["inputId"] == foreground["inputId"]
-                    or existing["contract"] != contract):
+                    or existing["contract"] != contract and not effect_free):
                 raise ContextRecoveryError("recovery_unreconciled")
             source = existing["sourceRevision"]
             if digest(messages[:source["messages"]]) != source["sha256"]:
                 raise ContextRecoveryError("recovery_source_changed")
-            existing.update(state="pending", foreground=foreground)
-            self._journal["current"] = command
-            self._write_recovery()
+            await self._rebind_transition(existing, foreground, contract, guard)
             return existing
         # Foreign failed/refused preparations are not a global hold. Unsettled
         # paid calls and install candidates still fence all identities.
@@ -647,6 +687,33 @@ class ContextContinuity:
         finally:
             self._pending_busy = False
 
+    def _source_continuation(self, record):
+        """Observe a safe non-target source unit without restoring it again."""
+        if (record.get("kind") != "model-transition" or record.get("candidateSha256")
+                or record.get("installedCandidate") or self._recovery_busy
+                or self._identity == record["identity"]):
+            return False
+        source_identity = (record.get("sourceCheckpoint") or {}).get("identity")
+        canonical_source = (record.get("sourceCheckpoint") is None
+                            and record.get("sourceCheckpointSha256") is None
+                            and record.get("sourceCheckpointDigest") == digest(None))
+        if source_identity != self._identity and not canonical_source:
+            return False
+        accepted = self._accepted_record
+        try:
+            current = json.loads(self.path.read_text()) if self.path.exists() else None
+        except (ValueError, OSError, TypeError):
+            return False
+        if digest(current) != digest(accepted):
+            return False
+        if isinstance(accepted, dict) and accepted.get("identity") == self._identity:
+            classify = self.coordinator.get_capability("context.checkpoint.transition")
+            return bool(callable(classify) and classify(
+                copy.deepcopy(accepted), copy.deepcopy(self._identity)).get("status") == "compatible")
+        empty = self.coordinator.get_capability("context.checkpoint.prepared_originals")
+        return bool(canonical_source and accepted is None and callable(empty)
+                    and empty(copy.deepcopy(self._identity)) is True)
+
     async def _run_pending(self, *, provider, retain_contents=(), count_view):
         record = self._recovery_record()
         policy = self.coordinator.get_capability("context.transition_policy")
@@ -659,7 +726,7 @@ class ContextContinuity:
         transition = record is not None and record.get("kind") == "model-transition"
         if transition and record["state"] != "committed" and record.get("candidateSha256"):
             await self.refresh_identity()
-            self._reconcile_transition(record)
+            await self._reconcile_transition(record)
         if record is None or record["state"] == "committed" or transition:
             previous_identity = copy.deepcopy(self._identity)
             await self.refresh_identity()
@@ -674,6 +741,8 @@ class ContextContinuity:
             await self.preserve(messages)
             if self._foreign_rejected:
                 raise ContextRecoveryError("recovery_checkpoint_rejected")
+            if transition and self._source_continuation(record):
+                return None  # Passive validation never resets source failure/progress.
             checkpointless = (self._accepted_record is None and
                 self._prepared_identity != self._identity and
                 self.coordinator.get_capability("web.context_transition.originals") is True)
@@ -689,19 +758,6 @@ class ContextContinuity:
                         return None
                     raise
                 transition = record is not None and record.get("kind") == "model-transition"
-            elif transition and not record.get("candidateSha256") and not self._recovery_busy:
-                # Returning to a source identity is permitted only after the
-                # entire source unit verifies under that exact source identity.
-                # This neither settles nor resumes a foreign uncertain call.
-                source_identity = (record.get("sourceCheckpoint") or {}).get("identity")
-                accepted = self._accepted_record
-                restore = self.coordinator.get_capability("context.checkpoint.restore")
-                if (source_identity == self._identity and isinstance(accepted, dict)
-                        and accepted.get("identity") == source_identity and callable(restore)):
-                    disposition = restore(copy.deepcopy(accepted), copy.deepcopy(self._identity))
-                    if disposition.get("status") in {"restored", "resuming"}:
-                        self.status.update(disposition)
-                        return None
         if record is None or record["state"] == "committed":
             return None
         if self._recovery_busy or record["state"] != "pending":

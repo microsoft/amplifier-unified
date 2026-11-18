@@ -127,9 +127,22 @@ about physical HTTP requests or exactly-once billing. Completed acknowledged
 progress survives; unknown paid calls never automatically replay.
 An uncertain target call without an installation candidate does not prevent
 ordinary continuation under the fully revalidated source identity. Its journal
-and target-call fence remain intact. A known refused preparation with no call
+and target-call fence remain intact. Source validation is passive after the
+necessary restore; repeated preparation must not reset paid progress, a failure
+latch or its retry cooldown. With no source checkpoint, a different safe empty
+canonical identity may continue ordinarily without rearming the uncertain target.
+A known refused preparation with no call
 reservations, no progress and no installation effect may be prepared again only
 on a new genuine foreground input under the same binding and cumulative budget.
+That effect-free retry may use a newly authorized tool/request contract, retaining
+the prior failed preparation's provenance in the existing journal. Paid progress
+and uncertain effects cannot use this exception.
+
+Eligible confirmed-progress continuation and exact candidate readback on a
+genuinely new authorized foreground input bind the current interruption epoch
+after current ownership, selection, contract and canonical-source guards. They
+retain prior epoch/provenance and cumulative paid reservations. A newer Stop
+counter alone never renews an old input, clears Stop, or permits UNKNOWN replay.
 
 The complete target request must fit under the unchanged allowance. Immediately
 before installing its derived checkpoint, recheck source, selection, options,
@@ -154,6 +167,12 @@ originals through ordinary preparation. It is never transition provenance.
 Older saved explicit model selections without a revision acquire one stable
 revision only after verification of the mounted connection; restoring a default,
 an absent selection or an explicit null fork revision does not grant admission.
+Missing transition intent tells the person to choose an explicit connection/model
+and send a new ordinary message. A rejected foreign checkpoint instead needs a
+compatible validated source or supported explicit recovery; choosing a model is
+not claimed to repair corruption. Default drift, peer/control input, schedules
+and retries do not authorize a new paid transition campaign. This is not general
+self-repair for every historical conversation or input route.
 
 Only participating roots declare the host-managed transition policy. Other
 Context consumers retain supported ordinary preparation, including one-window

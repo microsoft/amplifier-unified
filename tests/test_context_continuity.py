@@ -1715,6 +1715,235 @@ async def test_h1_unknown_target_preserves_and_resumes_valid_paid_source_partial
     assert adapter.recovery_path.read_bytes() == journal
 
 
+async def test_source_return_repeated_preparation_preserves_paid_failure_cooldown(tmp_path):
+    from amplifier_core import ChatRequest, Message
+    from amplifier_core.llm_errors import LLMError
+    from amplifier_web.host.session import SelectedProvider
+    case = await target_transition_fixture(tmp_path)
+    async def lost(request):
+        raise RuntimeError('unknown target reply')
+    case.raw.compact_context = lost
+    with pytest.raises(RuntimeError, match='unknown target'):
+        await case.prepare()
+    journal = case.adapter.recovery_path.read_bytes()
+    source = SelectedProvider(case.raw, {'instance': 'fixture', 'model': 'selected-model'})
+    case.coordinator.loop.root_provider = source
+    case.raw.input_limit = 50000
+    for row in (
+        {'role': 'assistant', 'content': 'FILLER:' + 'new research ' * 2500},
+        {'role': 'user', 'content': 'Correction after source return.'},
+        {'role': 'assistant', 'content': 'Acknowledged.'},
+        {'role': 'user', 'content': 'Continue source work.'},
+    ):
+        await case.coordinator.context.add_message(row)
+    failed = AsyncMock(side_effect=LLMError('source temporarily offline', retryable=True))
+    case.raw.compact_context = failed
+    async def count(rows):
+        request = ChatRequest(model='selected-model', messages=[Message(**row) for row in rows])
+        return {'dispatch': request, 'budget_decision': source.request_budget(request)}
+    async def prepare_source():
+        return await case.coordinator.context.get_measured_request_view(
+            provider=source, retain_contents=(), count_view=count)
+    with pytest.raises(RuntimeError):
+        await prepare_source()
+    assert failed.await_count == 1
+    failure = copy.deepcopy(case.coordinator.context.summary_failure)
+    partial = copy.deepcopy(case.coordinator.context._summary_progress)
+    assert failure and failure['retryable']
+    with pytest.raises(RuntimeError, match='previous_failure'):
+        await prepare_source()
+    assert failed.await_count == 1
+    assert case.coordinator.context.summary_failure == failure
+    assert case.coordinator.context._summary_progress == partial
+    assert case.adapter.recovery_path.read_bytes() == journal
+
+
+async def test_checkpointless_unknown_target_allows_different_empty_canonical_identity_without_rearm(tmp_path):
+    from amplifier_web.context_continuity import ContextContinuity
+    from amplifier_web.host.session import SelectedProvider
+    from amplifier_core import ChatRequest, Message
+    case = await target_transition_fixture(tmp_path)
+    directory = tmp_path / 'checkpointless'
+    directory.mkdir()
+    case.origin['originals'] = True
+    case.coordinator.register_capability('web.context_transition.originals', True)
+    case.adapter = ContextContinuity(case.coordinator, 'session', directory, AsyncMock(),
+                                    writer_guard=case.gate.check_current)
+    async def lost(request):
+        raise RuntimeError('unknown checkpointless target')
+    case.raw.compact_context = lost
+    with pytest.raises(RuntimeError, match='unknown checkpointless'):
+        await case.prepare()
+    journal = case.adapter.recovery_path.read_bytes()
+    other = SelectedProvider(case.raw, {'instance': 'fixture', 'model': 'different-canonical-model'})
+    case.coordinator.loop.root_provider = other
+    case.origin.update(inputId='new-other-input', generationId='other-generation',
+        selectionRevision='other-choice', selection=other.selection)
+    case.raw.input_limit = 50000
+    case.coordinator.context.config['summarize_trigger'] = 1
+    async def count(rows):
+        request = ChatRequest(model='different-canonical-model', messages=[Message(**row) for row in rows])
+        return {'dispatch': request, 'budget_decision': other.request_budget(request)}
+    result = await case.coordinator.context.get_measured_request_view(
+        provider=other, retain_contents=(), count_view=count)
+    assert result['final_attempt']['dispatch'].model == 'different-canonical-model'
+    assert case.coordinator.context.summary is None
+    assert case.adapter.recovery_path.read_bytes() == journal
+    # Returning to the uncertain target is still fenced even on a fresh input.
+    case.coordinator.loop.root_provider = case.selected
+    case.origin.update(inputId='target-again', generationId='target-again-generation',
+        selectionRevision='target-choice-1', selection=case.selected.selection)
+    with pytest.raises(RuntimeError, match='recovery_unreconciled'):
+        await case.prepare()
+    assert case.adapter.recovery_path.read_bytes() == journal
+
+
+@pytest.mark.parametrize('kind', ['zero-call', 'completed-progress', 'installed-candidate'])
+async def test_fresh_authorized_foreground_rebinds_durable_stop_epoch_without_replaying_work(tmp_path, monkeypatch, kind):
+    from amplifier_web import context_continuity
+    case = await target_transition_fixture(tmp_path)
+    epoch = {'value': 7}
+    case.adapter._interruption_revision = AsyncMock(side_effect=lambda: epoch['value'])
+    case.coordinator.register_capability('web.context_recovery.epoch', lambda: epoch['value'])
+    recover = case.coordinator.get_capability('context.recovery.recover')
+    async def initial_failure(**kwargs):
+        if kind == 'zero-call':
+            raise RuntimeError('known refusal with zero effects')
+        install = kwargs['install']
+        async def fail(candidate, verification):
+            if kind == 'installed-candidate':
+                await install(candidate, verification)
+            raise RuntimeError('lost installation ACK' if kind == 'installed-candidate' else 'known preinstall refusal')
+        return await recover(**{**kwargs, 'install': fail})
+    case.coordinator.register_capability('context.recovery.recover', initial_failure)
+    with pytest.raises(RuntimeError):
+        await case.prepare()
+    prior = case.adapter._recovery_record()
+    assert prior['interruptionRevision'] == 7
+    paid = len(case.raw.compactions)
+    saved = case.adapter.path.read_bytes()
+    writes = []
+    write = context_continuity.write_private
+    def observe(path, text):
+        if path == case.adapter.path:
+            writes.append(text)
+        return write(path, text)
+    monkeypatch.setattr(context_continuity, 'write_private', observe)
+    case.coordinator.register_capability('context.recovery.recover', recover)
+    epoch['value'] = 8
+    # Merely observing a newer Stop is never a fresh authorization.
+    with pytest.raises(RuntimeError, match='recovery_unreconciled|recovery_interrupted'):
+        await case.prepare()
+    assert len(case.raw.compactions) == paid
+    case.origin.update(inputId='new-epoch-input', generationId='new-epoch-generation')
+    result = await case.prepare()
+    assert result['outcome'] == 'transitioned'
+    row = case.adapter._recovery_record()
+    assert row['state'] == 'committed' and row['interruptionRevision'] == 8
+    assert row['maxCalls'] == prior['maxCalls'] == 16
+    assert any(attempt['interruptionRevision'] == 7 for attempt in row['preparations'])
+    if kind != 'zero-call':
+        assert len(case.raw.compactions) == paid
+    if kind == 'installed-candidate':
+        assert case.adapter.path.read_bytes() == saved
+        assert writes == []
+
+
+@pytest.mark.parametrize('change', ['stop-during-bind', 'source-during-bind', 'paid-contract', 'unknown-call'])
+async def test_epoch_rebind_does_not_admit_changed_scope_or_uncertain_paid_effects(tmp_path, change):
+    case = await target_transition_fixture(tmp_path)
+    epoch = {'value': 7}
+    case.adapter._interruption_revision = AsyncMock(side_effect=lambda: epoch['value'])
+    case.coordinator.register_capability('web.context_recovery.epoch', lambda: epoch['value'])
+    recover = case.coordinator.get_capability('context.recovery.recover')
+    async def fail(**kwargs):
+        if change in {'stop-during-bind', 'source-during-bind'}:
+            raise RuntimeError('known prepay refusal')
+        if change == 'unknown-call':
+            kwargs['admit_call']({'method': 'native', 'targetIdentity': kwargs['identity'],
+                'sourceCheckpointSha256': json.loads(case.accepted)['sha256'],
+                'sequence': 1, 'requestSha256': 'b' * 64, 'maxOutputTokens': 100})
+            raise RuntimeError('unknown paid reply')
+        async def refuse_install(candidate, verification):
+            raise RuntimeError('known local final refusal')
+        return await recover(**{**kwargs, 'install': refuse_install})
+    case.coordinator.register_capability('context.recovery.recover', fail)
+    with pytest.raises(RuntimeError):
+        await case.prepare()
+    journal = case.adapter.recovery_path.read_bytes()
+    paid = len(case.raw.compactions)
+    case.coordinator.register_capability('context.recovery.recover', recover)
+    epoch['value'] = 8
+    case.origin.update(inputId='new-admitted-input', generationId='new-admitted-generation')
+    if change == 'stop-during-bind':
+        async def interrupt():
+            value = epoch['value']
+            epoch['value'] += 1
+            return value
+        case.adapter._interruption_revision = interrupt
+    elif change == 'source-during-bind':
+        async def replace_source():
+            case.adapter.path.write_text('{}')
+            return epoch['value']
+        case.adapter._interruption_revision = replace_source
+    elif change == 'paid-contract':
+        case.contract['tools'] = 'changed after paid progress'
+    with pytest.raises(RuntimeError, match='recovery_interrupted|recovery_unreconciled|recovery_source_changed'):
+        await case.prepare()
+    assert len(case.raw.compactions) == paid
+    assert case.adapter.recovery_path.read_bytes() == journal
+
+
+async def test_known_zero_effect_refusal_new_foreground_can_use_updated_tool_contract(tmp_path):
+    case = await target_transition_fixture(tmp_path)
+    recover = case.coordinator.get_capability('context.recovery.recover')
+    async def refuse(**kwargs):
+        raise RuntimeError('known initial required-tool refusal')
+    case.coordinator.register_capability('context.recovery.recover', refuse)
+    with pytest.raises(RuntimeError):
+        await case.prepare()
+    old = copy.deepcopy(case.adapter._recovery_record())
+    assert old['calls'] == [] and old['progress'] is None
+    case.contract['tools'] = 'fewer authorized tools'
+    case.coordinator.register_capability('context.recovery.recover', recover)
+    with pytest.raises(RuntimeError, match='recovery_unreconciled'):
+        await case.prepare()
+    case.origin.update(inputId='new-input-with-fewer-tools', generationId='new-generation')
+    assert (await case.prepare())['outcome'] == 'transitioned'
+    row = case.adapter._recovery_record()
+    assert row['commandId'] == old['commandId'] and row['maxCalls'] == old['maxCalls']
+    assert row['contract'] != old['contract']
+    assert any(attempt['contract'] == old['contract'] and attempt['state'] == 'refused'
+               for attempt in row['preparations'])
+
+
+async def test_source_continuation_rejects_replaced_checkpoint_without_clearing_target_fence(tmp_path):
+    case = await target_transition_fixture(tmp_path)
+    async def lost(request):
+        raise RuntimeError('uncertain target')
+    case.raw.compact_context = lost
+    with pytest.raises(RuntimeError, match='uncertain target'):
+        await case.prepare()
+    journal = case.adapter.recovery_path.read_bytes()
+    from amplifier_web.host.session import SelectedProvider
+    case.coordinator.loop.root_provider = SelectedProvider(case.raw, {'model': 'selected-model'})
+    await case.adapter.preserve(await case.coordinator.context.get_messages())
+    case.adapter.path.write_text('{}')
+    with pytest.raises(RuntimeError, match='recovery_unreconciled'):
+        await case.prepare()
+    assert case.adapter.recovery_path.read_bytes() == journal
+
+
+def test_transition_errors_give_distinct_actionable_guidance():
+    from amplifier_web.context_continuity import ContextRecoveryError
+    missing = str(ContextRecoveryError('transition_intent_required'))
+    rejected = str(ContextRecoveryError('recovery_checkpoint_rejected'))
+    assert 'explicit model connection' in missing and 'new ordinary message' in missing
+    assert 'schedules' in missing and 'retries' in missing
+    assert 'compatible validated source' in rejected and 'explicit recovery' in rejected
+    assert 'may not repair' in rejected
+
+
 async def test_h2_zero_reservation_refusal_can_retry_only_new_foreground_same_binding(tmp_path):
     case = await target_transition_fixture(tmp_path)
     recover = case.coordinator.get_capability('context.recovery.recover')
