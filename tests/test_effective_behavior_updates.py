@@ -327,6 +327,19 @@ def test_only_a_value_that_is_a_named_folder_or_a_path_below_it_loses_the_folder
         assert one_key(lambda folder: named(folder + more)) == as_before, more
     # A backslash is a part of a name on Linux and macOS, and a path separator on Windows.
     assert one_key(lambda folder: named(folder + '\\tool')) == (as_before or os.sep == '\\')
+    # ".." after the folder can lead out of it again, so a value with it keeps its own path.
+    # That holds for a part, and also for a name or a fragment with two dots, which do not
+    # lead out: the rule does not read the path. In an address, "%" can hide the dots.
+    for more in ('..', '..' + os.sep + 'outside', 'cache' + os.sep + '..' + os.sep + '..' + os.sep + 'outside',
+                 '..tool', 'cache' + os.sep + 'tool..v2', 'bundle#subdirectory=a/../b'):
+        assert one_key(lambda folder: named(folder + os.sep + more)) == as_before, more
+        assert one_key(lambda folder: named(folder + '/' + more)) == as_before, more
+        assert one_key(lambda folder: named('file://' + folder + os.sep + more)) == as_before, more
+    for more in ('%2e%2e/outside', 'a%20b'):
+        assert one_key(lambda folder: named('file://' + folder + '/' + more)) == as_before, more
+    # One dot is the folder itself or a part of a name. "%" in a path that is no address is a letter.
+    for more in ('.', '.' + os.sep + 'tool', '.hidden', 'tool.v2', '100%', '%2e%2e' + os.sep + 'tool'):
+        assert one_key(lambda folder: named(folder + os.sep + more)), more
     # The name of an entry is not a source.
     assert one_key(lambda folder: settings([URI], sources={'modules': {folder: URI}})) == as_before
     assert one_key(lambda folder: settings([URI], sources={'modules': {folder + os.sep + 'tool': URI}})) == as_before
@@ -334,6 +347,8 @@ def test_only_a_value_that_is_a_named_folder_or_a_path_below_it_loses_the_folder
     assert witness_of(home, home/'foundation') == witness_of(stage, stage/'foundation', home)
     assert (witness_of(home, str(home/'foundation') + '#extra')
             == witness_of(stage, str(stage/'foundation') + '#extra', home)) == as_before
+    assert (witness_of(home, str(home/'foundation'/'..'/'outside'))
+            == witness_of(stage, str(stage/'foundation'/'..'/'outside'), home)) == as_before
 
 
 @pytest.mark.parametrize('name', ['app', 'caf\u00e9 app'])

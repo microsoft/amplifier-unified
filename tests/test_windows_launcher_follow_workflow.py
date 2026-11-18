@@ -210,15 +210,17 @@ def starts_pytest(line, name):
     """A line of a step that starts pytest with this file: `uv run ... pytest` or `<python> ... -m pytest`.
 
     Only the plain form counts: the line is one command, it starts with that command, and
-    no quotation or comment stands before the file. A second command, a pipe, a command in
-    the background or a quoted text can hold the words and run nothing, or lose the result.
+    no quotation, variable or comment stands before the file. A second command, a pipe, a
+    redirection, a command in the background or a quoted text can hold the words and run
+    nothing, or lose the result.
     So a line with another form is no run, and the case fails for it. One line is read at a
     time: a text of several lines that only holds the command is not told from a command.
+    Not read: an option after the file that selects none of its cases (`-k`, `-m`).
     """
     words = line.split()
-    if name not in words or re.search("[;&|`]", line):
+    if name not in words or re.search("[;&|`<>]", line):
         return False
-    if any(mark in word for word in words[:words.index(name)] for mark in "\"'#"):
+    if any(mark in word for word in words[:words.index(name)] for mark in "\"'#$"):
         return False
     return _starts_pytest(words, name)
 
@@ -238,8 +240,12 @@ def _starts_pytest(words, name):
     # A collection only runs no case.
     if {"--collect-only", "--co"} & set(after):
         return False
-    return any(word == name and after[index - 1] not in ("--ignore", "--ignore-glob", "--deselect")
-               for index, word in enumerate(after))
+    # The file is an argument, not the value of an option. So the word before it is `pytest`,
+    # another argument, an option that holds its value (`--tb=short`), or a known option with no value.
+    def argument(index):
+        last = after[index - 1]
+        return not last.startswith("-") or "=" in last or last in ("-q", "-ra", "-s", "-x", "-v")
+    return any(word == name and argument(index) for index, word in enumerate(after))
 
 
 def command_lines(run):
@@ -277,6 +283,16 @@ def command_lines(run):
     ("uv run pytest tests/test_one.py # a note; with a mark", False),
     ("x=$(uv run pytest tests/test_one.py)", False),
     ("if uv run pytest tests/test_one.py", False),
+    ("uv run pytest tests/test_two.py > tests/test_one.py", False),
+    ("uv run pytest tests/test_two.py 2> tests/test_one.py", False),
+    ("uv run pytest < tests/test_one.py", False),
+    ("uv run pytest $OPTIONS tests/test_one.py", False),
+    ("uv run pytest -k tests/test_one.py", False),
+    ("uv run pytest -c tests/test_one.py tests/test_two.py", False),
+    ("uv run pytest --deselect tests/test_one.py", False),
+    ("uv run pytest --junitxml tests/test_one.py", False),
+    ("uv run pytest -p no:cacheprovider tests/test_one.py", True),
+    ("uv run pytest -q -ra --tb=short tests/test_two.py tests/test_one.py", True),
     ('python -m pytest -q tests/test_one.py -k "not slow"', True),
     ("uv run pytest tests/test_one.py # a note", True),
 ])
@@ -311,7 +327,7 @@ def test_a_pull_request_runs_every_launcher_case_file():
     starts it.
     """
     document = yaml.safe_load(LISTED.read_text(encoding="utf-8"))
-    assert "continue-on-error" not in json.dumps(document)
+    assert not [word for word in ("continue-on-error", "working-directory", '"defaults"') if word in json.dumps(document)]
     triggers = document[True]  # YAML reads the key `on` as True.
     paths = triggers["pull_request"]["paths"]
     assert triggers["push"] == {"branches": ["main"], "paths": paths} and "workflow_dispatch" in triggers
@@ -370,8 +386,9 @@ def test_a_pull_request_runs_every_launcher_case_file():
     # And the other way: the step runs every test file that the path filter names. A name below
     # `paths:` that nothing runs is the gap that this workflow closes. The only others are test
     # files that a run file imports. An import runs none of their cases, so each has a line that
-    # starts pytest with it, in a step with no condition whose failure fails its job, in another
-    # workflow that starts for a pull request. Not read here: the condition of that step's job,
+    # starts pytest with it, in a step with no condition and no folder of its own whose failure
+    # fails its job, in another workflow that starts for a pull request (a step in another
+    # folder runs another file of that name). Not read here: the condition of that step's job,
     # and whether that workflow starts for a change of the file alone. A command form that this
     # case does not know fails it; that does not say that the file is not run.
     named = [path for path in paths if path.startswith("tests/test_") and "*" not in path]
@@ -382,6 +399,7 @@ def test_a_pull_request_runs_every_launcher_case_file():
         assert "pull_request" in other[True], workflow
         assert [job for job, body in other["jobs"].items() for step in body.get("steps", [])
                 if "if" not in step and not step.get("continue-on-error") and not body.get("continue-on-error")
+                and "working-directory" not in step and "defaults" not in body and "defaults" not in other
                 and any(starts_pytest(line, name) for line in command_lines(step.get("run", "")))
                 ], (name, workflow)
     assert [path for path in paths if "*" not in path and not (ROOT / path).is_file()] == []
