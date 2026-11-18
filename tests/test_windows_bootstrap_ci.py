@@ -15,10 +15,11 @@ WORKFLOW = ROOT / ".github/workflows/platform-mechanisms.yml"
 SPEC = importlib.util.spec_from_file_location("bootstrap_ci", ROOT / "tests/fixtures/windows_bootstrap_ci.py")
 CI = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(CI)
-# windows-local-connection (#2065) is one more ordinary lane. storage_only
-# (#1815) selects the user-trial job alone, for its sharing controls.
-OLD_JOBS = ("passive-process-check", "windows-private-config-tls", "windows-local-connection",
-            "windows-user-trial", "windows-default-runtime")
+# windows-local-connection (#2065) and instance-branding-storage (#2235) are
+# two more ordinary lanes. storage_only (#1815) selects the user-trial job
+# alone, for its sharing controls.
+OLD_JOBS = ("instance-branding-storage", "passive-process-check", "windows-private-config-tls",
+            "windows-local-connection", "windows-user-trial", "windows-default-runtime")
 OLD_GUARD = "${{ !inputs.bootstrap_only && !inputs.foreground_only && !inputs.storage_only }}"
 TRIAL_GUARD = "${{ inputs.storage_only || (!inputs.bootstrap_only && !inputs.foreground_only) }}"
 DEFAULT_GUARD = "${{ !inputs.bootstrap_only && !inputs.storage_only && !cancelled() && (inputs.foreground_only || needs.windows-user-trial.result == 'success') }}"

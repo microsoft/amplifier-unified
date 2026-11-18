@@ -1,0 +1,318 @@
+name: Test files that no other check runs
+# This repository's pull-request checks name their test files one by one. A
+# name below `paths:` only starts a workflow. Only a pytest command runs a
+# file. Until this workflow no pull-request job ran the files below. Cases in
+# them fell behind the product and behind other workflows, and no check
+# showed it.
+#
+# One job on Linux and one on native Windows run the same list with the
+# locked dependencies and Python 3.13. The last step prints, for each file,
+# how many cases passed, failed and were skipped, and each skip with its
+# reason. The job fails when a case fails, when no case of a file passes, and
+# when a case is skipped or expected to fail and the step does not expect
+# that on this runner. So on Windows a case that needs Windows cannot be
+# skipped.
+#
+# The Windows job leaves out some files and cases by name: they are written
+# for Linux, or they fail on a Windows runner and are not repaired yet. The
+# step lists each one with its reason and prints the list. Linux runs all
+# of them.
+#
+# A limit: the step counts the cases that pytest reports. It does not see a
+# case that pytest did not collect or that a setting took out before the
+# run. The count of each file is in the log.
+#
+# A new test file belongs in the workflow that owns its code. Add it here
+# only when there is none.
+#
+# It is not setup-file or clean-account acceptance: no installation, no app
+# and no chat.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths: &inputs
+      - .github/workflows/other-test-files.yml
+      # tests/test_windows_launcher_files.py fails when a change makes the
+      # launcher load another file. That change can be in any file of the app
+      # or in the lock, so every one of them starts this workflow. Several
+      # listed files start the whole app service, which imports the packages
+      # of the three other folders.
+      - amplifier_web/**
+      - amplifier_operations/**
+      - amplifier_kernels/**
+      - components/**
+      - pyproject.toml
+      - uv.lock
+      # What the cases read beside the app: the setup and launcher tools, the
+      # release tool, the client selection's tools, and two other workflows.
+      - scripts/install.ps1
+      - scripts/windows_*
+      - scripts/release.py
+      - scripts/web_client_*.py
+      - .github/workflows/platform-mechanisms.yml
+      - .github/workflows/windows-launcher-follow.yml
+      - tests/conftest.py
+      - tests/fixtures/**
+      # Test files that the listed files import.
+      - tests/test_service.py
+      - tests/test_update_health_setup_record.py
+      - tests/test_update_partial.py
+      - tests/test_update_sequence.py
+      - tests/test_windows_auth.py
+      - tests/test_windows_service.py
+      # The listed files.
+      - tests/test_application_generations.py
+      - tests/test_browser_entry.py
+      - tests/test_conftest.py
+      - tests/test_effective_behavior_updates.py
+      - tests/test_host_dependencies.py
+      - tests/test_installation_health.py
+      - tests/test_reset.py
+      - tests/test_runtime_registry_updates.py
+      - tests/test_update_core_lookup_failure.py
+      - tests/test_update_health_first_install.py
+      - tests/test_update_partial_review.py
+      - tests/test_updates_cache.py
+      - tests/test_windowless_subprocesses.py
+      - tests/test_windows_bootstrap_ci.py
+      - tests/test_windows_bootstrap_native.py
+      - tests/test_windows_bootstrap_prototype.py
+      - tests/test_windows_consumer.py
+      - tests/test_windows_installation.py
+      # Also a launcher test file that is new: a case of
+      # tests/test_windows_launcher_follow_workflow.py then fails until the
+      # step below runs the new file.
+      - tests/test_windows_launcher_*.py
+      - tests/test_windows_user_trial_probe.py
+  push:
+    branches: [main]
+    paths: *inputs
+permissions:
+  contents: read
+# A new push to a pull request ends the run of the push before it. The group
+# holds the event's name: a run by hand and a run for a push to main are for
+# the same commit, and neither ends the other.
+concurrency:
+  group: other-test-files-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+jobs:
+  cases:
+    name: Listed test files (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      # The product gives its own processes this setting on Windows.
+      PYTHONUTF8: '1'
+      UV_PYTHON_DOWNLOADS: never
+    steps:
+      # Some cases compare a file of the repository byte for byte. Git on a
+      # Windows runner would give the files Windows line ends.
+      - name: Keep the repository's line ends in the checkout
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        id: python
+        with:
+          python-version: '3.13'
+          architecture: x64
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      # One case of tests/test_browser_entry.py compares the app's sign-in
+      # files with the selected client source.
+      - name: Prepare selected client source for host checks
+        run: python scripts/web_client_build.py prepare
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      - name: Install the locked application and test dependencies (CI setup only)
+        run: uv sync --locked --group dev --group artifacts --python "${{ steps.python.outputs.python-path }}"
+      # The step's text is a Python program, so that both runners run the
+      # same lines. It starts pytest once for all files and then reads the
+      # result file.
+      - name: Run the listed files and require every case and every file
+        shell: uv run --no-sync python {0}
+        run: |
+          import collections
+          import contextlib
+          import importlib.util
+          import os
+          import pathlib
+          import subprocess
+          import sys
+          import xml.etree.ElementTree as tree
+
+          FILES = """
+          tests/test_application_generations.py
+          tests/test_browser_entry.py
+          tests/test_conftest.py
+          tests/test_effective_behavior_updates.py
+          tests/test_host_dependencies.py
+          tests/test_installation_health.py
+          tests/test_reset.py
+          tests/test_runtime_registry_updates.py
+          tests/test_update_core_lookup_failure.py
+          tests/test_update_health_first_install.py
+          tests/test_update_partial_review.py
+          tests/test_updates_cache.py
+          tests/test_windowless_subprocesses.py
+          tests/test_windows_bootstrap_ci.py
+          tests/test_windows_bootstrap_native.py
+          tests/test_windows_bootstrap_prototype.py
+          tests/test_windows_consumer.py
+          tests/test_windows_launcher_files.py
+          tests/test_windows_launcher_follow.py
+          tests/test_windows_launcher_follow_workflow.py
+          tests/test_windows_launcher_refresh.py
+          tests/test_windows_launcher_task.py
+          tests/test_windows_user_trial_probe.py
+          """.split()
+          # platform-mechanisms.yml runs the other cases of this file on
+          # Windows and leaves this one out. That job installs no plugin that
+          # runs an async case.
+          CASES = ["tests/test_windows_installation.py::test_captured_cli_children_never_need_a_windows_console"]
+
+          windows = sys.platform == "win32"
+          # What the Windows job leaves out, each with its reason. Linux runs it.
+          # These files ran on a Windows runner for the first time with this
+          # workflow. The reasons say what the failed cases and the code show;
+          # no reason was confirmed by a repair.
+          POSIX_STATUS = ("the case is for the status that Linux and macOS give; on Windows another function gives it, "
+                          "and platform-mechanisms.yml runs its cases")
+          OTHER_APP_HOME = ("its cases fail on a Windows runner; by a reading of the code they build the app in a folder "
+                            "that is not the test process's app home, and the app's file writer on Windows refuses a write there")
+          NOT_ON_WINDOWS = {
+              "tests/test_reset.py":
+                  "the reset command is for Linux, WSL and macOS; on Windows it says so and stops",
+              "tests/test_host_dependencies.py":
+                  "the cases make their stand-ins for uv as shell scripts, which Windows does not run",
+              "tests/test_windows_launcher_refresh.py":
+                  "the cases turn the refresh module's Windows switch off, and the app's file writer on Windows "
+                  "then refuses their writes; windows-launcher-refresh.yml runs the native case",
+              "tests/test_update_partial_review.py":
+                  "its fixture, in tests/test_update_sequence.py, writes the shared settings file with the app's "
+                  "writer and names no owner folder, which that writer needs on Windows",
+              "tests/test_updates_cache.py":
+                  OTHER_APP_HOME + "; other cases there compare a path that has the runner's separator",
+              "tests/test_update_core_lookup_failure.py": OTHER_APP_HOME,
+              "tests/test_update_health_first_install.py": OTHER_APP_HOME,
+              "tests/test_effective_behavior_updates.py":
+                  "four of its cases fail on a Windows runner: two in the update check's own handling of a Windows "
+                  "path (a path that it makes from a file address has no drive; it replaces a folder path inside "
+                  "JSON text, where each backslash is written twice), and two as the three files above",
+              "tests/test_application_generations.py::test_qualified_launch_preserves_arguments_and_data_scope":
+                  "the case stands in for os.execv; on Windows the app starts a child and waits for it",
+              "tests/test_installation_health.py::test_status_reports_every_verified_listener_and_partial_failure":
+                  POSIX_STATUS,
+              "tests/test_installation_health.py::test_named_and_ipv6_wildcard_binds_verify_only_reached_numeric_addresses":
+                  POSIX_STATUS,
+              "tests/test_installation_health.py::test_unassigned_bind_and_untrusted_dns_cannot_receive_control_token":
+                  POSIX_STATUS,
+              "tests/test_installation_health.py::test_listener_collection_bounds_concurrency_but_does_not_truncate_binds":
+                  POSIX_STATUS,
+              "tests/test_browser_entry.py::test_tls_negative_lifetime_on_actual_pytest_fixtures_without_listeners":
+                  "its model of pytest's fixtures fails in setup on a Windows runner; the cause is not established",
+              "tests/test_windows_user_trial_probe.py::test_actual_private_constructor_refusal_offsets_are_safe_with_inert_api":
+                  "the case gives the app's private-folder check a path with no drive, which that check refuses on Windows first",
+          }
+          left_out = NOT_ON_WINDOWS if windows else {}
+          # A skip that this step expects, by its reason, and whether this
+          # runner may have it. Any other skip fails the job.
+          SKIPS = {
+              # Each needs a name in the environment that no runner sets.
+              "explicit DTU-only uv installation test": True,
+              "explicit isolated installed-package reset bridge": True,
+              # These cases need Windows.
+              "Native Windows HTTPS/private-storage combined boundary": not windows,
+              "Native Windows TLS listener-confusion controls": not windows,
+              "native prototype PowerShell model pending": not windows,
+              # These cases need what Windows does not have.
+              "could not import 'pwd': No module named 'pwd'": windows,
+              "getifaddrs enumeration is qualified only on Linux/macOS": windows,
+          }
+          # An expected failure that this step expects, and whether this runner
+          # may have it. A shared settings file that cannot be read ends the
+          # whole update check; the file's own comment names the open question.
+          EXPECTED_FAILURES = {
+              "::".join(("tests/test_updates_cache.py",
+                         f"test_unresolvable_configuration_does_not_hide_cache_failures[{row}]")): True
+              for row in ("yaml", "module-shape", "recursive-yaml")
+          }
+
+          result = pathlib.Path(os.environ["RUNNER_TEMP"]) / "listed-test-files.xml"
+          print("Python", sys.version)
+          assert sys.version_info[:2] == (3, 13), sys.version
+          owner = contextlib.nullcontext()
+          if sys.platform == "win32":
+              # A hosted runner's account is elevated. A folder that a case makes
+              # then belongs to the Administrators group, and the app's
+              # private-folder check refuses that owner. On a person's PC the
+              # account owns the folder. So this run's new files and folders
+              # get the account as their owner.
+              spec = importlib.util.spec_from_file_location("native_helpers", "tests/fixtures/manual_app_handoff_native.py")
+              helpers = importlib.util.module_from_spec(spec)
+              spec.loader.exec_module(helpers)
+              owner = helpers.token_user_default_owner()
+          for name, reason in left_out.items():
+              print(f"left out on this runner: {name}: {reason}")
+          files = [file for file in [*FILES, *CASES] if file not in left_out]
+          sys.stdout.flush()  # Before pytest writes, so that the log keeps the order.
+          with owner:
+              status = subprocess.run([
+                  sys.executable, "-m", "pytest", "-q", "-rfEsxX", "--tb=short", "-p", "no:cacheprovider",
+                  "--continue-on-collection-errors", "-o", "faulthandler_timeout=300", f"--junitxml={result}",
+                  *files, *(f"--deselect={name}" for name in left_out if "::" in name)]).returncode
+
+          if not result.is_file():
+              sys.exit(f"pytest ended with status {status} and wrote no result file")
+          counts, problems = collections.defaultdict(collections.Counter), []
+          for case in tree.parse(result).getroot().iter("testcase"):
+              # "tests.test_x", or "tests.test_x.Class" for a case in a class.
+              parts = case.get("classname", "").split(".")
+              at = next((index for index, part in enumerate(parts) if part.startswith("test_")), None)
+              if at is None:  # Not a case: a file that pytest could not load.
+                  file = name = case.get("name", "?")
+              else:
+                  file = "/".join(parts[:at + 1]) + ".py"
+                  name = "::".join([file, *parts[at + 1:], case.get("name", "?")])
+              found = {child.tag: child for child in case}
+              if "failure" in found or "error" in found:
+                  counts[file]["failed"] += 1
+                  problems.append(f"failed: {name}")
+              elif "skipped" not in found:
+                  counts[file]["passed"] += 1
+              elif found["skipped"].get("type") == "pytest.xfail":
+                  counts[file]["expected failures"] += 1
+                  print(f"expected failure: {name}: {found['skipped'].get('message')}")
+                  if not EXPECTED_FAILURES.get(name):
+                      problems.append(f"expected to fail, and this step does not expect that: {name}")
+              else:
+                  reason = found["skipped"].get("message", "")
+                  counts[file]["skipped"] += 1
+                  print(f"skipped: {name}: {reason}")
+                  if not SKIPS.get(reason):
+                      problems.append(f"skipped, and this step does not expect that on this runner: {name}: {reason}")
+
+          total = collections.Counter()
+          for file in dict.fromkeys(name.split("::")[0] for name in files):
+              row = counts.pop(file, collections.Counter())
+              total.update(row)
+              print(f"{file}: {row['passed']} passed, {row['failed']} failed, {row['skipped']} skipped, "
+                    f"{row['expected failures']} expected failures")
+              if not row["passed"]:
+                  problems.append(f"no case of this file passed: {file}")
+          for file, row in counts.items():  # A file that pytest could not load, or a file that is not listed.
+              total.update(row)
+              print(f"{file}: {dict(row)}")
+          print(f"all files on {sys.platform}: {total['passed']} passed, {total['failed']} failed, "
+                f"{total['skipped']} skipped, {total['expected failures']} expected failures")
+          if status and not problems:
+              problems.append(f"pytest ended with status {status}")
+          if problems:
+              print(f"\n{len(problems)} of these stop the job:")
+              print("\n".join(problems))
+              sys.exit(1)
