@@ -51,6 +51,12 @@ namespace UnifiedBootstrap {
         // (source_store in amplifier_web/windows_consumer.py).
         internal const string SourceStore="s", EarlierSourceStore="source-store";
         internal const string Started="unified-setup-started.json", Complete="unified-setup-complete.json";
+        // Uninstall's own names (amplifier_web/windows_uninstall.py): the journal
+        // that an uninstall with the delete choice writes before its first
+        // deletion, and the entries that hold the person's data. Setup only
+        // looks at them, to choose a text. It never writes or deletes them.
+        internal const string Journal="unified-uninstall.json";
+        internal static readonly string[] Data={"shared","app","capture","ownership","import","workspace","export"};
         internal static string Diagnostics;
         static string FailedStage, Aftermath="Setup changed nothing on this PC.";
         static bool Installed;
@@ -727,14 +733,76 @@ namespace UnifiedBootstrap {
             var start=AppStart(root);
             using(PinInstalled(root,start.FileName)) return Process.Start(start);
         }
+        internal static bool Emptied(string root) {
+            // Whether setup's own look finds what an uninstall with the delete
+            // choice leaves: a journal that records that choice, and none of the
+            // person's data. The journal: at most 4096 bytes of UTF-8 with schema
+            // 1 and a token of 32 lower-case hexadecimal digits, as uninstall's
+            // own reader requires (windows_uninstall.pending), and the choice
+            // "delete", which uninstall compares in its removal steps. A data
+            // name counts as data when the look at its attributes shows a file
+            // or a link, or when the listing of the folder shows anything in
+            // it. Every doubt answers no: a journal that is missing, a link, too
+            // large, not UTF-8 or not such a record, and a folder that Windows
+            // does not list. These are separate steps on paths, and nothing is
+            // held between them: a program of this account can replace an entry
+            // between the look at its attributes and the read or the listing.
+            // The answer only chooses a text.
+            try {
+                string journal=Path.Combine(root,Journal);
+                if((File.GetAttributes(journal)&(FileAttributes.Directory|FileAttributes.ReparsePoint))!=0) return false;
+                // At most one byte more than the limit is read. The file is opened
+                // with every sharing mode: the step after exit of a removal deletes
+                // the journal, and this look must not make that deletion fail.
+                var bytes=new byte[4097]; int count=0, read;
+                using(var file=new FileStream(journal,FileMode.Open,FileAccess.Read,FileShare.ReadWrite|FileShare.Delete))
+                    while(count<bytes.Length && (read=file.Read(bytes,count,bytes.Length-count))>0) count+=read;
+                if(count>4096) return false;
+                var record=Json.Deserialize<Dictionary<string,object>>(Utf8.GetString(bytes,0,count));
+                object schema;
+                if(record==null || !record.TryGetValue("schema",out schema) || !(schema is int) || (int)schema!=1) return false;
+                string token=Text(record,"token");
+                if(Text(record,"choice")!="delete" || !Regex.IsMatch(token,"\\A[0-9a-f]{32}\\z")) return false;
+                foreach(string name in Data) {
+                    string entry=Path.Combine(root,name);
+                    FileAttributes kind;
+                    try { kind=File.GetAttributes(entry); } catch(FileNotFoundException) { continue; }
+                    // List the entry only when this look shows a folder that is no link.
+                    if((kind&(FileAttributes.Directory|FileAttributes.ReparsePoint))!=FileAttributes.Directory ||
+                        Directory.EnumerateFileSystemEntries(entry).Any()) return false;
+                }
+                return true;
+            } catch(Exception) { return false; }
+        }
+        internal static string Unopened(string root) {
+            // The text for a folder that has setup's completion record and no
+            // launcher program. Setup installs nothing there and deletes nothing.
+            // After an uninstall that deleted the person's data, the folder can
+            // stay: it holds something that is not Amplifier's, or the last step
+            // of the removal did not finish. Then the text of a damaged
+            // installation is not true ("It holds your chats and settings"), and
+            // it names no next step. Each statement of the other text is what
+            // setup found in this run, or what setup does. It says nothing
+            // about the folder's history: setup knows only that a file with the
+            // name of its completion record is there. Its next step is to
+            // move or rename the folder, as at setup's stop for a damaged
+            // folder, and not to delete it: the folder can hold something of
+            // the person's that this look did not see.
+            if(Emptied(root)) return
+                "Setup cannot install Amplifier yet. Setup found an installation record in this folder:\n"+root+"\n\n"+
+                "Setup cannot find a program file that it needs to open Amplifier from that folder. "+
+                "Setup found no chats or settings in the folder. "+
+                "It does not change the folder, because the folder can hold files or folders that are not Amplifier's.\n\n"+
+                "Move or rename that folder. Then run this setup file again.";
+            return "Amplifier is already installed in "+root+", but setup cannot open it: a program file is missing.\n\n"+
+                "Keep that folder. It holds your chats and settings. This version of setup cannot repair it.";
+        }
         static int OpenInstalled(string root) {
             // A second setup run adds missing Start-menu and Apps-list entries
             // again and starts the app. It never installs again and never removes
             // anything.
             if(!File.Exists(AppStart(root).FileName)) {
-                Say("Amplifier is already installed in "+root+", but setup cannot open it: a program file is missing.\n\n"+
-                    "Keep that folder. It holds your chats and settings. This version of setup cannot repair it.",
-                    MessageBoxButtons.OK,MessageBoxIcon.Warning);
+                Say(Unopened(root),MessageBoxButtons.OK,MessageBoxIcon.Warning);
                 return 1;
             }
             // True only when the entry record says so and the Start-menu entry
