@@ -13,6 +13,9 @@ name: Test files that no other check runs
 # that on this runner. So on Windows a case that needs Windows cannot be
 # skipped.
 #
+# The Windows job leaves out a few files and cases by name. The step lists
+# each one with its reason and prints the list. Linux runs all of them.
+#
 # A new test file belongs in the workflow that owns its code. Add it here
 # only when there is none.
 #
@@ -95,6 +98,10 @@ jobs:
       PYTHONUTF8: '1'
       UV_PYTHON_DOWNLOADS: never
     steps:
+      # Some cases compare a file of the repository byte for byte. Git on a
+      # Windows runner would give the files Windows line ends.
+      - name: Keep the repository's line ends in the checkout
+        run: git config --global core.autocrlf false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
@@ -120,6 +127,8 @@ jobs:
         shell: uv run --no-sync python {0}
         run: |
           import collections
+          import contextlib
+          import importlib.util
           import os
           import pathlib
           import subprocess
@@ -157,6 +166,18 @@ jobs:
           CASES = ["tests/test_windows_installation.py::test_captured_cli_children_never_need_a_windows_console"]
 
           windows = sys.platform == "win32"
+          # What the Windows job leaves out, each with its reason. Linux runs it.
+          NOT_ON_WINDOWS = {
+              "tests/test_reset.py":
+                  "the reset command is for Linux, WSL and macOS; on Windows it says so and stops",
+              "tests/test_host_dependencies.py":
+                  "the cases make their stand-ins for uv as shell scripts",
+              "tests/test_browser_entry.py::test_tls_negative_lifetime_on_actual_pytest_fixtures_without_listeners":
+                  "the case's model of pytest's fixtures has an event loop with no socket, and Windows cannot wait on none",
+              "tests/test_windows_user_trial_probe.py::test_actual_private_constructor_refusal_offsets_are_safe_with_inert_api":
+                  "the case gives the app's private-folder check POSIX paths, which that check refuses on Windows first",
+          }
+          left_out = NOT_ON_WINDOWS if windows else {}
           # A skip that this step expects, by its reason, and whether this
           # runner may have it. Any other skip fails the job.
           SKIPS = {
@@ -168,8 +189,8 @@ jobs:
               "Native Windows TLS listener-confusion controls": not windows,
               "native prototype PowerShell model pending": not windows,
               # These cases need what Windows does not have.
-              "POSIX FIFO admission": windows,
               "could not import 'pwd': No module named 'pwd'": windows,
+              "getifaddrs enumeration is qualified only on Linux/macOS": windows,
           }
           # A shared settings file that cannot be read ends the whole update
           # check. The file's own comment names the open question.
@@ -180,10 +201,25 @@ jobs:
           result = pathlib.Path(os.environ["RUNNER_TEMP"]) / "listed-test-files.xml"
           print("Python", sys.version, flush=True)
           assert sys.version_info[:2] == (3, 13), sys.version
-          status = subprocess.run([
-              sys.executable, "-m", "pytest", "-q", "-rfEsxX", "--tb=short", "-p", "no:cacheprovider",
-              "--continue-on-collection-errors", "-o", "faulthandler_timeout=300",
-              f"--junitxml={result}", *FILES, *CASES]).returncode
+          owner = contextlib.nullcontext()
+          if sys.platform == "win32":
+              # A hosted runner's account is elevated. A folder that a case makes
+              # then belongs to the Administrators group, and the app's
+              # private-folder check refuses that owner. On a person's PC the
+              # account owns the folder. So this run's new files and folders
+              # get the account as their owner.
+              spec = importlib.util.spec_from_file_location("native_helpers", "tests/fixtures/manual_app_handoff_native.py")
+              helpers = importlib.util.module_from_spec(spec)
+              spec.loader.exec_module(helpers)
+              owner = helpers.token_user_default_owner()
+          for name, reason in left_out.items():
+              print(f"left out on this runner: {name}: {reason}")
+          files = [file for file in [*FILES, *CASES] if file not in left_out]
+          with owner:
+              status = subprocess.run([
+                  sys.executable, "-m", "pytest", "-q", "-rfEsxX", "--tb=short", "-p", "no:cacheprovider",
+                  "--continue-on-collection-errors", "-o", "faulthandler_timeout=300", f"--junitxml={result}",
+                  *files, *(f"--deselect={name}" for name in left_out if "::" in name)]).returncode
 
           if not result.is_file():
               sys.exit(f"pytest ended with status {status} and wrote no result file")
@@ -216,7 +252,7 @@ jobs:
                       problems.append(f"skipped, and this step does not expect that on this runner: {name}: {reason}")
 
           total = collections.Counter()
-          for file in [*FILES, *(case.split("::")[0] for case in CASES)]:
+          for file in dict.fromkeys(name.split("::")[0] for name in files):
               row = counts.pop(file, collections.Counter())
               total.update(row)
               print(f"{file}: {row['passed']} passed, {row['failed']} failed, {row['skipped']} skipped, "

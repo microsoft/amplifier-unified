@@ -60,9 +60,10 @@ def checked(manager, row):
 async def service(tmp_path, monkeypatch, repository):
     from amplifier_web import updates, update_sequence
     from amplifier_web.host.config import amplifier_home, write_private
+    # The shared home is not below the app home. On Windows the writer needs the folder that owns the path.
     write_private(amplifier_home() / 'settings.yaml', json.dumps({
         'config': {'providers': [{'module': 'provider-anthropic',
-                                 'config': {'default_model': 'fixture-model'}}]}}))
+                                 'config': {'default_model': 'fixture-model'}}]}}), owned_root=amplifier_home())
     # These tests own their cache fixtures. Shipped dependencies and cold-worker
     # installation are covered by test_update_sequence rather than live remotes.
     monkeypatch.setattr(update_sequence, 'included_sources', lambda: (set(), []))

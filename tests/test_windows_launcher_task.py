@@ -132,7 +132,9 @@ def test_extra_definition_element_is_not_owned(parent, name):
 
 
 @pytest.mark.parametrize("xml", [
-    None, "<Task>", "<!DOCTYPE x><Task/>", "x" * (service.LIMIT + 1),
+    None, "<Task>", "<!DOCTYPE x><Task/>",
+    # pytest puts the case's name into an environment variable, and Windows limits its length.
+    pytest.param("x" * (service.LIMIT + 1), id="longer-than-the-limit"),
 ])
 def test_invalid_xml_is_not_owned(xml):
     with pytest.raises(helper.NotOurs):

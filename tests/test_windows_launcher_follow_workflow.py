@@ -219,6 +219,10 @@ def test_a_pull_request_runs_every_launcher_case_file():
     for refusal in ('problems.append(f"failed: {name}")', "does not expect that on this runner",
                     "no case of this file passed", "sys.exit(1)"):
         assert refusal in step["run"]
+    # The Windows job can leave out a file or a case by name. The two files with
+    # cases that need Windows are never left out there as a whole.
+    for kept in ("tests/test_browser_entry.py", "tests/test_windows_bootstrap_prototype.py"):
+        assert f'"{kept}":' not in step["run"] and kept in step["run"]
 
     def starts(path):
         return any(re.fullmatch(re.escape(pattern).replace(r"\*\*", ".*").replace(r"\*", "[^/]*"), path)
@@ -255,8 +259,14 @@ def test_a_pull_request_runs_every_launcher_case_file():
 NEEDS_WINDOWS = "import pytest\n@pytest.mark.skip(reason='native prototype PowerShell model pending')\ndef test_one(): pass\n"
 
 
+ONE_FAILS = "def test_one(): assert False\ndef test_two(): pass\n"
+
+
 @pytest.mark.parametrize("body,windows,stops", [
     ("def test_one(): pass\n", False, None),
+    # What the Windows job leaves out by name, Linux runs.
+    (ONE_FAILS, True, None),
+    (ONE_FAILS, False, "failed: tests/test_one.py::test_one"),
     ("def test_one(): assert False\n", False, "failed: tests/test_one.py::test_one"),
     ("import nothing_with_this_name\n", False, "no case of this file passed: tests/test_one.py"),
     ("import pytest\n@pytest.mark.skip(reason='another reason')\ndef test_one(): pass\ndef test_two(): pass\n",
@@ -273,19 +283,26 @@ def test_the_step_that_runs_the_listed_files_stops_for_a_wrong_result(tmp_path, 
     document = yaml.safe_load(LISTED.read_text(encoding="utf-8"))
     (job,) = document["jobs"].values()
     program = job["steps"][-1]["run"]
+    leave = 'NOT_ON_WINDOWS = {"tests/test_one.py::test_one": "a reason"}' if body == ONE_FAILS else "NOT_ON_WINDOWS = {}"
     for pattern, replacement in ((r'FILES = """.*?"""\.split\(\)', 'FILES = ["tests/test_one.py"]'),
                                  (r"CASES = \[[^\]]*\]", "CASES = []"),
+                                 (r"NOT_ON_WINDOWS = \{.*?\n\}", leave),
                                  (r'windows = sys\.platform == "win32"', f"windows = {windows}"),
                                  # The job requires CI's Python. This case is about the step's decisions.
                                  (r"assert sys\.version_info\[:2\] == \(3, 13\), sys\.version", "pass")):
         program, count = re.subn(pattern, lambda match: replacement, program, flags=re.S)
         assert count == 1, pattern
-    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests/fixtures").mkdir(parents=True)
     (tmp_path / "tests/test_one.py").write_text(body, encoding="utf-8")
+    # On Windows the step takes the account as the owner of new folders from this file.
+    helpers = "tests/fixtures/manual_app_handoff_native.py"
+    assert helpers in program
+    (tmp_path / helpers).write_bytes((ROOT / helpers).read_bytes())
     (tmp_path / "step.py").write_text(program, encoding="utf-8")
     done = subprocess.run([sys.executable, "-B", str(tmp_path / "step.py")], cwd=tmp_path, capture_output=True, text=True,
                           timeout=120, env={**os.environ, "RUNNER_TEMP": str(tmp_path), "PYTEST_ADDOPTS": ""})
     assert "tests/test_one.py: " in done.stdout, done.stdout + done.stderr
+    assert ("left out on this runner: tests/test_one.py::test_one: a reason" in done.stdout) == (body == ONE_FAILS and windows)
     if stops is None:
         assert done.returncode == 0 and "stop the job" not in done.stdout, done.stdout + done.stderr
     else:
