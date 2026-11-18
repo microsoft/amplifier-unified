@@ -581,7 +581,7 @@ namespace UnifiedBootstrap {
                 string asked="Setup found an uninstall record in this folder:\n"+seen+"\n\n"+
                     "Amplifier does not open while that record is there. Setup does not start it. "+
                     "Setup did not find Amplifier in the Start menu.\n\n"+
-                    "Select Yes to add Amplifier to the Start menu again, so that you can finish that uninstall from there.";
+                    "Select Yes, and setup tries to add Amplifier to the Start menu again, so that you can finish that uninstall from there.";
                 Need(NativeInstaller.Removing(seen,true)==halted && NativeInstaller.Removing(seen,false)==asked,"the two first texts of a folder with an uninstall record");
                 string added="Setup added Amplifier to the Start menu. "+
                     "Setup did not start Amplifier, because it found an uninstall record in this folder:\n"+seen+"\n\n"+
@@ -599,7 +599,7 @@ namespace UnifiedBootstrap {
                     "Setup did not start Amplifier, because it found an uninstall record in this folder:\n"+seen+"\n\n"+
                     "Setup found no chats or settings in the folder.\n\n"+
                     "If another Amplifier message is open, answer it first. "+
-                    "If the folder is still there afterwards, move or rename it. Then run this setup file again.";
+                    "If the folder is still there a few minutes later, move or rename it. Then run this setup file again.";
                 File.WriteAllText(seenJournal,record);
                 Need(NativeInstaller.Emptied(seen) && NativeInstaller.Unstarted(seen,false)==moved && NativeInstaller.Unstarted(seen,true)==added,
                     "after the entries step, with the journal of a delete and no data");

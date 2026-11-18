@@ -2386,8 +2386,9 @@ limit as not blocking.
   step. While an entry with the journal's name is in the folder, no message
   of setup says that the person's chats and settings are in the folder or
   are kept, or that Amplifier opens. A folder that the person moved or
-  renamed on that step still holds Amplifier's program files and both
-  records. Nothing removes them.
+  renamed on that step keeps what it held: both records, and Amplifier's
+  program files when the last step did not remove them. Nothing removes
+  them.
 - **L4.** A journal that is damaged, or that records another choice, proves
   nothing. When the look that an uninstall makes before its questions finds a
   journal, the uninstall reads it through the private-file boundary. When that
@@ -2747,8 +2748,9 @@ journal (`os.path.lexists`), so it starts too.
 An entry with the journal's name (`removal`): the launcher does not open
 Amplifier from such a folder (`Refused("removing")` in `_start` of
 `amplifier_web/windows_consumer.py`, which looks with
-`windows_uninstall.unfinished`). So setup does not start it. No text of setup then says that Amplifier opens or
-starts, and none says that chats or settings are kept. Setup says that it
+`windows_uninstall.unfinished`). So setup does not start it. No text of
+setup then says that Amplifier opens or starts, and none says that chats or
+settings are kept. Setup says that it
 found "an uninstall record", not that an uninstall began: a file with that
 name is no proof of an uninstall (a program of this account can write one),
 and setup does not read it for these texts.
@@ -2763,8 +2765,10 @@ and setup does not read it for these texts.
 - Not listed: a question. "Setup found an uninstall record in this folder:",
   the folder, "Amplifier does not open while that record is there. Setup does
   not start it. Setup did not find Amplifier in the Start menu." and "Select
-  Yes to add Amplifier to the Start menu again, so that you can finish that
-  uninstall from there." On No setup changes nothing and ends with status 0.
+  Yes, and setup tries to add Amplifier to the Start menu again, so that you
+  can finish that uninstall from there." On No setup changes nothing and ends
+  with status 0. The question says that setup tries: setup does not know
+  before the entries step whether it can add the entries.
   On Yes setup's window runs the entries step only (`SecondRun` with `start`
   false), then setup shows one of the texts below and ends with status 1.
 - The entries were added: "Setup added Amplifier to the Start menu. Setup did
@@ -2777,7 +2781,8 @@ and setup does not read it for these texts.
   not start Amplifier, because it found an uninstall record in this folder:",
   the folder, "Setup found no chats or settings in the folder." and "If
   another Amplifier message is open, answer it first. If the folder is still
-  there afterwards, move or rename it. Then run this setup file again."
+  there a few minutes later, move or rename it. Then run this setup file
+  again."
 - The entries were not added, in every other case: the same two sentences
   and the folder, then "Restart Windows. Then run this setup file again."
 
@@ -2792,14 +2797,23 @@ launcher's own words. While the last message of that uninstall is open, the
 uninstall program still runs from files in the folder, and Windows does not
 rename a folder that holds a file which a program keeps open (the header of
 `amplifier_web/windows_removal.py`). When the person answers that message,
-the last step removes the program files, and the folder too when nothing
-else is in it. When the PC was switched off while the message was open, no
-message is open afterwards, the last step never ran, and the folder stays
-(L3). The person then moves or renames the folder, and the next setup run
-finds no folder and installs. The text does not tell the person to delete
-the folder, for the reason of the first text above. The folder that the
-person moved or renamed still holds Amplifier's program files (`python`,
-`tools`) and both records. Nothing removes them.
+the uninstall goes on with its last step, which removes the program files
+and then, when nothing else is in it, the folder. When that step cannot run,
+the folder stays (L3). The text says "a few minutes later" because that step
+holds the folder while it works, and Windows refuses to move the folder
+until then. The uninstall program deletes its two program folders and ends,
+and the step after exit begins no pass later than 120 seconds after its
+start (`SECONDS_AFTER_EXIT` in `amplifier_web/windows_uninstall.py`). The
+time is a guide and not a limit: the deletion of the two program folders has
+no limit of time. When the person moves the folder while something still
+holds it, Windows refuses, and nothing is changed. When the PC was switched
+off while the message was open, no message is open afterwards, the last step
+never ran, and the folder stays (L3). The person then moves or renames the
+folder, and the next setup run finds no folder and installs. The text does
+not tell the person to delete the folder, for the reason of the first text
+above. The folder that the person moved or renamed keeps what it held: both
+records, and Amplifier's program files (`python`, `tools`) when the last
+step did not remove them. Nothing removes them.
 
 The entries program adds the entries only when the installation's own
 records are whole and no entry exists, and it does not look for the journal.

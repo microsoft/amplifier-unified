@@ -197,7 +197,8 @@ HALTED = ("Setup found an uninstall record in this folder:\n{root}\n\n"
 ASKED = ("Setup found an uninstall record in this folder:\n{root}\n\n"
          "Amplifier does not open while that record is there. Setup does not start it. "
          "Setup did not find Amplifier in the Start menu.\n\n"
-         "Select Yes to add Amplifier to the Start menu again, so that you can finish that uninstall from there.")
+         "Select Yes, and setup tries to add Amplifier to the Start menu again, "
+         "so that you can finish that uninstall from there.")
 ADDED = ("Setup added Amplifier to the Start menu. "
          "Setup did not start Amplifier, because it found an uninstall record in this folder:\n{root}\n\n"
          "To finish that uninstall, select Uninstall Amplifier in the Start menu.")
@@ -209,7 +210,7 @@ MOVED = ("Setup could not add Amplifier to the Start menu. "
          "Setup did not start Amplifier, because it found an uninstall record in this folder:\n{root}\n\n"
          "Setup found no chats or settings in the folder.\n\n"
          "If another Amplifier message is open, answer it first. "
-         "If the folder is still there afterwards, move or rename it. Then run this setup file again.")
+         "If the folder is still there a few minutes later, move or rename it. Then run this setup file again.")
 
 
 def literal(body, name="root"):
@@ -848,8 +849,20 @@ def test_a_second_setup_run_starts_no_launcher_on_a_folder_with_an_uninstall_rec
     assert "Setup found no chats or settings in the folder. " in EMPTIED
     open_message = "If another Amplifier message is open, answer it first."
     assert open_message in windows_consumer._UNFINISHED["busy"]
-    assert MOVED.endswith("\n\n" + open_message + " If the folder is still there afterwards, move or rename it. "
-                          "Then run this setup file again.")
+    assert MOVED.endswith("\n\n" + open_message + " If the folder is still there a few minutes later, move or "
+                          "rename it. Then run this setup file again.")
+    # "a few minutes later": after the answer the uninstall's last step holds the folder while it works. The
+    # step after exit begins no pass later than 120 seconds after its start.
+    from amplifier_web import windows_removal
+    assert windows_uninstall.SECONDS_AFTER_EXIT == 120
+    assert "seconds=SECONDS_AFTER_EXIT, choice=choice)" in inspect.getsource(windows_uninstall.finish)
+    assert '"seconds": seconds,' in inspect.getsource(windows_removal.finish_after_exit)
+    script = windows_removal.FINISH_SCRIPT
+    order = [script.index(line) for line in (
+        "        Write-Host 'ready'\n        $until = (Get-Date) + (New-TimeSpan -Seconds $p.seconds)\n",
+        "            if ($idle -or (Get-Date) -ge $until) { break }\n            Start-Sleep -Seconds 1\n"
+        "        } while ((Get-Date) -lt $until)\n")]
+    assert order == sorted(order) and script.count("$until") == 3
     assert "Restart Windows" not in MOVED and "delete" not in MOVED.lower() and "your chats" not in MOVED
     # An uninstall deletes the records that the entries step reads before its last message.
     removal = inspect.getsource(windows_uninstall.remove)
@@ -871,8 +884,11 @@ def test_a_second_setup_run_starts_no_launcher_on_a_folder_with_an_uninstall_rec
     for text in (ADDED, RESTART, MOVED):
         assert "Setup did not start Amplifier, because it found an uninstall record" in text
     # The step of each text: the launcher's own, where an entry is there or was added.
-    assert ASKED.endswith("Select Yes to add Amplifier to the Start menu again, "
+    # The question does not promise the entries: after an uninstall that deleted the launcher's records,
+    # the entries step cannot add them, and setup does not know that before the step.
+    assert ASKED.endswith("\n\nSelect Yes, and setup tries to add Amplifier to the Start menu again, "
                           "so that you can finish that uninstall from there.")
+    assert "Select Yes to add" not in ASKED
     assert ADDED.endswith("\n\nTo finish that uninstall, select Uninstall Amplifier in the Start menu.")
     assert RESTART.endswith("\n\nRestart Windows. Then run this setup file again.")
     design = " ".join(DESIGN.split())
@@ -893,16 +909,27 @@ def test_a_second_setup_run_starts_no_launcher_on_a_folder_with_an_uninstall_rec
             "While the last message of that uninstall is open, the uninstall program still runs from files in "
             "the folder, and Windows does not rename a folder that holds a file which a program keeps open (the "
             "header of `amplifier_web/windows_removal.py`).",
+            "When the person answers that message, the uninstall goes on with its last step, which removes the "
+            "program files and then, when nothing else is in it, the folder.",
+            "When that step cannot run, the folder stays (L3).",
+            "The text says \"a few minutes later\" because that step holds the folder while it works, and "
+            "Windows refuses to move the folder until then.",
+            "The uninstall program deletes its two program folders and ends, and the step after exit begins no "
+            "pass later than 120 seconds after its start (`SECONDS_AFTER_EXIT` in "
+            "`amplifier_web/windows_uninstall.py`).",
+            "The time is a guide and not a limit: the deletion of the two program folders has no limit of time.",
+            "When the person moves the folder while something still holds it, Windows refuses, and nothing is "
+            "changed.",
             "When the PC was switched off while the message was open, no message is open afterwards, the last "
             "step never ran, and the folder stays (L3).",
             "The text does not tell the person to delete the folder, for the reason of the first text above.",
-            "The folder that the person moved or renamed still holds Amplifier's program files (`python`, "
-            "`tools`) and both records.",
+            "The folder that the person moved or renamed keeps what it held: both records, and Amplifier's "
+            "program files (`python`, `tools`) when the last step did not remove them.",
             "Nothing removes them.",
             "When that program is still there and the entries cannot be added again, setup's last message gives "
             "the same step.",
-            "A folder that the person moved or renamed on that step still holds Amplifier's program files and "
-            "both records.",
+            "A folder that the person moved or renamed on that step keeps what it held: both records, and "
+            "Amplifier's program files when the last step did not remove them.",
             "Not proven: that Windows refuses to rename the folder while the last message of an uninstall is "
             "open;",
             "An entry with the journal's name (`removal`): the launcher does not open Amplifier from such a "
@@ -917,6 +944,8 @@ def test_a_second_setup_run_starts_no_launcher_on_a_folder_with_an_uninstall_rec
             "Listed: one message, and setup ends with status 1.",
             "The step is the launcher's own (its text `removing`).",
             "On No setup changes nothing and ends with status 0.",
+            "The question says that setup tries: setup does not know before the entries step whether it can "
+            "add the entries.",
             "On Yes setup's window runs the entries step only (`SecondRun` with `start` false), then setup "
             "shows one of the texts below and ends with status 1.",
             "The entries program adds the entries only when the installation's own records are whole and no "

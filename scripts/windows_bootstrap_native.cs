@@ -859,14 +859,15 @@ namespace UnifiedBootstrap {
             // launcher's own. With `listed` it is a message; without, it is
             // the question whether setup adds the entries again: after a
             // removal that stopped, the entries are what lets the person
-            // uninstall again.
+            // uninstall again. The question says that setup tries: setup
+            // does not know before the entries step whether it can add them.
             if(listed) return "Setup found an uninstall record in this folder:\n"+root+"\n\n"+
                 "Amplifier does not open while that record is there. Setup did not start it.\n\n"+
                 "To finish that uninstall, select Uninstall Amplifier in the Start menu or in the Windows Apps list.";
             return "Setup found an uninstall record in this folder:\n"+root+"\n\n"+
                 "Amplifier does not open while that record is there. Setup does not start it. "+
                 "Setup did not find Amplifier in the Start menu.\n\n"+
-                "Select Yes to add Amplifier to the Start menu again, so that you can finish that uninstall from there.";
+                "Select Yes, and setup tries to add Amplifier to the Start menu again, so that you can finish that uninstall from there.";
         }
         internal static string Unstarted(string root, bool added) {
             // The last text of that state, after the entries step. When the
@@ -878,7 +879,9 @@ namespace UnifiedBootstrap {
             // Unopened, to move or rename the folder, and never to delete
             // it. While that last message is open in another window, the
             // uninstall still runs from the folder and Windows refuses to
-            // move it, so the text names that message first.
+            // move it, so the text names that message first. After the
+            // answer the uninstall's last step holds the folder while it
+            // works, so the text says "a few minutes later".
             if(added) return "Setup added Amplifier to the Start menu. "+
                 "Setup did not start Amplifier, because it found an uninstall record in this folder:\n"+root+"\n\n"+
                 "To finish that uninstall, select Uninstall Amplifier in the Start menu.";
@@ -886,7 +889,7 @@ namespace UnifiedBootstrap {
                 "Setup did not start Amplifier, because it found an uninstall record in this folder:\n"+root+"\n\n"+
                 "Setup found no chats or settings in the folder.\n\n"+
                 "If another Amplifier message is open, answer it first. "+
-                "If the folder is still there afterwards, move or rename it. Then run this setup file again.";
+                "If the folder is still there a few minutes later, move or rename it. Then run this setup file again.";
             return "Setup could not add Amplifier to the Start menu. "+
                 "Setup did not start Amplifier, because it found an uninstall record in this folder:\n"+root+"\n\n"+
                 "Restart Windows. Then run this setup file again.";
