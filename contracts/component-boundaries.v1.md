@@ -100,6 +100,30 @@ receipt must match the selected Worktrees receipt exactly. This moves no user
 files or ownership/transfer records and does not extract the whole resource
 lifecycle domain. Source publication and app adoption remain separate.
 
+## Current output mechanism delivery
+
+[amplifier-platform-resources](https://github.com/bkrabach/amplifier-platform-resources)
+owns output relationships, saved-body decoding, read-only Git evidence and direct
+mechanism tests. The package keeps its `amplifier-outputs` distribution and
+`amplifier_outputs` import. Unified selects the published artifact as the sole
+installed owner and retains authorization, transactions, source access, content
+storage, integrity and retention. This transfers no user data and does not extract
+the broader resource/media lifecycle. Publication and app selection stay separate;
+historical receipts and saved-body formats retain their existing meaning.
+
+## Current Recall storage delivery
+
+[amplifier-platform-recall](https://github.com/bkrabach/amplifier-platform-recall)
+owns conversation search, versioned-memory storage and direct SQLite tests. The
+package keeps its `amplifier-recall` distribution and `amplifier_recall` import.
+Unified selects its published artifact as the sole installed owner and retains
+source access, scope, authorization, opt-ins, context assembly, model execution
+and Stop. Durable notes, versions, settings, command receipts and suppression
+records retain their existing formats and recovery behavior. This handoff moves
+no user data and does not replace native history or Foundation's separate optional
+Recall API. Publication and app selection remain separate; historical receipts
+and newer user state survive ordinary app rollback.
+
 ## Not in v1
 
 Mandatory microservices or a new central runtime framework; promote only when a

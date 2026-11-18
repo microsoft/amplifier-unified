@@ -1819,6 +1819,121 @@ def certificate(stage, exchange, account, token):
     return steps.finish()
 
 
+def sign_in_snapshot(again, root, home, *, status=None, state=None):
+    """A few read-only public fixture calls; keep facts, never raw settings or output."""
+    from amplifier_web import windows_installation
+    facts, errors = {}, []
+
+    def read(name, action):
+        try:
+            facts[name] = action()
+        except Exception as error:
+            # Exception text and arbitrary diagnostic fields can carry private data.
+            errors.append({"part": name, "errorType": type(error).__name__})
+
+    def service():
+        result = status if status is not None else again.cli(root, "service", "status", "--json", timeout=30)
+        value = result["json"]
+        need(isinstance(value, dict), "Service status returned no JSON")
+        fields = {key: value[key] for key in ("ok", "processVerified", "responding", "probeAttempted")
+                  if key in value and type(value[key]) is bool}
+        if type(value.get("pid")) is int and 0 < value["pid"] <= 0xFFFFFFFF:
+            fields["pid"] = value["pid"]
+        # windows_task_runtime's FILETIME identity is a bounded ASCII decimal
+        # string, passed unchanged through installation_health. Never normalize it.
+        created = value.get("created")
+        if (isinstance(created, str) and re.fullmatch(r"[1-9][0-9]{0,19}", created)
+                and int(created) <= 0xFFFFFFFFFFFFFFFF):
+            fields["created"] = created
+        return {"exitCode": result["exitCode"], "json": fields}
+
+    def identity():
+        value = facts.get("serviceStatus", {}).get("json", {})
+        need(all(key in value for key in ("pid", "created")), "Service status has no valid exact host identity")
+        return list(again.process_identity(value))
+
+    def scheduler():
+        value = state if state is not None else again.task_facts(home)
+        need("errorType" not in value, "Task observation failed")
+        return {key: value[key] for key in ("managed", "state", "taskPath", "instances", "lastResult")
+                if key in value}
+
+    def preparation():
+        value = again.preparation_facts(root)
+        # A bounded phase tail only. Never copy install-failure's arbitrary details.
+        return {"releaseCount": value["releaseCount"], "failureRecorded": "install-failure.json" in value,
+                "phaseTail": [event if re.fullmatch(
+                    r"(?:download|install|audit|prepare|qualify|promote|complete|runtime|dependencies|"
+                    r"application|components|probe|validation): (?:started|running|passed|failed|complete|completed|ok)",
+                    event) else "[phase omitted]" for event in value.get("install-progress.json", [])[-12:]]}
+
+    def tail():
+        result = again.cli(root, "service", "logs", timeout=30)
+        need(result["exitCode"] == 0, "Service logs could not be read")
+        # Only fixed markers from the bounded public log tail, not lines containing
+        # URLs, credentials, exception messages, command lines or arbitrary locals.
+        markers = ("Started server process", "Application startup complete.", "Shutting down",
+                   "Finished server process", "Traceback (most recent call last):")
+        rows = result["stdout"].splitlines()[-20:]
+        return {"linesExamined": len(rows), "rawTextOmitted": True,
+                "markers": [{"tailLine": number, "marker": marker}
+                            for number, row in enumerate(rows) for marker in markers if marker in row]}
+
+    read("serviceStatus", service)
+    read("host", identity)
+    read("task", scheduler)
+    read("savedPort", lambda: windows_installation.saved_port(home))
+    read("listenerAnswers", lambda: asyncio.run(again.listener_answers(home)))
+    read("preparation", preparation)
+    read("taskOutputTail", tail)
+    facts.setdefault("host", None)  # Missing/invalid identities always have a captureErrors entry.
+    facts["captureErrors"] = errors
+    return facts
+
+
+def sign_in_trust(steps, again, root, home, urls, pin, status, state):
+    """Observe the maintained settling rule, without changing its defaults or TLS inputs."""
+    from amplifier_web import windows_installation
+    observation = {"stage": "BEFORE PROBE", "probes": [],
+                   "before": sign_in_snapshot(again, root, home, status=status, state=state)}
+    steps.report["signInTrust"] = observation
+    if observation["before"]["captureErrors"]:
+        observation["stage"] = "FAIL"
+    steps.save()
+    need(not observation["before"]["captureErrors"], "Before-probe evidence capture failed",
+         observation["before"]["captureErrors"])
+    started, original, trusted = time.monotonic(), windows_installation.trust_state, None
+
+    def recorded(targets, fingerprint):
+        value = original(targets, fingerprint)
+        observation["probes"].append({"seconds": round(time.monotonic() - started, 3), "state": value})
+        steps.save()
+        return value
+
+    windows_installation.trust_state = recorded
+    try:
+        # Retry only unreachable; trusted and untrusted return immediately.
+        trusted = windows_installation.settled_trust(urls, pin)
+    except Exception as error:
+        observation["probeErrorType"] = type(error).__name__
+        raise RuntimeError("The TLS trust probe or its evidence capture failed: " + type(error).__name__) from None
+    finally:
+        windows_installation.trust_state = original
+        observation.update(state=trusted, seconds=round(time.monotonic() - started, 3),
+                           after=sign_in_snapshot(again, root, home))
+        pre, post = observation["before"]["host"], observation["after"]["host"]
+        observation["hostChanged"] = pre != post if pre is not None and post is not None else None
+        observation["stage"] = "AFTER PROBE" if trusted == "trusted" and not observation["after"]["captureErrors"] else "FAIL"
+        steps.save()
+    need(not observation["after"]["captureErrors"], "After-probe evidence capture failed",
+         observation["after"]["captureErrors"])
+    need(trusted == "trusted",
+         "After the new sign-in the TLS listener stayed unreachable during the bounded wait; trust was not established"
+         if trusted == "unreachable" else "After the new sign-in Windows returned an untrusted connection",
+         trusted)
+    return trusted
+
+
 def second(stage, exchange, account, token):
     """After the sign-out and the new sign-in. No launcher command runs before the first check."""
     steps = Steps(exchange / "second.json", SECOND, token=token)
@@ -1842,8 +1957,12 @@ def second(stage, exchange, account, token):
              "The host after the sign-in is not a new host on the same port")
         urls, pin = trust_targets(home)
         marks = certificate_marks(home)
-        trusted = windows_installation.trust_state(urls, pin)
-        need(trusted == "trusted", "After the new sign-in Windows does not trust the connection. It read", trusted)
+        trusted = sign_in_trust(steps, again, root, home, urls, pin, status, state)
+        after = steps.report["signInTrust"]["after"]
+        need(again.running(after["task"]) and again.healthy(after["serviceStatus"]),
+             "After the TLS probe the task no longer has a verified responsive host", after)
+        need(after["host"] != list(before["hostBeforeSignOut"]) and after["savedPort"] == before["port"],
+             "After the TLS probe the host is not a new host on the same port", after)
         need(windows_root_has(marks[1]) is True,
              "After the new sign-in Windows does not list the certificate among this user's root certificates")
         steps.report["thumbprint"] = marks[1]  # For the check after the delete choice.

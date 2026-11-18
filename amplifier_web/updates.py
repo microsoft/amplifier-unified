@@ -534,25 +534,31 @@ class UpdateManager:
         state['canRollback'] = 'previous' in active_release(self.home)
         from .update_diagnostics import UpdateDiagnostics
         self.diagnostics=UpdateDiagnostics(self)
-        from .update_health import publish as publish_health
+        from .update_health import activation, publish as publish_health
         self._active_update_evidence = {}
         self._update_health_initial = True
         self._host_started = time.time()  # See check_due.
         self._start_check_open = True
+        self._activation_failed = None  # See _activation_held.
         self._update_health_seen_revision = service.state.get('configurationRevision')
+        from .update_restart import target
+        state['activation'] = activation(self)
+        state['forceRestartTarget'] = target(self)
         publish_health(self)
+        from .windows_launcher_follow import project
+        project(self)
         if restart_repair:
             self.diagnostics.record('restart-repair','failed',errorType='ValueError',preserve_last_failure=True)
         else:
             service._save_changes(globals={'updates'})
-        from .update_restart import target
-        state['forceRestartTarget'] = target(self)
 
     async def confirm_readiness(self, health, expected=None):
         from .update_readiness import confirm_readiness
         return await confirm_readiness(self, health, expected=expected)
 
     def awaiting_restart(self):
+        from .windows_launcher_follow import fenced
+        if fenced(self): return True
         from .update_readiness import recovery_candidate
         # A legacy erased-marker receipt must not permanently prevent repairs
         # after an unrelated manual upgrade. Only its active health check gates
@@ -570,14 +576,31 @@ class UpdateManager:
                     group['displayError'] = values['error']
                 self.diagnostics._pending_failure = None
             self.service.state['updates'].update(values)
-            state = self.service.state['updates']
-            from .update_health import publish as publish_health
-            state['blockers'] = (self.app_blockers() if state.get('pendingApp')
-                                 else self.blockers()) if self.requires_idle(state) else []
-            publish_health(self)
-            from .update_restart import target
-            state['forceRestartTarget'] = target(self)
+            self._derive_state()
             self.service._publish_changes(globals={'updates','settings'})
+
+    def _derive_state(self):
+        """Refresh the publication fields under service.lock; report any change."""
+        state = self.service.state['updates']
+        fields = ('blockers', 'activation', 'detail', 'currentStatus', 'forceRestartTarget')
+        before = tuple(state.get(key) for key in fields)
+        from .update_health import activation, publish as publish_health, PREPARED_STARTING, PREPARED_WAITING
+        state['blockers'] = (self.app_blockers() if state.get('pendingApp')
+                             else self.blockers()) if self.requires_idle(state) else []
+        state['activation'] = activation(self)
+        if (state['activation'] in {'starting', 'waiting'}
+                and state.get('detail') in (PREPARED_STARTING, PREPARED_WAITING)):
+            state['detail'] = PREPARED_STARTING if state['activation'] == 'starting' else PREPARED_WAITING
+        publish_health(self)
+        # After the health text, at every place that derives it: the launcher's
+        # text replaces or extends it (no IO; it never raises).
+        from .windows_launcher_follow import project
+        project(self)
+        from .update_restart import target
+        # Also the identity that task.waitForUpdate names. The page's offer to
+        # interrupt work is a matter of its view (update_health.browser_view).
+        state['forceRestartTarget'] = target(self)
+        return before != tuple(state.get(key) for key in fields)
 
     def configuration_changed(self):
         """Invalidate the current projection on a source-settings publication."""
@@ -589,6 +612,8 @@ class UpdateManager:
         self._update_health_initial = True
         from .update_health import publish as publish_health
         publish_health(self)
+        from .windows_launcher_follow import project
+        project(self)
         self.wakeup.set()
         return True
 
@@ -741,24 +766,54 @@ class UpdateManager:
                         **({'pendingApp': {**pending, 'updateIntent': intent}} if pending else {}))
                 await self.app()
             elif action == 'install':
+                from .windows_launcher_follow import request_by_button
+                if await request_by_button(self): return
                 # A click during a check must not disappear at install()'s
                 # busy guard. Join that check, then re-evaluate its inventory.
                 if self.check_task and not self.check_task.done():
                     await asyncio.shield(self.check_task)
                     if self.service.state['updates'].get('phase') in {'error', 'interrupted'}:
                         return
+                def found():
+                    # After a new check the request installs what that check found.
+                    state = self.service.state['updates']
+                    return state.get('phase') == 'available' and state.get('available', 0)
+                async with self.lock:
+                    if self.closed or self.awaiting_restart():return
+                    retry = self._failed_component_retry()
+                if retry:
+                    # _check takes this same lock. Refresh outside it, before
+                    # publishing intent (_check clears applicationIntent).
+                    await self.check(fresh=True)
                 async with self.lock:
                     if self.closed or self.awaiting_restart():return
                     intent = {'id': command_id or uuid.uuid4().hex, 'scope': 'whole'}
                     pending = self.service.state['updates'].get('pendingApp')
                     await self.publish(applicationIntent=intent,
+                        **({} if retry else {'retryCheck': None}),
                         **({'pendingApp': {**pending, 'updateIntent': intent}} if pending else {}))
+                    if retry and not found():
+                        failed = self.service.state['updates'].get('phase') in {'error', 'interrupted'}
+                        await self.publish(retryCheck={'at': time.time(), 'attemptId': None,
+                            'result': 'check-failed' if failed else 'nothing-to-install'})
+                        return
+                    prior_attempt = self.diagnostics.state.get('batch', {}).get('attemptId')
                 if not self.closed and not self.awaiting_restart():
-                    def found():
-                        # After a new check the request installs what that check found.
-                        state = self.service.state['updates']
-                        return state.get('phase') == 'available' and state.get('available', 0)
                     await self.install_checked(found)
+                    if retry:
+                        async with self.lock:
+                            # Settings-race checks clear intent; a newer request
+                            # replaces it and must keep its own result.
+                            if self.service.state['updates'].get('applicationIntent') not in (None, intent):return
+                            batch = self.diagnostics.state.get('batch', {})
+                            attempt = batch.get('attemptId') if (batch.get('kind') == 'ecosystem'
+                                and batch.get('attemptId') != prior_attempt) else None
+                            # 'retried' only names a component attempt that this
+                            # request started. 'other-update': it started an update
+                            # of another kind (the application comes first).
+                            started = batch.get('attemptId') not in (None, prior_attempt)
+                            await self.publish(retryCheck={'at': time.time(), 'attemptId': attempt,
+                                'result': 'retried' if attempt else 'other-update' if started else 'not-started'})
             else:
                 await getattr(self, action)()
         except asyncio.CancelledError: raise
@@ -782,6 +837,19 @@ class UpdateManager:
             # polling sleep. Wake the owner; keep all admission/idle checks in
             # tick(), rather than installing in parallel with another update.
             self.wakeup.set()
+
+    def _failed_component_retry(self):
+        """Called under the manager lock; interrupted/pending owners keep their paths."""
+        state = self.service.state['updates']
+        diagnostics = self.diagnostics.state
+        batch = diagnostics.get('componentPreparation', diagnostics.get('batch', {}))
+        failure = batch.get('failure') or diagnostics.get('lastFailure') or {}
+        return (state.get('phase') == 'error' and batch.get('kind') == 'ecosystem'
+            and bool(batch.get('attemptId')) and failure.get('attemptId') == batch['attemptId']
+            and failure.get('kind') == 'ecosystem' and failure.get('status') == 'failed'
+            and (batch.get('retry') or {}).get('mode') == 'changed-inputs'
+            and not any(state.get(key) for key in ('pendingApp', 'pendingRelease', 'pendingRollback',
+                                                  'pendingRestart', 'pendingReplacement', 'pendingSmartTools')))
 
     @staticmethod
     def independent_tool_results(state):
@@ -1268,6 +1336,8 @@ class UpdateManager:
                 write_private(stage/'validated.json',json.dumps({'generationSchema': 1, 'workerProtocol': 1, 'createdAt':time.time(),'sources':len(candidates),'hostVersion':__import__('amplifier_web').__version__, 'updateTier': self.service.state['updates'].get('sequence', {}).get('stage'),
                     'appSelection': next(row.get('appSelection') for row in self.inventory
                                          if row.get('kind') != 'smart tool')}))
+                from .update_storage import remove_stage_keys
+                remove_stage_keys(self.home, stage)
                 self.diagnostics.clear_failure()
                 self.diagnostics.record('ecosystem-stage','succeeded',commandId=stage_id)
                 await self.publish(phase='staged',pendingRelease=release,
@@ -1276,6 +1346,9 @@ class UpdateManager:
             except BaseException as error:
                 from .update_diagnostics import exception_facts, failure_guidance
                 interrupted=isinstance(error,asyncio.CancelledError)
+                if isinstance(error, Exception):
+                    from .update_storage import remove_stage_keys
+                    remove_stage_keys(self.home, stage)
                 if interrupted:proof['interruptedAt'] = time.time()
                 status='interrupted' if interrupted else 'failed'
                 failure=self.diagnostics.state.get('lastFailure',{})
@@ -1495,6 +1568,38 @@ class UpdateManager:
         write_private(stage/'profiles-qualified.json', json.dumps({'profiles': profiles,
             'configuration': configuration_key(config.settings, self.home, stage)}))
 
+    def _activation_inputs(self, target):
+        """What can change the result of a prepared update's validation at activation.
+
+        The prepared update, the settings and the selection that also hold a
+        failed preparation (update_health.preparation_key), and the person's
+        keys file, which that validation reads: its time and size, never its
+        content. Settings that cannot be read are one state of their own.
+        """
+        from .session_files import amplifier_home
+        from .update_health import preparation_key
+        # Total: the owner's pass asks this at every pass while a failure is held.
+        try:
+            witness = preparation_key(self, [])
+        except Exception as error:
+            witness = 'unreadable ' + type(error).__name__
+        try:
+            info = (amplifier_home() / 'keys.env').stat()
+            keys = (info.st_mtime_ns, info.st_size)
+        except Exception:
+            keys = None
+        return target, witness, keys
+
+    def _activation_held(self, target):
+        """This update's validation at activation failed, and nothing that can change its result has changed.
+
+        The owner's pass asks, so that time alone does not repeat minutes of
+        probe processes (tick). A person's own request does not ask. The fact
+        is in memory only: a start of the app validates once more.
+        """
+        failed = getattr(self, '_activation_failed', None)
+        return failed is not None and failed == self._activation_inputs(target)
+
     async def activate(self, rollback=False):
         async with self.service.runtime_lifecycle():
             await self._activate(rollback)
@@ -1521,7 +1626,49 @@ class UpdateManager:
             if target:
                 marker=json.loads((self.directory/'releases'/target/'validated.json').read_text())
                 if marker.get('hostVersion')!=__import__('amplifier_web').__version__:
-                    await self.validate(self.directory/'releases'/target,target)
+                    from .session_files import amplifier_home
+                    from .update_health import STALE_STAGE_KEYS
+                    from .update_storage import refresh_stage_keys, remove_stage_keys
+                    target_stage = self.directory / 'releases' / target
+                    # Taken before the keys file is read: a change during the
+                    # validation is then a change for the owner's next pass.
+                    inputs = None if rollback else self._activation_inputs(target)
+                    refused = refresh_stage_keys(self.home, target_stage, amplifier_home())
+                    if refused is not None and remove_stage_keys(self.home, target_stage) is not None:
+                        # One rule, and it keeps no memory: qualification never
+                        # reads a copy that this refresh did not write. The stage
+                        # may hold such a copy (of a keys file that the person
+                        # has removed or changed since), and it cannot be removed
+                        # now. No pointer, runtime or receipt was changed, so this
+                        # is not a failed attempt and the phase stays, as when a
+                        # switch waits for work. The next request tries again.
+                        # Said once: the owner's pass comes here every minute.
+                        # So an earlier failed validation must not hold the
+                        # owner now (_activation_held): this request validated
+                        # nothing, and only the owner's pass finds the end of
+                        # this refusal by itself.
+                        if not rollback:
+                            self._activation_failed = None
+                        if state.get('error') != STALE_STAGE_KEYS:
+                            await self.publish(error=STALE_STAGE_KEYS)
+                        return
+                    if state.get('error') == STALE_STAGE_KEYS:
+                        await self.publish(error=None)  # That refusal is over.
+                    try:
+                        # A refused refresh is not an update failure. Validation
+                        # then runs without a keys file in the stage.
+                        await self.validate(target_stage, target)
+                    except asyncio.CancelledError:
+                        raise  # Qualification may still have a reader; keep the copy.
+                    except Exception:
+                        remove_stage_keys(self.home, target_stage)
+                        if not rollback:
+                            self._activation_failed = inputs  # See _activation_held.
+                        raise
+                    else:
+                        remove_stage_keys(self.home, target_stage)
+                        if not rollback:
+                            self._activation_failed = None
                     marker['hostVersion']=__import__('amplifier_web').__version__
                     write_private(self.directory/'releases'/target/'validated.json',json.dumps(marker))
             from .update_partial import read as partial_read, verify_pointer, adopted_items, public_results
@@ -1794,6 +1941,7 @@ class UpdateManager:
         if state.get('pendingRelease'):
             from .update_health import pending_preparation
             if pending_preparation(self.diagnostics.state):return
+            if self._activation_held(state['pendingRelease']):return
             await self.activate()
             return
         if state.get('initialPreparation') and state.get('sequence', {}).get('stage') == 'complete':
@@ -1861,6 +2009,8 @@ class UpdateManager:
                     self.diagnostics.record('background-update','failed',**exception_facts(error))
                 phase=self.diagnostics.state['latest']['phase']
                 await self.publish(phase='activating' if self.service.state['updates'].get('pendingRestart') else 'error',error=failure_guidance(self.diagnostics.state.get('lastFailure', {})) or 'Background update failed during '+phase.replace('-',' ')+'. Review its diagnostic receipt; no work was replayed.')
+            from .windows_launcher_follow import consider
+            await consider(self)  # After the except: a failing tick must not starve an open launcher request.
             state = self.service.state['updates']
             sequence = state.get('sequence', {})
             from .update_health import pending_preparation
@@ -1883,6 +2033,11 @@ class UpdateManager:
         if self.closed or self.awaiting_restart():
             return
         started = time.monotonic()
+        try:
+            from .update_storage import scrub_stage_keys
+            await scrub_stage_keys(self)
+        except Exception:
+            pass  # A later pass tries again. It never defers the maintenance below.
         try:
             # Tool result retention is its own existing promise, independent of
             # whether unused-code cleanup is enabled in Settings.

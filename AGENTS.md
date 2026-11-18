@@ -197,6 +197,33 @@ restore. The stable launcher keeps the code that setup installed; an in-app
 update cannot change it. `amplifier_web.windows_launcher_refresh` is the only
 supported replacement: it runs with the active generation's Python from outside
 the host's Job, and it rolls back fully on failure.
+The app host asks for that refresh by itself (`windows_launcher_follow`): it
+registers a second task, `AmplifierUnifiedLauncher-<SID>`, whose helper runs
+the command with `--automatic` outside the Job. Keep its rules: an open request
+fences every update operation (`awaiting_restart`); a host names its run in the
+request only after it closed admission; the helper stops only the exact run
+whose hold it read under the refresh lock; a host reopens only with that lock
+and with no stop record for its run; a journal of another task registration is
+renamed and never used. No clock decides safety there, and the helper never
+shows a message box (a waiting box blocks the timed trigger that repairs an
+ended helper). Every app generation's `Scripts` folder holds a `uv.exe` of a
+package, and that folder is the helper's working folder: keep
+`NoDefaultCurrentDirectoryInExePath` in the refresh command's environment, or
+Windows runs that program before setup's. The refresh starts only when a file of
+`windows_launcher_files.FILES` or a distribution of `PACKAGES` differs, so a
+launcher-side fix reaches an installed PC only through that list. A change
+that makes the launcher load another file fails
+`tests/test_windows_launcher_files.py`: run
+`scripts/windows_launcher_files.py --write` and decide each new `DYNAMIC`
+entry. The Apps-list version is the confirmed app version; the host writes it
+(`windows_consumer_shell.set_version`), not the refresh. A host that an update
+started confirms its own start after it listens: the hand-over record still
+says `prepared` when the update loop first runs. Never keep that reading as a
+decision for the host run; read the record again until it says something else.
+A fixture that writes `acknowledged` before the start hides this. In
+`windows-launcher-follow.yml` the app is built as a version above every
+release: a host that is behind a public release updates itself in the middle
+of a case.
 A live conversation worker holds Foundation's session ownership below
 `<installation folder>\ownership`. A worker whose Foundation is older than
 `e37a946b` makes Windows refuse a rename, a move or a replacement of an entry
@@ -357,6 +384,36 @@ compared and exported, so a schedule or a queued change of an earlier version
 would then be refused. Add a module to `STATE_FILES` only after reading its
 source; `tests/test_provider_state_files.py` runs the real module and fails
 when a later version adds a file or changes a name.
+On Windows the host's environment names the shared source store
+(`AMPLIFIER_SOURCE_STORE`, kept in the start-at-sign-in task). A helper of the
+host that prepares a module from a source then imports it from a store object.
+A read-only attribute on a Windows folder does not stop a new entry: a helper
+that writes bytecode puts `__pycache__` into the object, and Foundation refuses
+the object from then on ("Shared source contents changed"). In 0.106.3 the
+connection check of an "OpenAI Compatible API" connection did that; no chat
+with the connection started and the next component update failed. A helper
+prepares a source only through `source_imports.prepare`, which turns bytecode
+writing off for the rest of that process and for a Python process that it
+starts with its environment (a child started with `-E` or `-I` ignores the
+setting). Call it only in a helper process that ends after its one task, never
+in the host. Do not give the setting to every child of the host instead.
+Workers write no bytecode (`update_sources.store_environment`), and no
+installation step was found that compiles the worker environment. A helper
+leaves the bytecode of what it imported from that environment before that call
+for the next process; with a host-wide setting it would leave none.
+`tests/test_source_store_bytecode.py` runs the real connection check against
+Foundation's store on a hosted runner.
+A text that tells a person how to open Amplifier says only what that code
+knows. On Windows the sign-in page and the ticket refusals take the step from
+`browser_entry.next_step`: the Start menu only for a request from this
+computer to a host that can give a ticket, that this installation's own task
+started and whose Start-menu entry exists, and else one sentence that names
+no way. Do not name
+`amplifier-unified open` in a Windows text for a browser: it works as written
+only on an installation by hand with the default data folder. Do not put a
+path of the installation on a page that needs no sign-in. `open` is that step,
+so its own failure messages never name it or the Start menu; it prints the
+host's reason.
 
 ## Keep agent context and coordination useful
 

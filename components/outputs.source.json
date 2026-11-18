@@ -2,17 +2,21 @@
   "schema": 1,
   "source": {
     "schema": 1,
-    "repository": "microsoft/amplifier-unified",
-    "revision": "51551349e1cf437a40318e220dcd50e59680d4ef",
-    "subdirectory": "components/outputs",
-    "tree": "725c8ddaf1a64731278607cf76b965854234f206",
+    "component": "outputs",
+    "repository": "bkrabach/amplifier-platform-resources",
+    "revision": "f1324d00996910939fc82161626dc4807674fd99",
+    "subdirectory": ".",
+    "tree": "d91c358a6587f5e43ff7848e7b313e79c18f5efe",
     "version": "0.1.0",
     "tag": "outputs-v0.1.0",
     "sourceFiles": {
-      ".gitignore": "91ff24eaa65a89ef74d692e164233422924a556a07666dd471ceefc6a31f331f",
+      "CODE_OF_CONDUCT.md": "9d45a586fce701502d173a7c10c71c8bd4f23e23d5a4a06e9d00eb57a9c11205",
       "LICENSE": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
-      "MANIFEST.in": "ca4d086a2960c7e0254208f08bf99f5db67adb33599085574b1155e859c7fb0a",
-      "README.md": "06e40e4c12d1e91522eef3e85088f31f1038b92c539d24e209c9c32da1a46112",
+      "MANIFEST.in": "34e98013b429affe5e69fccce3540d2d6c04afc72233271f0a765bc3bb516888",
+      "PROVENANCE.json": "476b0257b41b5fd8b7bd895e4e752a682e74f34f2a64f206333e4eb4ef0e8da4",
+      "README.md": "57d734375f51fb2401bd6b5c27fbe52c5586693889fd8cac2451359ba9039bd0",
+      "SECURITY.md": "b02bf4e236e9335b27298a77688c751d18ca7e6052873d0d3d29eda37d0a72fa",
+      "SUPPORT.md": "bc29be057576bc9576acb59335d95fe6dfef948c1c056e7ad5758cf97e9caa68",
       "amplifier_outputs/__init__.py": "59d3a4c48c08c834e6b77715d84b8396282a2ca508866e598875e80b7ea101ca",
       "amplifier_outputs/content.py": "64d088512a02bddc3c2da69fc189f2ec0888a75b70ee37ae4555ac27b4feb791",
       "amplifier_outputs/git_review.py": "fd31051e4b3fde3f2255ad478112b5630ec99fc58b7cf48798075b14000b486c",
@@ -23,21 +27,21 @@
     },
     "artifacts": {
       "amplifier_outputs-0.1.0-py3-none-any.whl": {
-        "sha256": "08c318e6083a2d75dfeac376e4fd23e91ee4dff0f393ff339c1fe06f57a993a4",
-        "bytes": 9062
+        "sha256": "24a14314304239458442780c9415b4e933776ad30abe0fa15b6965d5fe842471",
+        "bytes": 10716
       },
       "amplifier_outputs-0.1.0.tar.gz": {
-        "sha256": "ebbee61b304fa062e7db680f84efe0d30875388720a1656961eacff8ab57eb68",
-        "bytes": 9917
+        "sha256": "9faf0bcea0adf38b0676d81ff0f7fcec0106b86eee0b5fda4d0e12d4f57eee8a",
+        "bytes": 17547
       }
     }
   },
   "artifact": {
-    "url": "https://github.com/microsoft/amplifier-unified/releases/download/outputs-v0.1.0/amplifier_outputs-0.1.0-py3-none-any.whl",
-    "sha256": "08c318e6083a2d75dfeac376e4fd23e91ee4dff0f393ff339c1fe06f57a993a4",
-    "bytes": 9062
+    "url": "https://github.com/bkrabach/amplifier-platform-resources/releases/download/outputs-v0.1.0/amplifier_outputs-0.1.0-py3-none-any.whl",
+    "sha256": "24a14314304239458442780c9415b4e933776ad30abe0fa15b6965d5fe842471",
+    "bytes": 10716
   },
-  "sourceReceiptSha256": "bc652d4bc87fa119faa6e66c98e61b33f0346923ed4aaf1928b98f8a2ff88456",
+  "sourceReceiptSha256": "277b58d45a531f889da5540db71b93ff82ca9b1215ad80f379b0ca922c83841b",
   "runtimeRequirements": [],
   "files": {
     "amplifier_outputs/__init__.py": "59d3a4c48c08c834e6b77715d84b8396282a2ca508866e598875e80b7ea101ca",

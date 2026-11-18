@@ -62,11 +62,13 @@ print(root)
     (harness / '.venv').symlink_to(python.parent.parent, target_is_directory=True)
     scenarios = []
     for name in args.scenario:
-        assert name in {'compact-composer', 'markdown-composer', 'composer-return-host', 'layout-spacing-host', 'conversation-error-host', 'settings-mobile',
+        assert name in {'canvas-chrome', 'canvas-dirty', 'canvas-close', 'canvas-refresh-catchup',
+                        'compact-composer', 'markdown-composer', 'composer-return-host', 'layout-spacing-host', 'conversation-error-host', 'settings-mobile',
                         'layout-pass2-settings', 'layout-pass2-work', 'layout-pass2-priority'}
         target = output / name
         scenarios.append({'id': name, 'command': ['node', f'tests/web/{name}-browser.mjs'], 'env': {
             'AMPLIFIER_TEST_PYTHON': str(python), 'AMPLIFIER_TEST_PACKAGE_ROOT': package,
+            'AMPLIFIER_SHELL_NODE_MODULES': str(ROOT / '.build/web-client/node_modules'),
             'AMPLIFIER_TEST_INSTALLED_PACKAGE': package, 'AMPLIFIER_TEST_WHEEL_IDENTITY': str(identity_path),
             'AMPLIFIER_TEST_ARTIFACTS': str(target), 'AMPLIFIER_TEST_OUTPUT': str(target), 'PYTHONPATH': ''}})
     result = run_scenarios(harness, {'schemaVersion': 1, 'scenarios': scenarios}, output / 'browser',

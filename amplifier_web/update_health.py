@@ -8,12 +8,118 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import sys
 import time
 
 from .update_diagnostics import RUNTIME_SOURCE_REASONS, failure_guidance
 
 DETERMINISTIC = RUNTIME_SOURCE_REASONS - {'runtime-source-changed'} | {
     'host-component-conflict', 'missing-configured-environment', 'incompatible-conversation-loop'}
+
+PREPARED_WAITING = 'Application release validated. Waiting for work to finish before restarting.'
+PREPARED_STARTING = 'Application release validated. No work is running. Amplifier installs the update and restarts by itself.'
+STALE_STAGE_KEYS = ('Amplifier did not switch component versions. The version that it would switch to may still hold '
+                    'an old copy of the keys file, and Amplifier could not replace or remove that copy. Amplifier '
+                    'did not check that version with the old copy. Current components remain active.')
+
+# Attempt IDs of the app replacements that THIS process executes at this moment.
+# Never saved. `updates.activation` in saved or restored state is a copy for
+# readers. It is never the evidence that hides a replacement marker.
+_EXECUTING = set()
+
+
+def claim_replacement(attempt):
+    _EXECUTING.add(attempt)
+
+
+def release_replacement(attempt):
+    """Synchronous and total. The owner calls it before any wait when it ends."""
+    _EXECUTING.discard(attempt)
+
+
+def _replacing(state):
+    """A replacement that this process executes now, in a state that still says so."""
+    marker = state.get('pendingReplacement')
+    return bool(isinstance(marker, dict) and isinstance(marker.get('attemptId'), str)
+                and marker['attemptId'] in _EXECUTING
+                and state.get('phase') == 'activating' and not state.get('error')
+                and not state.get('pendingRestart'))
+
+
+def _prepared(state):
+    """The saved state of a validated app that nothing has started to install."""
+    return bool(state.get('pendingApp') and state.get('phase') == 'app-staged'
+                and not state.get('error') and not state.get('pendingRestart')
+                and state.get('pendingReplacement') is None
+                and (state.get('application') or {}).get('canInstall') is not False)
+
+
+def _starting(state):
+    """A prepared app that the owner's next pass activates by itself."""
+    if not _prepared(state) or state.get('blockers'):
+        return False
+    from .update_readiness import valid_update_intent
+    from .updates import UpdateManager
+    # Match the saved holds before tick/app reach activation. Operation locks
+    # themselves are not a hold: staging publishes while it owns that lock.
+    # A prepared state excludes every branch of awaiting_restart(): it has no
+    # marker, no pending restart and no error phase.
+    if (not valid_update_intent(state.get('applicationIntent'))
+            or (state.get('pendingSmartTools') and not UpdateManager.independent_tool_results(state)
+                and (state.get('applicationIntent') or {}).get('scope') != 'app')):
+        return False
+    drain = state.get('drain') or {}
+    return not (drain.get('phase') in {'draining', 'replacing', 'releasing'}
+                or drain.get('phase') == 'waiting' and any(
+                    not row.get('ready') and not row.get('suppressed')
+                    for row in drain.get('workers', {}).values()))
+
+
+def activation(manager):
+    """Derive live app progress from resident state, never from saved ownership."""
+    state = manager.service.state['updates']
+    if _replacing(state):
+        return 'installing'
+    if not _prepared(state):
+        return None
+    if state.get('blockers'):
+        return 'waiting'
+    # A closed manager and an unreadable handoff commit are facts of this
+    # process. The saved state does not hold them.
+    if (getattr(manager, 'closed', False) or getattr(manager, '_manual_handoff_commit_unknown', False)
+            or not _starting(state)):
+        return None
+    return 'starting'
+
+
+def browser_view(updates):
+    """Adapt live app progress for the bundled page without changing saved state.
+
+    The page reads any replacement marker as an unconfirmed outcome and any
+    prepared app as waiting for work. The server knows these two states better.
+    Remove this view when the page reads updates.activation itself.
+
+    `activation` is derived at the manager's own publications. Other owners
+    publish `updates` too, so the field alone is never enough. `installing`
+    also needs this process to execute that exact attempt (_EXECUTING), and
+    `starting` needs every saved condition that allowed it. A claim that fails
+    this changes nothing: the page then gets the real marker, phase and error.
+
+    The page offers "Interrupt work and restart" whenever it gets
+    `forceRestartTarget`. It gets none when no work delays the update, and none
+    on Windows, where a forced restart is always refused (update_restart.require).
+    The saved field stays: task.waitForUpdate names it.
+    """
+    claim = updates.get('activation')
+    live = bool(claim == 'installing' and _replacing(updates)
+                or claim == 'starting' and _starting(updates))
+    if not live and (updates.get('forceRestartTarget') is None or sys.platform != 'win32'):
+        return updates
+    view = {**updates, 'forceRestartTarget': None}
+    if live:
+        view['phase'] = 'activating'
+        view.pop('pendingReplacement', None)
+    return view
 
 
 def configuration(manager):
@@ -419,7 +525,12 @@ def failure_events(state):
 
 
 def current(state, evidence=None, *, manual_verified=None, explicit_retry=False, connection=None):
-    """Pure projection of operation/desired/active state; no IO and no read flags."""
+    """Pure projection of operation/desired/active state; no IO and no read flags.
+
+    One fact is not in the state: whether this process executes the app
+    replacement that a marker names (_EXECUTING). Without it the marker reads
+    as an unconfirmed outcome.
+    """
     evidence = evidence or {}
     connection = connection or {}
     seq = state.get('sequence') or {}
@@ -429,6 +540,25 @@ def current(state, evidence=None, *, manual_verified=None, explicit_retry=False,
     retry = batch.get('retry') or {}
     phase = state.get('phase')
     def result(status, title, detail, *, action=None, component=None, failure=None):
+        retry_check = state.get('retryCheck') or {}
+        if (status in {'action-required', 'protected'} and failure
+                and retry_check.get('result') == 'retried' and retry_check.get('attemptId')
+                and retry_check['attemptId'] == failure.get('attemptId')):
+            detail += ' Amplifier checked the sources again before this attempt.'
+        if status == 'current' and retry_check.get('result') == 'nothing-to-install':
+            detail += ' Amplifier checked the sources again. Nothing is left to install.'
+        if (status in {'action-required', 'protected'} and failure and failure.get('kind') == 'ecosystem'
+                and type(retry_check.get('at')) in {int, float} and type(failure.get('at')) in {int, float}
+                and retry_check['at'] > failure['at']):
+            # The earlier record keeps its priority. Say what the later request did.
+            if retry_check.get('result') == 'nothing-to-install':
+                detail += ' Amplifier checked the sources again. Nothing is left to install.'
+            elif retry_check.get('result') == 'not-started':
+                detail += ' Amplifier checked the sources again. No new attempt started.'
+        if (failure and failure.get('kind') == 'ecosystem' and connection.get('needed')
+                and (failure.get('reason') or (failure.get('probe') or {}).get('reason')) != 'ai-connection-needed'):
+            # A record of this exact refusal carries the same guidance already.
+            detail += ' No AI connection is set up yet. A component update starts only after you set one up in Settings.'
         value = {'status': status, 'title': title, 'detail': detail,
                 'actionRequired': status in {'action-required', 'protected', 'unverified'},
                 'action': action, 'component': component}
@@ -447,6 +577,9 @@ def current(state, evidence=None, *, manual_verified=None, explicit_retry=False,
                 if source in selected:
                     value[target] = selected[source]
         return value
+    if state.get('activation') == 'installing' and _replacing(state):
+        return result('working', 'Updating Amplifier',
+                      state.get('detail') or 'Installing the app update and restarting…')
     if state.get('pendingReplacement') is not None:
         return result('unverified', 'Installation needs verification',
                       'The application replacement outcome is not confirmed. Work remains protected; inspect the update diagnostics before another installation.', action='diagnostics')
@@ -459,6 +592,11 @@ def current(state, evidence=None, *, manual_verified=None, explicit_retry=False,
     if phase in {'checking', 'staging', 'validating', 'activating'}:
         return result('working', 'Checking for updates' if phase == 'checking' else 'Updating Amplifier',
                       state.get('detail') or 'Preparing and checking the requested update.')
+    if state.get('error') == STALE_STAGE_KEYS:
+        # An activation or a rollback that changed nothing (updates._activate).
+        # A rollback has no pending release, and an earlier failure record must
+        # not speak in place of this text.
+        return result('action-required', 'Update needs attention', STALE_STAGE_KEYS, action='diagnostics')
     if state.get('pendingApp') or state.get('pendingRelease'):
         if any(row.get('kind') == 'checkout-handoff' or row.get('reasonCode') in {
                 'management-tasks-unavailable', 'management-lock-unavailable', 'runtime-observer-unavailable'}
@@ -466,6 +604,8 @@ def current(state, evidence=None, *, manual_verified=None, explicit_retry=False,
             return result('action-required', 'Update needs attention',
                           'Automatic restart is paused because Amplifier cannot confirm earlier work has finished. The current app is kept.',
                           action='diagnostics')
+        if state.get('activation') == 'starting' and _starting(state):
+            return result('working', 'Updating Amplifier', PREPARED_STARTING)
         return result('action-required' if state.get('error') else 'waiting',
                       'Update needs attention' if state.get('error') else 'Update ready; waiting for work',
                       state.get('error') or 'The qualified update continues automatically when its activation boundary is ready.',
@@ -609,6 +749,8 @@ def current(state, evidence=None, *, manual_verified=None, explicit_retry=False,
         # selected conversation profile, which has no provider yet. Application
         # and Smart Tool updates do not wait.
         return result('waiting', 'Components update after you set up an AI connection',
+                      'The application release could not be checked. The component update waits for another reason. Amplifier checks new components together with an AI connection, and none is set up yet. Set up an AI connection in Settings. The component update can then start.'
+                      if app.get('status') == 'check_failed' else
                       'Nothing failed. Amplifier checks new components together with an AI connection, and none is set up yet. Set up an AI connection in Settings. The update can then start.',
                       action='connect')
     if state.get('available') or seq.get('nextStage') or any(
