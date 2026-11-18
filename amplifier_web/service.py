@@ -1873,6 +1873,22 @@ class AppService:
         if candidate is not None and candidate is not self.runtime and not getattr(candidate, "_closed", False):
             await candidate.close()
 
+    def _first_use_over(self):
+        """Tell the browser tabs that attach later that first use is over.
+
+        A new browser tab has no view of its own and copies the shared view
+        (``ClientViews.attach``). An action of an attached client changes only
+        that client's view, so the shared view would keep the first setup step
+        for good. The client opens Settings at the AI connections by itself
+        while the step is "welcome": each new tab, and so each start of the
+        app, would open that panel again on an installation that has a
+        connection and chats. A view that already left "welcome" is not
+        changed, and no client's own view is changed here.
+        """
+        view = self._state.get('view') or {}
+        if view.get('setupJourney') == 'welcome':
+            view['setupJourney'] = 'done'
+
     async def dispatch(self, action, args=None, origin="ui", command_id=None, expected_revision=None, *, include_state=True, caller_session_id=None, admission_check=None):
         # Directory preparation yields outside the service lock. Keep concurrent
         # retries on the same creation command behind its durable receipt, so a
@@ -3178,6 +3194,7 @@ class AppService:
                 if args.get('select', True) and not args.get('purpose'):
                     if self.state['view'].get('setupJourney') == 'welcome':
                         self.state['view']['setupJourney'] = 'done'
+                    self._first_use_over()
                     from .workspace_selection import select_session_workspace
                     select_session_workspace(self.state, session)
                     self.state["selectedSessionId"] = session["id"]
@@ -3820,6 +3837,8 @@ class AppService:
                 if opens_delivery:
                     self.state.setdefault('canvas', {})['open'] = True
                 self.state["view"].update(patch)
+                if patch.get('setupJourney') == 'done':
+                    self._first_use_over()
             elif action == 'feedback.excerpt.stage':
                 diagnostic_result = self.feedback.excerpts.stage(args, origin, caller_session_id)
             elif action in {"feedback.attachment.add","feedback.attachment.remove"}:
@@ -4128,6 +4147,14 @@ class AppService:
                 receipt['handoffOrigin'] = self.handoffs.lineage(handoff)
                 receipt['actor'] = self.handoffs.actor(handoff)
             if action == 'conversation.send':
+                # The host saves the submission here, together with the step.
+                # What the send path does with the message afterwards does not
+                # bring first use back: a chat exists and a message was
+                # submitted to it. An earlier version left the shared setup
+                # step at its first value on an installation that already has
+                # chats.
+                if origin in {'ui', 'user'} and session.get('sessionKind') != 'internal':
+                    self._first_use_over()
                 receipt.update(delivery=message['delivery']['status'], sessionId=session['id'], inputId=input_id)
                 if stopped_generation is not None:
                     receipt['stoppedGenerationRecovery'] = stopped_generation
