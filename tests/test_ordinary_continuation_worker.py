@@ -225,11 +225,16 @@ async def test_actual_worker_completes_two_ordinary_turns_after_omission(
     finally:
         artifacts = os.environ.get('AMPLIFIER_TEST_ARTIFACTS')
         if artifacts:
-            Path(artifacts, 'ordinary-worker-' + shape + '.json').write_text(json.dumps({
-                'events': events, 'effects': effects,
-                'executionDone': worker.execution.done() if worker.execution else None,
-                'generation': getattr(worker.runtime, 'generation', None),
-            }, default=str))
+            try:
+                Path(artifacts, 'ordinary-worker-' + shape + '.json').write_text(json.dumps({
+                    'events': events, 'effects': effects,
+                    'executionDone': worker.execution.done() if worker.execution else None,
+                    'generation': getattr(worker.runtime, 'generation', None),
+                }, default=str))
+            except (OSError, TypeError, ValueError):
+                # Optional diagnostics must never replace the original failure
+                # or prevent the native owner/session cleanup below.
+                pass
         if worker.execution:
             worker.execution.cancel()
             await asyncio.wait_for(asyncio.gather(worker.execution, return_exceptions=True), 10)
