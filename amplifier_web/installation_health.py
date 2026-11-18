@@ -285,11 +285,11 @@ async def windows_working(home, *, wait=15.0):
     One read has a time limit of 3 seconds. A busy host can give no answer in
     that time: on hosted test machines its loop stayed in one database commit
     for about 11 seconds at the longest, some seconds after a start. With
-    None the uninstall goes on and does not ask; a chat that is at work is
-    then stopped with no question. So the reads are made in rounds, and a later round can read
-    again an address whose read ended by its time limit. A round reads its
-    addresses in their order; the first round has every address. What one
-    read does:
+    None the uninstall does not ask its question about a chat at work, and
+    it stops that chat. So the reads are made in rounds, and a later round
+    can read again an address whose read ended by its time limit. A round
+    reads its addresses in their order; the first round has every address.
+    What one read does:
 
     - It ends by the time limit (`TimeoutError`): its address is in the next
       round, when one starts.
