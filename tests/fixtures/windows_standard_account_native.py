@@ -1459,10 +1459,12 @@ def cleanup():
 def replace_report(partial, path, *, replace=os.replace, wait=time.sleep, timer=time.monotonic, limit=5.0):
     """Put a written report in the place of the report file.
 
-    While this user's program runs, the program of the runner's account
-    reads the report file to see whether the program has finished
-    (`in_session`): in a loop, with a pause of 3 seconds before the read of
-    each round, and once more before it gives up.
+    The program of the runner's account starts this user's program of the
+    phases `first`, `second` and `third` (`in_session`). While such a
+    program runs, the program of the runner's account reads that phase's
+    report file to see whether it has finished: in a loop, with a pause of
+    3 seconds before the read of each round, and once more before it gives
+    up.
     While a program has the file open in that way, Windows refuses the
     replacement (`PermissionError`, "Access is denied"). One run failed a
     step with this error (run 44204538909, November 17, 2026). Which program
@@ -1723,13 +1725,14 @@ class ListenerWatch:
     quicker than the question that brought the change, whose seconds the
     entry has itself.
 
-    The report has what these questions saw, and nothing of the time between
-    two of them: each kept change of the answer (for example to no answer
-    after a host start, and back to an answer) with the process numbers that
-    owned the port at that question. A number is not a process: Windows uses
-    a number again. A listener that answers late can show there, also in a
-    run where every read of the case is as required. A host that is busy
-    only between two questions does not show.
+    Of the listener, the report has what these questions saw: each kept
+    change of the answer (for example to no answer after a host start, and
+    back to an answer) with the process numbers that owned the port at that
+    question. What the listener did between two questions is not there. A
+    number is not a process: Windows uses a number again. A listener that
+    answers late can show there, also in a run where every read of the case
+    is as required. A host that is busy only between two questions does not
+    show.
 
     With a read of the processor time (`gauge`), the watch keeps each
     question that took `slow` seconds or more, at most 40 (`late`). An entry
@@ -1869,7 +1872,7 @@ def keep_after_failure(steps, watch, *, wait=time.sleep, seconds=20):
 
     The failed step has its text already, and the report is saved with it.
     Nothing here changes that text, and nothing here can make a step pass.
-    The watch of the listener goes on in those seconds. Then each read that
+    A watch that still runs goes on in those seconds. Then each read that
     gave an answer which was not as its step requires is made once more, and
     that answer is kept beside the first. A read that ended with an error is
     not made again. Without an app folder that is safe to read
@@ -1899,9 +1902,12 @@ def kept(answer):
     A report that holds an answer which JSON cannot write (for example a
     dictionary with a tuple as a key) cannot be saved. The save of a failed
     step then fails too, and the step's text is not in the report. The
-    Python form is cut at 4000 characters, at its end.
+    Python form is cut at 4000 characters, at its end. When Python cannot
+    make that form either, the report keeps the error of that try.
     """
-    return answer if isinstance(attempt(lambda: json.dumps(answer, default=str)), str) else repr(answer)[:4000]
+    if isinstance(attempt(lambda: json.dumps(answer, default=str)), str):
+        return answer
+    return attempt(lambda: repr(answer)[:4000])
 
 
 def accept_start(steps, key, again, home, root, started, state, status, text, *, wait=time.sleep):
@@ -1923,10 +1929,10 @@ def accept_start(steps, key, again, home, root, started, state, status, text, *,
     The text is cut at 2900 characters, at its end. So it keeps its start,
     also in the report, which keeps the last 3000 characters of a step's text.
     The report holds the three answers as the case got them and, after a
-    start that is not accepted, the pair of five seconds later. An answer
-    that JSON cannot write is there in its Python form (`kept`), so that the
-    report can still be saved. In the text, a detail that JSON cannot write
-    is given in its Python form.
+    start that is not accepted, the pair of five seconds later or the error
+    of that read. An answer that JSON cannot write alone is there in its
+    Python form, or as the error of that form (`kept`). In the text, a
+    detail that JSON cannot write is given in its Python form.
 
     The read five seconds later never makes the step pass. It, the read of the
     host's log (`host_output`) and the second save of the report can each

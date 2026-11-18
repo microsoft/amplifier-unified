@@ -290,8 +290,8 @@ def test_a_report_that_windows_does_not_let_replace_for_a_moment_is_replaced_at_
     tries.clear(), waits.clear()
     case.replace_report(partial, report, replace=refused(0, denied, tries), wait=waits.append)
     assert len(tries) == 1 and waits == [] and report.read_text() == "the next report"
-    # The clock is read after a refusal only. Here it passes the limit of 3 seconds during the pause: the try
-    # after the pause is made, and it replaces the report.
+    # After its read before the first try, the clock is read after a refusal only. Here it passes the limit of 3
+    # seconds during the pause: the try after the pause is made, and it replaces the report.
     partial.write_text("the last report")
     tries.clear(), waits.clear()
     case.replace_report(partial, report, replace=refused(1, denied, tries), wait=waits.append,
@@ -628,6 +628,12 @@ def test_the_report_keeps_an_answer_itself_or_its_python_form_when_json_cannot_w
     assert case.kept({("a", "pair"): 1}) == "{('a', 'pair'): 1}"
     long = {(number,): "x" * 100 for number in range(100)}
     assert case.kept(long) == repr(long)[:4000] and len(case.kept(long)) == 4000
+
+    class NoForm:
+        def __repr__(self):
+            raise ValueError("no form")
+    # Python cannot make a form of this answer either: the report keeps the error of that try.
+    assert case.kept({("a", "pair"): NoForm()}) == {"errorType": "ValueError", "error": "no form"}
 
 
 @pytest.mark.parametrize("said", ["The second start failed", "The start after the uninstall failed"])
@@ -998,9 +1004,15 @@ def test_a_question_of_the_watch_that_fails_is_an_answer_and_the_list_has_a_limi
 
 
 def test_the_watch_asks_in_a_thread_of_its_own_and_ends_when_it_is_stopped(case):
-    asked = []
+    # The watch's real thread runs here. Each of the two waits for it has a limit of 60 seconds. A limit ends the
+    # case when the thread asks too few questions or does not end. A machine that gives the thread no time for
+    # that long fails the case too.
+    asked, enough = [], case.threading.Event()
+
     def probe():
         asked.append(case.threading.current_thread().name)
+        if len(asked) == 5:
+            enough.set()
         if len(asked) == 2:
             raise OSError("one question failed")  # The watch goes on after it.
         return "trusted"
@@ -1008,10 +1020,8 @@ def test_the_watch_asks_in_a_thread_of_its_own_and_ends_when_it_is_stopped(case)
     thread = watch._thread
     assert watch.start() is watch and watch._thread is thread  # A second start adds no second thread.
     assert [one.name for one in case.threading.enumerate()].count("listener-watch") == 1
-    deadline = time.monotonic() + 10
-    while len(asked) < 5 and time.monotonic() < deadline:
-        time.sleep(0.01)
-    kept = watch.stop()
+    assert enough.wait(60), "The watch's thread asked fewer than five questions in 60 seconds"
+    kept = watch.stop(wait=60)
     assert kept["started"] is True and kept["ended"] is True and kept["questions"] >= 5
     assert set(asked) == {"listener-watch"}
     assert [change["answer"] for change in kept["changes"]][:3] == [
@@ -1024,16 +1034,20 @@ def test_the_watch_asks_in_a_thread_of_its_own_and_ends_when_it_is_stopped(case)
 def test_a_watch_whose_thread_does_not_end_says_so(case):
     asking, release = case.threading.Event(), case.threading.Event()
 
-    def probe():  # A question that does not come back, as a connection without a time limit would.
+    def probe():  # A question that comes back only when the test lets it, as a connection without a time limit.
         asking.set()
-        release.wait(30)
+        release.wait()
         return "trusted"
     watch = case.ListenerWatch(probe, every=0.01).start()
-    assert asking.wait(10)
-    kept = watch.stop(wait=0.05)
-    assert kept["started"] is True and kept["ended"] is False
-    release.set()
-    watch._thread.join(10)
+    try:
+        assert asking.wait(60), "The watch's thread asked no question in 60 seconds"
+        # The thread is in its question and cannot end before `release`. So this stop finds it running, however
+        # long the test itself had to wait for the processor.
+        kept = watch.stop(wait=0.05)
+        assert kept["started"] is True and kept["ended"] is False
+    finally:
+        release.set()
+        watch._thread.join(60)
     assert watch.stop()["ended"] is True
 
 
@@ -1066,20 +1080,22 @@ def test_what_a_stopped_watch_gave_does_not_change_while_its_thread_still_asks(c
     import copy
     asking, release, count = case.threading.Event(), case.threading.Event(), [0]
 
-    def probe():  # The second question does not come back before the test lets it.
+    def probe():  # The second question comes back only when the test lets it.
         count[0] += 1
         if count[0] == 2:
             asking.set()
-            release.wait(30)
+            release.wait()
         return "trusted"
     watch = case.ListenerWatch(probe, every=0.01).start()
-    assert asking.wait(10)
-    kept = watch.stop(wait=0.05)
-    assert kept["ended"] is False and [change["answer"] for change in kept["changes"]] == ["trusted"]
-    assert "slowest" not in kept["changes"][0]
-    given = copy.deepcopy(kept)
-    release.set()
-    watch._thread.join(10)
+    try:
+        assert asking.wait(60), "The watch's thread asked no second question in 60 seconds"
+        kept = watch.stop(wait=0.05)
+        assert kept["ended"] is False and [change["answer"] for change in kept["changes"]] == ["trusted"]
+        assert "slowest" not in kept["changes"][0]
+        given = copy.deepcopy(kept)
+    finally:
+        release.set()
+        watch._thread.join(60)
     # The second question had the same answer, and it took some time (the stop waited 0.05 second for its thread
     # meanwhile). So the entry now has it as `slowest`, the slowest of the questions that follow a change.
     assert watch.questions == 2 and "slowest" in watch.changes[0]
@@ -1110,7 +1126,7 @@ def test_an_error_of_the_watchs_own_code_ends_the_watch_and_the_stop_says_it(cas
     # A read of the processor time that gives no record: the watch's own code fails at the late answer.
     ticks = iter([0.0, 3.0, 3.5])
     watch = case.ListenerWatch(lambda: "trusted", gauge=lambda owners: 5, timer=lambda: next(ticks), every=0.01)
-    watch.start()._thread.join(10)
+    watch.start()._thread.join(60)
     kept = watch.stop()
     assert kept["started"] is True and kept["ended"] is True and kept["questions"] == 0 and kept["changes"] == []
     assert kept["endedBy"]["errorType"] == "TypeError"
@@ -1178,28 +1194,33 @@ def test_the_watch_of_an_installation_asks_its_saved_address_and_reads_the_owner
                         lambda urls, pin: asked.append(("trust", urls, pin)) or "trusted")
     monkeypatch.setattr(windows_task_runtime, "listener_owners",
                         lambda host, port: asked.append(("owners", host, port)) or {4500, 77})
-    gauges = []
+    gauges, started = [], []
     monkeypatch.setattr(case, "cpu_seconds", lambda owners: gauges.append(owners) or {"busy": 0, "all": 0,
                                                                                       "processes": {}})
+    # A stand-in for the start, so that no thread runs here. The test asks each question itself, and the timer is
+    # a stand-in too: the seconds that this case requires are the stand-in's. The real start is in the case
+    # `test_the_watch_asks_in_a_thread_of_its_own_and_ends_when_it_is_stopped`.
+    monkeypatch.setattr(case.ListenerWatch, "start", lambda self: started.append(self) or self)
     watch = case.watch_listener(tmp_path)
+    assert started == [watch]  # `watch_listener` starts the watch that it gives.
     # The watch of an installation reads the processor time and, after a late answer, Windows' root certificates.
-    assert watch.after is case.root_store_read and watch.slow == 0.5
-    deadline = time.monotonic() + 10
-    while not watch.changes and time.monotonic() < deadline:
-        time.sleep(0.01)
+    # It pauses for half a second after a question, and an answer of half a second or more is late.
+    assert watch.after is case.root_store_read and watch.slow == 0.5 and watch.every == 0.5
+    # Two questions: the first takes 0.1 second; the second begins 0.8 second later and takes 0.7 second.
+    ticks = iter([0.0, 0.1, 0.2, 1.0, 1.7, 1.8])
+    watch.timer, watch.after = lambda: next(ticks), lambda: "the root store"
+    watch.look()
+    watch.look()
     kept = watch.stop()
-    assert kept["started"] is True and kept["ended"] is True
-    assert [(change["answer"], change["owner"]) for change in kept["changes"]] == [("trusted", [77, 4500])]
-    # Nothing here requires that a question is quick. On a machine that gives this program no time for half a
-    # second, a question takes that long and counts as late: the watch then asks the gauge a second time with the
-    # same owners. That is the watch's own rule; other cases require it with a stand-in for the timer. The 10
-    # seconds above only end a test whose watch keeps no answer.
-    assert isinstance(kept["changes"][0]["seconds"], float) and isinstance(kept["late"], list)
-    # The gauge was asked with each question: at the first question with no owner of the port (twice when that
-    # question was late), then with the owners that the question before read.
-    first = 2 if gauges[:2] == [[], []] else 1
-    assert gauges[:first] == [[]] * first and all(owners == [77, 4500] for owners in gauges[first:])
-    assert asked[:2] == [("trust", ["https://127.0.0.1:27595/api/health"], "the pin"), ("owners", "127.0.0.1", 27595)]
+    assert [(change["answer"], change["owner"], change["seconds"]) for change in kept["changes"]] == [
+        ("trusted", [77, 4500], 0.1)]
+    assert [(entry["seconds"], entry["waitedBefore"], entry["after"]) for entry in kept["late"]] == [
+        (0.7, 0.8, "the root store")]
+    # The gauge was asked before each question with the owners that the question before read (none before the
+    # first question), and once more after the late question.
+    assert gauges == [[], [77, 4500], [77, 4500]]
+    assert asked == [("trust", ["https://127.0.0.1:27595/api/health"], "the pin"),
+                     ("owners", "127.0.0.1", 27595)] * 2
 
 
 def test_the_watch_asks_with_the_products_function_of_its_start_and_not_with_one_put_in_its_place(
@@ -1215,9 +1236,10 @@ def test_the_watch_asks_with_the_products_function_of_its_start_and_not_with_one
                         lambda urls, pin: asked.append(("the product's", urls, pin)) or "trusted")
     monkeypatch.setattr(windows_task_runtime, "listener_owners", lambda host, port: {4500})
     monkeypatch.setattr(case, "cpu_seconds", lambda owners: {"busy": 0, "all": 0, "processes": {}})
+    # A stand-in for the start, so that no thread runs here. The test asks the watch's question itself.
+    monkeypatch.setattr(case.ListenerWatch, "start", lambda self: self)
     watch = case.watch_listener(tmp_path)
-    assert watch.stop()["ended"] is True
-    asked.clear()
+    assert asked == [] and watch.reason is None
     monkeypatch.setattr(windows_installation, "trust_state",
                         lambda urls, pin: asked.append("the step's") or "unreachable")
     assert watch.probe() == "trusted"
@@ -1497,8 +1519,10 @@ def test_the_watch_and_the_reads_for_the_record_end_before_the_folder_is_deleted
     end = 'steps.report["listener"], steps.evidence = attempt(watch.stop), None\n'
     assert second.index("steps.begin(SECOND[3])") < second.index(end) < second.index("delete_everything(again, root")
     assert second.count("steps.evidence = ") == 2 and journey.count("steps.evidence = home") == 1
-    # A failed step gets its text first (`steps.failed`). Then the record is kept. After the steps and after a
-    # failed step, `stop` is called on the watch once, and not again when the report holds its result already.
+    # A failed step gets its text first (`steps.failed`). Then the record is kept. A phase that reaches its last
+    # lines, after the steps or after a failed step whose text is saved, has called `stop` on the watch once:
+    # there, or in `second` before the delete choice. When `steps.failed` itself raises, those lines are not
+    # reached.
     ending = ('    except BaseException as error:\n        steps.failed(error)\n'
               '        attempt(lambda: keep_after_failure(steps, watch))\n'
               '    # Once: `second` stops the watch before the delete choice, and the report then holds its result '
@@ -1508,7 +1532,7 @@ def test_the_watch_and_the_reads_for_the_record_end_before_the_folder_is_deleted
     assert source.count("attempt(watch.stop)") == 3 and source.count("watch.stop") == 3
     assert journey.count(ending) == 1 and second.count(ending) == 1
     assert source.count("keep_after_failure(steps, watch)") == 2
-    # The update record is kept only after a step has passed, never between a start and its reads.
+    # `note_updates` is called only after a step has passed, never between a start and its reads.
     for part, moments in ((journey, ("after the first start", "at the end of the steps after the first sign-in")),
                           (second, ("after the sign-in", "after the start that follows the uninstall"))):
         for moment in moments:
@@ -3015,8 +3039,8 @@ def test_second_sign_in_keeps_standard_user_identity_port_readiness_and_root_ora
     monkeypatch.setattr(case, "windows_root_has", lambda thumbprint: False)
     # The record beside the steps is not the subject here. Its watch would read the saved port once more and ask
     # the stand-in for the trust read from a thread of its own: here it never starts. After a failed step the
-    # record is kept as in the case, without its wait of 20 seconds, so that `run.seen` below also counts a trust
-    # read that the record would make again.
+    # record is kept as in the case, without its wait of 20 seconds: a trust read that the record made again
+    # would then show in `run.seen` below.
     monkeypatch.setattr(case, "watch_listener", lambda home: case.ListenerWatch())
     keep = case.keep_after_failure
     monkeypatch.setattr(case, "keep_after_failure", lambda steps, watch: keep(steps, watch, wait=lambda seconds: None))
