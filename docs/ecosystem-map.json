@@ -27,6 +27,13 @@
       "ref": "54c457a059812d290c781c55e4edf84cb33ad937",
       "sha256": "737f5bfcf0f1bdb0a262e52f7a5cfb59c542c04ea0ac742c2540fb6b4072f0f6",
       "url": "https://github.com/microsoft/amplifier-unified/blob/54c457a059812d290c781c55e4edf84cb33ad937/pyproject.toml"
+    },
+    {
+      "git_blob": "6a8bbcf76ef11fda970c0bc0480e3c3b2d1565d8",
+      "path": "README.md",
+      "ref": "5114e5ecee18dfdc6af70876846adb0291fe2f1b",
+      "sha256": "bba979b2d9c060f53ccd5c2154baf4575e2e57f45067a6cae5203261bb7c5696",
+      "url": "https://github.com/bkrabach/amplifier-shell-sdk/blob/5114e5ecee18dfdc6af70876846adb0291fe2f1b/README.md"
     }
   ],
   "consumer_cta": {
@@ -60,6 +67,11 @@
       "from": "self",
       "relation": "uses",
       "to": "bundles"
+    },
+    {
+      "from": "self",
+      "relation": "uses",
+      "to": "shell-sdk"
     }
   ],
   "nodes": [
@@ -96,13 +108,20 @@
       "id": "bundles",
       "kind": "external",
       "label": "Configured bundles & tools"
+    },
+    {
+      "id": "shell-sdk",
+      "kind": "external",
+      "label": "Shell extension SDK",
+      "repository": "bkrabach/amplifier-shell-sdk"
     }
   ],
   "notes": [
     "Current app uses Core AmplifierSession through Foundation prepared bundles.",
     "Do not depict amplifier-unified-host, amplifier-unified-client-web or AHP as already replacing current app architecture; the architecture packet explicitly keeps that adoption a secondary track.",
     "amplifier-client-web is the sole authoring owner; Unified prepares an exact public repository revision and ships its verified built assets. Source merge is not automatic app delivery.",
-    "Role mapping describes responsibility, not a claim that every Constellation family contract has been qualified."
+    "Role mapping describes responsibility, not a claim that every Constellation family contract has been qualified.",
+    "The independently authored Shell SDK supplies trusted browser extension helpers. Unified retains host contracts, validation and activation; source publication and explicit app input selection remain separate."
   ],
   "product_site": {
     "label": "Visit product website",
