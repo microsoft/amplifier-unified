@@ -4,6 +4,8 @@ The case itself runs only on a Windows runner (`windows-launcher-follow.yml`).
 These cases fail on every platform when the workflow could pass with a failed
 check, when the fixture reads a name that the product does not have, or when
 the fixture's reader of the app's saved state does not match the app's writer.
+The last two cases are about the launcher's portable cases themselves: a pull
+request must run them, and the job that runs them must stop for a wrong result.
 """
 from __future__ import annotations
 
@@ -11,8 +13,12 @@ import ast
 import importlib
 import importlib.util
 import json
+import os
 from pathlib import Path
+import re
 import sqlite3
+import subprocess
+import sys
 import tomllib
 
 import pytest
@@ -21,6 +27,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/windows-launcher-follow.yml"
 FIXTURE = ROOT / "tests/fixtures/windows_launcher_follow_native.py"
+LISTED = ROOT / ".github/workflows/other-test-files.yml"
 
 
 @pytest.fixture(scope="module")
@@ -188,3 +195,99 @@ def test_the_stand_in_for_uv_is_put_in_place_and_taken_away(fixture, tmp_path, m
     assert 'args[0] != "tool" || args[1] != "install"' in fixture.STAND_IN
     assert 'GetEnvironmentVariable("UV_TOOL_DIR")' in fixture.STAND_IN and 'Path.Combine(folder, "..", "tools")' in fixture.STAND_IN
     assert "uv-real.exe" in fixture.STAND_IN and "TrimEnd(separators)" in fixture.STAND_IN
+
+
+def test_a_pull_request_runs_every_launcher_case_file():
+    """A name in a path filter starts a workflow. Only a pytest command runs a file.
+
+    Until `other-test-files.yml` no pull-request check ran the launcher's
+    portable cases, and nobody saw that. A new `tests/test_windows_launcher_*.py`
+    fails here until that workflow starts for it and runs it. The same holds for
+    every file that the workflow lists: what it runs, and what those files read,
+    starts it.
+    """
+    document = yaml.safe_load(LISTED.read_text(encoding="utf-8"))
+    assert "continue-on-error" not in json.dumps(document)
+    triggers = document[True]  # YAML reads the key `on` as True.
+    paths = triggers["pull_request"]["paths"]
+    assert triggers["push"] == {"branches": ["main"], "paths": paths} and "workflow_dispatch" in triggers
+    (job,) = document["jobs"].values()
+    assert job["strategy"]["matrix"] == {"os": ["ubuntu-latest", "windows-latest"]} and "if" not in job
+    (step,) = [step for step in job["steps"] if "pytest" in step.get("run", "")]
+    assert step == job["steps"][-1] and "if" not in step
+    # The step ends with a failure for a failed case, an unexpected skip and a file with no passed case.
+    for refusal in ('problems.append(f"failed: {name}")', "does not expect that on this runner",
+                    "no case of this file passed", "sys.exit(1)"):
+        assert refusal in step["run"]
+
+    def starts(path):
+        return any(re.fullmatch(re.escape(pattern).replace(r"\*\*", ".*").replace(r"\*", "[^/]*"), path)
+                   for pattern in paths)
+
+    run = sorted(set(re.findall(r"tests/test_\w+\.py", step["run"])))
+    launcher = sorted(path.relative_to(ROOT).as_posix() for path in (ROOT / "tests").glob("test_windows_launcher_*.py"))
+    assert Path(__file__).resolve().relative_to(ROOT).as_posix() in launcher and len(launcher) >= 5
+    assert [name for name in launcher if name not in run] == []
+    assert [name for name in run if not (ROOT / name).is_file() or name not in paths] == []
+    # The list case fails when a change makes the launcher load another file,
+    # so every file of the app and the lock start the workflow. Then what this
+    # file reads beside the app.
+    for needed in ("amplifier_web/windows_consumer.py", "amplifier_web/host/config.py", "uv.lock", "pyproject.toml",
+                   "scripts/windows_launcher_files.py", "scripts/release.py",
+                   WORKFLOW.relative_to(ROOT).as_posix(), FIXTURE.relative_to(ROOT).as_posix(),
+                   "tests/fixtures/windows_launcher_refresh_native.py", "tests/fixtures/windows_start_again_native.py",
+                   "tests/fixtures/manual_app_handoff_native.py", "tests/conftest.py"):
+        assert (ROOT / needed).is_file() and starts(needed), needed
+    # Every test file that a listed file imports, directly or through another one.
+    reached, queue = set(), list(run)
+    while queue:
+        name = queue.pop()
+        if name not in reached:
+            reached.add(name)
+            for node in ast.walk(ast.parse((ROOT / name).read_text(encoding="utf-8"))):
+                modules = ([node.module] if isinstance(node, ast.ImportFrom) and node.module
+                           else [alias.name for alias in node.names] if isinstance(node, ast.Import) else [])
+                queue += [f"tests/{module}.py" for module in modules if (ROOT / f"tests/{module}.py").is_file()]
+    assert [name for name in sorted(reached) if not starts(name)] == []
+    assert [path for path in paths if "*" not in path and not (ROOT / path).is_file()] == []
+
+
+NEEDS_WINDOWS = "import pytest\n@pytest.mark.skip(reason='native prototype PowerShell model pending')\ndef test_one(): pass\n"
+
+
+@pytest.mark.parametrize("body,windows,stops", [
+    ("def test_one(): pass\n", False, None),
+    ("def test_one(): assert False\n", False, "failed: tests/test_one.py::test_one"),
+    ("import nothing_with_this_name\n", False, "no case of this file passed: tests/test_one.py"),
+    ("import pytest\n@pytest.mark.skip(reason='another reason')\ndef test_one(): pass\ndef test_two(): pass\n",
+     False, "skipped, and this step does not expect that on this runner: tests/test_one.py::test_one: another reason"),
+    # A case that needs Windows may be skipped on Linux and never on Windows.
+    (NEEDS_WINDOWS + "def test_two(): pass\n", False, None),
+    (NEEDS_WINDOWS + "def test_two(): pass\n", True, "skipped, and this step does not expect that on this runner"),
+    (NEEDS_WINDOWS, False, "no case of this file passed: tests/test_one.py"),
+    ("import pytest\n@pytest.mark.xfail(strict=True)\ndef test_one(): assert False\ndef test_two(): pass\n",
+     False, "expected to fail, and this step does not expect that: tests/test_one.py::test_one"),
+])
+def test_the_step_that_runs_the_listed_files_stops_for_a_wrong_result(tmp_path, body, windows, stops):
+    """The step's own program, with one made-up test file in place of its list."""
+    document = yaml.safe_load(LISTED.read_text(encoding="utf-8"))
+    (job,) = document["jobs"].values()
+    program = job["steps"][-1]["run"]
+    for pattern, replacement in ((r'FILES = """.*?"""\.split\(\)', 'FILES = ["tests/test_one.py"]'),
+                                 (r"CASES = \[[^\]]*\]", "CASES = []"),
+                                 (r'windows = sys\.platform == "win32"', f"windows = {windows}"),
+                                 # The job requires CI's Python. This case is about the step's decisions.
+                                 (r"assert sys\.version_info\[:2\] == \(3, 13\), sys\.version", "pass")):
+        program, count = re.subn(pattern, lambda match: replacement, program, flags=re.S)
+        assert count == 1, pattern
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests/test_one.py").write_text(body, encoding="utf-8")
+    (tmp_path / "step.py").write_text(program, encoding="utf-8")
+    done = subprocess.run([sys.executable, "-B", str(tmp_path / "step.py")], cwd=tmp_path, capture_output=True, text=True,
+                          timeout=120, env={**os.environ, "RUNNER_TEMP": str(tmp_path), "PYTEST_ADDOPTS": ""})
+    assert "tests/test_one.py: " in done.stdout, done.stdout + done.stderr
+    if stops is None:
+        assert done.returncode == 0 and "stop the job" not in done.stdout, done.stdout + done.stderr
+    else:
+        assert done.returncode == 1 and stops in done.stdout, done.stdout + done.stderr
+
