@@ -4,18 +4,24 @@ The app composes a provider that has no source of its own from
 `amplifier_web/provider_sources.json`. The worker environment gets the same
 module from `amplifier_web/runtime_deps/pyproject.toml`. Releases 0.108.0 and
 0.109.0 named a fixed commit in the first file and the branch `main` in the
-second. The update guard (`runtime_source_alignment.verify_checked_selection`)
-then refused every component update that prepares a worker environment, with
-the reason `protected-runtime-source`, also when the branch still was at that
-commit. With those two files four of the five cases fail at that guard. With
-the same commit in both files three still fail: an installation that an
-earlier app version made keeps its earlier reference
-(`runtime_environment.augmented_manifest`).
+second. On an installation whose profile composes the module from that list,
+the update guard (`runtime_source_alignment.verify_checked_selection`) then
+refused every component update that prepares a worker environment, with the
+reason `protected-runtime-source`, also when the branch still was at that
+commit. With those two files four of the five cases fail at that guard. The
+fifth passes with them: there the person's settings name the module's branch,
+so the profile does not use the list. With the same commit in both files an
+installation that an earlier app version made is still refused: it keeps its
+earlier reference (`runtime_environment.augmented_manifest`).
 
-Each case runs the product's real `UpdateManager.check` and `install`: the real
-uv lock and sync, the real collection child process (`update_probe.py`), the
-real guard, installation, freeze and profile mounts. Both product files are
-read as they are; nothing of the update owner is replaced.
+Each case runs the product's `UpdateManager.check` and `install`: the real uv
+lock and sync, the real collection child process (`update_probe.py`), the real
+guard, installation, freeze and profile mounts. The provider list is the
+product's file. The worker manifest is a fixture that holds the product's row
+for this module. Four more things are fixture seams, as in
+`test_partial_update_native.py`: no support pack is installed, the app release
+check answers "current", and the shared source store is off (two seams), so
+the installation's own Git caches are used.
 
 Run (Python 3.13, after `uv sync --locked --group dev`; about one minute a case):
 

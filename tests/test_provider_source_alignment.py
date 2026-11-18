@@ -8,9 +8,15 @@ the two references in `runtime_source_alignment.verify_checked_selection` and
 refuses the update when they differ, also when both name the same commit.
 
 Releases 0.108.0 and 0.109.0 named a commit in the first file and the branch
-`main` in the second for the OpenAI module. No component update of a PC with an
-"OpenAI API" connection could complete. No test read both files, so no check
+`main` in the second for the OpenAI module. On a PC whose "OpenAI API"
+connection takes its source from the list, no component update that prepares a
+worker environment could complete. (A PC whose settings name the module's
+branch themselves was not affected.) No test read both files, so no check
 failed. These cases read both.
+
+What the cases compare: a module of the list with a worker package, when both
+name the same repository as a Git source. A module that the worker manifest
+does not declare has one reference, and the cases compare nothing for it.
 
 Changing only the worker manifest to the same commit does not repair an
 installed PC: `runtime_environment.augmented_manifest` keeps the reference that
@@ -50,16 +56,17 @@ def declared():
 
 
 def pairs(composed, declared):
-    """Each module of the list with each worker package of the same repository."""
+    """Each module of the list with each worker package of the same repository and subdirectory."""
     packages = {}
     for package, row in declared.items():
         if isinstance(row, dict) and row.get('git'):
-            packages.setdefault(source_key(row['git'], 'HEAD')[0], []).append((package, row))
+            place = source_key(row['git'], 'HEAD')[0], row.get('subdirectory', '')
+            packages.setdefault(place, []).append((package, row))
     found = []
     for module, reference in sorted(composed.items()):
         source = git_source(reference)
         assert source is not None, f'{LIST}: {module} is not a Git reference with a ref: {reference}'
-        for package, row in packages.get(source_key(source['url'], 'HEAD')[0], []):
+        for package, row in packages.get((source_key(source['url'], 'HEAD')[0], source['subdirectory']), []):
             found.append((module, source['ref'], package, row.get('branch') or row.get('rev') or row.get('tag')))
     return found
 
@@ -78,6 +85,38 @@ def test_each_provider_has_one_reference_in_the_list_and_in_the_worker_manifest(
         '(runtime_source_alignment.verify_checked_selection). Change both files together. '
         'A change of the worker manifest from a branch to a commit does not reach an installed PC '
         '(runtime_environment.augmented_manifest). ' + ' '.join(found))
+
+
+def fixed(composed):
+    return {module: reference for module, reference in composed.items()
+            if pinned(git_source(reference)['ref'])}
+
+
+def test_the_list_names_no_commit_and_no_version():
+    # tests/test_standalone.py holds this rule for the shipped .py, .toml, .yaml and .txt
+    # files. It does not read .json files, and the pin of pull request 2294 was in this one.
+    found = fixed(composed())
+    assert not found, (
+        f'{LIST} names a commit or a version. The app\'s own sources follow a branch '
+        '(tests/test_standalone.py); a fixed reference also stops component updates when the '
+        f'worker manifest names a branch for the same module: {found}')
+
+
+def test_a_commit_or_a_version_in_the_list_is_found():
+    address = 'git+https://github.com/microsoft/amplifier-module-provider-openai@'
+    assert fixed({'a': address + COMMIT, 'b': address + 'v1.2.0', 'c': address + 'main'}) == {
+        'a': address + COMMIT, 'b': address + 'v1.2.0'}
+
+
+def test_a_package_in_another_subdirectory_of_the_repository_is_another_source():
+    # The update guard compares the subdirectory too. Two packages of one repository
+    # are two sources; only the package in the module's own subdirectory is compared.
+    url = 'https://example.invalid/modules'
+    listed = {'provider-x': f'git+{url}@main#subdirectory=modules/provider-x'}
+    declared = {'amplifier-module-provider-x': {'git': url, 'rev': COMMIT, 'subdirectory': 'modules/provider-x'},
+                'amplifier-module-other': {'git': url, 'rev': 'v2', 'subdirectory': 'modules/other'}}
+    assert [package for _, _, package, _ in pairs(listed, declared)] == ['amplifier-module-provider-x']
+    assert len(differences(listed, declared)) == 1
 
 
 def test_the_comparison_reads_the_openai_module_and_the_support_packs():

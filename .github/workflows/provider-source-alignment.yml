@@ -6,11 +6,16 @@ name: Provider source alignment
 # Releases 0.108.0 and 0.109.0 named a commit in the list and the branch in the
 # manifest for the OpenAI module, and no check read both files.
 #
-# The first job reads both files. The second job runs the product's real
-# update owner (check and install: uv lock and sync, the collection child
-# process, the guard, the installation, the freeze, the profile mounts) for
-# five installation states with an "OpenAI API" connection. It fails when a
-# case is skipped.
+# The first job reads both files. The second job runs the product's update
+# owner (check and install: uv lock and sync, the collection child process,
+# the guard, the installation, the freeze, the profile mounts) for five
+# installation states with an "OpenAI API" connection. The worker manifest's
+# other rows, the app release check and the source store are fixtures (the
+# test file's header names them). It fails when a case is skipped.
+#
+# While the list names a branch, the cases start from that branch's head of
+# the day. So a change of the public module can fail the second job. The job
+# prints the commit.
 #
 # Linux only. It is not a Windows check, not an installation from the setup
 # file, and no chat: the profile's provider sends nothing.
@@ -74,7 +79,9 @@ jobs:
       # The cases read the module from a local mirror of this clone. They
       # allow Git no other protocol than local files.
       - name: Clone the public provider module
-        run: git clone --quiet https://github.com/microsoft/amplifier-module-provider-openai "$RUNNER_TEMP/provider-openai"
+        run: |
+          git clone --quiet https://github.com/microsoft/amplifier-module-provider-openai "$RUNNER_TEMP/provider-openai"
+          echo "The module's main: $(git -C "$RUNNER_TEMP/provider-openai" rev-parse HEAD)"
       - name: The real update owner in five installation states
         env:
           AMPLIFIER_PINNED_PROVIDER_UPDATE_NATIVE: '1'
