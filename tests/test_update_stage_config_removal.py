@@ -66,7 +66,12 @@ def small_stage(home, name, *, keys=False):
 
 
 def walked(folder):
-    """``os.walk`` of a folder that goes into no junction. (It goes into no symbolic link by itself.)"""
+    """``os.walk`` of a folder that goes into no junction. (It goes into no symbolic link by itself.)
+
+    A start that is a link or a junction has no entries here.
+    """
+    if os.path.islink(folder) or os.path.isjunction(folder):
+        return
     for parent, folders, files in os.walk(folder):
         yield parent, list(folders), files
         folders[:] = [name for name in folders if not os.path.isjunction(os.path.join(parent, name))]
@@ -423,13 +428,15 @@ async def test_a_stage_is_handled_once_in_a_pass_when_the_list_of_stages_changes
     root = manager.directory / 'releases'
     first, second, third = (small_stage(manager.home, name * 32) for name in 'abc')
     scandir, remove, calls = os.scandir, storage._remove_stage_config, []
+    stages_folder = (root.stat().st_dev, root.stat().st_ino)
 
     @contextmanager
     def by_name(folder):
         # The folder's own order is not fixed. The pass gets the stages by name.
+        # The pass reads the folder of the stages through its open folder.
         with scandir(folder) as listing:
             entries = list(listing)
-        if folder == root:
+        if isinstance(folder, int) and (os.fstat(folder).st_dev, os.fstat(folder).st_ino) == stages_folder:
             entries.sort(key=lambda entry: entry.name)
         yield iter(entries)
 
@@ -515,6 +522,66 @@ async def test_the_pass_leaves_a_link_named_config_and_the_folder_that_it_points
         await storage.scrub_stage_keys(manager)
         assert (stage / 'config').is_symlink() and not os.path.lexists(stage / 'routing')
         assert gone(other) and held(manager.home) == before
+
+
+@posix
+async def test_the_pass_lists_and_looks_through_no_link(app, tmp_path, monkeypatch):
+    """A link at the name of a stage, and a link at the name of the folder of the stages.
+
+    The pass opens the folder of the stages and reads its entries through
+    that open folder, and it looks at a stage through an open folder too. No
+    open follows a link. So the pass does not look at what a link at a stage's
+    name points to. With a link at the name of the folder of the stages, the
+    part of the pass that removes the copies lists no folder by a path, looks
+    at no stage and calls no removal. The stages that the links point to keep
+    their copies. (The loop for the keys files, after it, is not the subject:
+    it lists the folder by its path.)
+    """
+    manager = app.update_manager
+    before = app_files(manager.home)
+    root, elsewhere, away = manager.directory / 'releases', tmp_path / 'elsewhere', tmp_path / 'away'
+    stage, linked = earlier_stage(manager.home, 'a' * 32), earlier_stage(manager.home, 'b' * 32)
+    total = copied(linked)
+    linked.rename(elsewhere)
+    linked.symlink_to(elsewhere, target_is_directory=True)
+    assert (linked / 'config/auth/control-token').is_file()   # Through the link.
+    scandir, remove, by_path, calls = os.scandir, storage._remove_stage_config, [], []
+
+    def listed(folder):
+        if not isinstance(folder, int):
+            by_path.append(folder)
+        return scandir(folder)
+
+    def record(home, folder, expected, work):
+        calls.append(folder)
+        return remove(home, folder, expected, work)
+
+    monkeypatch.setattr(storage, '_remove_stage_config', record)
+    # A link at the name of a stage: the stage beside it is handled, the link is not.
+    for _ in range(2):
+        await storage.scrub_stage_keys(manager)
+    assert calls == [stage] and gone(stage)
+    assert linked.is_symlink() and copied(elsewhere) == total
+    # A link at the name of the folder of the stages.
+    stage = earlier_stage(manager.home, 'c' * 32)
+    root.rename(away)
+    root.symlink_to(away, target_is_directory=True)
+    assert sorted(os.listdir(root)) == ['a' * 32, 'b' * 32, 'c' * 32]   # Through the link.
+    del calls[:]
+    manager._stage_config_offset = 0
+    with monkeypatch.context() as patch:
+        patch.setattr(os, 'scandir', listed)
+        storage._scrub_stage_config(manager, root, set())   # No exception.
+    assert by_path == [] and calls == []
+    await storage.scrub_stage_keys(manager)   # The whole pass: no exception.
+    assert calls == [] and copied(away / stage.name) == total and copied(elsewhere) == total
+    assert held(manager.home) == before
+    # With the folder itself at its name, the pass removes the copies.
+    root.unlink()
+    away.rename(root)
+    await storage.scrub_stage_keys(manager)
+    assert calls == [stage] and gone(stage)
+    assert linked.is_symlink() and copied(elsewhere) == total and held(manager.home) == before
 
 
 @posix
@@ -1444,6 +1511,7 @@ def test_native_windows_stage_config_hold_keeps_a_folder_at_its_path_and_removes
             'rename of the held folder': refusal(lambda: os.rename(tls, away)),
             'rename of the held folder by another process': by_another_process(try_rename, tls, away),
             'removal of the held folder by its path': refusal(lambda: os.rmdir(tls)),
+            'removal of the held folder by its path by another process': by_another_process(try_rmdir, tls),
             'rename of the held folder above it': refusal(lambda: os.rename(config, away)),
             'rename of the stage': refusal(lambda: os.rename(stage, other_stage)),
             'rename of the stage by another process': by_another_process(try_rename, stage, other_stage),
@@ -1452,7 +1520,9 @@ def test_native_windows_stage_config_hold_keeps_a_folder_at_its_path_and_removes
         }
         assert refusals == {
             'rename of the held folder': 32, 'rename of the held folder by another process': 'winerror 32',
-            'removal of the held folder by its path': 32, 'rename of the held folder above it': 32,
+            'removal of the held folder by its path': 32,
+            'removal of the held folder by its path by another process': 'winerror 32',
+            'rename of the held folder above it': 32,
             'rename of the stage': 5, 'rename of the stage by another process': 'winerror 5',
             'rename of the folder of the stages': 5, 'removal through the hold while a file is left': 145}, refusals
         # The boundary works on a held folder: it pins it, and it reads and removes each file.
@@ -1465,10 +1535,11 @@ def test_native_windows_stage_config_hold_keeps_a_folder_at_its_path_and_removes
         empty = {
             'removal by its path': refusal(lambda: os.rmdir(tls)),
             'removal by its path by another process': by_another_process(try_rmdir, tls),
+            'rename': refusal(lambda: os.rename(tls, away)),
             'rename by another process': by_another_process(try_rename, tls, away),
         }
         assert empty == {'removal by its path': 32, 'removal by its path by another process': 'winerror 32',
-                         'rename by another process': 'winerror 32'}, empty
+                         'rename': 32, 'rename by another process': 'winerror 32'}, empty
         assert tls.is_dir()
         remove()
     assert not os.path.lexists(tls) and not os.path.lexists(away) and not os.path.lexists(other_stage)
@@ -1573,6 +1644,112 @@ def test_native_windows_stage_config_folder_that_becomes_a_junction_in_place_is_
     assert held(home) == before
     os.rmdir(empty)   # The junction itself.
     assert storage.remove_stage_config(home, stage) == (None, 1)
+    assert gone(stage) and held(home) == before
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='requires native Windows private files')
+def test_native_windows_stage_config_pass_reads_the_stages_through_the_open_folder(native_stage, monkeypatch):
+    """The part of the pass that removes the copies, with the real folder of the stages on Windows.
+
+    The pass opens the folder of the stages and reads its entries through
+    that handle. While the handle is open, Windows refuses the rename of that
+    folder, to this process and to another one. The look at a stage opens the
+    stage itself: a junction at the name of a stage and a file get no look.
+    The pass removes the copies of the stage, and it calls no removal for the
+    junction. A junction at the name of the folder of the stages: the open
+    refuses it, and the pass looks at no stage and calls no removal; the stage
+    that the junction leads to keeps its copies.
+    """
+    import _winapi
+    from types import SimpleNamespace
+    home, stage, before = native_stage()
+    root, away = stage.parent, stage.parent.with_name('away')
+    total, manager = copied(stage), SimpleNamespace(home=home)
+    remove, calls = storage._remove_stage_config, []
+
+    def record(home, folder, expected, work):
+        calls.append(folder.name)
+        return remove(home, folder, expected, work)
+
+    monkeypatch.setattr(storage, '_remove_stage_config', record)
+    junction, no_copy = root / ('b' * 32), root / ('d' * 32)
+    _winapi.CreateJunction(str(home), str(junction))   # To the app home, which has ``config`` and ``routing``.
+    with ordinary_default_owner():
+        (root / 'made-up.txt').write_text('made-up')
+        no_copy.mkdir()
+        (no_copy / 'validated.json').write_text('{}')
+    names = sorted(['a' * 32, 'b' * 32, 'd' * 32, 'made-up.txt'])
+    try:
+        assert (junction / 'config/auth/control-token').is_file()   # Through the junction: the app's own file.
+        with storage._stage_listing(root) as (entries, look):
+            # The entries through the handle; a second reading starts at the first entry again.
+            assert sorted(entries()) == names and sorted(entries()) == names == sorted(os.listdir(root))
+            tries = {
+                'rename of the folder of the stages': refusal(lambda: os.rename(root, away)),
+                'rename of the folder of the stages by another process': by_another_process(try_rename, root, away),
+            }
+            info = stage.lstat()
+            assert look(stage.name) == (info.st_dev, info.st_ino)
+            assert look(no_copy.name) is None
+            for name, error in ((junction.name, PermissionError), ('made-up.txt', PermissionError),
+                                ('c' * 32, FileNotFoundError)):
+                with pytest.raises(error):
+                    look(name)
+        assert tries == {'rename of the folder of the stages': 32,
+                         'rename of the folder of the stages by another process': 'winerror 32'}, tries
+        # The pass: the copies of the stage go. The junction and the stage with no copy get no removal.
+        storage._scrub_stage_config(manager, root, set())
+        assert calls == [stage.name] and gone(stage) and manager._stage_config_offset == 0
+        assert os.path.isjunction(junction) and held(home) == before
+    finally:
+        if os.path.lexists(junction):
+            os.rmdir(junction)   # The junction itself.
+    # A junction at the name of the folder of the stages.
+    with ordinary_default_owner():
+        for folder in COPIES:
+            shutil.copytree(home / folder, stage / folder)
+    assert copied(stage) == total
+    os.rename(root, away)
+    _winapi.CreateJunction(str(away), str(root))
+    try:
+        assert sorted(os.listdir(root)) == sorted(os.listdir(away))   # By the path: through the junction.
+        with pytest.raises(PermissionError):
+            with storage._stage_listing(root):
+                pass
+        del calls[:]
+        storage._scrub_stage_config(manager, root, set())   # No exception.
+        assert calls == [] and copied(away / stage.name) == total
+    finally:
+        os.rmdir(root)   # The junction itself.
+        os.rename(away, root)
+    # With the folder itself at its name, the pass removes the copies.
+    storage._scrub_stage_config(manager, root, set())
+    assert calls == [stage.name] and gone(stage) and held(home) == before
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='requires native Windows private files')
+def test_native_windows_stage_config_entry_with_a_name_that_is_no_text_stays_and_the_others_go(native_stage):
+    """NTFS takes a file name that is no valid text (here: half of a surrogate pair).
+
+    The listing through the hold gives that name as it is. The boundary
+    refuses that file, so it stays with its folders. Every other entry of the
+    copies goes. When the file is gone, a later call removes the rest.
+    """
+    home, stage, before = native_stage()
+    name = 'made-up-\udc00.json'
+    with ordinary_default_owner():
+        (stage / 'config/services' / name).write_text('{}')
+    assert name in os.listdir(stage / 'config/services')
+    total, stays = copied(stage), ['config', 'config/services', 'config/services/' + name]
+    with storage._windows_hold(stage / 'config/services') as (listing, _):
+        assert name in [entry for entry, _ in listing(64)]
+    result = storage.remove_stage_config(home, stage)
+    assert result == ('refused', total - len(stays)), (
+        f'The removal returned {result!r}; left {left(stage)!r}; '
+        f'the boundary refuses {boundary_refusals(home, stage)!r}')
+    assert left(stage) == stays and held(home) == before
+    os.unlink(stage / 'config/services' / name)
+    assert storage.remove_stage_config(home, stage) == (None, 2)
     assert gone(stage) and held(home) == before
 
 

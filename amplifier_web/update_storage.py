@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from contextlib import contextmanager, ExitStack
+from contextlib import closing, contextmanager, ExitStack
 import hashlib
 import itertools
 import json
@@ -264,12 +264,15 @@ def _windows_open(folder, access, share):
         raise
 
 
-def _windows_listing(handle, limit):
-    """Windows: at most ``limit`` entries of the folder that this handle has open: the name and the attributes of each.
+def _windows_entries(handle):
+    """Windows: the entries of the folder that this handle has open, from its first one: the name and the attributes of each.
 
     The handle lists the folder that it opened. A listing by the path would
     list what the path names at that moment, and another program can make an
     empty folder a junction in place.
+
+    NTFS takes a name that is no valid text. Such a name is given as it is, so
+    that the caller can refuse that entry alone.
     """
     import ctypes
     import struct
@@ -277,25 +280,29 @@ def _windows_listing(handle, limit):
     read = ctypes.WinDLL('kernel32', use_last_error=True).GetFileInformationByHandleEx
     read.restype, read.argtypes = BOOL, [HANDLE, ctypes.c_int32, PVOID, DWORD]
     buffer = ctypes.create_string_buffer(64 * 1024)
-    found, kind = [], 15  # FileFullDirectoryRestartInfo: from the first entry. After it FileFullDirectoryInfo.
-    while len(found) < limit:
+    kind = 15  # FileFullDirectoryRestartInfo: from the first entry. After it FileFullDirectoryInfo.
+    while True:
         if not read(handle, kind, buffer, len(buffer)):
             error = ctypes.get_last_error()
             if error == 18:  # ERROR_NO_MORE_FILES
-                break
-            raise OSError(f'Windows could not list a folder of a stage copy (error {error}).')
+                return
+            raise OSError(f'Windows could not list a folder of the update stages (error {error}).')
         kind, offset = 14, 0
-        while len(found) < limit:
+        while True:
             # FILE_FULL_DIR_INFO: the offset of the next record, ..., the attributes, the bytes of the name, ..., the name.
             following, = struct.unpack_from('<I', buffer, offset)
             attributes, length = struct.unpack_from('<II', buffer, offset + 56)
-            name = buffer[offset + 68:offset + 68 + length].decode('utf-16-le')
+            name = buffer[offset + 68:offset + 68 + length].decode('utf-16-le', 'surrogatepass')
             if name not in ('.', '..'):
-                found.append((name, attributes))
+                yield name, attributes
             if not following:
                 break
             offset += following
-    return found
+
+
+def _windows_listing(handle, limit):
+    """Windows: at most ``limit`` of those entries."""
+    return list(itertools.islice(_windows_entries(handle), limit))
 
 
 @contextmanager
@@ -350,6 +357,12 @@ def _windows_stage_hold(stage):
     refuses every program the rename of the stage and of a folder above it. It
     asks for no right to delete, so a program that has the stage as its
     working folder does not stop it. Native cases show each of these.
+
+    Windows refuses this hold when another program has the stage open in a way
+    that does not go with it (for example with the right to delete it, or
+    without sharing reading), and when the account may not list the stage or
+    write its attributes. The stage then keeps its copies, and a later pass
+    tries again. No case shows these refusals.
     """
     import ctypes
     import struct
@@ -663,6 +676,70 @@ def _ended_without_admission(stage):
         return False
 
 
+@contextmanager
+def _stage_listing(root):
+    """Open the folder of the stages; give its entries and a look at one of them.
+
+    ``entries()`` gives the name of each entry from the first one, read
+    through the open folder. ``look(name)`` gives the identity of the folder
+    of that name when that folder has an entry ``config`` or ``routing``, else
+    None. It opens that folder itself and reads it through the open folder.
+    It raises OSError for an entry that is no folder.
+
+    Each open refuses a link and a junction: at the name of the folder of the
+    stages, in the path to it, and at the name of a stage. So no listing and
+    no look here goes through a link or a junction.
+
+    Windows: the handle of the folder of the stages shares no deletion. While
+    it is open, Windows refuses every program the rename of that folder. The
+    handle of a look shares everything, so a look stops no other program. The
+    identity of a stage is read at its name, of that entry itself; the removal
+    compares it again while it holds the stage.
+    """
+    from .windows_files import address
+    root = address(root)
+    if os.name == 'nt':
+        # FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES and READ_CONTROL. Shared: reading and writing.
+        api, handle, _ = _windows_open(root, 0x20081, 3)
+        try:
+            def entries():
+                return (name for name, _ in _windows_entries(handle))
+
+            def look(name):
+                stage = root / name
+                # The same rights. Shared: reading, writing and deletion.
+                boundary, opened, _ = _windows_open(stage, 0x20081, 7)
+                try:
+                    if any(entry in ('config', 'routing') for entry, _ in _windows_entries(opened)):
+                        return _identity(stage.lstat())
+                    return None
+                finally:
+                    boundary.close(opened)
+            yield entries, look
+        finally:
+            api.close(handle)
+    else:
+        with _posix_directory(root) as (fd, _):
+            def entries():
+                with os.scandir(fd) as found:
+                    for entry in found:
+                        yield entry.name
+
+            def look(name):
+                stage = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+                try:
+                    for copy in ('config', 'routing'):
+                        try:
+                            os.stat(copy, dir_fd=stage, follow_symlinks=False)
+                        except FileNotFoundError:
+                            continue
+                        return _identity(os.fstat(stage))
+                    return None
+                finally:
+                    os.close(stage)
+            yield entries, look
+
+
 def _scrub_stage_config(manager, root, protected):
     """The part of the idle pass that removes stage copies of the app's config and routing folders.
 
@@ -682,40 +759,47 @@ def _scrub_stage_config(manager, root, protected):
     a receipt, a keys file or shared-config, and at every age, because nothing
     reads the copies. It leaves the stage of a preparation that is not
     reconciled. It never raises.
+
+    The pass opens the folder of the stages for its whole time. It reads the
+    list of stages through that open folder, and it looks at a stage through
+    an open folder too (_stage_listing). It lists nothing and looks at nothing
+    by a path. So a link or a junction at the name of the folder of the
+    stages, in the path to it, or at the name of a stage, is not listed or
+    looked through: the pass handles nothing there.
     """
     try:
         start = getattr(manager, '_stage_config_offset', 0)
         deadline, stages, work = time.monotonic() + 1, 0, _Work(STAGE_CONFIG_ENTRIES)
         progressed, handled = False, set()
-        # From the saved place to the end of the listing, then from its start to the saved place.
-        for first, end in ((start, None), (0, start)) if start else ((0, None),):
-            with os.scandir(root) as entries:
-                for index, entry in enumerate(entries):
-                    if index < first:
-                        continue
-                    if end is not None and index >= end:
-                        break
-                    if (stages >= STAGE_CONFIG_STAGES or work.full()
-                            or (progressed and time.monotonic() >= deadline)):
-                        return
-                    progressed = True
-                    manager._stage_config_offset = index + 1
-                    if (not re.fullmatch('[a-f0-9]{32}', entry.name) or entry.name in protected
-                            or entry.name in handled):
-                        continue
-                    stage = root / entry.name
-                    try:
-                        info = stage.lstat()
-                        if not stat.S_ISDIR(info.st_mode) or not any(
-                                os.path.lexists(stage / name) for name in ('config', 'routing')):
+        with _stage_listing(root) as (entries, look):
+            # From the saved place to the end of the listing, then from its start to the saved place.
+            for first, end in ((start, None), (0, start)) if start else ((0, None),):
+                with closing(entries()) as names:
+                    for index, name in enumerate(names):
+                        if index < first:
                             continue
-                    except OSError:
-                        continue
-                    stages += 1
-                    handled.add(entry.name)
-                    _remove_stage_config(manager.home, stage, {stage: _identity(info)}, work)
-            if end is None:
-                manager._stage_config_offset = 0
+                        if end is not None and index >= end:
+                            break
+                        if (stages >= STAGE_CONFIG_STAGES or work.full()
+                                or (progressed and time.monotonic() >= deadline)):
+                            return
+                        progressed = True
+                        manager._stage_config_offset = index + 1
+                        if (not re.fullmatch('[a-f0-9]{32}', name) or name in protected
+                                or name in handled):
+                            continue
+                        try:
+                            identity = look(name)
+                        except (OSError, ValueError):
+                            continue  # No folder, a link, a junction, or a path that the boundary does not take.
+                        if identity is None:
+                            continue
+                        stages += 1
+                        handled.add(name)
+                        stage = root / name
+                        _remove_stage_config(manager.home, stage, {stage: identity}, work)
+                if end is None:
+                    manager._stage_config_offset = 0
     except Exception:
         return  # A later pass tries again.
 
