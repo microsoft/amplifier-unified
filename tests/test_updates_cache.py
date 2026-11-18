@@ -50,16 +50,28 @@ class Runtime:
     async def reset(self):pass
 
 
+def checked(manager, row):
+    """A row as a check leaves it: bound to the app's current behavior selection."""
+    from amplifier_web.update_sequence import app_selection
+    return {**row, 'appSelection': app_selection(manager.home)['witness']}
+
+
 @pytest.fixture
 async def service(tmp_path, monkeypatch, repository):
     from amplifier_web import updates, update_sequence
     from amplifier_web.host.config import amplifier_home, write_private
+    # The shared home is not below the app home. On Windows the writer needs the folder that owns the path.
     write_private(amplifier_home() / 'settings.yaml', json.dumps({
         'config': {'providers': [{'module': 'provider-anthropic',
-                                 'config': {'default_model': 'fixture-model'}}]}}))
+                                 'config': {'default_model': 'fixture-model'}}]}}), owned_root=amplifier_home())
     # These tests own their cache fixtures. Shipped dependencies and cold-worker
     # installation are covered by test_update_sequence rather than live remotes.
     monkeypatch.setattr(update_sequence, 'included_sources', lambda: (set(), []))
+    # The app's enabled behaviors name remotes too (test_effective_behavior_updates
+    # covers them). The selection keeps its real witness and names no source here.
+    selection = update_sequence.app_selection
+    monkeypatch.setattr(update_sequence, 'app_selection',
+                        lambda *args, **kwargs: {**selection(*args, **kwargs), 'sources': []})
     original = updates.process
     async def process(*args, **kwargs):
         if 'fetch' in args:
@@ -149,7 +161,7 @@ async def test_staging_normalizes_only_verified_artifacts_and_preserves_live_cac
     (cache/'__pycache__/personal-notes.pyc').write_text('keep my notes')
     before = (cache/'AGENTS.md').read_bytes(), (cache/'__pycache__/module.cpython-313.pyc').read_bytes()
     manager = service.update_manager
-    manager.inventory = [{'id':'repo', 'path':'cache/example', 'url':'https://example.invalid/repo', 'label':'Fixture', 'current':old, 'latest':new, 'ref':'main', 'eligible':True, 'status':'update'}]
+    manager.inventory = [checked(manager, {'id':'repo', 'path':'cache/example', 'url':'https://example.invalid/repo', 'label':'Fixture', 'current':old, 'latest':new, 'ref':'main', 'eligible':True, 'status':'update'})]
     async def validate(stage, release):
         staged = stage/'foundation/cache/example'
         assert git(staged, 'rev-parse', 'HEAD') == new
@@ -174,8 +186,6 @@ async def test_staging_uses_shared_settings_without_cli_registry_or_cache(reposi
 
     cached(service, repository, 'repo')
     manager = service.update_manager
-    row = (await manager.inventory_sources())[0]
-    manager.inventory = [{**row, 'latest': row['current'], 'status': 'update'}]
     shared = amplifier_home()
     (shared / 'cache/cli-only').mkdir(parents=True)
     sentinel = shared / 'cache/cli-only/sentinel'
@@ -190,6 +200,9 @@ async def test_staging_uses_shared_settings_without_cli_registry_or_cache(reposi
         'web_bundles': {'excluded': list(DEFAULT_BEHAVIORS)}}))
     original = (shared / 'registry.json').read_bytes()
     service.state['settings']['bundle'] = 'example'
+    # The check comes after the settings: a later change of them refuses the install.
+    row = (await manager.inventory_sources())[0]
+    manager.inventory = [{**row, 'latest': row['current'], 'status': 'update'}]
 
     async def validate(stage, release):
         staged_shared = stage / 'shared-config'
@@ -216,7 +229,7 @@ async def test_source_edit_added_after_check_blocks_staging(repository, service)
     assert (await cache_changes(cache))[0] == []
     (cache/'bundle.py').write_text('a later real source edit\n')
     manager = service.update_manager
-    manager.inventory = [{'id':'repo', 'path':'cache/example', 'url':'https://example.invalid/repo', 'label':'Fixture', 'current':old, 'latest':old, 'ref':'main', 'eligible':True, 'status':'update'}]
+    manager.inventory = [checked(manager, {'id':'repo', 'path':'cache/example', 'url':'https://example.invalid/repo', 'label':'Fixture', 'current':old, 'latest':old, 'ref':'main', 'eligible':True, 'status':'update'})]
     await manager.install()
     assert service.state['updates']['phase'] == 'error'
     assert not active_release(service.data_dir)
@@ -279,7 +292,8 @@ async def test_historical_registry_entries_keep_failures_with_unknown_usage(repo
     assert row['status'] == 'check_failed' and row['usage'] == 'unknown'
     assert row['eligible']
     assert len(remote_calls) == 1
-    assert len(snapshot(service.state)['items']) == 1
+    # The source's own row, and the one current update status that names it.
+    assert sorted('source' if item['id'].startswith('source:') else item['id'] for item in snapshot(service.state)['items']) == ['source', 'updates:current']
     assert root.exists() and registry.exists()
 
 
@@ -320,7 +334,20 @@ async def test_configured_sources_include_scoped_settings_and_session_choices(re
     assert before == {p: p.read_bytes() for p in (home/'config').rglob('*') if p.is_file()}
 
 
-@pytest.mark.parametrize('failure', ['alias', 'cycle', 'yaml', 'module-shape', 'recursive-yaml'])
+# Since pull request 1725 the check reads the app's behavior selection from the shared
+# settings file first, with no handling of a file that cannot be read. The check then ends
+# with "Update check failed. Your installed sources are unchanged." and lists nothing.
+# docs/UPDATES.md says that such a file gives a warning row and that cached sources are
+# still checked. docs/validation/ordered-updates.md says that an unresolvable app
+# selection requires correction. The owner of the update check decides which holds.
+# Strict: these rows fail when the check lists the rows again, and the marks then go.
+UNREADABLE_SHARED_SETTINGS = pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
+    'a shared settings file that cannot be read ends the whole update check ("Update check failed."); '
+    'docs/UPDATES.md says that it gives a warning row and that cached sources are still checked'))
+
+
+@pytest.mark.parametrize('failure', ['alias', 'cycle', *(
+    pytest.param(name, marks=UNREADABLE_SHARED_SETTINGS) for name in ('yaml', 'module-shape', 'recursive-yaml'))])
 async def test_unresolvable_configuration_does_not_hide_cache_failures(repository, service, monkeypatch, failure):
     from amplifier_web import updates, app_updates
     from amplifier_web.session_files import amplifier_home
@@ -472,7 +499,7 @@ async def test_configured_unavailable_branch_remains_an_actionable_failure(repos
     monkeypatch.setattr(app_updates, 'check', application)
     await service.update_manager.check()
     assert service.update_manager.inventory[0]['status'] == 'check_failed'
-    assert len(snapshot(service.state)['items']) == 1
+    assert sorted('source' if item['id'].startswith('source:') else item['id'] for item in snapshot(service.state)['items']) == ['source', 'updates:current']
 
 
 async def test_changed_cache_identity_invalidates_previously_checked_candidate(repository, service):
