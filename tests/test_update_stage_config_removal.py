@@ -65,9 +65,16 @@ def small_stage(home, name, *, keys=False):
     return stage
 
 
+def walked(folder):
+    """``os.walk`` of a folder that goes into no junction. (It goes into no symbolic link by itself.)"""
+    for parent, folders, files in os.walk(folder):
+        yield parent, list(folders), files
+        folders[:] = [name for name in folders if not os.path.isjunction(os.path.join(parent, name))]
+
+
 def entries(folder):
     """How many entries a folder is: itself and each file, link and folder below it. No link is followed."""
-    return 1 + sum(len(folders) + len(files) for _, folders, files in os.walk(folder))
+    return 1 + sum(len(folders) + len(files) for _, folders, files in walked(folder))
 
 
 def copied(stage):
@@ -81,7 +88,7 @@ def left(stage):
     for folder in list(names):
         if (stage / folder).is_symlink() or os.path.isjunction(stage / folder):
             continue  # Never the names of what a link points to.
-        for parent, folders, files in os.walk(stage / folder):
+        for parent, folders, files in walked(stage / folder):
             names += [(Path(parent) / name).relative_to(stage).as_posix() for name in folders + files]
     return sorted(names)
 
