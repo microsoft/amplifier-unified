@@ -258,9 +258,14 @@ def _windows_remove_tree(folder, home, work, depth=0):
     no more entries than the work may still handle, and one more.
 
     The pinned folder must be the folder that the walk looked at before the
-    pin. A pin shares reading only (windows_files), so while it is open no
-    other process can rename or remove that folder: the listing and the
-    entries that the walk handles are of that folder.
+    pin. Before each read and each removal of a file the boundary checks that
+    every pinned folder is still at its path, so a file goes only from the
+    folder that the walk pinned. The listing, and the step into a folder of
+    the copy, go by the path. It is not tested whether Windows lets another
+    process of the same account move a pinned folder. If one does, and puts
+    another folder at the path while the pin is open, the files directly in
+    that folder stay, and the walk handles its folders as folders of the
+    copy. A later pass handles every folder with the name of a copy that way.
     A folder is removed only when it is empty and is no link, and only
     after its own pin is closed; the walk looks at it again directly before.
     Between that look and the removal another process of the same account can
