@@ -177,10 +177,10 @@ Retain the original public source receipts and four assets for each selection.
 The package names remain `amplifier-worktrees` and `amplifier-portability`; source
 repository names do not change their installed imports.
 
-This delivery draft still retains the historical Unified-produced Portability
-0.1.1 selection. The standalone 0.1.3 artifact must be published, verified and
-selected through the commands below before this draft is ready for release.
-Private qualification artifacts are not a published selection.
+Unified selects the public Portability 0.1.3 artifact with the exact public
+Worktrees 0.1.0 receipt it was qualified against. Historical Unified-produced
+Portability receipts remain valid for explicit selection and ordinary app rollback;
+they are not rewritten as part of this authoring handoff.
 
 Download each release's wheel, source archive, source receipt and `SHA256SUMS`
 into separate private directories. Verify both original receipt hashes against
