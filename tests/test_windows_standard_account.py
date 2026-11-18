@@ -1305,7 +1305,7 @@ def test_the_runs_page_names_the_first_question_of_a_silence_after_the_app_had_a
     # One text for the silence: the question that began it. The questions that follow it have no answer before
     # them, and the question of the start has no owner of the port before it.
     assert case.late_answers({"listener": SILENCE}, "the second sign-in") == [
-        f'After "the second sign-in": {TOOK} 2.08 seconds and got no answer. The next change of the answer came '
+        f'After "the second sign-in": {TOOK} 2.08 seconds and got no answer. The next answer came '
         "7.9 seconds after that question began."]
 
 
@@ -1335,6 +1335,20 @@ def test_the_runs_page_names_the_first_question_of_a_silence_after_the_app_had_a
     # No answer, and the watch ended before the next change.
     ([changed(100.0, "trusted", [4500]), changed(103.0, "unreachable", [4500], 2.07)], asked_late(103.0, 2.07),
      " 2.07 seconds and got no answer."),
+    # No answer, and then the next answer: "untrusted" is an answer of the listener too.
+    ([changed(100.0, "trusted", [4500]), changed(103.0, "unreachable", [4500], 2.07),
+      changed(105.6, "untrusted", [4500])], asked_late(103.0, 2.07),
+     " 2.07 seconds and got no answer. The next answer came 2.6 seconds after that question began."),
+    # No answer, and the watch's next change is not an answer: the host went away 8 seconds later, or the next
+    # question ended with an error. The watch keeps a change of the owners of the port too.
+    ([changed(100.0, "trusted", [4500]), changed(103.0, "unreachable", [4500], 2.07),
+      changed(111.0, "unreachable", [], 2.07), changed(120.0, "trusted", [7000])], asked_late(103.0, 2.07),
+     " 2.07 seconds and got no answer. The watch's next change came 8.0 seconds after that question began, and it "
+     "was not an answer."),
+    ([changed(100.0, "trusted", [4500]), changed(103.0, "unreachable", [4500], 2.07),
+      changed(105.6, {"errorType": "OSError", "error": "PRIVATE-SENTINEL"}, [4500])], asked_late(103.0, 2.07),
+     " 2.07 seconds and got no answer. The watch's next change came 2.6 seconds after that question began, and it "
+     "was not an answer."),
     # A question that ended with an error: the text has the seconds and not the error.
     ([changed(100.0, "trusted", [4500]),
       changed(103.0, {"errorType": "OSError", "error": "PRIVATE-SENTINEL"}, [4500], 2.2)],
@@ -1351,7 +1365,7 @@ def test_a_late_answer_is_named_with_what_the_case_did_then_and_not_while_the_ca
                             changed(103.0, "unreachable", [4500], 2.07), changed(105.6, "trusted", [4500])],
                 "late": [asked_late(103.0, 2.07)]}
     assert case.late_answers({"listener": watch("the certificate step")}, "the first start") == [
-        f'After "the certificate step": {TOOK} 2.07 seconds and got no answer. The next change of the answer came '
+        f'After "the certificate step": {TOOK} 2.07 seconds and got no answer. The next answer came '
         "2.6 seconds after that question began."]
     # The case stops the app itself after these two marks. A question with no answer is no late answer there.
     assert case.STOPS == ("Stop Amplifier", "the uninstall that keeps the folder")
@@ -1400,8 +1414,8 @@ def test_the_runs_page_names_each_read_of_the_trust_read_after_the_sign_in_that_
     texts = case.late_answers({"listener": SILENCE, "signInTrust": {**waited, "before": one, "after": one}}, "x")
     failed = "failed or got no answer: host (AssertionError)."
     assert texts == [
-        f'After "x": {TOOK} 2.08 seconds and got no answer. The next change of the answer came 7.9 seconds after '
-        "that question began.",
+        f'After "x": {TOOK} 2.08 seconds and got no answer. The next answer came 7.9 seconds after that question '
+        "began.",
         f"{read}: 1 read(s) for the record before its first question {failed}",
         f"{read}: 1 read(s) for the record after its answer {failed}",
         f"{read} waited: 2 question(s) got no answer, and the read ended after 6.3 seconds."]
@@ -1422,8 +1436,8 @@ def test_the_lines_for_the_runs_page_are_one_line_each_in_the_form_that_github_r
                                                               "seconds": 60.0}}}
     assert case.page_warnings(report) == [
         f'{start}After "the first start": {TOOK} 2.4 seconds.',
-        f'{start}After "the second sign-in": {TOOK} 2.08 seconds and got no answer. The next change of the answer '
-        "came 7.9 seconds after that question began.",
+        f'{start}After "the second sign-in": {TOOK} 2.08 seconds and got no answer. The next answer came 7.9 '
+        "seconds after that question began.",
         f"{start}The read of trust after the sign-in waited: 1 question(s) got no answer, and the read ended "
         "after 60.0 seconds."]
     # A mark is a text of the record. A line stays one line, in GitHub's own codes.
@@ -1453,7 +1467,7 @@ def test_the_run_keeps_and_prints_the_lines_for_its_page_after_every_step_has_it
             '    return report["status"] == "PASS"\n')
     assert run.count(first) == 1 and run.count(then) == 1 and run.rstrip().endswith(then.rstrip())
     assert run.index('report.update(status="PASS", stage="Complete")') < run.index(first) < run.index(then)
-    # Between the two there is only a comment, and the result is saved under that name nowhere after them.
+    # Between the two there is only a comment. The second part is the end of `run()`.
     between = run[run.index(first) + len(first):run.index(then)]
     assert between.strip() and all(line.strip().startswith("#") for line in between.splitlines())
     assert source.count("page_warnings(") == 2 and source.count("late_answers(") == 3  # A definition and its calls.

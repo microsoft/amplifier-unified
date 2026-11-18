@@ -1069,10 +1069,12 @@ def late_answers(report, begins):
       for a process that owned the port at the question before and that was
       there before this question and after it. The text names what the case
       did then: the last mark of the watch before the question, or `begins`
-      when there is none. A question after a mark of `STOPS` gets no text:
-      the case itself stops the app there. A host that has the port and has
-      not answered yet gets no text either: it starts, and the case waits
-      for it in every case.
+      when there is none. For a question that got no answer, the text also
+      says when the next answer came, or when the watch kept its next change
+      if that was not an answer (for example a host that went away). A
+      question after a mark of `STOPS` gets no text: the case itself stops
+      the app there. A host that has the port and has not answered yet gets
+      no text either: it starts, and the case waits for it in every case.
     - The read of trust after the second sign-in (`signInTrust`). A read of
       one of its two snapshots failed (`captureErrors`), or its request to the
       listener got no answer (`listenerAnswers`).
@@ -1116,10 +1118,13 @@ def late_answers(report, begins):
             said = (f'After "{marks[-1] if marks else begins}": the app had answered, and then one question to '
                     f'its listener took {late["seconds"]} seconds')
             if late.get("answer") == "unreachable":
+                said += " and got no answer"
                 later = [change for change in answers if change["at"] > late["at"]]
-                said += " and got no answer" + (
-                    f'. The next change of the answer came {round(later[0]["at"] - late["at"], 1)} seconds after '
-                    "that question began" if later else "")
+                if later:
+                    # The watch keeps a change of the owners of the port too: a host that went away is no answer.
+                    after = f'{round(later[0]["at"] - late["at"], 1)} seconds after that question began'
+                    said += (f". The next answer came {after}" if later[0].get("answer") in ("trusted", "untrusted")
+                             else f". The watch's next change came {after}, and it was not an answer")
             found.append(said + ".")
     trust = report.get("signInTrust")
     if isinstance(trust, dict):
