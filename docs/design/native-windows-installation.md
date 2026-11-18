@@ -2459,27 +2459,28 @@ between two texts:
   chats and settings. This version of setup cannot repair it."
 
 Each statement of the first text is what setup found in this run, or what
-setup does; its last two sentences are the next step. Setup found the
-record's name when it classified the folder, and the missing program file
-directly before this look. "Setup found an installation record in this
+setup does; its last two sentences are the next step. Setup found the record's
+name when it classified the folder, and it looked for the launcher's start
+program directly before this look. "Setup found an installation record in this
 folder": the folder has a file with the name of setup's completion record,
-which setup writes at the end of an installation.
-Setup does not read that file in this look, and it knows no more about the
-folder's history. The text does not say that an installation was made in the
-folder. (The second text says "Amplifier is already installed in" on the same
-evidence, as it did before.) "a program file is missing": the
-launcher's start program is not there, as in the second text. "Setup found no
-chats or settings in the folder": none of the seven names held anything at
-the look. The text does not say that Amplifier was uninstalled, and it does
-not say that Amplifier cannot start: a file that reads as a journal is no
-proof of an uninstall (a program of this account can write one), and setup
-looked for one program file only. The text tells the person to move or rename
-the folder, not to delete it: the folder can hold something of the person's
-that the look did not see, and a program can put data into it after the
-look. Setup's stop for a damaged folder names the same step. A setup run
-that finds no folder at that path goes on as for a first installation. The
-look only chooses a text. With either text setup installs nothing, deletes
-nothing and ends with status 1.
+which setup writes at the end of an installation. Setup does not read that
+file in this look, and it knows no more about the folder's history. The text
+does not say that an installation was made in the folder. (The second text
+says "Amplifier is already installed in" on the same evidence, as it did
+before.) "a program file is missing": setup's look for the launcher's start
+program found no file (`File.Exists`), as for the second text. That look also
+finds no file when Windows does not let setup see one that is there; the text
+then says "missing" for a file that setup cannot see. "Setup found no chats or
+settings in the folder": none of the seven names held anything at the look.
+The text does not say that Amplifier was uninstalled, and it does not say that
+Amplifier cannot start: a file that reads as a journal is no proof of an
+uninstall (a program of this account can write one), and setup looked for one
+program file only. The text tells the person to move or rename the folder, not
+to delete it: the folder can hold something of the person's that the look did
+not see, and a program can put data into it after the look. Setup's stop for a
+damaged folder names the same step. A setup run that finds no folder at that
+path goes on as for a first installation. The look only chooses a text. With
+either text setup installs nothing, deletes nothing and ends with status 1.
 
 Three states give the first text (a program of this account can make
 others): an uninstall with the delete choice left the folder because it holds

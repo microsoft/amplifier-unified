@@ -9,6 +9,7 @@ on:
       - scripts/windows_private_git.py
       - scripts/windows_bootstrap_native.cs
       - scripts/windows_bootstrap_native.py
+      - scripts/windows_bootstrap_capsule.py
       - scripts/install.ps1
       - amplifier_web/host_dependencies.py
       - amplifier_web/windows_consumer.py
@@ -108,12 +109,20 @@ jobs:
       # The Python cases on setup's source: its folder rules, its texts, the
       # design's sentences and the texts of the native case. They read
       # uninstall's names from amplifier_web. No other job runs this file.
+      # Every case must run and pass. pytest ends with status 0 also for a
+      # skipped case and for an expected failure, and a case with that mark can
+      # be set not to run. So the last line of pytest's output must name passed
+      # cases only; any other outcome gives another line. The output is read,
+      # so pytest writes it without colour. The file's own case gives real last
+      # lines of pytest to this expression.
       - name: Check setup's folder rules and texts against its source and the design
         shell: pwsh
         run: |
-          & "$env:SHELL_BASE/env/Scripts/python.exe" -B -m pytest -q -ra -p no:cacheprovider tests/test_windows_setup_folder.py | Tee-Object -Variable log
+          & "$env:SHELL_BASE/env/Scripts/python.exe" -B -m pytest -q -ra --color=no -p no:cacheprovider tests/test_windows_setup_folder.py | Tee-Object -Variable log
           if ($LASTEXITCODE -ne 0) { throw 'Setup folder and text checks failed.' }
-          if (($log -join "`n") -match '\d+ skipped') { throw 'A setup folder case was skipped on this lane.' }
+          $lines = @($log | ForEach-Object { "$_".Trim() } | Where-Object { $_ })
+          $summary = if ($lines.Count) { $lines[-1] } else { '' }
+          if ($summary -notmatch '^\d+ passed(, \d+ warnings?)? in \d') { throw "Not every setup folder case ran and passed. The last line of pytest: $summary" }
       - name: Unpack the pinned Git and run the real shell tool without developer tools on PATH
         timeout-minutes: 10
         shell: pwsh

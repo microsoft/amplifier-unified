@@ -221,21 +221,32 @@ def test_setup_without_a_launcher_program_says_what_its_own_look_finds():
                        "FileMode", "FileAccess", "Set"):
             assert change not in operations, change
     # A list of words does not name every operation (a property of a `FileInfo`, for example). So the
-    # case also holds every call of the two functions: a new call of any kind fails here.
+    # case also holds, for the two functions and for the one function of setup that they call: each name
+    # that stands before a `(`, with the number of its uses, and that nothing is assigned to a member.
+    # These are checks of the source text. They do not prove what a call does. The native case holds what
+    # the looks leave in the folder.
+    def text(body):
+        lines = "\n".join(line for line in body.splitlines() if not line.strip().startswith("//"))
+        return re.sub(r'"(?:[^"\\]|\\.)*"', '""', lines)
+
     def calls(body):
-        code = "\n".join(line for line in body.splitlines() if not line.strip().startswith("//"))
-        return set(re.findall(r"([A-Za-z_][A-Za-z0-9_.]*)(?:<[A-Za-z0-9_<>,]*>)?\(",
-                              re.sub(r'"(?:[^"\\]|\\.)*"', '""', code)))
+        found = re.findall(r"([A-Za-z_][A-Za-z0-9_.]*)(?:<[A-Za-z0-9_<>,]*>)?\s*\(", text(body))
+        return {name: found.count(name) for name in found}
     assert calls(emptied) == {
-        "if", "using", "while", "foreach", "catch",
-        "Path.Combine", "File.GetAttributes", "FileStream", "file.Read", "Json.Deserialize", "Utf8.GetString",
-        "record.TryGetValue", "Text", "Regex.IsMatch", "Directory.EnumerateFileSystemEntries", "Any"}
-    assert calls(unopened) == {"if", "Emptied"}
-    # `Text`, the one function of setup that they call besides themselves, only reads the parsed record.
-    assert calls(between("static string Text(", "static Dictionary<string,object> Object(")) == {
-        "Need", "map.TryGetValue"}
+        "if": 5, "using": 1, "while": 1, "foreach": 1, "catch": 2,
+        "Path.Combine": 2, "File.GetAttributes": 2, "FileStream": 1, "file.Read": 1, "Json.Deserialize": 1,
+        "Utf8.GetString": 1, "record.TryGetValue": 1, "Text": 2, "Regex.IsMatch": 1,
+        "Directory.EnumerateFileSystemEntries": 1, "Any": 1}
+    assert calls(unopened) == {"if": 1, "Emptied": 1}
+    reads = between("static string Text(", "static Dictionary<string,object> Object(")
+    assert calls(reads) == {"Need": 1, "map.TryGetValue": 1, "return": 1}  # `return (string)value;`
     assert ("static void Need(bool value, string message) "
             "{ if (!value) throw new InvalidDataException(message); }") in SOURCE
+    for body in (emptied, unopened, reads):
+        assert not re.search(r"\.\s*[A-Za-z_][A-Za-z0-9_]*\s*(?:[-+*/%|&^]|<<|>>)?=(?!=)", text(body))
+        assert "++" not in text(body) and "--" not in text(body)
+    assert re.findall(r"\bnew\s+[A-Za-z_][A-Za-z0-9_.]*", text(emptied)) == ["new byte", "new FileStream"]
+    assert "new" not in re.findall(r"[A-Za-z_]+", text(unopened) + text(reads))
     # The one place that shows the text: a finished installation with no launcher program. Setup ends with 1.
     opened = between("static int OpenInstalled(", "static int ConsumerWindow()")
     assert opened.index("if(!File.Exists(AppStart(root).FileName)) {\n"
@@ -294,8 +305,12 @@ def test_setup_without_a_launcher_program_says_what_its_own_look_finds():
             "The text tells the person to move or rename the folder, not to delete it:",
             "Each statement of the first text is what setup found in this run, or what setup does; its last two "
             "sentences are the next step.",
-            "Setup found the record's name when it classified the folder, and the missing program file directly "
-            "before this look.",
+            "Setup found the record's name when it classified the folder, and it looked for the launcher's start "
+            "program directly before this look.",
+            "setup's look for the launcher's start program found no file (`File.Exists`), as for the second "
+            "text.",
+            "That look also finds no file when Windows does not let setup see one that is there; the text then "
+            "says \"missing\" for a file that setup cannot see.",
             "Setup does not read that file in this look, and it knows no more about the folder's history.",
             "The text does not say that an installation was made in the folder.",
             "In every other case, and when any part of the look fails, setup says what it said before:",
@@ -324,6 +339,70 @@ def test_setup_without_a_launcher_program_says_what_its_own_look_finds():
     cases = native.split('string left=Make(work,"Left");', 1)[1]
     assert literal(cases.split("string damaged=", 1)[1].split(";", 1)[0].replace("left", "root")) == DAMAGED
     assert literal(cases.split("string emptied=", 1)[1].split(";", 1)[0].replace("left", "root")) == EMPTIED
+
+
+def test_the_check_that_runs_this_file_requires_every_case_to_run_and_pass(tmp_path):
+    """The workflow step that runs this file on a pull request (follow-up A24).
+
+    Before, no check ran this file: its workflow named it only as a path that starts the workflow. The step
+    must fail when a case did not run or did not pass. pytest ends with status 0 also for a skipped case and
+    for an expected failure, and a case with that mark can be set not to run. So the step requires that the
+    last line of pytest's output names passed cases only. This case runs pytest on small files and gives each
+    real last line to the step's own expression. It does not run the step: a hosted runner does that.
+    """
+    import os
+    import subprocess
+    import sys
+    workflow = (ROOT / ".github/workflows/windows-private-shell.yml").read_text(encoding="utf-8")
+    step = workflow.split(
+        "      - name: Check setup's folder rules and texts against its source and the design\n", 1)[1].split(
+        "\n      - name: ", 1)[0]
+    order = [step.index(line) for line in (
+        " -B -m pytest -q -ra --color=no -p no:cacheprovider tests/test_windows_setup_folder.py"
+        " | Tee-Object -Variable log\n",
+        "          if ($LASTEXITCODE -ne 0) { throw 'Setup folder and text checks failed.' }\n",
+        '          $lines = @($log | ForEach-Object { "$_".Trim() } | Where-Object { $_ })\n',
+        "          $summary = if ($lines.Count) { $lines[-1] } else { '' }\n",
+        "          if ($summary -notmatch '")]
+    assert order == sorted(order)
+    assert "-k " not in step and "--deselect" not in step and "continue-on-error" not in step
+    expression = re.search(r"if \(\$summary -notmatch '([^']+)'\) \{ throw \"", step).group(1)
+    # A change of a file that these cases read starts the workflow.
+    paths = workflow.split("    paths:\n", 1)[1].split("permissions:", 1)[0]
+    for name in (".github/workflows/windows-private-shell.yml", "scripts/windows_bootstrap_native.cs",
+                 "scripts/windows_bootstrap_native.py", "scripts/windows_bootstrap_capsule.py",
+                 "scripts/windows_private_git.py", "scripts/install.ps1", "amplifier_web/windows_uninstall.py",
+                 "amplifier_web/windows_consumer_shell.py", "tests/windows/native_setup.Tests.cs",
+                 "tests/test_windows_setup_folder.py", "docs/design/native-windows-installation.md"):
+        assert f"      - {name}\n" in paths, name
+    (tmp_path / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+    passing = "import pytest\n\n\ndef test_passes():\n    assert True\n\n\n"
+    outcomes = {
+        "passed": ("", 0),
+        "xfail_not_run": ("@pytest.mark.xfail(run=False)\ndef test_other():\n    assert False\n", 0),
+        "xfail": ("@pytest.mark.xfail\ndef test_other():\n    assert False\n", 0),
+        "xpass": ("@pytest.mark.xfail\ndef test_other():\n    assert True\n", 0),
+        "skip": ("@pytest.mark.skip\ndef test_other():\n    assert False\n", 0),
+        "fail": ("def test_other():\n    assert False\n", 1)}
+    # The step's options. Options that a person's environment adds to every pytest run are left out.
+    environment = {name: value for name, value in os.environ.items() if name != "PYTEST_ADDOPTS"}
+    for name, (other, status) in outcomes.items():
+        (tmp_path / f"test_{name}.py").write_text(passing + other, encoding="utf-8")
+        run = subprocess.run(
+            [sys.executable, "-B", "-m", "pytest", "-q", "-ra", "--color=no", "-p", "no:cacheprovider",
+             f"test_{name}.py"],
+            cwd=tmp_path, env=environment, capture_output=True, text=True, encoding="utf-8", timeout=120)
+        lines = [line.strip() for line in run.stdout.splitlines() if line.strip()]
+        # pytest's status alone does not tell a case that did not run or did not pass.
+        assert run.returncode == status, (name, run.stdout, run.stderr)
+        assert bool(re.search(expression, lines[-1])) == (name == "passed"), (name, lines[-1])
+    for line in ("11 passed in 0.32s", "11 passed, 1 warning in 0.32s",
+                 "1592 passed, 2 warnings in 64.17s (0:01:04)"):
+        assert re.search(expression, line), line
+    for line in ("", "no tests ran in 0.01s", "10 passed, 1 deselected in 0.10s", "1 failed, 10 passed in 0.10s",
+                 "10 passed, 1 warning, 1 error in 0.10s", "10 passed, 1 skipped, 1 warning in 0.10s",
+                 "x 11 passed in 0.32s", "11 passed"):
+        assert not re.search(expression, line), line
 
 
 def test_second_setup_restores_entries_before_start_and_waits_without_pins():
