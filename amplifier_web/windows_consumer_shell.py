@@ -417,9 +417,9 @@ def _free(folder):
     had a shortcut open. An entry of another name is the person's: it is not
     opened, changed or removed here.
 
-    Private means: a real folder and no link, owned by this account, with
-    access rules that name only this account, SYSTEM, the Administrators
-    group and TrustedInstaller.
+    Private means: a real folder and no link, owned by this account, in which
+    no access rule gives a right to anyone but this account, SYSTEM, the
+    Administrators group and TrustedInstaller.
 
     Every doubt is False: a link or a file at that path, a folder that fails
     that check, a folder that cannot be listed, and a path that Windows does
@@ -484,11 +484,17 @@ def install(root, version):
             path = folder / name
             # The private directory is pinned, no pre-existing file is adopted:
             # the writer refuses a name that exists, also one that appeared
-            # after the check above. Then the Windows shell saves the shortcut
-            # to that new, empty file by its path. Between the two, only the
-            # path names the file: a program of this account that puts another
-            # file there in that moment gets that file written over. A first
-            # installation has the same moment.
+            # after the check above. From there to the end of this pass the
+            # step works with the new shortcut by its name, in three separate
+            # steps, and holds nothing open between them: the Windows shell
+            # saves to the path, the shell reads the path back, and the bytes
+            # for the record are read. Two moments are therefore not covered,
+            # and a first installation has both. A program of this account
+            # that puts something else at that path before the save gets it
+            # written: the shell writes to whatever the path names then. One
+            # that replaces the saved shortcut with a private file of its own
+            # before the last read gets that file's bytes recorded as this
+            # installation's shortcut.
             owned.publish_private(name, b"")
             with shell_link() as link:
                 link.create(path, python, args, root / "workspace")

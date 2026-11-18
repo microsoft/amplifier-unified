@@ -2034,11 +2034,11 @@ def test_native_shortcut_name_that_appears_after_the_check_is_not_overwritten(na
 
     The other program's file is made in two ways. As a private file of this
     account (its owner is this account, as for a person's own program on a
-    PC): the writer answers that the name exists. As a plain file: on a
-    runner whose account is elevated such a file belongs to the Administrators
-    group, and the writer can refuse it at its own check of the owner before
+    PC): the writer answers that the name exists. As a plain file: the writer
+    can refuse that file at one of its own checks of an existing file before
     it answers that the name exists. Both are the writer's refusals, and
-    neither carries a Windows error code. The case prints which one it got.
+    neither carries a Windows error code. The case prints which refusal it
+    got, with the refusal's text.
     """
     from amplifier_web import windows_files
     native, root, folder = native_uninstall, native_uninstall.root, native_uninstall.folder
@@ -2057,7 +2057,8 @@ def test_native_shortcut_name_that_appears_after_the_check_is_not_overwritten(na
     with pytest.raises((FileExistsError, PermissionError)) as refused:
         shell.install(root, "1.0.0")
     print("NAME_APPEARED " + json.dumps({"made": made, "refusal": type(refused.value).__name__,
-                                         "code": getattr(refused.value, "winerror", None)}))
+                                         "code": getattr(refused.value, "winerror", None),
+                                         "text": str(refused.value).replace(str(folder), "<folder>")}))
     assert getattr(refused.value, "winerror", None) is None, refused.value  # Not a sharing refusal of Windows.
     if made != "as-a-plain-file":
         assert type(refused.value) is FileExistsError, refused.value
@@ -2069,7 +2070,7 @@ def test_native_shortcut_name_that_appears_after_the_check_is_not_overwritten(na
 
 
 def test_native_file_put_at_a_new_shortcut_path_before_the_shell_saves_is_written_over(native_uninstall, monkeypatch):
-    """The one moment that setup's step does not cover, on real files. A known limit, not a promise.
+    """The first moment that setup's step does not cover, on real files. A known limit, not a promise.
 
     The writer makes each shortcut as a new, empty file, and the Windows shell
     then saves the shortcut to that file's path. Here another program of this
@@ -2098,3 +2099,37 @@ def test_native_file_put_at_a_new_shortcut_path_before_the_shell_saves_is_writte
         "sameFileObject": os.stat(folder / name).st_ino == put[0],
         "shortcuts": result["shortcuts"], "record": _native_record(root)["status"]}))
     assert put and after != theirs and after[:4] == b"L\x00\x00\x00"
+
+
+def test_native_file_put_at_a_saved_shortcut_path_before_the_record_reads_it_is_recorded(native_uninstall, monkeypatch):
+    """The second moment that setup's step does not cover, on real files. A known limit, not a promise.
+
+    After the Windows shell saved a shortcut and read its target back, the
+    step reads the shortcut's bytes by its name for its record. Here another
+    program of this account replaces the saved shortcut between the two, with
+    a private file of its own. The record then holds the hash of that file as
+    this installation's shortcut. A change that closes this moment changes
+    this case and the sentence of the design that names the moment.
+    """
+    from amplifier_web import windows_files
+    native, root, folder = native_uninstall, native_uninstall.root, native_uninstall.folder
+    assert native.run()["ok"] and not folder.exists()
+    name, theirs, saved = "Amplifier status.lnk", b"another program's file", []
+    read = windows_files.PinnedDirectory.read_private
+    publish = windows_files.PinnedDirectory.publish_private
+    def replaced(self, entry, *, limit):
+        if entry == name and not saved:
+            saved.append(read(self, name, limit=limit))  # The shortcut that this run saved.
+            publish(self, name, theirs, replace=True)
+        return read(self, entry, limit=limit)
+    monkeypatch.setattr(windows_files.PinnedDirectory, "read_private", replaced)
+    result = shell.install(root, "1.0.0")
+    monkeypatch.setattr(windows_files.PinnedDirectory, "read_private", read)
+    record = _native_record(root)
+    seen = {"savedWasAShortcut": bool(saved) and saved[0][:4] == b"L\x00\x00\x00",
+            "recordedTheirs": record["links"][name] == hashlib.sha256(theirs).hexdigest(),
+            "fileIsTheirs": (folder / name).read_bytes() == theirs,
+            "shortcuts": result["shortcuts"], "record": record["status"]}
+    print("RECORDED_BY_NAME " + json.dumps(seen))
+    assert seen == {"savedWasAShortcut": True, "recordedTheirs": True, "fileIsTheirs": True,
+                    "shortcuts": 4, "record": "installed"}, seen

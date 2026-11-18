@@ -1712,8 +1712,9 @@ So the order is:
    gets no second question.
 3. Check and pin every Start-menu shortcut and the Apps-list entry. A changed
    entry stops here, before the app is touched. Another program can have a
-   shortcut open at that moment (on hosted runners `explorer.exe` had a new
-   shortcut open for a moment). Windows then refuses the pin with its error 32
+   shortcut open at that moment (on hosted runners, asked which program had
+   the shortcut open, Windows named `explorer.exe` after 7 of 92 such refusals
+   and no program after the others). Windows then refuses the pin with its error 32
    ("The process cannot access the file because it is being used by another
    process."), and uninstall tries again before it stops here: at most 50
    more times for this step, with a wait of a tenth of a second before each.
@@ -1834,9 +1835,9 @@ an empty folder), and when another program still had a shortcut open in a way
 that let the delete pass. Setup's step uses that folder again when both hold:
 
 - It is this account's own private folder: a real folder and no link, owned
-  by this account, with access rules that name only this account, SYSTEM, the
-  Administrators group and TrustedInstaller. This is the check that the first
-  installation and every uninstall make.
+  by this account, in which no access rule gives a right to anyone but this
+  account, SYSTEM, the Administrators group and TrustedInstaller. This is the
+  check that the first installation and every uninstall make.
 - No entry directly in it has the name of one of the four shortcuts. Such an
   entry counts whatever it is (a file, a folder, a link), and the names are
   compared without letter case.
@@ -1846,18 +1847,34 @@ change or remove it, and writes the four shortcuts beside it. The step
 replaces and takes over nothing that it finds: it looks before its first
 write, the writer of a shortcut refuses a name that exists (also one that
 appeared after the look), and the Apps-list entry is a key that the step
-itself creates new. One moment is not covered, and a first installation has
-the same moment: the writer makes each shortcut as a new, empty file, and the
-Windows shell then saves the shortcut to that file by its path. A program of
-this account that puts another file at that path between the two gets that
-file written over.
+itself creates new.
 
-In every other case the step refuses with its record unchanged: an entry with
-a shortcut's name in the folder, an Apps-list entry, a link or a file at the
-folder's path, a folder that fails the check, a path that Windows does not
-let the step look at. A partly damaged set whose record still says
-`installed` (a person deleted one shortcut) is refused by that record, as
-before. Setup then says that it could not add the entries, and starts the app.
+Two moments are not covered, and a first installation has both. The writer
+makes each shortcut as a new, empty file. From there the step works with the
+shortcut by its name, in three separate steps, and holds nothing open between
+them: the Windows shell saves the shortcut to the path, the shell reads the
+path back, and the bytes for the record are read.
+
+- A program of this account that puts something else at that path before the
+  save gets it written: the shell writes to whatever the path names then. A
+  file there is written over (a case shows it). A link there was not tried.
+- A program of this account that replaces the saved shortcut with a private
+  file of its own before the last read gets that file's bytes recorded as
+  this installation's shortcut (a case shows it).
+
+The look refuses, before the first write and with the record unchanged: an
+entry with a shortcut's name in the folder, an Apps-list entry, a link or a
+file at the folder's path, a folder that fails the check, a path that Windows
+does not let the step look at. A partly damaged set whose record still says
+`installed` (a person deleted one shortcut) is refused by that record, before
+the look, as before. Setup then says that it could not add the entries, and
+starts the app.
+
+A failure after the first write is different, as it was before this rule: a
+shortcut's name or an Apps-list entry that appeared after the look, or a
+folder that fails the check when the step opens it for its writes. The record
+then says `preparing`, the shortcuts that this run already wrote stay, and
+that record refuses a later run.
 
 This rule replaced an earlier one, under which the entries were added again
 only when the Start-menu folder was gone too. A folder that stayed then kept
@@ -1868,14 +1885,14 @@ stop or uninstall Amplifier. One state is still refused: a record that says
 The native cases in the `windows-local-connection` job run the step on the
 real Start-menu folder. After an uninstall that left a person's file there,
 the four shortcuts and the Apps-list entry are added beside the file. Each
-refusal of the paragraph before the last has a case there, with one
-exception: the path that Windows does not let the step look at has a case
-with a stand-in. Each case finds the folder, the record and the Apps list as
-they were. The folder that fails the check is, in these cases, one that the
-group Everyone can change. One case shows the moment that is not covered: a
-file that another program of this account puts at a new shortcut's path
-before the shell saves is written over. No hosted runner runs the setup
-program itself, which refuses Windows Server.
+refusal of the look has a case there, with one exception: the path that
+Windows does not let the step look at has a case with a stand-in. Each of
+those cases, and the case of the partly damaged set, finds the folder, the
+record and the Apps list as they were. The folder that fails the check is, in
+these cases, one that the group Everyone can change. A shortcut's name that
+appears after the look has a case: the file keeps its bytes. Two cases show
+the two moments that are not covered. No hosted runner runs the setup program
+itself, which refuses Windows Server.
 
 `.github/workflows/windows-start-again.yml` runs this path on a Windows
 runner with the product's own commands in setup's order: entries, first
