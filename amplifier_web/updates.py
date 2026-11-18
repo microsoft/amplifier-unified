@@ -1760,6 +1760,10 @@ class UpdateManager:
                 self.service.state['updates'].update(phase='activating',detail='Switching ecosystem version…')
                 self.service._publish_changes(globals={'updates','settings'})
             candidate = None
+            # True while the page has the publication of the new selection and
+            # not yet the last publication of this switch: the result of its
+            # own read of the proof, or its own failure.
+            unsettled = False
             try:
                 # New work is gated during this short phase. Old sessions remain
                 # durable.  The pointer is committed only after replacement
@@ -1836,11 +1840,17 @@ class UpdateManager:
                         sequence.update(nextStage='other', other=tier_summary)
                     else:
                         sequence.update(stage='complete', install=False, other=tier_summary)
+                # The selection is new, and its proof is not read yet: the held
+                # proof is the one of the generation before. Until the read
+                # below ends, the page gets no result from an earlier component
+                # failure record (update_health.publish).
+                self._update_proof_unread = True
                 await self.publish(phase='installed',release=target,pendingRelease=None,canRollback=True,items=items,error=None,
                     componentResults=public_results(partial, adopted=True),
                     includedCanProceed=False,
                     **({'sequence': sequence} if sequence else {}),
-                    available=sum(row.get('status')=='update' for row in items),installedAt=time.time(),detail='Previous ecosystem restored. Automatic installation is now off.' if rollback else 'Update ready for new work. Active conversations adopt it after their current work finishes.')
+                    available=sum(row.get('status')=='update' for row in items),installedAt=time.time(),detail='Amplifier went back to the earlier components. "Keep Amplifier up to date" is now off, so that the same update is not installed again by itself.' if rollback else 'Update ready for new work. Active conversations adopt it after their current work finishes.')
+                unsettled = True  # The page has the new selection now.
                 if rollback or 'pendingRollback' in self.service.state['updates']:
                     async with self.service.lock:
                         self.service.state['updates'].pop('pendingRollback', None)
@@ -1849,7 +1859,9 @@ class UpdateManager:
                 self.diagnostics.record('ecosystem-rollback' if rollback else 'ecosystem-activation','succeeded')
                 from .update_health import refresh as refresh_health
                 await refresh_health(self)
+                self._update_proof_unread = False  # This switch's own read ended, with or without a proof.
                 await self.publish()  # Publish settled attention, not just the preceding installed status.
+                unsettled = False
                 self.inventory=[]
                 if self.cleanup_task is None or self.cleanup_task.done():
                     self.cleanup_task = asyncio.create_task(self.retire_storage())
@@ -1861,13 +1873,29 @@ class UpdateManager:
                 except OSError:
                     pass
             except asyncio.CancelledError:
+                self._update_proof_unread = False  # The mark ends with the switch.
                 await self.service.discard_runtime(candidate)
                 raise
             except Exception as error:
+                self._update_proof_unread = False  # The mark ends with the switch.
                 await self.service.discard_runtime(candidate)
                 from .update_diagnostics import exception_facts
                 self.diagnostics.record('ecosystem-activation','failed',**exception_facts(error))
                 await self.publish(phase='error',error='Could not activate the ecosystem update; review its diagnostic receipt before retrying.')
+                unsettled = False  # The page has this switch's own failure now.
+            finally:
+                if unsettled:
+                    # The switch ends, and the page has its selection without its
+                    # last publication: it was cancelled in its own read, in the
+                    # publication after that read, or in the publication of its
+                    # own failure. The page can then hold "Checking components"
+                    # with nothing that checks. Nothing can be published for
+                    # sure in a task that ends this way. So the switch asks the
+                    # update owner for the read: the owner's next pass that no
+                    # hold stops reads and publishes (tick), as after a settings
+                    # change. The owner is woken for it.
+                    self._update_health_initial = True
+                    self.wakeup.set()
 
     async def installSmartTools(self):
         from .smart_tool_update_batch import stage
@@ -1944,7 +1972,10 @@ class UpdateManager:
         state=self.service.state['updates']
         from .update_drain import observe_waiters
         await observe_waiters(self)
-        if self.awaiting_restart():return
+        if self.awaiting_restart():
+            # See loop: this pass did not come to the first read of this host.
+            self._first_read_held = getattr(self, '_update_health_initial', False)
+            return
         if getattr(self, '_update_health_initial', False):
             self._update_health_initial = False
             from .manual_app_handoff import verify_current
@@ -2060,6 +2091,7 @@ class UpdateManager:
 
     async def loop(self):
         await self.wait_for_work(3)
+        woke = False
         while not self.closed:
             self.wakeup.clear()
             state = self.service.state['updates']
@@ -2078,6 +2110,18 @@ class UpdateManager:
                 await self.publish(phase='activating' if self.service.state['updates'].get('pendingRestart') else 'error',error=failure_guidance(self.diagnostics.state.get('lastFailure', {})) or 'Background update failed during '+phase.replace('-',' ')+'. Review its diagnostic receipt; no work was replayed.')
             from .windows_launcher_follow import consider
             await consider(self)  # After the except: a failing tick must not starve an open launcher request.
+            # A new host has no proof of the installed components until a pass
+            # reads it (tick), and a hold (awaiting_restart) keeps a pass from
+            # that read. The hold can end above, for example when a launcher
+            # request closes, and nothing else wakes this loop then. Without a
+            # wake the page keeps the text of a host with no proof for the 60
+            # seconds below. One wake for a pass that the hold stopped. A pass
+            # that this wake started asks for no second one: when its hold is
+            # on again, the loop waits its 60 seconds.
+            held, self._first_read_held = getattr(self, '_first_read_held', False), False
+            woke = held and not woke and not self.closed and not self.awaiting_restart()
+            if woke:
+                self.wakeup.set()
             state = self.service.state['updates']
             sequence = state.get('sequence', {})
             from .update_health import pending_preparation

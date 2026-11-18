@@ -11,7 +11,7 @@ name: Test files that no other check runs
 # reason. The job fails when a case fails, when no case of a file passes, and
 # when a case is skipped or expected to fail and the step does not expect
 # that on this runner. So on Windows a case that needs Windows cannot be
-# skipped.
+# skipped. It also fails when the step expects a failure and no case had it.
 #
 # The Windows job leaves out some files and cases by name: they are written
 # for Linux, or they fail on a Windows runner and are not repaired yet. The
@@ -44,21 +44,24 @@ on:
       - pyproject.toml
       - uv.lock
       # What the cases read beside the app: the setup and launcher tools, the
-      # release tool, the client selection's tools, and two other workflows.
+      # release tool, the client selection's tools, and four other workflows.
       - scripts/install.ps1
       - scripts/windows_*
       - scripts/release.py
       - scripts/web_client_*.py
+      - .github/workflows/coordination.yml
       - .github/workflows/platform-mechanisms.yml
+      - .github/workflows/update-ai-connection.yml
       - .github/workflows/windows-launcher-follow.yml
       - tests/conftest.py
       - tests/fixtures/**
-      # Test files that the listed files import.
+      # Test files that the listed files import. An import runs none of
+      # their cases: a command of another workflow runs each of these four,
+      # and a case of tests/test_windows_launcher_follow_workflow.py reads
+      # that command.
       - tests/test_service.py
       - tests/test_update_health_setup_record.py
-      - tests/test_update_partial.py
       - tests/test_update_sequence.py
-      - tests/test_windows_auth.py
       - tests/test_windows_service.py
       # The listed files.
       - tests/test_application_generations.py
@@ -71,9 +74,11 @@ on:
       - tests/test_runtime_registry_updates.py
       - tests/test_update_core_lookup_failure.py
       - tests/test_update_health_first_install.py
+      - tests/test_update_partial.py
       - tests/test_update_partial_review.py
       - tests/test_updates_cache.py
       - tests/test_windowless_subprocesses.py
+      - tests/test_windows_auth.py
       - tests/test_windows_bootstrap_ci.py
       - tests/test_windows_bootstrap_native.py
       - tests/test_windows_bootstrap_prototype.py
@@ -157,9 +162,11 @@ jobs:
           tests/test_runtime_registry_updates.py
           tests/test_update_core_lookup_failure.py
           tests/test_update_health_first_install.py
+          tests/test_update_partial.py
           tests/test_update_partial_review.py
           tests/test_updates_cache.py
           tests/test_windowless_subprocesses.py
+          tests/test_windows_auth.py
           tests/test_windows_bootstrap_ci.py
           tests/test_windows_bootstrap_native.py
           tests/test_windows_bootstrap_prototype.py
@@ -200,10 +207,10 @@ jobs:
                   OTHER_APP_HOME + "; other cases there compare a path that has the runner's separator",
               "tests/test_update_core_lookup_failure.py": OTHER_APP_HOME,
               "tests/test_update_health_first_install.py": OTHER_APP_HOME,
-              "tests/test_effective_behavior_updates.py":
-                  "four of its cases fail on a Windows runner: two in the update check's own handling of a Windows "
-                  "path (a path that it makes from a file address has no drive; it replaces a folder path inside "
-                  "JSON text, where each backslash is written twice), and two as the three files above",
+              "tests/test_effective_behavior_updates.py::test_index_invalidates_on_effective_selection_not_history_size":
+                  OTHER_APP_HOME,
+              "tests/test_effective_behavior_updates.py::test_real_check_includes_selected_source_before_other_tier":
+                  OTHER_APP_HOME,
               "tests/test_application_generations.py::test_qualified_launch_preserves_arguments_and_data_scope":
                   "the case stands in for os.execv; on Windows the app starts a child and waits for it",
               "tests/test_installation_health.py::test_status_reports_every_verified_listener_and_partial_failure":
@@ -223,16 +230,19 @@ jobs:
           # A skip that this step expects, by its reason, and whether this
           # runner may have it. Any other skip fails the job.
           SKIPS = {
-              # Each needs a name in the environment that no runner sets.
-              "explicit DTU-only uv installation test": True,
-              "explicit isolated installed-package reset bridge": True,
+              # Each needs a name in the environment that no runner sets. Their
+              # file is left out on Windows.
+              "explicit DTU-only uv installation test": not windows,
+              "explicit isolated installed-package reset bridge": not windows,
               # These cases need Windows.
               "Native Windows HTTPS/private-storage combined boundary": not windows,
               "Native Windows TLS listener-confusion controls": not windows,
               "native prototype PowerShell model pending": not windows,
+              "Requires Windows TokenUser/NTFS/private DACL": not windows,
               # These cases need what Windows does not have.
               "could not import 'pwd': No module named 'pwd'": windows,
               "getifaddrs enumeration is qualified only on Linux/macOS": windows,
+              "the values of a Linux installation": windows,
           }
           # An expected failure that this step expects, and whether this runner
           # may have it. A shared settings file that cannot be read ends the
@@ -270,6 +280,7 @@ jobs:
           if not result.is_file():
               sys.exit(f"pytest ended with status {status} and wrote no result file")
           counts, problems = collections.defaultdict(collections.Counter), []
+          failures, reasons = set(), set()  # The expected failures and the skip reasons that this run had.
           for case in tree.parse(result).getroot().iter("testcase"):
               # "tests.test_x", or "tests.test_x.Class" for a case in a class.
               parts = case.get("classname", "").split(".")
@@ -288,12 +299,14 @@ jobs:
               elif found["skipped"].get("type") == "pytest.xfail":
                   counts[file]["expected failures"] += 1
                   print(f"expected failure: {name}: {found['skipped'].get('message')}")
+                  failures.add(name)
                   if not EXPECTED_FAILURES.get(name):
                       problems.append(f"expected to fail, and this step does not expect that: {name}")
               else:
                   reason = found["skipped"].get("message", "")
                   counts[file]["skipped"] += 1
                   print(f"skipped: {name}: {reason}")
+                  reasons.add(reason)
                   if not SKIPS.get(reason):
                       problems.append(f"skipped, and this step does not expect that on this runner: {name}: {reason}")
 
@@ -310,6 +323,19 @@ jobs:
               print(f"{file}: {dict(row)}")
           print(f"all files on {sys.platform}: {total['passed']} passed, {total['failed']} failed, "
                 f"{total['skipped']} skipped, {total['expected failures']} expected failures")
+          # An entry of the two lists that this run did not use is behind. A
+          # skip reason has no case name, so it only gets a line in the log.
+          def covers(entry, name):
+              # The entry is the case, or its function, its class or its file.
+              return name == entry or name.startswith((entry + "::", entry + "["))
+          # Only for a case that pytest got: in a whole file, or by a name.
+          for name, here in EXPECTED_FAILURES.items():
+              if (here and name not in failures and any(covers(entry, name) for entry in files)
+                      and not any(covers(entry, name) for entry in left_out)):
+                  problems.append(f"this step expects a failure, and no case had it: {name}")
+          for reason, here in SKIPS.items():
+              if here and reason not in reasons:
+                  print(f"no case was skipped for a reason that this step allows on this runner: {reason}")
           if status and not problems:
               problems.append(f"pytest ended with status {status}")
           if problems:
