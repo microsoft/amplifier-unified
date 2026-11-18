@@ -1870,11 +1870,15 @@ does not let the step look at. A partly damaged set whose record still says
 the look, as before. Setup then says that it could not add the entries, and
 starts the app.
 
-A failure after the first write is different, as it was before this rule: a
-shortcut's name or an Apps-list entry that appeared after the look, or a
-folder that fails the check when the step opens it for its writes. The record
-then says `preparing`, the shortcuts that this run already wrote stay, and
-that record refuses a later run.
+A failure after the first write is different, as it was before this rule.
+Examples are a shortcut's name or an Apps-list entry that appeared after the
+look, a folder that fails the check when the step opens it for its writes,
+and an error of the Windows shell. The record then says `preparing`, the
+shortcuts that this run already wrote stay, and that record refuses a later
+run. The step's last write is the exception. It says `installed`, and the
+writer can report an error after it published the file (its check of the
+published file failed). The step then ends with an error, and the record says
+`installed`.
 
 This rule replaced an earlier one, under which the entries were added again
 only when the Start-menu folder was gone too. A folder that stayed then kept
