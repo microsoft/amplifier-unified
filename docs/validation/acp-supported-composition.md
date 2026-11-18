@@ -129,8 +129,9 @@ named lifecycle outcomes are recorded above.
 [Conversations #89](https://github.com/microsoft/amplifier-constellation-conversations/pull/89),
 accepted as `b6d3eae5633c`, adds four maintained service tests for public admission
 ordering. For both participant removal and whole-room deletion, admitted input
-makes removal refuse with 409; completed removal makes later input refuse with
-404. The controls preserve the unaffected participant's binding, cursor and
+makes removal refuse with 409. After participant removal, new input targeting
+that participant refuses with 400; a deleted room refuses with 404. The controls
+preserve the unaffected participant's binding, cursor and
 history, use another room for the whole-room deletion control, and cover ordinary
 single-participant continuation after detach. This is a test-only contribution,
 not a separate runtime release or a new Stop policy.
