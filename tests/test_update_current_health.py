@@ -532,11 +532,11 @@ async def test_changed_configuration_does_not_resurrect_a_covered_source_conflic
     health.publish(m)
     status = u['currentStatus']
     if case == 'changed':
-        assert status['status'] == 'unverified'
-        assert status['title'] == 'Component verification is incomplete'
+        # The covered conflict stays history, and settings with another key are no alarm.
+        assert (status['status'], status['title'], status['detail']) == NEW_CHECK
         assert status['component'] is None
-        assert status['actionRequired'] and status['action'] == 'check'
-        assert 'configuration' in status['detail']
+        assert not status['actionRequired'] and status['action'] == 'check'
+        assert status['proofLimitation'] == {'configurationChanged': True}
     elif case == 'restored':
         assert status['status'] == 'current'
     elif case == 'pending':
@@ -623,11 +623,12 @@ async def test_real_global_configuration_change_explains_retained_failure(tmp_pa
     before = settings.read_bytes()
     await health.refresh(m)
     health.publish(m)
-    assert m.service.state['updates']['currentStatus']['status'] == 'unverified'
+    assert (m.service.state['updates']['currentStatus']['status'],
+            m.service.state['updates']['currentStatus']['title']) == NEW_CHECK[:2]
     assert m.service.state['updates']['currentStatus']['component'] is None
     assert settings.read_bytes() == before
-    # An ordinary qualification writes the new key, so this is not a permanent
-    # unverified state. Exercise the real qualification/configuration owner;
+    # An ordinary qualification writes the new key, so this state is not
+    # permanent. Exercise the real qualification/configuration owner;
     # subprocess mounts are the same explicit offline seam as its unit tests.
     from amplifier_web import updates, runtime_environment, runtime_qualification
     from unittest.mock import AsyncMock
@@ -670,6 +671,371 @@ async def test_real_global_configuration_change_explains_retained_failure(tmp_pa
     await health.refresh(m)
     health.publish(m)
     assert m.service.state['updates']['currentStatus']['status'] == 'current'
+
+
+# The installation matches its record, and the key of the settings is not the key
+# in the record of the component check. A saved AI connection gives this state.
+# Nothing failed, and nothing is required of the person.
+NEW_CHECK = ('unchecked', 'The components need a new check for your current settings',
+             'The components that Amplifier recorded are installed as recorded. Amplifier has no record that it '
+             'checked them with your current AI connections and other settings. A new AI connection is one cause. '
+             'The next update check looks for the components that your current settings need. To check now, select '
+             'Check for updates.')
+# What the state said before, with the unread mark.
+ALARM = ('unverified', 'Component verification is incomplete',
+         'The active installation still matches its recorded graph, but the current source configuration differs '
+         'from its qualification. Current components are kept; earlier attempts remain in history. Check for '
+         'updates and review the changed source choices before installing.')
+QUALIFY_ROW = {'id': 'runtime:environment', 'kind': 'runtime environment', 'status': 'update', 'eligible': True,
+               'label': 'Qualify current component configuration'}
+CHECKING_SETTINGS = {'status': 'unchecked', 'title': 'Checking current configuration',
+                     'detail': 'Update health will refresh against the changed settings. Existing components remain active.',
+                     'actionRequired': False, 'action': None, 'component': None}
+LOCAL_SOURCE = {'id': 'custom', 'label': 'Custom source', 'status': 'local_changes', 'updateTier': 'included'}
+
+
+def settled(**changes):
+    """A complete check that found nothing newer, on an app that is current."""
+    return {'phase': 'checked', 'error': None, 'available': 0, 'items': [], 'sequence': {'stage': 'complete'},
+            'application': {'status': 'current'}, 'diagnostics': {}, **changes}
+
+
+def generation_proof(**limits):
+    """What a health read holds when the selected generation's lock and recorded packages match."""
+    return {'generation': 'a' * 32, 'verifiedAt': 20, 'startedAt': 10, 'configuration': 'b' * 64,
+            'attemptId': 'c' * 32, 'packages': {'recorded'}, 'components': {'recorded'}, **limits}
+
+
+def receipt_gone(**limits):
+    """The same, when the bounded history no longer holds the activation of that generation."""
+    return {'generation': 'a' * 32, 'activationUnknown': True, 'qualifiedAt': 10, 'configuration': 'b' * 64,
+            'packages': {'recorded'}, 'components': {'recorded'}, **limits}
+
+
+def component_failure(at):
+    return {'activeFailures': {'one': {'latest': {
+        'id': 'd' * 32, 'attemptId': 'e' * 32, 'kind': 'ecosystem', 'status': 'failed',
+        'phase': 'ecosystem-stage', 'package': 'recorded', 'at': at}}}}
+
+
+def settings_entry(state):
+    """What the Settings entry "Updates" counts, and the item that an alarm adds."""
+    attention = snapshot(state)
+    return (attention['pages'].get('updates', 0), attention['settingsUnread'],
+            [item['id'] for item in attention['items'] if item['id'] == 'updates:current'])
+
+
+@pytest.mark.parametrize('also', ['nothing', 'receipt-gone', 'local-source', 'local-source-no-complete-check',
+                                  'covered-failure'])
+def test_settings_with_another_key_on_an_installation_that_matches_its_record_are_no_alarm(also):
+    state, proof = settled(), generation_proof(configurationChanged=True)
+    if also == 'receipt-gone':
+        proof = receipt_gone(configurationChanged=True)
+    elif also == 'local-source':
+        state = settled(items=[dict(LOCAL_SOURCE)])
+    elif also == 'local-source-no-complete-check':
+        # A listed local source change reaches the same rule without a complete check.
+        state = settled(items=[dict(LOCAL_SOURCE)], sequence={})
+    elif also == 'covered-failure':
+        state = settled(diagnostics=component_failure(at=5))  # Before the activation of this generation.
+    before = copy.deepcopy(state)
+    value = health.current(state, proof)
+    assert (value['status'], value['title'], value['detail']) == NEW_CHECK
+    assert value['actionRequired'] is False
+    assert value['action'] == 'check' and value['component'] is None
+    # The support report still gets the limit of the proof.
+    assert value['proofLimitation'] == {'configurationChanged': True,
+                                        **({'activationUnknown': True} if also == 'receipt-gone' else {})}
+    assert 'selectedFailure' not in value and 'failureKind' not in value
+    text = (value['title'] + ' ' + value['detail']).lower()
+    assert not any(word in text for word in ('qualif', 'graph', 'source configuration', 'verif', 'incomplete'))
+    # The proof says that two keys differ. It does not say that the person changed a setting,
+    # so the text does not say it either.
+    assert 'chang' not in text
+    assert settings_entry({'updates': {**state, 'currentStatus': value}}) == (0, 0, [])
+    assert state == before
+
+
+@pytest.mark.parametrize('neighbour', ['no-proof', 'receipt-gone', 'local-source', 'setup-record', 'settings-equal',
+                                       'a-listed-update', 'not-checked', 'later-failure', 'later-failure-no-proof'])
+def test_the_states_beside_it_keep_their_text_and_their_mark(neighbour):
+    state, proof, expected, mark, action = {
+        'no-proof': (settled(), {}, ('unverified', 'Component verification is incomplete',
+            'The active component graph or configuration could not be verified. Current components are kept. '
+            'Check for updates and inspect diagnostics if this remains.'), True, 'check'),
+        'receipt-gone': (settled(), receipt_gone(), ('unchecked', 'Current components kept',
+            'The installed graph matches its recorded qualification. Its older activation receipt is no longer '
+            'retained, so full activation verification is unavailable. No reinstall is requested.'), False, None),
+        'local-source': (settled(items=[dict(LOCAL_SOURCE)]), generation_proof(), ('unchecked', 'Custom sources kept',
+            'Local source changes are kept as configured and are not replaced automatically. Source details remain '
+            'available; no repair is required for intentional customization.'), False, None),
+        # A new installation never reaches the state: setup's record carries no settings key.
+        'setup-record': (settled(), {'setupRecord': True, 'packageCount': 3}, ('current', 'You\u2019re up to date',
+            'No newer version of the app or its components was found. The components that setup recorded are '
+            'installed as recorded.'), False, None),
+        'settings-equal': (settled(), generation_proof(), ('current', 'You\u2019re up to date',
+            'The current application and qualified components are ready. Earlier attempts remain in history; '
+            'configured fixed versions are kept.'), False, None),
+        # A listed update ends the state. (The journey case below takes the row from the real inventory.)
+        'a-listed-update': (settled(available=1, items=[dict(QUALIFY_ROW)]),
+                            generation_proof(configurationChanged=True),
+            ('available', 'Updates available',
+             'The app and eligible components can update while preserving configured pins and local sources.'),
+            False, 'install'),
+        'not-checked': (settled(sequence={}), generation_proof(configurationChanged=True), ('unchecked',
+            'Check for updates', 'The full desired component state has not been checked.'), False, 'check'),
+        # A component failure after the activation is not covered by the proof, with changed settings or without.
+        'later-failure': (settled(diagnostics=component_failure(at=30)), generation_proof(configurationChanged=True),
+            ('action-required', 'Update could not finish', 'The prior attempt has no applicable verified outcome. '
+             'Current installation is retained; inspect diagnostics before retrying.'), True, 'diagnostics'),
+        'later-failure-no-proof': (settled(diagnostics=component_failure(at=30)), {},
+            ('action-required', 'Update could not finish', 'The prior attempt has no applicable verified outcome. '
+             'Current installation is retained; inspect diagnostics before retrying.'), True, 'diagnostics'),
+    }[neighbour]
+    value = health.current(state, proof)
+    assert (value['status'], value['title'], value['detail']) == expected
+    assert (value['actionRequired'], value['action']) == (mark, action)
+    count, unread, item = settings_entry({'updates': {**state, 'currentStatus': value}})
+    assert item == (['updates:current'] if mark else [])
+    # A local source is information and counts nothing. With automatic installation
+    # (the default) the row of a listed update is progress and counts nothing either.
+    assert (count, unread) == ((1, 1) if mark else (0, 0))
+    if neighbour == 'a-listed-update':
+        # With "Keep Amplifier up to date" off, that row is an unread item of its own. Not changed.
+        off = snapshot({'updates': {**state, 'currentStatus': value},
+                        'settings': {'updates': {'autoInstall': False}}})
+        assert [row['id'] for row in off['items']] == ['source:runtime:environment']
+        assert (off['pages']['updates'], off['settingsUnread']) == (1, 1)
+
+
+def test_an_earlier_component_issue_keeps_its_own_sentence_about_the_settings():
+    """The other place that reads the limit. Its text has a mark for the earlier issue, and stays."""
+    state, proof = acknowledged_app_with_old_component_history()
+    value = health.current(state, {**proof, 'configurationChanged': True})
+    assert value['title'] == 'Application updated; earlier component issue needs review'
+    assert value['actionRequired'] and value['status'] != 'unchecked'
+    assert 'The current source configuration also differs from that qualification. ' in value['detail']
+    assert NEW_CHECK[1] not in value['title'] and NEW_CHECK[2] not in value['detail']
+
+
+async def test_a_second_ai_connection_gives_the_quiet_text_until_an_update_is_listed(tmp_path, monkeypatch):
+    """What a person meets: a component update ran once; then a second AI connection is saved for all folders.
+
+    Real: the settings read, the key, the health read and its publication, and the row of the inventory.
+    Not run: the update check itself (its network requests and its sequence). The proof is of the fixture's
+    generation.
+    """
+    from amplifier_web import runtime_environment, runtime_profiles
+    real_configuration, real_key = health.configuration, runtime_profiles.configuration_key
+    m, stage, project, _ = mounted_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(health, 'configuration', real_configuration)
+    monkeypatch.setattr(runtime_profiles, 'configuration_key', real_key)
+    shared = tmp_path / 'canonical-shared'
+    shared.mkdir()
+    monkeypatch.setenv('AMPLIFIER_HOME', str(shared))
+    settings = shared / 'settings.yaml'
+    first = {'id': 'provider-openai-11111111', 'module': 'provider-openai', 'config': {'default_model': 'one'}}
+    second = {'id': 'provider-openai-22222222', 'module': 'provider-openai', 'config': {'default_model': 'two'}}
+    settings.write_text(json.dumps({'config': {'providers': [first]}}))
+    # The component update qualified the settings with the one connection.
+    qualified = real_key(health.configuration(m)[1].settings, m.home, stage)
+    (stage / 'profiles-qualified.json').write_text(json.dumps({'profiles': ['work'], 'configuration': qualified}))
+    u = m.service.state['updates']
+
+    def listed():
+        """The rows that a check gets from the real inventory. The fixture's lock names no package."""
+        for name in (project / 'uv.lock', stage / 'runtime.lock'):
+            name.write_text('version = 1\n')
+        try:
+            return [(row['id'], row['label'], row['status'], row['current'], row['latest'])
+                    for row in runtime_environment.inventory(m.home, installed={}, graph=[])]
+        finally:
+            for name in (project / 'uv.lock', stage / 'runtime.lock'):
+                name.write_text('exact graph')
+
+    await health.refresh(m)
+    health.publish(m)
+    assert (u['currentStatus']['status'], u['currentStatus']['title']) == ('current', 'You\u2019re up to date')
+    assert settings_entry(m.service.state) == (0, 0, [])
+    assert listed() == []
+    # Another model for the same connection is no change of the key.
+    settings.write_text(json.dumps({'config': {'providers': [{**first, 'config': {'default_model': 'three'}}]}}))
+    assert real_key(health.configuration(m)[1].settings, m.home, stage) == qualified
+    # A connection of another kind changes the key, and so does the other order of two kinds.
+    # Two connections of one kind have one key in both orders.
+    other = {'id': 'provider-anthropic-33333333', 'module': 'provider-anthropic', 'config': {'default_model': 'one'}}
+    keys = []
+    for rows in ([first, other], [other, first], [second, first], [first, second]):
+        settings.write_text(json.dumps({'config': {'providers': rows}}))
+        keys.append(real_key(health.configuration(m)[1].settings, m.home, stage))
+    assert keys[2] == keys[3] and len({qualified, *keys}) == 4
+    # The settings now hold a second connection. The save action and the publication of changes that
+    # wakes the update owner are not run here: the revision is set by hand, and the health value is published.
+    assert json.loads(settings.read_text()) == {'config': {'providers': [first, second]}}
+    m.service.state['configurationRevision'] = 2
+    health.publish(m)
+    assert u['currentStatus'] == CHECKING_SETTINGS
+    before = copy.deepcopy(m.diagnostics.state)
+    # The owner's pass reads the proof again. No check runs.
+    await health.refresh(m)
+    health.publish(m)
+    status = u['currentStatus']
+    assert (status['status'], status['title'], status['detail']) == NEW_CHECK
+    assert status['actionRequired'] is False and status['action'] == 'check'
+    assert status['proofLimitation'] == {'configurationChanged': True}
+    assert settings_entry(m.service.state) == (0, 0, [])
+    assert m._active_update_evidence['configurationChanged'] is True
+    # Only the page's words changed: a preparation still gets no proof for these settings,
+    # and no failure record was removed or settled.
+    assert health.active_evidence(m) == {}
+    assert m.diagnostics.state == before
+    # A check takes its rows from the inventory. The real inventory now lists one update, with the
+    # two keys that the health read compared. A listed update ends the state.
+    assert listed() == [('runtime:environment', 'Qualify current component configuration', 'update',
+                         qualified, keys[3])]
+    # When the inventory already lists a row for the worker environment (here: the app declares other
+    # worker packages than the generation's record), that row stands for both. It is an update too.
+    (stage / 'runtime-base.toml').write_text('another manifest')
+    assert [row[:3] for row in listed()] == [('runtime:environment', 'Conversation worker environment', 'update')]
+    (stage / 'runtime-base.toml').unlink()
+    u['available'] = 1
+    health.publish(m)
+    assert (u['currentStatus']['status'], u['currentStatus']['title']) == ('available', 'Updates available')
+    # The connection is removed again: the settings have the key of the record.
+    u['available'] = 0
+    settings.write_text(json.dumps({'config': {'providers': [first]}}))
+    await health.refresh(m)
+    health.publish(m)
+    assert (u['currentStatus']['status'], u['currentStatus']['title']) == ('current', 'You\u2019re up to date')
+    assert listed() == []
+
+
+async def test_a_key_that_only_the_app_computes_differently_gives_the_same_text(tmp_path, monkeypatch):
+    """The settings file is the same. The key function gives another value, as a new app version can.
+
+    Health cannot tell this from a saved connection, so its text must be true for both.
+    """
+    from amplifier_web import runtime_profiles
+    m, stage, _, source = mounted_fixture(tmp_path, monkeypatch)
+    u = m.service.state['updates']
+    await health.refresh(m)
+    health.publish(m)
+    assert (u['currentStatus']['status'], u['currentStatus']['title']) == ('current', 'You\u2019re up to date')
+    recorded = source['profiles-qualified.json']['configuration']
+    monkeypatch.setattr(runtime_profiles, 'configuration_key', lambda *a: recorded[::-1])
+    assert recorded[::-1] != recorded
+    await health.refresh(m)
+    health.publish(m)
+    status = u['currentStatus']
+    assert (status['status'], status['title'], status['detail']) == NEW_CHECK
+    assert 'chang' not in (status['title'] + ' ' + status['detail']).lower()
+    assert settings_entry(m.service.state) == (0, 0, [])
+
+
+def this_state(rig, phase, *, alarm=False):
+    """The real `current()` value of this state, then the real launcher step over it."""
+    from amplifier_web import windows_launcher_follow as follow
+    value = health.current(settled(), generation_proof(configurationChanged=True))
+    if alarm:
+        # The value that the state had: its status, its title, its text, and the mark.
+        value = {**value, 'status': ALARM[0], 'title': ALARM[1], 'detail': ALARM[2], 'actionRequired': True}
+    m = rig.m
+    m._launcher_follow.phase = phase
+    m.state['launcherRefresh'] = {**(m.state.get('launcherRefresh') or {}), 'phase': phase,
+                                  'launcher': {'version': '1.0.0'}, 'app': follow._target(rig.target)}
+    m.state['currentStatus'] = copy.deepcopy(value)
+    follow.project(m)
+    return value, m.state['currentStatus'], m._launcher_follow.button_generation
+
+
+@pytest.mark.parametrize('automatic', [True, False])
+@pytest.mark.parametrize('phase', [None, 'waiting', 'ready', 'failed', 'failed-unchanged', 'done'])
+def test_the_launcher_step_reads_this_state_as_a_quiet_state(rig, phase, automatic):  # noqa: F811
+    """On Windows the launcher's text shows over a quiet health state, and in three phases its button.
+
+    The six phases that the launcher step has with no open request. The real `current()` and the real
+    `windows_launcher_follow.project`. With the alarm status that this state had, the step only added one
+    sentence to the alarm text in four phases, and kept no generation for the button.
+    """
+    from amplifier_web import windows_launcher_follow as follow
+    from test_windows_launcher_follow import TEXTS
+    rig.m.service.state['settings']['updates']['autoInstall'] = automatic
+    value, row, button = this_state(rig, phase)
+    assert (value['status'], value['title']) == NEW_CHECK[:2]
+    if phase in {None, 'done'}:
+        # No launcher text for this state: its own text, with nothing added.
+        assert row == value and button is None
+    else:
+        status, title, detail, action = TEXTS[phase]
+        if phase in {'failed', 'failed-unchanged'}:
+            detail += (' Amplifier tries again after the next app update. To try now, select Retry installation.'
+                       if automatic else ' To try again, select Retry installation.')
+        assert row == {'status': status, 'title': title, 'detail': detail, 'action': action,
+                       'actionRequired': False, 'component': None}
+        # A click on that button asks for a launcher refresh of this app generation.
+        assert button == (rig.target['generation'] if phase in {'ready', 'failed', 'failed-unchanged'} else None)
+    assert settings_entry(rig.m.service.state) == (0, 0, [])
+    follow.project(rig.m)
+    assert rig.m.state['currentStatus'] == row
+    # What the step did with the alarm value: the alarm stays, with one sentence more and no button.
+    value, row, button = this_state(rig, phase, alarm=True)
+    suffix = {'waiting': ' The program that starts Amplifier still has version 1.0.0.',
+              'ready': ' The program that starts Amplifier still has version 1.0.0.',
+              'failed': ' The program that starts Amplifier still has version 1.0.0. Its update did not finish.',
+              'failed-unchanged': ' The program that starts Amplifier still has version 1.0.0. Its update did not finish.',
+              }.get(phase, '')
+    assert row == {**value, 'detail': value['detail'] + suffix} and button is None
+
+
+@pytest.mark.parametrize('phase', ['waiting', 'restarting', 'finishing', 'repairing', 'needs-repair'])
+def test_an_open_launcher_request_shows_its_text_over_this_state_as_it_did(rig, phase):  # noqa: F811
+    """A control: it passes with and without the change.
+
+    Four of these phases exist only while a launcher request is open. With an open request the launcher's
+    text shows over every health value, so the status word of this state changes nothing there.
+    """
+    from test_windows_launcher_follow import TEXTS, request
+    status, title, detail, action = TEXTS[phase]
+    expected = {'status': status, 'title': title, 'detail': detail, 'action': action,
+                'actionRequired': phase == 'needs-repair', 'component': None}
+    for alarm in (False, True):
+        request(rig)
+        _, row, button = this_state(rig, phase, alarm=alarm)
+        assert row == expected and button is None
+
+
+@pytest.mark.parametrize('setting', ['off', 'on-after-a-refusal'])
+async def test_the_button_over_this_state_asks_for_a_launcher_refresh(rig, setting):  # noqa: F811
+    """The one decision that the status word moves: a click on the launcher's button in this state.
+
+    Real: the launcher step's own pass (`consider`), `project`, `request_by_button`. The Windows parts of a
+    refresh are the stand-ins of `test_windows_launcher_follow.rig`.
+    """
+    from amplifier_web import windows_launcher_follow as follow
+    m = rig.m
+    if setting == 'off':
+        m.service.state['settings']['updates']['autoInstall'] = False
+    else:
+        m.state['launcherRefresh'] = {'attempt': {'generation': rig.target['generation'], 'result': 'refused'}}
+    await follow.consider(m)
+    phase = m.state['launcherRefresh']['phase']
+    assert phase == ('ready' if setting == 'off' else 'failed-unchanged')
+    assert 'request' not in rig.records
+    # With the alarm value that this state had, the button is not the launcher's: a click asks for nothing.
+    _, row, button = this_state(rig, phase, alarm=True)
+    assert (row['status'], row['title'], row['action'], button) == (*ALARM[:2], 'check', None)
+    assert not await follow.request_by_button(m)
+    await follow.consider(m)
+    assert 'request' not in rig.records
+    # With this state's value the launcher's row and its button show, and a click opens one request.
+    _, row, button = this_state(rig, phase)
+    assert (row['status'], row['action'], button) == ('available', 'install', rig.target['generation'])
+    assert await follow.request_by_button(m)
+    assert not await follow.request_by_button(m)
+    await follow.consider(m)
+    assert rig.records['request']['status'] == 'open'
+    assert rig.records['request']['target']['generation'] == rig.target['generation']
+    assert m.state['launcherRefresh']['attempt']['automatic'] is False
 
 
 @pytest.mark.parametrize('case',['available','invalid-graph','local-only'])

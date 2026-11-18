@@ -785,9 +785,54 @@ failure summaries, total/omitted counts, and activation/configuration proof
 limitations. It does not rename the selected record as the last failure or
 discard history. A missing older activation receipt alone remains neutral,
 does not request reinstallation, and does not claim full component verification.
-If the selected installation's graph, lock and activation still verify but its
-source-configuration key no longer matches, health reports incomplete component
-verification, not a renewed claim that an older source conflict is occurring.
+If the selected installation's graph and lock still verify, and its activation
+receipt verifies or is no longer kept, but its source-configuration key no
+longer matches, that alone is no failure and requires nothing of the person.
+A saved AI connection for all folders can give this
+state: a second connection, a connection of another kind, or another order of
+connections of different kinds changes the key; another model for the same
+connection does not. A new app version that computes another key for the same
+settings gives it too, and health cannot tell the two apart. So the text says
+only that the record of the component check is not for the current settings.
+After a save that moved `configurationRevision`, the next publication of
+changes marks health for another read and wakes the update owner
+(`UpdateManager.configuration_changed`). The owner makes that read in its
+first pass that reaches it: `tick` returns before the
+read while the outcome of a manual hand-over commit is not known, and while
+`awaiting_restart()` holds. Until a health read for the new revision ends,
+health gives "Checking current configuration" when the proof that it holds,
+with this limit taken out, gives a quiet value (`projection`). When that
+read finds this state, an earlier rule of `current()` can still decide the
+value, for example an
+operation that runs or waits, a failure that the proof does not cover, a
+listed update or a failed application check. When none does, and either the
+check sequence is complete with the application current or a local source
+change is listed, the value has the quiet status `unchecked`, with no
+attention item for it, so the Settings entry gets no unread mark from it: "The components
+need a new check for your current settings" / "The components that Amplifier
+recorded are installed as recorded. Amplifier has no record that it checked
+them with your current AI connections and other settings. A new AI connection
+is one cause. The next update check looks for the components that your current
+settings need. To check now, select Check for updates." The first sentence
+speaks of the recorded components because the health proof accepts a package
+that the record does not name. When no earlier rule decides and neither of
+those two holds, the value is "Check for updates" / "The full desired
+component state has not been checked.", also with the status `unchecked`. The
+bundled page shows a quiet health value when no update operation runs or
+waits; while one does, the page shows its own text of that operation. The
+text of this state ends when a check lists an update, or when the settings
+again have the key of the record. For the other key a check's
+inventory adds the row "Qualify current component configuration", unless it
+already lists a row for the worker environment; each such row is an update.
+A health read is not an update check, and no rule for a check reads this
+status. The text is the same with automatic checks on and off, and it promises
+no result of the next check. It is not a renewed claim that an older source
+conflict is occurring. On Windows the launcher step
+(`windows_launcher_follow.project`) reads this status as a quiet one. With no
+open launcher request, in the phases `waiting`, `ready`, `failed` and
+`failed-unchanged` of that step, the published value holds the launcher's text
+in place of this text, in the last three with its button; with no phase, and
+in the phase `done`, this text stays.
 Only covered failures predating that installation remain historical; newer
 failures, missing source scope and uncertain operations retain their priority.
 This explanatory proof cannot authorize partial-source retention or declare the
