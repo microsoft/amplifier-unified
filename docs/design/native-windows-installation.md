@@ -1877,8 +1877,8 @@ and an error of the Windows shell. The record then says `preparing`, the
 shortcuts that this run already wrote stay, and that record refuses a later
 run. The step's last write is the exception. It says `installed`, and the
 writer can report an error after it published the file (its check of the
-published file failed). The step then ends with an error, and the record says
-`installed`.
+published file failed, or the close of one of its handles). The step then
+ends with an error, and the record says `installed`.
 
 This rule replaced an earlier one, under which the entries were added again
 only when the Start-menu folder was gone too. A folder that stayed then kept
@@ -4340,8 +4340,10 @@ sharing does not prevent reparse conversion through attribute access. Validate
 actual handle identity, type, filesystem and ACLs. Treat the owner and
 narrowly identified Windows system authorities as trusted; reject ordinary
 foreign mutation rights on traversal ancestors and ordinary foreign read
-access to private state. Do not silently rewrite an existing custom root's
-ACLs.
+access to private state. On a traversal ancestor two foreign grants are
+accepted: the right to add a subfolder alone, and an entry that applies only
+to new children (inherit-only). Do not silently rewrite an existing custom
+root's ACLs.
 
 What a pin of this boundary holds (`amplifier_web/windows_files.py`), measured
 on hosted Windows runners (Windows Server 2025), not on Windows 11. A pin is
@@ -4350,23 +4352,27 @@ folder that the caller named. Each handle asks for the folder's attributes
 and security information only. Its share mode leaves out writing and
 deleting. With a pin open:
 
-- Another program of the same account renamed the last pinned folder. It
-  removed that folder when it was empty. It then made a new folder at that
-  name.
+- In one measurement another program of the same account renamed the last
+  pinned folder. In another it removed that folder, which was empty. In both
+  it then made a new folder at that name.
 - After the rename, and after the removal, the pin's next check refused, also
   with the new folder at the name. The check runs before each read, removal
   and publication through the pin. A publication wrote nothing: not into the
   folder that moved, and not into the new one.
 - Windows refused a rename of the folder above the last one, and of the
-  folder above that (error 5). After the pin closed, the rename worked.
+  folder above that (error 5). After the pin closed, a rename of the folder
+  directly above the last one worked. The folder above that was not tried
+  again.
 
 So a pin covers what goes through its handles and its checks. It does not
 cover an act by a path, while the pin is open or after it: the path can name
 another folder then. The access check accepts a folder of the path only when
-no account but this one and the trusted Windows authorities has a right to
-delete it or to delete an entry in it. So such a rename or removal needs a
-program of the same account or a trusted Windows authority, and both are
-inside this boundary's trust.
+no access rule of that folder gives anyone but this account and the trusted
+Windows authorities a right to delete it or to delete an entry in it. The
+check reads the folder's owner and its access rules. It does not see a right
+that Windows gives in another way (a privilege). So, by the access rules,
+such a rename or removal needs a program of the same account or a trusted
+Windows authority, and both are inside this boundary's trust.
 
 In the same measurements a second handle of the same process was open on the
 last folder. The rename and the removal were tried with that handle alone.
@@ -4380,7 +4386,15 @@ The publication went through a pin that was opened beside it:
 | Has the right to delete; shares reading only | refused (error 32) | refused (error 32) | refused (error 32) |
 
 A read and a removal of a file through a pin worked beside each of the four.
-The pins of this boundary open no handle of the last three kinds.
+The pins of this boundary open no handle of the last three kinds. A pin's own
+handle asks for the same as the first row and shares reading. With a pin
+alone the rename, the removal and the publication worked, as in the first
+row.
+
+This is about the pins of `windows_files.py`. The pins of Amplifier
+Foundation's session ownership are other handles from other code: Windows
+refuses a rename of a folder that they pin
+(`tests/test_windows_live_worker_folders.py`).
 
 New private directories and temporary files receive their security descriptors
 at creation, before content is written. Credential initialization publishes
