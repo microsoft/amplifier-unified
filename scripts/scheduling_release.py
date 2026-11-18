@@ -38,7 +38,7 @@ def component_name(selected):
     # Standalone packages declare their identity independently of repository name.
     # Historical monorepo receipts retain their original path-derived identity.
     component = selected.get("component")
-    if selected["subdirectory"] == "." and component in ("scheduling", "workspace-metadata", "operations", "worktrees", "outputs", "recall", "kernels", "status-emitter"):
+    if selected["subdirectory"] == "." and component in tuple(COMPONENTS):
         return component
     if selected["subdirectory"] == "amplifier_web/status_protocol":
         return "status-emitter"  # Original public artifact keeps its authored identity.
@@ -109,6 +109,8 @@ def package_identity(dist, selected):
     wheel, source = artifact_names(selected)
     expected = selected["sourceFiles"]
     prefix = COMPONENTS[component][1]
+    if selected["subdirectory"] == "." and component in {"publishing", "portability"}:
+        prefix = "src/" + prefix
     runtime = {package + "/" + name.removeprefix(prefix): digest
                for name, digest in expected.items()
                if name.startswith(prefix) and (prefix or "/" not in name and
@@ -152,7 +154,10 @@ def package_identity(dist, selected):
                     observed[name] = sha(archive.extractfile(member).read())
                 elif name.endswith(".py") or component == "kernels" and name.endswith(".cjs"):
                     raise ValueError("Source archive contains unselected runtime code.")
-        required = {name: digest for name, digest in expected.items() if name != ".gitignore"}
+        # These root projects ship every selected package input, including their
+        # ignore file. Historical monorepo archives deliberately omitted it.
+        complete_inputs = selected["subdirectory"] == "." and component in {"publishing", "portability"}
+        required = {name: digest for name, digest in expected.items() if complete_inputs or name != ".gitignore"}
         if observed != required:
             raise ValueError("Source archive differs from selected project/tests.")
         if component == "status-emitter":

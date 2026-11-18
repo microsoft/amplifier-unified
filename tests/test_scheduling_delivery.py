@@ -9,7 +9,7 @@ import zipfile
 
 import pytest
 
-from test_scheduling_release import candidate, release, make_candidate  # Existing real Git/artifact fixture.
+from test_scheduling_release import candidate, release, make_candidate, make_src_candidate
 
 SPEC = importlib.util.spec_from_file_location("scheduling_delivery", Path(__file__).parents[1] / "scripts/scheduling_delivery.py")
 delivery = importlib.util.module_from_spec(SPEC)
@@ -252,6 +252,117 @@ def selected_pair(tmp_path):
     return root
 
 
+def public_portability_profile(root):
+    """Keep the selected bodies, but express the public source/metadata contract."""
+    path = root / "components/portability.source.json"
+    record = json.loads(path.read_bytes()); source = record["source"]
+    source.update(component="portability", subdirectory=".", repository="microsoft/amplifier-portability")
+    source["sourceFiles"] = {("src/" + name if name.startswith("amplifier_portability/") else name): value
+                             for name, value in source["sourceFiles"].items()}
+    record["sourceReceiptSha256"] = delivery.sha((json.dumps(source, indent=2) + "\n").encode())
+    record["artifact"]["url"] = (f"https://github.com/{source['repository']}/releases/download/"
+                                 f"{source['tag']}/amplifier_portability-{source['version']}-py3-none-any.whl")
+    record["runtimeRequirements"] = ["amplifier-worktrees>=0.1.0", "cryptography>=43", "filelock>=3.16"]
+    path.write_text(json.dumps(record, indent=2) + "\n")
+    return root
+
+
+@pytest.fixture(params=["publishing", "portability"])
+def public_src_selection(selected_pair, tmp_path, request):
+    root = selected_pair; component = request.param
+    dependency = delivery.verify(root, component="worktrees")["source"] if component == "portability" else None
+    producer = tmp_path / "producer"; producer.mkdir()
+    _, revision, dist, receipt = make_src_candidate(producer, component, worktrees=dependency)
+    checksum = delivery.sha((dist / f"{component}-source.json").read_bytes())
+    delivery.select(root, dist, revision, checksum, component=component)
+    return root, component, revision, dist, receipt, checksum
+
+
+def test_public_src_selection_preserves_raw_receipt_and_installed_owner(public_src_selection):
+    root, component, _, _, receipt, _ = public_src_selection
+    record = delivery.verify(root, component=component); package = "amplifier_" + component
+    assert record["source"] == receipt
+    assert record["files"] == {"LICENSE": receipt["sourceFiles"]["LICENSE"],
+                               package + "/__init__.py": receipt["sourceFiles"]["src/" + package + "/__init__.py"]}
+    expected = [] if component == "publishing" else [
+        "amplifier-worktrees>=0.1.0", "cryptography>=43", "filelock>=3.16"]
+    assert record["runtimeRequirements"] == expected
+    assert not (root / ".git").exists() and not (root / "src").exists()
+    before = (root / f"components/{component}.source.json").read_bytes()
+    project = root / "pyproject.toml"
+    original = project.read_text()
+    assert 'packages = [' in original
+    changed = original.replace('packages = [', f'packages = ["src/{package}",', 1)
+    assert changed != original
+    project.write_text(changed)
+    with pytest.raises(ValueError, match="only the selected"):
+        delivery.verify(root, component=component)
+    assert (root / f"components/{component}.source.json").read_bytes() == before
+
+
+def test_bad_public_src_artifact_preserves_prior_selection(public_src_selection):
+    root, component, revision, dist, _, checksum = public_src_selection
+    directory = root / f"components/{component}-delivery"
+    before = delivery.inventory(directory)
+    path = root / f"components/{component}.source.json"; record = path.read_bytes()
+    with zipfile.ZipFile(next(dist.glob("*.whl")), "a") as archive:
+        archive.writestr(f"amplifier_{component}/unselected.py", "unselected = True\n")
+    with pytest.raises(ValueError):
+        delivery.select(root, dist, revision, checksum, component=component)
+    assert delivery.inventory(directory) == before and path.read_bytes() == record
+
+
+@pytest.mark.parametrize("public", [False, True])
+@pytest.mark.parametrize("name,replacement", [
+    ("cryptography>=44,<51", "cryptography>=43"),
+    ("cryptography>=44,<51", None),
+    ("filelock>=4.2.1,<5", "filelock>=3.16"),
+    ("filelock>=4.2.1,<5", None),
+])
+def test_portability_requires_the_existing_stricter_host_bounds(selected_pair, public, name, replacement):
+    root = public_portability_profile(selected_pair) if public else selected_pair
+    before = delivery.verify(root, component="portability")
+    project = root / "pyproject.toml"; text = project.read_text(); assert f'"{name}",' in text
+    project.write_text(text.replace(f'"{name}",', f'"{replacement}",' if replacement else ""))
+    with pytest.raises(ValueError, match="runtime requirement"):
+        delivery.verify(root, component="portability")
+    assert json.loads((root / "components/portability.source.json").read_bytes()) == before
+
+
+@pytest.mark.parametrize("requirements", [
+    ["amplifier-worktrees>=0.2.0", "cryptography>=43", "filelock>=3.16"],
+    ["amplifier-worktrees>=0.1.0", "cryptography>=42", "filelock>=3.16"],
+    ["amplifier-worktrees>=0.1.0", "cryptography>=43", "filelock>=3.16; sys_platform == 'linux'"],
+    ["amplifier-worktrees>=0.1.0", "cryptography>=43", "filelock>=3.16", "new-dependency>=1"],
+])
+def test_unreviewed_public_portability_requirements_are_refused(selected_pair, requirements):
+    root = public_portability_profile(selected_pair)
+    delivery.verify(root, component="portability")
+    path = root / "components/portability.source.json"; record = json.loads(path.read_bytes())
+    record["runtimeRequirements"] = requirements; path.write_text(json.dumps(record))
+    with pytest.raises(ValueError, match="Portability dependency requirements"):
+        delivery.verify(root, component="portability")
+
+
+def test_public_portability_does_not_float_to_a_different_worktrees_version(selected_pair):
+    root = public_portability_profile(selected_pair)
+    path = root / "components/worktrees.source.json"; worktrees = json.loads(path.read_bytes())
+    source = worktrees["source"]; previous = source["version"]; source["version"] = "0.1.1"
+    source["tag"] = "worktrees-v0.1.1"
+    source["artifacts"] = {name.replace(previous, "0.1.1"): value for name, value in source["artifacts"].items()}
+    worktrees["artifact"]["url"] = worktrees["artifact"]["url"].replace(previous, "0.1.1")
+    worktrees["sourceReceiptSha256"] = delivery.sha((json.dumps(source, indent=2) + "\n").encode())
+    path.write_text(json.dumps(worktrees))
+    assert delivery.verify(root, component="worktrees") == worktrees
+    path = root / "components/portability.source.json"; record = json.loads(path.read_bytes())
+    record["dependencySources"]["worktrees"] = source
+    record["source"]["sourceFiles"]["worktrees-source.json"] = worktrees["sourceReceiptSha256"]
+    record["sourceReceiptSha256"] = delivery.sha((json.dumps(record["source"], indent=2) + "\n").encode())
+    path.write_text(json.dumps(record))
+    with pytest.raises(ValueError, match="Portability dependency requirements"):
+        delivery.verify(root, component="portability")
+
+
 def test_portability_selection_is_independent_of_author_dependency_selection(selected_pair):
     root = selected_pair
     before = delivery.verify(root, component="portability")
@@ -264,9 +375,11 @@ def test_portability_selection_is_independent_of_author_dependency_selection(sel
     assert not (root / ".git").exists()
 
 
+@pytest.mark.parametrize("public", [False, True])
 @pytest.mark.parametrize("change", ["artifact", "runtime", "revision"])
-def test_portability_refuses_other_worktrees_bytes_at_same_version(selected_pair, change):
-    root = selected_pair
+def test_portability_refuses_other_worktrees_bytes_at_same_version(selected_pair, change, public):
+    root = public_portability_profile(selected_pair) if public else selected_pair
+    delivery.verify(root, component="portability")
     path = root / "components/worktrees.source.json"
     record = json.loads(path.read_bytes())
     original_version = record["source"]["version"]
@@ -289,8 +402,9 @@ def test_portability_refuses_other_worktrees_bytes_at_same_version(selected_pair
         delivery.verify(root, component="portability")
 
 
-def test_portability_dependency_receipt_is_bound_to_published_source(selected_pair):
-    root = selected_pair
+@pytest.mark.parametrize("public", [False, True])
+def test_portability_dependency_receipt_is_bound_to_published_source(selected_pair, public):
+    root = public_portability_profile(selected_pair) if public else selected_pair
     path = root / "components/portability.source.json"
     record = json.loads(path.read_bytes())
     record["dependencySources"]["worktrees"]["tree"] = "a" * 40
