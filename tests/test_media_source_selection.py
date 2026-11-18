@@ -18,7 +18,7 @@ MANIFEST = Path(assembly.__file__).with_name("media_sources.json")
 # is included for cold/fork input semantics, not claimed as a mounted callback.
 TRANSITION_OWNERS = {
     "amplifier_web/context_continuity.py": "b88015a2534884e30c2afff5eb91e3500df84315433a9da71ab6bf77080e54b1",
-    "amplifier_web/host/session.py": "bdc3d43e9644c6bad1af18a5d6225ea423746999aaf0de7d89817a66de160be2",
+    "amplifier_web/host/session.py": "d32b486a58096b96f6b6708075551beb0b108917a4b2bf4b9285330041339c7f",
     "amplifier_web/runtime_worker.py": "593840f8d769d86a9b79be2b6a739975ff5c76c6da6c37f70acf1e87dab7753f",
     "amplifier_web/runtime_controls.py": "1399d8e5418a245d3593a8f978e386300f4f518a9abdc15a7712d2000fe77884",
     "amplifier_web/session_store.py": "0f341820b9e5398ad5f9d2c72814ddd75bf9a6e9428c86cbba963753ea2a1897",
@@ -36,8 +36,10 @@ def catalog_digest(sources):
 
 def assert_transition_closure(manifest):
     assert all(manifest["sources"].get(name) == digest for name, digest in TRANSITION_OWNERS.items())
-    assert len(manifest["sources"]) == 308
-    assert catalog_digest(manifest["sources"]) == "33298872b79ec5f3d786dd064d5f7adc476350a60b6792b92f26a1abb910f495"
+    # The accepted decision namespace adds three explicit semantic owners while
+    # this selection retains all transition owners and the combined session.
+    assert len(manifest["sources"]) == 311
+    assert catalog_digest(manifest["sources"]) == "55f7d9fc1b7d1de6527465d3a6ad60199e25c9827eb4eadd0da3c73cd4ee22f3"
 
 
 def work_plan():

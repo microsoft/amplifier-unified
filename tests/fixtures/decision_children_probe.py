@@ -77,6 +77,24 @@ async def main():
                 "config": {"api_key": "synthetic-unused-private-key", "priority": -1000,
                     "decisions": {"enabled": True, "backends": {"child-decision": {"enabled": True, "model": model}}}}}],
             "agents": {"worker": {"instruction": "Run offline fixture"}}}
+        # Exercise the installed namespace and normal host assembly before the
+        # existing real Core child/resume/source-authorization lifecycle.
+        from amplifier_web.decision_namespace import translate, logical_rows
+        from amplifier_web.decision_settings import catalogs as settings_catalogs
+        from amplifier_web.host.config import HostConfig
+        from amplifier_web.host.session import _apply_settings
+        settings = translate({"config": {"providers": logical["providers"]}},
+                             settings_catalogs(unique=True))
+        assert settings["config"]["providers"] == []
+        assert logical_rows(settings) == logical["providers"]
+        with tempfile.TemporaryDirectory() as fixture:
+            root = Path(fixture)
+            config = HostConfig(root / "app", root, settings, root / "cache", root / "shared")
+            bundle = Bundle.from_dict(logical)
+            bundle.providers = []
+            assembled = _apply_settings(bundle, config).to_mount_plan()
+            assert assembled["providers"] == logical["providers"]
+            logical = assembled
         isolation = ProviderIsolation()
         account = DecisionAccounts(logical, isolation, lambda module, source: source)
         # A lost exact source must not silently fall back to this installed hook.

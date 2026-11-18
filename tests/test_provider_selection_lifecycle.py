@@ -3,6 +3,8 @@ import copy
 import json
 from types import SimpleNamespace
 
+import pytest
+
 from amplifier_core.message_models import ChatRequest
 
 from amplifier_web.host.session import SelectedProvider
@@ -157,6 +159,95 @@ async def test_transition_foreground_needs_new_host_send_and_native_delivery(tmp
     assert controls.transition_foreground() is None
     assert all(not provider.calls for provider in providers.values())
     await controls.close()
+
+
+@pytest.mark.parametrize('changed', [None, 'credential', 'source'])
+async def test_namespace_migration_cold_selection_retains_binding_without_minting_intent(
+        tmp_path, monkeypatch, changed):
+    import yaml
+    from amplifier_foundation import Bundle
+    from amplifier_web import decision_accounts, decision_namespace
+    from amplifier_web.host.config import HostConfig
+    from amplifier_web.host.session import _apply_settings
+    from amplifier_web.provider_catalog import mounted_catalog_keys
+
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    definitions = {
+        'provider-openai': ({'configuration_key': 'decisions'}, lambda value: value),
+        'provider-only': ({'decision_only': True}, lambda value: value),
+    }
+    hooks = {'provider-only': 'hooks-only-decisions'}
+    monkeypatch.setattr(decision_accounts, 'catalogs', lambda: hooks)
+    settings = {'config': {'providers': [
+        {'id': 'decision', 'module': 'provider-only', 'source': '/synthetic/decision',
+         'config': {'api_key': 'synthetic-decision', 'decisions': {'enabled': True}}},
+        {'id': 'terra', 'module': 'provider-openai', 'source': '/synthetic/chat',
+         'config': {'api_key': 'synthetic-chat', 'default_model': SELECTION['model'],
+                    'decisions': {'enabled': False}}},
+    ]}}
+    path = tmp_path / 'settings.yaml'
+    path.write_text(yaml.safe_dump(settings))
+
+    def mount():
+        current = decision_namespace.read_scopes([path])
+        config = HostConfig(tmp_path, tmp_path, current, tmp_path / 'cache', tmp_path / 'shared')
+        logical = _apply_settings(Bundle(name='fixture'), config).to_mount_plan()
+        projected = decision_accounts.DecisionAccounts(
+            logical, None, lambda module, source: source, definitions=hooks).plan
+        assert [row['id'] for row in projected['providers']] == ['terra']
+        sources = {row['id']: row['source'] for row in projected['providers']}
+        controls, _, providers = mounted_controls(SELECTION)
+        controls.coordinator.config = controls.session.config = projected
+        caps = {'web.provider_catalog': {
+            'home': str(tmp_path), 'workspace': str(tmp_path), 'sources': sources,
+            'connectionKeys': mounted_catalog_keys(
+                tmp_path, tmp_path, projected['providers'], sources, binding=True)}}
+        controls.coordinator.get_capability = caps.get
+        return controls, providers, caps
+
+    first, providers, caps = mount()
+    binding = caps['web.provider_catalog']['connectionKeys']['terra']
+    await first.perform('provider.select', {**SELECTION, 'expectedConnectionKey': binding})
+    contract = first.recovery_contract()
+    saved = first.state_path().read_bytes()
+    assert first.transition_foreground() is None
+    await first.close()
+
+    decision_namespace.migrate_paths([path], definitions=definitions)
+    assert 'decision' in decision_namespace.connections(decision_namespace.read_scopes([path]))
+    assert first.state_path().read_bytes() == saved
+    if changed:
+        value = yaml.safe_load(path.read_text())
+        row = value['config']['providers'][0]
+        if changed == 'credential':
+            row['config']['api_key'] = 'different-synthetic-chat'
+        else:
+            row['source'] = '/synthetic/different-chat'
+        path.write_text(yaml.safe_dump(value))
+    resumed, providers, caps = mount()
+    await resumed.restore()
+    assert resumed.selection_revision == contract['selectionRevision']
+    assert resumed.selection_binding == binding
+    assert resumed.transition_foreground() is None  # A cold read is never Send.
+    assert all(not provider.calls for provider in providers.values())
+    if changed:
+        with pytest.raises(ValueError, match='mounted connection differs'):
+            await resumed.perform('provider.verifyConnection', {
+                'instance': 'terra', 'expectedConnectionKey': binding})
+        assert resumed.state_path().read_bytes() == saved
+    else:
+        assert resumed.recovery_contract() == contract  # Ignores new projection UUID.
+        await resumed.perform('provider.verifyConnection', {
+            'instance': 'terra', 'expectedConnectionKey': binding})
+        runtime = resumed.runtime
+        runtime.accepted = {'new': SimpleNamespace(kind='user')}
+        runtime.generation = {'id': 'generation', 'initial_input_id': 'new', 'input_ids': ['new']}
+        caps['web.context_transition.input'] = lambda: {
+            'inputId': 'new', 'selectionRevision': resumed.selection_revision}
+        assert resumed.transition_foreground()['connection'] == binding
+        runtime.stop_requested = True
+        assert resumed.transition_foreground() is None
+    await resumed.close()
 
 
 async def test_cold_selection_override_revisions_once_then_identical_mounted_ack(tmp_path, monkeypatch):

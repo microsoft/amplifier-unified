@@ -11,7 +11,7 @@ def prepare():
     assert 'provider-jev' in installed, 'Install the optional Jev package for this qualification'
     # Other installed adapters must not supply a connection for this empty-account
     # case. Keep the real provider's validator, credential metadata and model list.
-    decision_settings.catalogs = lambda: {'provider-jev': installed['provider-jev']}
+    decision_settings.catalogs = lambda **kwargs: {'provider-jev': installed['provider-jev']}
     os.environ['TYPESAFE_API_KEY'] = 'fixture-not-a-real-key'
     app_features.status = lambda manager: {
         'supported': True, 'pending': False, 'installedExtras': ['decisions-jev'],
@@ -29,8 +29,8 @@ def attach(app, workspace):
         if request.headers.get('Authorization') != 'Bearer fixture-browser-control-token':
             raise web.HTTPForbidden()
         current = manager.config(workspace)
-        ordinary = [row for row in current.providers if row['module'] != 'provider-jev']
-        accounts = [row for row in current.providers if row['module'] == 'provider-jev']
+        ordinary = current.providers
+        accounts = [row for row in current.connections if row['module'] == 'provider-jev']
         return web.json_response({
             'ordinaryProvidersPreserved': ordinary == initial.providers,
             'ordinaryRoutingPreserved': current.settings.get('routing') == initial.settings.get('routing'),

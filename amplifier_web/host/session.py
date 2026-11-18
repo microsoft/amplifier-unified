@@ -388,7 +388,10 @@ def _apply_settings(bundle, config):
              for key in ('allowed_write_paths', 'allowed_read_paths') if key in row.get('config', {})}
         for row in bundle.tools if row.get('module') == 'tool-filesystem'
     }
-    bundle.providers = merge(bundle.providers, config.providers)
+    # Settings keeps decision services out of the ordinary LLM list. Runtime
+    # preparation still receives the same logical roster, in declaration order,
+    # before DecisionAccounts projects its accounts onto exact-source hooks.
+    bundle.providers = merge(bundle.providers, getattr(config, "connections", config.providers))
     bundle.providers.sort(key=lambda row: row.get("config", {}).get("priority", 100))
     for kind in ("tools", "hooks"):
         values = merge(getattr(bundle, kind), settings.get("modules", {}).get(kind, []))
