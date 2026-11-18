@@ -1722,13 +1722,19 @@ Each has a record of its packages.
   record, so no chat that uses that environment starts. Only a worker whose
   environment names an installer override of its own (`UV_OVERRIDE`) skips
   that check. "Restore previous components" selects a generation with its
-  environment as it is then. A new generation has a new environment and does
-  not change an earlier one.
+  environment as it is then. Preparing a new generation does not repair an
+  earlier environment. Two generations can use one environment: a
+  preparation uses an existing qualified environment again when its
+  packages, their content, the manifest, the Python version, the system and
+  the lock all match. When that environment no longer matches, the
+  preparation leaves it as it is and builds another one.
 
 Five of the six services that the connection page offers have their module
-in the worker's own project: their check prepares nothing. The limit is for
-"OpenAI Compatible API" and for a module that a person adds with a source on
-"Full provider configuration".
+in the worker's own project: their check prepares nothing while the worker
+environment holds that module. The limit is for "OpenAI Compatible API",
+Azure OpenAI, Ollama and vLLM (the app gives each of these four its source
+when the connection is saved), and for a module that a person adds with a
+source on "Full provider configuration".
 
 ### Uninstall stops the app before it removes an entry
 
