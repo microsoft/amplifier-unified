@@ -1159,8 +1159,7 @@ async def test_a_health_read_that_began_before_the_switch_shows_no_earlier_failu
     assert manager._update_proof_unread is False
 
 
-@pytest.mark.parametrize('where,error', [('read', RuntimeError), ('read', asyncio.CancelledError),
-                                         ('publication', RuntimeError)])
+@pytest.mark.parametrize('where,error', [('read', RuntimeError), ('publication', RuntimeError)])
 async def test_a_switch_that_ends_with_an_error_leaves_no_unread_mark_and_shows_its_failure(
         app, repo, monkeypatch, where, error):
     manager, _ = await prepare(app, repo)
@@ -1183,19 +1182,98 @@ async def test_a_switch_that_ends_with_an_error_leaves_no_unread_mark_and_shows_
                 raise error('the publication ended with an error')
             return publish(**kwargs)
         app._publish_changes = refuse
-    if error is asyncio.CancelledError:
-        with pytest.raises(asyncio.CancelledError):
-            await manager.install()
-    else:
-        await manager.install()  # It raises nothing.
+    await manager.install()  # It raises nothing.
     assert seen == [True]  # The mark was set when the error came.
     assert manager._update_proof_unread is False
-    if error is not asyncio.CancelledError:
-        state = app.state['updates']
-        assert state['phase'] == 'error'
-        status = state['currentStatus']
+    state = app.state['updates']
+    assert state['phase'] == 'error'
+    status = state['currentStatus']
+    assert status['title'] == 'Update could not finish' and status['actionRequired']
+    assert status['failurePhase'] == 'ecosystem-activation'
+
+
+@pytest.mark.parametrize('found', ['a proof', 'no proof'])
+async def test_a_switch_that_is_cancelled_in_its_own_read_leaves_that_read_to_the_owners_next_pass(
+        app, repo, monkeypatch, found):
+    """The switch is cancelled while it reads the proof of the new selection. An earlier failed attempt is in the record.
+
+    At that moment the page holds "Checking components", and nothing read the
+    proof. The cancelled switch publishes nothing. It ends the mark, it leaves
+    the read to the owner's next pass, and it wakes the owner. The real pass
+    then reads and publishes what it found, before its other work: "You're up
+    to date" with a proof of the new selection, the earlier attempt without
+    one. The page does not keep "Checking components" in either case.
+    """
+    from amplifier_web.updates import active_release
+    manager, failure = await earlier_failed_attempt(app, repo)
+
+    def evidence(m, **options):
+        # The stand-in of the first case of the switch: this staging fixture stubs qualification.
+        pointer = active_release(m.home)
+        batch = next((row for row in reversed(m.diagnostics.state.get('completedBatches', []))
+                      if row.get('revision') == pointer.get('current')
+                      and row.get('phase') == 'ecosystem-activation'), None)
+        if batch is None or found == 'no proof':
+            return {}
+        return {'generation': pointer['current'], 'verifiedAt': batch['completedAt'],
+                'startedAt': batch['startedAt'], 'configuration': 'a' * 64,
+                'attemptId': batch['attemptId'], 'packages': set(), 'components': set()}
+    monkeypatch.setattr(health, 'active_evidence', evidence)
+    read, reads = health.refresh, []
+
+    async def refresh(m):
+        reads.append((getattr(m, '_update_proof_unread', None), copy.deepcopy(app.state['updates']['currentStatus'])))
+        if len(reads) == 1:
+            raise asyncio.CancelledError('the switch was cancelled in its own read')
+        return await read(m)
+    monkeypatch.setattr(health, 'refresh', refresh)
+    manager._update_health_initial = False   # The first read of this host is over.
+    manager.wakeup.clear()
+    with pytest.raises(asyncio.CancelledError):
+        await manager.install()
+    # The mark was set and the page had the working value when the cancellation came.
+    assert reads == [(True, CHECKING_COMPONENTS)]
+    assert manager._update_proof_unread is False
+    state = app.state['updates']
+    assert state['phase'] == 'installed' and state['currentStatus'] == CHECKING_COMPONENTS
+    # The read is the next pass's, and the owner is woken for it.
+    assert manager._update_health_initial is True and manager.wakeup.is_set()
+    published, publish = [], app._publish_changes
+
+    def observe(**kwargs):
+        published.append((copy.deepcopy(app.state['updates']['currentStatus']),
+                          [item['id'] for item in snapshot(app.state)['items']]))
+        return publish(**kwargs)
+    app._publish_changes = observe
+    await manager.tick()   # The real pass. After its read it goes on with its other work (here: a check).
+    assert reads[1][0] is False and manager._update_health_initial is False
+    # The first publication of the pass is the result of its read, and no later one is the working value.
+    status, attention = published[0]
+    assert CHECKING_COMPONENTS not in [row[0] for row in published]
+    if found == 'a proof':
+        assert (status['status'], status['title'], status['actionRequired']) == ('current', 'You\u2019re up to date', False)
+        assert 'updates:current' not in attention
+    else:
         assert status['title'] == 'Update could not finish' and status['actionRequired']
-        assert status['failurePhase'] == 'ecosystem-activation'
+        assert status['failureAttemptId'] == failure['attemptId']
+    # The earlier attempt stays in the record.
+    assert failure in manager.diagnostics.state['events']
+
+
+async def test_a_switch_that_is_cancelled_before_it_selects_asks_for_no_read(app, repo, monkeypatch):
+    """A cancellation before the mark is set: the page holds no working value, so no read is asked for."""
+    manager, _ = await earlier_failed_attempt(app, repo)
+
+    async def validate(stage, release):
+        raise asyncio.CancelledError('the switch was cancelled before it selected')
+    manager.validate = validate
+    manager._update_health_initial = False
+    manager.wakeup.clear()
+    with pytest.raises(asyncio.CancelledError):
+        await manager.install()
+    assert getattr(manager, '_update_proof_unread', False) is False
+    assert manager._update_health_initial is False and not manager.wakeup.is_set()
+    assert app.state['updates']['currentStatus'] != CHECKING_COMPONENTS
 
 
 

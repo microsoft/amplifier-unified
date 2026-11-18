@@ -1867,7 +1867,16 @@ class UpdateManager:
                 except OSError:
                     pass
             except asyncio.CancelledError:
-                self._update_proof_unread = False  # The switch ended before its own read ended.
+                # The switch ended before its own read ended. When the mark was
+                # set, the page can hold "Checking components", and nothing
+                # read the proof of the new selection. Nothing can be published
+                # for sure in a cancelled task. So the owner's next pass makes
+                # that read and publishes (tick), as after a settings change,
+                # and the owner is woken for it.
+                unread, self._update_proof_unread = getattr(self, '_update_proof_unread', False), False
+                if unread:
+                    self._update_health_initial = True
+                    self.wakeup.set()
                 await self.service.discard_runtime(candidate)
                 raise
             except Exception as error:

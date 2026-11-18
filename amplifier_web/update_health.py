@@ -839,6 +839,8 @@ def publish(manager):
     they are. Only that switch sets and ends this time. Another health read
     (the owner's pass) can end while the switch runs; it did not read the new
     selection, so it does not end the time (`refresh` never does).
+    A switch that is cancelled in that time ends it too, and leaves the read
+    of the new selection to the owner's next pass, which publishes its result.
     The support report reads `projection`, so it is not changed.
     """
     state = manager.service.state['updates']
