@@ -62,7 +62,12 @@ def resolve_config(config, *, workspace, session_id):
     # instructions, session limits and agent declarations remain caller-owned.
     selected = {key: copy.deepcopy(settings[key]) for key in
                 ("routing", "overrides", "configurator", "sources") if key in settings}
-    selected["config"] = {"providers": settings.get("config", {}).get("providers", [])}
+    # Preserve the full source-resolution roster until after composition, then
+    # expose only ordinary chat accounts to this model-only bridge.
+    from ..decision_namespace import logical_rows, connections
+    from ..decision_settings import row_id
+    dedicated = {row_id(row) for row in connections(settings).values() if "provider" not in row}
+    selected["config"] = {"providers": logical_rows(settings)}
     for section in ("config", "modules"):
         rows = settings.get(section, {}).get("hooks", [])
         selected.setdefault(section, {})["hooks"] = [copy.deepcopy(row) for row in rows if row.get("module") == "hooks-routing"]
@@ -77,6 +82,7 @@ def resolve_config(config, *, workspace, session_id):
     model = SimpleNamespace(providers=[], tools=[], session={}, agents={},
                             hooks=existing or [{"module": "hooks-routing", "source": ROUTING_SOURCE}])
     _apply_settings(model, host)
+    model.providers = [row for row in model.providers if row_id(row) not in dedicated]
     if not model.providers:
         raise ValueError("No shared provider is enabled; configure config.providers in the shared Amplifier settings")
     if not model.hooks:

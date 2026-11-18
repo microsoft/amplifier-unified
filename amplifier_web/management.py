@@ -104,7 +104,9 @@ class Management:
         # Publish the cached catalog as one snapshot. Even fresh cache hits used
         # to rebuild and persist the entire app twice for every provider.
         with manager.read_snapshot(workspace):
-            enabled=[row for row in manager.provider_rows(workspace) if row.get('enabled',True)]
+            from .decision_settings import row_id
+            chat_ids = {row_id(row) for row in manager.config(workspace).configured_connections}
+            enabled=[row for row in manager.provider_rows(workspace) if row.get('enabled',True) and row['id'] in chat_ids]
             for row in enabled:
                 key=manager.catalog_key({'id':row['id']},workspace)
                 cache_key=('providers.models',key)

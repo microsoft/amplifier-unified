@@ -11,6 +11,7 @@ import hashlib
 import json
 from pathlib import Path
 import shlex
+import yaml
 
 from filelock import FileLock
 
@@ -103,3 +104,24 @@ def migrate_settings(home, workspaces):
                 promote(Path(workspace) / '.amplifier-unified' / target.name, target)
             state['workspaces'].append(workspace)
         atomic_write(marker, json.dumps(state, indent=2), private=True)
+    # Decision accounts have their own namespace in the same settings owner.
+    # Each file is independently locked/atomic; repeated or interrupted startup
+    # does not replay credentials or depend on the older private-import marker.
+    from .decision_namespace import migrate_paths, preflight_paths
+    from .decision_settings import catalogs
+    try:
+        definitions = catalogs(unique=True)
+        lineages = [tuple(settings_paths(workspace, shared_home=shared).values()) for workspace in workspaces]
+        # All supplied workspaces share the global owner. An ambiguous later
+        # workspace must refuse before another lineage publishes that ancestor.
+        for paths in lineages:
+            preflight_paths(paths, definitions)
+        for paths in lineages:
+            migrate_paths(paths, definitions=definitions)
+    except (OSError, ValueError, TypeError, AttributeError, yaml.YAMLError):
+        # A refused optional migration must not prevent an unrelated chat
+        # from loading. Leave its original files for deliberate repair;
+        # never log account data, exception payloads or credential paths.
+        import logging
+        logging.getLogger(__name__).warning(
+            "Decision settings migration incomplete; original declarations were retained.")

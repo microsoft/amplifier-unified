@@ -427,6 +427,9 @@ jobs:
       # other program lets go, it finishes. Each case prints what it saw, and
       # `-raP` shows that line for a case that passed. No `-s` here: without
       # pytest's own capture, an earlier case of this file leaves a closed stream.
+      # One case leaves a person's file in the Start-menu folder at an uninstall
+      # and then runs setup's step for the entries: the four shortcuts and the
+      # Apps-list entry are added beside that file, which is unchanged.
       - name: Check uninstall order, a failed stop, a held shortcut and restored real Windows entries
         shell: pwsh
         run: |
@@ -437,6 +440,7 @@ jobs:
           foreach ($held in '"step": "entries-check", "error": "PermissionError", "code": 32', '"step": "shortcuts", "error": "PermissionError", "code": 5') {
             if (-not $text.Contains('UNINSTALL_HELD {' + $held)) { throw ('The case of a held shortcut did not print: ' + $held) }
           }
+          if (-not $text.Contains('ENTRIES_AGAIN {"shortcuts": 4, "appsEntry": true, "kept": ["My own note.txt"], "unchanged": true')) { throw 'The case of a Start-menu folder that stayed did not print its result.' }
       # Uninstall asks the running app whether a chat is at work. Real sockets
       # and aiohttp's own errors on Windows: a listener that takes the
       # connection and gives no answer is asked again, and the refusal of a

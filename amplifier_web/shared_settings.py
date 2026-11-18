@@ -76,7 +76,7 @@ class SettingsReadCache:
         return tuple(result)
 
     def read(self, paths):
-        from amplifier_foundation.settings import read_settings as read_scoped_settings
+        from .decision_namespace import read_scopes as read_scoped_settings
         paths = tuple(paths)
         key = self._signature(paths)
         if key in self._values:
@@ -93,7 +93,7 @@ class SettingsReadCache:
 
 
 def read_settings(workspace, *, shared_home=None, session_id=None, global_only=False, cache=None):
-    from amplifier_foundation.settings import read_settings as read_scoped_settings
+    from .decision_namespace import read_scopes as read_scoped_settings
     paths = settings_paths(workspace, shared_home=shared_home, session_id=session_id, global_only=global_only).values()
     return cache.read(paths) if cache is not None else read_scoped_settings(paths)
 
