@@ -135,9 +135,9 @@ dev = [
     # Match context-managed's authored source; uv.lock records the exact test
     # revision without imposing a resolver-global runtime source override.
     "amplifier-module-context-simple @ git+https://github.com/microsoft/amplifier-module-context-simple@main",
-    # Accepted resumable compaction source; provider stays on the existing locked
+    # Accepted ordinary-turn continuation source; provider stays on the existing locked
     # source shared with the optional decisions extra.
-    "amplifier-module-context-managed @ git+https://github.com/microsoft/amplifier-bundle-context-managed@c18eb0c68d609d3471549f148f2e36f77d59a336#subdirectory=modules/context-managed",
+    "amplifier-module-context-managed @ git+https://github.com/microsoft/amplifier-bundle-context-managed@694cf37c00f3f09fbc16c6120289298759c0c06a#subdirectory=modules/context-managed",
     "amplifier-module-provider-openai[native] @ git+https://github.com/microsoft/amplifier-module-provider-openai@main",
     # Cold selected-model budget and private overflow feedback integration.
     "amplifier-module-provider-anthropic @ git+https://github.com/microsoft/amplifier-module-provider-anthropic@fa1adae32eea495b0b9214cd03baa9d63f43517b",
