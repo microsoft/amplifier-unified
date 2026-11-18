@@ -889,3 +889,92 @@ async def test_manager_failure_corrects_earlier_idle_receipt_for_only_its_input(
         await service.on_runtime_event('runtime.error', {'sessionId': sid, 'error': 'Manager turn failed'})
         assert session['status'] == 'error'
         assert session['failure']['countFailure']['httpStatus'] == 500
+
+
+async def _as_client(service, client, action, args=None):
+    with service.clients.bind(client):
+        return await service.dispatch(action, args)
+
+
+def _setup_step(service, client):
+    with service.clients.bind(client):
+        return service.browser_state()['view'].get('setupJourney')
+
+
+async def test_first_use_starts_every_new_browser_tab_at_the_first_setup_step(tmp_path):
+    service = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    try:
+        service.clients.attach('tab-one')
+        assert _setup_step(service, 'tab-one') == 'welcome'
+        # The client writes this by itself when it opens the AI connections.
+        await _as_client(service, 'tab-one', 'view.update', {'patch': {'setupJourney': 'connect'}})
+        # Work that is not a person's chat does not end first use.
+        await _as_client(service, 'tab-one', 'session.create', {'title': 'Not selected', 'select': False})
+        service.clients.attach('tab-two')
+        assert _setup_step(service, 'tab-two') == 'welcome'
+        assert _setup_step(service, 'tab-one') == 'connect'
+    finally:
+        await service.close()
+
+
+@pytest.mark.parametrize('step_of_first_tab', ['welcome', 'connect'])
+async def test_new_browser_tab_after_a_first_chat_does_not_start_at_the_first_setup_step(tmp_path, step_of_first_tab):
+    service = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    try:
+        service.clients.attach('tab-one')
+        if step_of_first_tab != 'welcome':
+            await _as_client(service, 'tab-one', 'view.update', {'patch': {'setupJourney': step_of_first_tab}})
+        await _as_client(service, 'tab-one', 'session.create', {'title': 'First chat'})
+        # Only a tab that is still at the first step is moved by its own chat.
+        assert _setup_step(service, 'tab-one') == {'welcome': 'done', 'connect': 'connect'}[step_of_first_tab]
+        service.clients.attach('tab-two')
+        assert _setup_step(service, 'tab-two') == 'done'
+    finally:
+        await service.close()
+    # A start of the app opens a new tab: the saved shared view must hold the step.
+    restored = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    try:
+        restored.clients.attach('tab-after-start')
+        assert _setup_step(restored, 'tab-after-start') == 'done'
+    finally:
+        await restored.close()
+
+
+async def test_new_browser_tab_after_a_finished_setup_does_not_start_at_the_first_setup_step(tmp_path):
+    service = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    try:
+        service.clients.attach('tab-one')
+        await _as_client(service, 'tab-one', 'view.update', {'patch': {'setupJourney': 'connect'}})
+        await _as_client(service, 'tab-one', 'view.update', {'patch': {'panel': None, 'setupJourney': 'done'}})
+        service.clients.attach('tab-two')
+        assert _setup_step(service, 'tab-two') == 'done'
+    finally:
+        await service.close()
+
+
+async def test_a_message_ends_first_use_on_an_installation_of_an_earlier_version(tmp_path):
+    service = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    try:
+        service.clients.attach('tab-one')
+        await _as_client(service, 'tab-one', 'session.create', {'title': 'Made by an earlier version'})
+        chat = service.clients.records['tab-one']['selectedSessionId']
+        # An earlier version changed only the tab's own view and saved this.
+        service._state['view']['setupJourney'] = 'welcome'
+        service.clients.attach('tab-two')
+        assert _setup_step(service, 'tab-two') == 'welcome'
+        # Opening a chat changes only that tab's own view.
+        await _as_client(service, 'tab-two', 'session.select', {'id': chat})
+        service.clients.attach('tab-three')
+        assert _setup_step(service, 'tab-three') == 'welcome'
+        sent = await _as_client(service, 'tab-one', 'conversation.send', {'sessionId': chat, 'text': 'Go on'})
+        assert sent['accepted']
+        service.clients.attach('tab-four')
+        assert _setup_step(service, 'tab-four') == 'done'
+    finally:
+        await service.close()
+    restored = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    try:
+        restored.clients.attach('tab-after-start')
+        assert _setup_step(restored, 'tab-after-start') == 'done'
+    finally:
+        await restored.close()
