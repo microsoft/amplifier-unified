@@ -2,12 +2,14 @@
 
 UNIFIED_WORK_MEDIA_SOURCES names a test-owned JSON receipt mapping preselected
 repository names to immutable exports. No fetch/install/source learning here.
-The only synthetic mount is the deterministic provider endpoint. All Work tools,
+The default provider mount is deterministic; the SDK join instead uses the real
+public provider mount with a supplied offline client setup. All Work tools,
 hooks and agent declarations survive composition; no other tool is called.
 """
 import copy
 import hashlib
 import importlib
+import inspect
 import json
 import os
 from pathlib import Path
@@ -37,20 +39,20 @@ REPOSITORIES = {
 
 
 class WorkLoader(ModuleLoader):
-    """Real Core entry-point loader; substitute only the no-network provider."""
+    """Real Core loader; None selects the actual provider public entry point."""
     def __init__(self, provider):
         super().__init__()
         self.provider = provider
 
     async def load(self, module_id, config=None, source_hint=None, coordinator=None):
-        if module_id == "provider-openai-chatgpt":
+        if module_id == "provider-openai" and self.provider is not None:
             async def mount(current):
                 await current.mount("providers", self.provider, name="offline")
             return mount
         return await super().load(module_id, config=config, source_hint=source_hint, coordinator=coordinator)
 
 
-async def compose_work(tmp_path, monkeypatch):
+async def compose_work(tmp_path, monkeypatch, *, actual_provider=False):
     receipt = os.environ.get("UNIFIED_WORK_MEDIA_SOURCES")
     if not receipt:
         pytest.skip("Requires explicit immutable Work source exports")
@@ -93,8 +95,10 @@ async def compose_work(tmp_path, monkeypatch):
         return ResolvedSource(active_path=path, source_root=root)
     monkeypatch.setattr(SimpleSourceResolver, "resolve", resolve)
     config = HostConfig(tmp_path / "app", workspace, {"config": {"providers": [{
-        "module": "provider-openai-chatgpt", "config": {
-            "auth_mode": "chatgpt_codex", "default_model": "gpt-6.1-sol"}}]}},
+        "module": "provider-openai", "config": {
+            **({"api_key": "offline-fixture", "use_streaming": False,
+                "max_retries": 0, "raw": True} if actual_provider else {}),
+            "default_model": "gpt-6.1-sol"}}]}},
         tmp_path / "registry", tmp_path / "shared")
     assert config.active_bundle == "work"
     _, bundle, _ = await load_root_bundle(config, config.active_bundle)
@@ -109,8 +113,9 @@ async def compose_work(tmp_path, monkeypatch):
 
 
 async def work_root(tmp_path, monkeypatch, provider, *, store=None, post=None, deny_work=False,
-                    prepared_host=False, configuration_only=False, worker_observers=False):
-    bundle, plan, roots = await compose_work(tmp_path, monkeypatch)
+                    prepared_host=False, configuration_only=False, worker_observers=False,
+                    provider_setup=None):
+    bundle, plan, roots = await compose_work(tmp_path, monkeypatch, actual_provider=provider is None)
     # Discovery sees the same selected public resources, mirrored offline. No
     # real home/project scans and no deferred Git source download at first turn.
     def local(value):
@@ -140,6 +145,11 @@ async def work_root(tmp_path, monkeypatch, provider, *, store=None, post=None, d
     for name in names:
         package = importlib.import_module(name)
         files.extend(Path(package.__file__).parent.rglob("*.py"))
+    if provider is None:
+        package = importlib.import_module("amplifier_module_provider_openai")
+        files.extend(Path(package.__file__).parent.rglob("*.py"))
+    if provider_setup is not None:
+        files.append(Path(inspect.getsourcefile(provider_setup)).resolve())
     files += [Path(importlib.import_module(name).__file__) for name in (
         "amplifier_web.host.media", "amplifier_web.host.session", "amplifier_web.app_guidance",
         "amplifier_web.runtime_worker", "amplifier_web.computer_episodes",
@@ -168,6 +178,10 @@ async def work_root(tmp_path, monkeypatch, provider, *, store=None, post=None, d
         coordinator = session.coordinator
         cap = coordinator.get_capability(media.NAMESPACE)
         assert cap is not None
+        if provider is None:
+            provider = coordinator.get("providers", "openai")
+            assert type(provider).__name__ == "OpenAIProvider"
+            provider_setup(provider)
         bridge, graph, _ = coordinator.get_capability("web.media.construction")
         evidence = graph.participants_evidence()
         assert len(evidence["loads"]) == 23 and all(row["mounted"] for row in evidence["loads"])

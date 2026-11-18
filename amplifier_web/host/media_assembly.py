@@ -38,9 +38,9 @@ WORK_AGENTS = frozenset({
     "context-intelligence:session-navigator", "context-intelligence:server-data-ops",
 })
 WORK_PARTICIPANTS = ("unified-host", "loop-live", "context-managed",
-                     "provider-openai-chatgpt", *WORK_TOOLS, *WORK_HOOKS)
+                     "provider-openai", *WORK_TOOLS, *WORK_HOOKS)
 _MINIMAL_PARTICIPANTS = ("unified-host", "loop-live", "context-simple",
-                         "tool-filesystem", "provider-openai-chatgpt")
+                         "tool-filesystem", "provider-openai")
 # Minimum reviewed semantic owners; integration may pin further dependencies.
 # These are authored names, never discovered from the current callback graph.
 _REQUIRED_SOURCES = frozenset({
@@ -89,12 +89,13 @@ _WORK_SOURCES = frozenset({
 
 
 def supported_provider(spec):
-    """Qualification is Codex + one explicit model, not the provider catalogue."""
-    if not isinstance(spec, dict) or spec.get("module") != "provider-openai-chatgpt":
+    """One explicit OpenAI model; route facts remain the provider's public API."""
+    if not isinstance(spec, dict) or spec.get("module") != "provider-openai":
         return False
     config = spec.get("config", {})
-    return (isinstance(config, dict) and config.get("auth_mode") == "chatgpt_codex"
-            and config.get("default_model") == MEDIA_MODEL)
+    return (isinstance(config, dict) and "auth_mode" not in config
+            and config.get("default_model") == MEDIA_MODEL
+            and not config.get("extra_request_params"))
 
 
 def supported_request(plan, provider, request, options):
@@ -104,12 +105,12 @@ def supported_request(plan, provider, request, options):
     actual = chain[-1]() if chain else None
     extra = getattr(actual, "extra_request_params", {}) if actual is not None else None
     return (supported_plan(plan) and actual is not None
-            and getattr(actual, "auth_mode", None) == "chatgpt_codex"
+            and getattr(actual, "name", None) == "openai"
             and getattr(actual, "default_model", None) == MEDIA_MODEL
             and request.model == MEDIA_MODEL and options.get("model") == MEDIA_MODEL
-            and not {"input", "extra_body"} & options.keys()
-            and isinstance(extra, dict)
-            and not {"input", "model", "extra_body"} & extra.keys())
+            and not {"input", "extra_body", "extra_headers", "extra_query",
+                     "single_attempt", "single_attempt_version", "background"} & options.keys()
+            and isinstance(extra, dict) and not extra)
 
 
 def supported_plan(plan):
@@ -203,7 +204,23 @@ class ReviewedRootRecipe:
                    for path, digest in self.sources.items())
 
     def accepts_plan(self, plan):
-        return plan == self.plan and self.current()
+        if not self.current():
+            return False
+        if plan == self.plan:
+            return True
+        # The reviewed Work routing hook materializes absent role preferences
+        # at session:start. These retained declarations do not execute in the
+        # root image route. Preserve every declared field/explicit preference;
+        # only additive derived preferences on these four roles may differ.
+        # Foundation independently freezes the ENTIRE effective config during
+        # actual construction and invalidates any later out-of-phase mutation.
+        if not ordinary_work_plan(self.plan) or not ordinary_work_plan(plan):
+            return False
+        comparable = copy.deepcopy(plan)
+        for name, original in self.plan["agents"].items():
+            if original.get("model_role") and "provider_preferences" not in original:
+                comparable["agents"][name].pop("provider_preferences", None)
+        return comparable == self.plan
 
     def accepts_callable(self, value, seen=None):
         seen = set() if seen is None else seen

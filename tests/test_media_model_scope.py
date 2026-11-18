@@ -20,27 +20,26 @@ def test_scope_uses_the_exact_existing_qualified_model_not_a_new_catalog_choice(
 def plan():
     return {"session": {"orchestrator": "loop-live", "context": "context-simple"},
             "tools": [{"module": "tool-filesystem"}],
-            "providers": [{"module": "provider-openai-chatgpt", "config": {
-                "auth_mode": "chatgpt_codex", "default_model": MODEL}}]}
+            "providers": [{"module": "provider-openai", "config": {"default_model": MODEL}}]}
 
 
-@pytest.mark.parametrize("change", ["missing-config", "implicit-auth", "plan-auth",
-    "implicit-model", "latest", "other-codex", "other-provider"])
+@pytest.mark.parametrize("change", ["missing-config", "codex-auth", "plan-auth",
+    "implicit-model", "latest", "other-model", "other-provider"])
 def test_unqualified_plan_is_not_selected(monkeypatch, change):
     value = plan()
     spec = value["providers"][0]
     if change == "missing-config":
         spec.pop("config")
-    elif change == "implicit-auth":
-        spec["config"].pop("auth_mode")
+    elif change == "codex-auth":
+        spec["config"]["auth_mode"] = "chatgpt_codex"
     elif change == "plan-auth":
         spec["config"]["auth_mode"] = "chatgpt_plan"
     elif change == "implicit-model":
         spec["config"].pop("default_model")
     elif change == "other-provider":
-        spec["module"] = "provider-openai"
+        spec["module"] = "provider-openai-chatgpt"
     else:
-        spec["config"]["default_model"] = {"latest": "latest", "other-codex": "gpt-5.3-codex"}[change]
+        spec["config"]["default_model"] = {"latest": "latest", "other-model": "gpt-5.3-codex"}[change]
     assert not supported_plan(value)
     # The source manifest is not even consulted for an unsupported model/auth.
     with monkeypatch.context() as patch:
@@ -54,7 +53,6 @@ async def selected_fixture(tmp_path, *, model=MODEL):
     path, original = picture(tmp_path)
     current = await root(tmp_path)
     current.provider.default_model = MODEL
-    current.provider.auth_mode = "chatgpt_codex"
     _, _, _, rows = await read(current, path)
     current.provider.capability = None  # Raw endpoint below never acts as media authority.
     seen = []
@@ -77,8 +75,80 @@ def images(request):
             for block in message.content if block.type == "image"]
 
 
+async def test_valid_empty_indexed_support_is_unmarked_warning_before_asset_access(tmp_path, monkeypatch):
+    current, selected, request, _, seen = await selected_fixture(tmp_path)
+    def empty(**kwargs):
+        return {"v": 2, "positions": [], "mime_types": ["image/png", "image/jpeg"]}
+    current.provider.get_media_request_support_for_request = empty
+    try:
+        monkeypatch.setattr(current.coordinator.get_capability("web.media.store"), "resolve_ref",
+                            lambda *a, **k: pytest.fail("Empty support opened stored pixels"))
+        before = request.model_dump_json()
+        await selected.request_budget(request)
+        private = seen[-1][1]
+        assert not images(private)
+        assert all("experimental.media.v1" not in (m.metadata or {}) for m in private.messages)
+        assert "Image unavailable" in private.model_dump_json()
+        await selected.complete(request)
+        assert seen[-1][1] is private
+        assert request.model_dump_json() == before
+    finally:
+        await current.session.cleanup()
+
+
+@pytest.mark.parametrize("fault", ["missing", "malformed", "async", "request-mutation",
+    "options-mutation", "getter-mutation"])
+async def test_invalid_indexed_support_does_not_fallback_or_hydrate(tmp_path, monkeypatch, fault):
+    current, selected, request, _, seen = await selected_fixture(tmp_path)
+    def broken(*, request, request_options, **kwargs):
+        if fault == "request-mutation":
+            request.messages.clear()
+        if fault == "options-mutation":
+            request_options["model"] = "latest"
+        if fault == "getter-mutation":
+            current.provider.get_media_request_support_for_request = lambda **kwargs: {
+                "v": 2, "positions": [], "mime_types": []}
+        return {"v": 2, "positions": [], "mime_types": []} if fault != "malformed" else {"v": 2}
+    async def asynchronous(**kwargs):
+        return {"v": 2, "positions": [], "mime_types": []}
+    current.provider.get_media_request_support_for_request = (
+        None if fault == "missing" else asynchronous if fault == "async" else broken)
+    try:
+        monkeypatch.setattr(current.coordinator.get_capability("web.media.store"), "resolve_ref",
+                            lambda *a, **k: pytest.fail("Invalid support opened stored pixels"))
+        before = request.model_dump_json()
+        with pytest.raises(ValueError):
+            await selected.request_budget(request)
+        assert not seen and request.model_dump_json() == before
+        assert not current.wrapper._media
+    finally:
+        await current.session.cleanup()
+
+
+@pytest.mark.parametrize("change", ["empty", "equal-replacement"])
+async def test_positive_fit_cannot_downgrade_or_replace_indexed_getter(tmp_path, change):
+    current, selected, request, _, seen = await selected_fixture(tmp_path)
+    try:
+        await selected.request_budget(request)
+        private = seen[-1][1]
+        assert images(private)
+        previous = current.provider.get_media_request_support_for_request
+        def replacement(**kwargs):
+            value = previous(**kwargs)
+            if change == "empty":
+                value["positions"] = []
+            return value
+        current.provider.get_media_request_support_for_request = replacement
+        with pytest.raises(ValueError):
+            await selected.complete(request)
+        assert not any(phase == "send" for phase, *_ in seen)
+        assert not current.wrapper._media and private.messages == []
+    finally:
+        await current.session.cleanup()
+
+
 @pytest.mark.parametrize("change", ["implicit-selection", "latest-selection", "other-selection",
-    "default-mismatch", "default-latest", "plan-auth", "missing-auth", "option-override",
+    "default-mismatch", "default-latest", "wrong-provider", "missing-provider", "option-override",
     "nested-option-override", "provider-override", "provider-plan-mismatch"])
 async def test_unsupported_initial_scope_warns_without_hydrating_and_text_recovers(tmp_path, monkeypatch, change):
     selected_model = {"implicit-selection": None, "latest-selection": "latest",
@@ -90,10 +160,10 @@ async def test_unsupported_initial_scope_warns_without_hydrating_and_text_recove
         assert selected.default_model == MODEL  # The selected wrapper cannot bless the actual default.
     elif change == "default-latest":
         current.provider.default_model = "latest"
-    elif change == "plan-auth":
-        current.provider.auth_mode = "chatgpt_plan"
-    elif change == "missing-auth":
-        current.provider.auth_mode = None
+    elif change == "wrong-provider":
+        current.provider.name = "openai-chatgpt"
+    elif change == "missing-provider":
+        current.provider.name = None
     elif change == "option-override":
         # Check options reaching the private boundary, not SelectedProvider's
         # preexisting preference-over-stale-keyword normalization.
@@ -143,7 +213,7 @@ async def test_explicit_matching_selected_request_count_send_same_originals(tmp_
         await current.session.cleanup()
 
 
-@pytest.mark.parametrize("change", ["auth", "default", "selection", "options", "nested-options", "provider-options"])
+@pytest.mark.parametrize("change", ["provider", "default", "selection", "options", "nested-options", "provider-options"])
 async def test_fitted_scope_mutation_refuses_before_send_and_cleans_pixels(tmp_path, change):
     current, selected, request, _, seen = await selected_fixture(tmp_path)
     if change == "options":
@@ -153,8 +223,8 @@ async def test_fitted_scope_mutation_refuses_before_send_and_cleans_pixels(tmp_p
         private = seen[-1][1]
         assert images(private)
         options = {}
-        if change == "auth":
-            current.provider.auth_mode = "chatgpt_plan"
+        if change == "provider":
+            current.provider.name = "openai-chatgpt"
         elif change == "default":
             current.provider.default_model = "latest"
         elif change == "selection":

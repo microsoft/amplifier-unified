@@ -380,36 +380,37 @@ def effective_options(request, options):
 
 def _support(provider, request, model, options):
     from amplifier_foundation.session.media_projection import validate_media_request_support
-    absent = object()
-    indexed = getattr(provider, "get_media_request_support_for_request", absent)
-    if indexed is not absent:
+    indexed = getattr(provider, "get_media_request_support_for_request", None)
+    if indexed is not None:
         if not callable(indexed):
             raise ValueError("Indexed media support must be synchronous")
         snapshot, kwargs = request.model_copy(deep=True), copy.deepcopy(options)
+        owner = _support_owner(provider)
         before = snapshot.model_dump_json()
+        sources = [block.source for message in snapshot.messages
+                   for block in message.content if isinstance(message.content, list)
+                   if getattr(block, "type", None) == "image"]
         try:
             value = indexed(request=snapshot, model=model, request_options=kwargs)
             if inspect.isawaitable(value):
                 if inspect.iscoroutine(value):
                     value.close()
                 raise ValueError("Indexed media support must be synchronous")
-            if snapshot.model_dump_json() != before or kwargs != options:
+            if (snapshot.model_dump_json() != before or kwargs != options
+                    or _support_owner(provider) != owner):
                 raise ValueError("Indexed media support changed its read-only input")
             return validate_media_request_support(value, request)
         finally:
-            for message in snapshot.messages:
-                for block in message.content if isinstance(message.content, list) else ():
-                    if getattr(block, "type", None) == "image":
-                        block.source.clear()
+            for source in sources:
+                source.clear()
             snapshot.messages = []
-    getter = getattr(provider, "get_media_request_support", None)
-    value = getter(model=model, request_options=copy.deepcopy(options)) if callable(getter) else {
-        "v": 1, "positions": []}
-    if inspect.isawaitable(value):
-        if inspect.iscoroutine(value):
-            value.close()
-        raise ValueError("Media support must be synchronous")
-    return value
+    raise ValueError("Reviewed media requires request-indexed provider support")
+
+
+def _support_owner(provider):
+    """Retain the exact getter endpoint, not just its reproducible return value."""
+    getter = getattr(provider, "get_media_request_support_for_request", None)
+    return (getattr(getter, "__self__", None), getattr(getter, "__func__", getter))
 
 
 def _supported_scope(coordinator, provider, request, options):
@@ -433,6 +434,7 @@ class HostMediaProjection:
         if not self.chain:
             raise ValueError("Prepared media provider identity is unavailable")
         self.binding = self._binding()
+        self.support_owner = _support_owner(provider)
         prepared.set_binding_validator(self.validate_binding)
 
     def _binding(self):
@@ -449,6 +451,7 @@ class HostMediaProjection:
                 or self.coordinator.get_capability(NAMESPACE) is not self.capability
                 or self.capability.enabled is not True or self._binding() != self.binding
                 or not _supported_scope(self.coordinator, self.provider, self.source, self.options)
+                or self.support_owner != _support_owner(self.provider)
                 or self.support != _support(self.provider, self.snapshot, self.model, self.options)
                 or self.lifetime[1]() is not True):
             raise ValueError("Prepared media source/provider/construction changed")
@@ -475,6 +478,7 @@ class HostMediaProjection:
             self.prepared = self.request = self.source = self.snapshot = None
             self.canonical = self.canonical_snapshot = None
             self.chain = None
+            self.support_owner = None
 
 
 class WarningProjection:
@@ -523,6 +527,12 @@ async def prepare_media(coordinator, provider, request, *, request_options=None)
         return WarningProjection(request, request_options, coordinator=coordinator)
     model = request.model  # _supported_scope requires the same explicit portable/wire model.
     support = _support(provider, request, model, options)
+    if not support["positions"]:
+        # Valid unsupported facts are an initial, unmarked text-only fit.
+        # Never hydrate or hand a marked warning to a provider that correctly
+        # refuses unsupported private carriers. A positive fitted candidate
+        # changing support still fails validate_binding; it cannot downgrade.
+        return WarningProjection(request, options, coordinator=coordinator)
     context = state[0].request_scope()
     validate = context.__enter__()
     prepared = None

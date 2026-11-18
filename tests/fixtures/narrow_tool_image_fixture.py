@@ -10,10 +10,9 @@ from amplifier_web.host.media import NAMESPACE
 
 
 class RecordingProvider:
-    name = "offline-media"
+    name = "openai"
     config = {}
     default_model = "gpt-6.1-sol"
-    auth_mode = "chatgpt_codex"
     support = {"v": 1, "positions": ["user", "tool"]}
 
     def __init__(self):
@@ -25,6 +24,12 @@ class RecordingProvider:
 
     def get_media_request_support(self, **kwargs):
         return self.support
+
+    def get_media_request_support_for_request(self, *, request, **kwargs):
+        return {"v": 2, "positions": [
+            {"message_index": i, "role": m.role} for i, m in enumerate(request.messages)
+            if m.role in self.support["positions"]],
+            "mime_types": ["image/png", "image/jpeg"]}
 
     def get_info(self):
         from amplifier_core import ProviderInfo
@@ -93,7 +98,7 @@ class FixtureLoader:
                 await context.mount(current, config)
             elif module_id == "tool-filesystem":
                 await filesystem.mount(current, config)
-            elif module_id == "provider-openai-chatgpt":
+            elif module_id == "provider-openai":
                 await current.mount("providers", self.provider, name="offline")
         return mount
 
@@ -131,7 +136,7 @@ class ActualConsumerLoader(FixtureLoader):
         import amplifier_module_loop_live.orchestrator as live
         import amplifier_module_context_simple as context
         import amplifier_module_tool_filesystem as filesystem
-        if module_id == "provider-openai-chatgpt":
+        if module_id == "provider-openai":
             async def mount(current):
                 await current.mount("providers", self.provider, name="offline")
         else:

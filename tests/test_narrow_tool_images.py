@@ -39,8 +39,8 @@ async def root(tmp_path, *, store=None, post=None,
     provider = RecordingProvider()
     plan = {"session": {"orchestrator": {"module": "loop-live", "config": {"configured_bundle": True}},
                         "context": {"module": "context-simple"}},
-            "providers": [{"module": "provider-openai-chatgpt", "config": {
-                "auth_mode": "chatgpt_codex", "default_model": "gpt-6.1-sol"}}],
+            "providers": [{"module": "provider-openai", "config": {
+                "default_model": "gpt-6.1-sol"}}],
             "tools": [{"module": "tool-filesystem", "config": {
                 "working_dir": str(tmp_path), "allowed_read_paths": [str(tmp_path)]}}]}
     session = AmplifierSession(plan, session_id="root-media")
@@ -303,8 +303,8 @@ async def test_mixed_direct_upload_and_tool_ref_keep_exact_positions(tmp_path, m
 def test_recipe_is_explicit_and_shipped_pins_are_pending():
     plan = {"session": {"orchestrator": "loop-live", "context": "context-simple"},
             "tools": [{"module": "tool-filesystem"}],
-            "providers": [{"module": "provider-openai-chatgpt", "config": {
-                "auth_mode": "chatgpt_codex", "default_model": "gpt-6.1-sol"}}]}
+            "providers": [{"module": "provider-openai", "config": {
+                "default_model": "gpt-6.1-sol"}}]}
     assert supported_plan(plan)
     assert select_root(plan) is None
     for extra in ("tool-delegate", "unknown-tool"):

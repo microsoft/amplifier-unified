@@ -27,9 +27,8 @@ from test_narrow_tool_images import picture
 
 class ScriptedReadProvider:
     """Deterministic bottom: returns one actual read_file call, then text."""
-    name = "offline"
+    name = "openai"
     default_model = "gpt-6.1-sol"
-    auth_mode = "chatgpt_codex"
     config = {}
 
     def __init__(self, path, *, read=True):
@@ -44,8 +43,10 @@ class ScriptedReadProvider:
     def get_info(self):
         return ProviderInfo(id=self.name, display_name=self.name, defaults={"model": self.default_model})
 
-    def get_media_request_support(self, **kwargs):
-        return {"v": 1, "positions": ["tool"], "mime_types": ["image/png", "image/jpeg"]}
+    def get_media_request_support_for_request(self, *, request, **kwargs):
+        return {"v": 2, "positions": [
+            {"message_index": i, "role": "tool"} for i, m in enumerate(request.messages)
+            if m.role == "tool"], "mime_types": ["image/png", "image/jpeg"]}
 
     async def request_budget(self, request, *, request_options=None, **kwargs):
         self.counted = request
@@ -120,8 +121,8 @@ async def actual_root(tmp_path, provider, *, post=None, store=None, deny_work=Fa
     plan = {"session": {"orchestrator": {"module": "loop-live", "config": {
                 "configured_bundle": True, "max_iterations": 4}},
             "context": {"module": "context-simple"}},
-        "providers": [{"module": "provider-openai-chatgpt", "config": {
-            "auth_mode": "chatgpt_codex", "default_model": "gpt-6.1-sol"}}],
+        "providers": [{"module": "provider-openai", "config": {
+            "default_model": "gpt-6.1-sol"}}],
         "tools": [{"module": "tool-filesystem", "config": {
             "working_dir": str(tmp_path), "allowed_read_paths": [str(tmp_path)]}}]}
     session = AmplifierSession(plan, session_id="root-consumer-join")
