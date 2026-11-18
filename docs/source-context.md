@@ -68,10 +68,14 @@ Publishing is authored in public
 Its generated `components/publishing-delivery` snapshot is bound by
 `components/publishing.source.json`; follow the
 [selection guide](../components/README.md#select-a-publishing-artifact).
-Portability retains its temporary `components/portability` author project and
-generated `components/portability-delivery` snapshot. Visible source records bind
-the selected public wheels. Use `--all --under components/<name>-delivery` to
-inspect generated inputs; source edits and publication do not refresh them.
+Portability is authored in public
+[microsoft/amplifier-portability](https://github.com/microsoft/amplifier-portability).
+Its generated `components/portability-delivery` snapshot and
+`components/portability.source.json` remain paired with the exact Worktrees receipt;
+see the [selection guide](../components/README.md#select-worktrees-and-portability-artifacts).
+Visible source records bind selected public artifacts; author edits and publication
+never silently refresh them. Use `--all --under components/<name>-delivery` to
+inspect selected runtime bytes.
 Recall storage is authored in public
 [amplifier-platform-recall](https://github.com/bkrabach/amplifier-platform-recall).
 Unified's generated `components/recall-delivery` snapshot and `recall.source.json`

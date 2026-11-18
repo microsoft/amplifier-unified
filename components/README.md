@@ -54,12 +54,14 @@ copy; Unified remains the sole installed owner. Follow the
 [selection instructions](#select-an-outputs-artifact), and do not restore an author
 copy here or coinstall the standalone distribution.
 
-[`portability/`](portability/README.md) is the temporary authoring home for the
-independently buildable signed transfer journal and Git capsule package. Its
-standalone development uses the published worktrees artifact; the local dependency
-and installed-test instructions are in its README. Unified consumes the generated
-`portability-delivery/` and `worktrees-delivery/` selections, preserving the exact
-published dependency receipt; author edits do not refresh either app selection.
+[microsoft/amplifier-portability](https://github.com/microsoft/amplifier-portability)
+owns signed handoff receipts, workspace capsules, indexed selected reads and
+historical payload/evidence APIs. Its standalone recovery and mechanism tests
+remain there; Unified retains admission, native fencing, data projection and
+host policy. Generated `portability-delivery/` and `worktrees-delivery/` selections
+preserve the exact published dependency receipt. Source changes and publication
+do not refresh either app selection. See the
+[paired selection instructions](#select-worktrees-and-portability-artifacts).
 
 [amplifier-platform-worktrees](https://github.com/bkrabach/amplifier-platform-worktrees)
 is the public authoring owner for the managed Git worktree mechanism and its
@@ -168,11 +170,17 @@ deleting output relationships, command receipts or retained bodies.
 ## Select Worktrees and Portability artifacts
 
 Worktrees is authored and published in
-[amplifier-platform-worktrees](https://github.com/bkrabach/amplifier-platform-worktrees).
-Unified selects its public `worktrees-v0.1.0` artifact together with the matching
-Portability `portability-v0.1.1` artifact from Unified's existing Portability author.
-The separate `microsoft/amplifier-portability` implementation has a different API;
-this delivery does not substitute it.
+[amplifier-platform-worktrees](https://github.com/bkrabach/amplifier-platform-worktrees);
+Portability is authored and published in
+[microsoft/amplifier-portability](https://github.com/microsoft/amplifier-portability).
+Retain the original public source receipts and four assets for each selection.
+The package names remain `amplifier-worktrees` and `amplifier-portability`; source
+repository names do not change their installed imports.
+
+This delivery draft still retains the historical Unified-produced Portability
+0.1.1 selection. The standalone 0.1.3 artifact must be published, verified and
+selected through the commands below before this draft is ready for release.
+Private qualification artifacts are not a published selection.
 
 Download each release's wheel, source archive, source receipt and `SHA256SUMS`
 into separate private directories. Verify both original receipt hashes against
@@ -190,9 +198,17 @@ python scripts/scheduling_delivery.py verify --component portability
 ```
 
 Portability must name the exact selected Worktrees source receipt and artifact;
-matching versions alone do not suffice. Authoring, standalone publication and
-Unified selection remain separate. Keep both selections together in the reviewed
-consumer change; do not publish an intermediate mismatched pair.
+matching versions alone do not suffice. The public package keeps its original
+runtime requirement ranges. Unified retains its tighter cryptography/filelock
+constraints and exact Worktrees source equality; dependency metadata is recorded
+without rewriting it. Source authoring, standalone publication and Unified
+selection remain separate. Keep both selections together in the reviewed change;
+do not publish an intermediate mismatched pair.
+
+For standalone library development and installed checks, use the public owner's
+[instructions](https://github.com/microsoft/amplifier-portability#development).
+Verify its original Worktrees receipt and assets before installing the two wheels
+outside either author checkout. Never install them alongside Unified's copies.
 
 Normal wheel, source-archive and editable builds verify both generated snapshots
 offline, without their author checkouts. Unified remains the sole installed owner

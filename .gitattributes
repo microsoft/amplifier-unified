@@ -23,13 +23,7 @@
 /components/publishing.source.json source-context=configuration
 /components/publishing-delivery/** source-context=generated linguist-vendored=true linguist-generated=true -text
 /components/worktrees.source.json source-context=configuration
-/components/portability/worktrees-source.json source-context=configuration
 /components/worktrees-delivery/** source-context=generated linguist-vendored=true linguist-generated=true -text
-/components/portability/amplifier_portability/** source-context=source
-/components/portability/tests/** source-context=tests
-/components/portability/MANIFEST.in source-context=configuration
-/components/portability/.gitignore source-context=configuration
-/components/portability/LICENSE source-context=documentation
 /components/portability.source.json source-context=configuration
 /components/portability-delivery/** source-context=generated linguist-vendored=true linguist-generated=true -text
 /components/outputs.source.json source-context=configuration

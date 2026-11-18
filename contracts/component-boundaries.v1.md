@@ -100,6 +100,21 @@ receipt must match the selected Worktrees receipt exactly. This moves no user
 files or ownership/transfer records and does not extract the whole resource
 lifecycle domain. Source publication and app adoption remain separate.
 
+## Portability authoring and delivery
+
+[microsoft/amplifier-portability](https://github.com/microsoft/amplifier-portability)
+owns signed receipt mechanisms, workspace capsules, retained JSON recovery and
+public selected-read/payload/evidence APIs. Unified selects a reviewed artifact
+and remains the sole installed owner. Its embedded Worktrees receipt must equal
+the selected Worktrees source, artifacts and runtime identity; public dependency
+ranges do not replace the host's tighter constraints. Admission, native writer
+fencing, execution authority, transport and data projection remain in the host.
+Source handoff and publication do not change the selected default, replay uncertain
+effects, rewrite historical evidence or authorize a user-state migration. Retained
+receipts and newer state survive ordinary app rollback. The
+[selection guide](../components/README.md#select-worktrees-and-portability-artifacts)
+records the current artifact and any pending delivery qualification.
+
 ## Current output mechanism delivery
 
 [amplifier-platform-resources](https://github.com/bkrabach/amplifier-platform-resources)
