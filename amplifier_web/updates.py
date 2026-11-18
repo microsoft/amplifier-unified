@@ -36,6 +36,28 @@ def work_paused(state):
     return updates.get('phase') == 'activating' or bool(updates.get('pendingRestart')) or pending(updates)
 
 
+def pending_tool_activations(state):
+    """Tool activations that still own a handoff after staging."""
+    return [row for row in state.get('pendingSmartTools') or []
+            if not row.get('runnerSource') and not row.get('failure')]
+
+
+def availability_check_blocked(manager, state, tier):
+    if (manager.closed or manager.awaiting_restart() or state.get('pendingRelease')
+            or (state.get('pendingApp') or {}).get('featureSelection')):
+        return True
+    return any(tier != 'application' or not row.get('target')
+               for row in pending_tool_activations(state))
+
+
+def has_new_app_target(manager, state):
+    from .app_updates import supersedes_staged
+    if any(not row.get('target') for row in pending_tool_activations(state)):
+        return False  # An incomplete stage still owns the handoff.
+    return bool(state.get('pendingApp') or (state.get('appAvailable')
+                and supersedes_staged(state.get('application', {}), manager.running_identity)))
+
+
 def active_release(home):
     path = Path(home) / 'updates' / 'active.json'
     try:
@@ -823,7 +845,7 @@ class UpdateManager:
                 if self.check_task and not self.check_task.done():
                     await asyncio.shield(self.check_task)
                 state = self.service.state['updates']
-                if self.tool_activations(state) and not self.has_new_app_target(state):
+                if pending_tool_activations(state) and not has_new_app_target(self, state):
                     await self.check(fresh=True)
                 async with self.lock:
                     if self.closed or self.awaiting_restart():return
@@ -835,7 +857,7 @@ class UpdateManager:
                     pending = self.service.state['updates'].get('pendingApp')
                     await self.publish(applicationIntent=intent, sequence=sequence,
                         **({'pendingApp': {**pending, 'updateIntent': intent}} if pending else {}))
-                    if self.tool_activations(state) and not self.has_new_app_target(state):
+                    if pending_tool_activations(state) and not has_new_app_target(self, state):
                         return
                 await self.app()
             elif action == 'install':
@@ -925,33 +947,13 @@ class UpdateManager:
                                                   'pendingRestart', 'pendingReplacement', 'pendingSmartTools')))
 
     @staticmethod
-    def tool_activations(state):
-        # Failed attempts retain their current installation and explicit
-        # retry/skip receipt; they are not unfinished activation work.
-        return [row for row in state.get('pendingSmartTools') or []
-                if not row.get('runnerSource') and not row.get('failure')]
-
-    @staticmethod
     def independent_tool_results(state):
-        return bool(state.get('pendingSmartTools')) and not UpdateManager.tool_activations(state)
-
-    def check_blocked(self, state, tier):
-        tools = self.tool_activations(state)
-        return (self.closed or self.awaiting_restart() or state.get('pendingRelease')
-                or (state.get('pendingApp') or {}).get('featureSelection')
-                or (tools and (tier != 'application' or any(not row.get('target') for row in tools))))
-
-    def has_new_app_target(self, state):
-        from .app_updates import supersedes_staged
-        if any(not row.get('target') for row in self.tool_activations(state)):
-            return False  # A staging operation without a known target still owns its handoff.
-        return bool(state.get('pendingApp') or (state.get('appAvailable')
-            and supersedes_staged(state.get('application', {}), self.running_identity)))
+        return bool(state.get('pendingSmartTools')) and not pending_tool_activations(state)
 
     async def check(self, *, tier='application', install=False, fresh=True, automatic=False):
         if getattr(self, '_manual_handoff_commit_unknown', False):return
         state = self.service.state['updates']
-        if self.check_blocked(state, tier):
+        if availability_check_blocked(self, state, tier):
             return  # A timing measurement must not change a pending handoff.
         if self.check_task and not self.check_task.done():
             # Join only an equivalent availability operation. A manual refresh
@@ -984,7 +986,7 @@ class UpdateManager:
             state = self.service.state['updates']
             # A capacity observation can own this lock when a refresh arrives.
             # Queue that refresh, then recheck admission against current state.
-            if self.check_blocked(state, tier):
+            if availability_check_blocked(self, state, tier):
                 return
             # A check has passed its admission since this host started. That
             # ends the start reason of check_due; a refusal above does not.
@@ -993,7 +995,7 @@ class UpdateManager:
                 # Retained runner qualification and failed optional tools own
                 # their rows independently of the new sequence/install intent.
                 await self.publish(runnerAvailabilityCheck=True)
-            if state.get('pendingApp') or self.tool_activations(state):
+            if state.get('pendingApp') or pending_tool_activations(state):
                 # A tool can be waiting for a saved configuration indefinitely.
                 # Refresh only the app row; the staged tool retains its own handoff.
                 from .app_updates import check_staged
@@ -1225,7 +1227,7 @@ class UpdateManager:
             if self.closed or self.awaiting_restart():return
             if awaiting_verification(self):return
             state = self.service.state['updates']
-            if self.tool_activations(state) and not self.has_new_app_target(state):
+            if pending_tool_activations(state) and not has_new_app_target(self, state):
                 return
             pending = state.get('pendingApp')
             if not pending or supersedes_staged(state.get('application', {}), pending):
@@ -1282,8 +1284,8 @@ class UpdateManager:
             # Saved once: an update that waits (for an AI connection, or for
             # changed inputs) reaches this line again at every minute tick.
             await self.publish(sequence={**state['sequence'], 'install': True})
-        if self.tool_activations(state):
-            if not manual and not state.get('pendingRelease') and self.has_new_app_target(state):
+        if pending_tool_activations(state):
+            if not manual and not state.get('pendingRelease') and has_new_app_target(self, state):
                 await self.app()
             else:
                 await self.activateSmartTools()
@@ -2051,12 +2053,12 @@ class UpdateManager:
                 # of the superseded whole-install command or its stale inventory.
                 await self.check(fresh=due == 'start', automatic=True)
             return
-        if self.tool_activations(state):
+        if pending_tool_activations(state):
             if due := self.check_due():
                 await self.check(fresh=due == 'start', automatic=True)
             from .windows_app_recovery import automatic_retry_held
             if (state.get('phase') not in {'error', 'interrupted'} and not state.get('pendingRelease')
-                    and not automatic_retry_held(state) and self.has_new_app_target(state)
+                    and not automatic_retry_held(state) and has_new_app_target(self, state)
                     and (state.get('pendingApp') or settings.get('autoInstall', True))):
                 await self.app()
                 return
