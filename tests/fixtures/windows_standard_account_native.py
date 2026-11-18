@@ -1459,17 +1459,23 @@ def cleanup():
 def replace_report(partial, path, *, replace=os.replace, wait=time.sleep, timer=time.monotonic, limit=5.0):
     """Put a written report in the place of the report file.
 
-    While this user's program runs, the program of the runner's account reads
-    the report file again and again, with a pause of 3 seconds before each
-    read, to see whether the program has finished.
+    While this user's program runs, the program of the runner's account
+    reads the report file to see whether the program has finished
+    (`in_session`): in a loop, with a pause of 3 seconds before the read of
+    each round, and once more before it gives up.
     While a program has the file open in that way, Windows refuses the
     replacement (`PermissionError`, "Access is denied"). One run failed a
     step with this error (run 44204538909, November 17, 2026). Which program
     had the file open in that run is not recorded. The record makes the
-    report larger, so a read of it takes longer. A replacement that Windows
-    refuses is made again, with 0.05 second between two tries, for `limit`
-    seconds. After that the error goes on to the caller, as before. Another
-    error goes on at once.
+    report larger, so a read of it takes longer.
+
+    A replacement that Windows refuses is made again. After each refusal the
+    clock is read. When `limit` seconds or more have gone by since the clock
+    was read before the first try, the error of that refusal goes on to the
+    caller, as before. Else the next try follows after a pause of 0.05
+    second. The clock is not read between that pause and the try: a try can
+    begin later than `limit` seconds, and when it works, the report is
+    replaced. Another error goes on at once.
     """
     deadline = timer() + limit
     while True:
@@ -1615,9 +1621,11 @@ def observed(steps, home, name, read, good, later=None):
     The answer goes back to the step as it is. The step decides with its own
     condition. `good` is that condition for this one answer. It only marks
     the entry of the record. After a step has failed, `keep_after_failure`
-    makes a read that was not as required once more (`later`, or the same
-    read). Only `journey` and `second` call `keep_after_failure`, and it
-    reads only while the app folder is safe to read. The certificate program
+    makes a read once more when that read gave an answer and the answer was
+    not as required (`later`, or the same read). A read that ended with an
+    error is not made again. Only `journey` and `second` call
+    `keep_after_failure`, and it reads only while the app folder is safe to
+    read. The certificate program
     makes its reads through this function too, and does not make them again.
     An error of the read itself goes on to the step.
     """
@@ -1638,7 +1646,8 @@ def observed(steps, home, name, read, good, later=None):
 
 
 def cpu_seconds(processes=()):
-    """Processor time until now, in seconds: of the whole computer, and of each given process that Windows opens.
+    """Processor time until now, in seconds: of the whole computer, and of each given process whose times Windows
+    gives.
 
     `busy` is the time in which the computer's processors worked, `all` is
     that time plus their idle time; both are sums over the processors. A
@@ -1675,7 +1684,8 @@ def cpu_between(before, after):
     """What two reads of `cpu_seconds` say about the time between them.
 
     `computerBusy` is the share of that time in which the computer's
-    processors worked, from 0 to 1. `processes` is the processor time that
+    processors worked, from 0 to 1. It is None when the second read's total
+    is not above the first read's. `processes` is the processor time that
     each process used, in seconds. A process that only one of the reads has
     is left out. So is a number that the two reads have with different
     creation times: that is another process with the same number. More than
@@ -1700,26 +1710,35 @@ def root_store_read():
 class ListenerWatch:
     """Asks the app's listener for an answer again and again, beside the steps of the case.
 
-    The next question follows half a second after an answer. A question that
-    gets no answer can take some seconds itself. With each question the watch
-    reads which processes own the listener's port. It keeps each change of
-    the answer or of the owners, with the time at which that question began
-    and the seconds that the question took. While nothing changes, it keeps
-    the slowest of the questions that follow (`slowest`). That one can be
+    After a question and the reads that belong to it, the watch pauses for
+    half a second (`every`); then the next question follows. A question that
+    gets no answer can take some seconds itself. After each question the
+    watch asks `owner`, when it has one, which process numbers own the
+    listener's port. It keeps a change of the answer or of those numbers,
+    with the time at which that question began and the seconds that the
+    question took. It keeps a change only while its list has fewer than
+    `limit` entries (400; the marks of the case are in the same list). A
+    change after that is not kept. While nothing changes, it keeps the
+    slowest of the questions that follow (`slowest`). That one can be
     quicker than the question that brought the change, whose seconds the
-    entry has itself. So the report says, to about the time
-    between two questions, for how long the listener gave no answer after a
-    host start, whether a process owned the port in that time, and whether
-    another process owned it afterwards. It also says when the listener
-    answered late: a host that is busy for a second shows there, also in a
-    run where every read of the case is as required.
+    entry has itself.
+
+    The report has what these questions saw, and nothing of the time between
+    two of them: each kept change of the answer (for example to no answer
+    after a host start, and back to an answer) with the process numbers that
+    owned the port at that question. A number is not a process: Windows uses
+    a number again. A listener that answers late can show there, also in a
+    run where every read of the case is as required. A host that is busy
+    only between two questions does not show.
 
     With a read of the processor time (`gauge`), the watch keeps each
     question that took `slow` seconds or more, at most 40 (`late`). An entry
     says what can make an answer late: how busy the computer was during the
-    question, how much processor time the owners of the port used in it, how
-    long the watch itself waited before the question, and what `after` reads
-    directly afterwards. That wait holds the watch's pause and its read of
+    question, how much processor time the processes used in it that owned
+    the port at the question before (none at the first question, and none
+    when that read gave no list), how long the watch itself waited before
+    the question, and what `after` reads directly afterwards. That wait
+    holds the watch's pause and its read of
     the processor time; the seconds of a question hold neither. Much more
     than the pause can mean that this program got no time. The number alone
     does not say why. The watch gives these numbers. It does not decide the
@@ -1745,7 +1764,8 @@ class ListenerWatch:
         self._ended, self._lock, self.fault = None, threading.Lock(), None
 
     def look(self):
-        """One question to the listener. A change is kept; an error of the question is an answer too."""
+        """One question to the listener. A change is kept while the list has room; an error of the question is an
+        answer too."""
         owners = self._last[1] if isinstance(self._last, tuple) and isinstance(self._last[1], list) else []
         before = attempt(lambda: self.gauge(owners)) if self.gauge else None
         # The question begins here. The read of the processor time before it is in `waited`, not in its seconds.
@@ -1850,8 +1870,9 @@ def keep_after_failure(steps, watch, *, wait=time.sleep, seconds=20):
     The failed step has its text already, and the report is saved with it.
     Nothing here changes that text, and nothing here can make a step pass.
     The watch of the listener goes on in those seconds. Then each read that
-    was not as its step requires is made once more, and that answer is kept
-    beside the first. Without an app folder that is safe to read
+    gave an answer which was not as its step requires is made once more, and
+    that answer is kept beside the first. A read that ended with an error is
+    not made again. Without an app folder that is safe to read
     (`steps.evidence`), this does nothing.
     """
     home = steps.evidence
@@ -1872,6 +1893,17 @@ def keep_after_failure(steps, watch, *, wait=time.sleep, seconds=20):
     attempt(steps.save)
 
 
+def kept(answer):
+    """An answer as the report keeps it: the answer itself, or its Python form when JSON cannot write it.
+
+    A report that holds an answer which JSON cannot write (for example a
+    dictionary with a tuple as a key) cannot be saved. The save of a failed
+    step then fails too, and the step's text is not in the report. The
+    Python form is cut at 4000 characters, at its end.
+    """
+    return answer if isinstance(attempt(lambda: json.dumps(answer, default=str)), str) else repr(answer)[:4000]
+
+
 def accept_start(steps, key, again, home, root, started, state, status, text, *, wait=time.sleep):
     """Require one start of the launcher, and say which answer was not as required.
 
@@ -1890,8 +1922,11 @@ def accept_start(steps, key, again, home, root, started, state, status, text, *,
     that is not short is given as the first 60 characters of its Python form.
     The text is cut at 2900 characters, at its end. So it keeps its start,
     also in the report, which keeps the last 3000 characters of a step's text.
-    The report holds the three answers as the case got them. A detail that
-    JSON cannot write is given in its Python form.
+    The report holds the three answers as the case got them and, after a
+    start that is not accepted, the pair of five seconds later. An answer
+    that JSON cannot write is there in its Python form (`kept`), so that the
+    report can still be saved. In the text, a detail that JSON cannot write
+    is given in its Python form.
 
     The read five seconds later never makes the step pass. It, the read of the
     host's log (`host_output`) and the second save of the report can each
@@ -1902,7 +1937,8 @@ def accept_start(steps, key, again, home, root, started, state, status, text, *,
     its text, and the launcher had said that the start worked (run 44149453625,
     November 17, 2026). That run does not say which other answer was wrong.
     """
-    record = steps.report[key] = {"launcher": started, "task": state, "serviceStatus": status}
+    record = steps.report[key] = {"launcher": kept(started), "task": kept(state),
+                                  "serviceStatus": kept(status)}
     unsaved_first = attempt(steps.save)
     if unsaved_first:
         record["notSavedBeforeTheCheck"] = unsaved_first
@@ -1939,7 +1975,7 @@ def accept_start(steps, key, again, home, root, started, state, status, text, *,
     def later():
         wait(5)
         pair = {"task": again.task_facts(home), "serviceStatus": again.cli(root, "service", "status", "--json")}
-        record["fiveSecondsLater"] = pair
+        record["fiveSecondsLater"] = kept(pair)
         return {"Task Scheduler": again.running(pair["task"]), "the app's status": again.healthy(pair["serviceStatus"])}
 
     then = attempt(later)
@@ -1951,7 +1987,8 @@ def accept_start(steps, key, again, home, root, started, state, status, text, *,
               **({"notSavedInTheReport": unsaved} if unsaved else {}),
               "more": {name: attempt(lambda: more(name)) for name in wrong}}
     said = attempt(lambda: json.dumps(detail, default=str))
-    # An answer that JSON cannot write (for example a dictionary with a tuple as a key) does not replace the text.
+    # A detail that JSON cannot write (for example a dictionary with a tuple as a key) is in the text in its Python
+    # form. The error of that write does not replace the text.
     raise AssertionError((text + ". Not as required: " + ", ".join(wrong) + ": "
                           + (said if isinstance(said, str) else repr(detail)))[:2900])
 
@@ -2235,7 +2272,9 @@ def journey(stage, exchange, account, token):
     except BaseException as error:
         steps.failed(error)
         attempt(lambda: keep_after_failure(steps, watch))
-    steps.report.setdefault("listener", attempt(watch.stop))
+    # Once: `second` stops the watch before the delete choice, and the report then holds its result already.
+    if "listener" not in steps.report:
+        steps.report["listener"] = attempt(watch.stop)
     return steps.finish()
 
 
@@ -2524,7 +2563,9 @@ def second(stage, exchange, account, token):
     except BaseException as error:
         steps.failed(error)
         attempt(lambda: keep_after_failure(steps, watch))
-    steps.report.setdefault("listener", attempt(watch.stop))
+    # Once: `second` stops the watch before the delete choice, and the report then holds its result already.
+    if "listener" not in steps.report:
+        steps.report["listener"] = attempt(watch.stop)
     return steps.finish()
 
 

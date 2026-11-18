@@ -109,7 +109,9 @@ jobs:
   # The checks of the case's own code: who counts as a standard user, which
   # step a failure belongs to, the record of the reads of the host, and what
   # this workflow can never do silently. They need no Windows. No other
-  # workflow names their file: without this job they run on no pull request.
+  # workflow names their file, and the full Python suite (python-checks.yml)
+  # does not start on a pull request: without this job no pull request runs
+  # them.
   portable-checks:
     name: The case's own checks (Linux, Python 3.13)
     runs-on: ubuntu-latest
@@ -130,11 +132,12 @@ jobs:
         timeout-minutes: 5
         run: uv sync --locked --group dev
       # The named shell `bash` stops at a failed command, also on the left of a
-      # pipe. pytest's last line must say that cases passed and nothing else,
-      # except warnings: a case that pytest skipped or deselected fails the step.
+      # pipe. pytest's last line must be the number of passed cases, then the
+      # number of warnings or nothing, then the time, and nothing after it: a
+      # case that pytest skipped or deselected fails the step.
       - name: Run every case of tests/test_windows_standard_account.py, with no skip
         timeout-minutes: 8
         shell: bash
         run: |
           uv run --no-sync pytest -q -ra -p no:cacheprovider tests/test_windows_standard_account.py | tee "$RUNNER_TEMP/portable-checks.log"
-          tail -n 1 "$RUNNER_TEMP/portable-checks.log" | grep -E '^[0-9]+ passed(, [0-9]+ warnings?)? in [0-9.]+s'
+          tail -n 1 "$RUNNER_TEMP/portable-checks.log" | grep -E '^[0-9]+ passed(, [0-9]+ warnings?)? in [0-9.]+s( \([0-9:]+\))?$'

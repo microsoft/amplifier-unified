@@ -262,7 +262,10 @@ def test_a_failed_step_keeps_its_exact_text_and_later_steps_are_not_reached(case
 
 
 def refused(times, error, tries, limit=50):
-    """A stand-in for the replacement: it fails `times` times with `error`, then it replaces."""
+    """A stand-in for the replacement: it fails `times` times with `error`, then it replaces.
+
+    A try after `limit` tries fails the test.
+    """
     def replace(source, target):
         tries.append((source, target))
         assert len(tries) <= limit, "The replacement is tried without end"
@@ -287,6 +290,13 @@ def test_a_report_that_windows_does_not_let_replace_for_a_moment_is_replaced_at_
     tries.clear(), waits.clear()
     case.replace_report(partial, report, replace=refused(0, denied, tries), wait=waits.append)
     assert len(tries) == 1 and waits == [] and report.read_text() == "the next report"
+    # The clock is read after a refusal only. Here it passes the limit of 3 seconds during the pause: the try
+    # after the pause is made, and it replaces the report.
+    partial.write_text("the last report")
+    tries.clear(), waits.clear()
+    case.replace_report(partial, report, replace=refused(1, denied, tries), wait=waits.append,
+                        timer=lambda: 100.0 * len(waits), limit=3)
+    assert len(tries) == 2 and waits == [0.05] and report.read_text() == "the last report"
 
 
 def test_a_report_that_windows_never_lets_replace_fails_with_that_error_after_the_limit(case, tmp_path):
@@ -588,17 +598,36 @@ def test_a_report_that_cannot_be_saved_before_the_check_fails_no_start_and_repla
 
 
 def test_an_answer_that_json_cannot_write_does_not_replace_the_text_of_a_refused_start(case, start_rules, tmp_path):
-    # A key that is a pair. No answer of the product has such a key; the step's text must not depend on that.
-    wrong = {**TASK, "instances": 0, ("a", "pair"): 1}
-    text, _, steps = accept(case, tmp_path, Reads(start_rules), task=wrong)
+    # A key that is a pair, in each of the three answers and in Task Scheduler's answer five seconds later. No
+    # answer of the product has such a key. Neither the step's text nor the save of the report may depend on that.
+    wrong, later = {**TASK, "instances": 0, ("a", "pair"): 1}, {**TASK, ("b", "pair"): 2}
+    started, status = {**STARTED, ("c", "pair"): 3}, {**STATUS, ("d", "pair"): 4}
+    text, saved, steps = accept(case, tmp_path, Reads(start_rules, task=later), started=started, task=wrong,
+                                status=status)
     # The Python form of the same detail, in the same order: the names, the values that the rules read, the rest.
     assert text.startswith("The start failed. Not as required: Task Scheduler: {'Task Scheduler': "
                            "{'managed': True, 'state': 'running', 'instances': 0}, 'fiveSecondsLater': "
                            "{'Task Scheduler': True, \"the app's status\": True}, ")
     assert "('a', 'pair'): 1" in text and len(text) <= 2900
-    # The report cannot be written with such a key either. The text says so, and no error of a save reached the step.
-    assert "'notSavedBeforeTheCheck': {'errorType': 'TypeError'" in text
-    assert steps.report["theStart"]["task"] == wrong
+    # The report keeps the Python form of each such answer. Both saves worked: the text names no save that
+    # failed, and the file holds the record.
+    assert "notSaved" not in text
+    assert saved == {"launcher": repr(started), "task": repr(wrong), "serviceStatus": repr(status),
+                     "taskOutput": saved["taskOutput"],
+                     "fiveSecondsLater": repr({"task": later, "serviceStatus": STATUS})}
+    # So the save of the failed step works too, and the phase ends with the step's text in its report.
+    steps.failed(AssertionError(text))
+    assert steps.finish() is False
+    report = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
+    assert report["steps"][0]["reason"] == "AssertionError: " + text and report["finished"] is True
+
+
+def test_the_report_keeps_an_answer_itself_or_its_python_form_when_json_cannot_write_it(case):
+    answer = {"state": "running", "folder": Path("a")}  # The save of the report writes a path as its text.
+    assert case.kept(answer) is answer and case.kept(None) is None and case.kept("text") == "text"
+    assert case.kept({("a", "pair"): 1}) == "{('a', 'pair'): 1}"
+    long = {(number,): "x" * 100 for number in range(100)}
+    assert case.kept(long) == repr(long)[:4000] and len(case.kept(long)) == 4000
 
 
 @pytest.mark.parametrize("said", ["The second start failed", "The start after the uninstall failed"])
@@ -631,7 +660,8 @@ UPDATES = {"phase": "checked", "lastCheck": 1794940700.5, "lastAttempt": 1794940
 
 @pytest.fixture
 def installation(case, monkeypatch):
-    """Stand-ins for the three reads of the installation that only Windows gives. Each can be made to fail."""
+    """Stand-ins for the three reads of the installation that the record makes: the host's record, the update
+    record and the end of the host's log. Each can be made to fail."""
     class Installation:
         calls, fails = [], set()
 
@@ -1050,7 +1080,8 @@ def test_what_a_stopped_watch_gave_does_not_change_while_its_thread_still_asks(c
     given = copy.deepcopy(kept)
     release.set()
     watch._thread.join(10)
-    # The second question had the same answer and took longer: the watch's own entry now has it as the slowest.
+    # The second question had the same answer, and it took some time (the stop waited 0.05 second for its thread
+    # meanwhile). So the entry now has it as `slowest`, the slowest of the questions that follow a change.
     assert watch.questions == 2 and "slowest" in watch.changes[0]
     # What the stop gave is as it was. The report that holds it can be saved while the thread still asks.
     assert kept == given and kept["changes"][0] is not watch.changes[0]
@@ -1159,12 +1190,15 @@ def test_the_watch_of_an_installation_asks_its_saved_address_and_reads_the_owner
     kept = watch.stop()
     assert kept["started"] is True and kept["ended"] is True
     assert [(change["answer"], change["owner"]) for change in kept["changes"]] == [("trusted", [77, 4500])]
-    # No time of the real clock is required here. On a machine that gives this program no time for half a second,
-    # a question takes that long and counts as late. That is the watch's own rule; other cases require it with a
-    # stand-in for the timer.
+    # Nothing here requires that a question is quick. On a machine that gives this program no time for half a
+    # second, a question takes that long and counts as late: the watch then asks the gauge a second time with the
+    # same owners. That is the watch's own rule; other cases require it with a stand-in for the timer. The 10
+    # seconds above only end a test whose watch keeps no answer.
     assert isinstance(kept["changes"][0]["seconds"], float) and isinstance(kept["late"], list)
-    assert gauges[0] == []  # The gauge was asked with each question: first with no owner of the port.
-    assert all(owners == [77, 4500] for owners in gauges[1:])
+    # The gauge was asked with each question: at the first question with no owner of the port (twice when that
+    # question was late), then with the owners that the question before read.
+    first = 2 if gauges[:2] == [[], []] else 1
+    assert gauges[:first] == [[]] * first and all(owners == [77, 4500] for owners in gauges[first:])
     assert asked[:2] == [("trust", ["https://127.0.0.1:27595/api/health"], "the pin"), ("owners", "127.0.0.1", 27595)]
 
 
@@ -1303,7 +1337,7 @@ def test_after_a_failed_step_the_record_keeps_the_next_seconds_and_changes_no_te
     assert kept == {"host": HOST, "updates": UPDATES, "hostLater": HOST, "updatesLater": UPDATES,
                     "hostOutput": "the end of the log"}
     trust, status, task = report["reads"]
-    # Each read that was not as required is made once more: the given later read, or the same read.
+    # Each read whose answer was not as required is made once more: the given later read, or the same read.
     assert trust["later"].pop("at") > 0 and task["later"].pop("at") > 0
     assert trust["later"] == {"answer": "trusted", "asRequired": True, "host": HOST}
     assert task["later"] == {"answer": {"managed": False}, "asRequired": False, "host": HOST}
@@ -1458,14 +1492,20 @@ def test_the_watch_and_the_reads_for_the_record_end_before_the_folder_is_deleted
         < journey.index('steps.report["firstStart"] = ')
     assert second.index("watch = watch_listener(home)") < second.index('"the app\'s status after the sign-in"')
     assert source.count("watch_listener(home)") == 3  # Its definition and the two starts.
-    # Before the delete choice: the watch ends, and no later failure reads the installation for the record.
+    # Before the delete choice: the watch is stopped (`stop` waits at most 10 seconds for its thread), and no later
+    # failure reads the installation for the record.
     end = 'steps.report["listener"], steps.evidence = attempt(watch.stop), None\n'
     assert second.index("steps.begin(SECOND[3])") < second.index(end) < second.index("delete_everything(again, root")
     assert second.count("steps.evidence = ") == 2 and journey.count("steps.evidence = home") == 1
-    # A failed step is recorded with its text first. Then the record is kept, and the watch ends in every case.
+    # A failed step gets its text first (`steps.failed`). Then the record is kept. After the steps and after a
+    # failed step, `stop` is called on the watch once, and not again when the report holds its result already.
     ending = ('    except BaseException as error:\n        steps.failed(error)\n'
               '        attempt(lambda: keep_after_failure(steps, watch))\n'
-              '    steps.report.setdefault("listener", attempt(watch.stop))\n    return steps.finish()\n')
+              '    # Once: `second` stops the watch before the delete choice, and the report then holds its result '
+              'already.\n'
+              '    if "listener" not in steps.report:\n'
+              '        steps.report["listener"] = attempt(watch.stop)\n    return steps.finish()\n')
+    assert source.count("attempt(watch.stop)") == 3 and source.count("watch.stop") == 3
     assert journey.count(ending) == 1 and second.count(ending) == 1
     assert source.count("keep_after_failure(steps, watch)") == 2
     # The update record is kept only after a step has passed, never between a start and its reads.
@@ -1535,7 +1575,8 @@ def test_a_file_of_the_running_installation_is_read_only_with_the_products_reade
         reader = source[source.index(f"def {name}(home):"):source.index(following)]
         assert "with directory(root / \"config/services\", owned_root=root, create=False) as pinned:" in reader
         assert "pinned.read_private(" in reader and "read_text(" not in reader and "open(" not in reader
-    # The host's log is read nowhere else, and never with an ordinary open: the host replaces that file.
+    # The fixture opens the host's log only in `host_output`, and never with an ordinary open: the host replaces
+    # that file. (Main's `sign_in_snapshot` asks the product's own command `service logs` for the log.)
     assert source.count("task-output.log") == 0
     assert source.count("host_output(home)") == 4  # Its definition, the first start, a later start, a failed step.
     watch = source[source.index("def cpu_seconds("):source.index("def note_updates(")]
@@ -1640,13 +1681,20 @@ def test_the_workflow_cannot_skip_and_always_removes_the_account():
 
 
 def test_the_workflow_runs_every_case_of_this_file_and_a_case_that_did_not_run_fails_it():
-    """No other workflow names this file. Without this job its cases run on no pull request."""
+    """No other workflow names this file.
+
+    Read from the workflows on November 17, 2026 and not checked here: the
+    workflows that run a whole `tests` folder run a component's own folder,
+    and the full Python suite (`python-checks.yml`) does not start on a pull
+    request.
+    """
     workflow = yaml.load(WORKFLOW.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
     name = Path(__file__).resolve().relative_to(ROOT).as_posix()
     assert name == "tests/test_windows_standard_account.py" and name in workflow["on"]["pull_request"]["paths"]
-    others = [path.name for path in WORKFLOW.parent.glob("*.yml")
-              if path != WORKFLOW and Path(name).name in path.read_text(encoding="utf-8")]
-    assert others == []  # When another workflow runs the file, change the sentences here and in the workflow.
+    others = [path.name for path in sorted(WORKFLOW.parent.iterdir())
+              if path.suffix in (".yml", ".yaml") and path != WORKFLOW
+              and Path(name).name in path.read_text(encoding="utf-8")]
+    assert others == []  # When another workflow names the file, change the sentences here and in the workflow.
     job = workflow["jobs"]["portable-checks"]
     assert job["runs-on"] == "ubuntu-latest"
     assert all(key not in part for part in (job, *job["steps"]) for key in ("if", "continue-on-error", "needs"))
@@ -1654,7 +1702,7 @@ def test_the_workflow_runs_every_case_of_this_file_and_a_case_that_did_not_run_f
     # The candidate of a pull request, not its merge with main, as in the other job; the Python of CI.
     assert checkout["with"]["ref"] == "${{ github.event.pull_request.head.sha || github.sha }}"
     assert python["with"]["python-version"] == "3.13" and install["run"] == "uv sync --locked --group dev"
-    # GitHub runs the named shell `bash` with `-eo pipefail`: a failed pytest fails the step through the pipe.
+    # GitHub runs the named shell `bash` with `-e -o pipefail`: a failed pytest fails the step through the pipe.
     assert run["shell"] == "bash"
     first, last = run["run"].splitlines()
     log = '"$RUNNER_TEMP/portable-checks.log"'
@@ -1663,8 +1711,11 @@ def test_the_workflow_runs_every_case_of_this_file_and_a_case_that_did_not_run_f
     start = f"tail -n 1 {log} | grep -E '"
     assert last.startswith(start) and last.endswith("'") and "'" not in last[len(start):-1]
     wanted = last[len(start):-1]
-    # pytest's last line. Only the first three pass: cases passed, and nothing else is said except warnings.
+    # pytest's last line. Only the first three pass: the passed cases, then warnings or nothing, then the time, and
+    # nothing after it.
+    assert wanted.startswith("^") and wanted.endswith("$")
     lines = ["302 passed in 31.07s", "302 passed, 8 warnings in 31.07s", "302 passed, 1 warning in 61.07s (0:01:01)",
+             "302 passed in 31.07s and something more", "302 passed in 61.07s (0:01:01) and something more",
              "301 passed, 1 skipped in 31.07s", "300 passed, 2 deselected in 31.07s", "1 failed, 301 passed in 31.07s",
              "301 passed, 1 xfailed in 31.07s", "301 passed, 1 xpassed in 31.07s", "301 passed, 1 error in 31.07s",
              "301 passed, 8 warnings, 2 errors in 31.07s", "1 skipped in 0.07s", "no tests ran in 0.07s",
@@ -1676,8 +1727,9 @@ def test_the_jobs_time_limit_holds_every_step_and_the_run_step_holds_its_phases(
     workflow = yaml.load(WORKFLOW.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
     for job in workflow["jobs"].values():
         limits = [int(step["timeout-minutes"]) for step in job["steps"]]
-        # The job's limit cuts no step short when every step before it used its whole limit. In the Windows job
-        # that keeps the cleanup step.
+        # The limit of each job is at least the sum of the limits of its steps plus 5 minutes. So a step's own limit
+        # ends it before the job's limit does, when GitHub needs no more than those 5 minutes between the steps. In
+        # the Windows job that is for the cleanup step.
         assert int(job["timeout-minutes"]) >= sum(limits) + 5
     job = workflow["jobs"]["windows-standard-account"]
     source = FIXTURE.read_text(encoding="utf-8")
@@ -2962,9 +3014,12 @@ def test_second_sign_in_keeps_standard_user_identity_port_readiness_and_root_ora
     monkeypatch.setattr(case, "certificate_marks", lambda home: MARKS)
     monkeypatch.setattr(case, "windows_root_has", lambda thumbprint: False)
     # The record beside the steps is not the subject here. Its watch would read the saved port once more and ask
-    # the stand-in for the trust read from a thread of its own, and after a failed step it waits 20 seconds.
+    # the stand-in for the trust read from a thread of its own: here it never starts. After a failed step the
+    # record is kept as in the case, without its wait of 20 seconds, so that `run.seen` below also counts a trust
+    # read that the record would make again.
     monkeypatch.setattr(case, "watch_listener", lambda home: case.ListenerWatch())
-    monkeypatch.setattr(case, "keep_after_failure", lambda steps, watch: None)
+    keep = case.keep_after_failure
+    monkeypatch.setattr(case, "keep_after_failure", lambda steps, watch: keep(steps, watch, wait=lambda seconds: None))
     before = {"hostBeforeSignOut": [22, "220"] if change == "same-host" else [11, "110"], "port": 443}
     (tmp_path / "journey.json").write_text(json.dumps(before))
     if change == "port":
@@ -3006,7 +3061,9 @@ def test_the_record_keeps_the_trust_read_after_the_sign_in_and_never_makes_it_a_
     monkeypatch.setattr(case, "product", lambda stage, root: (run.home, run.again))
     monkeypatch.setattr(case, "trust_targets", lambda home: (run.urls, run.pin))
     monkeypatch.setattr(case, "certificate_marks", lambda home: MARKS)
-    monkeypatch.setattr(case, "windows_root_has", lambda thumbprint: False)  # The step fails after the trust read.
+    # After a trust read that gives its answer, the step fails at this condition (the first parameter). In the
+    # second parameter the trust read itself ends with the step's error.
+    monkeypatch.setattr(case, "windows_root_has", lambda thumbprint: False)
     # The watch has its own cases. Here it never starts: its thread would ask the stand-in for the trust read.
     monkeypatch.setattr(case, "watch_listener", lambda home: case.ListenerWatch())
     waits, keep = [], case.keep_after_failure
