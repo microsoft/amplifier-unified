@@ -285,23 +285,27 @@ async def windows_working(home, *, wait=15.0):
     One read has a time limit of 3 seconds. A host that is busy takes the
     request and can give no answer in that time: on hosted test machines its
     loop stayed in one database commit for up to 11 seconds, some seconds
-    after a start. With None the uninstall stops a chat that is at work and
-    does not ask the person first. So an address whose read ended by its time
-    limit is asked again. A new round of reads starts only while fewer than
-    `wait` seconds have gone by since the first read began, and a round that
-    has started is completed. An installation from the setup file has one
-    address: five reads, 15 seconds.
+    after a start. With None the uninstall goes on and does not ask; a chat
+    that is at work is then stopped with no question. So an address whose
+    read ended by its time limit is asked again. A new round of reads starts
+    only while fewer than `wait` seconds have gone by since the first read
+    began, and a round that has started is completed. An installation from
+    the setup file has one address: five reads, 15 seconds.
 
     A read that ends in another way is final for its address, which is not
     asked again: a refused connection (nothing listens there), a connection
     that is cut off, an answer of another program. An answer of this
     installation ends all reads, with a count or without one.
 
-    So the person's next question waits only while something takes the
-    connection at an address of this installation and gives no answer within
-    the limit. That is a busy host. It can also be another program at that
-    port after the host has gone, or a computer that gives this program no
-    time. The result is then None after the wait, as it was after one read.
+    Only a time limit brings another read. It does not prove that a host is
+    there: the limit can end a read while it connects, and while it waits for
+    the answer. A busy host is one cause. Another program at that port after
+    the host has gone is one, and a computer that gives this program no time
+    is one. While reads end in that way, the person's next question waits,
+    at most to the bound; the result is then None, as it was after one read.
+    A refusal is final, and it takes time too, as it did before this wait
+    existed: a hosted Windows test machine refused a port with no listener
+    after about 2 seconds.
     """
     import aiohttp
     import yaml
@@ -314,6 +318,8 @@ async def windows_working(home, *, wait=15.0):
             return None
         token = browser_entry._control_token(home, browser_entry.current_owner_sid())
         identity = data_identity(home)
+        # The module's `time`, not the event loop's clock: a case gives this function a clock of its own and
+        # leaves the loop's clock, which aiohttp's time limits use, as it is.
         deadline = time.monotonic() + wait
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=3), trust_env=False) as client:
             while True:
