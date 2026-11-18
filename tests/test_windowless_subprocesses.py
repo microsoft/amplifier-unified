@@ -12,7 +12,7 @@ import pytest
 @pytest.mark.parametrize("path,function", [
     ("runtime_qualification.py", "_installed_checkout_environment"),
     ("runtime_qualification.py", "_installed_checkout_dirty"),
-    ("runtime_qualification.py", "installed_graph"),
+    ("runtime_qualification.py", "_installed_root"),  # The Git calls of installed_graph since #2194.
     ("runtime_retained_dependencies.py", "verify"),
     ("host/components.py", "portable_module_sources"),
     ("host/context_source.py", "_git"),
