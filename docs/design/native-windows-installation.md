@@ -192,8 +192,9 @@ that setup did not make. `--check` reports the plan and changes nothing.
 **It must run outside the app.** The normal stop ends every process in the
 host's Job. The command runs with the active generation's Python (never the
 launcher's own), and refuses when it is a descendant of the running host. A
-terminal, a remote shell and setup qualify. The app itself cannot run it
-without a helper that Windows starts outside that Job; none exists yet.
+terminal and a remote shell qualify. The app itself starts it through a
+second task, which Windows starts outside that Job (see "The launcher follows
+the app").
 
 Steps, in order:
 
@@ -305,9 +306,207 @@ one next step: before the start-at-sign-in task exists the cause is the first
 start's download, and the next step is the internet connection and the Start
 menu; nothing is installed again.
 
-The Apps-list version stays at the setup version, as it already does after
-every in-app update. Setup's Repair and Update will call this command and
-refresh the private tools; that is separate work.
+The refresh does not change the Apps-list version; the app host writes it
+(next section). Setup's Repair and Update will call this command and refresh
+the private tools; that is separate work.
+
+### The launcher follows the app
+
+After an app update, the app host asks for the launcher refresh by itself.
+No person, terminal, console window or elevation is needed. The decision is
+app code (`windows_launcher_follow`), so it reaches an installed PC with an
+ordinary update; the launcher that the PC has needs no change for it.
+
+**When.** One call in the update owner's loop, after each pass. All of these
+must hold:
+
+- This host is the verified update owner of a supervised task, and it runs the
+  active app generation.
+- The app is newer than the launcher, and the launcher's files differ from the
+  app's. `windows_launcher_files.py` lists the package files that a launcher
+  process can load (`FILES`) and the distributions that they import
+  (`PACKAGES`). The host compares the bytes of each listed file, the installed
+  version of each listed distribution, and `entry_points.txt`. A file that one
+  side lacks, or that cannot be read, is a difference. Nothing is stored in
+  the launcher, so a launcher from before this change is compared the same
+  way. Measured at the release tags: a listed file changed in 5 of the last
+  20 releases. An update that changes no listed file causes no refresh.
+- The active app version is confirmed: the update's own record says that the
+  new app started (`acknowledged`) for exactly this generation. A new task
+  registration has no such record until the next app update. After an update
+  the new host writes that confirmation itself, and it does so after it
+  listens. So a record that still says `prepared` for the running generation
+  is no answer: the host reads it again at each pass. Every other state of
+  the record is read once for one host run.
+- Nothing runs: no chat turn, no worker, no update check, stage, installation
+  or activation, and the update state is the same as at the pass before.
+- "Keep Amplifier up to date" is on, or the person selected the install button
+  of the Updates page while that page offered the launcher for this app
+  version.
+- No counted attempt exists for this app version, or the button was selected.
+- No request is open and no refresh is unfinished.
+
+**Who runs it.** The host registers a second task of the same account,
+`AmplifierUnifiedLauncher-<SID>` (`windows_launcher_task`), and starts it.
+Its action is the refresh command with the active generation's windowless
+Python and `--automatic`: "the helper". The task has the same principal as the
+main task (the person's own sign-in, least privilege) and the same ownership
+rule: its description holds its own specification, and the whole definition
+must equal the definition that this specification generates. A task of that
+name that fails the check is never changed, and no refresh starts. Its
+triggers have no end: at sign-in, every 5 minutes for one day, then once a
+day. The host removes the task when the request is settled; the helper removes
+it when the account has no owned main task for this data folder any more; the
+uninstall of a launcher with this change removes it too.
+
+The helper's working folder is the app generation's `Scripts` folder. That
+folder holds a `uv.exe` of its own, because the app depends on a package that
+brings one. Windows program lookup tries the current folder before the path,
+and on a Windows runner the helper ran that program and not setup's. The
+refresh command now turns that lookup off for its process, as the host does
+(`NoDefaultCurrentDirectoryInExePath`), and refuses a uv whose path is not
+absolute. So the task's own path decides, in the helper and in a person's
+terminal.
+
+**Records**, private, in `config\services`: `launcher-refresh-request.json`
+(hosts write it: the request, the main task's registration, the launcher's
+identity, the target generation, `open` or `closed`, and the hold),
+`launcher-refresh.json` (the helper's state and result) and the journal of the
+refresh. Every journal names the main task's registration; the journal of an
+automatic refresh also names its request.
+
+**The rules.** No clock decides safety; time limits decide only when a side
+gives up.
+
+- *Update fence.* While a host knows an open request, `awaiting_restart()` is
+  true: no update check, stage, installation, activation or storage cleanup
+  starts. The host sets the fence in the same step in which it tested that
+  nothing runs. So a launcher request and an app-update hand-over never run
+  together, and the helper's Python is not deleted.
+- *Hold.* A host names its own run in the request only after it closed
+  admission for new work. It does so at "go" (the helper said that it is ready
+  for exactly this run, the app is still idle, and the setting or the button
+  still allows it), or when it starts while a refresh has already started.
+- *Stop.* The helper asks the app to stop only while it holds the refresh
+  lock, only the exact run whose hold it read under that lock, and never while
+  an update hand-over is in flight. This covers the first stop and every stop
+  of a rollback or a recovery.
+- *Reopen.* A host clears its hold and admits work again only when it holds
+  the refresh lock itself and no stop record names its run.
+- *Registration.* A journal that names another registration than the main
+  task has now belongs to an installation before Amplifier was installed
+  again. Nothing is ever rolled back from it: the manual command refuses and
+  names the file; a host or a helper renames it
+  (`launcher-refresh-journal-stale-<time>.json`) and goes on.
+
+So a stop of this mechanism cannot reach a host that has work, and with the
+setting off no refresh starts. A person's own "Stop Amplifier" is not part of
+this: it stops the app at once, as before.
+
+**What brings the app back.** The helper that sees its own failure rolls back
+and starts the app in the same process. For that it stops the app only with
+the hold of the host that runs then (the stop rule). A host that started on
+the new launcher gives that hold before it listens. A host that hangs before
+that point gives none: the helper then stops nothing, and each trigger waits
+again, until a person selects "Stop Amplifier"; the next trigger then puts
+the earlier launcher back. A helper that was ended leaves its
+journal and the task; the timed trigger starts the helper again, and it puts
+the earlier launcher back from the journal and starts the app. A sign-out, a
+restart of the PC or a power loss is settled at the next sign-in. The recovery
+always rolls back; it never finishes a refresh forward. A host that waited 10
+minutes with admission closed reopens as soon as it has the lock, says that
+one part of the update still needs a repair, and tries that repair about once
+an hour when no work runs. Until then Amplifier checks for no updates. That
+is for a refresh that started. The repair's own "go" needs no setting, so a
+host gives it only for such a refresh. A request whose refresh did not start
+changed nothing: the host closes it, as one counted attempt. A hold that a
+host could not save ends after the same 10 minutes, in one of these two ways.
+When the helper finishes before that, its own result closes the request at the
+host's next pass.
+
+**Bounded.** One counted automatic attempt for one app version: a refusal, a
+check that could not run three times in one host run (the host tries it again
+after 5 minutes), a helper that did not become ready, or any settled result
+except "withdrawn"
+(the app was busy at "go", or the setting was turned off). The next automatic
+attempt comes with the next app update. The page's install button tries once
+more for each press.
+
+**What a person sees.** The server puts the text into the update status
+(`updates.launcherRefresh`, shown through `currentStatus`): before the
+restart "Amplifier needs one more restart", or with the setting off "One part
+of the update is ready" with the button; then "Amplifier is restarting";
+afterwards a sentence with the new version, or "Amplifier is running. One
+part of the update did not finish." with the earlier version and the button.
+While a request is open its text replaces the health text, because no update
+runs then. The texts name the install button as the bundled page labels it for
+such a status: "Retry installation". The page also adds its own sentence about
+"retained components" there, which does not fit the launcher; a label and a
+sentence of its own for this state are web-client work. During the outage the
+page shows the web client's own reconnect text. The helper never shows a
+message box: a waiting box would hold the task and block the timed trigger.
+
+**The Apps list.** It shows the version of the app that is installed and
+confirmed, which is the version that the Updates page shows. The app host
+writes it once per run (`windows_consumer_shell.set_version`), only for a
+setup-made installation and only after the app version is confirmed. It
+requires that the entry record and every value of the key are as setup wrote
+them, changes `DisplayVersion` alone in one registry transaction, and puts
+the record back when the key step fails. A private note lets the next host
+start settle a write that was interrupted. The result of each run is saved in
+`updates.launcherRefresh.appsList`. The refresh itself still rewrites only
+setup's install receipt. A version that is not of the form `d.d.d` is not
+written.
+
+**The kept launcher folder.** An automatic refresh keeps the launcher that it
+replaced, as the manual command does. After a later automatic refresh is
+settled, the helper deletes the folder that the previous automatic refresh
+set aside: only the path in its own record, only a real folder of that name
+form beside the installation's `tools` folder, never a path that an
+unfinished journal names. Folders from manual runs are never touched. So the
+first automatic refresh on a PC deletes nothing.
+
+**Not weakened.** The main task's ownership check, the launcher identity in
+the launch record, the generation's own checks and the release file's digest
+are unchanged and run in the helper. The host itself never moves, installs or
+binds anything: it writes private records, registers and starts one task of
+its own account, and writes one registry value. A refresh never changes the
+main task or its registration.
+
+Evidence and limits. `windows-launcher-follow.yml` runs on a Windows runner
+with a published earlier release (0.105.0) as the launcher in setup's layout
+and with the real Task Scheduler, supervisor, host, helper task, helper, uv
+and Apps-list key. It requires, with no skipped check: nothing starts before
+the app version is confirmed; an app that started while the record still said
+`prepared` writes the Apps list after the confirmation comes; a
+forced installation failure is rolled back, the app runs on the earlier
+launcher and saves the failure; an app that starts afterwards makes no second
+attempt; a helper that is ended after the launcher folder was moved aside is
+repaired by Task Scheduler's timed trigger with no other action; then the
+launcher follows, at the same path and on the same port, and the listed files
+do not differ any more; the new launcher starts and uninstalls; a helper task
+that was left with no main task removes itself. The fixture writes the records
+that an app update leaves, and it writes the confirmation in the place of the
+app's own readiness check; the update hand-over has its own workflow.
+Measured there (run 44162025757): 75 seconds from the app's request to the
+settled rollback of the forced failure; 241 seconds from the end of the helper
+to the repair by the timed trigger; 134 seconds from the request to the
+settled refresh. Not shown there: the setup file, a standard account, a sign-out or a restart of
+the PC, the Updates page in a browser and its button, a message that is sent
+while Amplifier restarts, a count of console windows, a helper that is ended
+after it started the app, a real update hand-over that the refresh follows,
+and an installation that setup did not make.
+Portable cases cover the decision, each rule, the helper's cases, the button
+and the texts.
+
+Known limits. While the launcher folder is aside, the Start-menu entries do
+not work, and nothing on the screen reports a recovery that fails while the
+app is down. The "needs a repair" text names no step for the person, because
+none is true today: setup does not repair an installation, and `--recover`
+needs a terminal. A launcher from before this change cannot remove the helper
+task at uninstall; when the folder was deleted too, the task stays and can
+start nothing. If Amplifier gets a new task registration while the launcher
+folder is still aside, nothing automatic brings the app back.
 
 ### Consumer release asset
 
@@ -583,8 +782,10 @@ two places where a person meets it: the Start-menu entry gets no status from
 its `service status` command and shows "Amplifier could not start", and a
 first start that updates the app opens no browser. The task that starts the
 background app does not use this hand-over (also read from source). Such an
-installation needs its launcher replaced
-(`windows_launcher_refresh`); nothing does that automatically. Measured on a
+installation needs its launcher replaced (`windows_launcher_refresh`). The
+app starts that refresh by itself after an app update that changed a file that
+the launcher runs (see "The launcher follows the app"); such an installation
+is not run there. Measured on a
 Windows runner: a plain list splits an argument with a space, and with an
 interpreter under a folder with a space the command does not arrive. Not run:
 a real installation of an earlier setup file under such a user name.
@@ -3618,8 +3819,11 @@ task. None of the three is measured on a PC.
   second setup run does not: on an installed PC setup offers to add missing
   Start-menu and Apps-list entries and to open the app (with a program file
   missing it offers nothing), and it does not install the program files
-  again. Nothing in the app or in setup runs the refresh; a person runs it,
-  with the Python of the active app version. The refresh has its own
+  again. The app starts the refresh by itself after an app update that
+  changed a file that the launcher runs, when no work runs (see "The launcher
+  follows the app"). After a rename such a launcher does not start the app,
+  so then only a person can run the refresh, with the Python of the active
+  app version; setup never runs it. The refresh has its own
   conditions (for one, it installs nothing when no newer app version is
   active). It reads the task with the active app version's ownership check.
   So after a rename the refresh ends at that read and changes nothing, unless

@@ -61,11 +61,52 @@ def run(root):
             raise AssertionError("Registry create must refuse an existing registration.")
         if shell.registry(root) != registration:
             raise AssertionError("Registry collision overwrote existing values.")
+        home = root / "app"
+        with directory(home / "config/services", owned_root=home, create=True):
+            pass
+        report["phase"] = "apps-list-version"
+        save()
+        report["setVersion"] = shell.set_version(root, "9.9.9", home=home)
+        with directory(root, owned_root=root) as owned:
+            row = json.loads(owned.read_private(shell.FILE, limit=65536))
+        registration = shell.registry(root)
+        if (not report["setVersion"]["changed"] or registration["DisplayVersion"][0] != "9.9.9"
+                or row["registry"]["DisplayVersion"] != "9.9.9"):
+            raise AssertionError("The confirmed version was not written to the record and key.")
+        import winreg
+        key = shell.REGISTRY + shell.identity(root)
+        with directory(root, owned_root=root) as owned:
+            earlier = owned.read_private(shell.FILE, limit=65536)
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key, 0, winreg.KEY_SET_VALUE) as changed:
+            winreg.SetValueEx(changed, "DisplayName", 0, winreg.REG_SZ, "fixture-racer")
+        refused = shell.set_version(root, "9.9.10", home=home)
+        expected = {**registration, "DisplayName": ("fixture-racer", winreg.REG_SZ)}
+        with directory(root, owned_root=root) as owned:
+            unchanged = owned.read_private(shell.FILE, limit=65536) == earlier
+        if (refused["changed"] or shell.registry(root) != expected or not unchanged
+                or (home / "config/services" / shell.NOTE).exists()):
+            raise AssertionError("A changed Apps-list key did not refuse the version write.")
+        report["changedValueVersionRefused"] = True
+        # Restore only the exact fixture-authored value.
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key, 0, winreg.KEY_SET_VALUE) as changed:
+            winreg.SetValueEx(changed, "DisplayName", 0, *reversed(registration["DisplayName"]))
+        write_private(home / "config/services" / shell.NOTE, json.dumps(
+            {"schema": 1, "root": str(root), "from": "9.9.9", "to": "9.9.10"}), owned_root=home)
+        row["registry"]["DisplayVersion"] = "9.9.10"
+        write_private(root / shell.FILE, json.dumps(row), owned_root=root)
+        report["settleVersion"] = shell.settle_version(root, home=home)
+        registration = shell.registry(root)
+        with directory(root, owned_root=root) as owned:
+            row = json.loads(owned.read_private(shell.FILE, limit=65536))
+        if (report["settleVersion"]["state"] != "completed"
+                or registration["DisplayVersion"][0] != "9.9.10"
+                or row["registry"]["DisplayVersion"] != "9.9.10"
+                or (home / "config/services" / shell.NOTE).exists()):
+            raise AssertionError("Startup did not settle the interrupted Apps-list write.")
+        save()
         # Preparing removal retains the entire file set. Actual NTFS sharing
         # must block same-account link writes/replacement before any effect.
         with shell.removal(root):
-            import winreg
-            key = shell.REGISTRY + shell.identity(root)
             last = list(links)[-1]
             for operation in ("write-link", "replace-link"):
                 try:
