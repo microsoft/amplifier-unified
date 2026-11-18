@@ -774,8 +774,9 @@ first pass that reaches it: `tick` returns before the
 read while the outcome of a manual hand-over commit is not known, and while
 `awaiting_restart()` holds. Until a health read for the new revision ends,
 health gives "Checking current configuration" when the proof that it holds,
-with this limit taken out, gives a quiet value (`projection`). After that
-read, an earlier rule of `current()` can decide the value, for example an
+with this limit taken out, gives a quiet value (`projection`). When that
+read finds this state, an earlier rule of `current()` can still decide the
+value, for example an
 operation that runs or waits, a failure that the proof does not cover, a
 listed update or a failed application check. When none does, and either the
 check sequence is complete with the application current or a local source
@@ -791,8 +792,9 @@ that the record does not name. When no earlier rule decides and neither of
 those two holds, the value is "Check for updates" / "The full desired
 component state has not been checked.", also with the status `unchecked`. The
 bundled page shows a quiet health value when no update operation runs or
-waits; while one does, the page shows its own text of that operation. The
-state ends when a check lists an update. For the other key a check's
+waits; while one does, the page shows its own text of that operation. This
+text ends when a check lists an update, or when the settings again have the
+key of the record. For the other key a check's
 inventory adds the row "Qualify current component configuration", unless it
 already lists a row for the worker environment; each such row is an update.
 A health read is not an update check, and no rule for a check reads this
