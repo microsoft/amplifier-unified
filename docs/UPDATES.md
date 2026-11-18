@@ -715,8 +715,9 @@ After a switch to another generation, the owner publishes the new selection
 before it has read that generation's proof. Until that read ends, the page shows
 "Checking components" in place of a result from an earlier component failure
 record; an error of the switch itself is shown at once. When the switch is
-cancelled before it has published the result of that read, the update owner's
-next pass that no hold stops makes the read again and publishes what it found.
+cancelled before it has published the result of that read, or its own error,
+the update owner's next pass that no hold stops makes the read and
+publishes what it found.
 No installation or model call runs just to clear old attention.
 An exact verified app restart also supersedes older candidate failures only when
 their requested feature scope is known and present. Intentional local source
