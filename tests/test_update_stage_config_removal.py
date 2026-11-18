@@ -860,13 +860,18 @@ def native_stage():
 
 
 @pytest.mark.skipif(os.name != 'nt', reason='requires native Windows private files')
-def test_native_windows_stage_config_copies_go_through_the_private_boundary(native_stage):
+def test_native_windows_stage_config_copies_go_through_the_private_boundary(native_stage, capsys):
     home, stage, before = native_stage()
     kept, total = rest(stage), copied(stage)
     info = stage.lstat()
     written = info.st_mtime_ns
     assert storage.remove_stage_config(home, stage, expected={stage: (0, 0)}) == ('refused', 0)
+    started = time.perf_counter()
     result = storage.remove_stage_config(home, stage, expected={stage: (info.st_dev, info.st_ino)})
+    elapsed = time.perf_counter() - started
+    with capsys.disabled():
+        # The pass runs this on the host's event loop. The job's log keeps the time of this runner.
+        print(f'\nnative removal of a stage\'s copies: {result[1]} entries in {elapsed * 1000:.0f} ms')
     assert result == (None, total), (
         f'The removal of copies that copytree made returned {result!r}; left {left(stage)}; '
         f'the boundary refuses {boundary_refusals(home, stage)}')

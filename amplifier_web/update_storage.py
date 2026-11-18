@@ -115,7 +115,10 @@ def remove_stage_keys(home, stage, *, expected=None):
 
 # An earlier version of the app copied its own config and routing folders into
 # each stage. One idle pass removes at most this many entries (files, links and
-# folders) of those copies; a larger copy goes on at the next pass.
+# folders) of those copies; a larger copy goes on at the next pass. The removal
+# runs on the host's event loop, as the removal of a keys file does, and on
+# Windows each file goes through the private-file boundary: the count bounds
+# that time.
 STAGE_CONFIG_ENTRIES = 256
 _STAGE_CONFIG_DEPTH = 32
 
