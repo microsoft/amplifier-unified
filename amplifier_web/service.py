@@ -4912,6 +4912,22 @@ class AppService:
     def _ingest_runtime_execution(self, session, payload):
         with self.performance_diagnostics.measure('execution.ingest', synchronous=True, session_id=session['id']):
             ingest_execution(session,payload)
+        if (payload.get('incompleteHistoryDispatched') is True and payload.get('kind') == 'llm'
+                and payload.get('phase') == 'running' and not payload.get('purpose')
+                and payload.get('sessionId') == payload.get('rootSessionId') == session['id']):
+            from .execution import turns_for_inputs
+            active = session.get('collaborationGeneration') or {}
+            turn_id, owner = payload.get('admissionInputId'), payload.get('runtimeOwnerId')
+            generation = payload.get('generationId')
+            if (turn_id and owner and generation and generation == active.get('id')
+                    and not active.get('terminal')
+                    and active.get('interruptionRevision') == session.get('interruptionRevision', 0)
+                    and session.get('status') not in {'stopping', 'stopped'}
+                    and session.get('contextDegradation') != {'turnId': turn_id}
+                    and any(turn['id'] == turn_id and turn.get('runtimeOwnerId') == owner
+                            and turn.get('generationId') == generation
+                            for turn in turns_for_inputs(session, {turn_id}))):
+                session['contextDegradation'] = {'turnId': turn_id}
         if getattr(self, 'status_emitter', None):
             self.status_emitter.execution(session, payload)
         # Call failures remain on the operation that failed. Only terminal
@@ -5410,6 +5426,8 @@ class AppService:
                     if admitted_start and session.get('messageAnnotations', {}).get(input_annotation) is not before_input:
                         from .execution import bind_runtime_turn
                         bind_runtime_turn(session, payload)
+                        if message.get('role') == 'user' and initial != (session.get('contextDegradation') or {}).get('turnId'):
+                            session.pop('contextDegradation', None)
                     from .response_completion import apply as apply_response_completion
                     apply_response_completion(session, payload)
                     if payload.get('event') == 'generation.failed':
