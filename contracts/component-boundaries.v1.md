@@ -149,6 +149,18 @@ Client source locks must select the same three SDK build inputs; no lock bypass
 or second SDK author is introduced. Component publication and app adoption remain
 separate. See [SDK delivery](../docs/shell/sdk-delivery.md).
 
+## Current Publishing mechanism delivery
+
+[microsoft/amplifier-publishing](https://github.com/microsoft/amplifier-publishing)
+owns immutable static releases, private serving, lifecycle receipts and direct
+mechanism tests. Unified selects its published artifact as the sole installed
+owner and retains task scope, authorization, policy and remote-target integration.
+The existing public Python API and Unified's durable store formats, optional
+retention, pins, reader settlement, expired-body history and unknown-outcome
+recovery remain supported. Selection moves no user data, enables no policy and
+replays no effect. Historical publication receipts remain valid; source acceptance,
+standalone publication, app selection and live adoption are distinct.
+
 ## Not in v1
 
 Mandatory microservices or a new central runtime framework; promote only when a

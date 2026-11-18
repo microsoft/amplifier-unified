@@ -20,11 +20,6 @@
 /components/recall-delivery/** source-context=generated linguist-vendored=true linguist-generated=true -text
 /components/scheduling.source.json source-context=configuration
 /components/scheduling-delivery/** source-context=generated linguist-vendored=true linguist-generated=true -text
-/components/publishing/amplifier_publishing/** source-context=source
-/components/publishing/tests/** source-context=tests
-/components/publishing/MANIFEST.in source-context=configuration
-/components/publishing/.gitignore source-context=configuration
-/components/publishing/LICENSE source-context=documentation
 /components/publishing.source.json source-context=configuration
 /components/publishing-delivery/** source-context=generated linguist-vendored=true linguist-generated=true -text
 /components/worktrees.source.json source-context=configuration

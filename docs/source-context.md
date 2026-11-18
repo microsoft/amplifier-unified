@@ -63,11 +63,15 @@ Scheduling is authored in the public
 repository. Its selected artifact remains in generated `components/scheduling-delivery`,
 bound by `components/scheduling.source.json`; see the
 [selection guide](../components/README.md#select-a-scheduling-artifact).
-Portability and publishing artifact snapshots follow the same author/delivery
-distinction: `components/<name>` is authored, while `components/<name>-delivery`
-is generated and opt-in. Visible `components/<name>.source.json` records the
-selected public wheel. Use `--all --under components/<name>-delivery` to inspect
-it; a new component source edit or publication does not silently refresh the copy.
+Publishing is authored in public
+[microsoft/amplifier-publishing](https://github.com/microsoft/amplifier-publishing).
+Its generated `components/publishing-delivery` snapshot is bound by
+`components/publishing.source.json`; follow the
+[selection guide](../components/README.md#select-a-publishing-artifact).
+Portability retains its temporary `components/portability` author project and
+generated `components/portability-delivery` snapshot. Visible source records bind
+the selected public wheels. Use `--all --under components/<name>-delivery` to
+inspect generated inputs; source edits and publication do not refresh them.
 Recall storage is authored in public
 [amplifier-platform-recall](https://github.com/bkrabach/amplifier-platform-recall).
 Unified's generated `components/recall-delivery` snapshot and `recall.source.json`

@@ -70,8 +70,6 @@ exclude = [
 [tool.hatch.build.targets.sdist]
 exclude = [
     "/.ci/**",
-    "/components/publishing/build/**", "/components/publishing/dist/**",
-    "/components/publishing/.venv/**", "/components/publishing/*.egg-info/**",
     "/components/portability/build/**", "/components/portability/dist/**",
     "/components/portability/.venv/**", "/components/portability/*.egg-info/**",
 ]

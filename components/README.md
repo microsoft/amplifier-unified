@@ -69,15 +69,14 @@ real-Git tests. Unified consumes the exact published artifact selected into
 The host retains active-task, permission, handoff and cleanup policy. Do not
 restore an author copy here or coinstall the standalone distribution with Unified.
 
-[`publishing/`](publishing/README.md) is the temporary authoring home for the
-independently buildable static publishing package and its portable tests. Unified
-consumes the public artifact selected into `publishing-delivery/`, recorded by
-`publishing.source.json`; its host publishing adapters, authorization and policy
-remain in Unified. Author edits and publication do not refresh this generated
-copy; Unified remains the sole installed owner. Follow the
-[selection instructions](publishing/README.md#unified-artifact-selection), and do
-not coinstall the standalone distribution. The author project stays here until
-a separate repository and handoff are ready.
+[microsoft/amplifier-publishing](https://github.com/microsoft/amplifier-publishing)
+owns the static publishing package, private-service mechanism and their direct
+tests. Unified consumes the published artifact selected into
+`publishing-delivery/`, recorded by `publishing.source.json`; host publishing
+adapters, authorization and policy remain in Unified. Source acceptance and
+publication do not refresh this generated copy. Unified remains the sole installed
+owner; follow the [selection instructions](#select-a-publishing-artifact), and do
+not restore an author copy or coinstall the standalone distribution.
 
 [amplifier-platform-scheduling](https://github.com/bkrabach/amplifier-platform-scheduling)
 owns the independently buildable scheduling policy/store and its standalone tests.
@@ -86,6 +85,40 @@ Unified consumes the explicitly selected published wheel through the generated
 Author changes and component publication do not change that app default. The app
 remains the sole installed distribution owner; this is artifact assembly, not a
 separately updatable pip dependency. Do not restore a second author copy here.
+
+## Select a Publishing artifact
+
+The public [Publishing repository](https://github.com/microsoft/amplifier-publishing)
+owns source and standalone publication. `publishing.source.json` is the authority
+for Unified's selected source, original receipt and artifact bytes; a public
+source merge or release does not change that selection. Historical Unified
+publication receipts remain valid and are not rewritten by this handoff.
+
+Download the reviewed release's wheel, source archive, `publishing-source.json`
+and `SHA256SUMS` into a private directory. Verify the original receipt SHA256
+against the reviewed publication, then run:
+
+```sh
+python scripts/scheduling_delivery.py select --component publishing \
+  --dist /path/to/release-assets --revision FULL_PUBLISHED_SOURCE_SHA \
+  --receipt-sha256 REVIEWED_RECEIPT_SHA256
+python scripts/scheduling_delivery.py verify --component publishing
+```
+
+The selector verifies original artifacts and refuses locally changed delivery.
+Normal wheel, editable and Git-free source-archive builds verify the selected
+snapshot offline; there is no author-source fallback. Review the selection and
+qualify the installed package before a Unified release. Unified is the sole
+installed owner and carries the original license and provenance under
+`amplifier_web/component_delivery/`; do not coinstall the standalone distribution.
+The old Unified Publishing publication workflow is retired.
+
+This handoff preserves store formats, immutable release identities, receipts,
+pins, opted-in retention and unknown-outcome recovery. It does not move user data,
+activate expiry, restart listeners or replay work. Host authorization, serving
+policy and remote-target integration stay in Unified. Package publication
+controls GitHub artifacts; it does not add GitHub release automation to the
+Publisher domain.
 
 ## Select a Recall artifact
 

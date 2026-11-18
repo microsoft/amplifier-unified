@@ -56,13 +56,15 @@ receipt; follow the [paired selection guide](README.md#select-worktrees-and-port
 Never restore an author copy, edit generated delivery or coinstall the standalone
 distribution with Unified.
 
-`components/publishing/` is temporarily authored here as its independently
-buildable Python project. Preserve its `amplifier_publishing` imports and existing
-module entrypoint. Unified consumes only the published artifact selected into
+[microsoft/amplifier-publishing](https://github.com/microsoft/amplifier-publishing)
+is the sole Publishing author and owns its lifecycle, storage and private-service
+mechanism tests. Preserve `amplifier_publishing` imports and the service module
+entrypoint. Unified consumes only the published artifact selected into
 `publishing-delivery/` by `publishing.source.json`, as the sole installed owner.
-Never edit that generated copy by hand or coinstall the standalone distribution.
-Author edits and publication do not refresh the app selection. Its POSIX mechanism
-tests stay with the package; host authorization, policy and integration stay in Unified.
+Never restore an author copy here, edit generated delivery by hand or coinstall the
+standalone distribution. Source acceptance and publication do not refresh the app
+selection. Host authorization, policy and integration remain in Unified; follow
+the [selection instructions](README.md#select-a-publishing-artifact).
 
 Author Scheduling's policy/store and standalone tests in
 [amplifier-platform-scheduling](https://github.com/bkrabach/amplifier-platform-scheduling).
