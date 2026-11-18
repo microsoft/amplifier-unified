@@ -4147,9 +4147,12 @@ class AppService:
                 receipt['handoffOrigin'] = self.handoffs.lineage(handoff)
                 receipt['actor'] = self.handoffs.actor(handoff)
             if action == 'conversation.send':
-                # An earlier version left the shared setup step at its first
-                # value on an installation that already has chats.
-                self._first_use_over()
+                # A person's message is saved at this point; its delivery can
+                # still fail afterwards. An earlier version left the shared
+                # setup step at its first value on an installation that
+                # already has chats.
+                if origin in {'ui', 'user'} and session.get('sessionKind') != 'internal':
+                    self._first_use_over()
                 receipt.update(delivery=message['delivery']['status'], sessionId=session['id'], inputId=input_id)
                 if stopped_generation is not None:
                     receipt['stoppedGenerationRecovery'] = stopped_generation

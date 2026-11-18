@@ -901,6 +901,25 @@ def _setup_step(service, client):
         return service.browser_state()['view'].get('setupJourney')
 
 
+def _saved_setup_step(service):
+    """The shared view as the next host process reads it. A close saves everything, so read it before."""
+    row = service.db.execute("SELECT value FROM state_records WHERE kind='global' AND id='view'").fetchone()
+    return json.loads(row[0])['value'].get('setupJourney')
+
+
+def _as_an_earlier_version_saved_it(service):
+    # An earlier version changed only a tab's own view: the saved shared view kept the first step.
+    service._state['view']['setupJourney'] = 'welcome'
+    service._save_changes(globals={'view'})
+    assert _saved_setup_step(service) == 'welcome'
+
+
+class _RuntimeThatDoesNotStart(Runtime):
+    async def send(self, session, text, input_id, emit, **options):
+        from amplifier_web.runtime import RuntimeStartupError
+        raise RuntimeStartupError('Amplifier did not send your message.')
+
+
 async def test_first_use_starts_every_new_browser_tab_at_the_first_setup_step(tmp_path):
     service = AppService(tmp_path, Runtime(), workspace=tmp_path)
     try:
@@ -910,6 +929,8 @@ async def test_first_use_starts_every_new_browser_tab_at_the_first_setup_step(tm
         await _as_client(service, 'tab-one', 'view.update', {'patch': {'setupJourney': 'connect'}})
         # Work that is not a person's chat does not end first use.
         await _as_client(service, 'tab-one', 'session.create', {'title': 'Not selected', 'select': False})
+        await _as_client(service, 'tab-one', 'session.create', {'purpose': 'terminal-tool'})
+        assert _saved_setup_step(service) == 'welcome'
         service.clients.attach('tab-two')
         assert _setup_step(service, 'tab-two') == 'welcome'
         assert _setup_step(service, 'tab-one') == 'connect'
@@ -925,19 +946,31 @@ async def test_new_browser_tab_after_a_first_chat_does_not_start_at_the_first_se
         if step_of_first_tab != 'welcome':
             await _as_client(service, 'tab-one', 'view.update', {'patch': {'setupJourney': step_of_first_tab}})
         await _as_client(service, 'tab-one', 'session.create', {'title': 'First chat'})
+        assert _saved_setup_step(service) == 'done'
         # Only a tab that is still at the first step is moved by its own chat.
         assert _setup_step(service, 'tab-one') == {'welcome': 'done', 'connect': 'connect'}[step_of_first_tab]
         service.clients.attach('tab-two')
         assert _setup_step(service, 'tab-two') == 'done'
     finally:
         await service.close()
-    # A start of the app opens a new tab: the saved shared view must hold the step.
+    # A start of the app opens a new tab.
     restored = AppService(tmp_path, Runtime(), workspace=tmp_path)
     try:
         restored.clients.attach('tab-after-start')
         assert _setup_step(restored, 'tab-after-start') == 'done'
     finally:
         await restored.close()
+
+
+async def test_a_first_chat_with_no_browser_tab_attached_ends_first_use(tmp_path):
+    service = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    try:
+        await service.dispatch('session.create', {'title': 'First chat'})
+        assert _saved_setup_step(service) == 'done'
+        service.clients.attach('tab-one')
+        assert _setup_step(service, 'tab-one') == 'done'
+    finally:
+        await service.close()
 
 
 async def test_new_browser_tab_after_a_finished_setup_does_not_start_at_the_first_setup_step(tmp_path):
@@ -945,36 +978,57 @@ async def test_new_browser_tab_after_a_finished_setup_does_not_start_at_the_firs
     try:
         service.clients.attach('tab-one')
         await _as_client(service, 'tab-one', 'view.update', {'patch': {'setupJourney': 'connect'}})
+        assert _saved_setup_step(service) == 'welcome'
         await _as_client(service, 'tab-one', 'view.update', {'patch': {'panel': None, 'setupJourney': 'done'}})
+        assert _saved_setup_step(service) == 'done'
         service.clients.attach('tab-two')
         assert _setup_step(service, 'tab-two') == 'done'
     finally:
         await service.close()
 
 
-async def test_a_message_ends_first_use_on_an_installation_of_an_earlier_version(tmp_path):
+async def test_a_persons_message_ends_first_use_on_an_installation_of_an_earlier_version(tmp_path):
     service = AppService(tmp_path, Runtime(), workspace=tmp_path)
     try:
         service.clients.attach('tab-one')
         await _as_client(service, 'tab-one', 'session.create', {'title': 'Made by an earlier version'})
         chat = service.clients.records['tab-one']['selectedSessionId']
-        # An earlier version changed only the tab's own view and saved this.
-        service._state['view']['setupJourney'] = 'welcome'
+        _as_an_earlier_version_saved_it(service)
         service.clients.attach('tab-two')
         assert _setup_step(service, 'tab-two') == 'welcome'
-        # Opening a chat changes only that tab's own view.
+        # Opening a chat does not change the shared setup step.
         await _as_client(service, 'tab-two', 'session.select', {'id': chat})
+        assert _saved_setup_step(service) == 'welcome'
+        # A message that no person sent does not change it either.
+        await service.dispatch('conversation.send', {'sessionId': chat, 'text': 'From the chat itself'},
+                               origin='agent', caller_session_id=chat)
+        assert _saved_setup_step(service) == 'welcome'
         service.clients.attach('tab-three')
         assert _setup_step(service, 'tab-three') == 'welcome'
         sent = await _as_client(service, 'tab-one', 'conversation.send', {'sessionId': chat, 'text': 'Go on'})
         assert sent['accepted']
+        assert _saved_setup_step(service) == 'done'
         service.clients.attach('tab-four')
         assert _setup_step(service, 'tab-four') == 'done'
     finally:
         await service.close()
-    restored = AppService(tmp_path, Runtime(), workspace=tmp_path)
+
+
+async def test_a_persons_message_whose_delivery_fails_still_ends_first_use(tmp_path):
+    service = AppService(tmp_path, _RuntimeThatDoesNotStart(), workspace=tmp_path)
     try:
-        restored.clients.attach('tab-after-start')
-        assert _setup_step(restored, 'tab-after-start') == 'done'
+        service.clients.attach('tab-one')
+        await _as_client(service, 'tab-one', 'session.create', {'title': 'Made by an earlier version'})
+        chat = service.clients.records['tab-one']['selectedSessionId']
+        _as_an_earlier_version_saved_it(service)
+        with pytest.raises(AppError) as failure:
+            await _as_client(service, 'tab-one', 'conversation.send', {'sessionId': chat, 'text': 'Kept, not delivered'})
+        assert failure.value.code == 'worker_startup_failed'
+        message = next(row for row in service._session(chat)['messages'] if row.get('text') == 'Kept, not delivered')
+        assert message['delivery']['status'] == 'failed'
+        # The person used the app: the message is saved in the chat. First use is over.
+        assert _saved_setup_step(service) == 'done'
+        service.clients.attach('tab-two')
+        assert _setup_step(service, 'tab-two') == 'done'
     finally:
-        await restored.close()
+        await service.close()
