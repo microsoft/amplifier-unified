@@ -481,6 +481,12 @@ class ContextContinuity:
             return False
         current = _sync(selection)
         checkpoint_digest = digest(self._accepted_record)
+        try:
+            stored = json.loads(self.path.read_text()) if self.path.exists() else None
+        except (ValueError, OSError, TypeError):
+            return False
+        if digest(stored) != checkpoint_digest:
+            return False
         for row in self._journal["attempts"].values():
             verification = row.get("verification") or {}
             if (row.get("kind") != "model-transition" or row["state"] != "committed"
@@ -693,7 +699,7 @@ class ContextContinuity:
                 if (source_identity == self._identity and isinstance(accepted, dict)
                         and accepted.get("identity") == source_identity and callable(restore)):
                     disposition = restore(copy.deepcopy(accepted), copy.deepcopy(self._identity))
-                    if disposition.get("status") == "restored":
+                    if disposition.get("status") in {"restored", "resuming"}:
                         self.status.update(disposition)
                         return None
         if record is None or record["state"] == "committed":

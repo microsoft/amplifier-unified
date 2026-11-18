@@ -1667,6 +1667,54 @@ async def test_h1_unknown_target_call_does_not_brick_strict_source_continuation(
     assert case.adapter.recovery_path.read_bytes() == journal
 
 
+async def test_h1_unknown_target_preserves_and_resumes_valid_paid_source_partial(tmp_path):
+    from amplifier_core.llm_errors import LLMError
+    from amplifier_module_context_managed.errors import CompactionError
+    from amplifier_web.host.session import SelectedProvider
+    original = [{'role': 'user', 'content': 'Preserve all evidence.'},
+        {'role': 'assistant', 'content': 'Evidence ' * 1200},
+        {'role': 'user', 'content': 'Correction'}, {'role': 'assistant', 'content': 'Working'},
+        {'role': 'user', 'content': 'Continue'}]
+    coordinator, provider, adapter, _, _ = await mount(tmp_path, original)
+    coordinator.context.config.update(summary_max_source_chars=1200, summary_max_calls=32)
+    note = SimpleNamespace(content=[SimpleNamespace(type='text', text='Acknowledged paid source part')])
+    provider.complete = AsyncMock(side_effect=[note, LLMError('offline', retryable=True)])
+    with pytest.raises(CompactionError, match='summary_failed'):
+        await coordinator.context.get_messages_for_request(provider=provider)
+    accepted = json.loads(adapter.path.read_text())
+    assert accepted['progress']['completed'] == 1
+    contract = {'selection': 'target'}
+    bind_continuity_recovery_guards(coordinator, adapter, contract)
+    from amplifier_core import ProviderInfo
+    provider.get_info = lambda: ProviderInfo(id='fixture', display_name='Fixture',
+                                            defaults={'model': 'model-a'})
+    target = SelectedProvider(provider, {'instance': 'fixture', 'model': 'other-model'})
+    coordinator.loop.root_provider = target
+    origin = {'generationId': 'g', 'inputId': 'target', 'selectionRevision': 'choice',
+              'selection': target.selection}
+    coordinator.register_capability('web.context_transition.foreground', lambda: origin)
+    recover = coordinator.get_capability('context.recovery.recover')
+    async def lose(**kwargs):
+        kwargs['admit_call']({'method': 'semantic', 'targetIdentity': kwargs['identity'],
+            'sourceCheckpointSha256': accepted['sha256'], 'sequence': 1,
+            'requestSha256': 'a' * 64, 'maxOutputTokens': 10})
+        raise RuntimeError('unknown target inference')
+    coordinator.register_capability('context.recovery.recover', lose)
+    with pytest.raises(RuntimeError, match='unknown target'):
+        await adapter.run_pending(provider=target, retain_contents=(), count_view=AsyncMock())
+    journal = adapter.recovery_path.read_bytes()
+    coordinator.register_capability('context.recovery.recover', recover)
+    coordinator.loop.root_provider = provider
+    provider.complete = AsyncMock(return_value=note)
+    # The host gate must accept Context's strictly validated 'resuming'
+    # disposition; ordinary source generation consumes its paid prefix.
+    await adapter.run_pending(provider=provider, retain_contents=(), count_view=AsyncMock())
+    await coordinator.context.get_messages_for_request(provider=provider)
+    assert coordinator.context.summary is not None
+    assert 'Acknowledged paid source part' in str(provider.complete.call_args_list[0])
+    assert adapter.recovery_path.read_bytes() == journal
+
+
 async def test_h2_zero_reservation_refusal_can_retry_only_new_foreground_same_binding(tmp_path):
     case = await target_transition_fixture(tmp_path)
     recover = case.coordinator.get_capability('context.recovery.recover')
@@ -1739,7 +1787,7 @@ async def test_h2_cold_settled_originals_needs_no_new_selection_intent_or_old_co
     assert adapter.recovery_path.read_bytes() == journal
 
 
-@pytest.mark.parametrize('damage', ['source-prefix', 'source-record', 'choice', 'connection', 'active-derived'])
+@pytest.mark.parametrize('damage', ['source-prefix', 'source-record', 'checkpoint-file', 'choice', 'connection', 'active-derived'])
 async def test_h2_settled_originals_cannot_mask_changed_provenance_or_derived_unit(tmp_path, damage):
     case = await target_transition_fixture(tmp_path)
     case.raw.input_limit = 50000
@@ -1748,6 +1796,8 @@ async def test_h2_settled_originals_cannot_mask_changed_provenance_or_derived_un
         case.coordinator.context.messages[0]['content'] += ' changed'
     elif damage == 'source-record':
         case.adapter._accepted_record['summary']['message']['content'] += ' corrupt'
+    elif damage == 'checkpoint-file':
+        case.adapter.path.write_text('{"unexpected": "replacement"}')
     elif damage == 'choice':
         case.origin['selectionRevision'] = 'new-choice'
     elif damage == 'connection':
