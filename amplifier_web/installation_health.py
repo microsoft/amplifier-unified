@@ -286,13 +286,14 @@ async def windows_working(home, *, wait=15.0):
     that time: on hosted test machines its loop stayed in one database commit
     for about 11 seconds at the longest, some seconds after a start. With
     None the uninstall goes on and does not ask; a chat that is at work is
-    then stopped with no question. So the reads are made in rounds, and a
-    later round can read again an address whose read ended by its time
-    limit. A round reads its addresses in their order; the first round has
-    every address. What one read does:
+    then stopped with no question. So the reads are made in rounds, one
+    read at a time, and a later round can read again an address whose read
+    ended with `TimeoutError`, as the time limit ends it. The first round
+    has every address, in the order of the list; a later round keeps that
+    order. What one read does:
 
-    - It ends by the time limit (`TimeoutError`): its address is in the next
-      round, when one starts.
+    - It ends with `TimeoutError`: its address is in the next round, when
+      one starts.
     - Its answer has status 200, this app's name, this installation's data
       identity and an `activity` dictionary: the function ends. The result
       is `working` of that dictionary when that is an `int` (no `bool`) of 0
@@ -307,14 +308,14 @@ async def windows_working(home, *, wait=15.0):
       `yaml.YAMLError`; any other error goes to the caller.
 
     A round starts after the first only when a read of the round before
-    ended by its limit, and only while fewer than `wait` seconds have gone
-    by since the clock was read before the first read. The bound does not
-    end a round that has started. An installation from the setup file has
-    one address. With the default `wait`, five reads that each take 3
-    seconds reach the bound: about 15 seconds. Reads that take longer can
-    be fewer, and the whole can take longer. When the last round has ended
-    and no answer ended the function, the result is None, as it was after
-    one read.
+    ended with `TimeoutError`, and only while fewer than `wait` seconds
+    have gone by since the clock was read before the first read. The bound
+    does not end a round that has started. An installation from the setup
+    file has one address. With the default `wait`, five reads that each
+    take 3 seconds reach the bound: about 15 seconds. Reads that take
+    longer can be fewer, and the whole can take longer. When the last round
+    has ended and no answer ended the function, the result is None, as it
+    was after one read.
 
     No read is made again unless it ended with `TimeoutError`. That end does
     not prove that a host is there: the limit can end a read while it
