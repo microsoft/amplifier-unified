@@ -18,11 +18,13 @@ PROVIDER = '''
 import json
 from amplifier_core import ProviderInfo
 from amplifier_core.message_models import ChatResponse, TextBlock, ToolCall
+from amplifier_web.execution_events import CALL_PURPOSE
 
 class Provider:
     name = "continuationfixture"
     def __init__(self):
         self.counted, self.sent, self.compactions = [], [], 0
+        self.tool_issued = False
     def get_info(self):
         return ProviderInfo(id=self.name, display_name="Offline continuation fixture",
                             defaults={"model": "fixture"})
@@ -39,6 +41,8 @@ class Provider:
         if (request.metadata or {}).get("purpose") == "context-compaction":
             self.compactions += 1
             raise TimeoutError("Synthetic unconfirmed compaction: must not retry")
+        if CALL_PURPOSE.get():
+            return ChatResponse(content=[TextBlock(text="Offline fixture title")])
         assert request == self.counted[-1], "Dispatch changed after counting"
         assert len(request.model_dump_json().encode()) // 4 <= 20000
         self.sent.append(request.model_copy(deep=True))
@@ -47,7 +51,8 @@ class Provider:
                 m.role == "tool" and m.tool_call_id == "once" for m in request.messages):
             # The latest result is deliberately larger than the whole allowance.
             # After it settles the same turn must be allowed to shed this group.
-            if len(self.sent) == 1:
+            if not self.tool_issued:
+                self.tool_issued = True
                 return ChatResponse(content=[], tool_calls=[
                     ToolCall(id="once", name="large_result", arguments={})])
         return ChatResponse(content=[TextBlock(text="Ordinary answer completed.")])
@@ -79,13 +84,15 @@ async def test_actual_worker_completes_two_ordinary_turns_after_omission(
     workspace.mkdir()
     modules = {}
     for name, package in [('loop-live', 'amplifier_module_loop_live'),
-                          ('context-managed', 'amplifier_module_context_managed')]:
+                          ('context-managed', 'amplifier_module_context_managed'),
+                          ('hook-context-intelligence', 'amplifier_module_hook_context_intelligence')]:
         spec = importlib.util.find_spec(package)
         assert spec and spec.origin, f'Missing prepared dependency: {package}'
         modules[name] = str(Path(spec.origin).parent)
-    provider = root / 'provider' / 'amplifier_module_provider_continuationfixture'
+    provider_name = 'continuationfixture' + ('same' if shape == 'same-turn' else 'refs')
+    provider = root / 'provider' / ('amplifier_module_provider_' + provider_name)
     provider.mkdir(parents=True)
-    (provider / '__init__.py').write_text(PROVIDER)
+    (provider / '__init__.py').write_text(PROVIDER.replace('continuationfixture', provider_name))
     bundle = root / 'fixture.yaml'
     bundle.write_text(json.dumps({
         'bundle': {'name': 'ordinary-continuation-fixture', 'version': '0.0.1'},
@@ -97,7 +104,11 @@ async def test_actual_worker_completes_two_ordinary_turns_after_omission(
             'context': {'module': 'context-managed', 'config': {
                 'max_tokens': 20000, 'summarize_trigger': .2,
                 'archive_recovery': False, 'compaction_notice_enabled': False}}},
-        'providers': [{'module': 'provider-continuationfixture', 'source': str(provider.parent)}],
+        'providers': [{'module': 'provider-' + provider_name, 'source': str(provider.parent)}],
+        'hooks': [{'module': 'hook-context-intelligence',
+                   'source': str(Path(modules['hook-context-intelligence']).parent),
+                   'config': {'destinations': {}, 'context_intelligence_server_url': '',
+                              'context_intelligence_api_key': '', 'base_path': str(root / 'capture')}}],
     }))
     for name, folder in [('AMPLIFIER_HOME', 'amplifier-home'),
                          ('AMPLIFIER_WEB_HOME', 'home'),
@@ -185,6 +196,14 @@ async def test_actual_worker_completes_two_ordinary_turns_after_omission(
         assert effects == (['once'] if shape == 'same-turn' else [])
         canonical = await context.get_messages()
         assert canonical[:len(source)] == source
+        if shape == 'same-turn':
+            results = [row for row in canonical if row.get('role') == 'tool'
+                       and row.get('tool_call_id') == 'once']
+            assert len(results) == 1
+            assert 'completed-once' in results[0]['content']
+            assert 'x' * 160000 in results[0]['content']
+            assert sum(any(call.get('id') == 'once' for call in row.get('tool_calls', []))
+                       for row in canonical) == 1
         marks = [normalize_event(event, worker.session.session_id)[1] for event in events
                  if event.get('type') == 'execution.event'
                  and event['event'].get('incompleteHistoryDispatched')]
