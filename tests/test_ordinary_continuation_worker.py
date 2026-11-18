@@ -145,6 +145,9 @@ async def test_actual_worker_completes_two_ordinary_turns_after_omission(
             result = values[operation]
         elif operation == 'capacity.admit':
             result = {'allowed': True, 'budgetRevision': worker.controls.capacity.policy['revision']}
+        elif operation == 'work.effect.check':
+            assert event['args']['toolName'] == 'large_result'
+            result = {'allowed': True, 'effectAuthorized': True}
         else:
             raise AssertionError(f'Unexpected fixture bridge: {operation}')
         worker.bridges[event['id']].set_result(result)
