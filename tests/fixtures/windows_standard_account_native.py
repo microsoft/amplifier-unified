@@ -1461,12 +1461,14 @@ def replace_report(partial, path, *, replace=os.replace, wait=time.sleep, timer=
 
     While this user's program runs, the program of the runner's account reads
     the report file every 3 seconds, to see whether the program has finished.
-    While such a read has the file open, Windows refuses the replacement
-    (`PermissionError`, "Access is denied"). One run failed a step with that
-    (run 44204538909, November 17, 2026). The record makes the report larger,
-    so a read takes longer. A replacement that Windows refuses is made again,
-    with 0.05 second between two tries, for `limit` seconds. After that the
-    error goes on to the caller, as before. Another error goes on at once.
+    While a program has the file open in that way, Windows refuses the
+    replacement (`PermissionError`, "Access is denied"). One run failed a
+    step with this error (run 44204538909, November 17, 2026). Which program
+    had the file open in that run is not recorded. The record makes the
+    report larger, so a read of it takes longer. A replacement that Windows
+    refuses is made again, with 0.05 second between two tries, for `limit`
+    seconds. After that the error goes on to the caller, as before. Another
+    error goes on at once.
     """
     deadline = timer() + limit
     while True:
