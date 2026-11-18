@@ -12,11 +12,34 @@ from contextlib import AsyncExitStack, asynccontextmanager
 import hashlib
 import json
 import os
+import re
 import shutil
 import time
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
+
+
+def app_folders(text, roots):
+    """Replace the installation's folders in JSON text, so that a copy in another folder gives the same text.
+
+    A folder path that JSON text writes as it is (no backslash, only ASCII) is
+    replaced wherever it stands, as it always was: installations have saved
+    values of that text, also for a folder beside it whose name starts with its
+    name. Any other folder, so every Windows path, is looked for in the form
+    that JSON text has, and only as the folder itself or a path below it: at
+    the start of a text value, or after "file://" there, and before the end of
+    the value, a path separator or "#".
+    """
+    for root in sorted(roots, key=len, reverse=True):
+        form = json.dumps(root)[1:-1]
+        if form == root:
+            text = text.replace(root, "$APP")
+        else:
+            # A text value starts after `{"`, `["` or ` "`. A separator is "/" or a doubled backslash.
+            text = re.sub(r'(?:(?<=[\[{ ]")|(?<=[\[{ ]"file://))' + re.escape(form) + r'(?=[/"#]|\\\\)',
+                          lambda match: "$APP", text)
+    return text
 
 
 def configuration_key(settings, *roots):
@@ -65,11 +88,7 @@ def configuration_key(settings, *roots):
         },
     }
     text = json.dumps(value, sort_keys=True, default=str)
-    for root in sorted(
-        {str(Path(root).resolve()) for root in roots}, key=len, reverse=True
-    ):
-        # In the form that JSON text has: a backslash is written twice there.
-        text = text.replace(json.dumps(root)[1:-1], "$APP")
+    text = app_folders(text, {str(Path(root).resolve()) for root in roots})
     return hashlib.sha256(text.encode()).hexdigest()
 
 

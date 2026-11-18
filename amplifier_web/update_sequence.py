@@ -64,7 +64,7 @@ def app_selection(home, *, config=None, original_home=None):
     from .host.config import read_config
     from .host.bundle_paths import configured_bundle_reference, local_bundle_path
     from .builtin_behaviors import resolve_builtin_behavior, resource_root
-    from .runtime_profiles import configuration_key
+    from .runtime_profiles import app_folders, configuration_key
     from .updates import source_key
     from urllib.parse import parse_qs, unquote
     import yaml
@@ -126,9 +126,7 @@ def app_selection(home, *, config=None, original_home=None):
         roots.update((str(Path(original_home) / 'foundation'), str(foundation_home(original_home))))
     text = json.dumps([configuration_key(config.settings, *roots),
                        references], sort_keys=True)
-    for root in sorted(roots, key=len, reverse=True):
-        # In the form that JSON text has: a backslash is written twice there.
-        text = text.replace(json.dumps(root)[1:-1], '$APP')
+    text = app_folders(text, roots)
     return {'sources': list(sources.values()), 'witness': hashlib.sha256(text.encode()).hexdigest()}
 
 

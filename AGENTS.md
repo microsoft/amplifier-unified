@@ -348,12 +348,17 @@ configuration key (`runtime_profiles.configuration_key`) replace the
 installation's folders inside JSON text. JSON writes each backslash of a
 Windows path twice: look for a folder there in the form
 `json.dumps(folder)[1:-1]`, never as plain text, and with the same
-`ensure_ascii` setting as the text. The address of a Windows file
+`ensure_ascii` setting as the text. Both functions do it through
+`runtime_profiles.app_folders`. For a folder that JSON does not write as it is,
+that function replaces only the folder itself and a path below it; for a
+folder that JSON writes as it is, it replaces the text wherever it stands,
+also in the name of a folder beside it, because installations have saved
+those values. The address of a Windows file
 on a drive (`Path.as_uri()`) is `file:///C:/...`: it has no server name, and
 its path part has a slash before the drive. On Windows take that one slash
 away, only for an address with no server name, and change nothing else. Do not
-use `urllib.request.url2pathname` there: on every system it also takes
-`//localhost` away, and it does not look at a server name, so an address that
+use `urllib.request.url2pathname` there: on every system (read in Python
+3.13.11) it also takes `//localhost` away, and it does not look at a server name, so an address that
 was not the shipped file's becomes it and the witness of a Linux installation
 can move. The address of an app in a network folder (`file://server/share/...`)
 is not read as the shipped file's on Windows. An installation saves both
