@@ -2684,9 +2684,9 @@ this version of setup has no repair. Before this rule setup said in all of
 these states "Keep that folder. It holds your chats and settings."
 In one of these states "Keep that folder" leads to no installation: the PC
 lost power between the last two deletions of the step after exit, so the
-journal is gone, and setup's record, that step's flat folder and its two
-kept files are left (L3). Setup's looks do not tell that state from a folder
-whose data
+journal is gone. At that moment the folder holds setup's record, that step's
+flat folder and one of its two kept files, and the flat folder holds the
+other (L3). Setup's looks do not tell that state from a folder whose data
 stayed without the folder `app`, so the text is the same, and L3's step
 (the person deletes the folder by hand, or moves it away) is not in it.
 
@@ -2774,9 +2774,10 @@ as described under "Uninstall stops the app before it removes an entry".
 the text also said that Amplifier does not start when the person signs in; a
 second setup run does not read the start-at-sign-in task. With `other`
 because Windows gave the look for the journal's name no answer, setup asks
-as before, and on Yes it tries to start the launcher. The launcher's own
-look counts the same refusal as no journal (`os.path.lexists`), so the
-launcher does not refuse because of a journal then.
+as before, and on Yes it tries to start the launcher. The launcher makes
+its own look (`os.path.lexists`); when Windows gives that look no answer
+either, the launcher counts it as no journal and does not refuse because of
+a journal.
 
 The look finds an entry with the journal's name (`removal`): the launcher
 does not open Amplifier from such a folder (`Refused("removing")` in
@@ -2882,13 +2883,15 @@ source of both programs; none was seen on a PC):
   move the folder. By ordinary means this is where the question without a
   Start-menu entry leads: setup cannot add the entries that it offers to
   add. The same texts follow when an uninstall with the delete choice
-  stopped after its data step (the PC lost power, for example) and setup
-  finds no Start-menu entry; no uninstall message is open then.
+  stopped after it deleted the person's data (the PC lost power, for
+  example), the folder `workspace` is gone and setup finds no Start-menu
+  entry; no uninstall message is open then.
 - `removal`, not listed, the entries added: by ordinary means none was
   found. The entries step needs a folder `workspace`, whole records and no
   entry. An uninstall with the delete choice deletes `workspace` before it
-  removes its entries, and it deletes the records after them, when it can
-  ("One case remains" below). The text also appears when a file with the
+  removes its entries (an emptied `workspace` stays while a program keeps
+  it), and it deletes the records after them, when it can ("One case
+  remains" below). The text also appears when a file with the
   journal's name that is no record of a delete is in the folder of a whole
   installation and an uninstall removed the entries (L4).
 - `removal`, not listed, the entries not added, and the look finds no
@@ -2944,11 +2947,11 @@ time adds the entries, as it does after a removal that stopped. The uninstall
 then removes its own program files, and the entries name a program that is
 gone. No file of the person is involved. This case needs one thing more: a
 folder `workspace`. Setup starts the program with that folder as its working
-folder, and the uninstall deleted it with the person's data. So a program
-must have kept the emptied folder (as its current folder, for example), or
-something must have made the folder again. Without it Windows does not start
-the program, and setup says that it could not add Amplifier to the Start
-menu. The program does not look for the
+folder, and the uninstall deletes it with the person's data. So the case
+needs a program that kept the emptied folder (as its current folder, for
+example), or something that made the folder again. Without it Windows does
+not start the program, and setup says that it could not add Amplifier to the
+Start menu. The program does not look for the
 journal here: after a removal that stopped, the entries are what lets the
 person uninstall again.
 

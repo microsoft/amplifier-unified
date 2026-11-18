@@ -431,8 +431,9 @@ def test_setup_without_a_launcher_program_says_what_its_own_look_finds():
             "and settings in the folder.",
             "(The first says that setup found none.)",
             "In one of these states \"Keep that folder\" leads to no installation: the PC lost power between the "
-            "last two deletions of the step after exit, so the journal is gone, and setup's record, that step's "
-            "flat folder and its two kept files are left (L3).",
+            "last two deletions of the step after exit, so the journal is gone.",
+            "At that moment the folder holds setup's record, that step's flat folder and one of its two kept "
+            "files, and the flat folder holds the other (L3).",
             "It says where Amplifier keeps them.",
             "It does not say that a chat is there: setup does not look into `app`.",
             "The text names no chats and no settings: an entry with the journal's name is there, or Windows gave "
@@ -806,8 +807,8 @@ def test_a_second_setup_run_says_that_chats_and_settings_are_kept_only_where_its
             "and on Yes it tries to start the launcher.",
             "setup asks, and on Yes it runs the entries step when it found no Start-menu entry, and then it tries to "
             "start the launcher, as described under",
-            "The launcher's own look counts the same refusal as no journal (`os.path.lexists`), so the launcher "
-            "does not refuse because of a journal then.",
+            "The launcher makes its own look (`os.path.lexists`); when Windows gives that look no answer either, "
+            "the launcher counts it as no journal and does not refuse because of a journal.",
             "Setup looks once, before its first message: an uninstall that begins after the look is not seen, "
             "setup tries to start the launcher, and a launcher that starts refuses with its own text.",
             "\"Your chats and settings are kept.\" in the message after a failed entries step rests on that look, "
@@ -865,7 +866,8 @@ def test_a_second_setup_run_starts_no_launcher_on_a_folder_with_an_uninstall_rec
     native check runs the entries step without a start.
 
     The last state: before its last message an uninstall with the delete choice deletes the person's data,
-    and the folder `workspace` with it. Setup starts the entries program with that folder as its working
+    and the folder `workspace` with it (an emptied `workspace` stays while a program keeps it as its
+    current folder). Setup starts the entries program with that folder as its working
     folder, and Windows does not start a program whose working folder is not there (the native check holds
     that). The uninstall also deletes the records that the entries program reads, when it can delete them.
     So when that message is open, or the PC was switched off while it was open, setup adds an entry only
@@ -936,10 +938,10 @@ def test_a_second_setup_run_starts_no_launcher_on_a_folder_with_an_uninstall_rec
         "        } while ((Get-Date) -lt $until)\n")]
     assert order == sorted(order) and script.count("$until") == 3
     assert "Restart Windows" not in MOVED and "delete" not in MOVED.lower() and "your chats" not in MOVED
-    # Before its last message an uninstall deletes the person's data, and the folder `workspace` with it;
-    # then it removes the entries; then it deletes the records that the entries step reads, when it can
-    # (`remove_program` returns what stayed, and `remove` goes on). Setup starts the entries program with
-    # `workspace` as its working folder.
+    # Before its last message an uninstall with the delete choice deletes the person's data, and the folder
+    # `workspace` with it; then it removes the entries; then it deletes the records that the entries step
+    # reads, when it can (`remove_program` returns what stayed, and `remove` goes on). Setup starts the
+    # entries program with `workspace` as its working folder.
     assert "workspace" in windows_uninstall.DATA
     assert 'WorkingDirectory=Path.Combine(root,"workspace")};\n                Process entries;' in between(
         "internal static bool AddEntries(", "internal static Process StartApp(")
@@ -996,18 +998,20 @@ def test_a_second_setup_run_starts_no_launcher_on_a_folder_with_an_uninstall_rec
             "Setup installs nothing in a folder that has its completion record.",
             "(When a program keeps the emptied folder `workspace` as its current folder, the entries program "
             "starts, and it refuses when the uninstall deleted the launcher's records.)",
-            "The same texts follow when an uninstall with the delete choice stopped after its data step (the PC "
-            "lost power, for example) and setup finds no Start-menu entry; no uninstall message is open then.",
+            "The same texts follow when an uninstall with the delete choice stopped after it deleted the person's "
+            "data (the PC lost power, for example), the folder `workspace` is gone and setup finds no Start-menu "
+            "entry; no uninstall message is open then.",
             "The person then moves or renames the folder, and the next setup run finds no folder and goes on as "
             "for a first installation, with the checks of one (a second run does not check the free disk space, "
             "for example).",
             "`removal`, not listed, the entries added: by ordinary means none was found.",
             "The entries step needs a folder `workspace`, whole records and no entry.",
-            "An uninstall with the delete choice deletes `workspace` before it removes its entries, and it "
-            "deletes the records after them, when it can (\"One case remains\" below).",
+            "An uninstall with the delete choice deletes `workspace` before it removes its entries (an emptied "
+            "`workspace` stays while a program keeps it), and it deletes the records after them, when it can "
+            "(\"One case remains\" below).",
             "This case needs one thing more: a folder `workspace`.",
-            "So a program must have kept the emptied folder (as its current folder, for example), or something "
-            "must have made the folder again.",
+            "So the case needs a program that kept the emptied folder (as its current folder, for example), or "
+            "something that made the folder again.",
             "Without it Windows does not start the program, and setup says that it could not add Amplifier to "
             "the Start menu.",
             "that the entries program is not started on a folder without `workspace`;",
