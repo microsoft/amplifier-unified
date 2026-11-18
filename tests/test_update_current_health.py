@@ -14,6 +14,7 @@ from test_update_core_lookup_failure import checked_install
 from test_update_health_first_install import core_row
 from test_update_health_setup_record import INCOMPLETE, UP_TO_DATE, setup_record  # noqa: F401
 from test_updates import app, prepare, repo  # noqa: F401 -- existing real manager fixture
+from test_windows_launcher_follow import rig  # noqa: F401 -- stand-ins for the Windows parts of a launcher refresh
 
 CAPTURE = Path(__file__).parent / 'fixtures/update-current-health-captured060.json'
 
@@ -1295,3 +1296,61 @@ async def test_a_hold_that_stays_gets_no_wake(setup_record, monkeypatch):  # noq
         await asyncio.wait_for(manager.loop(), 60)
         assert waits == [(3, False), (60, False), (60, False)] and len(passes) == 2
         assert manager._update_health_initial is True and incomplete(c)
+
+
+async def test_no_launcher_request_begins_at_the_pass_without_a_wait_or_at_once_after_it(
+        rig, setup_record, monkeypatch):  # noqa: F811
+    """The real loop, the real pass and the real step after a pass (``windows_launcher_follow.consider``).
+
+    A launcher refresh begins only when the update state is the same at two
+    passes in a row. Between two passes the loop waits its 60 seconds, so
+    that rule gives a minute of unchanged state before a refresh. The wake
+    for the first read adds one pass without a wait. It must add no more.
+
+    A host starts with an open launcher request of an earlier host. The step
+    after the first pass withdraws that request, which ends the hold. The
+    pass without a wait follows and makes the first read; it is the first
+    look at the update state, so no request begins there. The loop then
+    waits. The request begins at the pass after that wait.
+
+    Not Windows: the Windows parts of a refresh (its files, the Scheduler
+    task) are the stand-ins of ``test_windows_launcher_follow.rig``. The
+    clock of the launcher code is the stand-in's, and the case moves it past
+    the 300 seconds of a withdrawn request, so that only the two equal looks
+    hold a new request back.
+    """
+    from amplifier_web import windows_launcher_follow as follow
+    from amplifier_web.updates import UpdateManager
+    import time
+    async with checked_install(setup_record.home, core_row(setup_record), monkeypatch) as c:
+        await checked_new_installation(c)
+        rig.records['request'] = {
+            'schema': 1, 'id': 'c' * 32, 'registration': rig.spec.registration_id,
+            'launcher': {'prefix': 'launcher', 'digest': 'old'}, 'target': follow._target(rig.target),
+            'status': 'open', 'result': None, 'hold': None, 'repair': False, 'at': rig.now[0]}
+        rig.m.state['launcherRefresh'] = {'attempt': True}   # The stand-in for the task reads it from its own owner.
+        manager = UpdateManager(c.service)
+        manager._storage_last_pass = time.time()   # No storage pass: it is not the subject.
+        follow.at_start(manager)   # As the server does it after it made the owner.
+        assert follow.fenced(manager) and manager.awaiting_restart() and manager._update_health_initial is True
+        waits = []
+
+        async def wait(delay):
+            begun = sum(1 for call in rig.calls if call[0] == 'plan')
+            waits.append((delay, manager.wakeup.is_set(), begun))
+            if len(waits) == 2:
+                rig.now[0] += 301   # The 300 seconds after a withdrawn request are over.
+            manager.closed = bool(begun) or len(waits) > 8   # A loop that begins no request ends here.
+
+        monkeypatch.setattr(manager, 'wait_for_work', wait)
+        await asyncio.wait_for(manager.loop(), 60)
+        # Each wait: its seconds, whether the wake was set (no wait then), and the requests begun before it.
+        assert waits == [
+            (3, False, 0),    # The start of the loop. Then the pass that the hold stops; the step after it ends the hold.
+            (60, True, 0),    # The wake for the first read: the next pass comes with no wait.
+            (60, False, 0),   # After that pass: the first read is made, no request is begun, and the loop waits.
+            (60, False, 1),   # After the pass that followed the wait: the request is begun.
+        ], waits
+        assert rig.records['request']['status'] == 'open' and rig.records['request']['id'] != 'c' * 32
+        assert manager._update_health_initial is False and health.cached_evidence(manager).get('setupRecord')
+        assert c.state['currentStatus']['title'] != 'Component verification is incomplete'
