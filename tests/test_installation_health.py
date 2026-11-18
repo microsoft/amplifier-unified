@@ -836,6 +836,23 @@ def test_windows_working_with_a_silent_address_keeps_what_the_other_address_answ
     clock, left = reads_end(state, monkeypatch, [TimeoutError(), None] + [TimeoutError()] * 4)
     assert asyncio.run(health.windows_working(state["home"])) is None
     assert [url for url, _ in state["requests"]] == [first, second] + [first] * 4 and left == [] and clock == [15.0]
+    # This installation answers at the second address with no `activity` dictionary: that does not end all
+    # reads. It is final for that address only, and the silent address is asked again.
+    for activity in (None, [2], "absent"):
+        state["requests"].clear()
+        state["body"].update(dataIdentity="owned-data", activity=activity)
+        if activity == "absent":
+            del state["body"]["activity"]
+        clock, left = reads_end(state, monkeypatch, [TimeoutError(), None] + [TimeoutError()] * 4)
+        assert asyncio.run(health.windows_working(state["home"])) is None
+        assert [url for url, _ in state["requests"]] == [first, second] + [first] * 4 and left == []
+        assert clock == [15.0]
+    # An error at the second address that is no error of a connection or of an answer: it ends the function
+    # with None, as before the reads were made again. The silent address is not asked again.
+    state["requests"].clear()
+    clock, left = reads_end(state, monkeypatch, [TimeoutError(), RuntimeError("Session is closed")])
+    assert asyncio.run(health.windows_working(state["home"])) is None
+    assert [url for url, _ in state["requests"]] == [first, second] and left == [] and clock == [3.0]
 
 
 def test_windows_working_is_unknown_when_the_host_stays_silent_for_about_fifteen_seconds(working_chain, monkeypatch):
@@ -860,7 +877,7 @@ def test_windows_working_does_not_ask_again_when_a_read_ends_in_another_way(work
     error = {"refused": ConnectionRefusedError(10061, "No connection could be made"),
              "no connection": aiohttp.ClientConnectionError("refused"),
              "closed": aiohttp.ServerDisconnectedError(),
-             "no JSON": ValueError("The answer is not JSON")}.get(end)
+             "no JSON": Late(ValueError("The answer is not JSON"))}.get(end)  # It comes from the read of the answer.
     if end == "status":
         state["status"] = 503
     elif end == "another installation":

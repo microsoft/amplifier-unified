@@ -282,31 +282,45 @@ async def windows_working(home, *, wait=15.0):
     answers as this installation or when it does not report a count. It reads
     Task Scheduler never.
 
-    One read has a time limit of 3 seconds. A host that is busy takes the
-    request and can give no answer in that time: on hosted test machines its
-    loop stayed in one database commit for up to 11 seconds, some seconds
-    after a start. With None the uninstall goes on and does not ask; a chat
-    that is at work is then stopped with no question. So an address whose
-    read ended by its time limit is asked again. A new round of reads starts
-    only while fewer than `wait` seconds have gone by since the first read
-    began, and a round that has started is completed. An installation from
-    the setup file has one address: five reads, 15 seconds.
+    One read has a time limit of 3 seconds. A busy host can give no answer in
+    that time: on hosted test machines its loop stayed in one database commit
+    for up to 11 seconds, some seconds after a start. With None the uninstall
+    goes on and does not ask; a chat that is at work is then stopped with no
+    question. So a read that ends by its time limit is made again, in rounds.
+    A round reads its addresses in their order; the first round has every
+    address. What one read does:
 
-    A read that ends in another way is final for its address, which is not
-    asked again: a refused connection (nothing listens there), a connection
-    that is cut off, an answer of another program. An answer of this
-    installation ends all reads, with a count or without one.
+    - It ends by the time limit (`TimeoutError`): its address is in the next
+      round, when one starts.
+    - Its answer has status 200, this app's name, this installation's data
+      identity and an `activity` dictionary: the function ends. The result
+      is `working` of that dictionary when that is a whole number of 0 or
+      more, and None when it is not.
+    - It ends with another `aiohttp.ClientError`, `OSError` or `ValueError`
+      (a refused connection, a connection that is cut off, an answer that is
+      not JSON), or its answer is another one (a status that is not 200,
+      another app or installation, no `activity` dictionary): its address
+      is in no later round.
+    - It ends with an error of another kind: the function ends, as before
+      this change. Its last clause gives None for a `RuntimeError` and a
+      `yaml.YAMLError`; any other error goes to the caller.
+
+    A round starts after the first only when a read of the round before
+    ended by its limit, and only while fewer than `wait` seconds have gone
+    by since the clock was read before the first read. The bound does not
+    end a round that has started. An installation from the setup file has one address:
+    when each read ends by its limit, that is five reads and about 15
+    seconds. When no further round starts, the result is None, as it was
+    after one read.
 
     Only a time limit brings another read. It does not prove that a host is
     there: the limit can end a read while it connects, and while it waits for
     the answer. A busy host is one cause. Another program at that port after
     the host has gone is one, and a computer that gives this program no time
-    is one. While reads end in that way, the person's next question waits
-    until the last round has ended; the result is then None, as it was after
-    one read.
-    A refusal is final, and it takes time too, as it did before this wait
-    existed: a hosted Windows test machine refused a port with no listener
-    after about 2 seconds.
+    is one. The caller waits until the last round has ended.
+    A refusal ends the reads of its address, and it takes time too, as it did
+    before this change: a hosted Windows test machine refused a port with no
+    listener after about 2 seconds.
     """
     import aiohttp
     import yaml
