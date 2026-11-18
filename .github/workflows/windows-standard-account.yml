@@ -131,7 +131,7 @@ jobs:
         run: uv sync --locked --group dev
       # The named shell `bash` stops at a failed command, also on the left of a
       # pipe. pytest's last line must say that cases passed and nothing else,
-      # except warnings: a case that was skipped or left out fails the step.
+      # except warnings: a case that pytest skipped or deselected fails the step.
       - name: Run every case of tests/test_windows_standard_account.py, with no skip
         timeout-minutes: 8
         shell: bash

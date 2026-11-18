@@ -1460,7 +1460,8 @@ def replace_report(partial, path, *, replace=os.replace, wait=time.sleep, timer=
     """Put a written report in the place of the report file.
 
     While this user's program runs, the program of the runner's account reads
-    the report file every 3 seconds, to see whether the program has finished.
+    the report file again and again, with a pause of 3 seconds before each
+    read, to see whether the program has finished.
     While a program has the file open in that way, Windows refuses the
     replacement (`PermissionError`, "Access is denied"). One run failed a
     step with this error (run 44204538909, November 17, 2026). Which program
@@ -1950,7 +1951,7 @@ def accept_start(steps, key, again, home, root, started, state, status, text, *,
               **({"notSavedInTheReport": unsaved} if unsaved else {}),
               "more": {name: attempt(lambda: more(name)) for name in wrong}}
     said = attempt(lambda: json.dumps(detail, default=str))
-    # An answer that JSON cannot write (a key that is no text and no number) does not replace the text.
+    # An answer that JSON cannot write (for example a dictionary with a tuple as a key) does not replace the text.
     raise AssertionError((text + ". Not as required: " + ", ".join(wrong) + ": "
                           + (said if isinstance(said, str) else repr(detail)))[:2900])
 

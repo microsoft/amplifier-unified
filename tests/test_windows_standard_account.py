@@ -1676,7 +1676,8 @@ def test_the_jobs_time_limit_holds_every_step_and_the_run_step_holds_its_phases(
     workflow = yaml.load(WORKFLOW.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
     for job in workflow["jobs"].values():
         limits = [int(step["timeout-minutes"]) for step in job["steps"]]
-        # The cleanup step is not cut short when every step before it used its whole limit.
+        # The job's limit cuts no step short when every step before it used its whole limit. In the Windows job
+        # that keeps the cleanup step.
         assert int(job["timeout-minutes"]) >= sum(limits) + 5
     job = workflow["jobs"]["windows-standard-account"]
     source = FIXTURE.read_text(encoding="utf-8")
