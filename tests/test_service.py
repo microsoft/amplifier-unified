@@ -1051,7 +1051,7 @@ async def test_a_persons_message_that_is_refused_because_the_chat_is_in_use_stil
         with pytest.raises(AppError, match='conversation is in use') as refusal:
             await _as_client(service, 'tab-one', 'conversation.send', {'sessionId': chat, 'text': 'Keep this draft'})
         assert refusal.value.status == 409 and refusal.value.code == 'session_busy'
-        # The host removed the attempted message again and kept the draft.
+        # A refusal at once: the host removed the attempted message again. The tab's draft is unchanged.
         assert service._session(chat)['messages'] == []
         assert service.clients.records['tab-one']['drafts'][chat] == 'Keep this draft'
         # The chat exists and a person used it: first use is over.

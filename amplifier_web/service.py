@@ -4147,13 +4147,12 @@ class AppService:
                 receipt['handoffOrigin'] = self.handoffs.lineage(handoff)
                 receipt['actor'] = self.handoffs.actor(handoff)
             if action == 'conversation.send':
-                # The submission is saved here, together with the step. What
-                # follows does not bring first use back: the delivery can fail
-                # (the message stays in the chat), or the chat is in use by
-                # another app (the attempted message is removed again and the
-                # draft stays). A chat exists in each case. An earlier version
-                # left the shared setup step at its first value on an
-                # installation that already has chats.
+                # The host saves the submission here, together with the step.
+                # What the send path does with the message afterwards does not
+                # bring first use back: a chat exists and a message was
+                # submitted to it. An earlier version left the shared setup
+                # step at its first value on an installation that already has
+                # chats.
                 if origin in {'ui', 'user'} and session.get('sessionKind') != 'internal':
                     self._first_use_over()
                 receipt.update(delivery=message['delivery']['status'], sessionId=session['id'], inputId=input_id)
