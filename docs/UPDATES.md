@@ -475,7 +475,7 @@ each folder from its start again. So when the first 64 listed entries of a
 folder all stay, the entries behind them stay too. A link is
 never followed: an entry `config` or `routing` that is a link, a junction or no
 folder stays, and a link inside a copy is removed as a link (on Windows it
-stays). The pass reads the list of stages, and it looks at each stage, through
+stays). This removal reads the list of stages, and it looks at each stage, through
 an open folder and not by a path: at a link or a junction that has the name of
 the folder of the stages, or of a stage, it lists nothing and handles nothing.
 On Windows a folder of a copy that another program has open in a way that does

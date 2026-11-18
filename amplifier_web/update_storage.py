@@ -241,6 +241,18 @@ def _posix_tree(parent, name, device, work, still, depth):
         return 'io'
 
 
+class _Opened(tuple):
+    """Windows: the identity of a folder as an open handle of it gives it (the volume, and the two parts of the file index).
+
+    The pass reads it from the handle of its look at a stage, and the removal
+    compares it with the handle that holds the stage. No path is read for it.
+    """
+
+
+def _opened(info):
+    return _Opened((info.volume, info.index_high, info.index_low))
+
+
 def _windows_open(folder, access, share):
     """Windows: a handle of the folder that is at this path, of that entry itself.
 
@@ -348,8 +360,10 @@ def _windows_hold(folder):
 
 @contextmanager
 def _windows_stage_hold(stage):
-    """Windows: hold the stage folder for one removal of its copies; give the function that puts its times back.
+    """Windows: hold the stage folder for one removal of its copies.
 
+    It gives the identity of the held folder (_Opened) and the function that
+    puts its times back.
     The times are read from the handle when it opens, and the function writes
     them through the same handle. So the times of one folder never go to
     another folder, and never through a junction. The handle asks for the
@@ -375,7 +389,7 @@ def _windows_stage_hold(stage):
                                 info.write.high << 32 | info.write.low, 0, 0)
             buffer = ctypes.create_string_buffer(times, len(times))
             api.ok(api.SetFileInformationByHandle(handle, 0, buffer, len(times)))
-        yield restore
+        yield _opened(info), restore
     finally:
         api.close(handle)
 
@@ -388,7 +402,7 @@ def _windows_remove_tree(folder, home, work, depth=0):
     and every folder above it, checks their ACLs, and deletes each file as the
     exact object whose bytes it read. A link, a junction, a file above 1 MiB,
     a file with an ACL that is not private and a file that another program
-    holds open all stay, with their folders, and each counts; the other
+    holds open without sharing deletion all stay, with their folders, and each counts; the other
     entries are still handled. A folder that gets no hold stays with
     everything below it, and counts as one entry. The listing of a folder
     takes no more entries than the work may still handle, and one more.
@@ -500,10 +514,14 @@ def _windows_stage_config(home, stage, expected, work):
     from .windows_files import directory
     reason, before = None, work.removed
     # The hold first: from here the stage's path names this folder until the removal ends.
-    with _windows_stage_hold(stage) as restore, directory(stage, owned_root=home, create=False):
-        if expected and any(_identity(path.lstat()) != identity
-                            for path, identity in expected.items()):
-            raise ValueError('Stage identity changed')
+    with _windows_stage_hold(stage) as (held, restore), directory(stage, owned_root=home, create=False):
+        for path, identity in (expected or {}).items():
+            # The pass gives what the handle of its look said about the stage: that is compared
+            # with the handle that holds the stage, and no path is read. A caller's identity has
+            # the form of lstat; the stage's path names the held stage here.
+            found = held if isinstance(identity, _Opened) and path == stage else _identity(path.lstat())
+            if found != identity:
+                raise ValueError('Stage identity changed')
         try:
             for name in ('config', 'routing'):
                 result = _windows_remove_tree(stage / name, home, work)
@@ -684,17 +702,22 @@ def _stage_listing(root):
     through the open folder. ``look(name)`` gives the identity of the folder
     of that name when that folder has an entry ``config`` or ``routing``, else
     None. It opens that folder itself and reads it through the open folder.
-    It raises OSError for an entry that is no folder.
+    It raises OSError for an entry that is no folder, and ValueError for a
+    name that the private-file boundary does not take.
 
     Each open refuses a link and a junction: at the name of the folder of the
     stages, in the path to it, and at the name of a stage. So no listing and
     no look here goes through a link or a junction.
 
     Windows: the handle of the folder of the stages shares no deletion. While
-    it is open, Windows refuses every program the rename of that folder. The
-    handle of a look shares everything, so a look stops no other program. The
-    identity of a stage is read at its name, of that entry itself; the removal
-    compares it again while it holds the stage.
+    it is open, Windows refuses every program the rename of that folder.
+    Another program can still move a stage away, and then make the empty
+    folder of the stages a junction in place. So the look reads nothing by a
+    path: the identity of a stage is what the look's handle says (_Opened),
+    and the removal compares it with the handle that holds the stage. The
+    handle of a look shares reading, writing and deletion, so it refuses no
+    rename and no removal of the stage. (A program that opens the stage
+    without sharing reading is refused while a look is open.)
     """
     from .windows_files import address
     root = address(root)
@@ -708,10 +731,10 @@ def _stage_listing(root):
             def look(name):
                 stage = root / name
                 # The same rights. Shared: reading, writing and deletion.
-                boundary, opened, _ = _windows_open(stage, 0x20081, 7)
+                boundary, opened, info = _windows_open(stage, 0x20081, 7)
                 try:
                     if any(entry in ('config', 'routing') for entry, _ in _windows_entries(opened)):
-                        return _identity(stage.lstat())
+                        return _opened(info)   # From the handle: no path is read.
                     return None
                 finally:
                     boundary.close(opened)

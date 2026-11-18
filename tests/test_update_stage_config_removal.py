@@ -1167,7 +1167,8 @@ def test_the_walk_of_the_private_boundary_with_a_stand_in_for_the_boundary(tmp_p
             def restore():
                 events.append(('times through the hold', stage))
                 os.utime(stage, ns=(info.st_atime_ns, info.st_mtime_ns))
-            yield restore
+            # The identity that the real hold reads from its handle: three numbers.
+            yield storage._Opened((info.st_dev, 0, info.st_ino)), restore
         finally:
             holds.remove(stage)
             events.append(('end of the hold', stage))
@@ -1189,6 +1190,10 @@ def test_the_walk_of_the_private_boundary_with_a_stand_in_for_the_boundary(tmp_p
     kept, total = rest(stage), copied(stage)
     identity = {stage: (stage.stat().st_dev, stage.stat().st_ino)}
     assert storage.remove_stage_config(home, stage, expected={stage: (0, 0)}) == ('refused', 0)
+    # The identity of the pass's look on Windows is compared with the hold's, not with the path's.
+    for opened, reason in ((storage._Opened((0, 0, 0)), 'refused'),
+                           (storage._Opened((identity[stage][0], 0, identity[stage][1])), 'more')):
+        assert storage._remove_stage_config(home, stage, {stage: opened}, storage._Work(0)) == reason
     assert storage.remove_stage_config(home, stage, limit=4) == ('more', 4)
     assert storage.remove_stage_config(home, stage, expected=identity) == (None, total - 4)
     assert gone(stage) and rest(stage) == kept and not pins and not holds
@@ -1688,8 +1693,12 @@ def test_native_windows_stage_config_pass_reads_the_stages_through_the_open_fold
                 'rename of the folder of the stages': refusal(lambda: os.rename(root, away)),
                 'rename of the folder of the stages by another process': by_another_process(try_rename, root, away),
             }
-            info = stage.lstat()
-            assert look(stage.name) == (info.st_dev, info.st_ino)
+            # The identity of a stage with a copy is what a handle says: the same as the handle that holds the stage.
+            identity = look(stage.name)
+            with storage._windows_stage_hold(stage) as (held_identity, _):
+                assert type(identity) is storage._Opened and len(identity) == 3 and identity == held_identity
+            with storage._windows_stage_hold(no_copy) as (other_identity, _):
+                assert other_identity != identity
             assert look(no_copy.name) is None
             for name, error in ((junction.name, PermissionError), ('made-up.txt', PermissionError),
                                 ('c' * 32, FileNotFoundError)):
@@ -1750,6 +1759,77 @@ def test_native_windows_stage_config_entry_with_a_name_that_is_no_text_stays_and
     assert left(stage) == stays and held(home) == before
     os.unlink(stage / 'config/services' / name)
     assert storage.remove_stage_config(home, stage) == (None, 2)
+    assert gone(stage) and held(home) == before
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='requires native Windows private files')
+def test_native_windows_stage_config_folder_of_the_stages_that_becomes_a_junction_during_a_look(
+        native_stage, monkeypatch):
+    """Another program moves the stage away during the pass's look at it, and makes the folder of the stages a junction.
+
+    The moment is inside the look: the look has the stage open and reads its
+    entries. Windows lets both pass, also while the pass has the folder of the
+    stages open: the look's handle shares deletion, and the emptied folder of
+    the stages becomes a junction in place, with no rename. The junction leads
+    to a folder that has the moved stage at the same name, so the stage's path
+    now goes through the junction. The pass reads nothing by a path for the
+    stage's identity (the case records every ``os.lstat`` of the pass: there
+    is none). The removal opens the stage by its path and is refused. The
+    stage keeps every entry of its copies. With the folder of the stages back
+    at its name, the pass removes them.
+    """
+    from types import SimpleNamespace
+    home, stage, before = native_stage()
+    root, away = stage.parent, home / 'away'
+    with ordinary_default_owner():
+        away.mkdir()
+    moved, total, manager = away / stage.name, copied(stage), SimpleNamespace(home=home)
+    entries, remove, lstat = storage._windows_entries, storage._remove_stage_config, os.lstat
+    made, calls, by_path = [], [], []
+
+    def entries_then_a_move(handle):
+        found = list(entries(handle))   # The whole listing, through the handle.
+        if not made and 'config' in [name for name, _ in found]:
+            # The look's listing of the stage. Its handle is open.
+            made.append(refusal(lambda: os.rename(stage, moved)))
+            made.append(by_another_process(make_junction_in_place, root, away))
+            made.append(sorted(os.listdir(root)))   # By the path: through the junction.
+        yield from found
+
+    def record(home_, folder, expected, work):
+        reason = remove(home_, folder, expected, work)
+        calls.append((folder.name, type(expected[folder]).__name__, reason, work.removed))
+        return reason
+
+    def recorded_lstat(path, *args, **settings):
+        by_path.append(str(path))
+        return lstat(path, *args, **settings)
+
+    def one_pass():
+        with monkeypatch.context() as patch:
+            patch.setattr(storage, '_windows_entries', entries_then_a_move)
+            patch.setattr(storage, '_remove_stage_config', record)
+            patch.setattr(os, 'lstat', recorded_lstat)
+            storage._scrub_stage_config(manager, root, set())   # No exception.
+
+    try:
+        one_pass()
+        # The move and the conversion passed, and the stage's path leads through the junction to the moved stage.
+        assert made == [0, 'a junction now', [stage.name]], made
+        assert os.path.isjunction(root) and (root / stage.name / 'config/auth/control-token').is_file()
+        # The pass read no identity by a path, and its removal was refused.
+        assert by_path == [], by_path
+        assert calls == [(stage.name, '_Opened', 'refused', 0)], calls
+        assert copied(moved) == total and held(home) == before
+    finally:
+        if os.path.lexists(moved):
+            os.rmdir(root)        # The junction itself, or the emptied folder.
+            os.rename(away, root)
+    # With the folder of the stages at its name, the pass removes the copies, and it still reads nothing by a path.
+    del calls[:]
+    one_pass()
+    assert by_path == [], by_path
+    assert calls == [(stage.name, '_Opened', None, total)], calls
     assert gone(stage) and held(home) == before
 
 
@@ -1841,7 +1921,7 @@ def test_native_windows_stage_config_stage_times_go_back_through_the_hold_of_tha
 
     @contextmanager
     def hold_then_try(path):
-        with real(path) as restore:
+        with real(path) as (identity, restore):
             def try_then_restore():
                 tries.update({
                     'the copies are gone': gone(stage),
@@ -1852,7 +1932,7 @@ def test_native_windows_stage_config_stage_times_go_back_through_the_hold_of_tha
                         lambda: os.rename(stage.parent, stage.parent.with_name('away'))),
                 })
                 restore()
-            yield try_then_restore
+            yield identity, try_then_restore
 
     with monkeypatch.context() as patch:
         patch.setattr(storage, '_windows_stage_hold', hold_then_try)
