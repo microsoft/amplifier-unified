@@ -455,11 +455,13 @@ def install(root, version):
         # removal. A record that still says `installed` counts the same when
         # the entries are gone: the last write of an uninstall can be refused
         # after every entry is removed. "Gone" means the folder that this
-        # record names, so that a record of entries in another place is never
-        # replaced. The check below also refuses when the Apps-list entry
-        # exists, or when today's Start-menu folder holds one of the
-        # shortcuts or is not this account's own (`_free`). Every other
-        # record is refused.
+        # record names, so that a record of entries in another place is not
+        # replaced. That holds for the record that this step reads here. The
+        # step writes the record later and compares nothing between the two:
+        # a private file that another program of this account puts there
+        # meanwhile is written over. The check below also refuses when the
+        # Apps-list entry exists, and in every case in which `_free` answers
+        # False for today's Start-menu folder. Every other record is refused.
         try:
             row = _receipt(root)
             status = row.get("status") if isinstance(row, dict) else None
