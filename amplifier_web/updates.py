@@ -263,7 +263,13 @@ async def process(*args, cwd=None, env=None, timeout=90, raw=False, _redaction_e
     # All commands here use captured pipes, never an interactive console. A
     # pythonw consumer entry must not create a console for its CLI children.
     native = {'creationflags': subprocess.CREATE_NO_WINDOW} if os.name == 'nt' else {}
-    proc = await asyncio.create_subprocess_exec(*map(str,args), cwd=cwd, env=env,
+    command = args
+    if sys.platform == 'darwin' and Path(args[0]).name == 'uv':
+        # launchd normally gives GUI applications only 256 open descriptors.
+        # Keep the host's own limit and the original argv for diagnostics/retry.
+        launcher = Path(__file__).with_name('mac_uv_exec.py')
+        command = (sys.executable, '-I', '-S', str(launcher), *args)
+    proc = await asyncio.create_subprocess_exec(*map(str,command), cwd=cwd, env=env,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         start_new_session=os.name != 'nt', **native)
     out, err = Capture(STDOUT_LIMIT), Capture(STDERR_LIMIT)
