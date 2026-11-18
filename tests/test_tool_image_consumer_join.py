@@ -254,7 +254,7 @@ async def test_actual_loop_image_refusal_then_plaintext_recovery(tmp_path, monke
         await session.cleanup()
 
 
-async def test_live_composer_appends_durable_user_ref_before_transport(tmp_path, monkeypatch):
+async def test_live_composer_checkpoints_inline_upload_before_transport(tmp_path, monkeypatch):
     from amplifier_module_loop_live.runtime import Input, Runtime
     from amplifier_web.attachments import encode, save
 
@@ -263,10 +263,15 @@ async def test_live_composer_appends_durable_user_ref_before_transport(tmp_path,
     path, original = picture(tmp_path)
     encoded = base64.b64encode(original).decode()
     upload = save(home, path.name, encoded)
-    provider = ScriptedReadProvider(path, read=False)
+    class UploadProvider(ScriptedReadProvider):
+        async def complete(self, request, **kwargs):
+            assert any(((row.get("metadata") or {}).get("amplifier_input") or {}).get("id")
+                       == command.id for row in snapshots[-1])
+            return await super().complete(request, **kwargs)
+    provider = UploadProvider(path, read=False)
     # A different selected model is not a host decision.
     provider.default_model = "fixture-vision"
-    session, store, checkpoint, _, _, host = await actual_root(tmp_path, provider)
+    session, store, checkpoint, snapshots, _, host = await actual_root(tmp_path, provider)
     runtime = Runtime(session.session_id)
     session.coordinator.register_capability("live.runtime", runtime)
     session.coordinator.register_capability("live.attachments.encode", encode)
@@ -284,11 +289,11 @@ async def test_live_composer_appends_durable_user_ref_before_transport(tmp_path,
         assert provider.observed == [[("user", None, original)]]
         rows = await checkpoint()
         user = next(row for row in rows if row["role"] == "user"
-                    and media.NAMESPACE in (row.get("metadata") or {}))
+                    and ((row.get("metadata") or {}).get("amplifier_input") or {}).get("id") == command.id)
         assert user["metadata"]["amplifier_input"]["id"] == command.id
-        [ref] = user["metadata"][media.NAMESPACE]["refs"]
-        assert ref["provenance"]["kind"] == "upload"
-        assert encoded not in (store.directory(session.session_id) / "transcript.jsonl").read_text()
+        assert media.NAMESPACE not in user["metadata"]
+        assert encoded in (store.directory(session.session_id) / "transcript.jsonl").read_text()
+        assert not list((store.directory(session.session_id) / "media" / "assets").glob("*"))
     finally:
         if not execution.done():
             await runtime.submit(Input("stop"))

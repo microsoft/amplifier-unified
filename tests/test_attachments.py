@@ -15,30 +15,23 @@ from amplifier_web.server import create_app
 from amplifier_web.service import AppError, AppService
 from test_service import Runtime
 
-PNG = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=')
+PNG = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNgaGAAAAEEAIFw9selAAAAAElFTkSuQmCC')
 
 
 def upload(home, name='tiny.png', data=PNG):
     return attachments.save(home, name, base64.b64encode(data).decode())
 
 
-async def test_composer_import_persists_reference_and_original(tmp_path, monkeypatch):
-    from io import BytesIO
-    from PIL import Image
-    from amplifier_foundation.session.checkpoint import (
-        acknowledge_legacy_checkpoint, verified_checkpoint_refs,
-    )
-    from amplifier_foundation.session.media import SessionMediaStore
-    from amplifier_web.host.media import NAMESPACE
+async def test_composer_checkpoints_inline_content_and_exact_upload_issuance(tmp_path, monkeypatch):
+    from amplifier_core.message_models import ChatRequest, Message
+    from amplifier_web.host.media import NAMESPACE, RequestOnlyRegistry
 
-    source = BytesIO()
-    Image.new('RGB', (2, 2), 'green').save(source, format='PNG')
-    pixels = source.getvalue()
+    pixels = PNG
     monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
     row = upload(tmp_path, data=pixels)
     command = SimpleNamespace(id='my-input', text='Review', attachments=[row])
     transcript_path = tmp_path / 'transcript.jsonl'
-    media_path = tmp_path / 'media'
+    issuance = tmp_path / 'media-upload-issuance.json'
     canonical = []
 
     async def append(message):
@@ -46,56 +39,31 @@ async def test_composer_import_persists_reference_and_original(tmp_path, monkeyp
 
     async def checkpoint():
         transcript_path.write_text(''.join(json.dumps(row) + '\n' for row in canonical))
-        receipt = acknowledge_legacy_checkpoint(tmp_path, session_id='s1',
-                                                 expected_messages=canonical)
-        store.acknowledge_checkpoint(receipt)
-
-    store = SessionMediaStore(media_path, 's1', checkpoint_verifier=verified_checkpoint_refs)
-    capabilities = {'web.media.composer': store, 'session.durable_checkpoint': checkpoint,
+    registry = RequestOnlyRegistry(issuance)
+    capabilities = {'web.media.composer': object(), 'session.durable_checkpoint': checkpoint,
+                    'web.media.request_only': registry,
                     NAMESPACE: SimpleNamespace(enabled=True)}
-    coordinator = SimpleNamespace(get_capability=capabilities.get, get=lambda kind: {
-        'provider': SimpleNamespace(get_media_request_support_for_request=lambda **kw: {})})
-    try:
-        ctx = attachments.MediaAttachmentContext(SimpleNamespace(add_message=append), coordinator)
-        content = attachments.encode(command, coordinator)
-        with pytest.raises(ValueError, match='does not belong'):
-            await ctx.add_message({'role': 'user', 'content': content,
-                                   'metadata': {'amplifier_input': {'id': 'not-mine'}}})
-        assert not canonical
+    coordinator = SimpleNamespace(get_capability=capabilities.get)
+    ctx = attachments.MediaAttachmentContext(SimpleNamespace(add_message=append), coordinator)
+    content = attachments.encode(command, coordinator)
+    with pytest.raises(ValueError, match='does not belong'):
         await ctx.add_message({'role': 'user', 'content': content,
-                               'metadata': {'amplifier_input': {'id': command.id}}})
-        [ref] = canonical[0]['metadata'][NAMESPACE]['refs']
-        assert ref['provenance']['kind'] == 'upload'
-        assert ref['sha256'] == hashlib.sha256(pixels).hexdigest()
-        assert base64.b64encode(pixels).decode() not in transcript_path.read_text()
-        with store.resolve_ref(ref) as saved:
-            assert saved.read() == pixels
-    finally:
-        store.close()
-    # Reopen in a fresh process: a serialized record is not the live receipt.
-    # Resume must acknowledge the actual canonical transcript again.
-    result = subprocess.run([os.sys.executable, '-c', """
-import hashlib
-import json
-from pathlib import Path
-import sys
-from amplifier_foundation.session.checkpoint import acknowledge_legacy_checkpoint, verified_checkpoint_refs
-from amplifier_foundation.session.media import SessionMediaStore
-
-root = Path(sys.argv[1])
-rows = [json.loads(line) for line in (root / 'transcript.jsonl').read_text().splitlines()]
-[ref] = rows[0]['metadata']['experimental.media.v1']['refs']
-store = SessionMediaStore(root / 'media', 's1', checkpoint_verifier=verified_checkpoint_refs)
-try:
-    store.acknowledge_checkpoint(acknowledge_legacy_checkpoint(
-        root, session_id='s1', expected_messages=rows))
-    store.verify_checkpoint(ref)
-    with store.resolve_ref(ref) as source:
-        print(hashlib.sha256(source.read()).hexdigest())
-finally:
-    store.close()
-""", str(tmp_path)], capture_output=True, text=True, timeout=10, check=True)
-    assert result.stdout.strip() == hashlib.sha256(pixels).hexdigest()
+                               'metadata': {'amplifier_input': {'id': 'not-mine'}}})
+    assert not canonical
+    await ctx.add_message({'role': 'user', 'content': content,
+                           'metadata': {'amplifier_input': {'id': command.id}}})
+    assert NAMESPACE not in canonical[0]['metadata']
+    encoded = base64.b64encode(pixels).decode()
+    assert encoded in transcript_path.read_text() and encoded not in issuance.read_text()
+    # Reload owns exact content/input hashes, not blanket permission for images.
+    reopened = RequestOnlyRegistry(issuance)
+    request = ChatRequest(messages=[Message(**row) for row in canonical])
+    assert reopened.bind(request)
+    index = next(i for i, block in enumerate(request.messages[0].content) if block.type == 'image')
+    assert reopened.validate(request, message_index=0, block_index=index, purpose='transport')
+    request.messages[0].content[index].source['data'] = 'changed'
+    assert not reopened.validate(request, message_index=0, block_index=index, purpose='transport')
+    reopened.release(request)
 
 
 def test_private_storage_sniffs_content_and_bounds_data(tmp_path):
@@ -184,6 +152,39 @@ def test_encoder_reads_authoritative_metadata_and_limits_inline_text(tmp_path, m
     assert not any(item['type'] == 'image' for item in content)
 
 
+def test_image_snapshot_failure_uses_closed_notice_and_keeps_other_attachments(tmp_path, monkeypatch):
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    bad, good = upload(tmp_path, 'bad.png'), upload(tmp_path, 'good.png')
+    bad_path, _ = attachments.file_path(tmp_path, bad['id'])
+    original = attachments._image_source
+    secret = 'data:image/png;base64,' + base64.b64encode(PNG).decode()
+    def read(path, row):
+        if path == bad_path:
+            raise OSError(secret)
+        return original(path, row)
+    monkeypatch.setattr(attachments, '_image_source', read)
+    content = attachments.encode(SimpleNamespace(text='Keep user text', attachments=[bad, good]))
+    assert content[0]['text'] == 'Keep user text'
+    assert secret not in json.dumps(content)
+    assert any('Image unavailable: bad.png' in block.get('text', '') for block in content)
+    assert len([block for block in content if block['type'] == 'image']) == 1
+
+
+@pytest.mark.parametrize('limit', [None, 1])
+def test_composer_decoder_safety_refusal_keeps_text(tmp_path, monkeypatch, limit):
+    from io import BytesIO
+    from PIL import Image
+    source = BytesIO()
+    Image.new('RGB', (2, 2), 'green').save(source, format='PNG')
+    row = upload(tmp_path, data=source.getvalue())
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    monkeypatch.setattr(Image, 'MAX_IMAGE_PIXELS', limit)
+    content = attachments.encode(SimpleNamespace(text='Keep user text', attachments=[row]))
+    assert content[0]['text'] == 'Keep user text'
+    assert any('Image unavailable:' in block.get('text', '') for block in content)
+    assert not any(block['type'] == 'image' for block in content)
+
+
 async def test_draft_attachment_send_is_durable_and_private(tmp_path):
     app = AppService(tmp_path, Runtime(), workspace=tmp_path)
     try:
@@ -243,16 +244,14 @@ async def test_attachment_http_images_inline_documents_download(authenticated_cl
     assert (await client.get('/api/attachments/' + '0' * 32)).status == 404
 
 
-def test_real_core_loop_live_persists_composer_image_reference():
+def test_real_core_loop_live_persists_composer_image():
     python = os.environ.get('UNIFIED_RUNTIME_PYTHON')
     if not python:
         pytest.skip('Set UNIFIED_RUNTIME_PYTHON for real Core/loop-live multimodal verification')
-    # Reuse the maintained real-consumer construction/checkpoint fixture. The
-    # old standalone probe bypassed media.bind_media and the loop's sealed graph,
-    # so it exercised the inline fallback instead of durable image delivery.
+    # Reuse the maintained real-consumer construction/checkpoint fixture.
     result = subprocess.run([
         python, '-m', 'pytest', '-q', '-o', 'addopts=',
-        'tests/test_tool_image_consumer_join.py::test_live_composer_appends_durable_user_ref_before_transport',
+        'tests/test_tool_image_consumer_join.py::test_live_composer_checkpoints_inline_upload_before_transport',
     ], cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
     assert '1 passed' in result.stdout

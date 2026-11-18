@@ -2,6 +2,7 @@
 import asyncio
 import base64
 import copy
+from io import BytesIO
 import json
 import socket
 
@@ -131,3 +132,161 @@ async def test_legacy_composer_live_sdk_wire_capture_and_reload(tmp_path, monkey
         assert encoded not in capture.read_text()
     finally:
         await resumed.cleanup()
+
+
+@pytest.mark.parametrize("first", ["legacy", "openai"])
+@pytest.mark.parametrize("format", ["PNG", "JPEG", "WEBP"])
+async def test_composer_uploads_survive_sdk_provider_switches(tmp_path, monkeypatch, first, format):
+    """New upload on each provider, then two cold reopens after source deletion."""
+    from PIL import Image
+    from amplifier_module_loop_live.runtime import Input
+    from amplifier_web.attachments import file_path, save
+    from test_openai_work_tool_images import SDKRead, assert_pixel_free_capture
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    path, original = picture(workspace, format)
+    buffer = BytesIO()
+    Image.new("RGB", (8, 8), "blue").save(buffer, format=format)
+    originals = [original, buffer.getvalue()]
+    expected = []
+    store = None
+    other = "openai" if first == "legacy" else "legacy"
+    for phase, provider in enumerate((first, other, first, other)):
+        loaded = store.load("ordinary-work-media")[0] if store is not None else None
+        sdk = LegacySDK() if provider == "legacy" else SDKRead(private_media=False)
+        session, store, checkpoint, checks, host = await work_root(tmp_path, monkeypatch, None,
+            store=store, prepared_host=True, worker_observers=True, live=True,
+            provider_setup=sdk.setup, provider_module=(
+                "provider-anthropic" if provider == "legacy" else "provider-openai"),
+            model=MODEL if provider == "legacy" else "gpt-6.1-sol")
+        runtime = session.coordinator.get_capability("live.runtime")
+        execution = None
+        try:
+            if loaded is not None:
+                await session.coordinator.get("context").set_messages(loaded)
+                await checkpoint()
+            uploads = ()
+            if phase < 2:
+                upload = save(tmp_path / "app", "composer-" + str(phase),
+                              base64.b64encode(originals[phase]).decode())
+                uploads = ({"id": upload["id"]},)
+                expected.append(originals[phase])
+            command = Input("user", "Use my saved composer images; do not read files", attachments=uploads)
+            execution = asyncio.create_task(session.execute(""))
+            await runtime.submit(command)
+            finished = await runtime.wait_for(lambda row:
+                row["type"] in {"generation.finished", "generation.failed"}
+                and command.id in row.get("input_ids", []), timeout=15)
+            assert finished["type"] == "generation.finished", finished
+            endpoint = "/v1/messages" if provider == "legacy" else "/v1/responses"
+            sends = [body for route, body in sdk.wire if route == endpoint]
+            assert [pixels for _, pixels in sdk.pixels(sends[-1])] == expected, (phase, provider)
+            assert "Image unavailable" not in json.dumps(sends[-1])
+            assert host.sealed and checks == []
+            # Both real SDK native counts and sends see the same exact image bytes.
+            counts = [body for route, body in sdk.wire
+                      if route.endswith(("/count_tokens", "/input_tokens"))]
+            assert counts and [pixels for _, pixels in sdk.pixels(counts[-1])] == expected
+            rows = await checkpoint()
+            assert not session.coordinator.get_capability("web.media.request_only").requests
+            for pixels in expected:
+                encoded = base64.b64encode(pixels).decode()
+                assert encoded not in json.dumps(runtime.events)
+                assert encoded not in json.dumps(host.emitted)
+                assert_pixel_free_capture(tmp_path, pixels, tool=False)
+            if phase < 2:
+                file_path(tmp_path / "app", upload["id"])[0].unlink()
+                if phase == 0:
+                    path.unlink()
+        finally:
+            try:
+                if execution is not None:
+                    if not execution.done():
+                        await runtime.submit(Input("stop"))
+                    await asyncio.wait_for(execution, 5)
+            finally:
+                await session.cleanup()
+        store = SessionStore(store.base_dir)  # Fresh media store and issuance owner each time.
+
+    # Deliberate compatibility/privacy tradeoff, not reference-only history.
+    assert not any(media.NAMESPACE in (row.get("metadata") or {}) for row in rows)
+    images = [base64.b64decode(block["source"]["data"]) for row in rows
+              if isinstance(row["content"], list) for block in row["content"]
+              if block.get("type") == "image"]
+    assert images == originals
+    directory = store.directory(session.session_id)
+    assert not list((directory / "media" / "assets").iterdir())
+    assert not list((directory / "media" / "staging").iterdir())
+    issuance = (directory / "media-upload-issuance.json").read_text()
+    assert all(base64.b64encode(pixels).decode() not in issuance for pixels in originals)
+
+
+async def test_inline_composer_and_authorized_tool_ref_remain_distinct_across_switch(tmp_path, monkeypatch):
+    from PIL import Image
+    from amplifier_module_loop_live.runtime import Input
+    from amplifier_web.attachments import file_path, save
+    from test_openai_work_tool_images import SDKRead, assert_pixel_free_capture, sdk_root
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    path, tool_pixels = picture(workspace)
+    buffer = BytesIO()
+    Image.new("RGB", (8, 8), "blue").save(buffer, format="PNG")
+    upload_pixels = buffer.getvalue()
+    sdk = SDKRead([path], private_media=False)
+    session, store, checkpoint, checks, host = await sdk_root(tmp_path, monkeypatch, sdk, live=True)
+    upload = save(tmp_path / "app", "composer.png", base64.b64encode(upload_pixels).decode())
+    command = Input("user", "Inspect my upload and read the authorized local image",
+                    attachments=({"id": upload["id"]},))
+    runtime = session.coordinator.get_capability("live.runtime")
+    execution = asyncio.create_task(session.execute(""))
+    try:
+        await runtime.submit(command)
+        finished = await runtime.wait_for(lambda row:
+            row["type"] in {"generation.finished", "generation.failed"}
+            and command.id in row.get("input_ids", []), timeout=15)
+        assert finished["type"] == "generation.finished", finished
+        assert SDKRead.pixels(sdk.image_sends()[-1]) == [
+            (None, upload_pixels), ("call-sdk-read", tool_pixels)]
+        assert host.sealed and checks == [("read_file", {"file_path": str(path)})]
+        rows = await checkpoint()
+        [tool] = [row for row in rows if media.NAMESPACE in (row.get("metadata") or {})]
+        assert tool["role"] == "tool" and tool["tool_call_id"] == "call-sdk-read"
+        assert base64.b64encode(tool_pixels).decode() not in json.dumps(rows)
+        path.unlink()
+        file_path(tmp_path / "app", upload["id"])[0].unlink()
+    finally:
+        try:
+            if not execution.done():
+                await runtime.submit(Input("stop"))
+            await asyncio.wait_for(execution, 5)
+        finally:
+            await session.cleanup()
+
+    for legacy in (True, False):
+        reopened = SessionStore(store.base_dir)
+        loaded, _ = reopened.load("ordinary-work-media")
+        cold = LegacySDK() if legacy else SDKRead()
+        resumed, _, checkpoint, checks, host = await work_root(tmp_path, monkeypatch, None,
+            store=reopened, prepared_host=True, worker_observers=True, provider_setup=cold.setup,
+            provider_module="provider-anthropic" if legacy else "provider-openai",
+            model=MODEL if legacy else "gpt-6.1-sol")
+        try:
+            await resumed.coordinator.get("context").set_messages(loaded)
+            await checkpoint()
+            assert await resumed.execute("Use the saved images; do not read files") == "offline completion"
+            endpoint = "/v1/messages" if legacy else "/v1/responses"
+            [sent] = [body for route, body in cold.wire if route == endpoint]
+            assert [pixels for _, pixels in cold.pixels(sent)] == (
+                [upload_pixels] if legacy else [upload_pixels, tool_pixels])
+            assert ("Image unavailable" in json.dumps(sent)) is legacy
+            assert host.sealed and checks == []
+            saved = await checkpoint()
+            assert [row for row in saved if media.NAMESPACE in (row.get("metadata") or {})] == [tool]
+            assert base64.b64encode(tool_pixels).decode() not in json.dumps(saved)
+            for pixels in (upload_pixels, tool_pixels):
+                assert base64.b64encode(pixels).decode() not in json.dumps(host.emitted)
+                assert_pixel_free_capture(tmp_path, pixels, tool=True)
+        finally:
+            await resumed.cleanup()

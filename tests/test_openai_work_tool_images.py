@@ -36,12 +36,13 @@ def no_network(monkeypatch):
 
 
 class SDKRead:
-    def __init__(self, paths=(), *, revoke_send=False):
+    def __init__(self, paths=(), *, revoke_send=False, private_media=True):
         self.paths = list(paths)
         self.wire, self.private = [], []
         self.counted = set()
         self.provider = None
         self.revoke_send = revoke_send
+        self.private_media = private_media
 
     def setup(self, provider):
         # Inject only the documented SDK client seam after the actual public
@@ -75,7 +76,7 @@ class SDKRead:
     async def respond(self, request):
         body = json.loads(request.content)
         pixels = self.pixels(body)
-        if pixels:
+        if pixels and self.private_media:
             # The provider binding points at the exact real issuer registration,
             # not a copied/forged private carrier. Do not synthesize registration.
             candidates = [entry.request_ref() for entry in self.provider._media_request_bindings.values()]
@@ -130,7 +131,19 @@ def assert_pixel_free_capture(root, original, *, tool):
     def inspect(value):
         if isinstance(value, dict):
             if value.get("type") in ("image", "input_image"):
-                assert value == {"type": value["type"], "media": "[image omitted from diagnostics]"}
+                if value.get("media") == "[image omitted from diagnostics]":
+                    assert value == {"type": value["type"], "media": "[image omitted from diagnostics]"}
+                else:
+                    # Ordinary inline composer SDK diagnostics use the existing
+                    # typed fingerprint, not the private-ref omission block.
+                    source = (value["source"]["data"] if value["type"] == "image"
+                              else value["image_url"])
+                    assert set(source) == {"__unified_image_transport__"}
+                    fingerprint = source["__unified_image_transport__"]
+                    assert fingerprint["omitted"] is True
+                    assert fingerprint["encoding"] in {"base64", "data-url"}
+                    assert set(fingerprint) == {"omitted", "encoding", "characters", "sha256", "media_type"}
+                    assert len(fingerprint["sha256"]) == 64 and fingerprint["characters"] > 0
             for child in value.values():
                 inspect(child)
         elif isinstance(value, list):
@@ -261,7 +274,7 @@ async def test_actual_live_work_sdk_image_references_and_capture(tmp_path, monke
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     path, original = picture(workspace, format)
-    sdk = SDKRead([path] if origin == "tool" else [])
+    sdk = SDKRead([path] if origin == "tool" else [], private_media=origin == "tool")
     session, store, checkpoint, checks, host = await sdk_root(tmp_path, monkeypatch, sdk, live=True)
     coordinator = session.coordinator
     loop = coordinator.get("orchestrator")
@@ -283,13 +296,16 @@ async def test_actual_live_work_sdk_image_references_and_capture(tmp_path, monke
         expected = [("call-sdk-read" if origin == "tool" else None, original)]
         assert SDKRead.pixels(sdk.image_sends()[-1]) == expected
         rows = await checkpoint()
-        [message] = [row for row in rows if media.NAMESPACE in (row.get("metadata") or {})]
-        [ref] = message["metadata"][media.NAMESPACE]["refs"]
-        assert message["role"] == ("tool" if origin == "tool" else "user")
-        assert ref["provenance"]["kind"] == ("tool" if origin == "tool" else "upload")
-        assert ref["sha256"] == hashlib.sha256(original).hexdigest()
+        refs = [row for row in rows if media.NAMESPACE in (row.get("metadata") or {})]
+        if origin == "tool":
+            [message] = refs
+            [ref] = message["metadata"][media.NAMESPACE]["refs"]
+            assert message["role"] == "tool" and ref["provenance"]["kind"] == "tool"
+            assert ref["sha256"] == hashlib.sha256(original).hexdigest()
+        else:
+            assert not refs  # Composer retains its historical inline format on all providers.
         assert checks == ([("read_file", {"file_path": str(path)})] if origin == "tool" else [])
-        assert base64.b64encode(original).decode() not in json.dumps(rows)
+        assert (base64.b64encode(original).decode() in json.dumps(rows)) is (origin == "composer")
         assert base64.b64encode(original).decode() not in json.dumps(runtime.events)
         assert base64.b64encode(original).decode() not in json.dumps(host.emitted)
         # No replay of either producer is needed for the next real Live turn.
@@ -317,7 +333,7 @@ async def test_actual_live_work_sdk_image_references_and_capture(tmp_path, monke
         # after the original upload has been removed.
         reopened = SessionStore(store.base_dir)
         loaded, _ = reopened.load(session.session_id)
-        cold = SDKRead()
+        cold = SDKRead(private_media=False)
         resumed, _, checkpoint, checks, _ = await sdk_root(tmp_path, monkeypatch, cold, store=reopened)
         try:
             await resumed.coordinator.get("context").set_messages(loaded)
@@ -360,7 +376,7 @@ async def test_live_mixed_upload_failure_keeps_text_and_valid_image(tmp_path, mo
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     path, original = picture(workspace)
-    sdk = SDKRead()
+    sdk = SDKRead(private_media=False)
     session, store, checkpoint, checks, host = await sdk_root(tmp_path, monkeypatch, sdk, live=True)
     home = tmp_path / "app"
     if broken == "animated":
@@ -403,13 +419,15 @@ async def test_live_mixed_upload_failure_keeps_text_and_valid_image(tmp_path, mo
         text = json.dumps(user)
         assert reason in text and "Valid attachment text" in text
         assert ("Attachment 1 unavailable" if broken == "missing" else "Image unavailable: broken-image") in text
-        [ref] = user["metadata"][media.NAMESPACE]["refs"]
-        assert ref["sha256"] == hashlib.sha256(original).hexdigest()
+        assert media.NAMESPACE not in user["metadata"]
+        [image] = [block for block in user["content"] if block.get("type") == "image"]
+        assert base64.b64decode(image["source"]["data"]) == original
         assert SDKRead.pixels(sdk.image_sends()[-1]) == [(None, original)]
         assert reason in json.dumps(sdk.image_sends()[-1])
         assert host.sealed and checks == []
         assert base64.b64encode(bad_bytes).decode() not in json.dumps(sdk.wire)
-        for payload in (rows, runtime.events, host.emitted):
+        assert base64.b64encode(bad_bytes).decode() not in json.dumps(rows)
+        for payload in (runtime.events, host.emitted):
             assert base64.b64encode(bad_bytes).decode() not in json.dumps(payload)
             assert base64.b64encode(original).decode() not in json.dumps(payload)
         assert_pixel_free_capture(tmp_path, original, tool=False)
