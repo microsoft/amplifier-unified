@@ -66,6 +66,50 @@ def make_candidate(tmp_path, component="scheduling"):
     return root, revision, dist, git
 
 
+def make_src_candidate(tmp_path, component, *, worktrees=None):
+    """A real root Git tree and archives with public src-layout package inputs."""
+    root, _, dist, git = make_candidate(tmp_path, component)
+    package = "amplifier_" + component
+    author = root / "components" / component
+    files = {p.relative_to(author).as_posix(): p.read_bytes() for p in author.rglob("*") if p.is_file()}
+    requirements = [] if worktrees is None else [
+        "amplifier-worktrees>=0.1.0", "cryptography>=43", "filelock>=3.16"]
+    if worktrees is not None:
+        files["worktrees-source.json"] = (json.dumps(worktrees, indent=2) + "\n").encode()
+    files["pyproject.toml"] += ("dependencies=" + json.dumps(requirements) + "\n").encode()
+    files = {("src/" + name if name.startswith(package + "/") else name): raw
+             for name, raw in files.items()}
+    shutil.rmtree(root / "components")
+    for name, raw in files.items():
+        path = root / name; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(raw)
+    git("add", "-A"); git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                           "commit", "-qm", "public src owner")
+    revision = git("rev-parse", "HEAD")
+    selected = {"schema": 1, "component": component, "repository": f"microsoft/amplifier-{component}",
+                "revision": revision, "subdirectory": ".", "tree": git("rev-parse", "HEAD^{tree}"),
+                "version": "0.1.0", "tag": component + "-v0.1.0",
+                "sourceFiles": {name: release.sha(raw) for name, raw in files.items()}}
+    for path in dist.iterdir(): path.unlink()
+    wheel, sdist = release.artifact_names(selected)
+    with zipfile.ZipFile(dist / wheel, "w") as archive:
+        archive.writestr(package + "/__init__.py", files["src/" + package + "/__init__.py"])
+        info = package + "-0.1.0.dist-info/"
+        archive.writestr(info + "METADATA", f"Name: amplifier-{component}\nVersion: 0.1.0\n" +
+                        "".join("Requires-Dist: " + value + "\n" for value in requirements))
+        archive.writestr(info + "licenses/LICENSE", files["LICENSE"])
+    with tarfile.open(dist / sdist, "w:gz") as archive:
+        for name, raw in files.items():
+            if name == ".gitignore": continue
+            member = tarfile.TarInfo(package + "-0.1.0/" + name); member.size = len(raw)
+            archive.addfile(member, io.BytesIO(raw))
+    receipt = {**selected, "artifacts": release.package_identity(dist, selected)}
+    receipt_name = component + "-source.json"
+    (dist / receipt_name).write_text(json.dumps(receipt, indent=2) + "\n")
+    (dist / "SHA256SUMS").write_text("".join(
+        f"{release.sha((dist / name).read_bytes())}  {name}\n" for name in (wheel, sdist, receipt_name)))
+    return root, revision, dist, receipt
+
+
 @pytest.fixture
 def candidate(tmp_path):
     return make_candidate(tmp_path)
@@ -79,13 +123,43 @@ def test_exact_source_and_built_payload_round_trip(candidate):
     assert len(result["artifacts"]) == 2
 
 
-@pytest.mark.parametrize("component", [None, "portability", "unknown"])
+@pytest.mark.parametrize("component", [None, "unknown"])
 def test_repository_root_requires_supported_explicit_identity(component):
     selected = {"repository": "bkrabach/amplifier-platform-scheduling", "subdirectory": "."}
     if component is not None:
         selected["component"] = component
     with pytest.raises(ValueError, match="Unknown standalone component"):
         release.component_name(selected)
+
+
+@pytest.mark.parametrize("component", ["publishing", "portability"])
+def test_public_src_artifact_keeps_source_and_installed_paths_distinct(tmp_path, component):
+    root, revision, dist, receipt = make_src_candidate(tmp_path, component)
+    package = "amplifier_" + component
+    assert receipt["revision"] == revision
+    assert receipt["tree"] == release.run("git", "rev-parse", "HEAD^{tree}", cwd=root).decode().strip()
+    assert "src/" + package + "/__init__.py" in receipt["sourceFiles"]
+    assert package + "/__init__.py" not in receipt["sourceFiles"]
+    assert release.package_identity(dist, receipt) == receipt["artifacts"]
+    with zipfile.ZipFile(dist / release.artifact_names(receipt)[0]) as archive:
+        assert archive.read(package + "/__init__.py") == (root / "src" / package / "__init__.py").read_bytes()
+        assert not any(name.startswith("src/") for name in archive.namelist())
+
+
+@pytest.mark.parametrize("component", ["publishing", "portability"])
+@pytest.mark.parametrize("fault", ["changed", "missing", "extra"])
+def test_public_src_wheel_cannot_change_selected_runtime(tmp_path, component, fault):
+    _, _, dist, receipt = make_src_candidate(tmp_path, component)
+    wheel = dist / release.artifact_names(receipt)[0]
+    with zipfile.ZipFile(wheel) as archive:
+        files = {name: archive.read(name) for name in archive.namelist()}
+    runtime = f"amplifier_{component}/__init__.py"
+    if fault == "changed": files[runtime] = b"unselected = True\n"
+    elif fault == "missing": del files[runtime]
+    else: files[f"amplifier_{component}/unselected.py"] = b"extra = True\n"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        for name, raw in files.items(): archive.writestr(name, raw)
+    with pytest.raises(ValueError): release.package_identity(dist, receipt)
 
 
 def test_status_keeps_distribution_import_and_bundled_owner_distinct(tmp_path):

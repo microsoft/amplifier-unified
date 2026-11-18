@@ -40,10 +40,11 @@ def locations(component):
 
 def selected_files(source, component):
     package = "amplifier_" + component.replace("-", "_")
-    return {name: digest for name, digest in source["sourceFiles"].items()
+    prefix = "src/" if source["subdirectory"] == "." and component in {"publishing", "portability"} else ""
+    return {name.removeprefix(prefix): digest for name, digest in source["sourceFiles"].items()
             if name == "LICENSE" or (component in FLAT and "/" not in name and
                 (name.endswith(".py") or component == "kernels" and name == "node_runner.cjs"))
-            or (component not in FLAT and name.startswith(package + "/"))}
+            or (component not in FLAT and name.startswith(prefix + package + "/"))}
 
 
 def sha(raw):
@@ -124,10 +125,18 @@ def verify(root, *, component="scheduling"):
     if component == "portability":
         dependency = record["dependencySources"]["worktrees"]
         verify_worktrees_dependency(root, source, dependency)
-        embedded = "amplifier-worktrees==" + dependency["version"]
-        if embedded not in required:
-            raise ValueError("Portability must retain its exact worktrees requirement")
-        required.remove(embedded)
+        if source["subdirectory"] == ".":
+            # The public library permits broader versions. Unified retains its
+            # already-qualified narrower bounds and the exact Worktrees receipt;
+            # preserve the actual artifact metadata rather than rewriting it.
+            if required != {"amplifier-worktrees>=0.1.0", "cryptography>=43", "filelock>=3.16"} or dependency["version"] != "0.1.0":
+                raise ValueError("Review the public Portability dependency requirements before selection")
+            required = {requirement_key(value) for value in ("cryptography>=44,<51", "filelock>=4.2.1,<5")}
+        else:
+            embedded = "amplifier-worktrees==" + dependency["version"]
+            if embedded not in required:
+                raise ValueError("Portability must retain its exact worktrees requirement")
+            required.remove(embedded)
     if not required <= declared:
         raise ValueError("Unified omits a selected component runtime requirement")
     return record
