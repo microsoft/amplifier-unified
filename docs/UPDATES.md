@@ -737,8 +737,26 @@ limitations. It does not rename the selected record as the last failure or
 discard history. A missing older activation receipt alone remains neutral,
 does not request reinstallation, and does not claim full component verification.
 If the selected installation's graph, lock and activation still verify but its
-source-configuration key no longer matches, health reports incomplete component
-verification, not a renewed claim that an older source conflict is occurring.
+source-configuration key no longer matches, nothing failed and nothing is
+required of the person. A saved AI connection for all folders gives this state:
+a second connection, a connection of another kind, or another order of
+connections of different kinds changes the key; another model for the same
+connection does not.
+Seconds after the save the page says "Checking current configuration". Then,
+until the next update check, health reports the quiet status `unchecked`, with
+no attention item and no unread mark on the Settings entry: "Your settings
+changed since the components were checked" / "The installed components are as
+recorded. Your AI connections or other settings that choose components changed
+after Amplifier checked these components. The next update check looks for the
+components that the changed settings need. To check now, select Check for
+updates." The save starts no check. The text is the same with automatic checks
+on and off, and it promises no result of the next check. Health cannot tell a
+key that a new app version computes differently from a change by the person;
+the text says "changed" for both. It is not a renewed claim that an older
+source conflict is occurring. On Windows, while the program that starts
+Amplifier is behind, the launcher's text shows in place of this text, and in
+three of its phases with its button, as over every other quiet status
+(`windows_launcher_follow.project`).
 Only covered failures predating that installation remain historical; newer
 failures, missing source scope and uncertain operations retain their priority.
 This explanatory proof cannot authorize partial-source retention or declare the

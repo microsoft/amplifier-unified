@@ -775,8 +775,12 @@ def current(state, evidence=None, *, manual_verified=None, explicit_retry=False,
                       action='check', component='Amplifier Unified')
     if local_changes or seq.get('stage') == 'complete' and app.get('status') == 'current':
         if evidence.get('configurationChanged'):
-            return result('unverified', 'Component verification is incomplete',
-                          'The active installation still matches its recorded graph, but the current source configuration differs from its qualification. Current components are kept; earlier attempts remain in history. Check for updates and review the changed source choices before installing.',
+            # Nothing failed, and nothing is required of the person: a saved AI
+            # connection gives this state. A quiet status, so no unread mark.
+            # The text holds with automatic checks on and off, and it promises
+            # no result of the next check.
+            return result('unchecked', 'Your settings changed since the components were checked',
+                          'The installed components are as recorded. Your AI connections or other settings that choose components changed after Amplifier checked these components. The next update check looks for the components that the changed settings need. To check now, select Check for updates.',
                           action='check')
         if evidence.get('activationUnknown'):
             return result('unchecked', 'Application is up to date' if application_success else 'Current components kept',
