@@ -1156,6 +1156,26 @@ def test_the_wait_for_held_shortcuts_is_bounded_for_the_whole_step_not_for_each_
     assert "Uninstall Amplifier.lnk" not in attempts
 
 
+def test_the_pin_and_the_delete_each_have_their_own_wait(uninstaller, monkeypatch):
+    # The app stops between the two steps, and that can take long. So the wait of the pin takes
+    # nothing from the wait of the delete.
+    state, folder, waits, attempts = uninstaller.state, uninstaller.folder, [], {"pin": 0, "delete": 0}
+    monkeypatch.setattr(shell, "HOLD_SECONDS", 2)
+    monkeypatch.setattr(shell.time, "sleep", waits.append)
+    def refuse(place):
+        def refused(name):
+            if name == "Amplifier status.lnk":
+                attempts[place] += 1
+                if attempts[place] <= 15:
+                    raise held(dict((where, number) for where, number, _ in HELD)[place])
+        return refused
+    state["before_pin"] = lambda path, name: refuse("pin")(name)
+    state["before_remove"] = refuse("delete")
+    assert uninstaller.run()["ok"]
+    assert waits == [0.1] * 30 and attempts == {"pin": 16, "delete": 16}
+    assert state["registry"] is None and not folder.exists() and not state["pins"]
+
+
 @pytest.mark.parametrize("place,code", [("pin", 5), ("delete", 32), ("pin", 33), ("delete", 33),
                                         ("pin", None), ("delete", None)])
 def test_only_the_refusal_of_a_held_shortcut_is_tried_again(uninstaller, monkeypatch, place, code):
