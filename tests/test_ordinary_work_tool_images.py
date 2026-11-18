@@ -45,7 +45,7 @@ async def test_ordinary_work_first_image_post_ack_deleted_source_reload(tmp_path
         assert bridge.validate_receipt(bridge.graph_receipt), graph.participants_evidence()["state"]
         evidence = graph.participants_evidence()
         print("ORDINARY_WORK_SOURCE_FACTS " + json.dumps({
-            "model": provider.default_model, "auth": provider.auth_mode,
+            "model": provider.default_model, "provider": type(provider).__name__,
             "configured_mounts": len(evidence["loads"]),
             "participants": list(evidence["participants"]),
             "ready": [{"participant": row["participant"], "completed": row["completed"]}

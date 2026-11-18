@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -83,7 +84,15 @@ async def compose_work(tmp_path, monkeypatch, *, actual_provider=False):
     for key in tuple(os.environ):
         if key.startswith(("AMPLIFIER_CONTEXT_INTELLIGENCE_", "AMPLIFIER_COMPUTER_")) or key in {"DISPLAY", "WAYLAND_DISPLAY"}:
             monkeypatch.delenv(key, raising=False)
-    # No local desktop backend/SSH probes can invoke installed native binaries.
+    monkeypatch.setenv("AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH", str(tmp_path / "shared" / "projects"))
+    # An empty PATH does not disable Quartz on macOS. Replace only hardware
+    # discovery, never a mounted Work module or the file/media execution path.
+    import amplifier_module_tool_computer_use as computer
+    from amplifier_module_tool_computer_use.registry import NoBackendAvailable
+    def no_desktop(*args, **kwargs):
+        raise NoBackendAvailable([("offline-fixture", "No desktop target")])
+    monkeypatch.setattr(computer, "select_backend", no_desktop)
+    # No remaining local desktop/SSH probes can invoke installed native binaries.
     monkeypatch.setenv("PATH", str(tmp_path / "no-executables"))
     workspace = tmp_path / "workspace"
     workspace.mkdir(exist_ok=True)
@@ -128,7 +137,7 @@ async def compose_work(tmp_path, monkeypatch, *, actual_provider=False):
 
 async def work_root(tmp_path, monkeypatch, provider, *, store=None, post=None, deny_work=False,
                     prepared_host=False, configuration_only=False, worker_observers=False,
-                    provider_setup=None):
+                    provider_setup=None, live=False):
     bundle, plan, roots = await compose_work(tmp_path, monkeypatch, actual_provider=provider is None)
     # Discovery sees the same selected public resources, mirrored offline. No
     # real home/project scans and no deferred Git source download at first turn.
@@ -171,6 +180,14 @@ async def work_root(tmp_path, monkeypatch, provider, *, store=None, post=None, d
         if not prepared_host:
             await session.initialize()
         coordinator = session.coordinator
+        if live:
+            from amplifier_module_loop_live.runtime import Runtime
+            from amplifier_web.attachments import encode
+            runtime = Runtime(session.session_id)
+            coordinator.register_capability("live.runtime", runtime)
+            coordinator.register_capability("live.attachments.encode", encode)
+        else:
+            runtime = SimpleNamespace(session_id=session.session_id, generation={})
         cap = coordinator.get_capability(media.NAMESPACE)
         assert cap is not None
         if provider is None:
@@ -187,8 +204,6 @@ async def work_root(tmp_path, monkeypatch, provider, *, store=None, post=None, d
         if prepared_host:
             from amplifier_web.host.children import install_children
             from amplifier_foundation import SessionConfigurator
-            from types import SimpleNamespace
-            runtime = SimpleNamespace(session_id=session.session_id, generation={})
             delegate = coordinator.get("tools", "delegate")
             registry = await install_children(session, prepared, runtime, store, approvals=None)
             assert coordinator.get("tools", "delegate").original is delegate
@@ -208,11 +223,12 @@ async def work_root(tmp_path, monkeypatch, provider, *, store=None, post=None, d
             snapshots.append(copy.deepcopy(rows))
             return rows
         coordinator.register_capability("session.durable_checkpoint", checkpoint)
+        if live:
+            from amplifier_web.attachments import install_media_context
+            await install_media_context(coordinator)
         from amplifier_web.context_continuity import ContextContinuity
         ContextContinuity(coordinator, session.session_id, store.directory(session.session_id), checkpoint)
         from amplifier_web.host.session import install_checkpoint_hooks
-        from types import SimpleNamespace
-        runtime = SimpleNamespace(session_id=session.session_id, generation={})
         install_checkpoint_hooks(coordinator, runtime, checkpoint)
         provider.checkpoint_seen = lambda: bool(snapshots and any(
             media.NAMESPACE in (row.get("metadata") or {}) for row in snapshots[-1]))
@@ -232,7 +248,6 @@ async def work_root(tmp_path, monkeypatch, provider, *, store=None, post=None, d
             monkeypatch.setattr(runtime_worker, "publish", emitted.append)
             worker = runtime_worker.Worker()
             worker.session, worker.runtime = session, runtime
-            runtime.generation = {}
             worker.bridge = app_bridge
             worker.telemetry = ExecutionEvents(session.session_id, emitted.append)
             ui_tool = coordinator.get("tools", "ui_use")

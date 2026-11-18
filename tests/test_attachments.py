@@ -244,9 +244,15 @@ def test_real_core_loop_live_persists_composer_image_reference():
     python = os.environ.get('UNIFIED_RUNTIME_PYTHON')
     if not python:
         pytest.skip('Set UNIFIED_RUNTIME_PYTHON for real Core/loop-live multimodal verification')
-    result = subprocess.run([python, str(Path(__file__).parent / 'fixtures/attachments_runtime_probe.py')], capture_output=True, text=True, timeout=30)
+    # Reuse the maintained real-consumer construction/checkpoint fixture. The
+    # old standalone probe bypassed media.bind_media and the loop's sealed graph,
+    # so it exercised the inline fallback instead of durable image delivery.
+    result = subprocess.run([
+        python, '-m', 'pytest', '-q', '-o', 'addopts=',
+        'tests/test_tool_image_consumer_join.py::test_live_composer_appends_durable_user_ref_before_transport',
+    ], cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert '"image_reference_received": true' in result.stdout
+    assert '1 passed' in result.stdout
 
 
 def test_pasted_text_metadata_and_content_survive_reload(tmp_path):

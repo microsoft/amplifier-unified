@@ -1,11 +1,14 @@
-"""Finite real OpenAI SDK/F42 public-source join; no remote provider inference.
+"""Real OpenAI SDK/public-source join; no remote provider inference.
 
 The public provider mount, Core, Work, posthooks, legacy checkpoint/ACK and late
 Worker installers are real. Only the HTTP bottom returns scripted Responses.
-This is not Worker.start/LIVE-manager/installed-host qualification.
+Finite turns and the real Live inbox/Streaming engine are covered. This is not
+Worker.start/process-pipe/installed-host qualification.
 """
+import asyncio
 import base64
 import copy
+import hashlib
 import json
 import socket
 
@@ -58,8 +61,10 @@ class SDKRead:
 
     @classmethod
     def pixels(cls, body):
-        return [(item["call_id"], base64.b64decode(block["image_url"].split(",", 1)[1]))
-                for item in cls.outputs(body) for block in item.get("output", [])
+        return [(item.get("call_id"), base64.b64decode(block["image_url"].split(",", 1)[1]))
+                for item in body.get("input", [])
+                for block in (item.get("output", []) if item.get("type") == "function_call_output"
+                              else item.get("content", []) if item.get("role") == "user" else [])
                 if isinstance(block, dict) and block.get("type") == "input_image"]
 
     async def before_http(self, request):
@@ -111,7 +116,34 @@ async def sdk_root(tmp_path, monkeypatch, sdk, **kwargs):
                            worker_observers=True, provider_setup=sdk.setup, **kwargs)
 
 
-@pytest.mark.parametrize("format", ["PNG", "JPEG"])
+def assert_pixel_free_capture(root, original, *, tool):
+    """Read the real Context Intelligence hook's on-disk capture, not telemetry."""
+    [path] = list((root / "shared" / "projects").rglob("events.jsonl"))
+    text = path.read_text()
+    rows = [json.loads(line) for line in text.splitlines()]
+    names = {row["event"] for row in rows}
+    assert {"llm:request", "llm:response"} <= names
+    if tool:
+        assert "tool:post" in names
+    assert base64.b64encode(original).decode() not in text
+    assert "data:image/" not in text
+    def inspect(value):
+        if isinstance(value, dict):
+            if value.get("type") in ("image", "input_image"):
+                assert value == {"type": value["type"], "media": "[image omitted from diagnostics]"}
+            for child in value.values():
+                inspect(child)
+        elif isinstance(value, list):
+            for child in value:
+                inspect(child)
+    inspect(rows)
+    print("SDK_IMAGE_CAPTURE " + json.dumps({
+        "path": str(path), "events": len(rows), "pixel_free": True,
+        "original_sha256": hashlib.sha256(original).hexdigest(),
+    }, sort_keys=True))
+
+
+@pytest.mark.parametrize("format", ["PNG", "JPEG", "WEBP"])
 async def test_actual_openai_work_first_read_ack_deleted_source_warm_cold(tmp_path, monkeypatch, format):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -123,13 +155,8 @@ async def test_actual_openai_work_first_read_ack_deleted_source_warm_cold(tmp_pa
         assert host.sealed and checks == [("read_file", {"file_path": str(path)})]
         assert SDKRead.pixels(sdk.image_sends()[-1]) == [("call-sdk-read", original)]
         assert base64.b64encode(original).decode() not in json.dumps(host.emitted)
-        _, _, selection = session.coordinator.get_capability("web.media.construction")
-        assert selection.accepts_plan(session.config)
-        assert all("provider_preferences" in row for row in session.config["agents"].values())
-        for field, value in (("instruction", "changed"), ("tools", []), ("model_role", "other")):
-            changed = copy.deepcopy(session.config)
-            changed["agents"]["computer-use:computer-operator"][field] = value
-            assert not selection.accepts_plan(changed)
+        binding = session.coordinator.get_capability("web.media.construction")
+        assert binding.bridge.validate_receipt(binding.bridge.graph_receipt)
         rows = await checkpoint()
         assert any(media.NAMESPACE in (row.get("metadata") or {}) for row in rows)
         assert all(row["role"] == "tool" and row["tool_call_id"] == "call-sdk-read"
@@ -144,6 +171,7 @@ async def test_actual_openai_work_first_read_ack_deleted_source_warm_cold(tmp_pa
         assert SDKRead.pixels(sdk.image_sends()[-1]) == [("call-sdk-read", original)]
         assert all(request.messages == [] for request in sdk.private)
         assert not session.coordinator.get_capability("web.media.request_only").requests
+        assert_pixel_free_capture(tmp_path, original, tool=True)
     finally:
         await session.cleanup()
     reopened = SessionStore(store.base_dir)
@@ -166,19 +194,24 @@ async def test_actual_openai_work_first_read_ack_deleted_source_warm_cold(tmp_pa
         await resumed.execute("Continue with text on the unqualified route")
         assert all(not SDKRead.pixels(body) for _, body in cold.wire[start:])
         assert "Image unavailable" in json.dumps(cold.wire[start:])
-        bridge, _, selection = resumed.coordinator.get_capability("web.media.construction")
-        resumed.config["agents"]["computer-use:computer-operator"]["provider_preferences"][0]["model"] = "latest"
-        assert selection.accepts_plan(resumed.config)  # This field is not root execution authority.
+        bridge = resumed.coordinator.get_capability("web.media.construction").bridge
+        resumed.config["agents"]["computer-use:computer-operator"]["provider_preferences"] = [
+            {"provider": "openai", "model": "latest"}]
         assert not bridge.validate_receipt(bridge.graph_receipt)  # Whole-config F witness still fences it.
     finally:
         await resumed.cleanup()
 
 
-@pytest.mark.parametrize("denial", ["post-null", "read-policy", "gif"])
+@pytest.mark.parametrize("denial", ["post-null", "read-policy", "animated-gif"])
 async def test_actual_openai_work_refusal_has_no_pixels_and_plaintext_recovers(tmp_path, monkeypatch, denial):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    path, _ = picture(workspace, "GIF" if denial == "gif" else "PNG")
+    path, _ = picture(workspace)
+    if denial == "animated-gif":
+        from PIL import Image
+        path = workspace / "animated.gif"
+        Image.new("RGB", (2, 2), "red").save(path, format="GIF", save_all=True,
+            append_images=[Image.new("RGB", (2, 2), "blue")], duration=100, loop=0)
     text = workspace / "plaintext"
     text.write_text("Plaintext after refused image")
     sdk = SDKRead([path, text])
@@ -213,5 +246,124 @@ async def test_actual_openai_work_revocation_after_count_prevents_physical_image
         assert not sdk.image_sends()
         assert all(request.messages == [] for request in sdk.private)
         assert not session.coordinator.get_capability("web.media.request_only").requests
+    finally:
+        await session.cleanup()
+
+
+@pytest.mark.parametrize("origin", ["tool", "composer"])
+@pytest.mark.parametrize("format", ["PNG", "JPEG", "WEBP"])
+async def test_actual_live_work_sdk_image_references_and_capture(tmp_path, monkeypatch, origin, format):
+    from amplifier_module_loop_live.orchestrator import BundleLiveOrchestrator
+    from amplifier_module_loop_live.runtime import Input
+    from amplifier_module_loop_streaming import StreamingOrchestrator
+    from amplifier_web.attachments import file_path, save
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    path, original = picture(workspace, format)
+    sdk = SDKRead([path] if origin == "tool" else [])
+    session, store, checkpoint, checks, host = await sdk_root(tmp_path, monkeypatch, sdk, live=True)
+    coordinator = session.coordinator
+    loop = coordinator.get("orchestrator")
+    assert type(loop) is BundleLiveOrchestrator and isinstance(loop, StreamingOrchestrator)
+    runtime = coordinator.get_capability("live.runtime")
+    uploads = ()
+    if origin == "composer":
+        upload = save(tmp_path / "app", path.name, base64.b64encode(original).decode())
+        uploads = ({"id": upload["id"]},)
+    command = Input("user", "Inspect the authorized image", attachments=uploads)
+    execution = asyncio.create_task(session.execute(""))
+    try:
+        await runtime.submit(command)
+        finished = await runtime.wait_for(lambda row:
+            row["type"] in {"generation.finished", "generation.failed"}
+            and command.id in row.get("input_ids", []), timeout=15)
+        assert finished["type"] == "generation.finished", finished
+        assert finished["text"] == "offline completion" and host.sealed
+        expected = [("call-sdk-read" if origin == "tool" else None, original)]
+        assert SDKRead.pixels(sdk.image_sends()[-1]) == expected
+        rows = await checkpoint()
+        [message] = [row for row in rows if media.NAMESPACE in (row.get("metadata") or {})]
+        [ref] = message["metadata"][media.NAMESPACE]["refs"]
+        assert message["role"] == ("tool" if origin == "tool" else "user")
+        assert ref["provenance"]["kind"] == ("tool" if origin == "tool" else "upload")
+        assert ref["sha256"] == hashlib.sha256(original).hexdigest()
+        assert checks == ([("read_file", {"file_path": str(path)})] if origin == "tool" else [])
+        assert base64.b64encode(original).decode() not in json.dumps(rows)
+        assert base64.b64encode(original).decode() not in json.dumps(runtime.events)
+        assert base64.b64encode(original).decode() not in json.dumps(host.emitted)
+        # No replay of either producer is needed for the next real Live turn.
+        path.unlink()
+        if uploads:
+            file_path(tmp_path / "app", upload["id"])[0].unlink()
+        followup = Input("user", "Keep using the retained image without reading its source")
+        await runtime.submit(followup)
+        finished = await runtime.wait_for(lambda row:
+            row["type"] in {"generation.finished", "generation.failed"}
+            and followup.id in row.get("input_ids", []), timeout=15)
+        assert finished["type"] == "generation.finished", finished
+        assert SDKRead.pixels(sdk.image_sends()[-1]) == expected
+        assert all(request.messages == [] for request in sdk.private)
+        assert_pixel_free_capture(tmp_path, original, tool=origin == "tool")
+    finally:
+        if not execution.done():
+            await runtime.submit(Input("stop"))
+        try:
+            await asyncio.wait_for(execution, 5)
+        finally:
+            await session.cleanup()
+    if origin == "composer":
+        # Fresh coordinator/checkpoint acknowledgement, not a live receipt reused
+        # after the original upload has been removed.
+        reopened = SessionStore(store.base_dir)
+        loaded, _ = reopened.load(session.session_id)
+        cold = SDKRead()
+        resumed, _, checkpoint, checks, _ = await sdk_root(tmp_path, monkeypatch, cold, store=reopened)
+        try:
+            await resumed.coordinator.get("context").set_messages(loaded)
+            await checkpoint()
+            await resumed.execute("Use the saved upload without rereading")
+            assert not checks
+            assert SDKRead.pixels(cold.image_sends()[-1]) == expected
+            assert_pixel_free_capture(tmp_path, original, tool=False)
+        finally:
+            await resumed.cleanup()
+
+
+async def test_static_gif_is_retained_but_unsupported_openai_route_gets_no_pixels(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    path, original = picture(workspace, "GIF")
+    sdk = SDKRead([path])
+    session, _, checkpoint, _, host = await sdk_root(tmp_path, monkeypatch, sdk)
+    try:
+        assert await session.execute("Inspect the static GIF") == "offline completion"
+        rows = await checkpoint()
+        [message] = [row for row in rows if media.NAMESPACE in (row.get("metadata") or {})]
+        [ref] = message["metadata"][media.NAMESPACE]["refs"]
+        assert ref["mime"] == "image/gif" and host.sealed
+        with session.coordinator.get_capability("web.media.store").resolve_ref(ref) as saved:
+            assert saved.read() == original
+        assert not sdk.image_sends() and "Image unavailable" in json.dumps(sdk.wire)
+        assert_pixel_free_capture(tmp_path, original, tool=True)
+    finally:
+        await session.cleanup()
+
+
+@pytest.mark.parametrize("field,value", [
+    ("instruction", "changed"), ("tools", []), ("model_role", "other"),
+    ("provider_preferences", [{"provider": "openai", "model": "latest"}]),
+])
+async def test_work_media_graph_refuses_changed_agent_configuration(tmp_path, monkeypatch, field, value):
+    sdk = SDKRead()
+    session, _, _, _, _ = await sdk_root(tmp_path, monkeypatch, sdk)
+    try:
+        await session.execute("Seal the ordinary Work construction")
+        bridge = session.coordinator.get_capability("web.media.construction").bridge
+        assert bridge.validate_receipt(bridge.graph_receipt)
+        session.config["agents"]["computer-use:computer-operator"][field] = value
+        assert not bridge.validate_receipt(bridge.graph_receipt)
+        # Invalid construction is terminal; restoring dictionaries must not be
+        # used to resurrect the original receipt for later image sends.
     finally:
         await session.cleanup()
