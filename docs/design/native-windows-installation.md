@@ -491,10 +491,11 @@ app's own readiness check; the update hand-over has its own workflow.
 Measured there (run 44162025757): 75 seconds from the app's request to the
 settled rollback of the forced failure; 241 seconds from the end of the helper
 to the repair by the timed trigger; 134 seconds from the request to the
-settled refresh. A second job of the same workflow has the same installation
-with "Keep Amplifier up to date" off. It requires: after the confirmation the
-app saves its offer and starts no refresh by itself (the case waits for two
-more decisions of the app after the offer); the headline that the app gives
+settled refresh. A second job of the same workflow has its own installation
+of the same layout, with "Keep Amplifier up to date" off. It requires: after
+the confirmation the app saves its offer and starts no refresh by itself (the
+case waits for the offer, and then until the app's update state has been the
+same for 130 seconds; it does not count the app's decisions); the headline that the app gives
 the Updates page is the launcher's own offer, with the page's install action;
 the install request of the Updates page then starts one refresh, which the
 launcher follows on the same port; no second refresh starts, and the setting

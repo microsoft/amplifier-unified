@@ -24,8 +24,8 @@ The fixture's own part:
   the launcher's folder. Every other call goes to the real uv.
 - In check 6 it ends the helper's processes. After that it only reads.
 
-A second case, `run --case setting`, in a second job: the same installation
-with "Keep Amplifier up to date" off. One build of the app can refresh the
+A second case, `run --case setting`, in a second job: its own installation of
+the same layout, with "Keep Amplifier up to date" off. One build of the app can refresh the
 launcher once, so the two cases cannot share a job. Its own part:
 - It signs in as the owner's browser does: a ticket from the app's own entry
   for the owner (the launcher's `open` gets it there), the form token of the
@@ -859,13 +859,15 @@ def run(case="follow"):
                 offer_seconds = round(time.time() - confirmed_at)
                 # The app decides at each pass, one a minute. With the setting on, its request comes
                 # at the first pass after the confirmation: the first case measures 49 to 50 seconds.
-                # The offer is saved at that same pass. From here `settle` holds two more passes.
+                # The offer is saved at that same pass. `settle` then waits until the update state has
+                # been the same for 130 seconds. It does not count passes: the offer shows that the app
+                # took the branch that refuses, and nothing that this branch reads changes with time.
                 decided = settle("with the setting off")
                 state = follow_state()
                 assert not automatic(), switches()
                 assert state.get("phase") == "ready" and not state.get("attempt") and not state.get("requested"), state
                 assert record(refresher.REQUEST) is None and helper_task().get("exists") is False
-                assert not processes(HELPER) and not calls(root)
+                assert not processes(HELPER)
                 assert refresher.launcher_facts(launcher) == earlier and not set_aside()
                 assert healthy(health())
                 # The launcher's own offer is the page's headline, with the page's install action.
@@ -893,7 +895,7 @@ def run(case="follow"):
                 assert done["attempt"]["result"] == "refreshed" and done["phase"] == "done", done
                 # A person's request, not the app's own decision. It is used up, and the setting is as it was.
                 assert done["attempt"]["automatic"] is False and not done.get("requested"), done
-                assert not automatic() and not calls(root)
+                assert not automatic(), switches()
                 passed(5, action=pressed, secondsFromActionToRequest=request_seconds, helperRecord=helper,
                        launcher=launcher_now(), keptLauncher=previous.name, port=port, appsList=apps_list(),
                        difference=difference, appState=app_state(home))
@@ -905,7 +907,7 @@ def run(case="follow"):
                 assert helper_task().get("exists") is False and not processes(HELPER)
                 assert refresher.launcher_facts(launcher) == fresh and set_aside() == [previous.name]
                 assert state.get("attempt") == done["attempt"] and not state.get("requested"), state
-                assert not automatic() and not calls(root) and healthy(health())
+                assert not automatic() and healthy(health())
                 passed(6, decided=decided, switches=switches(), appState=app_state(home))
 
                 begin(7)

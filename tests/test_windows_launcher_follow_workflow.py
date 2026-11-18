@@ -253,8 +253,10 @@ def test_the_setting_case_sends_the_requests_that_the_bundled_page_sends():
     assert switch, changed
     assert re.search(r'(?<![\w$])' + re.escape(switch.group(2))
                      + r'=([\w$]+)=>[\w$]+\("settings\.update",\{patch:\{updates:\1\}\}\)', script), changed
-    # The install button: the action alone, with no argument.
+    # The install button: the action alone, with no argument. The host reads a request
+    # with no arguments as one with empty arguments, which is what the native case sends.
     assert re.search(r'"data-action":"updates\.install",onClick:\(\)=>[\w$]+\("updates\.install"\)', script), changed
+    assert 'payload.get("args", {})' in (Path(amplifier_web.__file__).parent / "server.py").read_text(encoding="utf-8")
     source = FIXTURE.read_text(encoding="utf-8")
     assert 'page_request("settings.update", {"patch": {"updates": {"autoInstall": False}}})' in source
     assert 'page_request("updates.install", {})' in source and source.count("page_request(") == 3
