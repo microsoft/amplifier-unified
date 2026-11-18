@@ -1793,7 +1793,8 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     assert any(step.get('if') == 'always()' and step.get('uses') == 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02'
                and step.get('with', {}).get('path', '').splitlines() == [
                    '${{ runner.temp }}/test-environments',
-                   'output/coordination-runtime-readiness.json']
+                   'output/coordination-runtime-readiness.json',
+                   'output/mounted-child-boundaries.xml']
                for step in coordination['jobs']['contracts']['steps'])
 
 
