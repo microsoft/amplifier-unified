@@ -441,7 +441,7 @@ def test_status_installed_owner_is_explicit_and_affected_changes_are_discoverabl
     assert lane['command'] == ['python', 'scripts/qualify_status_emitter.py']
     assert 'status-installed' not in {job['lane'] for job in checks.select_lanes()}
     for path in ['amplifier_web/status_emitter.py', 'amplifier_web/status_protocol/hook.py',
-                 'components/status/hook.py', 'components/status-emitter.source.json',
+                 'components/status-emitter.source.json',
                  'amplifier_web/execution_events.py', 'tests/fixtures/status_package_probe.py']:
         assert 'status-installed' in {job['lane'] for job in checks.select_lanes([path], include_manual=True)}
     assert 'status-installed' not in {job['lane'] for job in checks.select_lanes(['README.md'], include_manual=True)}

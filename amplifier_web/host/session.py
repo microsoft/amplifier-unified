@@ -47,6 +47,7 @@ def live_plan(plan, background_delegate=True):
         if context.get("module") == "context-managed" and context.get("config", {}).get("engine", "boundary") == "boundary":
             context.setdefault("config", {}).setdefault("durable_checkpoints", True)
             context["config"].setdefault("archive_recovery", True)
+            context["config"].setdefault("foreground_continuation", True)
         loop = node.get("session", {}).get("orchestrator", {})
         if loop.get("module") in {"loop-streaming", "loop-live"}:
             original = loop["module"]

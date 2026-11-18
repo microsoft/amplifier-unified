@@ -253,6 +253,8 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
         allowed = ("id", "revision", "producerId", "budgetRevision", "admittedAt", "parentId", "turnId", "admissionInputId", "generationId", "purpose", "sessionId", "rootSessionId", "kind", "phase", "label",
             "toolCallId", "provider", "model", "parentProvider", "routing", "runId", "startedAt", "endedAt", "usage", "summary", "input", "output", "error", "lifecycle", "failure", "liveObservation")
         public = {key:event[key] for key in allowed if key in event and (key not in {"input", "output", "error"} or event.get("kind") == "tool")}
+        if event.get("phase") == "running" and event.get("incompleteHistoryDispatched") is True:
+            public["incompleteHistoryDispatched"] = True
         from .tool_observations import metadata as tool_metadata
         public.update(tool_metadata(event))
         if event.get('kind') == 'tool' and event.get('label') == 'todo' and 'statusPlan' in event:
