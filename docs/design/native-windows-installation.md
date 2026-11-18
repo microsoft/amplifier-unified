@@ -1577,9 +1577,9 @@ add one second).
 
 No native step of a run begins after those 8 seconds: every listing, open,
 look at a kind and deletion goes through one wrapper (`_Bounded`) that checks
-the limit first. The lookup of Git, each Git command and the write of a change
-mark have the same check, and a Git command is started only when half a second
-is left. So after an operation that took the rest of the time, whether it
+the limit first. The look for Git into each folder of PATH, each Git command
+and the write of a change mark have the same check, and a Git command is
+started only when half a second is left. So after an operation that took the rest of the time, whether it
 worked or failed, the run only gives its handles back and writes the record a
 last time. One operation has no time limit of its own, and neither has the
 first check of the folders above the store. At its limit the step ends the Git

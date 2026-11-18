@@ -775,7 +775,7 @@ async def test_a_git_that_does_not_end_is_ended_at_the_limit_and_the_object_stay
     target = await broken(installation)
     before = snapshot(installation.store)
     program = a_program_that_does_not_end(tmp_path)
-    monkeypatch.setattr(repair, '_program', lambda: program)
+    monkeypatch.setattr(repair, '_program', lambda check: program)
     monkeypatch.setattr(repair, 'GIT_SECONDS', 0.5)
     started, real = [], subprocess.Popen
 
@@ -832,6 +832,28 @@ def test_the_limit_of_the_whole_step_is_also_the_limit_of_git():
     now[0] += repair.GIT_LEAST
     with pytest.raises(repair._Bound):
         budget.for_git()
+
+
+def test_the_look_for_git_checks_the_limit_before_each_folder_of_path(tmp_path, monkeypatch):
+    """A folder of PATH can be on a drive that does not answer. No look into the next folder after the limit."""
+    folders = [tmp_path / name for name in ('one', 'two', 'three')]
+    for folder in folders:
+        folder.mkdir()
+    program = folders[2] / ('git.exe' if NATIVE else 'git')
+    program.write_bytes(b'')
+    monkeypatch.setenv('PATH', os.pathsep.join(['', 'relative-folder', *map(str, folders)]))
+    looks = []
+    assert repair._program(lambda: looks.append(1)) == str(program) and len(looks) == 3
+    assert repair._program() == str(program)  # With no limit, as a case uses it.
+
+    def at_the_limit():
+        looks.append(1)
+        if len(looks) == 2:
+            raise repair._Bound()
+    del looks[:]
+    with pytest.raises(repair._Bound):
+        repair._program(at_the_limit)
+    assert len(looks) == 2  # The second folder was not looked into, and the third was not reached.
 
 
 def test_no_native_step_begins_at_the_limit_and_a_handle_is_always_given_back():
@@ -1154,8 +1176,8 @@ async def test_after_a_step_that_took_the_rest_of_the_time_nothing_else_begins(
     """Every native step of a real repair of two objects, one after the other, is the slow one.
 
     Once it works slowly, once it fails slowly. After it the run may give handles back and write the
-    record a last time. It may begin no listing, open, look at a kind, deletion, lookup of Git, Git
-    command or other write of the record.
+    record a last time. It may begin no listing, open, look at a kind, deletion, look for Git into a
+    folder of PATH, Git command or other write of the record.
     """
     targets = [await broken(installation), await broken(installation, repository(tmp_path / 'another-repository'))]
     now, events = [0.0], []
@@ -1168,7 +1190,13 @@ async def test_after_a_step_that_took_the_rest_of_the_time_nothing_else_begins(
             events.append(name)
             return function(*arguments, **options)
         return call
-    monkeypatch.setattr(repair, '_program', noted('the lookup of Git', real.program))
+
+    def look_for_git(check):
+        def then_note():
+            check()  # At the limit this raises, and no folder of PATH is looked into.
+            events.append('a look for Git into a folder of PATH')
+        return real.program(then_note)
+    monkeypatch.setattr(repair, '_program', look_for_git)
     monkeypatch.setattr(repair, '_save', noted('a write of the record', real.save))
     monkeypatch.setattr(repair, 'subprocess', SimpleNamespace(
         Popen=noted('a Git command', real.popen), PIPE=subprocess.PIPE, DEVNULL=subprocess.DEVNULL,
@@ -1186,6 +1214,9 @@ async def test_after_a_step_that_took_the_rest_of_the_time_nothing_else_begins(
     assert facts(run(), 'repaired', 'files', 'folders', 'git', 'complete') == (2, 4, 2, 4, True)
     steps = [name for name in events if name in NATIVE_STEPS]
     assert set(steps) == set(NATIVE_STEPS) and events.count('a Git command') == 4
+    # The record is written three times in a run that deletes: first of all, with the new change mark
+    # before the first deletion, and at the end.
+    assert events.count('a look for Git into a folder of PATH') >= 2 and events.count('a write of the record') == 3
     wrong = []
     for fail in (False, True):
         for slow in range(1, len(steps) + 1):
@@ -1208,7 +1239,7 @@ async def test_a_link_that_appears_between_the_listing_and_git_is_not_deleted_th
     target = await broken(installation)
     package, program, behind = target.folder / PACKAGE, repair._program(), {}
 
-    def after_the_listing():
+    def after_the_listing(check):
         with at_the_top(target):
             os.rename(package, installation.outside / 'package')
             installation.link(installation.outside / 'package', package)
@@ -1398,7 +1429,7 @@ async def test_a_file_that_appears_after_the_listing_leaves_the_object(installat
     target = await broken(installation)
     program, late = repair._program(), target.folder / PACKAGE / '__pycache__' / 'late.cpython-399.pyc'
 
-    def after_the_listing():
+    def after_the_listing(check):
         late.write_bytes(b'new')
         return program
     monkeypatch.setattr(repair, '_program', after_the_listing)

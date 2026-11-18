@@ -68,8 +68,9 @@ check's own rule ends that after 4 hours (``RECONCILE_SECONDS``).
 
 No native step of a run begins after the limit of the whole step: every
 listing, open, look at a kind and deletion goes through one wrapper
-(``_Bounded``) that checks the limit first. The lookup of Git, each Git
-command and the write of a change mark have the same check, and a Git command
+(``_Bounded``) that checks the limit first. The look for Git into each
+folder of PATH, each Git command and the write of a change mark have the same
+check, and a Git command
 is started only when half a second is left. So after an operation that took
 the rest of the time, whether it worked or failed, the run only gives its
 handles back and writes the record a last time. One operation has no time
@@ -326,7 +327,7 @@ def _walk(api, handle, *, top=True, trail=()):
     return caches, link, folders
 
 
-def _program():
+def _program(check=lambda: None):
     """Git of the first PATH folder that has it. Never one from the current folder.
 
     The task's host has the installation's saved tool path as its PATH, and a
@@ -335,10 +336,16 @@ def _program():
     leave an object that Foundation would accept without the bytecode, or
     remove bytecode from an object that Foundation still refuses. It cannot
     delete anything else.
+
+    ``check`` runs before the look into each folder: a folder of PATH can be
+    on a drive that does not answer.
     """
     for folder in os.environ.get("PATH", "").split(os.pathsep):
         candidate = Path(folder) / ("git.exe" if os.name == "nt" else "git")
-        if folder and candidate.is_absolute() and candidate.is_file():
+        if not folder or not candidate.is_absolute():
+            continue
+        check()
+        if candidate.is_file():
             return str(candidate)
     raise _Later()
 
@@ -466,8 +473,7 @@ def _object(api, parent, name, folder, budget, before_delete, count):
                 raise _Leave()
             if _walk(api, git, top=False)[1]:
                 raise _Leave()  # The listing found a link below .git. Git does not run.
-            budget.deadline()
-            program = _program()
+            program = _program(budget.deadline)
             if _git(program, folder, budget, *STATUS).strip():
                 raise _Leave()  # A tracked file is changed.
             files = _decide(_git(program, folder, budget, *OTHERS), caches)
