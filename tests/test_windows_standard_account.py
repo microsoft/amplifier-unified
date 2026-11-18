@@ -1,10 +1,11 @@
 """The standard-account case: its guard, its account test, its lines and its workflow.
 
 The case itself runs only on a GitHub-hosted Windows runner
-(`.github/workflows/windows-standard-account.yml`). These checks run
-everywhere. They keep the parts that decide what the case may claim: who
-counts as a standard user, which step a failure belongs to, and what the
-workflow can never do silently.
+(`.github/workflows/windows-standard-account.yml`). These checks need no
+Windows: the second job of that workflow runs them on Linux with Python 3.13,
+and no other workflow names this file. They keep the parts that decide what
+the case may claim: who counts as a standard user, which step a failure
+belongs to, and what the workflow can never do silently.
 """
 from __future__ import annotations
 
@@ -1608,8 +1609,9 @@ def test_the_workflow_cannot_skip_and_always_removes_the_account():
     workflow = yaml.load(WORKFLOW.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
     assert set(workflow["on"]) == {"workflow_dispatch", "pull_request"}
     assert workflow["permissions"] == {"contents": "read"}
-    job, = workflow["jobs"].values()
-    assert job["runs-on"] == "windows-latest" and "if" not in job and "continue-on-error" not in job
+    assert set(workflow["jobs"]) == {"windows-standard-account", "portable-checks"}
+    job = workflow["jobs"]["windows-standard-account"]
+    assert job["runs-on"] == "windows-latest" and "if" not in job and "continue-on-error" not in job and "needs" not in job
     assert job["env"]["AMPLIFIER_CREATE_A_STANDARD_USER_ON_THIS_RUNNER"] == "1"
     steps = job["steps"]
     assert all("continue-on-error" not in step for step in steps)
@@ -1628,6 +1630,7 @@ def test_the_workflow_cannot_skip_and_always_removes_the_account():
     # A change of the product code that the journey runs starts the case.
     paths = workflow["on"]["pull_request"]["paths"]
     for path in (".github/workflows/windows-standard-account.yml", "tests/fixtures/windows_standard_account_native.py",
+                 "tests/test_windows_standard_account.py",
                  "tests/fixtures/windows_start_again_native.py", "tests/windows/native_setup.Tests.cs",
                  "scripts/windows_bootstrap_native.cs", "scripts/install.ps1", "amplifier_web/windows_consumer.py",
                  "amplifier_web/windows_consumer_shell.py", "amplifier_web/windows_installation.py",
@@ -1636,12 +1639,46 @@ def test_the_workflow_cannot_skip_and_always_removes_the_account():
         assert path in paths and (ROOT / path).is_file(), path
 
 
+def test_the_workflow_runs_every_case_of_this_file_and_a_case_that_did_not_run_fails_it():
+    """No other workflow names this file. Without this job its cases run on no pull request."""
+    workflow = yaml.load(WORKFLOW.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+    name = Path(__file__).resolve().relative_to(ROOT).as_posix()
+    assert name == "tests/test_windows_standard_account.py" and name in workflow["on"]["pull_request"]["paths"]
+    others = [path.name for path in WORKFLOW.parent.glob("*.yml")
+              if path != WORKFLOW and Path(name).name in path.read_text(encoding="utf-8")]
+    assert others == []  # When another workflow runs the file, change the sentences here and in the workflow.
+    job = workflow["jobs"]["portable-checks"]
+    assert job["runs-on"] == "ubuntu-latest"
+    assert all(key not in part for part in (job, *job["steps"]) for key in ("if", "continue-on-error", "needs"))
+    checkout, python, _, install, run = job["steps"]
+    # The candidate of a pull request, not its merge with main, as in the other job; the Python of CI.
+    assert checkout["with"]["ref"] == "${{ github.event.pull_request.head.sha || github.sha }}"
+    assert python["with"]["python-version"] == "3.13" and install["run"] == "uv sync --locked --group dev"
+    # GitHub runs the named shell `bash` with `-eo pipefail`: a failed pytest fails the step through the pipe.
+    assert run["shell"] == "bash"
+    first, last = run["run"].splitlines()
+    log = '"$RUNNER_TEMP/portable-checks.log"'
+    # The whole file, with no selection of cases.
+    assert first == f"uv run --no-sync pytest -q -ra -p no:cacheprovider {name} | tee {log}"
+    start = f"tail -n 1 {log} | grep -E '"
+    assert last.startswith(start) and last.endswith("'") and "'" not in last[len(start):-1]
+    wanted = last[len(start):-1]
+    # pytest's last line. Only the first three pass: cases passed, and nothing else is said except warnings.
+    lines = ["302 passed in 31.07s", "302 passed, 8 warnings in 31.07s", "302 passed, 1 warning in 61.07s (0:01:01)",
+             "301 passed, 1 skipped in 31.07s", "300 passed, 2 deselected in 31.07s", "1 failed, 301 passed in 31.07s",
+             "301 passed, 1 xfailed in 31.07s", "301 passed, 1 xpassed in 31.07s", "301 passed, 1 error in 31.07s",
+             "301 passed, 8 warnings, 2 errors in 31.07s", "1 skipped in 0.07s", "no tests ran in 0.07s",
+             "........................................................................ [ 23%]"]
+    assert [line for line in lines if re.search(wanted, line)] == lines[:3]
+
+
 def test_the_jobs_time_limit_holds_every_step_and_the_run_step_holds_its_phases():
     workflow = yaml.load(WORKFLOW.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
-    job, = workflow["jobs"].values()
-    limits = [int(step["timeout-minutes"]) for step in job["steps"]]
-    # The cleanup step is not cut short when every step before it used its whole limit.
-    assert int(job["timeout-minutes"]) >= sum(limits) + 5
+    for job in workflow["jobs"].values():
+        limits = [int(step["timeout-minutes"]) for step in job["steps"]]
+        # The cleanup step is not cut short when every step before it used its whole limit.
+        assert int(job["timeout-minutes"]) >= sum(limits) + 5
+    job = workflow["jobs"]["windows-standard-account"]
     source = FIXTURE.read_text(encoding="utf-8")
     run = source[source.index("def run():"):source.index("PROFILE = ")]
     phases = [int(minutes) for minutes in re.findall(r"timeout=(\d+) \* 60\)", run)]

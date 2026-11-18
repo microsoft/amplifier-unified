@@ -25,6 +25,7 @@ on:
     paths:
       - .github/workflows/windows-standard-account.yml
       - tests/fixtures/windows_standard_account_native.py
+      - tests/test_windows_standard_account.py
       - tests/fixtures/windows_start_again_native.py
       - tests/fixtures/windows_setup_native.py
       - tests/windows/native_setup.Tests.cs
@@ -105,3 +106,35 @@ jobs:
           path: ${{ runner.temp }}/standard-account-evidence/
           if-no-files-found: warn
           retention-days: 7
+  # The checks of the case's own code: who counts as a standard user, which
+  # step a failure belongs to, the record of the reads of the host, and what
+  # this workflow can never do silently. They need no Windows. No other
+  # workflow names their file: without this job they run on no pull request.
+  portable-checks:
+    name: The case's own checks (Linux, Python 3.13)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        timeout-minutes: 2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        timeout-minutes: 3
+        with:
+          python-version: '3.13'
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        timeout-minutes: 2
+      - name: Install the locked test environment (CI setup only)
+        timeout-minutes: 5
+        run: uv sync --locked --group dev
+      # The named shell `bash` stops at a failed command, also on the left of a
+      # pipe. pytest's last line must say that cases passed and nothing else,
+      # except warnings: a case that was skipped or left out fails the step.
+      - name: Run every case of tests/test_windows_standard_account.py, with no skip
+        timeout-minutes: 8
+        shell: bash
+        run: |
+          uv run --no-sync pytest -q -ra -p no:cacheprovider tests/test_windows_standard_account.py | tee "$RUNNER_TEMP/portable-checks.log"
+          tail -n 1 "$RUNNER_TEMP/portable-checks.log" | grep -E '^[0-9]+ passed(, [0-9]+ warnings?)? in [0-9.]+s'
