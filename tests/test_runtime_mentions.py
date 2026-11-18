@@ -116,6 +116,40 @@ async def test_worker_expands_inputs_preserving_id_and_attachments(tmp_path, mon
         assert worker.runtime.inbox.empty()
 
 
+@pytest.mark.parametrize('operation', ['send', 'retry', 'history.edit'])
+async def test_actual_worker_admission_binds_only_new_send_for_transition(tmp_path, monkeypatch, operation):
+    from amplifier_module_loop_live.runtime import Runtime
+    from amplifier_web.runtime_worker import Worker
+    owner = coordinator(tmp_path)
+    owner.get = lambda name: SimpleNamespace(get_messages=AsyncMock(return_value=[]))
+    worker = Worker()
+    worker.session = SimpleNamespace(coordinator=owner)
+    worker.execution = object()
+    worker.runtime = Runtime('session')
+    worker.controls = SimpleNamespace(selection_revision='selection-B')
+    monkeypatch.setattr('amplifier_web.runtime_worker.publish', lambda _: None)
+    monkeypatch.setattr('amplifier_web.history_revision.rewind', AsyncMock(return_value={'accepted': True}))
+    if operation == 'history.edit':
+        data = {'op': 'control', 'operation': operation, 'arguments': {
+            'text': 'new authorized text', 'operationId': 'input'}, 'id': 'command'}
+    else:
+        data = {'op': operation, 'text': 'new authorized text', 'input_id': 'input', 'id': 'command'}
+    await worker._command_serial(data)
+    assert 'input' in worker.runtime.accepted
+    await worker.runtime.emit('generation.started', generation_id='g', initial_input_id='input')
+    await worker.runtime.emit('input.delivered', input_id='input')
+    if operation == 'send':
+        assert worker.transition_input() == {'inputId': 'input', 'selectionRevision': 'selection-B'}
+        worker.controls.selection_revision = 'future-C'
+        # A queued later input cannot change the first input's mounted choice.
+        await worker._command_serial({**data, 'input_id': 'queued'})
+        assert worker.transition_input()['selectionRevision'] == 'selection-B'
+    else:
+        assert worker.transition_input() is None
+    worker.stop_revision += 1
+    assert worker.transition_input() is None
+
+
 @pytest.mark.parametrize('action', ['message', 'steer'])
 async def test_worker_messages_use_child_namespace_and_workspace(tmp_path, action):
     Runtime = pytest.importorskip('amplifier_module_loop_live.runtime').Runtime

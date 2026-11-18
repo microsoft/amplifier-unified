@@ -1348,6 +1348,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
             "created": (saved[1].get("created") if saved else None) or datetime.now(UTC).isoformat(),
             "application_host": application_host, "config": redact(logical_plan(session.config))}
         continuity = None
+        coordinator.register_capability("web.context_transition.originals",
+                                        bool(saved and saved[1].get("fork")))
         published_anchors = None
         def recovery_write_guard():
             # A recovery write uses the same native ownership checks, without

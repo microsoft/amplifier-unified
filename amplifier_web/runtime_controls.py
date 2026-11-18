@@ -148,6 +148,8 @@ class RuntimeControls:
             self.selection = {key:copy.deepcopy(root_provider.selection[key])
                               for key in ("instance", "model", "effort") if key in root_provider.selection}
         self.selection_cleared = False
+        self.selection_revision = None
+        self.selection_binding = None
         self.max_output_tokens = None
         self.logins = {}
         self.kernels = None
@@ -155,6 +157,7 @@ class RuntimeControls:
         self.catalog_revision=str(uuid.uuid4())
         self.coordinator.register_capability("web.controls.persist", self.persist)
         self.coordinator.register_capability("web.context_recovery.contract", self.recovery_contract)
+        self.coordinator.register_capability("web.context_transition.foreground", self.transition_foreground)
         from .task_continuity import TaskController
         self.tasks = TaskController(self)
         from .capacity import CapacityController
@@ -187,6 +190,8 @@ class RuntimeControls:
         self.persist()
 
     async def _restore_saved(self, saved, *, selection_override=None):
+        self.selection_revision = saved.get("selectionRevision")
+        self.selection_binding = saved.get("selectionBinding")
         if self.configurator:
             await self.configurator.apply_saved_settings(saved.get("configurator", {}))
         self.coordinator.session_state["goal"] = saved.get("goal")
@@ -209,6 +214,10 @@ class RuntimeControls:
             await self._perform("budget.set", budget)
         if selection_override is not None:
             await self._perform("provider.select", selection_override)
+            if (saved.get("selection") != self.selection
+                    or saved.get("selectionBinding") != selection_override.get("expectedConnectionKey")):
+                self.selection_revision = str(uuid.uuid4())
+                self.selection_binding = selection_override.get("expectedConnectionKey")
         elif saved.get("selection"):
             await self._perform("provider.select", saved["selection"])
         elif "selection" in saved:
@@ -231,6 +240,7 @@ class RuntimeControls:
             "capacity":self.capacity.policy,"capacityReceipts":self.capacity.receipts,"capacityLastDenial":self.capacity.last_denial,
             "goal":self.coordinator.session_state.get("goal"),"task":self.coordinator.session_state.get("task"),"taskReceipts":self.tasks.receipts,"taskHistory":self.tasks.history,"mode":self.coordinator.session_state.get("active_mode"),
             "selection":None if self.selection_cleared else self.selection or previous.get("selection"),"budget":budget,
+            "selectionRevision":self.selection_revision,"selectionBinding":self.selection_binding,
             "configurationCheckpoint": self.coordinator.session_state.get("configurationCheckpoint")},default=str))
         if task_only:
             return
@@ -272,11 +282,38 @@ class RuntimeControls:
             # account, source, credentials and settings, not a redacted view.
             "plan": logical_plan(self.coordinator.config),
             "selection": self.selection,
+            "selectionRevision": self.selection_revision,
+            "selectionBinding": self.selection_binding,
             "maxOutputTokens": self.max_output_tokens,
             "context": getattr(context, "config", {}),
             "loop": getattr(loop, "config", {}),
             "mode": self.coordinator.session_state.get("active_mode"),
         })
+
+    def transition_foreground(self):
+        """A saved choice plus an actually delivered new ordinary input.
+
+        Startup, configuration reads, automatic job continuations and duplicate
+        submission checks do not create this native generation/input pair.
+        """
+        generation = getattr(self.runtime, "generation", None) or {}
+        identity = generation.get("initial_input_id")
+        command = getattr(self.runtime, "accepted", {}).get(identity)
+        origin = self.coordinator.get_capability("web.context_transition.input")
+        binding = origin() if callable(origin) else None
+        if (not self.selection_revision or not self.selection or not identity
+                or not isinstance(binding, dict) or binding.get("inputId") != identity
+                or binding.get("selectionRevision") != self.selection_revision
+                or identity not in generation.get("input_ids", ())
+                or getattr(command, "kind", None) != "user"
+                or getattr(self.runtime, "closed", False)
+                or getattr(self.runtime, "stop_requested", False)):
+            return None
+        return copy.deepcopy({"generationId": generation["id"], "inputId": identity,
+            "inputIds": generation["input_ids"],
+            "selectionRevision": self.selection_revision, "selection": self.selection,
+            "connection": self.selection_binding,
+            "originals": self.coordinator.get_capability("web.context_transition.originals") is True})
 
     def configuration(self):
         from .decision_accounts import logical_plan
@@ -570,6 +607,9 @@ class RuntimeControls:
                 raise
             self.selection=None
             self.selection_cleared=True
+            if not self._restoring:
+                self.selection_revision = None
+                self.selection_binding = None
             self.persist()
             return {'selection':None,'scope':'main session'}
         if operation == "provider.verifyConnection":
@@ -591,8 +631,12 @@ class RuntimeControls:
             selected = {key:args[key] for key in ("instance","model","effort") if key in args}
             effective = {**selected, **({"max_output_tokens":self.max_output_tokens} if self.max_output_tokens else {})}
             self.coordinator.get("orchestrator").root_provider = SelectedProvider(providers[args["instance"]], effective,self.coordinator.get_capability('web.provider_transform'))
+            changed = self.selection != selected or self.selection_binding != args.get('expectedConnectionKey')
             self.selection = selected
             self.selection_cleared = False
+            if not self._restoring and (changed or not self.selection_revision):
+                self.selection_revision = str(uuid.uuid4())
+                self.selection_binding = args.get('expectedConnectionKey')
             self.persist()
             return {"selection":selected,"scope":"main session"}
         if operation == "tool.invoke":

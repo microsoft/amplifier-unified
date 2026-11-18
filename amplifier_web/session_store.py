@@ -443,6 +443,8 @@ def fork_session(home, source, target_id, *, turn=None, after_message_id=None, b
             raise ValueError("The full runtime transcript is unavailable; restore it before forking")
         messages = [{"role":row["role"],"content":row.get("text","")} for row in visible]
         metadata = {"transcript_origin":"visible_text_import"}
+    from .context_continuity import _source_digest
+    full_context_digest = _source_digest(messages)
     from .automatic_history import display_identity, display_message, remove_internal_copies
     internal = {index: display_identity(source, index, row.get('role'), text_content(row))
                 for index, row in enumerate(messages)
@@ -564,6 +566,11 @@ def fork_session(home, source, target_id, *, turn=None, after_message_id=None, b
             data = json.loads(path.read_text())
             if name == "control-state.json":
                 data["goal"] = None
+                # Model choice is inherited, its source execution's transition
+                # admission is not. A later explicit target choice gets its own
+                # revision on the independent fork.
+                data.pop("selectionRevision", None)
+                data.pop("selectionBinding", None)
                 if bundle:
                     from .bundle_selection import reset_controls
                     data = reset_controls(data, reset_model=reset_model)
@@ -571,6 +578,31 @@ def fork_session(home, source, target_id, *, turn=None, after_message_id=None, b
     effective = source_dir / "effective-configuration.json"
     if effective.is_file() and not bundle:
         copied["configuration.json"] = effective.read_text()
+    # A full, unchanged fork may retain derived context, never the source's
+    # execution transaction or uncertain provider/install ownership. Context
+    # still validates identity/configuration on the target's first request.
+    if (not bundle and not recovery and cut == len(visible) and before_turn is None
+            and _source_digest(messages) == full_context_digest):
+        path = source_dir / "context-checkpoint.json"
+        journal = source_dir / "context-recovery.json"
+        try:
+            from .context_continuity import digest
+            checkpoint_text = path.read_text()
+            record = json.loads(checkpoint_text)
+            settled = True
+            if journal.exists():
+                receipt = json.loads(journal.read_text())
+                settled = (receipt.get("version") == 1 and isinstance(receipt.get("attempts"), dict)
+                           and all(row.get("state") == "committed" for row in receipt["attempts"].values()))
+            prefix = record["sourceRevision"]
+            end = prefix["messages"]
+            if (settled and not record.get("progress") and record.get("summary")
+                    and type(end) is int and 0 < end <= len(messages)
+                    and record.get("sha256") == digest({k: v for k, v in record.items() if k != "sha256"})
+                    and prefix["sha256"] == _source_digest(messages[:end])):
+                copied["context-checkpoint.json"] = checkpoint_text
+        except (FileNotFoundError, OSError, ValueError, TypeError, KeyError, AttributeError):
+            pass  # Originals-only is explicit in the fork result below.
     if "configuration.json" in copied:
         from .host.components import portable_module_sources
         copied["configuration.json"] = json.dumps(
@@ -615,6 +647,8 @@ def fork_session(home, source, target_id, *, turn=None, after_message_id=None, b
             'sharedHistoryTotal': sum(display_message(row, index, {'id': target_id}) is not None
                                       for index, row in enumerate(messages)),
             "forkTranscript":{"sourceSessionId":source_id,"messageCount":len(messages),"turn":through_turn,"jobsReplayed":False},
+            "forkContinuity": {"status": "checkpoint-retained" if "context-checkpoint.json" in copied else "originals-only",
+                               "providerWork": False},
             **({"selection":copy.deepcopy(source["selection"])} if source.get("selection") and not reset_model else {})}
 
     from .message_interactions import fork_annotations

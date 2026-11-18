@@ -132,6 +132,52 @@ async def test_model_selection_revision_survives_restore_and_distinguishes_a_b_a
     await resumed.close()
 
 
+async def test_transition_foreground_needs_new_host_send_and_native_delivery(tmp_path, monkeypatch):
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    controls, loop, providers = mounted_controls(SELECTION)
+    caps = {}
+    controls.coordinator.get_capability = caps.get
+    await controls.perform('provider.select', SELECTION)
+    runtime = controls.runtime
+    runtime.accepted = {'new': SimpleNamespace(kind='user')}
+    runtime.generation = {'id': 'generation', 'initial_input_id': 'new', 'input_ids': ['new']}
+    # Even a real generation's user input is insufficient without host provenance.
+    assert controls.transition_foreground() is None
+    caps['web.context_transition.input'] = lambda: {
+        'inputId': 'new', 'selectionRevision': controls.selection_revision}
+    assert controls.transition_foreground()['inputId'] == 'new'
+    runtime.generation['input_ids'] = []
+    assert controls.transition_foreground() is None
+    runtime.generation['input_ids'] = ['new']
+    runtime.accepted['new'].kind = 'job_complete'
+    assert controls.transition_foreground() is None
+    runtime.accepted['new'].kind = 'user'
+    caps['web.context_transition.input'] = lambda: {
+        'inputId': 'new', 'selectionRevision': 'old-selection'}
+    assert controls.transition_foreground() is None
+    assert all(not provider.calls for provider in providers.values())
+    await controls.close()
+
+
+async def test_cold_selection_override_revisions_once_then_identical_mounted_ack(tmp_path, monkeypatch):
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    first, _, _ = mounted_controls(SELECTION)
+    await first.perform('provider.select', SELECTION)
+    old = first.selection_revision
+    await first.close()
+    other = {**SELECTION, 'model': 'new-target'}
+    resumed, loop, providers = mounted_controls(other)
+    await resumed.restore(selection_override=other)
+    target = resumed.selection_revision
+    assert target and target != old
+    await resumed.perform('provider.select', other)
+    assert resumed.selection_revision == target
+    await resumed.perform('provider.select', SELECTION)
+    assert resumed.selection_revision not in {old, target}
+    assert all(not provider.calls for provider in providers.values())
+    await resumed.close()
+
+
 def test_selected_provider_info_reports_effort_without_mutating_bundle_defaults():
     provider = Provider('bundle-model', 'high')
     selected = SelectedProvider(provider, SELECTION)
