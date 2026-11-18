@@ -22,9 +22,12 @@ It deletes a file only when all of these hold:
 
 Then it deletes that ``__pycache__`` folder when this run took a file from it
 and it is empty. It deletes nothing else, anywhere. Any doubt leaves the
-object exactly as it is: a link of any kind in the object or below its
-``.git`` (Git does not run then), a Git error, a name that Git gives and the
-listing did not have.
+object exactly as it is: a link of any kind that the listing finds in the
+object or below its ``.git`` (Git does not run then), a Git error, a name
+that Git gives and the listing did not have. A link that appears after the
+listing can be read by Git; the deletion still opens each folder of a file's
+path and the file as themselves and checks each on its handle, so nothing
+behind such a link is deleted.
 
 Every listing and every deletion uses the native steps of
 ``windows_removal``: a name comes from the listing of an open handle, and an
@@ -63,12 +66,16 @@ then too. One sequence keeps saved rows: the record is lost, a check saves
 rows, a run repairs, and the record is lost again before the next check. The
 check's own rule ends that after 4 hours (``RECONCILE_SECONDS``).
 
-The limits of a run are checked between operations: before each listing,
-before each Git command, and in a deletion before each open of a folder,
-before each file and before the last listing of each folder. One operation of
-the file system has no time limit of its own, and neither has the lookup of
-Git in the folders of PATH. No handle of this step reaches the Git program:
-each is opened without inheritance.
+No native step of a run begins after the limit of the whole step: every
+listing, open, look at a kind and deletion goes through one wrapper
+(``_Bounded``) that checks the limit first. The lookup of Git, each Git
+command and the write of a change mark have the same check, and a Git command
+is started only when half a second is left. So after an operation that took
+the rest of the time, whether it worked or failed, the run only gives its
+handles back and writes the record a last time. One operation has no time
+limit of its own, and neither has the first check of the folders above the
+store. No handle of this step reaches the Git program: each is opened without
+inheritance.
 
 ``at_host_start`` raises no error into the host's start. A stop of the
 process (``KeyboardInterrupt``, ``SystemExit``) passes through it.
@@ -91,6 +98,7 @@ SOURCE, COMMIT = re.compile(r"[0-9a-f]{16}|[0-9a-f]{64}"), re.compile(r"[0-9a-f]
 # For one run. A bound reached: the run stops, and a later start goes on.
 LISTINGS, ENTRIES, DEPTH = 20_000, 400_000, 100
 SEARCH_SECONDS, GIT_SECONDS, TOTAL_SECONDS = 3.0, 5.0, 8.0
+GIT_LEAST = 0.5  # A Git command is started only when this much of the whole step is left.
 # For one app version: tries for one object, and runs that do not complete.
 TRIES, RUNS = 3, 10
 _DIRECTORY, _LINK = 0x10, 0x400  # FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT
@@ -205,49 +213,88 @@ def _save(data_dir, record):
 
 
 class _Budget:
-    """The bounds of one run. Time in Git and in deletions does not count as search."""
+    """The bounds of one run. Time in Git and in a deletion does not count as search."""
 
     def __init__(self, clock):
         self.clock, self.start = clock, clock()
         self.listings = self.entries = self.git = 0
-        self.apart = 0.0
+        self.apart, self.since = 0.0, None
 
     def elapsed(self):
         return self.clock() - self.start
 
-    def children(self, api, handle):
+    def searched(self):
+        now = self.clock()
+        return now - self.start - self.apart - (now - self.since if self.since is not None else 0.0)
+
+    def deadline(self):
+        """Before an operation begins: the limit of the whole step."""
         if self.elapsed() >= TOTAL_SECONDS:
             raise _Bound()
-        rows = api.children(handle)
+
+    def listed(self, entries):
+        """After a listing: the bounds of the search."""
         self.listings += 1
-        self.entries += len(rows)
-        elapsed = self.elapsed()
+        self.entries += entries
         if (self.listings > LISTINGS or self.entries > ENTRIES
-                or elapsed - self.apart > SEARCH_SECONDS or elapsed > TOTAL_SECONDS):
+                or self.searched() > SEARCH_SECONDS or self.elapsed() > TOTAL_SECONDS):
             raise _Bound()
-        return rows
 
     @contextmanager
     def aside(self):
-        begin = self.clock()
+        self.since = self.clock()
         try:
             yield
         finally:
-            self.apart += self.clock() - begin
+            self.apart += self.clock() - self.since
+            self.since = None
 
     def for_git(self):
         left = TOTAL_SECONDS - self.elapsed()
-        if left <= 0:
-            raise _Bound()
+        if left < GIT_LEAST:
+            raise _Bound()  # Too little is left for an answer. Git is not started.
         return min(GIT_SECONDS, left)
 
-    def deadline(self):
-        """Between two operations of a deletion: the limit of the whole step."""
-        if self.elapsed() >= TOTAL_SECONDS:
-            raise _Bound()
+
+class _Bounded:
+    """The native steps of a run. None begins after the limit of the whole step.
+
+    Every listing, open, look at a kind and deletion of a run goes through
+    here, also the open of the store folder. So after an operation that took
+    the rest of the time, whether it worked or failed, no other begins.
+    ``close`` has no check: a handle is always given back.
+    """
+
+    def __init__(self, api, budget):
+        self._api, self._budget = api, budget
+
+    def root(self, path):
+        self._budget.deadline()
+        return self._api.root(path)
+
+    def children(self, handle):
+        self._budget.deadline()
+        rows = self._api.children(handle)
+        self._budget.listed(len(rows))
+        return rows
+
+    def open(self, parent, name, *, enter, delete=True):
+        self._budget.deadline()
+        return self._api.open(parent, name, enter=enter, delete=delete)
+
+    def kind(self, handle):
+        self._budget.deadline()
+        return self._api.kind(handle)
+
+    def delete(self, handle):
+        self._budget.deadline()
+        self._api.delete(handle)
+
+    def close(self, handle):
+        self._api.close(handle)
 
 
-def _walk(api, handle, budget, *, top=True, trail=()):
+def _walk(api, handle, *, top=True, trail=()):
     """Every folder below an open folder, listed from handles; a link is never entered.
 
     Returns the plain files directly in each folder named ``__pycache__``,
@@ -256,7 +303,7 @@ def _walk(api, handle, budget, *, top=True, trail=()):
     """
     if len(trail) > DEPTH:
         raise _Leave()
-    rows = budget.children(api, handle)
+    rows = api.children(handle)
     caches, link, folders = {}, False, []
     if trail and trail[-1] == CACHE:
         caches[trail] = {name for name, attributes in rows if not attributes & (_DIRECTORY | _LINK)}
@@ -273,7 +320,7 @@ def _walk(api, handle, budget, *, top=True, trail=()):
             if api.kind(child) != "folder":  # It changed after the listing.
                 link = True
                 continue
-            below, linked, _ = _walk(api, child, budget, top=False, trail=(*trail, name))
+            below, linked, _ = _walk(api, child, top=False, trail=(*trail, name))
         caches.update(below)
         link = link or linked
     return caches, link, folders
@@ -347,14 +394,13 @@ def _decide(others, caches):
     return sorted(files)
 
 
-def _remove(api, handle, files, count, budget):
+def _remove(api, handle, files, count):
     """Delete each file through its handle, then a folder that this run emptied. True when no file stayed.
 
-    The limit of the whole step is checked before each open of a folder,
-    before each file and before the last listing of each folder. So an open
-    that fails slowly is not followed by more work. At the limit the deletion
-    stops where it is: what is deleted stays deleted, and a later start takes
-    the rest.
+    Each folder of a file's path and the file itself are opened again, as
+    themselves, and checked on their handles. At the limit of the whole step
+    the deletion stops where it is (``_Bounded``): what is deleted stays
+    deleted, and a later start takes the rest.
     """
     folders, whole = {}, True
     for parts in files:
@@ -365,14 +411,12 @@ def _remove(api, handle, files, count, budget):
             parent = handle
             for position, part in enumerate(trail):
                 last = position == len(trail) - 1
-                budget.deadline()
                 try:
                     child = api.open(parent, part, enter=True, delete=last)
                 except OSError:
                     if not last:
                         raise
                     # Another program holds the folder. Its files can still go; the folder stays.
-                    budget.deadline()
                     child, deletable = api.open(parent, part, enter=True, delete=False), False
                 opened.append(child)
                 if api.kind(child) != "folder":
@@ -380,7 +424,6 @@ def _remove(api, handle, files, count, budget):
                 parent = child
             removed = 0
             for name in names:
-                budget.deadline()
                 try:
                     file = api.open(parent, name, enter=False)
                     try:
@@ -393,7 +436,6 @@ def _remove(api, handle, files, count, budget):
                     count["files"] += 1
                 except OSError:
                     whole = False  # In use, or changed. It stays.
-            budget.deadline()
             if removed and deletable and not api.children(parent):
                 try:
                     api.delete(parent)
@@ -413,32 +455,35 @@ def _object(api, parent, name, folder, budget, before_delete, count):
     with _entry(api, parent, name) as handle:
         if api.kind(handle) != "folder":
             raise _Leave()
-        caches, link, folders = _walk(api, handle, budget)
+        caches, link, folders = _walk(api, handle)
         if not caches:
             return
         count["with_cache"] += 1
         if link or GIT not in folders:
-            raise _Leave()  # Git does not run.
+            raise _Leave()  # The listing found a link. Git does not run.
         with _entry(api, handle, GIT) as git:
             if api.kind(git) != "folder":
                 raise _Leave()
-            if _walk(api, git, budget, top=False)[1]:
-                raise _Leave()  # A link below .git. Git does not run.
+            if _walk(api, git, top=False)[1]:
+                raise _Leave()  # The listing found a link below .git. Git does not run.
+            budget.deadline()
             program = _program()
             if _git(program, folder, budget, *STATUS).strip():
                 raise _Leave()  # A tracked file is changed.
             files = _decide(_git(program, folder, budget, *OTHERS), caches)
             if not files:
                 return
+            budget.deadline()
             before_delete()
             with budget.aside():
-                if not _remove(api, handle, files, count, budget):
+                if not _remove(api, handle, files, count):
                     raise _Later()
     count["repaired"] += 1
 
 
 def _run(api, store, data_dir, record, clock, log):
     budget = _Budget(clock)
+    api = _Bounded(api, budget)  # From here on no native step begins after the limit.
     count = dict.fromkeys(COUNTS, 0)
     tries, announced = record["tries"], []
     if record["runs"] >= RUNS:
@@ -480,14 +525,14 @@ def _run(api, store, data_dir, record, clock, log):
                 raise OSError(20, "objects is not a folder")
             ids = []
             if objects is not None:
-                for source, attributes in budget.children(api, objects):
+                for source, attributes in api.children(objects):
                     if not SOURCE.fullmatch(source) or attributes & _LINK or not attributes & _DIRECTORY:
                         continue
                     try:
                         with _entry(api, objects, source) as folder:
                             if api.kind(folder) != "folder":
                                 raise OSError(20, "the source folder changed into a link")
-                            ids += [source + "/" + commit for commit, attributes in budget.children(api, folder)
+                            ids += [source + "/" + commit for commit, attributes in api.children(folder)
                                     if COMMIT.fullmatch(commit) and attributes & _DIRECTORY
                                     and not attributes & _LINK]
                     except OSError:
@@ -510,7 +555,7 @@ def _run(api, store, data_dir, record, clock, log):
                                 budget, before_delete, count)
                     tries.pop(key, None)
                 except _Bound:
-                    if first:  # This object alone reached a bound: one try, and the next run starts after it.
+                    if first:  # The first object of this run: one try, and the next run starts after it.
                         tries[key] = tries.get(key, 0) + 1
                         record["next"] = ids[position + 1] if position + 1 < len(ids) else None
                     else:

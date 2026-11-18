@@ -1519,8 +1519,11 @@ entry. One exception, the one that Foundation's own check makes:
 every object. The step never deletes that file. Then it deletes that
 `__pycache__` folder when this run took a file from it and it is empty. It
 deletes nothing else. Any doubt leaves the object exactly as it is: a link of
-any kind in the object or below its `.git` (Git does not run then), a Git
-error or timeout, a name that Git gives and the listing did not have.
+any kind that the listing finds in the object or below its `.git` (Git does
+not run then), a Git error or timeout, a name that Git gives and the listing
+did not have. A link that appears after the listing can be read by Git; the
+deletion still opens each folder of a file's path and the file as themselves
+and checks each on its handle, so nothing behind such a link is deleted.
 
 **How.** It lists and deletes with the native steps of `windows_removal`
 (`_Native`: a name from the listing of an open handle, an entry opened
@@ -1566,22 +1569,33 @@ store; a record that cannot be written means that the store is not looked at.
 After a complete pass a start of the same app version reads that file and does
 nothing more. The first start of an app version lists every folder of every
 object outside `.git` and starts no Git on a store with no `__pycache__`
-folder; an object that has one costs two Git commands. One run has these
-bounds: 20,000 listings, 400,000 entries, 3 seconds of search, 5 seconds for
-one Git command, 8 seconds in all (ending a Git that passed its limit can add
-one second). The bounds are checked between operations: before each listing,
-before each Git command, and in a deletion before each open of a folder,
-before each file and before the last listing of a folder. One operation of the file system has no time limit
-of its own, and neither has the lookup of Git in the folders of PATH. At its
-limit the step ends the Git program that it started and stops waiting; the
-installation's `git\cmd\git.exe` is Git's starter program, so the Git program
-behind it can run on until its read ends. It only reads, and that object is
-left. A bound reached ends the run and a later start goes on; an object that
-alone passes a bound, or that could not be decided (a file in use, a Git
-failure), gets at most three tries for one app version. One app version gets
-at most ten runs, also when a run is cut before its end (the count is written
-first). A source folder that cannot be opened leaves the pass open; the other
-sources are still looked at, and its objects keep their tries.
+folder. An object that has such a folder costs more: the step lists every
+folder below its `.git` for links and starts two Git commands. One run has
+these bounds: 20,000 listings, 400,000 entries, 3 seconds of search, 5 seconds
+for one Git command, 8 seconds in all (ending a Git that passed its limit can
+add one second).
+
+No native step of a run begins after those 8 seconds: every listing, open,
+look at a kind and deletion goes through one wrapper (`_Bounded`) that checks
+the limit first. The lookup of Git, each Git command and the write of a change
+mark have the same check, and a Git command is started only when half a second
+is left. So after an operation that took the rest of the time, whether it
+worked or failed, the run only gives its handles back and writes the record a
+last time. One operation has no time limit of its own, and neither has the
+first check of the folders above the store. At its limit the step ends the Git
+program that it started and stops waiting; the installation's
+`git\cmd\git.exe` is Git's starter program, so the Git program behind it can
+run on until its read ends. It only reads, and that object is left.
+
+A bound reached ends the run and a later start goes on. The object in which a
+run reaches a bound gets one try when it is the first object of that run, also
+when the listings before it used a part of the time; so one large object
+cannot hold the pass at itself. An object that could not be decided (a file in
+use, a Git failure) gets one try too. An object gets at most three tries for
+one app version. One app version gets at most ten runs, also when a run is cut
+before its end (the count is written first). A source folder that cannot be
+opened leaves the pass open; the other sources are still looked at, and its
+objects keep their tries.
 
 Every run that finds a file to delete writes a new change mark, 32 random
 hexadecimal digits, before its first deletion; a mark that cannot be written
@@ -1593,10 +1607,10 @@ new run cannot write a mark that an earlier check saw. Such a record itself
 gives no mark, as before the first repair; the update check keeps the rows of
 one signature only, so it scans again then too. One sequence keeps saved rows:
 the record is lost, a check saves rows, a run repairs, and the record is lost
-again before the next check. The check's own rule ends that after 4 hours. The step raises no error into the
-host's start; a stop of the process passes through it. One line with the
-counts and the milliseconds goes to the host's private log
-(`config\services\task-output.log`).
+again before the next check. The check's own rule ends that after 4 hours.
+The step raises no error into the host's start; a stop of the process passes
+through it. One line with the counts and the milliseconds goes to the host's
+private log (`config\services\task-output.log`).
 
 Not shown on a PC when this was written: the Updates page texts after a
 repair, whether a chat's saved discovery failure goes without "Refresh this

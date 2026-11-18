@@ -408,7 +408,10 @@ bytecode in a store object. `source_store_repair.at_host_start` removes it at
 the first start of an app version: only untracked `*.pyc` directly in a
 `__pycache__` of an object that has nothing else changed, then the emptied
 folder. Never widen that rule, and keep "any doubt leaves the object": a link
-anywhere in the object or below its `.git` means that Git does not run. It
+that the listing finds anywhere in the object or below its `.git` means that
+Git does not run. Every native step of a run goes through `_Bounded`, which
+lets none begin after the limit of the whole step; give a new step to that
+wrapper, never a call beside it. It
 runs only in the host that the Windows task started, before that host takes
 its own lock, with that lock held alone; do not call it later in the start or
 from another process. Its limits are stated in the setup design ("Repair of a

@@ -737,7 +737,7 @@ def test_the_listing_notes_only_the_plain_files_of_a_cache_folder_and_never_ente
     def walk():
         with repair._held(api, str(installation.store)) as top:
             with repair._entry(api, top, 'tree') as handle:
-                return repair._walk(api, handle, repair._Budget(time.monotonic))
+                return repair._walk(api, handle)
     # The folder with the name of a bytecode file is not a file. The cache folder below .git is not listed.
     assert walk() == ({('pkg', '__pycache__'): {'a.pyc', 'notes.txt'}, ('__pycache__',): set()},
                       False, sorted_as_listed(tree))
@@ -796,19 +796,26 @@ async def test_a_git_that_does_not_end_is_ended_at_the_limit_and_the_object_stay
         time.sleep(max(0, begin + SLOW + 2 - time.monotonic()))  # Its child has the object as its folder.
 
 
+def bounded(api, clock=lambda: 0.0):
+    """The native steps as a run has them: each begins only inside the limit of the whole step."""
+    budget = repair._Budget(clock)
+    return repair._Bounded(api, budget), budget
+
+
 def test_the_bounds_of_listings_and_of_entries_stop_a_run(monkeypatch):
     rows = [('name', 0x20)] * 3
     api = SimpleNamespace(children=lambda handle: rows)
     monkeypatch.setattr(repair, 'LISTINGS', 2)
-    budget = repair._Budget(lambda: 0.0)
-    assert budget.children(api, 1) == rows and budget.children(api, 1) == rows
+    steps, _ = bounded(api)
+    assert steps.children(1) == rows and steps.children(1) == rows
     with pytest.raises(repair._Bound):
-        budget.children(api, 1)
+        steps.children(1)
     monkeypatch.setattr(repair, 'ENTRIES', 5)
-    budget = repair._Budget(lambda: 0.0)
-    assert budget.children(api, 1) == rows
+    steps, budget = bounded(api)
+    assert steps.children(1) == rows
     with pytest.raises(repair._Bound):
-        budget.children(api, 1)  # Six entries.
+        steps.children(1)  # Six entries.
+    assert (budget.listings, budget.entries) == (2, 6)
 
 
 def test_the_limit_of_the_whole_step_is_also_the_limit_of_git():
@@ -817,23 +824,48 @@ def test_the_limit_of_the_whole_step_is_also_the_limit_of_git():
     assert budget.for_git() == repair.GIT_SECONDS
     now[0] += repair.TOTAL_SECONDS - 2
     assert budget.for_git() == pytest.approx(2)
-    now[0] += 2
+    now[0] += 2 - repair.GIT_LEAST
+    assert budget.for_git() == pytest.approx(repair.GIT_LEAST)
+    now[0] += 0.01  # Too little is left for an answer: Git is not started, and the object gets no try for it.
     with pytest.raises(repair._Bound):
         budget.for_git()
+    now[0] += repair.GIT_LEAST
     with pytest.raises(repair._Bound):
-        budget.children(SimpleNamespace(children=lambda handle: pytest.fail('listed after the limit')), 1)
+        budget.for_git()
 
 
-def test_time_in_git_does_not_count_as_search():
+def test_no_native_step_begins_at_the_limit_and_a_handle_is_always_given_back():
+    now, begun = [0.0], []
+
+    def step(name):
+        return lambda *arguments, **options: begun.append(name) or []
+    api = SimpleNamespace(**{name: step(name) for name in ('root', 'children', 'open', 'kind', 'delete', 'close')})
+    steps, _ = bounded(api, lambda: now[0])
+    calls = {'root': lambda: steps.root('store'), 'children': lambda: steps.children(1),
+             'open': lambda: steps.open(1, 'name', enter=True), 'kind': lambda: steps.kind(1),
+             'delete': lambda: steps.delete(1)}
+    for call in calls.values():
+        call()
+    assert begun == list(calls)  # Inside the limit each step runs.
+    del begun[:]
+    now[0] += repair.TOTAL_SECONDS
+    for name, call in calls.items():
+        with pytest.raises(repair._Bound):
+            call()
+    steps.close(1)
+    assert begun == ['close']
+
+
+def test_time_in_git_and_in_a_deletion_does_not_count_as_search():
     now = [0.0]
-    budget = repair._Budget(lambda: now[0])
+    steps, budget = bounded(SimpleNamespace(children=lambda handle: [('one', 0x20)]), lambda: now[0])
     with budget.aside():
         now[0] += repair.SEARCH_SECONDS + 1
-    api = SimpleNamespace(children=lambda handle: [('one', 0x20)])
-    assert budget.children(api, 1) == [('one', 0x20)]
+        assert steps.children(1) == [('one', 0x20)]  # The last listing of a deletion, inside that time.
+    assert steps.children(1) == [('one', 0x20)]
     now[0] += repair.SEARCH_SECONDS + 0.5
     with pytest.raises(repair._Bound):
-        budget.children(api, 1)
+        steps.children(1)
 
 
 def plain_objects(installation, count, folders, source='0123456789abcdef'):
@@ -1078,6 +1110,194 @@ async def test_an_object_that_became_a_link_after_the_listing_of_its_source_is_l
         assert not any(installation.outside in (path, *path.parents) for path in installation.steps.listed)
 
 
+NATIVE_STEPS = ('root', 'children', 'open', 'kind', 'delete')
+
+
+class Recorded:
+    """The steps of the fixture, with every step that begins written down. One step can be made slow."""
+
+    def __init__(self, api, now, events):
+        self.api, self.now, self.events = api, now, events
+        self.count, self.slow, self.fail = 0, None, False
+
+    def _step(self, name, function, *arguments, **options):
+        self.count += 1
+        self.events.append(name)
+        if self.count == self.slow:
+            self.now[0] += repair.TOTAL_SECONDS  # This one step takes as long as the whole step may.
+            if self.fail:
+                raise PermissionError(13, 'another program holds it')
+        return function(*arguments, **options)
+
+    def root(self, path):
+        return self._step('root', self.api.root, path)
+
+    def children(self, handle):
+        return self._step('children', self.api.children, handle)
+
+    def open(self, parent, name, *, enter, delete=True):
+        return self._step('open', self.api.open, parent, name, enter=enter, delete=delete)
+
+    def kind(self, handle):
+        return self._step('kind', self.api.kind, handle)
+
+    def delete(self, handle):
+        return self._step('delete', self.api.delete, handle)
+
+    def close(self, handle):
+        self.events.append('close')
+        self.api.close(handle)
+
+
+async def test_after_a_step_that_took_the_rest_of_the_time_nothing_else_begins(
+        installation, monkeypatch, tmp_path, capsys):
+    """Every native step of a real repair of two objects, one after the other, is the slow one.
+
+    Once it works slowly, once it fails slowly. After it the run may give handles back and write the
+    record a last time. It may begin no listing, open, look at a kind, deletion, lookup of Git, Git
+    command or other write of the record.
+    """
+    targets = [await broken(installation), await broken(installation, repository(tmp_path / 'another-repository'))]
+    now, events = [0.0], []
+    recorded = Recorded(installation.api, now, events)
+    monkeypatch.setattr(repair, '_steps', lambda: recorded)
+    real = SimpleNamespace(program=repair._program, save=repair._save, popen=subprocess.Popen)
+
+    def noted(name, function):
+        def call(*arguments, **options):
+            events.append(name)
+            return function(*arguments, **options)
+        return call
+    monkeypatch.setattr(repair, '_program', noted('the lookup of Git', real.program))
+    monkeypatch.setattr(repair, '_save', noted('a write of the record', real.save))
+    monkeypatch.setattr(repair, 'subprocess', SimpleNamespace(
+        Popen=noted('a Git command', real.popen), PIPE=subprocess.PIPE, DEVNULL=subprocess.DEVNULL,
+        TimeoutExpired=subprocess.TimeoutExpired))
+
+    def run(slow=None, fail=False):
+        (installation.data / 'updates' / repair.RECORD).unlink(missing_ok=True)
+        for target in targets:  # The state of a broken PC again.
+            if len(bytecode(target.folder)) != 3:
+                an_earlier_helper_imports(target.folder)
+        del events[:]
+        now[0], recorded.count, recorded.slow, recorded.fail = 0.0, 0, slow, fail
+        return repair.at_host_start(installation.data, clock=lambda: now[0], log=installation.lines.append)
+
+    assert facts(run(), 'repaired', 'files', 'folders', 'git', 'complete') == (2, 4, 2, 4, True)
+    steps = [name for name in events if name in NATIVE_STEPS]
+    assert set(steps) == set(NATIVE_STEPS) and events.count('a Git command') == 4
+    wrong = []
+    for fail in (False, True):
+        for slow in range(1, len(steps) + 1):
+            run(slow, fail)
+            position = [index for index, name in enumerate(events) if name in NATIVE_STEPS][slow - 1]
+            after = [name for name in events[position + 1:] if name != 'close']
+            if after != ['a write of the record']:
+                wrong.append((('fails' if fail else 'works'), slow, events[position], after[:6]))
+    assert not wrong, f'{len(wrong)} of {2 * len(steps)}: {wrong[:5]}'
+    with capsys.disabled():
+        print(f'\nEVERY STEP: {len(steps)} native steps in a repair of two objects; each was the slow one twice.')
+
+
+async def test_a_link_that_appears_between_the_listing_and_git_is_not_deleted_through(installation, monkeypatch):
+    """The package's folder becomes a link after the listing found no link. Git can read through it.
+
+    The folder that the link leads to holds the same files, also the bytecode. Nothing there may change:
+    the deletion opens each folder of a file's path as itself and checks it on its handle.
+    """
+    target = await broken(installation)
+    package, program, behind = target.folder / PACKAGE, repair._program(), {}
+
+    def after_the_listing():
+        with at_the_top(target):
+            os.rename(package, installation.outside / 'package')
+            installation.link(installation.outside / 'package', package)
+        behind.update(snapshot(installation.outside))
+        return program
+    monkeypatch.setattr(repair, '_program', after_the_listing)
+    result = installation.start()
+    assert behind and snapshot(installation.outside) == behind
+    assert len(bytecode(installation.outside / 'package')) == 3
+    assert facts(result, 'files', 'folders', 'repaired') == (0, 0, 0) and result['left'] + result['later'] == 1
+    # For Git on Windows a junction is a folder: both commands run, and the deletion refuses on the handle.
+    # For Git elsewhere a symbolic link in place of a folder is a changed tracked entry: the first command ends it.
+    assert facts(result, 'git', 'later', 'change') in ((2, 1, True), (1, 0, False))
+
+
+async def test_a_source_folder_that_became_a_link_after_the_listing_leaves_the_pass_open(installation, monkeypatch):
+    target = await broken(installation)
+    with monkeypatch.context() as patch:
+        patch.setenv('PATH', str(installation.outside))  # No Git there: one try for the object.
+        assert installation.start()['complete'] is False and record(installation)['tries'] == {target.key: 1}
+    source, real, behind = target.folder.parent, installation.api.open, {}
+
+    def open_(parent, name, *, enter, delete=True):
+        if name == source.name and not behind:  # After the listing of objects, before the open of the source.
+            os.rename(source, installation.outside / 'source')
+            installation.link(installation.outside / 'source', source)
+            behind.update(snapshot(installation.outside))
+        return real(parent, name, enter=enter, delete=delete)
+    installation.api.open = open_
+    try:
+        result = installation.start()
+    finally:
+        installation.api.open = real
+    assert behind and snapshot(installation.outside) == behind
+    assert facts(result, 'objects', 'git', 'files', 'complete') == (0, 0, 0, False)
+    assert installation.lines[-1].endswith(' A source folder could not be opened.')
+    assert record(installation)['tries'] == {target.key: 1}  # The object was not seen. It is not gone.
+    if installation.steps:
+        assert not any(installation.outside in (path, *path.parents) for path in installation.steps.listed)
+
+
+def git_in(folder, *arguments):
+    return subprocess.run(['git', '-c', 'user.name=case', '-c', 'user.email=case@example.invalid',
+                           '-c', 'commit.gpgsign=false', '-c', 'core.autocrlf=false', '-c', 'safe.directory=*',
+                           *arguments], cwd=folder, check=True, capture_output=True).stdout
+
+
+async def test_a_file_system_monitor_of_the_git_configuration_is_not_started(installation, tmp_path):
+    """A monitor program can outlive the step and hold the object's folders. Git is told to start none."""
+    target = await broken(installation)
+    ran, monitor = tmp_path / 'the-monitor-ran', tmp_path / 'monitor'
+    monitor.write_text('#!/bin/sh\necho ran >> "' + ran.as_posix() + '"\n', encoding='ascii', newline='\n')
+    monitor.chmod(0o755)
+    git_in(target.folder, 'config', 'core.fsmonitor', monitor.as_posix())
+    # The control: with this configuration Git starts the monitor for the first of the two commands.
+    git_in(target.folder, '--no-optional-locks', 'status', '--porcelain', '--untracked-files=no')
+    assert ran.is_file(), 'the monitor of this case does not run on this computer; the case shows nothing'
+    ran.unlink()
+    result = installation.start()
+    assert not ran.exists(), 'Git started the file system monitor'
+    assert facts(result, 'git', 'repaired', 'files') == (2, 1, 2) and target.verify() == 'accepted'
+
+
+async def test_git_is_asked_about_the_object_and_never_about_a_repository_above_it(installation):
+    """The object's own .git is not a repository any more. The store folder is one, and it tracks the object's files.
+
+    Git, started in the object's folder with no fixed paths, finds the repository above: there the object
+    is clean and only its bytecode is untracked. The repair must not take that answer.
+    """
+    target = await broken(installation)
+    head = target.folder / '.git' / 'HEAD'
+    _writable(head)
+    head.unlink()
+    tracked = sorted(path.relative_to(installation.store).as_posix() for path in target.folder.rglob('*')
+                     if path.is_file() and not {'.git', '__pycache__'} & set(path.relative_to(target.folder).parts)
+                     and path.name != repair.META)
+    git_in(installation.store, 'init', '--quiet')
+    git_in(installation.store, 'add', '--', *tracked)
+    git_in(installation.store, 'commit', '--quiet', '--message', 'a repository above the object')
+    # The control: that is what Git answers from the object's folder.
+    assert git_in(target.folder, 'status', '--porcelain', '--untracked-files=no') == b''
+    others = sorted(name for name in git_in(target.folder, 'ls-files', '--others', '-z').decode().split('\0') if name)
+    assert others == sorted([repair.META, *(name for name in bytecode(target.folder) if name.endswith('.pyc'))])
+    before = snapshot(installation.store)
+    result = installation.start()
+    assert snapshot(installation.store) == before and len(bytecode(target.folder)) == 3
+    assert facts(result, 'git', 'files', 'later', 'left', 'change') == (1, 0, 1, 0, False)
+
+
 def test_a_store_with_no_object_yet_is_a_complete_pass(installation):
     result = installation.start()
     assert facts(result, 'objects', 'listings', 'git', 'complete', 'change') == (0, 0, 0, True, False)
@@ -1191,9 +1411,9 @@ def between_git_and_the_removal(monkeypatch, change):
     """Another program changes the object after Git listed it and before the first deletion."""
     real = repair._remove
 
-    def then_remove(api, handle, files, count, budget):
+    def then_remove(api, handle, files, count):
         change()
-        return real(api, handle, files, count, budget)
+        return real(api, handle, files, count)
     monkeypatch.setattr(repair, '_remove', then_remove)
 
 
@@ -1274,8 +1494,8 @@ async def test_a_run_that_ends_after_a_deletion_has_already_written_a_new_mark(i
     assert mark(installation) is None
     real = repair._remove
 
-    def the_process_ends(api, handle, files, count, budget):
-        real(api, handle, files[:1], count, budget)
+    def the_process_ends(api, handle, files, count):
+        real(api, handle, files[:1], count)
         raise Cut  # The PC is switched off after the first file.
     monkeypatch.setattr(repair, '_remove', the_process_ends)
     with pytest.raises(Cut):
