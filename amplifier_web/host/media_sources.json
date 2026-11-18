@@ -240,7 +240,7 @@
     "amplifier_ui_use/selectors.py": "de3779347446accaa8b4f6858832a1249401395dba40479b221dfea91585457a",
     "amplifier_web/access_mode.py": "9ec5094ecd862531788521f507bbce24b77a87e1cba70e93e4b0da103c449785",
     "amplifier_web/app_guidance.py": "dcbbb2ef4bddd4d37f84a663b1842d343bab77d985c05c09f434b4bacf45a707",
-    "amplifier_web/attachments.py": "ceb45b85746faf6f0abdf830af0c6fe51bd3787925461817707e1a189eb189e7",
+    "amplifier_web/attachments.py": "be2c0a675ac16045c7e0329bbf0d337d88d5f0e5c6b2377cc2bb10de137d0afe",
     "amplifier_web/builtin_behaviors.py": "bd19de371b21fc53d251ec9b3cfd48ff893741d058bfbd9d78b229e1c7532105",
     "amplifier_web/bundle_defaults.py": "b82b2af42a683850b38812c5da0fab5e86eedf80c75443e73d3b34520e51be4e",
     "amplifier_web/capacity.py": "c0e9ab791c0f266e6a35297d3a014a30499852857958eb507aaab765903eaff1",

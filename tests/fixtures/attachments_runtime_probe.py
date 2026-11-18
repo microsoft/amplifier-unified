@@ -13,10 +13,7 @@ from amplifier_core.models import ProviderInfo
 from amplifier_core.message_models import ChatResponse, TextBlock, Usage
 from amplifier_foundation.bundle import Bundle, PreparedBundle, BundleModuleResolver
 from amplifier_module_loop_live.runtime import Input, Runtime
-from amplifier_web.attachments import save, encode
-
-PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII='
-
+from amplifier_web.attachments import MediaAttachmentContext, save, encode
 
 async def run():
     plan = {'session': {'orchestrator': {'module': 'loop-live', 'config': {'use_streaming': False}}, 'context': {'module': 'context-simple'}}}
@@ -42,8 +39,31 @@ async def run():
     task = None
     try:
         with tempfile.TemporaryDirectory() as home:
-            os.environ['AMPLIFIER_WEB_HOME'] = home
-            attachment = save(home, 'tiny.png', PNG)
+            home = Path(home).resolve()
+            os.environ['AMPLIFIER_WEB_HOME'] = str(home)
+            from io import BytesIO
+            from PIL import Image
+            from amplifier_foundation.session.checkpoint import acknowledge_legacy_checkpoint, verified_checkpoint_refs
+            from amplifier_foundation.session.media import SessionMediaStore
+            from amplifier_web.host.media import NAMESPACE
+            bitmap = BytesIO()
+            Image.new('RGB', (2, 2), 'blue').save(bitmap, format='PNG')
+            original = bitmap.getvalue()
+            encoded = base64.b64encode(original).decode()
+            coordinator = session.coordinator
+            media = SessionMediaStore(Path(home).resolve() / 'media', session.session_id,
+                                      checkpoint_verifier=verified_checkpoint_refs)
+            context = MediaAttachmentContext(coordinator.get('context'), coordinator)
+            await coordinator.mount('context', context)
+            coordinator.register_capability('web.media.composer', media)
+            async def checkpoint():
+                rows = await context.get_messages()
+                (Path(home) / 'transcript.jsonl').write_text(
+                    ''.join(json.dumps(row) + '\n' for row in rows))
+                media.acknowledge_checkpoint(acknowledge_legacy_checkpoint(
+                    Path(home), session_id=session.session_id, expected_messages=rows))
+            coordinator.register_capability('session.durable_checkpoint', checkpoint)
+            attachment = save(home, 'tiny.png', encoded)
             task = asyncio.create_task(session.execute(''))
             await runtime.wait_for(lambda e: e['type'] == 'session.ready', timeout=8)
             await runtime.submit(Input('user', 'Please review the attached files.', id='image-only', attachments=(attachment,)))
@@ -52,17 +72,23 @@ async def run():
             assert provider.requests
             request = provider.requests[0]
             user = next(message for message in request.messages if message.role == 'user' and isinstance(message.content, list))
-            image = next(block for block in user.content if block.type == 'image')
-            assert image.source['media_type'] == 'image/png'
-            assert base64.b64decode(image.source['data']) == base64.b64decode(PNG)
-            assert PNG not in json.dumps(runtime.events)
+            canonical = [json.loads(line) for line in (home / 'transcript.jsonl').read_text().splitlines()]
+            uploaded = next(message for message in canonical if NAMESPACE in (message.get('metadata') or {}))
+            [ref] = uploaded['metadata'][NAMESPACE]['refs']
+            media.verify_checkpoint(ref)
+            with media.resolve_ref(ref) as resolved:
+                assert resolved.read() == original
+            assert not any(block.type == 'image' for block in user.content)
+            assert encoded not in json.dumps(runtime.events)
+            assert encoded not in (Path(home) / 'transcript.jsonl').read_text()
             await runtime.submit(Input('stop'))
             await asyncio.wait_for(task, 5)
+            media.close()
     finally:
         if task and not task.done():
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
         await session.cleanup()
-    print(json.dumps({'image_received': True, 'public_events_contain_no_image_data': True, 'provider_network_calls': 0}))
+    print(json.dumps({'image_reference_received': True, 'public_events_contain_no_image_data': True, 'provider_network_calls': 0}))
 
 asyncio.run(run())
