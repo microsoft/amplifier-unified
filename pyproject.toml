@@ -132,8 +132,8 @@ default = true
 dev = [
     "pytest>=8", "pytest-asyncio>=0.25", "pytest-aiohttp>=1.1", "hatchling>=1.27",
     # Offline native-input fixtures use the real loop/context, not a fake mount.
-    # Accepted main includes the bounded compaction failure vocabulary.
-    "amplifier-module-loop-live @ git+https://github.com/microsoft/amplifier-module-loop-live@cd1c149d335c903d237a785505a3d0ccf439851c",
+    # Accepted source includes session image delivery and compaction failures.
+    "amplifier-module-loop-live @ git+https://github.com/microsoft/amplifier-module-loop-live@eafd20d31afa2635563deb333b931c1663398aec",
     # Real finite/resumed/persistent custody checks use the selected Foundation tool.
     "amplifier-module-tool-delegate @ git+https://github.com/microsoft/amplifier-foundation@05082c89a171758f8d0fb9d8df630ea581e5bdb5#subdirectory=modules/tool-delegate",
     # Match context-managed's authored source; uv.lock records the exact test
@@ -151,7 +151,8 @@ dev = [
     "amplifier-module-hook-context-intelligence @ git+https://github.com/microsoft/amplifier-bundle-context-intelligence@a80ce69d0e96e9a343501f238dcd867350dd9aa2#subdirectory=modules/hook-context-intelligence",
     # Installed skills checks exercise the real loader and companion-file tool.
     "amplifier-module-tool-skills @ git+https://github.com/microsoft/amplifier-bundle-skills@2f58408a879535df36da5c92d2b073f49271ade4#subdirectory=modules/tool-skills",
-    "amplifier-module-tool-filesystem @ git+https://github.com/microsoft/amplifier-module-tool-filesystem@663f26a878ae71e136f439fa73ded52b2eb24174",
+    # Published PNG/JPEG staging; GIF/WebP qualification is not selected yet.
+    "amplifier-module-tool-filesystem @ git+https://github.com/microsoft/amplifier-module-tool-filesystem@0eee8e9967f175ed32a01d1d0aac63894829db2d",
     # File-policy checks must execute the real patch engines, not skip at import.
     "amplifier-module-tool-apply-patch @ git+https://github.com/microsoft/amplifier-bundle-filesystem@515599f0d0763a946aa96ed1d0110db723f5c386#subdirectory=modules/tool-apply-patch",
     "amplifier-module-tool-image @ git+https://github.com/microsoft/amplifier-bundle-imagegen@8acd3773102b77378c0d46da53a901f8297a38fc#subdirectory=modules/tool-image",
