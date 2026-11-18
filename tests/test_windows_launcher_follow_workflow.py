@@ -197,6 +197,23 @@ def test_the_stand_in_for_uv_is_put_in_place_and_taken_away(fixture, tmp_path, m
     assert "uv-real.exe" in fixture.STAND_IN and "TrimEnd(separators)" in fixture.STAND_IN
 
 
+def given_to_pytest(program):
+    """The files and the single cases that the step's program gives pytest: its `FILES` and `CASES`.
+
+    Also the names that its `NOT_ON_WINDOWS` leaves out. A file name anywhere else in the program is no run.
+    """
+    values = {node.targets[0].id: node.value for node in ast.parse(program).body
+              if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)}
+    files = values["FILES"].func.value.value.split()  # A text with one file in each line, and `.split()`.
+    cases = ast.literal_eval(values["CASES"])
+    left_out = [key.value for key in values["NOT_ON_WINDOWS"].keys]
+    assert files and len(set(files)) == len(files) and all("::" in case for case in cases)
+    # The program gives pytest exactly these, less what this runner leaves out.
+    assert "files = [file for file in [*FILES, *CASES] if file not in left_out]" in program
+    assert '*files, *(f"--deselect={name}" for name in left_out if "::" in name)]).returncode' in program
+    return files, cases, left_out
+
+
 def test_a_pull_request_runs_every_launcher_case_file():
     """A name in a path filter starts a workflow. Only a pytest command runs a file.
 
@@ -219,20 +236,24 @@ def test_a_pull_request_runs_every_launcher_case_file():
     for refusal in ('problems.append(f"failed: {name}")', "does not expect that on this runner",
                     "no case of this file passed", "sys.exit(1)"):
         assert refusal in step["run"]
-    # The Windows job can leave out a file or a case by name. The two files with
-    # cases that need Windows are never left out there as a whole.
+    files, cases, left_out = given_to_pytest(step["run"])
+    run = sorted({*files, *(case.split("::")[0] for case in cases)})
+    # The Windows job can leave out a listed file, or a case of one, by name. The two
+    # files with cases that need Windows are never left out there as a whole.
+    assert [name for name in left_out if name.split("::")[0] not in run] == []
     for kept in ("tests/test_browser_entry.py", "tests/test_windows_bootstrap_prototype.py"):
-        assert f'"{kept}":' not in step["run"] and kept in step["run"]
+        assert kept in files and kept not in left_out
 
     def starts(path):
         return any(re.fullmatch(re.escape(pattern).replace(r"\*\*", ".*").replace(r"\*", "[^/]*"), path)
                    for pattern in paths)
 
-    run = sorted(set(re.findall(r"tests/test_\w+\.py", step["run"])))
     launcher = sorted(path.relative_to(ROOT).as_posix() for path in (ROOT / "tests").glob("test_windows_launcher_*.py"))
     assert Path(__file__).resolve().relative_to(ROOT).as_posix() in launcher and len(launcher) >= 5
-    assert [name for name in launcher if name not in run] == []
-    assert [name for name in run if not (ROOT / name).is_file() or name not in paths] == []
+    assert [name for name in launcher if name not in files] == []
+    assert [name for name in run if not (ROOT / name).is_file() or not starts(name)] == []
+    # A launcher test file that does not exist yet starts the workflow too, and this case then fails for it.
+    assert starts("tests/test_windows_launcher_a_name_that_no_file_has.py")
     # The list case fails when a change makes the launcher load another file,
     # so every file of the app and the lock start the workflow. Then what this
     # file reads beside the app.
