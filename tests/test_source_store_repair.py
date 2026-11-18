@@ -285,6 +285,23 @@ def record(installation):
     return json.loads(path.read_text(encoding='utf-8')) if path.is_file() else None
 
 
+def the_updates_folder(installation):
+    """The folder of the record, made as the app makes it (UpdateManager.__init__).
+
+    On Windows the app makes it as a private folder of the account. A hosted runner's account is elevated: a
+    folder from an ordinary mkdir would belong to the Administrators group, and the app's private writer
+    refuses such a folder.
+    """
+    folder = installation.data / 'updates'
+    if NATIVE:
+        from amplifier_web import windows_files
+        with windows_files.directory(folder, owned_root=installation.data, create=True):
+            pass
+    else:
+        folder.mkdir(exist_ok=True)
+    return folder
+
+
 def mark(installation):
     """The change mark of the record: None, or 32 hexadecimal digits that a run made."""
     value = repair.change(installation.data / 'updates')
@@ -1364,8 +1381,7 @@ async def test_it_never_raises_into_the_host_start(installation, monkeypatch):
 
 
 def test_a_record_that_cannot_be_read_is_an_empty_record(installation):
-    path = installation.data / 'updates' / repair.RECORD
-    path.parent.mkdir()
+    path = the_updates_folder(installation) / repair.RECORD
     empty = {'schema': 1, 'version': None, 'complete': False, 'change': None, 'runs': 0, 'tries': {}, 'next': None,
              'last': None}
     last = dict.fromkeys(repair.MEASURES, 0)
@@ -1396,8 +1412,7 @@ async def test_a_record_that_is_not_whole_does_not_stop_the_update_check_or_the_
     """The update check reads the record for its signature. A reader that raises would end the check."""
     from amplifier_web.update_inventory_index import inventory, signature
     target = await broken(installation)
-    path = installation.data / 'updates' / repair.RECORD
-    path.parent.mkdir()
+    path = the_updates_folder(installation) / repair.RECORD
     path.write_text(text, encoding='utf-8')
     manager = SimpleNamespace(home=installation.data, directory=installation.data / 'updates',
                               service=SimpleNamespace(state={'settings': {'bundle': 'work'}}))
