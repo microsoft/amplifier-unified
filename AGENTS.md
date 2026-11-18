@@ -344,16 +344,20 @@ at least 1 hour old. A one-time reason must end by a fact that the owner keeps
 comparing a saved time with the start time: a clock that was ahead at the start
 and is corrected later would name the reason again on every pass.
 The update check's selection witness (`update_sequence.app_selection`) and the
-configuration key (`runtime_profiles.configuration_key`) replace the
-installation's folders inside JSON text. JSON writes each backslash of a
-Windows path twice: look for a folder there in the form
-`json.dumps(folder)[1:-1]`, never as plain text, and with the same
-`ensure_ascii` setting as the text. Both functions do it through
-`runtime_profiles.app_folders`. For a folder that JSON does not write as it is,
-that function replaces only the folder itself and a path below it; for a
-folder that JSON writes as it is, it replaces the text wherever it stands,
-also in the name of a folder beside it, because installations have saved
-those values. The address of a Windows file
+configuration key (`runtime_profiles.configuration_key`) are hashes of JSON
+text in which the installation's folders are replaced. Both get that text
+from `runtime_profiles.app_folders`. JSON writes each backslash of a Windows
+path twice and a letter outside ASCII in another form, so such a folder is
+never found in the text as plain text. Do not look for it there in another
+form either: JSON text does not show where the name of a folder ends (a
+folder beside it, a name with `#` or a backslash, and the name of an entry
+were each taken for it). The function changes the values before it writes
+them: only a text value that is the folder or a path below it, with a path
+separator of the system after the folder, also after `file://`; never the
+name of an entry. For a folder that JSON writes as it is, it replaces the
+text wherever it stands in the JSON text, also in the name of a folder beside
+it and in the name of an entry, because installations have saved those
+values. The address of a Windows file
 on a drive (`Path.as_uri()`) is `file:///C:/...`: it has no server name, and
 its path part has a slash before the drive. On Windows take that one slash
 away, only for an address with no server name, and change nothing else. Do not

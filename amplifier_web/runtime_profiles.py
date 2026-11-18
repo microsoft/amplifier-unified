@@ -12,7 +12,6 @@ from contextlib import AsyncExitStack, asynccontextmanager
 import hashlib
 import json
 import os
-import re
 import shutil
 import time
 import uuid
@@ -20,25 +19,46 @@ from pathlib import Path
 from types import SimpleNamespace
 
 
-def app_folders(text, roots):
-    """Replace the installation's folders in JSON text, so that a copy in another folder gives the same text.
+def app_folders(value, roots, **options):
+    """Write a value as JSON text in which the installation's folders are "$APP".
+
+    A copy of the installation in another folder then gives the same text.
 
     A folder path that JSON text writes as it is (no backslash, only ASCII) is
-    replaced wherever it stands, as it always was: installations have saved
-    values of that text, also for a folder beside it whose name starts with its
-    name. Any other folder, so every Windows path, is looked for in the form
-    that JSON text has, and only as the folder itself or a path below it: at
-    the start of a text value, or after "file://" there, and before the end of
-    the value, a path separator or "#".
+    replaced wherever it stands in that text, as it always was: installations
+    have saved values of the text, also for a folder beside it whose name
+    starts with its name, and for the name of an entry.
+
+    Any other folder, so every Windows path, was never found in that text, and
+    it is not looked for there: JSON text does not show where the name of a
+    folder ends. The values are changed before they are written. Only a text
+    value that is the folder or a path below it loses the folder, also after
+    "file://": the folder's path, and then the end of the value or a path
+    separator of this system. The name of an entry is never changed.
     """
-    for root in sorted(roots, key=len, reverse=True):
-        form = json.dumps(root)[1:-1]
-        if form == root:
+    ordered = sorted(roots, key=len, reverse=True)
+    other = [root for root in ordered if json.dumps(root)[1:-1] != root]
+    separators = tuple(filter(None, (os.sep, os.altsep)))
+
+    def below(text):
+        start = "file://" if text.startswith("file://") else ""
+        for root in other:
+            rest = text[len(start) + len(root):]
+            if text.startswith(root, len(start)) and (not rest or rest.startswith(separators)):
+                return start + "$APP" + rest
+        return text
+
+    def walk(item):
+        if isinstance(item, dict):
+            return {key: walk(entry) for key, entry in item.items()}
+        if isinstance(item, (list, tuple)):
+            return [walk(entry) for entry in item]
+        return below(item) if isinstance(item, str) else item
+
+    text = json.dumps(walk(value) if other else value, **options)
+    for root in ordered:
+        if root not in other:
             text = text.replace(root, "$APP")
-        else:
-            # A text value starts after `{"`, `["` or ` "`. A separator is "/" or a doubled backslash.
-            text = re.sub(r'(?:(?<=[\[{ ]")|(?<=[\[{ ]"file://))' + re.escape(form) + r'(?=[/"#]|\\\\)',
-                          lambda match: "$APP", text)
     return text
 
 
@@ -87,8 +107,7 @@ def configuration_key(settings, *roots):
             if isinstance(row, dict) and row.get("source")
         },
     }
-    text = json.dumps(value, sort_keys=True, default=str)
-    text = app_folders(text, {str(Path(root).resolve()) for root in roots})
+    text = app_folders(value, {str(Path(root).resolve()) for root in roots}, sort_keys=True, default=str)
     return hashlib.sha256(text.encode()).hexdigest()
 
 

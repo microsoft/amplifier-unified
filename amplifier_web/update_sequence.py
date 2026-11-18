@@ -124,9 +124,7 @@ def app_selection(home, *, config=None, original_home=None):
     if original_home is not None:
         from .updates import foundation_home
         roots.update((str(Path(original_home) / 'foundation'), str(foundation_home(original_home))))
-    text = json.dumps([configuration_key(config.settings, *roots),
-                       references], sort_keys=True)
-    text = app_folders(text, roots)
+    text = app_folders([configuration_key(config.settings, *roots), references], roots, sort_keys=True)
     return {'sources': list(sources.values()), 'witness': hashlib.sha256(text.encode()).hexdigest()}
 
 
