@@ -739,7 +739,7 @@ def test_windows_working_is_unknown_when_no_owned_host_answers(working_chain, mo
 
 
 class Late:
-    """For `reads_end`: this error comes while the answer is read, not while the request is sent."""
+    """For `reads_end`: the read's error comes from `response.json()`, not from `client.get`."""
 
     def __init__(self, error):
         self.error = error
@@ -748,16 +748,18 @@ class Late:
 def reads_end(state, monkeypatch, ends, seconds=3.0):
     """Each read of the activity question ends as the next entry of `ends` says.
 
-    An entry is the error that the read ends with (in `Late`: while the
-    answer is read), or None for the host's answer. `windows_working` gets a
-    stand-in for its clock: a read that ends by a time limit took `seconds`,
-    every other read took no time. A read after the last entry fails the
-    test, so no case can read without end.
+    An entry is the error that the read ends with, or None for the answer
+    of the fixture (`state["body"]` with `state["status"]`). The error comes
+    from `client.get`; in `Late` it comes from `response.json()`.
+    `windows_working` gets a stand-in for its clock. That clock goes on by
+    `seconds` at each read that ends with a `TimeoutError`, and at no other
+    read: it says nothing about the time that a real read takes. A read
+    after the last entry fails the test, so no case can read without end.
     """
     import aiohttp
     from types import SimpleNamespace
     clock, left = [0.0], list(ends)
-    chain = state.setdefault("client", aiohttp.ClientSession)  # The stand-in of `working_chain`.
+    chain = state.setdefault("client", aiohttp.ClientSession)  # The stand-in of `working_chain`, at each call.
 
     class Client(chain):
         def get(self, url, **kwargs):
@@ -766,7 +768,7 @@ def reads_end(state, monkeypatch, ends, seconds=3.0):
             late, end = isinstance(end, Late), end.error if isinstance(end, Late) else end
             if isinstance(end, TimeoutError):
                 clock[0] += seconds
-            response = super().get(url, **kwargs)  # It keeps the request.
+            response = super().get(url, **kwargs)  # The fixture's stand-in keeps the request.
             if late:
                 async def answer():
                     raise end
@@ -782,8 +784,8 @@ def reads_end(state, monkeypatch, ends, seconds=3.0):
 def test_windows_working_asks_again_when_a_read_ends_by_its_time_limit(working_chain, monkeypatch):
     import aiohttp
     state = working_chain
-    # The time limit of the whole request, aiohttp's own error for a limit while it connects, and a limit that
-    # ends the read of the answer.
+    # Three reads end with a `TimeoutError`: the builtin one from `client.get`, aiohttp's `ConnectionTimeoutError`
+    # (a subclass of it) from `client.get`, and the builtin one from `response.json()`. The fourth read answers.
     clock, left = reads_end(state, monkeypatch, [
         TimeoutError(), aiohttp.ConnectionTimeoutError("Connection timeout to host"), Late(TimeoutError()), None])
     assert asyncio.run(health.windows_working(state["home"])) == 2
@@ -799,19 +801,21 @@ def test_windows_working_asks_again_only_the_address_whose_read_ended_by_its_tim
     state = working_chain
     first, second = urls = ["https://127.0.0.1:8942/api/health", "https://[::1]:8942/api/health"]
     monkeypatch.setattr(browser_entry, "_owner_probe_targets", lambda *a: (list(urls), state["pin"]))
-    # The first address is silent and the second refuses: only the first is asked again.
+    # The read of the first address ends with `TimeoutError`, the read of the second with an
+    # `aiohttp.ClientConnectionError`: only the first is read again (`TimeoutError` once more, then the answer).
     clock, left = reads_end(state, monkeypatch, [
         TimeoutError(), aiohttp.ClientConnectionError("refused"), TimeoutError(), None])
     assert asyncio.run(health.windows_working(state["home"])) == 2
     assert [url for url, _ in state["requests"]] == [first, second, first, first] and left == [] and clock == [6.0]
-    # The other order: the first address refuses and is not asked again.
+    # The other order: the read of the first address ends with `ConnectionRefusedError` (an `OSError`). Only the
+    # second address is read again.
     state["requests"].clear()
     clock, left = reads_end(state, monkeypatch, [
         ConnectionRefusedError(10061, "No connection could be made"), TimeoutError(), None])
     assert asyncio.run(health.windows_working(state["home"])) == 2
     assert [url for url, _ in state["requests"]] == [first, second, second] and left == [] and clock == [3.0]
-    # Both addresses stay silent: both are asked again. A round that has started is completed, so the third
-    # round (it starts at 12 seconds) ends at 18 seconds.
+    # Every read of both addresses ends with `TimeoutError`: both are read again. A round that has started is
+    # completed, so the third round (it starts at 12 seconds of the stand-in clock) ends at 18 seconds.
     state["requests"].clear()
     clock, left = reads_end(state, monkeypatch, [TimeoutError()] * 6)
     assert asyncio.run(health.windows_working(state["home"])) is None
@@ -823,21 +827,22 @@ def test_windows_working_with_a_silent_address_keeps_what_the_other_address_answ
     state = working_chain
     first, second = urls = ["https://127.0.0.1:8942/api/health", "https://[::1]:8942/api/health"]
     monkeypatch.setattr(browser_entry, "_owner_probe_targets", lambda *a: (list(urls), state["pin"]))
-    # This installation answers at the second address, without a count: that ends all reads. The silent
-    # address is not asked again.
+    # The second address answers as this installation, with an `activity` dictionary that has no count: the
+    # function ends with None. The first address, whose read ended with `TimeoutError`, is not read again.
     state["body"]["activity"] = {}
     clock, left = reads_end(state, monkeypatch, [TimeoutError(), None])
     assert asyncio.run(health.windows_working(state["home"])) is None
     assert [url for url, _ in state["requests"]] == [first, second] and left == [] and clock == [3.0]
-    # Another installation answers at the second address: final for that address only. The silent address is
-    # asked again to the bound.
+    # The second address answers with another data identity: final for that address only. The first address
+    # is read again, four times more, until the bound.
     state["requests"].clear()
     state["body"].update(activity={"working": 2}, dataIdentity="another-installation")
     clock, left = reads_end(state, monkeypatch, [TimeoutError(), None] + [TimeoutError()] * 4)
     assert asyncio.run(health.windows_working(state["home"])) is None
     assert [url for url, _ in state["requests"]] == [first, second] + [first] * 4 and left == [] and clock == [15.0]
-    # This installation answers at the second address with no `activity` dictionary: that does not end all
-    # reads. It is final for that address only, and the silent address is asked again.
+    # The second address answers as this installation with no `activity` dictionary (None, a list, or no such
+    # key): that does not end the function. It is final for that address only, and the first address is read
+    # again until the bound.
     for activity in (None, [2], "absent"):
         state["requests"].clear()
         state["body"].update(dataIdentity="owned-data", activity=activity)
@@ -847,21 +852,22 @@ def test_windows_working_with_a_silent_address_keeps_what_the_other_address_answ
         assert asyncio.run(health.windows_working(state["home"])) is None
         assert [url for url, _ in state["requests"]] == [first, second] + [first] * 4 and left == []
         assert clock == [15.0]
-    # An error at the second address that is no error of a connection or of an answer: it ends the function
-    # with None, as before the reads were made again. The silent address is not asked again.
+    # The read of the second address ends with a `RuntimeError`, which is no `aiohttp.ClientError`, `OSError`
+    # or `ValueError`: the function's last clause gives None. The first address is not read again.
     state["requests"].clear()
     clock, left = reads_end(state, monkeypatch, [TimeoutError(), RuntimeError("Session is closed")])
     assert asyncio.run(health.windows_working(state["home"])) is None
     assert [url for url, _ in state["requests"]] == [first, second] and left == [] and clock == [3.0]
 
 
-def test_windows_working_is_unknown_when_the_host_stays_silent_for_about_fifteen_seconds(working_chain, monkeypatch):
+def test_windows_working_is_unknown_when_every_read_ends_by_its_time_limit_until_the_bound(working_chain, monkeypatch):
     state = working_chain
-    # Five reads of 3 seconds each. Then the result is the one that a single read gave before.
+    # Five reads that each end with `TimeoutError`, 3 seconds each on the stand-in clock: the bound of 15
+    # seconds is reached, and the result is None.
     clock, left = reads_end(state, monkeypatch, [TimeoutError()] * 5)
     assert asyncio.run(health.windows_working(state["home"])) is None
     assert len(state["requests"]) == 5 and left == [] and clock == [15.0]
-    # The bound is the caller's. With 0 it is one read.
+    # The bound is the caller's: with 7 seconds it is three such reads, with 0 it is one.
     for wait, reads in ((7, 3), (0, 1)):
         state["requests"].clear()
         clock, left = reads_end(state, monkeypatch, [TimeoutError()] * reads)
@@ -877,7 +883,7 @@ def test_windows_working_does_not_ask_again_when_a_read_ends_in_another_way(work
     error = {"refused": ConnectionRefusedError(10061, "No connection could be made"),
              "no connection": aiohttp.ClientConnectionError("refused"),
              "closed": aiohttp.ServerDisconnectedError(),
-             "no JSON": Late(ValueError("The answer is not JSON"))}.get(end)  # It comes from the read of the answer.
+             "no JSON": Late(ValueError("The answer is not JSON"))}.get(end)  # From `response.json()`.
     if end == "status":
         state["status"] = 503
     elif end == "another installation":
@@ -885,7 +891,8 @@ def test_windows_working_does_not_ask_again_when_a_read_ends_in_another_way(work
     elif end == "no count":
         state["body"]["activity"] = {}
     clock, left = reads_end(state, monkeypatch, [error])
-    # One read and no wait: no host is there, or the answer is final. A second read would fail in `reads_end`.
+    # One read: after an end that is no `TimeoutError`, no read is made again. A second read would fail in
+    # `reads_end`.
     assert asyncio.run(health.windows_working(state["home"])) is None
     assert len(state["requests"]) == 1 and left == [] and clock == [0.0]
 
@@ -894,11 +901,14 @@ def test_windows_working_with_aiohttp_itself_asks_a_silent_listener_again_and_en
         tmp_path, monkeypatch):
     """Real sockets and aiohttp's own errors. The cases above give `windows_working` errors that they chose.
 
-    A socket that listens and never accepts: the system completes the
-    connection, and nothing answers the request. A host whose loop does not
-    run looks like that. A socket that is bound and does not listen refuses
-    the connection, as a port with no host does. Windows refuses only after
-    about 2 seconds, its own tries; the native lane prints the time.
+    A socket that listens and never accepts: the system completes the TCP
+    connection, and nothing answers the TLS handshake that aiohttp starts.
+    It stands for a host that takes a connection and gives no answer. A
+    socket that is bound and does not listen: the system refuses the
+    connection. It stands for a port with no listener, and it keeps the
+    port for the time of the case. A hosted Windows test machine refused
+    after about 2 seconds; the native lane prints the time of its run.
+    Nothing here requires a time.
     """
     import socket
     import time
@@ -913,7 +923,8 @@ def test_windows_working_with_aiohttp_itself_asks_a_silent_listener_again_and_en
     request, limit = aiohttp.ClientSession.get, aiohttp.ClientTimeout
 
     class Kept:
-        """The request of aiohttp itself. It keeps how each read ended."""
+        """The request of aiohttp itself. When its `__aenter__` ends with an error, `ends` gets one entry:
+        "limit" for a `TimeoutError`, "refused" for a refused connection, else the name of the error's class."""
 
         def __init__(self, read):
             self.read = read
