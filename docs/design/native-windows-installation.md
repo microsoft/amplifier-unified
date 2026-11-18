@@ -2937,20 +2937,21 @@ found nothing that a standard account cannot do.
 
 Later runs found one thing about the app, not about the account. Some seconds
 after a start, the app can give no answer for some seconds: 2.6 to 15.7
-seconds in nine failed runs that kept a record. A read with a limit of 2
-seconds then gets no answer. Until pull request 2316 the case made such reads
-after the second sign-in and after the start that follows the first
-uninstall, and 15 of the 257 runs that had ended by November 17, 2026 failed
-there. Those two steps now read as the Start-menu start reads its app: the
-status with a wait of up to 60 seconds, and the connection with a wait of up
-to 60 seconds. An answer within that wait fails no step. The case keeps a
-record of its reads after a start, and it asks the app's listener beside its
-steps. When one of those questions took 2 seconds or more after the app had
-answered, the page of the run gets a warning. The warning is for a question,
-not for the silence itself: a silence that ends before a question has waited
-2 seconds gets none, and that can be a silence of up to about 2.6 seconds.
-After the first start and after the second start of the first sign-in, the
-case still makes one status read each; none of those 257 runs failed there.
+seconds in nine failed runs that kept a record, and 19 seconds in one later
+run. A read with a limit of 2 seconds then gets no answer. Until pull request
+2316 the case made such reads after the second sign-in and after the start
+that follows the first uninstall, and 15 of the 257 runs that had ended by
+November 17, 2026 failed there. Those two steps now read as the Start-menu
+start reads its app: the status with a wait of up to 60 seconds, and the
+connection with a wait of up to 60 seconds. An answer within that wait fails
+no step. The case keeps a record of its reads after a start, and it asks the
+app's listener beside its steps. When one of those questions took 2 seconds or
+more after the app had answered, the page of the run gets a warning. The
+warning is for a question, not for the silence itself: a silence that ends
+before a question has waited 2 seconds gets none, and that can be a silence of
+up to about 2.6 seconds. After the first start and after the second start of
+the first sign-in, the case still makes one status read each; none of those
+257 runs failed there.
 
 The case does not show these parts. The result names each of them with its
 reason.

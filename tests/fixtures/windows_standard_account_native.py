@@ -135,11 +135,11 @@ NOT_SHOWN = (
     ("Windows 11, and a sign-in at the PC's own screen",
      "the runner is Windows Server, and the user signs in through Remote Desktop to the same computer."),
     ("That the app answers one read with a limit of 2 seconds at every moment after a start",
-     "the app can give no answer for some seconds, some seconds after a start (seen on hosted runners: up to "
-     "15.7 seconds). After the second sign-in and after the start that follows the first uninstall, the case "
-     "reads the status and the connection as the Start-menu start reads them: each with the product's "
-     "wait of 60 seconds. An answer within that wait fails no step. The run's page gets a warning when a "
-     "question of the case's watch took 2 seconds or more after the app had answered."),
+     "the app can give no answer for some seconds, some seconds after a start (on hosted runners until "
+     "November 18, 2026: up to 19 seconds). After the second sign-in and after the start that follows the "
+     "first uninstall, the case reads the status and the connection as the Start-menu start reads them: "
+     "each with the product's wait of 60 seconds. An answer within that wait fails no step. The run's page "
+     "gets a warning when a question of the case's watch took 2 seconds or more after the app had answered."),
 )
 
 
