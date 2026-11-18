@@ -1121,8 +1121,12 @@ def late_answers(report, begins):
                 said += " and got no answer"
                 later = [change for change in answers if change["at"] > late["at"]]
                 if later:
-                    # The watch keeps a change of the owners of the port too: a host that went away is no answer.
-                    after = f'{round(later[0]["at"] - late["at"], 1)} seconds after that question began'
+                    # A kept change has the time at which its question began. The watch had the answer, or saw
+                    # the change, when that question ended. The watch keeps a change of the owners of the port
+                    # too: a host that went away is no answer.
+                    took = later[0].get("seconds")
+                    ended = later[0]["at"] + (took if type(took) in (int, float) else 0)
+                    after = f'{round(ended - late["at"], 1)} seconds after that question began'
                     said += (f". The next answer came {after}" if later[0].get("answer") in ("trusted", "untrusted")
                              else f". The watch's next change came {after}, and it was not an answer")
             found.append(said + ".")
