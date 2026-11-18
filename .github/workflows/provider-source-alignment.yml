@@ -1,0 +1,113 @@
+name: Provider source alignment
+# A profile composes a provider that has no source of its own from
+# amplifier_web/provider_sources.json. The worker environment declares the same
+# repository in amplifier_web/runtime_deps/pyproject.toml. A component update
+# compares the two references and refuses the update when they differ.
+# Releases 0.108.0 and 0.109.0 named a commit in the list and the branch in the
+# manifest for the OpenAI module, and no check read both files.
+#
+# The first job reads both files. The second job runs the product's update
+# owner (check and install: uv lock and sync, the collection child process,
+# the guard, the installation, the freeze, the profile mounts) for five
+# installation states with an "OpenAI API" connection. The worker manifest's
+# other rows, the app release check and the source store are fixtures (the
+# test file's header names them). It fails when a case is skipped.
+#
+# While the list names a branch, the cases start from that branch's head of
+# the day. So a change of the public module can fail the second job. The job
+# prints the commit.
+#
+# Linux only. It is not a Windows check, not an installation from the setup
+# file, and no chat: the profile's provider sends nothing.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/provider-source-alignment.yml
+      - amplifier_web/provider_sources.json
+      - amplifier_web/runtime_deps/**
+      # The guard, and the code between the two files and the guard.
+      - amplifier_web/runtime_source_alignment.py
+      - amplifier_web/runtime_environment.py
+      - amplifier_web/runtime_policy_reconciliation.py
+      - amplifier_web/runtime_source_policy.py
+      - amplifier_web/configured_runtime_pins.py
+      - amplifier_web/selected_runtime_dependencies.py
+      - amplifier_web/installation_runtime.py
+      - amplifier_web/updates.py
+      - amplifier_web/update_probe.py
+      - amplifier_web/host/config.py
+      - amplifier_web/host/session.py
+      - tests/test_provider_source_alignment.py
+      - tests/test_host_provider_sources.py
+      - tests/test_update_with_pinned_provider.py
+      # The second job's cases import their fixtures from these two files.
+      - tests/test_partial_update_native.py
+      - tests/test_effective_behavior_update_native.py
+      - uv.lock
+permissions:
+  contents: read
+jobs:
+  one-reference:
+    name: The provider list and the worker manifest name one reference
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13'
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      - run: uv sync --locked --group dev
+      - name: Both files, the guard's function, and the source that a saved connection gets
+        run: uv run --no-sync pytest -q -ra -p no:cacheprovider tests/test_provider_source_alignment.py tests/test_host_provider_sources.py
+  component-update:
+    name: A component update completes with an OpenAI API connection
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13'
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      - run: uv sync --locked --group dev
+      # The cases read the module from a local mirror of this clone. They
+      # allow Git no other protocol than local files.
+      - name: Clone the public provider module
+        run: |
+          git clone --quiet https://github.com/microsoft/amplifier-module-provider-openai "$RUNNER_TEMP/provider-openai"
+          echo "The module's branch main, where the cases start: $(git -C "$RUNNER_TEMP/provider-openai" rev-parse refs/heads/main)"
+      - name: The real update owner in five installation states
+        env:
+          AMPLIFIER_PINNED_PROVIDER_UPDATE_NATIVE: '1'
+          AMPLIFIER_PINNED_PROVIDER_MODULE_REPOSITORY: ${{ runner.temp }}/provider-openai
+          AMPLIFIER_PINNED_PROVIDER_UPDATE_ROOT: ${{ runner.temp }}/pinned-provider-update
+        run: uv run --no-sync python -m pytest -q -ra -p no:cacheprovider --junitxml=pinned-provider-update.xml tests/test_update_with_pinned_provider.py
+      - name: All five cases ran and passed, with no skip
+        if: always()
+        run: |
+          python - <<'PY'
+          import xml.etree.ElementTree as tree
+          suites = tree.parse('pinned-provider-update.xml').getroot().iter('testsuite')
+          counts = {key: 0 for key in ('tests', 'failures', 'errors', 'skipped')}
+          for suite in suites:
+              for key in counts:
+                  counts[key] += int(suite.get(key, 0))
+          print(counts)
+          assert counts == {'tests': 5, 'failures': 0, 'errors': 0, 'skipped': 0}, counts
+          PY
+      - name: Retain each case's report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pinned-provider-update
+          path: |
+            pinned-provider-update.xml
+            ${{ runner.temp }}/pinned-provider-update/*/report.json
+          if-no-files-found: warn
+          retention-days: 7

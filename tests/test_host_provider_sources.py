@@ -39,7 +39,7 @@ def test_saved_named_connection_is_source_qualified_without_account_fallback(tmp
 def test_known_connection_without_bundle_provider_uses_catalog_source(tmp_path):
     saved = {'module': 'provider-openai', 'id': 'chosen', 'config': {'api_key': '${CHOSEN_KEY}'}}
     result = _apply_settings(bundle([]), configured(tmp_path, [saved]))
-    assert result.providers[0]['source'] == 'git+https://github.com/microsoft/amplifier-module-provider-openai@0640ac5f42bd6aa437f94cc0256a1c5090cb0a34'
+    assert result.providers[0]['source'] == 'git+https://github.com/microsoft/amplifier-module-provider-openai@main'
     assert result.providers[0]['config'] == saved['config']
 
 
