@@ -427,8 +427,16 @@ class Children:
         coordinator.register_capability("live.host", self.host_adapter)
         delegate = (coordinator.get("tools") or {}).get("delegate")
         if delegate and not isinstance(delegate, PersistentDelegate):
-            await coordinator.mount("tools", PersistentDelegate(delegate, self, coordinator), name="delegate")
-            await coordinator.mount("tools", WorkerControl(self), name="live_worker")
+            from .media import registration_coordinator
+            registration = registration_coordinator(coordinator)
+            wrapped = PersistentDelegate(delegate, self, coordinator)
+            if registration is coordinator:
+                await coordinator.mount("tools", wrapped, name="delegate")
+            else:
+                # Keep this existing root-host wrapper attached to the actual
+                # configured delegate occurrence before saved-settings setup.
+                await registration.mount_adapter("tools", wrapped, previous=delegate, name="delegate")
+            await registration.mount("tools", WorkerControl(self), name="live_worker")
 
     async def spawn(self, agent_name, instruction, parent_session, agent_configs=None, sub_session_id=None,
                     tool_inheritance=None, hook_inheritance=None, orchestrator_config=None,

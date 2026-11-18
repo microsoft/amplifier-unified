@@ -85,3 +85,132 @@ def validate_mounted_read_policy(coordinator):
             raise ValueError('The recorded file/search module cannot enforce this read policy. '
                              'Use Settings > Updates to check and install component updates before starting this worker; '
                              'a configuration permission grant is not needed for ordinary reads.')
+
+
+def mounted_read_file(coordinator):
+    """Inspect our actual mounted read tool, not an arbitrary .original chain."""
+    from amplifier_module_tool_filesystem.read import ReadTool
+    tool = (coordinator.get('tools') or {}).get('read_file')
+    inspect_tool = coordinator.get_capability('web.work_inspect_tool')
+    if callable(inspect_tool):
+        try:
+            tool = inspect_tool('read_file', tool)
+        except ValueError:
+            return None
+    from .file_source_guard import GuardedFileTool
+    if type(tool) is GuardedFileTool:
+        guard = coordinator.get_capability('web.file_source_guard')
+        if (guard is None or tool.guard is not guard or guard.coordinator is not coordinator
+                or tool.kind != 'read'):
+            return None
+        tool = tool.tool
+    return tool if type(tool) is ReadTool else None
+
+
+def media_read_source(coordinator, original_path):
+    """Resolve the current source name/policy, never open original pixel bytes.
+
+    Nonexistent regular paths still resolve: delivery uses the owned asset. An
+    alias/mention redirected to another source cannot borrow the old binding.
+    """
+    tool = mounted_read_file(coordinator)
+    if tool is None or not isinstance(original_path, str) or not original_path:
+        return None
+    if original_path.startswith('@'):
+        resolver = coordinator.get_capability('mention_resolver')
+        resolved = resolver.resolve(original_path) if resolver is not None else None
+        if resolved is None:
+            return None
+        original_path = str(resolved)
+    path = Path(original_path).expanduser()
+    if not path.is_absolute():
+        if not tool.working_dir:
+            return None
+        path = Path(tool.working_dir) / path
+    try:
+        return str(path.resolve()) if tool._is_allowed(path) is True else None
+    except (OSError, ValueError, RuntimeError):
+        return None
+
+
+def media_read_allowed(coordinator, original_path):
+    return media_read_source(coordinator, original_path) is not None
+
+
+def read_file_call_paths(canonical, session_id):
+    """Only complete canonical assistant/tool pairs can bind source arguments.
+
+    Duplicated IDs, missing results, wrong roles/names and producer-added paths
+    are not authority. This index is used only after the primary checkpoint
+    owner has saved these exact rows. It never establishes persistence itself.
+    """
+    import json
+    from .host.media import NAMESPACE
+    calls, duplicates, paths, paired = {}, set(), {}, set()
+    for index, row in enumerate(canonical):
+        if row.get('role') != 'assistant':
+            continue
+        entries = [('calls', call) for call in row.get('tool_calls') or []]
+        if isinstance(row.get('content'), list):
+            entries += [('content', block) for block in row['content'] if isinstance(block, dict)
+                        and block.get('type') == 'tool_call']
+        normalized, representations = {}, set()
+        for representation, call in entries:
+            if not isinstance(call, dict):
+                continue
+            identity = call.get('id')
+            function = call.get('function', call)
+            if not isinstance(function, dict):
+                continue
+            name = function.get('name', function.get('tool'))
+            if 'name' in function and 'tool' in function and function['name'] != function['tool']:
+                duplicates.add(identity)
+            arguments = function.get('arguments', function.get('input'))
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments)
+                except ValueError:
+                    arguments = None
+            value = (name, arguments)
+            if ((identity, representation) in representations
+                    or identity in normalized and normalized[identity] != value):
+                duplicates.add(identity)
+            representations.add((identity, representation))
+            normalized[identity] = value
+        # The real turn engine stores both a ToolCallBlock (name/input) and a
+        # tool_calls entry (tool/arguments). Equal representations describe one
+        # call; conflicts, repeats within either carrier or later rows do not.
+        identities = list(normalized)
+        end = index + 1
+        results = []
+        while end < len(canonical) and canonical[end].get('role') == 'tool':
+            results.append(canonical[end].get('tool_call_id'))
+            end += 1
+        if (all(isinstance(identity, str) and identity for identity in identities)
+                and len(set(identities)) == len(identities)
+                and len(results) == len(identities) and set(results) == set(identities)):
+            paired.update(identities)
+        for identity, value in normalized.items():
+            if identity in calls:
+                duplicates.add(identity)
+            calls[identity] = value
+    seen = set()
+    for row in canonical:
+        if row.get('role') != 'tool':
+            continue
+        identity = row.get('tool_call_id')
+        if identity in seen:
+            duplicates.add(identity)
+        seen.add(identity)
+        name, arguments = calls.get(identity, (None, None))
+        refs = ((row.get('metadata') or {}).get(NAMESPACE) or {}).get('refs', [])
+        if (identity not in paired or identity in duplicates or name != 'read_file'
+                or row.get('name', 'read_file') != 'read_file'
+                or not isinstance(arguments, dict) or not isinstance(arguments.get('file_path'), str)
+                or not arguments['file_path'] or 'offset' in arguments or 'limit' in arguments or not refs):
+            continue
+        if all((ref.get('provenance') or {}).get('kind') == 'tool'
+               and (ref.get('provenance') or {}).get('session_id') == session_id
+               and (ref.get('provenance') or {}).get('id') == identity for ref in refs):
+            paths[identity] = arguments['file_path']
+    return {identity: path for identity, path in paths.items() if identity not in duplicates}

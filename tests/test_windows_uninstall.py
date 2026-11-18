@@ -3300,8 +3300,20 @@ def test_setup_creates_no_top_level_name_that_uninstall_does_not_know():
         literal = re.fullmatch(r'"([^"]+)"', argument)
         (names if literal else forms).add(literal.group(1) if literal else argument)
     # Every way in which setup builds a name directly in the folder. A new way fails here.
-    assert forms == {"Started", "Complete", "SourceStore", "name", 'name+".zip"', 'name+".lnk"', 'name+".stderr.txt"',
-                     'name+".failure.json"', "relative", "pair.Substring(split+1"}
+    assert forms == {"Started", "Complete", "SourceStore", "Journal", "name", 'name+".zip"', 'name+".lnk"',
+                     'name+".stderr.txt"', 'name+".failure.json"', "relative", "pair.Substring(split+1"}
+    # Setup builds the journal's name in one place, to read that file: the look that chooses the text
+    # for a folder with no launcher program (`Emptied`). It never writes or deletes the journal. In the
+    # same look it builds each of uninstall's data names, to look at it.
+    look = text.split("internal static bool Emptied(", 1)[1].split("internal static string Unopened(", 1)[0]
+    assert text.count("Journal") == 2 and 'internal const string Journal="' + plan.JOURNAL + '";' in text
+    assert "string journal=Path.Combine(root,Journal);" in look
+    assert "foreach(string name in Data) {\n                    string entry=Path.Combine(root,name);" in look
+    # Its one open is for reading. The sharing modes let another program write or delete the file meanwhile.
+    opened = "new FileStream(journal,FileMode.Open,FileAccess.Read,FileShare.ReadWrite|FileShare.Delete)"
+    assert look.count("FileStream(") == 1 and look.count(opened) == 1
+    for change in ("Write", "Create", "Move", "PrivateText", "Delete", "SetAttributes", "FileMode", "FileAccess"):
+        assert change not in look.replace(opened, ""), change
     names.update(re.search(r'Started="([^"]+)", Complete="([^"]+)"', text).groups())
     # Setup names the source store through two constants: the folder that it creates in a new
     # installation, and the earlier name that its check of a folder still knows.

@@ -2352,11 +2352,15 @@ limit as not blocking.
 - **L3.** After a power loss in the last seconds, or when the step after exit
   cannot run, program files and both records stay (see Leftovers below). They
   hold none of the person's data, Amplifier cannot start from that folder,
-  and setup installs and deletes nothing in it. But setup's messages there
-  say that Amplifier is already installed, and that the person's chats and
-  settings are in the folder or are kept. That is not true for this
-  leftover. Nothing in the product removes it: the person deletes the folder
-  by hand.
+  and setup installs and deletes nothing in it. Nothing in the product
+  removes this leftover: the person deletes the folder by hand, or moves it
+  away. When the launcher's start program is gone and setup's look finds the
+  journal of a delete and none of the person's data, setup's message says
+  that it found no chats or settings, and it tells the person to move or
+  rename the folder (see Leftovers below). In the other cases setup's
+  messages there say that Amplifier is already installed, and that the
+  person's chats and settings are in the folder or are kept. That is not
+  true for this leftover.
 - **L4.** A journal that is damaged, or that records another choice, proves
   nothing. When the look that an uninstall makes before its questions finds a
   journal, the uninstall reads it through the private-file boundary. When that
@@ -2495,7 +2499,8 @@ and with that record setup installs and removes nothing. The step after exit
 deletes the journal and then the record, when nothing else is left. A second
 setup run can add the Start-menu and Apps-list entries again and start the
 launcher (see Leftovers). The launcher does not open Amplifier while the
-journal exists.
+journal exists. Setup reads the journal for one purpose only: to choose the
+text of one message (see Leftovers).
 
 **Leftovers.** If the step after exit cannot run, the parked program files
 and both records stay; they hold none of the person's data, and the message
@@ -2507,7 +2512,130 @@ folder, that entry and both records stay.
 
 A later setup run finds its completion record in such a folder. It installs
 nothing and deletes nothing. When the launcher's start program is gone, setup
-says that a program file is missing. When it is still there (a removal that
+shows one message and ends. Before it shows that message, it looks once
+(`Emptied` in `scripts/windows_bootstrap_native.cs`), and the look chooses
+between two texts:
+
+- Setup looks at the attributes of the entry with the journal's name. When
+  they show a file that is no folder and no link, setup opens that path and
+  reads it. It takes what it read for the journal of a delete when it is at
+  most 4096 bytes of UTF-8 that hold a record with `schema` 1, the choice
+  `delete` and a token of 32 lower-case hexadecimal digits. The schema and
+  the token are what uninstall's own reader requires
+  (`windows_uninstall.pending`). That reader requires a choice that is a
+  text; uninstall compares the choice in `remove` and in `finish`. Setup
+  requires the choice `delete` in the look itself. Setup reads the file
+  with its own JSON reader, as UTF-8 only, and not through the private-file
+  boundary; the two readers were not compared on a file in another encoding
+  or on one that is not strict JSON. Setup opens the file for reading with
+  every sharing mode, so Windows does not refuse another program's deletion
+  of the journal because of this handle (the step after exit deletes the
+  journal), and on the runner the journal's name is gone from the folder
+  directly after such a deletion, while a handle of the look's kind is still
+  open.
+- Setup looks at the seven names of the person's data
+  (`windows_uninstall.DATA`), one after the other. A name counts as data
+  when the look at its attributes shows a file or a link, or when the
+  listing of the folder shows anything in it. Setup lists an entry only
+  after that look showed a folder that is no link. An emptied folder that
+  Windows still keeps for a program is not data when Windows answers the look
+  at its attributes and its listing; an entry that Windows does not let
+  setup examine counts as data. For an entry with the exact spelling of a
+  name, the removal itself gives the same two answers (`holding` in
+  `windows_removal.py`). For an entry under another spelling (`App` for
+  `app`) the two differ. The removal never examines such an entry: it
+  counts the name as holding something, and it does not begin in a folder
+  that has one. Setup's look asks Windows for the path with the name's own
+  spelling and treats the entry that Windows gives like any other. Where
+  Windows ignores the case of letters (an ordinary folder), that is the
+  entry `App`: when it is an empty folder it is not data, and with a file
+  in it it is data. A folder can be set so that Windows compares its names
+  with the case of letters; there Windows gives no entry `App` for the path
+  with `app`, and the look does not see what `App` holds. That is not
+  shown. Setup looks for chats and settings under these seven names only.
+- The look is a row of separate steps on paths. Setup does not take the
+  installation's lock for it, and it holds no handle on the folder or on an
+  entry between two of those steps. A program of this account that replaces
+  an entry between the look at its attributes and the read or the listing
+  gets the read or the listing of what it put there, also when that is a
+  link. The look then answers for what it read. It still only chooses a
+  text.
+- When the look finds such a journal and no data, setup says: "Setup cannot
+  install Amplifier yet. Setup found an installation record in this
+  folder:", the folder, then "Setup cannot find a program file that it needs
+  to open Amplifier from that folder. Setup found no chats or settings in the
+  folder. It does not change the folder, because the folder can hold files or
+  folders that are not Amplifier's." and "Move or rename that folder. Then
+  run this setup file again."
+- In every other case, and when any part of the look fails, setup says what
+  it said before: "Amplifier is already installed in", the folder, "but setup
+  cannot open it: a program file is missing. Keep that folder. It holds your
+  chats and settings. This version of setup cannot repair it."
+
+Each statement of the first text is what setup found in this run, or what
+setup does, with the reason why it does not change the folder; its last two
+sentences are the next step. Setup found the record's
+name when it classified the folder, and it looked for the launcher's start
+program directly before this look. "Setup found an installation record in this
+folder": the folder has a file with the name of setup's completion record,
+which setup writes at the end of an installation. Setup does not read that
+file in this look, and it knows no more about the folder's history. The text
+does not say that an installation was made in the folder. (The second text
+says "Amplifier is already installed in" on the same evidence, as it did
+before.) "Setup cannot find a program file that it needs to open Amplifier
+from that folder": setup's look for the launcher's start program found no file
+(`File.Exists`). That look also finds no file when Windows does not let setup
+see one that is there, so the first text says "cannot find" and not "is
+missing". The second text says "a program file is missing" for the same look,
+as it did before; that is not true for a file that setup cannot see. "Setup
+found no chats or settings in the folder": none of the seven names held
+anything at the look. The text does not say that Amplifier was uninstalled,
+and it does not say that Amplifier cannot start: a file that reads as a
+journal is no proof of an uninstall (a program of this account can write one),
+and setup looked for one program file only. The text tells the person to move
+or rename the folder, not to delete it: the folder can hold something of the
+person's that the look did not see, and a program can put data into it after
+the look. Setup's stop for a damaged folder names the same step. A setup run
+that finds no folder at that path goes on as for a first installation. The
+look only chooses a text. With either text setup installs nothing, deletes
+nothing and ends with status 1.
+
+Three states give the first text (a program of this account can make
+others): an uninstall with the delete choice left the folder because it holds
+something that is not Amplifier's (seen on a PC on November 17, 2026, with
+the earlier text; that is why the first text exists); the leftover of L3
+when the launcher's start program is gone; and a setup run while the step
+after exit still works (that step can still delete the folder, and Windows
+can refuse to move the folder while that step holds it). The second text can
+still be false after a delete: when the look finds no journal of a delete
+(the journal is gone, a program replaced or damaged it, or Windows refused
+the look), and when one of the seven names holds something again (a folder
+that the person made under that name, for example). The text then says that
+the folder holds chats and settings that the uninstall deleted. That limit
+stays.
+
+Proven on a Windows runner (Windows Server;
+`tests/windows/native_setup.Tests.cs`, job `windows-setup-folder`): both
+texts, complete; each of the seven names as an empty folder, as a folder with
+a file or a folder in it, and as a file; an empty folder, and a folder with
+a file in it, under another spelling of a data name (`App`); a link with a
+data name; an empty data folder that Windows refuses to list; a link to a
+journal, and a link to
+a folder, with the journal's name; nineteen files that are not such a
+journal, bytes that are not UTF-8, a record with one byte in a text value
+that is not UTF-8, and a folder with the journal's name; a journal of exactly
+4096 bytes; a journal that another program has open for writing, one that is
+deleted while a handle of the look's kind is open, and one that another
+program holds for itself; that the folder holds afterwards what the case put
+there; and that a look changes no creation time, no write time and no
+attribute of the journal, of setup's record and of the person's file. Not
+proven: the message in setup's real window, the three states on a PC with
+this text, the look on Windows 11, the look in a folder whose names Windows
+compares with the case of letters, a program that replaces an entry during
+the look, and a setup run in the instant in which the step after exit deletes
+the journal.
+
+When the launcher's start program is still there (a removal that
 stopped before its last step), setup asks, and on Yes it lets the
 installation's own program add the Start-menu and Apps-list entries again,
 and then it starts the launcher. That program adds the entries only when the
