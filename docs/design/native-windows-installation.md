@@ -1582,7 +1582,7 @@ Nothing outside the rule above is deleted in any of them. The repair keeps no
 list of running programs.
 
 One more limit is Git's own. The step does not turn off Git's configuration.
-Git reads the computer's system configuration, the person's global
+Git reads the system configuration of its installation, the person's global
 configuration and the object's `.git\config`, each with the files that it
 includes. Foundation's check does not turn it off either. The step tells Git
 to start no file system monitor, because that program would stay after the
@@ -1597,11 +1597,11 @@ configuration can name a program for that filter (Git LFS is the usual one).
 Then `git status` can start that program for a file whose content it must
 compare. Git reads four attribute sources for an object: a `.gitattributes`
 file in a folder of the object, the object's `.git\info\attributes`, the
-person's global attribute file and the computer's system attribute file. So
-a filter needs no attribute file in a module. The four provider modules had
-no `.gitattributes` file when this was written (November 17, 2026); that
-says nothing about the other three sources on a PC. A committed attribute
-file alone names no program.
+person's global attribute file and the system attribute file of the Git
+installation. So a filter needs no attribute file in a module. The four
+provider modules had no `.gitattributes` file when this was written
+(November 17, 2026); that says nothing about the other three sources on a
+PC. A committed attribute file alone names no program.
 
 Foundation's `clean_checkout` also runs `git status` in the object, each
 time that it checks the object. The step adds at most one `git status` for
@@ -1617,8 +1617,9 @@ values. `GIT_ATTR_NOSYSTEM` drops the system attribute file.
 `GIT_INDEX_FILE` names another index. A person's environment can have such a
 name. The app gives some to child processes that it starts:
 `reset.repository_environment` can add values through `GIT_CONFIG_COUNT`,
-and with anonymous GitHub access it names an empty file as the global and as
-the system configuration file. The two can also run different Git programs,
+and with anonymous GitHub access it names the null device as the global and
+as the system configuration file, so that Git reads neither. The two can
+also run different Git programs,
 and each Git installation has its own system configuration file and system
 attribute file. What a filter program does is not bound by the rule of what
 the step deletes.

@@ -36,10 +36,10 @@ resolved twice, and no link is followed. Git gets a path; the folders of that
 path are held open meanwhile. Git only gives the answer: what is deleted is
 checked again on handles.
 
-This step does not turn off Git's configuration. Git reads the computer's
-system configuration, the person's global configuration and the object's
-``.git\\config``, each with the files that it includes. Foundation's own
-check does not turn it off either. This step tells Git to start no file
+This step does not turn off Git's configuration. Git reads the system
+configuration of its installation, the person's global configuration and the
+object's ``.git\\config``, each with the files that it includes. Foundation's
+own check does not turn it off either. This step tells Git to start no file
 system monitor. It gives both commands ``--no-optional-locks`` (Foundation
 gives it to ``git status``), so ``git status`` does not write the object's
 index again. That is not a promise that Git writes nothing: Git still writes
@@ -52,9 +52,9 @@ name a program for that filter (Git LFS is the usual one). Then ``git
 status`` can start that program for a file whose content it must compare.
 Git reads four attribute sources for an object: a ``.gitattributes`` file in
 a folder of the object, the object's ``.git\\info\\attributes``, the person's
-global attribute file and the computer's system attribute file. So a filter
-needs no attribute file in a module. A committed attribute file alone names
-no program.
+global attribute file and the system attribute file of the Git installation.
+So a filter needs no attribute file in a module. A committed attribute file
+alone names no program.
 
 Foundation's check also runs ``git status`` in the object, each time that it
 checks the object. This step adds at most one ``git status`` for each try of
@@ -69,11 +69,11 @@ configuration file. ``GIT_CONFIG_COUNT`` with ``GIT_CONFIG_KEY_<n>`` and
 drops the system attribute file. ``GIT_INDEX_FILE`` names another index. A
 person's environment can have such a name. The app gives some to child
 processes that it starts: ``reset.repository_environment`` can add values
-through ``GIT_CONFIG_COUNT``, and with anonymous GitHub access it names an
-empty file as the global and as the system configuration file. The two can
-also run different Git programs (``_program``), and each Git installation
-has its own system configuration file and system attribute file. What a
-filter program does is not bound by the rule above.
+through ``GIT_CONFIG_COUNT``, and with anonymous GitHub access it names the
+null device as the global and as the system configuration file, so that Git
+reads neither. The two can also run different Git programs (``_program``),
+and each Git installation has its own system configuration file and system
+attribute file. What a filter program does is not bound by the rule above.
 
 It runs only on Windows, only in the host that the start-at-sign-in task
 started, only on the store of the installation that this host belongs to, and

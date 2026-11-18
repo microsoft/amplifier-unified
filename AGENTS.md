@@ -424,8 +424,8 @@ source store object that holds bytecode"). It imports `_Native` from
 configuration files, as in Foundation's check: `git status` can start a
 content filter that they name. Any attribute file that Git reads can give a
 file that filter: a `.gitattributes` of the object, its
-`.git\info\attributes`, the person's global attribute file or the computer's
-system attribute file. The repair removes every `GIT_*` name from Git's
+`.git\info\attributes`, the person's global attribute file or the Git
+installation's system attribute file. The repair removes every `GIT_*` name from Git's
 environment. Foundation's check keeps the names of its process. So the two
 can read different configurations, different attribute files or another
 index. Do not write that Git only reads there: `--no-optional-locks` stops
