@@ -389,8 +389,11 @@ def test_a_pull_request_runs_every_launcher_case_file():
     # starts pytest with it, in a step with no condition and no folder of its own whose failure
     # fails its job, in another workflow that starts for a pull request (a step in another
     # folder runs another file of that name). Not read here: the condition of that step's job,
-    # and whether that workflow starts for a change of the file alone. A command form that this
-    # case does not know fails it; that does not say that the file is not run.
+    # whether that workflow starts for a change of the file alone, and what the step's other
+    # lines do with the command's result (a step in PowerShell ends with the status of its last
+    # command, so a line after the command must check it; a shell can be told to go on after a
+    # failure). A command form that this case does not know fails it; that does not say that
+    # the file is not run.
     named = [path for path in paths if path.startswith("tests/test_") and "*" not in path]
     assert sorted(set(named) - set(run)) == sorted(ELSEWHERE)
     for name, workflow in ELSEWHERE.items():
