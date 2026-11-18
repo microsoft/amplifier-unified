@@ -38,6 +38,9 @@ REQUEST_HELD = 'The test request held one short message and one tool definition.
 
 def _failure(error, config, built):
     text = safe_text(error, config)
+    if not text.strip():
+        # An error with no text of its own: its type is the one fact there is.
+        text = type(error).__name__
     return (REQUEST_HELD + text)[:1000] if built else text
 
 

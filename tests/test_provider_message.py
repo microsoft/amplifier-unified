@@ -159,6 +159,12 @@ async def test_a_refusal_by_the_service_keeps_its_sentence_redacted_and_bounded(
     assert long['error'].startswith(REQUEST_HELD) and len(long['error']) == 1000
 
 
+async def test_an_error_with_no_text_of_its_own_is_named_by_its_type():
+    result = await send_test_message(_Provider(RuntimeError()), {}, 'saved-model')
+    assert result['reachable'] is False and result['errorType'] == 'RuntimeError'
+    assert result['error'] == REQUEST_HELD + 'RuntimeError'
+
+
 async def test_a_failure_before_the_request_exists_does_not_say_what_the_request_held(monkeypatch):
     from amplifier_core import message_models
 
