@@ -738,6 +738,156 @@ def test_windows_working_is_unknown_when_no_owned_host_answers(working_chain, mo
         assert state["credentialReads"] == 0
 
 
+def reads_end(state, monkeypatch, ends, seconds=3.0):
+    """Each read of the activity question ends as the next entry of `ends` says.
+
+    An entry is the error that the read ends with, or None for the host's
+    answer. `windows_working` gets a stand-in for its clock: a read that ends
+    by a time limit took `seconds`, every other read took no time. A read
+    after the last entry fails the test, so no case can read without end.
+    """
+    import aiohttp
+    from types import SimpleNamespace
+    clock, left = [0.0], list(ends)
+    chain = state.setdefault("client", aiohttp.ClientSession)  # The stand-in of `working_chain`.
+
+    class Client(chain):
+        def get(self, url, **kwargs):
+            assert left, "A read that this case does not expect"
+            end = left.pop(0)
+            if isinstance(end, TimeoutError):
+                clock[0] += seconds
+            response = super().get(url, **kwargs)  # It keeps the request.
+            if end is not None:
+                raise end
+            return response
+    monkeypatch.setattr(aiohttp, "ClientSession", Client)
+    monkeypatch.setattr(health, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    return clock, left
+
+
+def test_windows_working_asks_again_when_a_read_ends_by_its_time_limit(working_chain, monkeypatch):
+    import aiohttp
+    state = working_chain
+    # The time limit of the whole request, and aiohttp's own error for a limit while it connects.
+    clock, left = reads_end(state, monkeypatch, [
+        TimeoutError(), aiohttp.ConnectionTimeoutError("Connection timeout to host"), None])
+    assert asyncio.run(health.windows_working(state["home"])) == 2
+    assert len(state["requests"]) == 3 and left == [] and clock == [6.0]
+    # Each read is the same request, and the credential is read once.
+    assert all(request == state["requests"][0] for request in state["requests"])
+    assert state["credentialReads"] == 1
+
+
+def test_windows_working_asks_every_address_again_while_one_of_them_stays_silent(working_chain, monkeypatch):
+    import aiohttp
+    from amplifier_web import browser_entry
+    state = working_chain
+    urls = ["https://127.0.0.1:8942/api/health", "https://[::1]:8942/api/health"]
+    monkeypatch.setattr(browser_entry, "_owner_probe_targets", lambda *a: (urls, state["pin"]))
+    clock, left = reads_end(state, monkeypatch, [
+        TimeoutError(), aiohttp.ClientConnectionError("refused"), TimeoutError(), None])
+    assert asyncio.run(health.windows_working(state["home"])) == 2
+    assert [url for url, _ in state["requests"]] == urls * 2 and left == [] and clock == [6.0]
+
+
+def test_windows_working_is_unknown_when_the_host_stays_silent_for_about_fifteen_seconds(working_chain, monkeypatch):
+    state = working_chain
+    # Five reads of 3 seconds each. Then the result is the one that a single read gave before.
+    clock, left = reads_end(state, monkeypatch, [TimeoutError()] * 5)
+    assert asyncio.run(health.windows_working(state["home"])) is None
+    assert len(state["requests"]) == 5 and left == [] and clock == [15.0]
+    # The bound is the caller's. With 0 it is one read.
+    for wait, reads in ((7, 3), (0, 1)):
+        state["requests"].clear()
+        clock, left = reads_end(state, monkeypatch, [TimeoutError()] * reads)
+        assert asyncio.run(health.windows_working(state["home"], wait=wait)) is None
+        assert len(state["requests"]) == reads and left == [] and clock == [3.0 * reads]
+
+
+@pytest.mark.parametrize("end", [
+    "refused", "no connection", "closed", "no JSON", "status", "another installation", "no count"])
+def test_windows_working_does_not_ask_again_when_a_read_ends_in_another_way(working_chain, monkeypatch, end):
+    import aiohttp
+    state = working_chain
+    error = {"refused": ConnectionRefusedError(10061, "No connection could be made"),
+             "no connection": aiohttp.ClientConnectionError("refused"),
+             "closed": aiohttp.ServerDisconnectedError(),
+             "no JSON": ValueError("The answer is not JSON")}.get(end)
+    if end == "status":
+        state["status"] = 503
+    elif end == "another installation":
+        state["body"]["dataIdentity"] = "another-installation"
+    elif end == "no count":
+        state["body"]["activity"] = {}
+    clock, left = reads_end(state, monkeypatch, [error])
+    # One read and no wait: no host is there, or the answer is final. A second read would fail in `reads_end`.
+    assert asyncio.run(health.windows_working(state["home"])) is None
+    assert len(state["requests"]) == 1 and left == [] and clock == [0.0]
+
+
+def test_windows_working_with_aiohttp_itself_asks_a_silent_listener_again_and_ends_at_a_port_without_one(
+        tmp_path, monkeypatch):
+    """Real sockets and aiohttp's own errors. The cases above give `windows_working` errors that they chose.
+
+    A socket that listens and never accepts: the system completes the
+    connection, and nothing answers the request. A host whose loop does not
+    run looks like that. A socket that is bound and does not listen refuses
+    the connection, as a port with no host does. Windows refuses only after
+    about 2 seconds, its own tries; the native lane prints the time.
+    """
+    import socket
+    import time
+    from types import SimpleNamespace
+    import aiohttp
+    from amplifier_web import auth, browser_entry, deployment
+    monkeypatch.setattr(deployment, "load_server_config", lambda home: {})
+    monkeypatch.setattr(auth, "data_identity", lambda home: "owned-data")
+    monkeypatch.setattr(browser_entry, "current_owner_sid", lambda: "S-1-5-21-100-200-300-1001")
+    monkeypatch.setattr(browser_entry, "_control_token", lambda home, sid: "synthetic-control")
+    asked, clock, seconds = [], [], [0.3]
+    request, limit = aiohttp.ClientSession.get, aiohttp.ClientTimeout
+
+    def get(self, url, **kwargs):
+        asked.append(url)
+        return request(self, url, **kwargs)
+
+    def limited(total):
+        assert total == 3  # The time limit of one read. The silent listener gets a tenth of it here.
+        return limit(total=seconds[0])
+
+    def now():  # A stand-in for the clock of the bound: 3 seconds go by with each question to it.
+        clock.append(3.0 * len(clock))
+        return clock[-1]
+    monkeypatch.setattr(aiohttp.ClientSession, "get", get)
+    monkeypatch.setattr(aiohttp, "ClientTimeout", limited)
+    monkeypatch.setattr(health, "time", SimpleNamespace(monotonic=now))
+    silent, refusing = socket.socket(), socket.socket()
+    try:
+        for end in (silent, refusing):
+            end.bind(("127.0.0.1", 0))
+        silent.listen(8)
+        urls = [f"https://127.0.0.1:{end.getsockname()[1]}/api/health" for end in (silent, refusing)]
+        pin = aiohttp.Fingerprint(b"\x11" * 32)
+        # The silent listener, with a bound of 5 seconds: asked at 0, again at 3, and not at 6.
+        monkeypatch.setattr(browser_entry, "_owner_probe_targets", lambda *a: (urls[:1], pin))
+        assert asyncio.run(health.windows_working(tmp_path, wait=5)) is None
+        assert asked == urls[:1] * 2 and clock == [0.0, 3.0, 6.0]
+        # No listener, with the real limit of 3 seconds and the bound of 15 seconds.
+        asked.clear(), clock.clear()
+        seconds[0] = 3
+        monkeypatch.setattr(browser_entry, "_owner_probe_targets", lambda *a: (urls[1:], pin))
+        began = time.perf_counter()
+        assert asyncio.run(health.windows_working(tmp_path)) is None
+        print(f"A port with no listener: {len(asked)} read(s), {time.perf_counter() - began:.2f} s in all.")
+        # The refusal ends the wait: one read. On a machine that gives this program no time for the rest of
+        # the limit, that read can end by the limit; the next read is then refused, and it ends the wait.
+        assert asked in (urls[1:], urls[1:] * 2) and clock == [0.0, 3.0][:len(asked)]
+    finally:
+        silent.close()
+        refusing.close()
+
+
 @pytest.mark.parametrize("retry", [False, True])
 def test_status_names_a_task_that_was_not_confirmed_instead_of_an_unreachable_service_manager(
         tmp_path, monkeypatch, retry):
