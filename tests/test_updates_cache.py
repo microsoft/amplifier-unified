@@ -2,6 +2,7 @@
 import importlib._bootstrap_external
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -258,8 +259,11 @@ def test_registry_preparation_never_imports_cli_cache(tmp_path, repository):
     assert not (home / 'foundation/registry.json').exists()
     assert (legacy / 'registry.json').read_text() == 'not valid json'
     assert (legacy / 'cache/repository/AGENTS.md').is_symlink()
+    target = (legacy / 'cache/repository/external').readlink()
     # On Windows readlink() gives the target in its long-path form, with a prefix.
-    assert Path(str((legacy / 'cache/repository/external').readlink()).removeprefix(LONG_PATH)) == outside
+    if os.name == 'nt':
+        target = Path(str(target).removeprefix(LONG_PATH))
+    assert target == outside
     assert (outside / 'notes.txt').read_text() == 'private'
 
 
@@ -468,11 +472,12 @@ async def test_branch_identity_and_nested_copies_are_not_guessed(repository, ser
     shutil.copytree(main, old, symlinks=True)
     shutil.copytree(main, nested, symlinks=True)
     (old/'.amplifier_cache_meta.json').write_text(json.dumps({'git_url': 'https://example.invalid/repo.git', 'ref': 'master'}))
+    rows = {r['path']: r for r in await service.update_manager.inventory_sources() if r.get('path')}
     # A row's path has the separator of the system.
-    rows = {Path(r['path']).as_posix(): r for r in await service.update_manager.inventory_sources() if r.get('path')}
-    assert rows['cache/repo']['eligible']
-    assert rows['cache/skills/repo']['eligible']
-    assert rows['cache/old-branch']['usage'] == 'unknown' and rows['cache/old-branch']['eligible']
+    assert rows[str(Path('cache/repo'))]['eligible']
+    assert rows[str(Path('cache/skills/repo'))]['eligible']
+    branch = rows[str(Path('cache/old-branch'))]
+    assert branch['usage'] == 'unknown' and branch['eligible']
 
 
 async def test_live_workspace_override_is_read_without_import_or_key_loading(repository, service, tmp_path, monkeypatch):
