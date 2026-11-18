@@ -295,7 +295,7 @@ async def test_mixed_direct_upload_and_tool_ref_keep_exact_positions(tmp_path, m
         await current.session.cleanup()
 
 
-@pytest.mark.parametrize("restriction", ["size", "pagination", "gif", "corrupt"])
+@pytest.mark.parametrize("restriction", ["size", "pagination", "animated-gif", "corrupt"])
 async def test_image_refusal_is_meaningful_and_text_recovers(tmp_path, restriction):
     from amplifier_foundation.session.media import MediaPolicy
     path, original = picture(tmp_path)
@@ -303,9 +303,10 @@ async def test_image_refusal_is_meaningful_and_text_recovers(tmp_path, restricti
     try:
         if restriction == "size":
             current.coordinator.get_capability("web.media.store").policy = MediaPolicy(max_bytes=len(original)-1)
-        elif restriction == "gif":
+        elif restriction == "animated-gif":
             output = io.BytesIO()
-            Image.new("RGB", (2, 2)).save(output, format="GIF")
+            Image.new("RGB", (2, 2), "red").save(output, format="GIF", save_all=True,
+                append_images=[Image.new("RGB", (2, 2), "blue")], duration=100, loop=0)
             path.write_bytes(output.getvalue())
         elif restriction == "corrupt":
             path.write_bytes(b"\x89PNG\r\n\x1a\nnot an image")

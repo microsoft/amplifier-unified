@@ -67,7 +67,8 @@ class WorkLoader(ModuleLoader):
         return await super().load(module_id, config=config, source_hint=source_hint, coordinator=coordinator)
 
 
-async def compose_work(tmp_path, monkeypatch, *, actual_provider=False):
+async def compose_work(tmp_path, monkeypatch, *, actual_provider=False,
+                       provider_module="provider-openai", model="gpt-6.1-sol"):
     receipt = os.environ.get("UNIFIED_WORK_MEDIA_SOURCES")
     if not receipt:
         pytest.skip("Requires explicit immutable Work source exports")
@@ -118,10 +119,10 @@ async def compose_work(tmp_path, monkeypatch, *, actual_provider=False):
         return ResolvedSource(active_path=path, source_root=root)
     monkeypatch.setattr(SimpleSourceResolver, "resolve", resolve)
     config = HostConfig(tmp_path / "app", workspace, {"config": {"providers": [{
-        "module": "provider-openai", "config": {
+        "module": provider_module, "config": {
             **({"api_key": "offline-fixture", "use_streaming": False,
                 "max_retries": 0, "raw": True} if actual_provider else {}),
-            "default_model": "gpt-6.1-sol"}}]}},
+            "default_model": model}}]}},
         tmp_path / "registry", tmp_path / "shared")
     assert config.active_bundle == "work"
     _, bundle, _ = await load_root_bundle(config, config.active_bundle)
@@ -137,8 +138,10 @@ async def compose_work(tmp_path, monkeypatch, *, actual_provider=False):
 
 async def work_root(tmp_path, monkeypatch, provider, *, store=None, post=None, deny_work=False,
                     prepared_host=False, configuration_only=False, worker_observers=False,
-                    provider_setup=None, live=False):
-    bundle, plan, roots = await compose_work(tmp_path, monkeypatch, actual_provider=provider is None)
+                    provider_setup=None, live=False, provider_module="provider-openai",
+                    model="gpt-6.1-sol"):
+    bundle, plan, roots = await compose_work(tmp_path, monkeypatch, actual_provider=provider is None,
+                                           provider_module=provider_module, model=model)
     # Discovery sees the same selected public resources, mirrored offline. No
     # real home/project scans and no deferred Git source download at first turn.
     def local(value):
@@ -180,6 +183,10 @@ async def work_root(tmp_path, monkeypatch, provider, *, store=None, post=None, d
         if not prepared_host:
             await session.initialize()
         coordinator = session.coordinator
+        # Same host diagnostic boundary as prepare_manager(), ahead of the
+        # real Context Intelligence capture hook; never alters SDK requests.
+        from amplifier_web.provider_recording import install_request_redaction
+        install_request_redaction(coordinator)
         if live:
             from amplifier_module_loop_live.runtime import Runtime
             from amplifier_web.attachments import encode
@@ -191,8 +198,9 @@ async def work_root(tmp_path, monkeypatch, provider, *, store=None, post=None, d
         cap = coordinator.get_capability(media.NAMESPACE)
         assert cap is not None
         if provider is None:
-            provider = coordinator.get("providers", "openai")
-            assert type(provider).__name__ == "OpenAIProvider"
+            provider = coordinator.get("providers", provider_module.removeprefix("provider-"))
+            assert type(provider).__name__ == (
+                "OpenAIProvider" if provider_module == "provider-openai" else "AnthropicProvider")
             provider_setup(provider)
         graph = coordinator.get_capability("web.media.construction").graph
         evidence = graph.participants_evidence()

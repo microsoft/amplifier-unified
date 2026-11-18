@@ -350,6 +350,87 @@ async def test_static_gif_is_retained_but_unsupported_openai_route_gets_no_pixel
         await session.cleanup()
 
 
+@pytest.mark.parametrize("broken", ["animated", "corrupt", "format-mismatch", "missing"])
+async def test_live_mixed_upload_failure_keeps_text_and_valid_image(tmp_path, monkeypatch, broken):
+    from io import BytesIO
+    from PIL import Image
+    from amplifier_module_loop_live.runtime import Input
+    from amplifier_web.attachments import file_path, save
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    path, original = picture(workspace)
+    sdk = SDKRead()
+    session, store, checkpoint, checks, host = await sdk_root(tmp_path, monkeypatch, sdk, live=True)
+    home = tmp_path / "app"
+    if broken == "animated":
+        buffer = BytesIO()
+        Image.new("RGB", (2, 2), "red").save(buffer, format="GIF", save_all=True,
+            append_images=[Image.new("RGB", (2, 2), "blue")], duration=100, loop=0)
+        bad_bytes = buffer.getvalue()
+        reason = "animated images are not supported"
+    elif broken == "format-mismatch":
+        buffer = BytesIO()
+        Image.new("RGB", (2, 2), "red").save(buffer, format="GIF")
+        bad_bytes = buffer.getvalue()
+        reason = "image format does not match the upload"
+    else:
+        bad_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00secret-corrupt" * 16
+        reason = "saved file could not be opened" if broken == "missing" else "corrupt or its format is unsupported"
+    bad = save(home, "broken-image", base64.b64encode(bad_bytes).decode())
+    if broken == "format-mismatch":
+        # Saved metadata is only a claim; ingestion checks the original bytes.
+        saved = home / "attachments" / bad["id"] / "metadata.json"
+        saved.write_text(json.dumps({**json.loads(saved.read_text()), "mime": "image/png"}))
+    if broken == "missing":
+        file_path(home, bad["id"])[0].unlink()
+    good = save(home, "valid-image", base64.b64encode(original).decode())
+    note = save(home, "notes.txt", base64.b64encode(b"Valid attachment text").decode())
+    command = Input("user", "Keep this user text", attachments=(
+        {"id": bad["id"]}, {"id": good["id"]}, {"id": note["id"]}))
+    runtime = session.coordinator.get_capability("live.runtime")
+    execution = asyncio.create_task(session.execute(""))
+    try:
+        await runtime.submit(command)
+        finished = await runtime.wait_for(lambda row:
+            row["type"] in {"generation.finished", "generation.failed"}
+            and command.id in row.get("input_ids", []), timeout=15)
+        assert finished["type"] == "generation.finished", finished
+        rows = await checkpoint()
+        [user] = [row for row in rows if row["role"] == "user" and
+                  ((row.get("metadata") or {}).get("amplifier_input") or {}).get("id") == command.id]
+        assert user["content"][0]["text"] == "Keep this user text"
+        text = json.dumps(user)
+        assert reason in text and "Valid attachment text" in text
+        assert ("Attachment 1 unavailable" if broken == "missing" else "Image unavailable: broken-image") in text
+        [ref] = user["metadata"][media.NAMESPACE]["refs"]
+        assert ref["sha256"] == hashlib.sha256(original).hexdigest()
+        assert SDKRead.pixels(sdk.image_sends()[-1]) == [(None, original)]
+        assert reason in json.dumps(sdk.image_sends()[-1])
+        assert host.sealed and checks == []
+        assert base64.b64encode(bad_bytes).decode() not in json.dumps(sdk.wire)
+        for payload in (rows, runtime.events, host.emitted):
+            assert base64.b64encode(bad_bytes).decode() not in json.dumps(payload)
+            assert base64.b64encode(original).decode() not in json.dumps(payload)
+        assert_pixel_free_capture(tmp_path, original, tool=False)
+        [capture] = list((tmp_path / "shared" / "projects").rglob("events.jsonl"))
+        assert base64.b64encode(bad_bytes).decode() not in capture.read_text()
+        # No failed upload poisons the Live inbox or the next ordinary turn.
+        followup = Input("user", "Plaintext after refused upload")
+        await runtime.submit(followup)
+        finished = await runtime.wait_for(lambda row:
+            row["type"] in {"generation.finished", "generation.failed"}
+            and followup.id in row.get("input_ids", []), timeout=15)
+        assert finished["type"] == "generation.finished", finished
+    finally:
+        if not execution.done():
+            await runtime.submit(Input("stop"))
+        try:
+            await asyncio.wait_for(execution, 5)
+        finally:
+            await session.cleanup()
+
+
 @pytest.mark.parametrize("field,value", [
     ("instruction", "changed"), ("tools", []), ("model_role", "other"),
     ("provider_preferences", [{"provider": "openai", "model": "latest"}]),

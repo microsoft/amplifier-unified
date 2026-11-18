@@ -53,7 +53,8 @@ async def test_composer_import_persists_reference_and_original(tmp_path, monkeyp
     store = SessionMediaStore(media_path, 's1', checkpoint_verifier=verified_checkpoint_refs)
     capabilities = {'web.media.composer': store, 'session.durable_checkpoint': checkpoint,
                     NAMESPACE: SimpleNamespace(enabled=True)}
-    coordinator = SimpleNamespace(get_capability=capabilities.get)
+    coordinator = SimpleNamespace(get_capability=capabilities.get, get=lambda kind: {
+        'provider': SimpleNamespace(get_media_request_support_for_request=lambda **kw: {})})
     try:
         ctx = attachments.MediaAttachmentContext(SimpleNamespace(add_message=append), coordinator)
         content = attachments.encode(command, coordinator)
@@ -177,8 +178,10 @@ def test_encoder_reads_authoritative_metadata_and_limits_inline_text(tmp_path, m
     assert 'appropriate tool' in content[-1]['text']
     path, _ = attachments.file_path(tmp_path, rows[0]['id'])
     path.write_bytes(b'changed')
-    with pytest.raises(ValueError, match='unavailable'):
-        attachments.encode(SimpleNamespace(text='Review', attachments=[rows[0]]))
+    content = attachments.encode(SimpleNamespace(text='Review', attachments=[rows[0]]))
+    assert content[0]['text'] == 'Review'
+    assert 'Attachment 1 unavailable' in content[1]['text']
+    assert not any(item['type'] == 'image' for item in content)
 
 
 async def test_draft_attachment_send_is_durable_and_private(tmp_path):
