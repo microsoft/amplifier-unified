@@ -52,6 +52,15 @@ async def test_message(provider, config, model, info=None):
                 'reachable': False, 'supported': False, 'elapsedMs': 0,
                 'errorType': 'UnsupportedMessageTest',
                 'error': 'ChatGPT plan does not support this test\'s output limit. Use Test connection to check the model catalog; no test message was sent.'}
+    if not callable(getattr(provider, 'complete', None)):
+        # The object that the helper built for this connection answers no
+        # request (a component can make its answering provider only when a
+        # chat mounts it). That is no failure of the service or of the key,
+        # and a saved model would not change it.
+        return {'method': 'provider.complete', 'model': safe_text(model or '', config),
+                'reachable': False, 'supported': False, 'elapsedMs': 0,
+                'errorType': 'UnsupportedMessageTest',
+                'error': 'This connection cannot send a test message here. No test message was sent. To try the connection, start a chat with it.'}
     if not isinstance(model, str) or not model.strip():
         raise ValueError('Choose and save a model before sending a test message.')
     started = time.monotonic()

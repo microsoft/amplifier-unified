@@ -178,3 +178,49 @@ async def test_no_saved_model_keeps_its_sentence_and_sends_nothing(model):
         await send_test_message(provider, {}, model)
     assert provider.requests == []
 
+
+class _ObjectWithNoAnswer:
+    """What the helper builds for a component whose answering provider is made only when a chat mounts it."""
+
+    def get_info(self):
+        return {'config_fields': []}
+
+
+NO_TEST_MESSAGE = ('This connection cannot send a test message here. No test message was sent. '
+                   'To try the connection, start a chat with it.')
+
+
+@pytest.mark.parametrize('model', ['my-deployment', None])
+async def test_an_object_that_answers_no_request_gets_one_plain_sentence_and_no_request(monkeypatch, model):
+    from amplifier_core import message_models
+
+    def built(**fields):
+        raise AssertionError('No request is built for an object that cannot answer one')
+    monkeypatch.setattr(message_models, 'ChatRequest', built)
+    result = await send_test_message(_ObjectWithNoAnswer(), {'api_key': 'private-credential-12345'}, model)
+    assert result == {'method': 'provider.complete', 'model': model or '', 'reachable': False, 'supported': False,
+                      'elapsedMs': 0, 'errorType': 'UnsupportedMessageTest', 'error': NO_TEST_MESSAGE}
+    # Not the name of a Python class or of an attribute, and no status of a service.
+    assert 'object' not in result['error'] and 'attribute' not in result['error'] and 'statusCode' not in result
+
+
+async def test_a_complete_that_is_not_callable_is_no_test_message_either():
+    provider = _ObjectWithNoAnswer()
+    provider.complete = None
+    result = await send_test_message(provider, {}, 'my-deployment')
+    assert result['supported'] is False and result['error'] == NO_TEST_MESSAGE
+
+
+async def test_the_helper_gives_that_sentence_for_such_a_connection(monkeypatch):
+    closed = []
+
+    class Provider(_ObjectWithNoAnswer):
+        def __init__(self, config=None): pass
+        async def close(self): closed.append(True)
+    monkeypatch.setattr(provider_probe, 'provider_class', lambda _: Provider)
+    result = await provider_probe.query({'action': 'providers.testMessage', 'module': 'test',
+                                         'config': {'api_key': 'private-credential-12345', 'default_model': 'my-deployment'}})
+    assert result['messageTest']['error'] == NO_TEST_MESSAGE
+    assert result['messageTest']['supported'] is False and result['messageTest']['model'] == 'my-deployment'
+    assert 'error' not in result and len(closed) == 2
+
