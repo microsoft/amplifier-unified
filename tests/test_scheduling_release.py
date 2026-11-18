@@ -99,7 +99,6 @@ def make_src_candidate(tmp_path, component, *, worktrees=None):
         archive.writestr(info + "licenses/LICENSE", files["LICENSE"])
     with tarfile.open(dist / sdist, "w:gz") as archive:
         for name, raw in files.items():
-            if name == ".gitignore": continue
             member = tarfile.TarInfo(package + "-0.1.0/" + name); member.size = len(raw)
             archive.addfile(member, io.BytesIO(raw))
     receipt = {**selected, "artifacts": release.package_identity(dist, selected)}
@@ -160,6 +159,19 @@ def test_public_src_wheel_cannot_change_selected_runtime(tmp_path, component, fa
     with zipfile.ZipFile(wheel, "w") as archive:
         for name, raw in files.items(): archive.writestr(name, raw)
     with pytest.raises(ValueError): release.package_identity(dist, receipt)
+
+
+@pytest.mark.parametrize("component", ["publishing", "portability"])
+def test_public_src_archive_retains_every_selected_input(tmp_path, component):
+    _, _, dist, receipt = make_src_candidate(tmp_path, component)
+    source = dist / release.artifact_names(receipt)[1]
+    with tarfile.open(source) as archive:
+        files = [(member, archive.extractfile(member).read()) for member in archive.getmembers()
+                 if member.isfile() and not member.name.endswith("/.gitignore")]
+    with tarfile.open(source, "w:gz") as archive:
+        for member, raw in files: archive.addfile(member, io.BytesIO(raw))
+    with pytest.raises(ValueError, match="selected project/tests"):
+        release.package_identity(dist, receipt)
 
 
 def test_status_keeps_distribution_import_and_bundled_owner_distinct(tmp_path):

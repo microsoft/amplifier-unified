@@ -154,7 +154,10 @@ def package_identity(dist, selected):
                     observed[name] = sha(archive.extractfile(member).read())
                 elif name.endswith(".py") or component == "kernels" and name.endswith(".cjs"):
                     raise ValueError("Source archive contains unselected runtime code.")
-        required = {name: digest for name, digest in expected.items() if name != ".gitignore"}
+        # These root projects ship every selected package input, including their
+        # ignore file. Historical monorepo archives deliberately omitted it.
+        complete_inputs = selected["subdirectory"] == "." and component in {"publishing", "portability"}
+        required = {name: digest for name, digest in expected.items() if complete_inputs or name != ".gitignore"}
         if observed != required:
             raise ValueError("Source archive differs from selected project/tests.")
         if component == "status-emitter":
