@@ -2361,7 +2361,7 @@ def test_design_entry_on_the_journal_names_what_the_cases_above_show():
             "When none of its steps fails, it deletes the person's data, as the person chose twice. It removes the "
             "Windows entries through setup's record of them: when it finds no such record in the folder, or the "
             "record says that they are removed already, it removes none. It also tries to delete the caches and "
-            "the other program files; one that Windows does not let go stays.",
+            "the other program files, and it goes on when Windows does not let one of them go.",
             # After the last step's refusal: `test_journal_that_a_program_replaces_..._never_deletes_more_...`.
             # The leftover is L3's only on two conditions that the uninstall program does not control.
             "When the removal deleted everything that it tried to delete, and no program changed the folder further, "
@@ -2418,6 +2418,7 @@ def test_design_entry_on_the_journal_names_what_the_cases_above_show():
                   "If one of that removal's steps fails, a second uninstall reads", "every later check takes it",
                   "ends as it does without a replacement", "it has deleted nothing. What",
                   "goes on to its end without its journal", "with the other program's file still in the folder",
+                  "one that Windows does not let go stays",
                   "so none of them is left to start an uninstall from", "none of this applies",
                   "By then the removal has removed the Windows entries", "stay too, and the uninstall program",
                   "The name is there, so the removal goes on", "the Windows entries that setup recorded",
@@ -2475,8 +2476,9 @@ def test_design_entry_on_the_journal_names_what_the_cases_above_show():
             "certificate (`declined`), it says that Windows kept the certificate. Otherwise, when at least one was "
             "not confirmed as deleted (`blocked`), it says that Windows can still hold it.",
             # Step 9: what the confirmation says in each of its three forms (asserted below against the product).
-            "9. One message. It says what was observed, that the data is deleted, and what follows: when the person "
-            "closes it, Amplifier starts to remove its last program files. When the last listing of the folder "
+            "9. One message. It says that the data is deleted, which the removal observed, and that Amplifier "
+            "starts to remove its last program files when the person closes the message. When the last listing of "
+            "the folder "
             "showed entries that are not Amplifier's, the message names up to five of them, with the number of the "
             "others when there are more, and says that the folder stays. When the folder could not be listed at the "
             "end, the message says that the folder can still exist afterwards. Otherwise it says that the person can "
@@ -2516,10 +2518,12 @@ def test_design_entry_on_the_journal_names_what_the_cases_above_show():
             "An uninstall that found no journal before its questions also looks when Windows does not show one of "
             "them; that look chooses only the place of the failure note.",
             # The look under the lock is main's (`Refused("removing")` in the keep path).
-            "Only the look under the lock decides a refusal, as it did before the other looks were added. The "
-            "looks at a step that failed, directly before the write of the journal, at a question that Windows "
-            "does not show, and at a failure that no step names choose only a text and the place of the failure "
-            "note. They change nothing that an uninstall deletes or removes.",
+            # The look of `maintenance` at a failure: the parameter `with-a-journal` of the unnamed-failure case.
+            "So does the look at a failure that no step and no question names, and at a preparation that fails "
+            "after the check of the installation files.",
+            "Of the looks that this paragraph names, only the one under the lock decides a refusal, as it did "
+            "before the others were added. The others choose only a text and the place of the failure note. They "
+            "change nothing that an uninstall deletes or removes.",
             "Each of these looks, and the launcher's look before it opens Amplifier, asks only whether the journal's "
             "name is in the folder. A look that Windows does not answer counts as \"no journal\". Where this section "
             "says that the launcher refuses, or does not open Amplifier, while the journal exists, that is the "

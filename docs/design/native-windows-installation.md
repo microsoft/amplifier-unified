@@ -1592,11 +1592,11 @@ does.
    shortcuts, then delete what the launcher's own check needs (`git`, `uv`,
    the receipts). So a second uninstall can still start for as long as an
    entry for it exists.
-9. One message. It says what was observed, that the data is deleted, and what
-   follows: when the person closes it, Amplifier starts to remove its last
-   program files. When the last listing of the folder showed entries that are
-   not Amplifier's, the message names up to five of them, with the number of
-   the others when there are more, and says that the folder stays. When the
+9. One message. It says that the data is deleted, which the removal observed,
+   and that Amplifier starts to remove its last program files when the person
+   closes the message. When the last listing of the folder showed entries that
+   are not Amplifier's, the message names up to five of them, with the number
+   of the others when there are more, and says that the folder stays. When the
    folder could not be listed at the end, the message says that the folder can
    still exist afterwards. Otherwise it says that the person can delete the
    folder if it still exists a minute later. If Windows does not show that
@@ -1711,11 +1711,12 @@ that write shows the text of a removal that did not finish too. A lock that
 another window holds is a refusal, not such an error: neither uninstall looks
 then. An uninstall that found no journal before its questions also looks when
 Windows does not show one of them; that look chooses only the place of the
-failure note. Only the look under the lock decides a refusal, as it did before
-the other looks were added. The looks at a step that failed, directly before
-the write of the journal, at a question that Windows does not show, and at a
-failure that no step names choose only a text and the place of the failure
-note. They change nothing that an uninstall deletes or removes.
+failure note. So does the look at a failure that no step and no question
+names, and at a preparation that fails after the check of the installation
+files. Of the looks that this paragraph names, only the one under the lock
+decides a refusal, as it did before the others were added. The others choose
+only a text and the place of the failure note. They change nothing that an
+uninstall deletes or removes.
 
 Each of these looks, and the launcher's look before it opens Amplifier, asks
 only whether the journal's name is in the folder. A look that Windows does not
@@ -1992,30 +1993,31 @@ limit as not blocking.
     twice. It removes the Windows entries through setup's record of them: when
     it finds no such record in the folder, or the record says that they are
     removed already, it removes none. It also tries to delete the caches and
-    the other program files; one that Windows does not let go stays. When step
-    9 did not stop the uninstall, the last step (`windows_uninstall.finish`)
-    follows. Once it has the lock and the folder, it reads the journal again
-    through the private-file boundary, before it starts the step after exit.
-    It refuses a file that it cannot read there, a file that is not a journal,
-    a journal that records another choice, and a journal with another token.
-    Then the last step deletes nothing: not `python`, not `tools`, not that
-    file and not setup's completion record. The uninstall program tries to
-    show a message that the last program files could not be removed. When
-    Windows does not show that message, the program tries once more. When
-    Windows does not show it then either, the person gets no message after the
-    confirmation of step 9. When the removal deleted everything that it tried
-    to delete, and no program changed the folder further, the folder is then
-    the leftover of L3 (see Leftovers below), with the other program's file in
-    the place of the journal. A file that the last step can read there as a
-    journal (`schema` 1), and that records the delete choice and this
-    removal's own token, passes. The step after exit compares the same values
-    (`FINISH_SCRIPT` in `windows_removal.py`: schema, choice, token) and
-    refuses a journal whose creation time, as Windows reports it, is later
-    than the step's own start. When it accepts the file too, the removal goes
-    on as it does without a replacement. In each case nothing more is deleted
-    than the person chose. For a later uninstall the other program's file is a
-    journal like any other: what that uninstall does follows its own look and
-    its own read (see "While the journal exists" above, and L4).
+    the other program files, and it goes on when Windows does not let one of
+    them go. When step 9 did not stop the uninstall, the last step
+    (`windows_uninstall.finish`) follows. Once it has the lock and the folder,
+    it reads the journal again through the private-file boundary, before it
+    starts the step after exit. It refuses a file that it cannot read there, a
+    file that is not a journal, a journal that records another choice, and a
+    journal with another token. Then the last step deletes nothing: not
+    `python`, not `tools`, not that file and not setup's completion record.
+    The uninstall program tries to show a message that the last program files
+    could not be removed. When Windows does not show that message, the program
+    tries once more. When Windows does not show it then either, the person
+    gets no message after the confirmation of step 9. When the removal deleted
+    everything that it tried to delete, and no program changed the folder
+    further, the folder is then the leftover of L3 (see Leftovers below), with
+    the other program's file in the place of the journal. A file that the last
+    step can read there as a journal (`schema` 1), and that records the delete
+    choice and this removal's own token, passes. The step after exit compares
+    the same values (`FINISH_SCRIPT` in `windows_removal.py`: schema, choice,
+    token) and refuses a journal whose creation time, as Windows reports it,
+    is later than the step's own start. When it accepts the file too, the
+    removal goes on as it does without a replacement. In each case nothing
+    more is deleted than the person chose. For a later uninstall the other
+    program's file is a journal like any other: what that uninstall does
+    follows its own look and its own read (see "While the journal exists"
+    above, and L4).
 
   Such a program runs as the person and can delete the person's data itself.
   That is the condition of this limit, not a protection against it.
