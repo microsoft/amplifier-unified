@@ -1329,6 +1329,51 @@ async def test_git_is_asked_about_the_object_and_never_about_a_repository_above_
     assert facts(result, 'git', 'files', 'later', 'left', 'change') == (1, 0, 1, 0, False)
 
 
+async def test_a_git_answer_that_came_at_the_limit_is_followed_by_no_change_mark_and_no_deletion(
+        installation, monkeypatch):
+    """Git is not a native step. Its second answer comes when the time of the whole step is over."""
+    target = await broken(installation)
+    now, real = [0.0], repair._git
+
+    def git(program, folder, budget, *words):
+        output = real(program, folder, budget, *words)
+        if words == repair.OTHERS:
+            now[0] += repair.TOTAL_SECONDS
+        return output
+    monkeypatch.setattr(repair, '_git', git)
+    before = snapshot(installation.store)
+    result = repair.at_host_start(installation.data, clock=lambda: now[0], log=installation.lines.append)
+    assert snapshot(installation.store) == before and mark(installation) is None
+    assert facts(result, 'git', 'files', 'repaired', 'complete', 'change') == (2, 0, 0, False, False)
+    assert installation.lines[0].endswith(' A bound was reached.') and record(installation)['tries'] == {target.key: 1}
+
+
+async def test_a_look_for_git_that_took_the_rest_of_the_time_is_followed_by_no_other_look(
+        installation, monkeypatch, tmp_path):
+    """The first folder of PATH is on a drive that answers late. The folder that has Git is not looked into."""
+    target = await broken(installation)
+    has_git = Path(repair._program()).parent
+    (tmp_path / 'slow').mkdir()
+    monkeypatch.setenv('PATH', os.pathsep.join([str(tmp_path / 'slow'), str(has_git)]))
+    now, looks = [0.0], []
+
+    class Looked(type(Path())):
+        def is_file(self):
+            if self.name in ('git', 'git.exe'):
+                looks.append(self.parent)
+                if self.parent.name == 'slow':
+                    now[0] += repair.TOTAL_SECONDS
+                    return False
+            return super().is_file()
+    monkeypatch.setattr(repair, 'Path', Looked)
+    before = snapshot(installation.store)
+    result = repair.at_host_start(installation.data, clock=lambda: now[0], log=installation.lines.append)
+    assert [folder.name for folder in looks] == ['slow']
+    assert facts(result, 'git', 'files', 'complete', 'change') == (0, 0, False, False)
+    assert snapshot(installation.store) == before and installation.lines[0].endswith(' A bound was reached.')
+    assert record(installation)['tries'] == {target.key: 1}
+
+
 def test_a_store_with_no_object_yet_is_a_complete_pass(installation):
     result = installation.start()
     assert facts(result, 'objects', 'listings', 'git', 'complete', 'change') == (0, 0, 0, True, False)
