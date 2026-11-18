@@ -259,6 +259,71 @@ def test_a_failed_step_keeps_its_exact_text_and_later_steps_are_not_reached(case
     assert len(lines) == 3 + len(case.NOT_SHOWN)
 
 
+def refused(times, error, tries, limit=50):
+    """A stand-in for the replacement: it fails `times` times with `error`, then it replaces."""
+    def replace(source, target):
+        tries.append((source, target))
+        assert len(tries) <= limit, "The replacement is tried without end"
+        if len(tries) <= times:
+            raise error
+        Path(source).replace(target)
+    return replace
+
+
+def test_a_report_that_windows_does_not_let_replace_for_a_moment_is_replaced_at_a_later_try(case, tmp_path):
+    partial, report = tmp_path / "second.partial", tmp_path / "second.json"
+    partial.write_text("the new report")
+    report.write_text("the report before")
+    tries, waits = [], []
+    denied = PermissionError(13, "Access is denied")
+    case.replace_report(partial, report, replace=refused(2, denied, tries), wait=waits.append,
+                        timer=lambda: float(len(waits)))
+    assert tries == [(partial, report)] * 3 and waits == [0.05, 0.05]
+    assert report.read_text() == "the new report" and not partial.exists()
+    # Without a refusal: one try and no wait.
+    partial.write_text("the next report")
+    tries.clear(), waits.clear()
+    case.replace_report(partial, report, replace=refused(0, denied, tries), wait=waits.append)
+    assert len(tries) == 1 and waits == [] and report.read_text() == "the next report"
+
+
+def test_a_report_that_windows_never_lets_replace_fails_with_that_error_after_the_limit(case, tmp_path):
+    partial, report = tmp_path / "second.partial", tmp_path / "second.json"
+    partial.write_text("the new report")
+    report.write_text("the report before")
+    tries, waits = [], []
+    denied = PermissionError(13, "Access is denied")
+    # The stand-in for the timer goes on by one second with each wait. The limit here is 3 seconds.
+    with pytest.raises(PermissionError) as failed:
+        case.replace_report(partial, report, replace=refused(1000, denied, tries), wait=waits.append,
+                            timer=lambda: float(len(waits)), limit=3)
+    assert failed.value is denied and len(tries) == 4 and waits == [0.05] * 3
+    assert report.read_text() == "the report before" and partial.read_text() == "the new report"
+    # An error that is not this refusal goes on at once: no second try, no wait.
+    tries.clear(), waits.clear()
+    full = OSError(28, "There is not enough space on the disk")
+    with pytest.raises(OSError) as failed:
+        case.replace_report(partial, report, replace=refused(1000, full, tries), wait=waits.append,
+                            timer=lambda: float(len(waits)), limit=3)
+    assert failed.value is full and len(tries) == 1 and waits == []
+
+
+def test_every_save_of_the_report_replaces_the_file_through_those_tries(case, tmp_path, monkeypatch):
+    # As the case uses it: the system's own replacement, the real clock, 5 seconds.
+    assert case.replace_report.__kwdefaults__ == {
+        "replace": case.os.replace, "wait": case.time.sleep, "timer": case.time.monotonic, "limit": 5.0}
+    calls = []
+
+    def replace(partial, path):
+        calls.append((partial, path))
+        Path(partial).replace(path)
+    monkeypatch.setattr(case, "replace_report", replace)
+    steps = case.Steps(tmp_path / "second.json", ("one",))
+    steps.begin("one")
+    assert calls == [(tmp_path / "second.partial", tmp_path / "second.json")] * 2
+    assert json.loads((tmp_path / "second.json").read_text())["steps"][0]["reason"] == "In progress"
+
+
 def test_a_step_passes_only_when_it_was_stated(case, tmp_path):
     steps = case.Steps(tmp_path / "report.json", ("one", "two"))
     steps.begin("one")
@@ -518,6 +583,20 @@ def test_a_report_that_cannot_be_saved_before_the_check_fails_no_start_and_repla
     # A first save that works adds nothing.
     text, saved, _ = accept(case, tmp_path, Reads(start_rules), task=wrong)
     assert "notSavedBeforeTheCheck" not in text and "notSavedBeforeTheCheck" not in saved
+
+
+def test_an_answer_that_json_cannot_write_does_not_replace_the_text_of_a_refused_start(case, start_rules, tmp_path):
+    # A key that is a pair. No answer of the product has such a key; the step's text must not depend on that.
+    wrong = {**TASK, "instances": 0, ("a", "pair"): 1}
+    text, _, steps = accept(case, tmp_path, Reads(start_rules), task=wrong)
+    # The Python form of the same detail, in the same order: the names, the values that the rules read, the rest.
+    assert text.startswith("The start failed. Not as required: Task Scheduler: {'Task Scheduler': "
+                           "{'managed': True, 'state': 'running', 'instances': 0}, 'fiveSecondsLater': "
+                           "{'Task Scheduler': True, \"the app's status\": True}, ")
+    assert "('a', 'pair'): 1" in text and len(text) <= 2900
+    # The report cannot be written with such a key either. The text says so, and no error of a save reached the step.
+    assert "'notSavedBeforeTheCheck': {'errorType': 'TypeError'" in text
+    assert steps.report["theStart"]["task"] == wrong
 
 
 @pytest.mark.parametrize("said", ["The second start failed", "The start after the uninstall failed"])
@@ -1006,6 +1085,41 @@ def test_an_error_of_the_watchs_own_code_ends_the_watch_and_the_stop_says_it(cas
     assert "endedBy" not in case.ListenerWatch(lambda: "trusted").stop()
 
 
+def test_a_watch_is_called_ended_only_when_its_thread_had_ended_before_the_copies(case):
+    order = []
+
+    class Thread:
+        """A stand-in for the watch's thread: each read of whether it runs takes the next answer."""
+
+        def __init__(self, *running):
+            self.running = list(running)
+
+        def join(self, wait):
+            order.append("the wait")
+
+        def is_alive(self):
+            order.append("does it run?")
+            return self.running.pop(0)
+
+    class Lock:
+        def __enter__(self):
+            order.append("the copies")
+
+        def __exit__(self, *error):
+            return False
+    watch = case.ListenerWatch(lambda: "trusted")
+    # The thread still runs after the wait, and it ends while the copies are made: the copies can lack its last
+    # question, so the watch is not called ended.
+    watch._thread, watch._lock = Thread(True, False, False), Lock()
+    kept = watch.stop()
+    assert order == ["the wait", "does it run?", "the copies"]
+    assert kept["started"] is True and kept["ended"] is False
+    # A thread that had ended after the wait: the copies hold everything, and the watch is called ended.
+    order.clear()
+    watch._thread = Thread(False, False)
+    assert watch.stop()["ended"] is True and order == ["the wait", "does it run?", "the copies"]
+
+
 def test_a_watch_without_a_question_never_starts_and_says_why(case, tmp_path, monkeypatch):
     idle = case.ListenerWatch().start()
     idle.mark("Stop Amplifier")
@@ -1043,8 +1157,11 @@ def test_the_watch_of_an_installation_asks_its_saved_address_and_reads_the_owner
     kept = watch.stop()
     assert kept["started"] is True and kept["ended"] is True
     assert [(change["answer"], change["owner"]) for change in kept["changes"]] == [("trusted", [77, 4500])]
-    assert 0 <= kept["changes"][0]["seconds"] < 5
-    assert gauges[0] == [] and kept["late"] == []  # The gauge was asked with each question; no answer was late.
+    # No time of the real clock is required here. On a machine that gives this program no time for half a second,
+    # a question takes that long and counts as late. That is the watch's own rule; other cases require it with a
+    # stand-in for the timer.
+    assert isinstance(kept["changes"][0]["seconds"], float) and isinstance(kept["late"], list)
+    assert gauges[0] == []  # The gauge was asked with each question: first with no owner of the port.
     assert all(owners == [77, 4500] for owners in gauges[1:])
     assert asked[:2] == [("trust", ["https://127.0.0.1:27595/api/health"], "the pin"), ("owners", "127.0.0.1", 27595)]
 
@@ -1264,7 +1381,9 @@ def test_every_read_after_a_host_start_is_made_through_the_record_and_keeps_its_
     # No further read of the status or of Task Scheduler: those of the record, and one pair after each stop.
     assert journey.count('again.cli(root, "service", "status"') == 3 and journey.count("again.task_facts(home)") == 3
     assert second.count('again.cli(root, "service", "status"') == 4 and second.count("again.task_facts(home)") == 3
-    assert 'observed(steps, home, "the launcher\'s status", lambda: again.launcher(root, "--status"),' in journey
+    assert ('observed(steps, home, "the launcher\'s status", lambda: again.launcher(root, "--status"), '
+            'lambda value: value["exitCode"] == 0 and (value["json"] or {}).get("ok") is True)'
+            ) in " ".join(journey.split())
     # Each read of trust, with the answer that its step requires.
     for part, name, required in ((certificate, "trust before the Windows question", "untrusted"),
                                  (certificate, "trust after Yes", "trusted"),

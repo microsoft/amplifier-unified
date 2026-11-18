@@ -1456,6 +1456,28 @@ def cleanup():
 
 
 # ---- As the standard user, in the user's own desktop session.
+def replace_report(partial, path, *, replace=os.replace, wait=time.sleep, timer=time.monotonic, limit=5.0):
+    """Put a written report in the place of the report file.
+
+    While this user's program runs, the program of the runner's account reads
+    the report file every 3 seconds, to see whether the program has finished.
+    While such a read has the file open, Windows refuses the replacement
+    (`PermissionError`, "Access is denied"). One run failed a step with that
+    (run 44204538909, November 17, 2026). The record makes the report larger,
+    so a read takes longer. A replacement that Windows refuses is made again,
+    with 0.05 second between two tries, for `limit` seconds. After that the
+    error goes on to the caller, as before. Another error goes on at once.
+    """
+    deadline = timer() + limit
+    while True:
+        try:
+            return replace(partial, path)
+        except PermissionError:
+            if timer() >= deadline:
+                raise
+            wait(0.05)
+
+
 class Steps:
     """The user's report: one entry for each step, saved after each change."""
 
@@ -1472,7 +1494,7 @@ class Steps:
         with self.lock:
             partial = self.path.with_suffix(".partial")
             partial.write_text(json.dumps(self.report, indent=2, default=str) + "\n", encoding="utf-8")
-            os.replace(partial, self.path)
+            replace_report(partial, self.path)
 
     def begin(self, name):
         self.report["steps"][self.names.index(name)]["reason"] = "In progress"
@@ -1591,8 +1613,9 @@ def observed(steps, home, name, read, good, later=None):
     condition. `good` is that condition for this one answer. It only marks
     the entry of the record. After a step has failed, `keep_after_failure`
     makes a read that was not as required once more (`later`, or the same
-    read). Only `journey` and `second` call it, and only while the app folder
-    is safe to read. The certificate program does not make its reads again.
+    read). Only `journey` and `second` call `keep_after_failure`, and it
+    reads only while the app folder is safe to read. The certificate program
+    makes its reads through this function too, and does not make them again.
     An error of the read itself goes on to the step.
     """
     entry = {"read": name, "at": round(time.time(), 3), "hostBefore": attempt(lambda: host_record(home))}
@@ -1679,7 +1702,9 @@ class ListenerWatch:
     reads which processes own the listener's port. It keeps each change of
     the answer or of the owners, with the time at which that question began
     and the seconds that the question took. While nothing changes, it keeps
-    the slowest question (`slowest`). So the report says, to about the time
+    the slowest of the questions that follow (`slowest`). That one can be
+    quicker than the question that brought the change, whose seconds the
+    entry has itself. So the report says, to about the time
     between two questions, for how long the listener gave no answer after a
     host start, whether a process owned the port in that time, and whether
     another process owned it afterwards. It also says when the listener
@@ -1698,7 +1723,8 @@ class ListenerWatch:
     cause.
     The watch opens no file of the installation, it asks without a
     credential, and it decides no step. A watch without a question (`probe`)
-    never starts; `reason` then says why.
+    never starts. When `watch_listener` could not start the watch, `reason`
+    says why; the watch that a phase holds before that call has no reason.
 
     The watch's thread and the case's thread change the lists under one lock,
     and `stop` gives copies that it makes under that lock. So what `stop`
@@ -1766,15 +1792,22 @@ class ListenerWatch:
             self.changes.append({"at": round(self.clock(), 3), "mark": text})
 
     def stop(self, wait=10):
-        """End the watch and give what it kept. `ended` is false when its thread still runs after `wait` seconds."""
+        """End the watch and give what it kept. `ended` is false when its thread still runs after `wait` seconds.
+
+        Whether the thread still runs is read once, after the wait and before
+        the copies. So a watch that is called ended gave everything that it
+        kept. A thread that ends while the copies are made is still called
+        running; the copies can then lack its last question.
+        """
         self._halt.set()
         if self._thread is not None:
             self._thread.join(wait)
+        running = self._thread is not None and self._thread.is_alive()  # Before the copies, never after them.
         with self._lock:  # Copies: a thread that still runs changes its own lists, never what this gave.
             kept = {"questions": self.questions, "changes": copy.deepcopy(self.changes),
                     **({"late": copy.deepcopy(self.late)} if self.gauge else {}),
                     **({"endedBy": self.fault} if self.fault else {})}
-        return {"started": self._thread is not None, "ended": self._thread is None or not self._thread.is_alive(),
+        return {"started": self._thread is not None, "ended": not running,
                 **kept, **({"notStarted": self.reason} if self.reason else {})}
 
 
@@ -1851,7 +1884,8 @@ def accept_start(steps, key, again, home, root, started, state, status, text, *,
     that is not short is given as the first 60 characters of its Python form.
     The text is cut at 2900 characters, at its end. So it keeps its start,
     also in the report, which keeps the last 3000 characters of a step's text.
-    The report holds the three answers as the case got them.
+    The report holds the three answers as the case got them. A detail that
+    JSON cannot write is given in its Python form.
 
     The read five seconds later never makes the step pass. It, the read of the
     host's log (`host_output`) and the second save of the report can each
@@ -1910,8 +1944,10 @@ def accept_start(steps, key, again, home, root, started, state, status, text, *,
               **({"notSavedBeforeTheCheck": unsaved_first} if unsaved_first else {}),
               **({"notSavedInTheReport": unsaved} if unsaved else {}),
               "more": {name: attempt(lambda: more(name)) for name in wrong}}
+    said = attempt(lambda: json.dumps(detail, default=str))
+    # An answer that JSON cannot write (a key that is no text and no number) does not replace the text.
     raise AssertionError((text + ". Not as required: " + ", ".join(wrong) + ": "
-                          + json.dumps(detail, default=str))[:2900])
+                          + (said if isinstance(said, str) else repr(detail)))[:2900])
 
 
 def installation_folder():
