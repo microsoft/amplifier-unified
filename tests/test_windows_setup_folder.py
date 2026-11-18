@@ -220,6 +220,22 @@ def test_setup_without_a_launcher_program_says_what_its_own_look_finds():
         for change in ("Delete", "Write", "Create", "Move", "Remove", "Process", "Say(", "Install", "Storage",
                        "FileMode", "FileAccess", "Set"):
             assert change not in operations, change
+    # A list of words does not name every operation (a property of a `FileInfo`, for example). So the
+    # case also holds every call of the two functions: a new call of any kind fails here.
+    def calls(body):
+        code = "\n".join(line for line in body.splitlines() if not line.strip().startswith("//"))
+        return set(re.findall(r"([A-Za-z_][A-Za-z0-9_.]*)(?:<[A-Za-z0-9_<>,]*>)?\(",
+                              re.sub(r'"(?:[^"\\]|\\.)*"', '""', code)))
+    assert calls(emptied) == {
+        "if", "using", "while", "foreach", "catch",
+        "Path.Combine", "File.GetAttributes", "FileStream", "file.Read", "Json.Deserialize", "Utf8.GetString",
+        "record.TryGetValue", "Text", "Regex.IsMatch", "Directory.EnumerateFileSystemEntries", "Any"}
+    assert calls(unopened) == {"if", "Emptied"}
+    # `Text`, the one function of setup that they call besides themselves, only reads the parsed record.
+    assert calls(between("static string Text(", "static Dictionary<string,object> Object(")) == {
+        "Need", "map.TryGetValue"}
+    assert ("static void Need(bool value, string message) "
+            "{ if (!value) throw new InvalidDataException(message); }") in SOURCE
     # The one place that shows the text: a finished installation with no launcher program. Setup ends with 1.
     opened = between("static int OpenInstalled(", "static int ConsumerWindow()")
     assert opened.index("if(!File.Exists(AppStart(root).FileName)) {\n"
@@ -276,6 +292,10 @@ def test_setup_without_a_launcher_program_says_what_its_own_look_finds():
             "entry between two of those steps.",
             "Setup's stop for a damaged folder names the same step.",
             "The text tells the person to move or rename the folder, not to delete it:",
+            "Each statement of the first text is what setup found in this run, or what setup does; its last two "
+            "sentences are the next step.",
+            "Setup found the record's name when it classified the folder, and the missing program file directly "
+            "before this look.",
             "Setup does not read that file in this look, and it knows no more about the folder's history.",
             "The text does not say that an installation was made in the folder.",
             "In every other case, and when any part of the look fails, setup says what it said before:",
@@ -291,10 +311,10 @@ def test_setup_without_a_launcher_program_says_what_its_own_look_finds():
     native = (ROOT / "tests/windows/native_setup.Tests.cs").read_text(encoding="utf-8")
     others = native.split("string[] others={", 1)[1].split("};", 1)[0]
     assert "nineteen files that are not such a journal" in design
-    assert ("that a look changes no creation time and no write time of the journal, of setup's record and of "
-            "the person's file") in design
-    assert ("a look changes no creation time and no write time of the journal, of setup's record and of the "
-            "person's file") in native
+    assert ("that a look changes no creation time, no write time and no attribute of the journal, of setup's "
+            "record and of the person's file") in design
+    assert ("a look changes no creation time, no write time and no attribute of the journal, of setup's record "
+            "and of the person's file") in native
     # Five literal files in the first line, then one file for each `record.Replace(...)`, then the file
     # that is one byte too large.
     assert others.split("\n", 1)[0] == '"","{","[]","null","\\"delete\\"",'

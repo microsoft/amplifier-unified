@@ -12,8 +12,10 @@ on:
       - scripts/install.ps1
       - amplifier_web/host_dependencies.py
       - amplifier_web/windows_consumer.py
+      - amplifier_web/windows_consumer_shell.py
       - amplifier_web/windows_files.py
       - amplifier_web/windows_read_files.py
+      - amplifier_web/windows_uninstall.py
       - tests/fixtures/windows_private_shell_probe.py
       - tests/test_windows_private_git.py
       - tests/fixtures/windows_setup_native.py
@@ -103,6 +105,15 @@ jobs:
         run: |
           & "$env:SHELL_BASE/env/Scripts/python.exe" -B -m pytest -q -ra -p no:cacheprovider tests/test_windows_private_git.py
           if ($LASTEXITCODE -ne 0) { throw 'Private Git unpacking checks failed.' }
+      # The Python cases on setup's source: its folder rules, its texts, the
+      # design's sentences and the texts of the native case. They read
+      # uninstall's names from amplifier_web. No other job runs this file.
+      - name: Check setup's folder rules and texts against its source and the design
+        shell: pwsh
+        run: |
+          & "$env:SHELL_BASE/env/Scripts/python.exe" -B -m pytest -q -ra -p no:cacheprovider tests/test_windows_setup_folder.py | Tee-Object -Variable log
+          if ($LASTEXITCODE -ne 0) { throw 'Setup folder and text checks failed.' }
+          if (($log -join "`n") -match '\d+ skipped') { throw 'A setup folder case was skipped on this lane.' }
       - name: Unpack the pinned Git and run the real shell tool without developer tools on PATH
         timeout-minutes: 10
         shell: pwsh

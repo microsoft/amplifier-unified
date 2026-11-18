@@ -307,13 +307,14 @@ namespace UnifiedBootstrap {
                 // missing. Only setup's own look at the folder chooses it.
                 string left=Make(work,"Left");
                 File.WriteAllText(Path.Combine(left,NativeInstaller.Complete),"{}");
-                // The creation time and the write time of a file. A look changes
-                // neither: the step after exit refuses a journal whose creation
-                // time is later than its own start (`Later` in
-                // amplifier_web/windows_removal.py). The case reads the times of
-                // a file before the first look that can reach it.
-                Func<string,string> times=one=>File.GetCreationTimeUtc(one).Ticks+","+File.GetLastWriteTimeUtc(one).Ticks;
-                string completeTimes=times(Path.Combine(left,NativeInstaller.Complete));
+                // The creation time, the write time and the attributes of a file. A
+                // look changes none of them: the step after exit refuses a journal
+                // whose creation time is later than its own start, and a record
+                // that is read-only, hidden or a system file (`Later` and
+                // `Get-Record` in amplifier_web/windows_removal.py). The case reads
+                // these facts of a file before the first look that can reach it.
+                Func<string,string> facts=one=>File.GetCreationTimeUtc(one).Ticks+","+File.GetLastWriteTimeUtc(one).Ticks+","+File.GetAttributes(one);
+                string completeFacts=facts(Path.Combine(left,NativeInstaller.Complete));
                 string damaged="Amplifier is already installed in "+left+", but setup cannot open it: a program file is missing.\n\n"+
                     "Keep that folder. It holds your chats and settings. This version of setup cannot repair it.";
                 string emptied="Setup cannot install Amplifier yet. Setup found an installation record in this folder:\n"+left+"\n\n"+
@@ -329,9 +330,11 @@ namespace UnifiedBootstrap {
                 // What an uninstall with the delete choice leaves when the folder
                 // holds a file of the person: that file, setup's record, the journal.
                 File.WriteAllText(notes,"mine");
-                string notesTimes=times(notes);
+                string notesFacts=facts(notes);
                 File.WriteAllText(journal,record);
+                string journalFacts=facts(journal);
                 Need(NativeInstaller.Emptied(left) && NativeInstaller.Unopened(left)==emptied,"a delete journal and no data: the text with the next step");
+                Need(facts(journal)==journalFacts,"the first looks change no time and no attribute of the journal");
                 // What stays when the last step did not finish: program files.
                 Directory.CreateDirectory(Path.Combine(left,"unified-uninstall-last"));
                 File.WriteAllText(Path.Combine(left,"unified-uninstall-last","python313.dll"),"program");
@@ -401,7 +404,9 @@ namespace UnifiedBootstrap {
                 // The largest file that is read, with a further field, as uninstall accepts it.
                 string largest=record.Replace("{","{\"more\": \""+new string('x',4096-record.Length-12)+"\", ");
                 File.WriteAllText(journal,largest);
+                journalFacts=facts(journal);
                 Need(new FileInfo(journal).Length==4096 && NativeInstaller.Unopened(left)==emptied,"a journal of 4096 bytes is read");
+                Need(facts(journal)==journalFacts,"the look at a journal of 4096 bytes changes no time and no attribute of it");
                 // Bytes that are not UTF-8 are no journal.
                 File.WriteAllBytes(journal,new byte[]{0x7b,0xff,0x7d});
                 Need(NativeInstaller.Unopened(left)==damaged,"bytes that are not UTF-8");
@@ -433,7 +438,7 @@ namespace UnifiedBootstrap {
                 Need(!File.Exists(journal),"the journal could be deleted while a handle of the look's kind was open");
                 File.WriteAllText(journal,record);
                 // The case wrote this journal anew, and no look has reached it yet.
-                string journalTimes=times(journal);
+                journalFacts=facts(journal);
                 // A journal that another program holds for itself is a doubt.
                 using(new FileStream(journal,FileMode.Open,FileAccess.ReadWrite,FileShare.None))
                     Need(NativeInstaller.Unopened(left)==damaged,"a journal that cannot be opened");
@@ -444,8 +449,8 @@ namespace UnifiedBootstrap {
                     "the folder holds what the case put there: "+String.Join("|",names));
                 Need(File.ReadAllText(notes)=="mine" && File.ReadAllText(journal)==record &&
                     File.ReadAllText(Path.Combine(left,NativeInstaller.Complete))=="{}","the person's file and both records are unchanged");
-                Need(times(journal)==journalTimes && times(Path.Combine(left,NativeInstaller.Complete))==completeTimes &&
-                    times(notes)==notesTimes,"a look changes no creation time and no write time of the journal, of setup's record and of the person's file");
+                Need(facts(journal)==journalFacts && facts(Path.Combine(left,NativeInstaller.Complete))==completeFacts &&
+                    facts(notes)==notesFacts,"a look changes no creation time, no write time and no attribute of the journal, of setup's record and of the person's file");
                 Need(NativeInstaller.RootState(left)=="installed","setup still takes the folder for a finished installation");
 
                 // A folder above the target that other accounts can change is named.

@@ -782,7 +782,7 @@ namespace UnifiedBootstrap {
             // of the removal did not finish. Then the text of a damaged
             // installation is not true ("It holds your chats and settings"), and
             // it names no next step. Each statement of the other text is what
-            // setup found at this look, or what setup does. It says nothing
+            // setup found in this run, or what setup does. It says nothing
             // about the folder's history: setup knows only that a file with the
             // name of its completion record is there. Its next step is to
             // move or rename the folder, as at setup's stop for a damaged

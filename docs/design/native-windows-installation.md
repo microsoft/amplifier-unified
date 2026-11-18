@@ -2458,10 +2458,12 @@ between two texts:
   cannot open it: a program file is missing. Keep that folder. It holds your
   chats and settings. This version of setup cannot repair it."
 
-Each statement of the first text is what setup found at that look, or what
-setup does; its last two sentences are the next step. "Setup found an
-installation record in this folder": the folder has a file with the name of
-setup's completion record, which setup writes at the end of an installation.
+Each statement of the first text is what setup found in this run, or what
+setup does; its last two sentences are the next step. Setup found the
+record's name when it classified the folder, and the missing program file
+directly before this look. "Setup found an installation record in this
+folder": the folder has a file with the name of setup's completion record,
+which setup writes at the end of an installation.
 Setup does not read that file in this look, and it knows no more about the
 folder's history. The text does not say that an installation was made in the
 folder. (The second text says "Amplifier is already installed in" on the same
@@ -2504,11 +2506,12 @@ that is not UTF-8, and a folder with the journal's name; a journal of exactly
 4096 bytes; a journal that another program has open for writing, one that is
 deleted while a handle of the look's kind is open, and one that another
 program holds for itself; that the folder holds afterwards what the case put
-there; and that a look changes no creation time and no write time of the
-journal, of setup's record and of the person's file. Not proven: the message
-in setup's real window, the three states on a PC with this text, the look on
-Windows 11, a program that replaces an entry during the look, and a setup run
-in the instant in which the step after exit deletes the journal.
+there; and that a look changes no creation time, no write time and no
+attribute of the journal, of setup's record and of the person's file. Not
+proven: the message in setup's real window, the three states on a PC with
+this text, the look on Windows 11, a program that replaces an entry during
+the look, and a setup run in the instant in which the step after exit deletes
+the journal.
 
 When the launcher's start program is still there (a removal that
 stopped before its last step), setup asks, and on Yes it lets the
