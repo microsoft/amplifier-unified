@@ -1293,8 +1293,9 @@ class UpdateManager:
                     await self.diagnostics.run('ecosystem-copy',candidate_copy,proof,copy_snapshot,source,stage/'foundation')
                 else:
                     (stage/'foundation').mkdir()
-                for name in ('config','routing'):
-                    if (self.home/name).exists(): await candidate_copy(proof,shutil.copytree,self.home/name,stage/name)
+                # No copy of the app's own config or routing folder: config holds
+                # the sign-in secrets and the TLS key, and a stage reads neither
+                # folder. Its settings, keys and routing are in shared-config.
                 from .session_files import amplifier_home
                 from .update_storage import snapshot_shared_config
                 shared_stage=stage/'shared-config'
@@ -1304,8 +1305,6 @@ class UpdateManager:
                 # or settlement from a CancelledError.
                 await asyncio.to_thread(verify_app_selection, self, self.inventory)
                 proof['boundary'] = 'preparing'
-                for config_file in (stage/'config').rglob('*.yaml'):
-                    config_file.write_text(config_file.read_text().replace(str(source),str(stage/'foundation')))
                 shared_settings = shared_stage/'settings.yaml'
                 if shared_settings.exists():
                     write_private(shared_settings, shared_settings.read_text().replace(str(source),str(stage/'foundation'))

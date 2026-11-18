@@ -455,6 +455,11 @@ of the historical Mac resolver failure whose stderr was unavailable.
 
 Local data: `updates/inventory.json` (private source details), `updates/releases/<id>/` (staged sources/configuration), `updates/active.json` (current/previous pointer), and per-generation runtime environments. Previous and referenced generations remain available for rollback and active workers; unreferenced, verified owned generations and environments are reclaimed. Shared source objects are retained pending complete proof that no references remain. State shown to the UI/agent contains credential-safe source labels and commit IDs, not credential-bearing remote URLs.
 
+A stage holds no copy of the app's own `config` or `routing` folder. `config`
+holds the sign-in secrets and the TLS key of the installation, and a stage reads
+neither folder: its settings, keys and routing are in `shared-config`. A stage
+that an earlier version of the app prepared can still hold such a copy.
+
 Component qualification uses a temporary `shared-config/keys.env` copy.
 The manager removes only that file after qualification succeeds or a handled
 preparation failure. Settings and routing stay. Cancellation keeps the copy.
