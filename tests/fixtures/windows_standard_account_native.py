@@ -137,9 +137,9 @@ NOT_SHOWN = (
     ("That the app answers one read with a limit of 2 seconds at every moment after a start",
      "the app can give no answer for some seconds, some seconds after a start (on hosted runners: up to 15.7 "
      "seconds). After the second sign-in and after the start that follows the first uninstall, the case "
-     "reads as the Start-menu start reads: the status with the product's wait of 60 seconds, then the "
-     "connection with the product's wait of 60 seconds. A late answer there fails no step. It is in the "
-     "record, and the run's page gets a warning."),
+     "reads the status and the connection as the Start-menu start reads them: each with the product's "
+     "wait of 60 seconds. An answer within that wait fails no step. The run's page gets a warning when a "
+     "question of the case's watch took 2 seconds or more after the app had answered."),
 )
 
 
@@ -404,13 +404,13 @@ def new_password(name):
     It holds no three characters in a row of the name, in either case. Windows
     refuses a password that holds a whole part of the user's name, when the
     part has three characters or more (`NetUserAdd` then gives status 2245).
-    The parts are what the dashes of the name divide: "amp" and "std" in this
-    case's names. Asked of Windows on a hosted runner (run 44270851072,
-    November 18, 2026): it refused "amp", "AMP", "Amp", "std", the whole last
-    part and the whole name; it took two characters of a part, three
-    characters across a dash, and three characters out of the last part. One
-    run of the case failed with that status before any step (run 44204522612,
-    November 17, 2026).
+    In this case's names the parts are what the dashes divide: "amp", "std"
+    and the six characters of the run. Asked of Windows on a hosted runner
+    (run 44270851072, November 18, 2026): it refused "amp", "AMP", "Amp",
+    "std", the whole last part and the whole name; it took two characters of
+    a part, three characters across a dash, and three characters out of the
+    last part. One run of the case failed with that status before any step
+    (run 44204522612, November 17, 2026).
     """
     alphabet = string.ascii_letters + string.digits + "!#%+-_="
     parts = {name[at:at + 3].lower() for at in range(len(name) - 2)}
@@ -1061,14 +1061,18 @@ def late_answers(report, begins):
 
     Three kinds, each read from the record in that program's report. None decides a step.
 
-    - The watch. One question to the listener took 2 seconds or more, the
-      listener had given an answer at the last change that the watch kept
-      before that question, and the same process numbers owned the port after
-      the question. The text names what the case did then: the last mark of
-      the watch before the question, or `begins` when there is none. A
-      question after a mark of `STOPS` gets no text: the case itself stops the
-      app there. A host that has the port and has not answered yet gets no
-      text either: it starts, and the case waits for it in every case.
+    - The watch. One question to the listener took 2 seconds or more, and
+      three things held. The listener had given an answer at the last change
+      that the watch kept before that question. The same process numbers
+      owned the port after the question. The record has the processor time
+      that a process used during the question; the watch reads that only
+      for a process that owned the port at the question before and that was
+      there before this question and after it. The text names what the case
+      did then: the last mark of the watch before the question, or `begins`
+      when there is none. A question after a mark of `STOPS` gets no text:
+      the case itself stops the app there. A host that has the port and has
+      not answered yet gets no text either: it starts, and the case waits
+      for it in every case.
     - The read of trust after the second sign-in (`signInTrust`). A read of
       one of its two snapshots failed (`captureErrors`), or its request to the
       listener got no answer (`listenerAnswers`).
@@ -1082,9 +1086,12 @@ def late_answers(report, begins):
     gets a text or none; that depends on when the watch's question began.
     The watch keeps at most 40 late answers; one after those gets no text.
 
-    A text holds fixed words, the marks of this file, numbers, and the names
-    of the snapshot's parts and of error classes. It holds no answer and no
-    error text.
+    A text holds fixed words, numbers, a mark of the record (the marks are
+    the texts of this file's `watch.mark` calls), and the names of the
+    snapshot's parts and of error classes, each with only letters, digits,
+    the dot and the underscore. It holds no answer and no error text. The
+    seconds of the read of trust are in a text only when the record has them
+    as a number.
     """
     found = []
     watch = report.get("listener")
@@ -1126,8 +1133,9 @@ def late_answers(report, begins):
         silent = [probe for probe in trust.get("probes") or [] if isinstance(probe, dict)
                   and probe.get("state") == "unreachable"]
         if silent:
-            found.append(f"The read of trust after the sign-in waited: {len(silent)} question(s) got no answer, "
-                         f'and the read ended after {trust.get("seconds")} seconds.')
+            ended = trust.get("seconds")
+            found.append(f"The read of trust after the sign-in waited: {len(silent)} question(s) got no answer"
+                         + (f", and the read ended after {ended} seconds." if type(ended) in (int, float) else "."))
     return found
 
 
@@ -1137,7 +1145,8 @@ def page_warnings(report):
     GitHub shows a line that begins with `::warning` on the page of the run.
     Such a line fails nothing. `%`, a line end and a carriage return are
     written as GitHub's own codes, so that a text stays one line. The title
-    has no comma and no colon: GitHub reads those as the end of a title.
+    has no comma and no colon: GitHub's own tool for such lines writes those
+    two as codes in a title, and this title needs neither.
     """
     texts = (late_answers((report.get("first") or {}).get("journey") or {}, "the first start")
              + late_answers(report.get("second") or {}, "the second sign-in"))
@@ -2342,8 +2351,8 @@ def journey(stage, exchange, account, token):
         note_updates(steps, home, "after the first start")
 
         steps.begin(JOURNEY[5])
-        # After a failed step the record makes this read once more with a limit of 2 minutes, not the 10 minutes
-        # of a launcher command.
+        # After a failed step the record makes this read once more when its answer was not as required. That
+        # read has a limit of 2 minutes, not the 10 minutes of a launcher command.
         shown = observed(steps, home, "the launcher's status", lambda: again.launcher(root, "--status"),
                          lambda value: value["exitCode"] == 0 and (value["json"] or {}).get("ok") is True,
                          later=lambda: again.launcher(root, "--status", timeout=120))
@@ -2479,9 +2488,10 @@ def exact_identity(value):
     The same rule as in `sign_in_snapshot`: the number is a whole number that
     Windows can give a process, and the creation time is the text that the
     product gives: decimal digits with no zero in front, at most 20, a number
-    of 64 bits. It is compared as that text and never made a number. Until
-    November 18, 2026 an answer without such an identity failed the step
-    through a snapshot. The step's two conditions on the host require it now.
+    of 64 bits. The identity has that text itself, and the step compares the
+    text. Until pull request 2316 an answer without such an identity failed
+    the step through a snapshot. The step's two conditions on the host
+    require it now.
     """
     if not isinstance(value, dict):
         return None
@@ -2567,8 +2577,10 @@ def sign_in_snapshot(again, root, home, *, status=None, state=None):
 def sign_in_trust(steps, again, root, home, urls, pin, status, state):
     """Observe the maintained settling rule, without changing its defaults or TLS inputs.
 
-    Only the answer of that rule (`settled_trust`) decides: the step goes on
-    with "trusted" and fails with every other answer.
+    Of the reads here, only the answer of that rule (`settled_trust`)
+    decides: the step goes on with "trusted" and fails with every other
+    answer. As before, an error of that read, or of a save of the report
+    here, fails the step too.
 
     The two snapshots, before the first question and after the answer, are
     for the record (`signInTrust`: `before`, `probes`, `after`). A read of a
@@ -2577,7 +2589,7 @@ def sign_in_trust(steps, again, root, home, urls, pin, status, state):
     read is: "BEFORE PROBE", then "AFTER PROBE" after the answer "trusted",
     or "FAIL" after another answer or an error of the read.
 
-    Until November 18, 2026 a failed read of a snapshot failed the step. A
+    Until pull request 2316 a failed read of a snapshot failed the step. A
     snapshot reads the app with short limits: one request to the listener
     with a limit of 3 seconds, and after the answer one status read with a
     limit of 2 seconds. The app can give no answer for longer than that, some

@@ -1381,6 +1381,12 @@ def test_the_runs_page_names_each_read_of_the_trust_read_after_the_sign_in_that_
         {"seconds": 6.2, "state": "trusted"}]}
     assert case.late_answers({"signInTrust": waited}, "the second sign-in") == [
         f"{read} waited: 2 question(s) got no answer, and the read ended after 6.3 seconds."]
+    # The seconds of the read are in the text only when the record has them as a number.
+    for seconds in (None, "6.3\n::error::x", True, {"errorType": "OSError", "error": "PRIVATE-SENTINEL"}):
+        assert case.late_answers({"signInTrust": {**waited, "seconds": seconds}}, "the second sign-in") == [
+            f"{read} waited: 2 question(s) got no answer."]
+    assert case.late_answers({"signInTrust": {**waited, "seconds": 60}}, "x") == [
+        f"{read} waited: 2 question(s) got no answer, and the read ended after 60 seconds."]
     # A read of a snapshot: an error, and the request to the listener that got no answer. A name in the text is
     # only a name: letters, digits, the dot and the underscore.
     silent = {"captureErrors": [{"part": "host", "errorType": "AssertionError"},
@@ -3222,7 +3228,7 @@ def test_second_sign_in_probe_error_restores_the_reader_and_saves_failure_observ
                                                  ("listener", "listenerAnswers", "RuntimeError")])
 def test_second_sign_in_evidence_capture_error_is_kept_for_the_record_and_fails_no_step(
         case, sign_in_probe, broken, part, error):
-    # Until November 18, 2026 such an error failed the step ("Before-probe evidence capture failed"). A snapshot
+    # Until pull request 2316 such an error failed the step ("Before-probe evidence capture failed"). A snapshot
     # reads the app with limits of 2 and 3 seconds, and the app can give no answer for longer than that, some
     # seconds after a start. Now only the answer of the read of trust decides.
     run = sign_in_probe
@@ -3267,7 +3273,7 @@ def test_second_sign_in_post_probe_evidence_error_is_kept_and_the_answer_of_the_
         return cli(root, *args, **kwargs)
 
     monkeypatch.setattr(run.again, "cli", read)
-    # Until November 18, 2026: "After-probe evidence capture failed", with the answer "trusted" in the record.
+    # Until pull request 2316: "After-probe evidence capture failed", with the answer "trusted" in the record.
     assert run.observe() == "trusted"
     observation = json.loads(run.steps.path.read_text())["signInTrust"]
     assert observation["stage"] == "AFTER PROBE" and observation["state"] == "trusted"
@@ -3313,15 +3319,15 @@ def test_second_sign_in_observations_omit_private_fields_messages_and_raw_tails(
     ("token", "not a standard user"),
     ("same-host", "not a new host on the same port"),
     ("port", "not a new host on the same port"),
-    # A status answer whose creation time is not the exact text of the product names no host. Until November 18,
-    # 2026 a snapshot failed the step for it; now the step's own conditions on the host do.
+    # A status answer whose creation time is not the exact text of the product names no host. Until pull request 2316
+    # a snapshot failed the step for it; now the step's own conditions on the host do.
     ("identity", "The host after the sign-in is not a new host on the same port"),
     ("post-identity", "After the TLS probe the host is not a new host on the same port"),
     ("post-host", "After the TLS probe the host is not a new host on the same port"),
     ("post-port", "After the TLS probe the host is not a new host on the same port"),
     ("post-ready", "no longer has a verified responsive host"),
     # The one status read of the snapshot after the read of trust gets no answer, and the waiting read gets one:
-    # the step goes on to its next condition. Until November 18, 2026 the step failed there.
+    # the step goes on to its next condition. Until pull request 2316 the step failed there.
     ("post-silent", "does not list the certificate among this user's root certificates"),
     ("root", "does not list the certificate among this user's root certificates"),
 ])
@@ -3463,7 +3469,7 @@ def test_second_sign_in_missing_or_invalid_creation_identity_is_no_identity(case
         run.status["json"] = value
     else:
         run.post_status = {"exitCode": 0, "json": value}
-    # In the record: a capture error, no host and no creation time. Until November 18, 2026 that error failed the
+    # In the record: a capture error, no host and no creation time. Until pull request 2316 that error failed the
     # step here ("Before-probe" or "After-probe evidence capture failed"). Now the read of trust goes on.
     assert run.observe() == "trusted"
     observation = json.loads(run.steps.path.read_text())["signInTrust"]

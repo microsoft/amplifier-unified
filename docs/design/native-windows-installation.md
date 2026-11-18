@@ -2872,12 +2872,12 @@ found nothing that a standard account cannot do.
 Later runs found one thing about the app, not about the account. Some seconds
 after a start, the app can give no answer for some seconds: 2.6 to 15.7
 seconds in nine failed runs that kept a record. A read with a limit of 2
-seconds then gets no answer. Until November 18, 2026 the case made such reads
+seconds then gets no answer. Until pull request 2316 the case made such reads
 after the second sign-in and after the start that follows the first
 uninstall, and 15 of 257 runs failed there. Those two steps now read as the
 Start-menu start reads its app: the status with a wait of up to 60 seconds,
-then the connection with a wait of up to 60 seconds. A late answer there
-fails no step. The case keeps a record of each read and asks the app's
+and the connection with a wait of up to 60 seconds. An answer within that
+wait fails no step. The case keeps a record of each read and asks the app's
 listener beside its steps. When one of those questions took 2 seconds or
 more after the app had answered, the page of the run gets a warning. A
 silence that is shorter than 2 seconds gets none, and one of 2 to about 2.6
@@ -2910,8 +2910,8 @@ reason.
 - Windows 11, and a sign-in at the PC's own screen. The runner is Windows
   Server, and the user signs in through Remote Desktop.
 - That the app answers one read with a limit of 2 seconds at every moment
-  after a start. Two steps wait as the product waits (see above), and a late
-  answer there is a warning on the page of the run.
+  after a start. Two steps wait as the product waits, and the page of the
+  run can get a warning (for both, see above).
 
 Also not shown anywhere: a standard account on a PC that an organization
 manages (rules for programs, a policy that disables a person's own
