@@ -9,10 +9,16 @@ name: Windows launcher follows the app
 # action; then the launcher follows, on the same port; a helper task that was
 # left removes itself. A failed or unreached check fails the job. No check is
 # skipped.
+# A second job, on its own installation, with "Keep Amplifier up to date" off:
+# a newer app version starts no launcher refresh by itself, and the Updates
+# page's install request starts one. One build of the app can refresh the
+# launcher once, so the two cases cannot share a job. They run side by side.
 # Not a setup file run, a standard account, a sign-out, a restart of the PC or
 # a browser. The fixture's own part is named at the top of its file.
-# Slow: the case waits for the app's own decisions (one a minute) and for Task
-# Scheduler's timed trigger (5 minutes). It starts only for the files below.
+# Slow: each case waits for the app's own decisions (one a minute), the first
+# also for Task Scheduler's timed trigger (5 minutes). It starts only for the
+# files below. amplifier_web/updates.py is one of them: the update owner's loop
+# decides when the request starts and what the page says after it.
 on:
   workflow_dispatch:
   pull_request:
@@ -22,6 +28,7 @@ on:
       - tests/fixtures/windows_launcher_refresh_native.py
       - tests/fixtures/windows_start_again_native.py
       - tests/fixtures/manual_app_handoff_native.py
+      - amplifier_web/updates.py
       - amplifier_web/windows_launcher_follow.py
       - amplifier_web/windows_launcher_refresh.py
       - amplifier_web/windows_launcher_task.py
@@ -35,8 +42,20 @@ permissions:
   contents: read
 jobs:
   windows-launcher-follow:
+    name: windows-launcher-follow (${{ matrix.case }})
     runs-on: windows-latest
     timeout-minutes: 100
+    strategy:
+      fail-fast: false
+      matrix:
+        # `checks` is the number of checks of the case in the fixture (CASES).
+        include:
+          - case: follow
+            checks: 10
+            title: The app asks, the helper fails and rolls back, the timed trigger repairs, the launcher follows
+          - case: setting
+            checks: 8
+            title: With the setting off nothing starts by itself, and the page's install request starts one refresh
     env:
       PYTHONDONTWRITEBYTECODE: '1'
       PYTHONUTF8: '1'
@@ -62,11 +81,11 @@ jobs:
         run: |
           python -I -B tests/fixtures/windows_launcher_follow_native.py prepare
           if ($LASTEXITCODE -ne 0) { throw 'Preparation failed; inspect preparation.json.' }
-      - name: The app asks, the helper fails and rolls back, the timed trigger repairs, the launcher follows
+      - name: ${{ matrix.title }}
         timeout-minutes: 60
         shell: pwsh
         run: |
-          & "$env:FOLLOW_PYTHON" -I -B tests/fixtures/windows_launcher_follow_native.py run
+          & "$env:FOLLOW_PYTHON" -I -B tests/fixtures/windows_launcher_follow_native.py run --case ${{ matrix.case }}
           if ($LASTEXITCODE -ne 0) { throw 'The case failed; inspect result.json.' }
       - name: Remove only this case's tasks, entries and folder
         if: always()
@@ -81,7 +100,8 @@ jobs:
         run: |
           $report = Get-Content -Raw "$env:RUNNER_TEMP/launcher-follow-evidence/result.json" | ConvertFrom-Json
           $missing = @($report.checks | Where-Object { $_.status -ne 'PASS' })
-          if ($report.status -ne 'PASS' -or $report.checks.Count -ne 10 -or $missing.Count -ne 0) {
+          if ($report.status -ne 'PASS' -or $report.case -ne '${{ matrix.case }}' -or
+              $report.checks.Count -ne ${{ matrix.checks }} -or $missing.Count -ne 0) {
             throw 'Not every check passed; inspect result.json.'
           }
       - name: Print the bounded result
@@ -98,7 +118,8 @@ jobs:
         timeout-minutes: 2
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: windows-launcher-follow
+          # The first case keeps the name that it had: windows-launcher-follow.
+          name: windows-launcher-${{ matrix.case }}
           path: |
             ${{ runner.temp }}/launcher-follow-evidence/*.json
             ${{ runner.temp }}/launcher-follow-evidence/*.cs
