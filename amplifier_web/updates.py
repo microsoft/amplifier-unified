@@ -1295,7 +1295,8 @@ class UpdateManager:
                     (stage/'foundation').mkdir()
                 # No copy of the app's own config or routing folder: config holds
                 # the sign-in secrets and the TLS key, and a stage reads neither
-                # folder. Its settings, keys and routing are in shared-config.
+                # folder. Its settings and routing are in shared-config; its keys
+                # file is there only during a qualification.
                 from .session_files import amplifier_home
                 from .update_storage import snapshot_shared_config
                 shared_stage=stage/'shared-config'
