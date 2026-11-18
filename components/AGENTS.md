@@ -85,21 +85,25 @@ edit that snapshot by hand or coinstall the standalone distribution with Unified
 Independent author edits/publication do not refresh the app selection. Follow
 the [selection instructions](README.md#select-an-operations-artifact).
 
-`kernels/` is the temporary authoring project for `amplifier_kernels`, including
+[amplifier-platform-kernels](https://github.com/bkrabach/amplifier-platform-kernels)
+is the sole authoring owner for `amplifier_kernels`, including
 its Python and Node runners and real-process mechanism tests. Unified consumes
 the generated top-level `amplifier_kernels/` snapshot selected by
 `kernels.source.json`, preserving editable and isolated-worker import origins.
 Never edit that snapshot by hand or coinstall the standalone distribution with
 Unified. Author edits and publication do not refresh the app selection; the host
-retains process approval, execution, observation and recovery authority.
+retains process approval, execution, observation and recovery authority. Do not
+restore an author copy here; follow the [selection guide](README.md#select-a-kernels-artifact).
 
-`status/` authors the independently published local observation package. Preserve
+[amplifier-platform-status](https://github.com/bkrabach/amplifier-platform-status)
+is the sole author of the local observation package and its standalone tests. Preserve
 the public `amplifier_status` import, CLI and optional hook. Unified consumes only
 the published artifact selected into generated `amplifier_web/status_protocol`,
 bound by `status-emitter.source.json`; do not edit that private delivery copy.
 Author changes/publication do not refresh it. Unlike the other embedded packages,
 distinct private/public imports and executable names permit coinstallation. Keep
-host enablement, projection and authority in Unified.
+host enablement, projection and authority in Unified. Do not restore an author
+copy here; follow the [selection guide](README.md#select-a-status-artifact).
 
 ## Web client delivery
 
