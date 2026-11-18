@@ -109,6 +109,29 @@ async def test_legacy_state_without_selection_keeps_explicit_creation_choice(tmp
     await controls.close()
 
 
+async def test_model_selection_revision_survives_restore_and_distinguishes_a_b_a(tmp_path, monkeypatch):
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    controls, loop, providers = mounted_controls(SELECTION)
+    await controls.perform('provider.select', SELECTION)
+    first = controls.recovery_contract()['selectionRevision']
+    other = {**SELECTION, 'model': 'other-model'}
+    await controls.perform('provider.select', other)
+    second = controls.recovery_contract()['selectionRevision']
+    await controls.perform('provider.select', SELECTION)
+    third = controls.recovery_contract()['selectionRevision']
+    assert len({first, second, third}) == 3
+    assert all(not provider.calls for provider in providers.values())
+    saved = json.loads(controls.state_path().read_text())
+    assert saved['selectionRevision'] == third
+    await controls.close()
+    resumed, loop, providers = mounted_controls(other)
+    await resumed.restore()
+    assert resumed.recovery_contract()['selectionRevision'] == third
+    assert resumed.selection == SELECTION
+    assert all(not provider.calls for provider in providers.values())
+    await resumed.close()
+
+
 def test_selected_provider_info_reports_effort_without_mutating_bundle_defaults():
     provider = Provider('bundle-model', 'high')
     selected = SelectedProvider(provider, SELECTION)

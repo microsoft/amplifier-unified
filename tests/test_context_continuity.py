@@ -1015,6 +1015,37 @@ def bind_continuity_recovery_guards(coordinator, adapter, contract):
     return gate
 
 
+@pytest.mark.parametrize('warm', [False, True], ids=['cold', 'warm'])
+async def test_model_transition_preserves_source_checkpoint_without_foreground_intent(tmp_path, warm):
+    """An explicit new model is not permission to reuse or replace opaque state."""
+    from amplifier_web.context_continuity import ContextRecoveryError
+    from amplifier_web.host.session import SelectedProvider
+    source = native_history()
+    first, raw, _, adapter, checkpoint, _, prepare = await native_fixture(tmp_path, source)
+    await prepare()
+    await checkpoint()
+    saved = adapter.path.read_bytes()
+    old_summary = copy.deepcopy(first.context.summary)
+    if warm:
+        coordinator = first
+    else:
+        coordinator, raw, _, adapter, checkpoint, _, prepare = await native_fixture(tmp_path, source)
+    coordinator.loop.root_provider = SelectedProvider(raw, {
+        'instance': 'fixture', 'model': 'target-model', 'effort': 'low'})
+    before = (len(raw.compactions), len(raw.sent))
+    await adapter.preserve(source)  # Passive restore/classification: zero model work.
+    assert adapter.public()['status'] == 'transition_required'
+    adapter.save()
+    assert adapter.path.read_bytes() == saved
+    with pytest.raises(ContextRecoveryError, match='transition_intent_required'):
+        await prepare()
+    assert adapter.path.read_bytes() == saved
+    assert (len(raw.compactions), len(raw.sent)) == before
+    assert await coordinator.context.get_messages() == source
+    if warm:
+        assert coordinator.context.summary == old_summary
+
+
 @pytest.mark.parametrize('change', [
     None, 'selection', 'maxOutputTokens', 'context', 'loop', 'plan',
 ], ids=['unchanged', 'model', 'output', 'context', 'loop', 'credentials'])
