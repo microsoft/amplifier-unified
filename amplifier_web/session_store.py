@@ -596,12 +596,22 @@ def fork_session(home, source, target_id, *, turn=None, after_message_id=None, b
                            and all(row.get("state") == "committed" for row in receipt["attempts"].values()))
             prefix = record["sourceRevision"]
             end = prefix["messages"]
+            # Consult the owning pure configuration classifier, never mount a
+            # worker or duplicate the module's prompt/configuration algorithm.
+            plan = json.loads(copied["configuration.json"])
+            declaration = plan.get("session", {}).get("context")
+            if not isinstance(declaration, dict) or declaration.get("module") != "context-managed":
+                raise ValueError("Fork checkpoint configuration is not verifiable")
+            from amplifier_module_context_managed.boundary import BoundaryContextManager
+            validator = BoundaryContextManager(declaration.get("config", {}))
+            if validator.checkpoint_configuration() != record["configuration"]:
+                raise ValueError("Fork checkpoint configuration changed")
             if (settled and not record.get("progress") and record.get("summary")
                     and type(end) is int and 0 < end <= len(messages)
                     and record.get("sha256") == digest({k: v for k, v in record.items() if k != "sha256"})
                     and prefix["sha256"] == _source_digest(messages[:end])):
                 copied["context-checkpoint.json"] = checkpoint_text
-        except (FileNotFoundError, OSError, ValueError, TypeError, KeyError, AttributeError):
+        except (FileNotFoundError, OSError, ValueError, TypeError, KeyError, AttributeError, ImportError):
             pass  # Originals-only is explicit in the fork result below.
     if "configuration.json" in copied:
         from .host.components import portable_module_sources

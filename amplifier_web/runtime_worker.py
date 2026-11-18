@@ -1672,7 +1672,7 @@ class Worker:
         identity = generation.get('initial_input_id')
         binding = self.context_bindings.get(identity, {})
         if (binding.get('operation') != 'send'
-                or binding.get('interruptionRevision') != self.stop_revision):
+                or binding.get('localStopRevision') != self.stop_revision):
             return None
         return {'inputId': identity, 'selectionRevision': binding.get('selectionRevision')}
 
@@ -1683,6 +1683,7 @@ class Worker:
         self.context_bindings[identity] = {
             **(binding or {'clientId': None, 'targets': []}),
             'interruptionRevision': data.get('interruptionRevision', 0),
+            'localStopRevision': self.stop_revision,
             'operation': data.get('op'),
             'selectionRevision': getattr(self.controls, 'selection_revision', None)}
         self.context_bindings = dict(list(self.context_bindings.items())[-64:])

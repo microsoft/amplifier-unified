@@ -178,6 +178,27 @@ async def test_cold_selection_override_revisions_once_then_identical_mounted_ack
     await resumed.close()
 
 
+async def test_cold_choice_only_override_then_bound_ack_keeps_one_revision(tmp_path, monkeypatch):
+    from amplifier_web import provider_catalog
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    monkeypatch.setattr(provider_catalog, 'require_mounted_binding', lambda *args: None)
+    first, _, _ = mounted_controls(SELECTION)
+    await first.perform('provider.select', {**SELECTION, 'expectedConnectionKey': 'account-A'})
+    old = first.selection_revision
+    await first.close()
+    other = {**SELECTION, 'model': 'new-target'}
+    resumed, _, _ = mounted_controls(other)
+    await resumed.restore(selection_override=other)
+    mounted = resumed.selection_revision
+    assert mounted != old
+    await resumed.perform('provider.select', {**other, 'expectedConnectionKey': 'account-B'})
+    assert resumed.selection_revision == mounted
+    assert resumed.selection_binding == 'account-B'
+    await resumed.close()
+    again, _, _ = mounted_controls(other)
+    await again.restore()
+    assert again.selection_revision == mounted and again.selection_binding == 'account-B'
+    await again.close()
 def test_selected_provider_info_reports_effort_without_mutating_bundle_defaults():
     provider = Provider('bundle-model', 'high')
     selected = SelectedProvider(provider, SELECTION)

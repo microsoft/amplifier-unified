@@ -106,7 +106,7 @@ def test_fork_keeps_full_system_tool_context_and_configuration_without_job_owner
     assert store.load('fork-session')[0][0]['role']=='system'
 
 
-@pytest.mark.parametrize('disposition', ['accepted', 'changed-prefix', 'unknown-install'])
+@pytest.mark.parametrize('disposition', ['accepted', 'changed-prefix', 'unknown-install', 'changed-config'])
 async def test_full_fork_retains_only_prefix_bound_accepted_context_checkpoint(tmp_path, disposition):
     from amplifier_web.automatic_history import display_message, revision
     from amplifier_web.session_files import project_slug
@@ -124,6 +124,11 @@ async def test_full_fork_retains_only_prefix_bound_accepted_context_checkpoint(t
     directory = home / 'sessions' / 'source-session'
     directory.mkdir(parents=True, exist_ok=True)
     (directory / 'context-checkpoint.json').write_bytes(accepted)
+    config = copy.deepcopy(coordinator.context.config)
+    if disposition == 'changed-config':
+        config['summary_max_output_tokens'] = 999
+    (directory / 'effective-configuration.json').write_text(json.dumps({
+        'session': {'context': {'module': 'context-managed', 'config': config}}}))
     if disposition == 'unknown-install':
         (directory / 'context-recovery.json').write_text(json.dumps({
             'version': 1, 'current': 'prior-install',

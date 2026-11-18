@@ -371,6 +371,7 @@ class RecoveryWire:
         self.effects = self.unknown_invocations = 0
         self.stop_revision = self.epoch = 0
         self.unknown = copy.deepcopy(RECOVERY_UNKNOWN)
+        self.reducing_models = set()
         self.instruction, self.reminder = RECOVERY_INSTRUCTION, RECOVERY_REMINDER
 
     @staticmethod
@@ -397,7 +398,8 @@ class RecoveryWire:
             # Large windows retain all bytes and add opaque state (no reduction).
             # Small windows remove ONLY known filler; named facts, prior opaque
             # windows, function calls and actual results remain in order.
-            large = len(json.dumps(body['input']).encode()) > RECOVERY_LARGE_BYTES
+            large = (len(json.dumps(body['input']).encode()) > RECOVERY_LARGE_BYTES
+                     and body['model'] not in self.reducing_models)
             window = (copy.deepcopy(body['input']) if large
                       else self.reduce_filler(body['input']))
             window.append({'type': 'compaction', 'encrypted_content': 'synthetic-' + digest(body)})
@@ -429,7 +431,7 @@ class RecoveryWire:
         count = self.count({key: value for key, value in body.items() if key in RECOVERY_PROJECTION})
         return httpx.Response(200, json={
             'id': 'response-' + digest(body), 'object': 'response', 'created_at': 1,
-            'model': RECOVERY_MODEL, 'status': 'completed', 'output': output,
+            'model': body['model'], 'status': 'completed', 'output': output,
             'usage': {'input_tokens': count, 'output_tokens': 20, 'total_tokens': count + 20},
         })
 
@@ -573,6 +575,128 @@ async def append_recovery_evidence(context, labels):
         {'role': 'assistant', 'content': 'No effects were replayed.'},
     ):
         await context.add_message(row)
+
+
+@pytest.mark.parametrize('cold', [False, True], ids=['warm', 'cold'])
+async def test_ordinary_sdk_model_transition_counts_compacts_and_dispatches_selected_target(tmp_path, cold):
+    """Actual Core/Streaming/Context/SelectedProvider/SDK pair, synthetic HTTP."""
+    target_model = 'gpt-6.1-astra'
+    wire, directory = RecoveryWire(), tmp_path / 'session'
+    async with ordinary_recovery_case(directory, wire) as first:
+        await first.session.execute('SEED-EFFECT: preserve ORBIT and completed receipt.')
+        await append_recovery_evidence(first.context, ['A'])
+        await first.session.execute('Establish accepted source checkpoint.')
+        await first.checkpoint()
+        accepted = first.adapter.path.read_bytes()
+        await append_recovery_evidence(first.context, [str(n) for n in range(10)])
+        canonical = copy.deepcopy(await first.context.get_messages())
+        async def target_request(case):
+            coordinator = case.session.coordinator
+            # Real ordinary Streaming selects its mounted map, not loop-live's
+            # root override. Change both through the actual mounted selection.
+            await case.controls.perform('provider.select', {'instance': 'openai', 'model': target_model, 'effort': 'high'})
+            target = coordinator.get('orchestrator').root_provider
+            await coordinator.mount('providers', target, name='openai')
+            coordinator.register_capability('web.context_transition.foreground', lambda: {
+                'generationId': 'synthetic-ordinary-generation', 'inputId': 'fresh-target-input',
+                'selectionRevision': case.controls.selection_revision,
+                'selection': case.controls.selection})
+            before = (len(wire.counts), len(wire.compactions), len(wire.completions))
+            assert case.adapter.path.read_bytes() == accepted
+            wire.reducing_models.add(target_model)
+            text = await case.session.execute('Fresh target input: use report-v2 and never replay effects.')
+            assert 'Usable continuation' in text
+            assert case.adapter.recovery_status()['state'] == 'committed'
+            assert case.adapter.recovery_status()['outcome'] == 'checkpoint-installed'
+            assert all(body['model'] == target_model for body, _ in wire.counts[before[0]:])
+            assert all(body['model'] == target_model for body, _, _ in wire.compactions[before[1]:])
+            assert all(body['model'] == target_model for body in wire.completions[before[2]:])
+            assert len(wire.compactions) > before[1] and len(wire.completions) == before[2] + 1
+            body = wire.completions[-1]
+            assert wire.counts[-1][0] == {k: v for k, v in body.items() if k in RECOVERY_PROJECTION}
+            assert (await case.context.get_messages())[:len(canonical)] == canonical
+            assert wire.effects == 1 and wire.unknown_invocations == 0
+            assert wire.unknown == RECOVERY_UNKNOWN
+        if not cold:
+            await target_request(first)
+            return
+        first.gate.release(first.activation)
+    async with ordinary_recovery_case(directory, wire, canonical) as second:
+        await target_request(second)
+
+
+async def sdk_transition_process_phase(directory, phase):
+    """Two exited interpreters use only durable host files and the real SDK seam."""
+    target_model = 'gpt-6.1-astra'
+    class PausedWire(RecoveryWire):
+        async def transport(self, request):
+            body = json.loads(request.content)
+            if (phase == 'prepare' and request.url.path.endswith('/input_tokens')
+                    and body.get('model') == target_model
+                    and any(row[0]['model'] == target_model for row in self.compactions)):
+                return httpx.Response(400, json={'error': {'message': 'synthetic known final-count failure',
+                    'type': 'invalid_request_error', 'code': 'invalid_request'}})
+            return await super().transport(request)
+    directory = Path(directory)
+    wire = PausedWire()
+    canonical = []
+    if phase == 'continue':
+        canonical = json.loads((directory / 'transcript.json').read_text())
+        wire.effects = 1  # Durable fixture effect counter, not another execution.
+    async with ordinary_recovery_case(directory, wire, canonical) as case:
+        if phase == 'prepare':
+            await case.session.execute('SEED-EFFECT: preserve ORBIT.')
+            await append_recovery_evidence(case.context, ['A'])
+            await case.session.execute('Establish source checkpoint.')
+            await case.checkpoint()
+            await append_recovery_evidence(case.context, [str(n) for n in range(10)])
+            await case.controls.perform('provider.select', {'instance': 'openai', 'model': target_model, 'effort': 'high'})
+        else:
+            await case.controls.restore()
+        coordinator = case.session.coordinator
+        target = coordinator.get('orchestrator').root_provider
+        await coordinator.mount('providers', target, name='openai')
+        coordinator.register_capability('web.context_transition.foreground', lambda: {
+            'generationId': 'generation-' + phase, 'inputId': 'input-' + phase,
+            'selectionRevision': case.controls.selection_revision, 'selection': case.controls.selection})
+        wire.reducing_models.add(target_model)
+        if phase == 'prepare':
+            try:
+                await case.session.execute('Prepare target context; preserve completed effect.')
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError('Synthetic final-count failure did not occur')
+            record = case.adapter._recovery_record()
+            assert record['state'] == 'refused' and record['progress']
+            assert record['calls'] and all(row['state'] == 'completed' for row in record['calls'])
+            assert len(wire.completions) == 3  # Seed tool request/result + source response.
+        else:
+            assert 'Usable continuation' in await case.session.execute('New authorized input after actual interpreter restart.')
+            assert case.adapter.recovery_status()['state'] == 'committed'
+            assert wire.compactions == []  # Completed paid target progress reused.
+            assert len(wire.completions) == 1 and wire.effects == 1 and wire.unknown_invocations == 0
+        return {'phase': phase, 'state': case.adapter.recovery_status()['state'],
+                'compactions': len(wire.compactions), 'effects': wire.effects,
+                'logicalCalls': case.adapter.recovery_status()['logicalCalls']}
+
+
+async def test_sdk_transition_confirmed_progress_survives_two_exited_interpreters(tmp_path):
+    import asyncio
+    import os
+    import sys
+    script = Path(__file__).parent / 'fixtures' / 'model_transition_restart.py'
+    reports = []
+    for phase in ('prepare', 'continue'):
+        process = await asyncio.create_subprocess_exec(
+            sys.executable, str(script), str(tmp_path / 'durable'), phase,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=dict(os.environ))
+        stdout, stderr = await asyncio.wait_for(process.communicate(), 30)
+        assert process.returncode == 0, (stdout.decode(), stderr.decode())
+        reports.append(json.loads(stdout.decode().splitlines()[-1]))
+    assert [row['state'] for row in reports] == ['refused', 'committed']
+    assert reports[0]['compactions'] > 0 and reports[1]['compactions'] == 0
+    assert reports[0]['logicalCalls'] == reports[1]['logicalCalls']
 
 
 def recovery_command(wire, command_id='recover-once'):
@@ -1160,6 +1284,23 @@ async def test_prepared_originals_b_a_b_revalidates_active_source_instead_of_sta
     assert case.raw.compactions == []
 
 
+async def test_warm_foreign_checkpoint_without_classifier_is_unsupported_not_overwritten(tmp_path):
+    from amplifier_web.host.session import SelectedProvider
+    original = native_history()
+    coordinator, raw, _, adapter, checkpoint, _, prepare = await native_fixture(tmp_path, original)
+    await prepare()
+    await checkpoint()
+    saved = adapter.path.read_bytes()
+    coordinator.register_capability('context.checkpoint.transition', None)
+    coordinator.loop.root_provider = SelectedProvider(raw, {'instance': 'fixture', 'model': 'other-model'})
+    await coordinator.context.add_message({'role': 'user', 'content': 'Fresh target request'})
+    await adapter.preserve(await coordinator.context.get_messages())
+    assert adapter.public()['status'] == 'rejected'
+    assert adapter.public()['code'] == 'transition_unsupported'
+    adapter.save()
+    assert adapter.path.read_bytes() == saved
+
+
 @pytest.mark.parametrize('change', ['source', 'config', 'selection', 'mounted-options', 'stop'])
 async def test_transition_after_last_fit_guard_keeps_exact_source_checkpoint(tmp_path, change):
     case = await target_transition_fixture(tmp_path)
@@ -1252,6 +1393,34 @@ async def test_transition_lost_install_ack_reconciles_exact_digest_without_secon
     assert case.adapter.recovery_status()['state'] == 'committed'
     assert case.adapter.path.read_bytes() == candidate
     assert len(writes) == 1 and len(case.raw.compactions) == calls
+
+
+async def test_transition_final_commit_failure_reconciles_already_active_exact_candidate(tmp_path, monkeypatch):
+    from amplifier_web import context_continuity
+    case = await target_transition_fixture(tmp_path)
+    write = context_continuity.write_private
+    failed, writes = [], []
+    def fail_final(path, text):
+        if path == case.adapter.path:
+            writes.append(text)
+        if path == case.adapter.recovery_path:
+            journal = json.loads(text)
+            if journal['attempts'][journal['current']]['state'] == 'committed' and not failed:
+                failed.append(True)
+                raise OSError('synthetic final commit failure')
+        return write(path, text)
+    monkeypatch.setattr(context_continuity, 'write_private', fail_final)
+    with pytest.raises(OSError, match='final commit'):
+        await case.prepare()
+    assert case.coordinator.context.summary_identity['model'] == 'target-model'
+    candidate = case.adapter.path.read_bytes()
+    assert case.adapter.recovery_status()['state'] == 'unknown'
+    paid = len(case.raw.compactions)
+    case.origin.update(inputId='fresh-final-commit-reconciliation', generationId='new-generation')
+    assert (await case.prepare())['outcome'] == 'transitioned'
+    assert case.adapter.recovery_status()['state'] == 'committed'
+    assert case.adapter.path.read_bytes() == candidate
+    assert len(writes) == 1 and len(case.raw.compactions) == paid
 
 
 async def test_transition_completed_progress_does_not_reset_total_call_cap(tmp_path):

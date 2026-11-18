@@ -173,6 +173,12 @@ class ContextContinuity:
                         and classified.get("status") == "transition_required"):
                     self._transition = None
                     self.status.update(status="prepared-originals")
+            else:
+                self._transition = None
+                self._suppress_save = True
+                self.status.update(status="rejected", code="transition_unsupported",
+                    reason="The mounted context cannot prepare a model transition.",
+                    originalsAvailable=True)
         elif accepted is not None and previous_identity != self._identity and self.loaded:
             restore = self.coordinator.get_capability("context.checkpoint.restore")
             if callable(restore):

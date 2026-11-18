@@ -150,6 +150,7 @@ class RuntimeControls:
         self.selection_cleared = False
         self.selection_revision = None
         self.selection_binding = None
+        self._selection_unbound_override = False
         self.max_output_tokens = None
         self.logins = {}
         self.kernels = None
@@ -218,6 +219,7 @@ class RuntimeControls:
                     or saved.get("selectionBinding") != selection_override.get("expectedConnectionKey")):
                 self.selection_revision = str(uuid.uuid4())
                 self.selection_binding = selection_override.get("expectedConnectionKey")
+                self._selection_unbound_override = self.selection_binding is None
         elif saved.get("selection"):
             await self._perform("provider.select", saved["selection"])
         elif "selection" in saved:
@@ -631,12 +633,18 @@ class RuntimeControls:
             selected = {key:args[key] for key in ("instance","model","effort") if key in args}
             effective = {**selected, **({"max_output_tokens":self.max_output_tokens} if self.max_output_tokens else {})}
             self.coordinator.get("orchestrator").root_provider = SelectedProvider(providers[args["instance"]], effective,self.coordinator.get_capability('web.provider_transform'))
-            changed = self.selection != selected or self.selection_binding != args.get('expectedConnectionKey')
+            confirmed_override = (self._selection_unbound_override and self.selection == selected
+                                  and args.get('expectedConnectionKey') is not None)
+            changed = self.selection != selected or (
+                self.selection_binding != args.get('expectedConnectionKey') and not confirmed_override)
             self.selection = selected
             self.selection_cleared = False
             if not self._restoring and (changed or not self.selection_revision):
                 self.selection_revision = str(uuid.uuid4())
                 self.selection_binding = args.get('expectedConnectionKey')
+            if confirmed_override:
+                self.selection_binding = args['expectedConnectionKey']
+                self._selection_unbound_override = False
             self.persist()
             return {"selection":selected,"scope":"main session"}
         if operation == "tool.invoke":

@@ -117,7 +117,8 @@ async def test_worker_expands_inputs_preserving_id_and_attachments(tmp_path, mon
 
 
 @pytest.mark.parametrize('operation', ['send', 'retry', 'history.edit'])
-async def test_actual_worker_admission_binds_only_new_send_for_transition(tmp_path, monkeypatch, operation):
+@pytest.mark.parametrize('durable_epoch', [0, 7])
+async def test_actual_worker_admission_binds_only_new_send_for_transition(tmp_path, monkeypatch, operation, durable_epoch):
     from amplifier_module_loop_live.runtime import Runtime
     from amplifier_web.runtime_worker import Worker
     owner = coordinator(tmp_path)
@@ -134,6 +135,7 @@ async def test_actual_worker_admission_binds_only_new_send_for_transition(tmp_pa
             'text': 'new authorized text', 'operationId': 'input'}, 'id': 'command'}
     else:
         data = {'op': operation, 'text': 'new authorized text', 'input_id': 'input', 'id': 'command'}
+    data['interruptionRevision'] = durable_epoch
     await worker._command_serial(data)
     assert 'input' in worker.runtime.accepted
     await worker.runtime.emit('generation.started', generation_id='g', initial_input_id='input')
