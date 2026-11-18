@@ -539,11 +539,14 @@ class UpdateManager:
         self._update_health_initial = True
         self._host_started = time.time()  # See check_due.
         self._start_check_open = True
+        self._activation_failed = None  # See _activation_held.
         self._update_health_seen_revision = service.state.get('configurationRevision')
         from .update_restart import target
         state['activation'] = activation(self)
         state['forceRestartTarget'] = target(self)
         publish_health(self)
+        from .windows_launcher_follow import project
+        project(self)
         if restart_repair:
             self.diagnostics.record('restart-repair','failed',errorType='ValueError',preserve_last_failure=True)
         else:
@@ -554,6 +557,8 @@ class UpdateManager:
         return await confirm_readiness(self, health, expected=expected)
 
     def awaiting_restart(self):
+        from .windows_launcher_follow import fenced
+        if fenced(self): return True
         from .update_readiness import recovery_candidate
         # A legacy erased-marker receipt must not permanently prevent repairs
         # after an unrelated manual upgrade. Only its active health check gates
@@ -587,6 +592,10 @@ class UpdateManager:
                 and state.get('detail') in (PREPARED_STARTING, PREPARED_WAITING)):
             state['detail'] = PREPARED_STARTING if state['activation'] == 'starting' else PREPARED_WAITING
         publish_health(self)
+        # After the health text, at every place that derives it: the launcher's
+        # text replaces or extends it (no IO; it never raises).
+        from .windows_launcher_follow import project
+        project(self)
         from .update_restart import target
         # Also the identity that task.waitForUpdate names. The page's offer to
         # interrupt work is a matter of its view (update_health.browser_view).
@@ -603,6 +612,8 @@ class UpdateManager:
         self._update_health_initial = True
         from .update_health import publish as publish_health
         publish_health(self)
+        from .windows_launcher_follow import project
+        project(self)
         self.wakeup.set()
         return True
 
@@ -755,6 +766,8 @@ class UpdateManager:
                         **({'pendingApp': {**pending, 'updateIntent': intent}} if pending else {}))
                 await self.app()
             elif action == 'install':
+                from .windows_launcher_follow import request_by_button
+                if await request_by_button(self): return
                 # A click during a check must not disappear at install()'s
                 # busy guard. Join that check, then re-evaluate its inventory.
                 if self.check_task and not self.check_task.done():
@@ -1555,6 +1568,38 @@ class UpdateManager:
         write_private(stage/'profiles-qualified.json', json.dumps({'profiles': profiles,
             'configuration': configuration_key(config.settings, self.home, stage)}))
 
+    def _activation_inputs(self, target):
+        """What can change the result of a prepared update's validation at activation.
+
+        The prepared update, the settings and the selection that also hold a
+        failed preparation (update_health.preparation_key), and the person's
+        keys file, which that validation reads: its time and size, never its
+        content. Settings that cannot be read are one state of their own.
+        """
+        from .session_files import amplifier_home
+        from .update_health import preparation_key
+        # Total: the owner's pass asks this at every pass while a failure is held.
+        try:
+            witness = preparation_key(self, [])
+        except Exception as error:
+            witness = 'unreadable ' + type(error).__name__
+        try:
+            info = (amplifier_home() / 'keys.env').stat()
+            keys = (info.st_mtime_ns, info.st_size)
+        except Exception:
+            keys = None
+        return target, witness, keys
+
+    def _activation_held(self, target):
+        """This update's validation at activation failed, and nothing that can change its result has changed.
+
+        The owner's pass asks, so that time alone does not repeat minutes of
+        probe processes (tick). A person's own request does not ask. The fact
+        is in memory only: a start of the app validates once more.
+        """
+        failed = getattr(self, '_activation_failed', None)
+        return failed is not None and failed == self._activation_inputs(target)
+
     async def activate(self, rollback=False):
         async with self.service.runtime_lifecycle():
             await self._activate(rollback)
@@ -1585,6 +1630,9 @@ class UpdateManager:
                     from .update_health import STALE_STAGE_KEYS
                     from .update_storage import refresh_stage_keys, remove_stage_keys
                     target_stage = self.directory / 'releases' / target
+                    # Taken before the keys file is read: a change during the
+                    # validation is then a change for the owner's next pass.
+                    inputs = None if rollback else self._activation_inputs(target)
                     refused = refresh_stage_keys(self.home, target_stage, amplifier_home())
                     if refused is not None and remove_stage_keys(self.home, target_stage) is not None:
                         # One rule, and it keeps no memory: qualification never
@@ -1595,6 +1643,12 @@ class UpdateManager:
                         # is not a failed attempt and the phase stays, as when a
                         # switch waits for work. The next request tries again.
                         # Said once: the owner's pass comes here every minute.
+                        # So an earlier failed validation must not hold the
+                        # owner now (_activation_held): this request validated
+                        # nothing, and only the owner's pass finds the end of
+                        # this refusal by itself.
+                        if not rollback:
+                            self._activation_failed = None
                         if state.get('error') != STALE_STAGE_KEYS:
                             await self.publish(error=STALE_STAGE_KEYS)
                         return
@@ -1608,9 +1662,13 @@ class UpdateManager:
                         raise  # Qualification may still have a reader; keep the copy.
                     except Exception:
                         remove_stage_keys(self.home, target_stage)
+                        if not rollback:
+                            self._activation_failed = inputs  # See _activation_held.
                         raise
                     else:
                         remove_stage_keys(self.home, target_stage)
+                        if not rollback:
+                            self._activation_failed = None
                     marker['hostVersion']=__import__('amplifier_web').__version__
                     write_private(self.directory/'releases'/target/'validated.json',json.dumps(marker))
             from .update_partial import read as partial_read, verify_pointer, adopted_items, public_results
@@ -1883,6 +1941,7 @@ class UpdateManager:
         if state.get('pendingRelease'):
             from .update_health import pending_preparation
             if pending_preparation(self.diagnostics.state):return
+            if self._activation_held(state['pendingRelease']):return
             await self.activate()
             return
         if state.get('initialPreparation') and state.get('sequence', {}).get('stage') == 'complete':
@@ -1950,6 +2009,8 @@ class UpdateManager:
                     self.diagnostics.record('background-update','failed',**exception_facts(error))
                 phase=self.diagnostics.state['latest']['phase']
                 await self.publish(phase='activating' if self.service.state['updates'].get('pendingRestart') else 'error',error=failure_guidance(self.diagnostics.state.get('lastFailure', {})) or 'Background update failed during '+phase.replace('-',' ')+'. Review its diagnostic receipt; no work was replayed.')
+            from .windows_launcher_follow import consider
+            await consider(self)  # After the except: a failing tick must not starve an open launcher request.
             state = self.service.state['updates']
             sequence = state.get('sequence', {})
             from .update_health import pending_preparation

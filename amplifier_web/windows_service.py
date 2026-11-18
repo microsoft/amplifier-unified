@@ -413,6 +413,7 @@ try {
             'replace' { $task = $folder.RegisterTask($p.name, $p.xml, 4, $p.sid, $null, 3, $null) }
             'start' { if ($task.GetInstances(0).Count -eq 0) { $null = $task.Run($null) } }
             'remove' { $folder.DeleteTask($p.name, 0); $task = $null }
+            'retire' { $folder.DeleteTask($p.name, 0); $task = $null }
             default { throw 'Unsupported operation' }
         }
     }
@@ -450,7 +451,7 @@ def _powershell() -> str:
 def _scheduler(op: str, sid: str, *, previous=None, xml=None, name=None) -> dict:
     if _owner() != sid:
         raise WindowsServiceError("The task owner does not match the process token.")
-    if op not in {"query", "create", "replace", "start", "remove"}:
+    if op not in {"query", "create", "replace", "start", "remove", "retire"}:
         raise ValueError("Unknown task operation.")
     payload = json.dumps({"op": op, "sid": sid, "name": name or task_name(sid),
                           "previous": previous, "xml": xml}, ensure_ascii=True).encode("ascii")
@@ -478,7 +479,7 @@ def _scheduler(op: str, sid: str, *, previous=None, xml=None, name=None) -> dict
     if type(value.get("exists")) is not bool:
         raise WindowsServiceError("Task Scheduler returned an invalid receipt; reconcile status.")
     if (op in {"create", "replace", "start"} and not value["exists"]
-            or op == "remove" and value["exists"]):
+            or op in {"remove", "retire"} and value["exists"]):
         raise WindowsServiceError("Task Scheduler did not confirm the requested task effect; reconcile status.")
     if value["exists"] and (
             not isinstance(value.get("xml"), str) or len(value["xml"].encode("utf-8")) > LIMIT
@@ -596,12 +597,12 @@ def install(data_dir, workspace=None, *, replace=False) -> dict:
             **({"backup": backup} if backup else {})}
 
 
-def _stop(value, spec, *, timeout=60):
+def _stop(value, spec, *, timeout=60, expected=None):
     """Stop through the private runner, not Task.Stop/TerminateProcess."""
     if value.get("instances", 0) == 0:
         return value
     from .windows_task_runtime import request_stop
-    request_stop(spec, timeout=timeout)
+    request_stop(spec, timeout=timeout, expected=expected)
     deadline = time.monotonic() + 10
     while True:
         current = _scheduler("query", spec.sid)
@@ -660,6 +661,11 @@ def uninstall(data_dir=None, *, progress=None) -> None:
         result = _scheduler("remove", spec.sid, previous=value["xml"])
         if result["exists"]:
             raise WindowsServiceError("Task removal was not verified; reconcile status.")
+    try:
+        from .windows_launcher_task import remove_task
+        remove_task(data_dir)
+    except Exception:
+        pass  # Helper cleanup must not prevent removal of the main task.
     # App data, credentials, backups and personal startup entries are untouched.
 
 
