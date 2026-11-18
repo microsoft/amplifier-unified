@@ -287,6 +287,19 @@ def test_startup_preflights_all_supplied_workspaces_before_shared_ancestor(tmp_p
     assert [paths[level].read_bytes() for level in ('global', 'local')] == before
 
 
+@pytest.mark.parametrize('content', ['config: [malformed]\n', 'config: [unterminated\n'])
+def test_startup_retains_malformed_decision_migration_without_losing_service_start(tmp_path, monkeypatch, content, caplog):
+    from amplifier_web.settings_migration import migrate_settings
+    from amplifier_web.shared_settings import settings_paths
+    monkeypatch.setattr(decision_settings, 'catalogs', lambda **kwargs: DEFINITIONS)
+    path = settings_paths(tmp_path)['global']
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content)
+    migrate_settings(tmp_path / 'app', [tmp_path])
+    assert path.read_text() == content
+    assert 'Decision settings migration incomplete' in caplog.text
+    assert content.strip() not in caplog.text
+
 def test_source_less_selected_chat_binding_keeps_decision_roster_source_fallback(tmp_path, monkeypatch):
     from amplifier_web.shared_settings import settings_paths
     from amplifier_web.setup import SetupManager

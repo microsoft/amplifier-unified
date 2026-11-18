@@ -249,6 +249,11 @@ async def test_advanced_decision_config_edit_routes_to_dedicated_owner(manager, 
         'id': 'fixture', 'module': 'provider-fixture', 'config': raw})
     assert manager.config(tmp_path).connections[0]['config']['decisions']['backends']['ui-browser-fixture']['model'] == 'advanced-edit'
     assert 'decisions' not in manager.store.read(tmp_path, 'global')['config']['providers'][0]['config']
+    raw.pop('decisions')
+    await manager.perform('providers.save', {'workspace': str(tmp_path), 'scope': 'global',
+        'id': 'fixture', 'module': 'provider-fixture', 'config': raw})
+    assert 'decisions' not in manager.config(tmp_path).connections[0]['config']
+    assert manager.store.read(tmp_path)['decision_models']['connections'] == {}
 
 
 async def test_conditional_account_role_change_refuses_before_publication(manager, tmp_path, monkeypatch):

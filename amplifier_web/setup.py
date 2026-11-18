@@ -641,6 +641,15 @@ class SetupManager:
                 decisions = row['config'].pop('decisions')
                 settings.setdefault('decision_models', {}).setdefault('connections', {})[identity_key] = {
                     'provider': identity_key, 'module': row['module'], 'config': {'decisions': decisions}}
+            elif not remove:
+                # The advanced editor replaces this scope's complete config.
+                # Omitting its decision field removes this scope's reference,
+                # just as omitting it from the old provider config did; broader
+                # scope options still inherit through the ordinary overlay.
+                identity_key = key(row)
+                scoped_accounts = settings.get('decision_models', {}).get('connections', {})
+                if scoped_accounts.get(identity_key, {}).get('provider') == identity_key:
+                    del scoped_accounts[identity_key]
             disabled=set(overlay(effective.settings,settings).get('configurator',{}).get('disabled',{}).get('providers',[]))
             if remove:disabled.add(identity)
             else:disabled.discard(identity)

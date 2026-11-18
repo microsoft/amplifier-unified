@@ -11,6 +11,7 @@ import hashlib
 import json
 from pathlib import Path
 import shlex
+import yaml
 
 from filelock import FileLock
 
@@ -117,7 +118,7 @@ def migrate_settings(home, workspaces):
             preflight_paths(paths, definitions)
         for paths in lineages:
             migrate_paths(paths, definitions=definitions)
-    except (OSError, ValueError):
+    except (OSError, ValueError, TypeError, AttributeError, yaml.YAMLError):
         # A refused optional migration must not prevent an unrelated chat
         # from loading. Leave its original files for deliberate repair;
         # never log account data, exception payloads or credential paths.

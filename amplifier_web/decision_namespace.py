@@ -96,6 +96,8 @@ def translate(settings, definitions, *, inherited=None):
     """
     from .shared_settings import overlay
     result = deepcopy(settings)
+    _mapping(result)
+    _mapping(result.get("config", {}))
     existing = connections(result)
     rows = result.get("config", {}).get("providers", [])
     if not isinstance(rows, list):
