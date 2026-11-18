@@ -54,6 +54,18 @@ namespace UnifiedBootstrap {
             if(on) security.AddAccessRule(rule); else security.RemoveAccessRule(rule);
             Directory.SetAccessControl(folder,security);
         }
+        static void Unreadable(string file, bool on) {
+            // A file whose attributes Windows refuses to read for this account:
+            // one deny entry for that right, added and taken away again. Windows
+            // still gives the attributes to an account that can list the folder,
+            // so the case also makes the folder unlistable.
+            var security=File.GetAccessControl(file);
+            FileSystemAccessRule rule;
+            using(var identity=WindowsIdentity.GetCurrent())
+                rule=new FileSystemAccessRule(identity.User,FileSystemRights.ReadAttributes,AccessControlType.Deny);
+            if(on) security.AddAccessRule(rule); else security.RemoveAccessRule(rule);
+            File.SetAccessControl(file,security);
+        }
         static void OpenToOthers(string folder) {
             var security=Directory.GetAccessControl(folder);
             security.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(WellKnownSidType.BuiltinUsersSid,null),
@@ -81,15 +93,18 @@ namespace UnifiedBootstrap {
             if(root==null || args.Length!=expected.Length) return 9;
             for(int index=0;index<args.Length;index++) if(args[index]!=expected[index]) return 9;
             int wait, code;
+            // Which of setup's two commands ran, for the case to read.
+            string ran=Environment.GetEnvironmentVariable("AMPLIFIER_SETUP_TEST_RAN");
+            if(ran!=null) File.AppendAllText(ran,integrate?"entries,":"start,");
             if(Int32.TryParse(Environment.GetEnvironmentVariable("AMPLIFIER_SETUP_TEST_WAIT_MS"),out wait)) Thread.Sleep(wait);
             if(integrate) Console.WriteLine("{\"startMenu\":true}");
             return Int32.TryParse(Environment.GetEnvironmentVariable("AMPLIFIER_SETUP_TEST_EXIT"),out code)?code:0;
         }
-        static int Window(string root, bool listed) {
+        static int Window(string root, bool listed, bool start) {
             // Setup's second-run window on a thread of its own, as setup's entry
             // runs it. A window that does not close by itself fails the case.
             int result=-1;
-            var thread=new Thread(()=>{ result=NativeInstaller.SecondRun(root,listed); });
+            var thread=new Thread(()=>{ result=NativeInstaller.SecondRun(root,listed,start,false); });
             thread.IsBackground=true; thread.SetApartmentState(ApartmentState.STA); thread.Start();
             return thread.Join(45000)?result:-2;
         }
@@ -97,7 +112,7 @@ namespace UnifiedBootstrap {
             // The person closes setup's window while setup only waits for the
             // launcher. A request that comes before that is refused; ask again.
             int result=-1;
-            var thread=new Thread(()=>{ result=NativeInstaller.SecondRun(root,true); });
+            var thread=new Thread(()=>{ result=NativeInstaller.SecondRun(root,true,true,false); });
             thread.IsBackground=true; thread.SetApartmentState(ApartmentState.STA); thread.Start();
             Thread.Sleep(1500);
             for(int attempt=0;attempt<12 && !thread.Join(500);attempt++) {
@@ -275,14 +290,28 @@ namespace UnifiedBootstrap {
                 Need(NativeInstaller.AddEntries(second),"entries step: the program got setup's exact arguments and ended with 0");
                 Environment.SetEnvironmentVariable("AMPLIFIER_SETUP_TEST_WAIT_MS","1500");
                 var clock=Stopwatch.StartNew();
-                int shown=Window(second,true);
+                int shown=Window(second,true,true);
                 Need(shown==0 && clock.ElapsedMilliseconds>=1400,"second run with entries: setup waits for the launcher, then the window closes (result "+shown+")");
                 Environment.SetEnvironmentVariable("AMPLIFIER_SETUP_TEST_WAIT_MS",null);
-                shown=Window(second,false);
-                Need(shown==0,"second run without entries: added, started, closed (result "+shown+")");
+                // The stand-in writes which of setup's two commands ran.
+                string ran=Path.Combine(work,"ran.txt");
+                Environment.SetEnvironmentVariable("AMPLIFIER_SETUP_TEST_RAN",ran);
+                shown=Window(second,false,true);
+                Need(shown==0 && File.ReadAllText(ran)=="entries,start,","second run without entries: added, started, closed (result "+shown+")");
+                // Without a start (an entry with the journal's name is in the
+                // folder): the entries step only. No launcher starts, and this
+                // window shows no message. The result says whether the entries
+                // were added.
+                File.Delete(ran);
+                shown=Window(second,false,false);
+                Need(shown==0 && File.ReadAllText(ran)=="entries,","second run without a start: the entries are added and no launcher starts (result "+shown+")");
                 Environment.SetEnvironmentVariable("AMPLIFIER_SETUP_TEST_EXIT","1");
+                File.Delete(ran);
+                shown=Window(second,false,false);
+                Need(shown==1 && File.ReadAllText(ran)=="entries,","second run without a start: a failed entries step is the result, with no message and no launcher (result "+shown+")");
+                Environment.SetEnvironmentVariable("AMPLIFIER_SETUP_TEST_RAN",null);
                 Need(!NativeInstaller.AddEntries(second),"entries step: a program that fails is a failure");
-                shown=Window(second,true);
+                shown=Window(second,true,true);
                 Need(shown==1,"second run: the launcher's failure is setup's result, with no second message (result "+shown+")");
                 Environment.SetEnvironmentVariable("AMPLIFIER_SETUP_TEST_EXIT","0");
                 // The window is closed while the launcher still runs (10 seconds
@@ -315,8 +344,10 @@ namespace UnifiedBootstrap {
                 // these facts of a file before the first look that can reach it.
                 Func<string,string> facts=one=>File.GetCreationTimeUtc(one).Ticks+","+File.GetLastWriteTimeUtc(one).Ticks+","+File.GetAttributes(one);
                 string completeFacts=facts(Path.Combine(left,NativeInstaller.Complete));
-                string damaged="Amplifier is already installed in "+left+", but setup cannot open it: a program file is missing.\n\n"+
-                    "Keep that folder. It holds your chats and settings. This version of setup cannot repair it.";
+                // The text that names no chats and no settings, for a folder.
+                Func<string,string> bare=folder=>"Setup cannot open Amplifier. Setup found an installation record in this folder:\n"+folder+"\n\n"+
+                    "Setup cannot find a program file that it needs to open Amplifier from that folder.\n\n"+
+                    "Keep that folder. Setup deletes nothing in it. This version of setup cannot repair it.";
                 string emptied="Setup cannot install Amplifier yet. Setup found an installation record in this folder:\n"+left+"\n\n"+
                     "Setup cannot find a program file that it needs to open Amplifier from that folder. "+
                     "Setup found no chats or settings in the folder. "+
@@ -329,7 +360,7 @@ namespace UnifiedBootstrap {
                 // The case's own list of the seven names. Its folders do not follow
                 // setup's list, and the looks must leave setup's list as it is.
                 string[] seven={"shared","app","capture","ownership","import","workspace","export"};
-                Need(!NativeInstaller.Emptied(left) && NativeInstaller.Unopened(left)==damaged,"no journal: the text of a damaged installation");
+                Need(!NativeInstaller.Emptied(left) && NativeInstaller.Unopened(left)==bare(left),"no journal and no folder app: the text that names no chats and no settings");
                 // What an uninstall with the delete choice leaves when the folder
                 // holds a file of the person: that file, setup's record, the journal.
                 File.WriteAllText(notes,"mine");
@@ -349,13 +380,13 @@ namespace UnifiedBootstrap {
                     Directory.CreateDirectory(entry);
                     Need(NativeInstaller.Unopened(left)==emptied,"an empty data folder is not data: "+name);
                     Directory.CreateDirectory(Path.Combine(entry,"inner"));
-                    Need(!NativeInstaller.Emptied(left) && NativeInstaller.Unopened(left)==damaged,"a folder in a data folder is data: "+name);
+                    Need(!NativeInstaller.Emptied(left) && NativeInstaller.Unopened(left)==bare(left),"a folder in a data folder is data: "+name);
                     Directory.Delete(Path.Combine(entry,"inner"));
                     File.WriteAllText(Path.Combine(entry,"kept.txt"),"data");
-                    Need(NativeInstaller.Unopened(left)==damaged,"a file in a data folder is data: "+name);
+                    Need(NativeInstaller.Unopened(left)==bare(left),"a file in a data folder is data: "+name);
                     File.Delete(Path.Combine(entry,"kept.txt")); Directory.Delete(entry);
                     File.WriteAllText(entry,"data");
-                    Need(NativeInstaller.Unopened(left)==damaged,"a file with a data name is data: "+name);
+                    Need(NativeInstaller.Unopened(left)==bare(left),"a file with a data name is data: "+name);
                     File.Delete(entry);
                     Need(NativeInstaller.Unopened(left)==emptied,"without that entry: "+name);
                 }
@@ -368,21 +399,21 @@ namespace UnifiedBootstrap {
                     Directory.Exists(Path.Combine(left,"app")),"Windows gives the folder App for the path with app");
                 Need(NativeInstaller.Unopened(left)==emptied,"an empty folder under another spelling of a data name is not data");
                 File.WriteAllText(Path.Combine(spelled,"kept.txt"),"data");
-                Need(NativeInstaller.Unopened(left)==damaged,"a file in a folder under another spelling of a data name is data");
+                Need(NativeInstaller.Unopened(left)==bare(left),"a file in a folder under another spelling of a data name is data");
                 File.Delete(Path.Combine(spelled,"kept.txt")); Directory.Delete(spelled);
                 Need(NativeInstaller.Unopened(left)==emptied,"without the folder under another spelling");
                 // A link with a data name counts as data, also when it leads to
                 // an empty folder.
                 string elsewhere=Path.Combine(work,"elsewhere"); Directory.CreateDirectory(elsewhere);
                 Junction(Path.Combine(left,"app"),elsewhere);
-                Need(NativeInstaller.Unopened(left)==damaged,"a link with a data name is data");
+                Need(NativeInstaller.Unopened(left)==bare(left),"a link with a data name is data");
                 Directory.Delete(Path.Combine(left,"app"),false);
                 Need(NativeInstaller.Unopened(left)==emptied,"without the link");
                 // An empty data folder that Windows refuses to list is a doubt.
                 string refused=Path.Combine(left,"shared"); Directory.CreateDirectory(refused);
                 Unlistable(refused,true);
                 Need(Refused(()=>Directory.GetFileSystemEntries(refused)),"Windows refuses to list the folder");
-                Need(NativeInstaller.Unopened(left)==damaged,"a data folder that Windows does not list is data");
+                Need(NativeInstaller.Unopened(left)==bare(left),"a data folder that Windows does not list is data");
                 Unlistable(refused,false);
                 Need(NativeInstaller.Unopened(left)==emptied,"the same folder, empty, when Windows lists it");
                 Directory.Delete(refused);
@@ -391,15 +422,15 @@ namespace UnifiedBootstrap {
                 File.Move(journal,Path.Combine(elsewhere,"journal.json"));
                 FileLink(journal,Path.Combine(elsewhere,"journal.json"));
                 Need(File.ReadAllText(journal)==record,"the link leads to a journal");
-                Need(NativeInstaller.Unopened(left)==damaged,"a file link with the journal's name");
+                Need(NativeInstaller.Unopened(left)==bare(left),"a file link with the journal's name");
                 File.Delete(journal);
                 Junction(journal,elsewhere);
-                Need(NativeInstaller.Unopened(left)==damaged,"a folder link with the journal's name");
+                Need(NativeInstaller.Unopened(left)==bare(left),"a folder link with the journal's name");
                 Directory.Delete(journal,false);
                 File.Move(Path.Combine(elsewhere,"journal.json"),journal);
                 Need(NativeInstaller.Unopened(left)==emptied,"the journal is back");
                 // A file that uninstall does not read as a journal with the
-                // delete choice: the text of a damaged installation.
+                // delete choice: the text that names no chats and no settings.
                 string[] others={"","{","[]","null","\"delete\"",
                     record.Replace("\"delete\"","\"keep\""),record.Replace("\"delete\"","\"Delete\""),
                     record.Replace("\"choice\": \"delete\"","\"choice\": 1"),
@@ -414,7 +445,7 @@ namespace UnifiedBootstrap {
                     record+new string(' ',4097-record.Length)};
                 for(int index=0;index<others.Length;index++) {
                     File.WriteAllText(journal,others[index]);
-                    Need(!NativeInstaller.Emptied(left) && NativeInstaller.Unopened(left)==damaged,"not a journal with the delete choice: file "+index);
+                    Need(!NativeInstaller.Emptied(left) && NativeInstaller.Unopened(left)==bare(left),"not a journal with the delete choice: file "+index);
                 }
                 // The largest file that is read, with a further field, as uninstall accepts it.
                 string largest=record.Replace("{","{\"more\": \""+new string('x',4096-record.Length-12)+"\", ");
@@ -424,17 +455,17 @@ namespace UnifiedBootstrap {
                 Need(facts(journal)==journalFacts,"the look at a journal of 4096 bytes changes no time and no attribute of it");
                 // Bytes that are not UTF-8 are no journal.
                 File.WriteAllBytes(journal,new byte[]{0x7b,0xff,0x7d});
-                Need(NativeInstaller.Unopened(left)==damaged,"bytes that are not UTF-8");
+                Need(NativeInstaller.Unopened(left)==bare(left),"bytes that are not UTF-8");
                 // A record that is whole, except for one byte in a text value
                 // that is not UTF-8. A reader that put another character in the
                 // place of that byte would take the record.
                 byte[] broken=System.Text.Encoding.ASCII.GetBytes(record.Replace("{","{\"more\": \"X\", "));
                 broken[Array.IndexOf(broken,(byte)'X')]=0xff;
                 File.WriteAllBytes(journal,broken);
-                Need(NativeInstaller.Unopened(left)==damaged,"a record with one byte in a text value that is not UTF-8");
+                Need(NativeInstaller.Unopened(left)==bare(left),"a record with one byte in a text value that is not UTF-8");
                 // A folder with the journal's name is no journal.
                 File.Delete(journal); Directory.CreateDirectory(journal);
-                Need(NativeInstaller.Unopened(left)==damaged,"a folder with the journal's name");
+                Need(NativeInstaller.Unopened(left)==bare(left),"a folder with the journal's name");
                 Directory.Delete(journal); File.WriteAllText(journal,record);
                 // The look shares the journal with every other access. A program
                 // that has it open for writing does not stop the look, and while
@@ -448,7 +479,7 @@ namespace UnifiedBootstrap {
                     // last step lists the folder directly after its deletion.
                     Need(!Directory.GetFileSystemEntries(left).Any(entry=>Path.GetFileName(entry)==NativeInstaller.Journal),
                         "the journal's name is gone while a handle of the look's kind is open");
-                    Need(NativeInstaller.Unopened(left)==damaged,"a journal that was deleted is no journal");
+                    Need(NativeInstaller.Unopened(left)==bare(left),"a journal that was deleted is no journal");
                 }
                 Need(!File.Exists(journal),"the journal could be deleted while a handle of the look's kind was open");
                 File.WriteAllText(journal,record);
@@ -456,7 +487,7 @@ namespace UnifiedBootstrap {
                 journalFacts=facts(journal);
                 // A journal that another program holds for itself is a doubt.
                 using(new FileStream(journal,FileMode.Open,FileAccess.ReadWrite,FileShare.None))
-                    Need(NativeInstaller.Unopened(left)==damaged,"a journal that cannot be opened");
+                    Need(NativeInstaller.Unopened(left)==bare(left),"a journal that cannot be opened");
                 Need(NativeInstaller.Unopened(left)==emptied,"the journal is read again");
                 // The looks changed nothing in the folder.
                 string[] names=Directory.GetFileSystemEntries(left).Select(entry=>Path.GetFileName(entry)).OrderBy(name=>name,StringComparer.Ordinal).ToArray();
@@ -468,6 +499,103 @@ namespace UnifiedBootstrap {
                     facts(notes)==notesFacts,"a look changes no creation time, no write time and no attribute of the journal, of setup's record and of the person's file");
                 Need(String.Join(",",NativeInstaller.Data)==String.Join(",",seven),"the looks leave setup's list of the seven names as it was");
                 Need(NativeInstaller.RootState(left)=="installed","setup still takes the folder for a finished installation");
+
+                // The two looks of a second setup run (Signs) and the texts that
+                // they choose, in a folder of its own: these cases begin with no
+                // entry of the journal's name.
+                string seen=Make(work,"Seen");
+                File.WriteAllText(Path.Combine(seen,NativeInstaller.Complete),"{}");
+                string seenJournal=Path.Combine(seen,NativeInstaller.Journal), seenApp=Path.Combine(seen,"app");
+                string whole="Amplifier is already installed in "+seen+", but setup cannot open it. "+
+                    "Setup cannot find a program file that it needs to open Amplifier from that folder.\n\n"+
+                    "Keep that folder. Amplifier keeps your chats and settings in it. This version of setup cannot repair it.";
+                Need(NativeInstaller.Signs(seen)=="other" && NativeInstaller.Unopened(seen)==bare(seen),"no journal entry and no folder app");
+                // No entry with the journal's name, and the folder app: the one
+                // state in which a text names the person's chats and settings.
+                Directory.CreateDirectory(seenApp);
+                Need(NativeInstaller.Signs(seen)=="kept" && NativeInstaller.Unopened(seen)==whole,"no journal entry, and the folder app: the text that names chats and settings");
+                File.WriteAllText(Path.Combine(seenApp,"unified.sqlite3"),"data");
+                Need(NativeInstaller.Signs(seen)=="kept" && NativeInstaller.Unopened(seen)==whole,"the same with a file in the folder app: setup does not look into it");
+                // An entry with the journal's name, whatever it is. Setup does not
+                // open it: an empty file, a file that is no record, a file that
+                // another program holds for itself, a folder, a link to a file,
+                // a link whose file is gone, and a link to a folder.
+                File.WriteAllText(seenJournal,"");
+                string seenFacts=facts(seenJournal);
+                Need(NativeInstaller.Signs(seen)=="removal" && NativeInstaller.Unopened(seen)==bare(seen),"an empty file with the journal's name");
+                Need(facts(seenJournal)==seenFacts,"the look changes no time and no attribute of the entry with the journal's name");
+                File.WriteAllText(seenJournal,"{");
+                Need(NativeInstaller.Signs(seen)=="removal" && !NativeInstaller.Emptied(seen),"a file with the journal's name that is no record");
+                using(new FileStream(seenJournal,FileMode.Open,FileAccess.ReadWrite,FileShare.None))
+                    Need(NativeInstaller.Signs(seen)=="removal","a file with the journal's name that another program holds for itself");
+                // A look that Windows refuses is a doubt: nothing about a removal,
+                // and nothing about chats and settings, also with the folder app.
+                Unreadable(seenJournal,true); Unlistable(seen,true);
+                Need(Refused(()=>File.GetAttributes(seenJournal)),"Windows refuses the look at the entry with the journal's name");
+                Need(NativeInstaller.Signs(seen)=="other" && NativeInstaller.Unopened(seen)==bare(seen),"a look that Windows refuses, with the folder app");
+                Unlistable(seen,false); Unreadable(seenJournal,false);
+                Need(NativeInstaller.Signs(seen)=="removal","Windows answers the look again");
+                File.Delete(seenJournal); Directory.CreateDirectory(seenJournal);
+                Need(NativeInstaller.Signs(seen)=="removal" && NativeInstaller.Unopened(seen)==bare(seen),"a folder with the journal's name");
+                Directory.Delete(seenJournal);
+                File.WriteAllText(Path.Combine(elsewhere,"record.json"),record);
+                FileLink(seenJournal,Path.Combine(elsewhere,"record.json"));
+                Need(NativeInstaller.Signs(seen)=="removal" && NativeInstaller.Unopened(seen)==bare(seen),"a file link with the journal's name");
+                File.Delete(Path.Combine(elsewhere,"record.json"));
+                Need(NativeInstaller.Signs(seen)=="removal","a link with the journal's name whose file is gone");
+                File.Delete(seenJournal);
+                Junction(seenJournal,elsewhere);
+                Need(NativeInstaller.Signs(seen)=="removal","a folder link with the journal's name");
+                Directory.Delete(seenJournal,false);
+                Need(NativeInstaller.Signs(seen)=="kept","without an entry of the journal's name");
+                // The entry app: only a folder that is no link counts.
+                File.Delete(Path.Combine(seenApp,"unified.sqlite3")); Directory.Delete(seenApp);
+                File.WriteAllText(seenApp,"a file");
+                Need(NativeInstaller.Signs(seen)=="other" && NativeInstaller.Unopened(seen)==bare(seen),"a file with the name app");
+                File.Delete(seenApp);
+                Junction(seenApp,elsewhere);
+                Need(NativeInstaller.Signs(seen)=="other" && NativeInstaller.Unopened(seen)==bare(seen),"a link with the name app");
+                Directory.Delete(seenApp,false);
+                // Windows gives a folder App for the path with app.
+                Directory.CreateDirectory(Path.Combine(seen,"App"));
+                Need(NativeInstaller.Signs(seen)=="kept","a folder under another spelling of the name app");
+                Directory.Delete(Path.Combine(seen,"App"));
+                // A folder that is not there: no look gets an answer.
+                Need(NativeInstaller.Signs(Path.Combine(work,"no such folder"))=="other","a folder that is not there");
+                // The question of a second run with no entry of the journal's name.
+                string offered="Amplifier is already installed on this PC, but setup did not find it in the Start menu.\n\n"+
+                    "Select Yes to add it to the Start menu again and start it now.";
+                Need(NativeInstaller.Offer(false,true)==offered+" Your chats and settings are kept." && NativeInstaller.Offer(false,false)==offered,
+                    "the question without a Start-menu entry names chats and settings only when the looks say so");
+                string opening="Amplifier is already installed on this PC.\n\nSelect Yes to open it now.\n\n"+
+                    "You can also open it from the Start menu: Amplifier Unified.";
+                Need(NativeInstaller.Offer(true,true)==opening && NativeInstaller.Offer(true,false)==opening,"the question with a Start-menu entry");
+                string unadded="Setup could not add Amplifier to the Start menu. Setup starts Amplifier now.\n\n"+
+                    "To open it later, run this setup file again.";
+                Need(NativeInstaller.Unadded(true)==unadded+" Your chats and settings are kept." && NativeInstaller.Unadded(false)==unadded,
+                    "the message after a failed entries step names chats and settings only when the looks say so");
+                // The texts for a folder with an entry of the journal's name.
+                string halted="Setup found an uninstall record in this folder:\n"+seen+"\n\n"+
+                    "Amplifier does not open while that record is there. Setup did not start it.\n\n"+
+                    "To finish that uninstall, select Uninstall Amplifier in the Start menu or in the Windows Apps list.";
+                string asked="Setup found an uninstall record in this folder:\n"+seen+"\n\n"+
+                    "Amplifier does not open while that record is there. Setup does not start it. "+
+                    "Setup did not find Amplifier in the Start menu.\n\n"+
+                    "Select Yes to add Amplifier to the Start menu again, so that you can finish that uninstall from there.";
+                Need(NativeInstaller.Removing(seen,true)==halted && NativeInstaller.Removing(seen,false)==asked,"the two first texts of a folder with an uninstall record");
+                string added="Setup added Amplifier to the Start menu. "+
+                    "Setup did not start Amplifier, because it found an uninstall record in this folder:\n"+seen+"\n\n"+
+                    "To finish that uninstall, select Uninstall Amplifier in the Start menu.";
+                string restart="Setup could not add Amplifier to the Start menu. "+
+                    "Setup did not start Amplifier, because it found an uninstall record in this folder:\n"+seen+"\n\n"+
+                    "Restart Windows. Then run this setup file again.";
+                // No journal of a delete: the entries could not be added, and the step is a restart.
+                Need(!NativeInstaller.Emptied(seen) && NativeInstaller.Unstarted(seen,false)==restart && NativeInstaller.Unstarted(seen,true)==added,
+                    "after the entries step, with no journal of a delete");
+                // These looks changed nothing in the folder.
+                names=Directory.GetFileSystemEntries(seen).Select(entry=>Path.GetFileName(entry)).OrderBy(name=>name,StringComparer.Ordinal).ToArray();
+                Need(String.Join("|",names)=="unified-setup-complete.json" && File.ReadAllText(Path.Combine(seen,NativeInstaller.Complete))=="{}",
+                    "the second run's looks leave the folder and setup's record as they were: "+String.Join("|",names));
 
                 // A folder above the target that other accounts can change is named.
                 string open=Path.Combine(work,"open"); Directory.CreateDirectory(Path.Combine(open,"inner"));

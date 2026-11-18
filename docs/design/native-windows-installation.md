@@ -1801,6 +1801,11 @@ seconds for them. A write that is still refused does not fail a finished
 uninstall, because every entry is already gone; it is saved as a failed
 `receipt` step.
 
+Everything in this section about a second setup run is for a folder with no
+entry of the journal's name (`unified-uninstall.json`). With such an entry
+setup starts no launcher (see "A second setup run on a folder with the
+launcher's start program" under "Uninstall can delete the installation
+folder").
 After an uninstall, a second setup run adds the Start-menu and Apps-list
 entries again (the entry record with the status `removed` permits exactly
 that), then starts the launcher and waits for it. Setup's window with the
@@ -2376,10 +2381,9 @@ limit as not blocking.
   away. When the launcher's start program is gone and setup's look finds the
   journal of a delete and none of the person's data, setup's message says
   that it found no chats or settings, and it tells the person to move or
-  rename the folder (see Leftovers below). In the other cases setup's
-  messages there say that Amplifier is already installed, and that the
-  person's chats and settings are in the folder or are kept. That is not
-  true for this leftover.
+  rename the folder (see Leftovers below). While an entry with the journal's
+  name is in the folder, no message of setup says that the person's chats
+  and settings are in the folder or are kept, or that Amplifier opens.
 - **L4.** A journal that is damaged, or that records another choice, proves
   nothing. When the look that an uninstall makes before its questions finds a
   journal, the uninstall reads it through the private-file boundary. When that
@@ -2516,10 +2520,11 @@ and changes nothing; the parked files and both records stay.
 while anything is left in the folder, setup's completion record is there too,
 and with that record setup installs and removes nothing. The step after exit
 deletes the journal and then the record, when nothing else is left. A second
-setup run can add the Start-menu and Apps-list entries again and start the
-launcher (see Leftovers). The launcher does not open Amplifier while the
-journal exists. Setup reads the journal for one purpose only: to choose the
-text of one message (see Leftovers).
+setup run can add the Start-menu and Apps-list entries again (see Leftovers).
+The launcher does not open Amplifier while the journal exists, and a second
+setup run that finds an entry with the journal's name starts no launcher.
+Setup reads the journal for one purpose only: to choose a text (see
+Leftovers).
 
 **Leftovers.** If the step after exit cannot run, the parked program files
 and both records stay; they hold none of the person's data, and the message
@@ -2531,9 +2536,9 @@ folder, that entry and both records stay.
 
 A later setup run finds its completion record in such a folder. It installs
 nothing and deletes nothing. When the launcher's start program is gone, setup
-shows one message and ends. Before it shows that message, it looks once
-(`Emptied` in `scripts/windows_bootstrap_native.cs`), and the look chooses
-between two texts:
+shows one message and ends. Before it shows that message, it looks
+(`Emptied` and `Signs` in `scripts/windows_bootstrap_native.cs`), and the
+looks choose between three texts:
 
 - Setup looks at the attributes of the entry with the journal's name. When
   they show a file that is no folder and no link, setup opens that path and
@@ -2586,10 +2591,25 @@ between two texts:
   folder. It does not change the folder, because the folder can hold files or
   folders that are not Amplifier's." and "Move or rename that folder. Then
   run this setup file again."
-- In every other case, and when any part of the look fails, setup says what
-  it said before: "Amplifier is already installed in", the folder, "but setup
-  cannot open it: a program file is missing. Keep that folder. It holds your
-  chats and settings. This version of setup cannot repair it."
+- In every other case, and when any part of that look fails, setup makes two
+  more looks (`Signs`). Each is one step on one path, and setup holds nothing
+  between them. First it looks at the attributes of the entry with the
+  journal's name. It does not open that entry, and it does not follow a link.
+  Any entry there answers `removal`: a file (also an empty one, and one that
+  another program holds for itself), a folder, a link. Only when Windows
+  answers that no file has that name does setup make the second look, at the
+  attributes of the entry `app`: a folder that is no link answers `kept`.
+  Setup does not look into that folder. Every other answer of Windows to
+  either look, and every other entry `app`, answers `other`.
+- With `kept` setup says: "Amplifier is already installed in", the folder,
+  ", but setup cannot open it. Setup cannot find a program file that it needs
+  to open Amplifier from that folder." and "Keep that folder. Amplifier keeps
+  your chats and settings in it. This version of setup cannot repair it."
+- With `removal` and with `other` setup says: "Setup cannot open Amplifier.
+  Setup found an installation record in this folder:", the folder, then
+  "Setup cannot find a program file that it needs to open Amplifier from that
+  folder." and "Keep that folder. Setup deletes nothing in it. This version
+  of setup cannot repair it."
 
 Each statement of the first text is what setup found in this run, or what
 setup does, with the reason why it does not change the folder; its last two
@@ -2599,14 +2619,12 @@ program directly before this look. "Setup found an installation record in this
 folder": the folder has a file with the name of setup's completion record,
 which setup writes at the end of an installation. Setup does not read that
 file in this look, and it knows no more about the folder's history. The text
-does not say that an installation was made in the folder. (The second text
-says "Amplifier is already installed in" on the same evidence, as it did
-before.) "Setup cannot find a program file that it needs to open Amplifier
+does not say that an installation was made in the folder. "Setup cannot find
+a program file that it needs to open Amplifier
 from that folder": setup's look for the launcher's start program found no file
 (`File.Exists`). That look also finds no file when Windows does not let setup
-see one that is there, so the first text says "cannot find" and not "is
-missing". The second text says "a program file is missing" for the same look,
-as it did before; that is not true for a file that setup cannot see. "Setup
+see one that is there, so each of the three texts says "cannot find" and not
+"is missing". "Setup
 found no chats or settings in the folder": none of the seven names held
 anything at the look. The text does not say that Amplifier was uninstalled,
 and it does not say that Amplifier cannot start: a file that reads as a
@@ -2616,8 +2634,33 @@ or rename the folder, not to delete it: the folder can hold something of the
 person's that the look did not see, and a program can put data into it after
 the look. Setup's stop for a damaged folder names the same step. A setup run
 that finds no folder at that path goes on as for a first installation. The
-look only chooses a text. With either text setup installs nothing, deletes
-nothing and ends with status 1.
+look only chooses a text. With each of the three texts setup installs
+nothing, deletes nothing and ends with status 1.
+
+The second text is the only one of the three that names the person's chats
+and settings. "Amplifier is already installed in": the folder has the name of
+setup's completion record, no entry has the journal's name, and the folder
+`app` is there. An uninstall that deletes the folder writes its journal before
+it deletes anything, and it deletes `app` before the journal goes. "Amplifier
+keeps your chats and settings in it" is the reason for "Keep that folder". It
+says where Amplifier keeps them. It does not say that a chat is there: setup
+does not look into `app`. The launcher has the same rule for its sentence "It
+keeps your chats and settings" (`_setup_again` in
+`amplifier_web/windows_consumer.py`), with two differences. The launcher
+follows a link with the name `app` (`os.path.isdir`); setup does not count a
+link. When Windows gives the launcher's look for the journal's name no answer,
+that look counts as no journal (`os.path.lexists` in
+`windows_uninstall.unfinished`), so the launcher can say its sentence; setup
+then says the third text. Where Windows ignores the case of letters, a folder
+`App` answers the look for `app`.
+
+Each statement of the third text is what setup found or what setup does. It
+begins like the first text. "Setup deletes nothing in it" is what setup does
+in every second run. The text names no chats and no settings: an entry with
+the journal's name is there, or Windows gave the look for it no answer, or
+the folder `app` is not there. It gives no step after "Keep that folder":
+this version of setup has no repair. Before this rule setup said in all of
+these states "Keep that folder. It holds your chats and settings."
 
 Three states give the first text (a program of this account can make
 others): an uninstall with the delete choice left the folder because it holds
@@ -2625,16 +2668,17 @@ something that is not Amplifier's (seen on a PC on November 17, 2026, with
 the earlier text; that is why the first text exists); the leftover of L3
 when the launcher's start program is gone; and a setup run while the step
 after exit still works (that step can still delete the folder, and Windows
-can refuse to move the folder while that step holds it). The second text can
-still be false after a delete: when the look finds no journal of a delete
-(the journal is gone, a program replaced or damaged it, or Windows refused
-the look), and when one of the seven names holds something again (a folder
-that the person made under that name, for example). The text then says that
-the folder holds chats and settings that the uninstall deleted. That limit
-stays.
+can refuse to move the folder while that step holds it). After a delete the
+first look can still say no: it finds no journal of a delete (the journal is
+gone, a program replaced or damaged it, or Windows refused the look), or one
+of the seven names holds something again (a folder that the person made under
+that name, for example). Setup then shows the third text, with one exception.
+When no entry has the journal's name and a folder `app` is there again, setup
+shows the second text: it says that Amplifier is installed in the folder,
+after an uninstall that deleted it. That limit stays.
 
 Proven on a Windows runner (Windows Server;
-`tests/windows/native_setup.Tests.cs`, job `windows-setup-folder`): both
+`tests/windows/native_setup.Tests.cs`, job `windows-setup-folder`): the three
 texts, complete; each of the seven names as an empty folder, as a folder with
 a file or a folder in it, and as a file; an empty folder, and a folder with
 a file in it, under another spelling of a data name (`App`); a link with a
@@ -2647,37 +2691,119 @@ that is not UTF-8, and a folder with the journal's name; a journal of exactly
 deleted while a handle of the look's kind is open, and one that another
 program holds for itself; that the folder holds afterwards what the case put
 there; and that a look changes no creation time, no write time and no
-attribute of the journal, of setup's record and of the person's file. Not
+attribute of the journal, of setup's record and of the person's file. For
+the two further looks: no entry with the journal's name with and without the
+folder `app`, and with a file in that folder; as the entry with the
+journal's name an empty file, a file that is no record, a file that another
+program holds for itself, a folder, a link to a file, a link whose file is
+gone and a link to a folder; an entry whose attributes Windows refuses to
+give, with the folder `app` there; a file and a link with the name `app`; a
+folder `App`; a folder that is not there; and that the look changes no time
+and no attribute of the entry with the journal's name. Not
 proven: the message in setup's real window, the three states on a PC with
 this text, the look on Windows 11, the look in a folder whose names Windows
 compares with the case of letters, a program that replaces an entry during
 the look, and a setup run in the instant in which the step after exit deletes
 the journal.
 
-When the launcher's start program is still there (a removal that
-stopped before its last step), setup asks, and on Yes it lets the
-installation's own program add the Start-menu and Apps-list entries again,
-and then it starts the launcher. That program adds the entries only when the
-installation's own records are whole and no entry exists, and it does not
-look for the journal. The launcher then does not open Amplifier:
+**A second setup run on a folder with the launcher's start program.** When
+the launcher's start program is still there, setup reads the entry record as
+before ("listed": the record says `installed`, and the Start-menu entry that
+it names exists). Then it makes the two looks of `Signs` once, before its
+first message of the run. Each text of this run says what setup found in
+this run, what setup does, or the next step.
 
-- While the installation's own records are whole, the launcher finds the
-  journal, and its message tells the person to select Uninstall Amplifier.
-  With the entries back, the person can do that, and the second uninstall
-  finishes the removal.
-- When those records are already deleted (a removal that stopped in its last
-  seconds), no entry is added, and the launcher's own check of the
-  installation fails before it looks for the journal. A launcher from a setup
-  file before pull request 2270 then says that Amplifier could not start and
-  names the setup file again, with "It keeps your chats and settings". Like
-  setup's message, that is not true for this leftover (L3). A launcher from
-  that pull request on looks for the journal when a start fails, and says
-  what it says under the lock: the removal did not finish, and Amplifier does
-  not open until it has.
+No entry with the journal's name, or a look without an answer (`kept`,
+`other`): setup asks, and on Yes it adds missing entries and starts the
+launcher, as described under "Uninstall stops the app before it removes an
+entry".
 
-This is read from the source of both programs; the combination was not run.
-In none of these states can Amplifier start, and in none of them does setup
-delete anything.
+- Listed, the question: "Amplifier is already installed on this PC.", "Select
+  Yes to open it now." and "You can also open it from the Start menu:
+  Amplifier Unified."
+- Not listed, the question: "Amplifier is already installed on this PC, but
+  setup did not find it in the Start menu." and "Select Yes to add it to the
+  Start menu again and start it now."
+- Not listed, when the entries step fails: "Setup could not add Amplifier to
+  the Start menu. Setup starts Amplifier now." and "To open it later, run
+  this setup file again."
+- Only with `kept` the last two texts end with "Your chats and settings are
+  kept." The sentence says what setup does: it deletes nothing. Setup says it
+  only where no entry has the journal's name and the folder `app` is there.
+  Before this rule setup said it in every state, also after an uninstall
+  that deleted them.
+
+"setup did not find it in the Start menu" is what setup looked for. Before,
+the text also said that Amplifier does not start when the person signs in; a
+second setup run does not read the start-at-sign-in task. With `other`
+because Windows gave the look for the journal's name no answer, setup starts
+the launcher as before. The launcher's own look counts the same refusal as no
+journal (`os.path.lexists`), so it starts too.
+
+An entry with the journal's name (`removal`): the launcher does not open
+Amplifier from such a folder (`Refused("removing")` in `_start` of
+`amplifier_web/windows_consumer.py`, which looks with
+`windows_uninstall.unfinished`). So setup does not start it. No text of setup then says that Amplifier opens or
+starts, and none says that chats or settings are kept. Setup says that it
+found "an uninstall record", not that an uninstall began: a file with that
+name is no proof of an uninstall (a program of this account can write one),
+and setup does not read it for these texts.
+
+- Listed: one message, and setup ends with status 1. "Setup found an
+  uninstall record in this folder:", the folder, "Amplifier does not open
+  while that record is there. Setup did not start it." and "To finish that
+  uninstall, select Uninstall Amplifier in the Start menu or in the Windows
+  Apps list." The step is the launcher's own (its text `removing`). Before
+  this rule setup asked "Select Yes to open it now.", started the launcher,
+  and the launcher refused.
+- Not listed: a question. "Setup found an uninstall record in this folder:",
+  the folder, "Amplifier does not open while that record is there. Setup does
+  not start it. Setup did not find Amplifier in the Start menu." and "Select
+  Yes to add Amplifier to the Start menu again, so that you can finish that
+  uninstall from there." On No setup changes nothing and ends with status 0.
+  On Yes setup's window runs the entries step only (`SecondRun` with `start`
+  false), then setup shows one of the texts below and ends with status 1.
+- The entries were added: "Setup added Amplifier to the Start menu. Setup did
+  not start Amplifier, because it found an uninstall record in this folder:",
+  the folder, and "To finish that uninstall, select Uninstall Amplifier in
+  the Start menu."
+- The entries were not added: "Setup could not add Amplifier to the Start
+  menu. Setup did not start Amplifier, because it found an uninstall record
+  in this folder:", the folder, and "Restart Windows. Then run this setup
+  file again."
+
+The entries program adds the entries only when the installation's own
+records are whole and no entry exists, and it does not look for the journal.
+
+Which of these states a person reaches by ordinary means (read from the
+source of both programs; none was seen on a PC):
+
+- `removal`, listed: an uninstall with the delete choice stopped at its data
+  step, because a program held a file or a folder below one of the seven
+  names. The entries and the launcher's records are whole, so the person can
+  uninstall again.
+- `removal`, not listed, the entries not added: the last message of an
+  uninstall with the delete choice is still open, or the PC was switched off
+  while it was open. The launcher's records are deleted by then, so the
+  entries program refuses.
+- `kept`, not listed: an uninstall that kept the folder.
+
+Limits that stay. Setup looks once, before its first message: an uninstall
+that begins after the look is not seen, setup starts the launcher, and the
+launcher refuses with its own text. A launcher from a setup file before
+release 0.106.0 has no rule for the journal's name, and its uninstall writes
+no journal. When a file with that name is in such an installation's folder,
+setup starts no launcher, although that launcher would open Amplifier. With
+a journal that is no record of a delete (L4), the Uninstall Amplifier entry
+removes the entries and keeps the folder and that file, so the launcher still
+does not open afterwards.
+
+Proven on a Windows runner (the same native case): each text of this
+section, complete; that `SecondRun` without a start runs the entries program
+and no launcher, shows no message, and gives 0 when the entries program
+ended with 0 and 1 when it failed. Not proven: these texts in setup's real
+window, the question and the choice between the texts in `OpenInstalled`
+(the Python case holds that code as text), and every state on a PC.
 
 The program that adds the entries again takes the installation's lock and
 checks the installation under it (`windows_consumer.integrate`, from pull
@@ -2714,8 +2840,12 @@ uninstall that deleted the folder.
   is not Amplifier's, or the step after exit could not run): the leftover
   above. Setup installs nothing there and deletes nothing, and Amplifier does
   not start from that folder. A new installation is possible only after the
-  person deleted that folder, or moved what is theirs out of it and deleted
+  person moved or renamed that folder, as setup's message says, or deleted
   it.
+- After Yes and Yes, when the removal stopped before its last step (a program
+  held data): the journal is in the folder, with the launcher and its
+  entries. Setup starts nothing and names Uninstall Amplifier, as described
+  under "A second setup run on a folder with the launcher's start program".
 
 The first is shown on a Windows runner (`windows-start-again.yml`, without
 the setup file). The second and the third are clean-room acceptance.
