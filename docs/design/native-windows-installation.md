@@ -491,8 +491,22 @@ app's own readiness check; the update hand-over has its own workflow.
 Measured there (run 44162025757): 75 seconds from the app's request to the
 settled rollback of the forced failure; 241 seconds from the end of the helper
 to the repair by the timed trigger; 134 seconds from the request to the
-settled refresh. Not shown there: the setup file, a standard account, a sign-out or a restart of
-the PC, the Updates page in a browser and its button, a message that is sent
+settled refresh. A second job of the same workflow has its own installation
+of the same layout, with "Keep Amplifier up to date" off. It requires: after
+the confirmation the app saves its offer and starts no refresh by itself (the
+case waits for the offer, and then until the app's update state has been the
+same for 130 seconds; it does not count the app's decisions); the headline that the app gives
+the Updates page is the launcher's own offer, with the page's install action;
+the install request of the Updates page then starts one refresh, which the
+launcher follows on the same port; no second refresh starts, and the setting
+is still off. The fixture signs in as the owner's browser does (a ticket of
+the owner's entry, the sign-in page's form token, the session cookie) and
+sends the two requests that the bundled page sends for the switch and for
+the button. One build of the app can refresh the launcher once, so this case
+has its own job.
+Not shown there: the setup file, a standard account, a sign-out or a restart of
+the PC, the Updates page in a browser (no browser draws the page or its
+button), a message that is sent
 while Amplifier restarts, a count of console windows, a helper that is ended
 after it started the app, a real update hand-over that the refresh follows,
 and an installation that setup did not make.
