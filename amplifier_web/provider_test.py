@@ -1,4 +1,9 @@
-"""A bounded, explicit inference check without a conversation or tools."""
+"""A bounded, explicit inference check without a conversation.
+
+The test message carries one tool definition, because a chat whose bundle has
+tools sends them and a service or a model can refuse a request for that reason.
+The tool is never run.
+"""
 import asyncio
 import os
 import re
@@ -26,8 +31,21 @@ def safe_text(value, config):
     return ''.join(c for c in text if c.isprintable() or c in '\n\t')[:1000]
 
 
+# What a failure names once the request exists. It says what the request held,
+# not that it was sent or who answered.
+REQUEST_HELD = 'The test request held one short message and one tool definition. The error: '
+
+
+def _failure(error, config, built):
+    text = safe_text(error, config)
+    if not text.strip():
+        # An error with no text of its own: its type is the one fact there is.
+        text = type(error).__name__
+    return (REQUEST_HELD + text)[:1000] if built else text
+
+
 async def test_message(provider, config, model, info=None):
-    from amplifier_core.message_models import ChatRequest, Message
+    from amplifier_core.message_models import ChatRequest, Message, ToolSpec
     model = model or config.get('default_model') or config.get('model')
     mode = ((info or {}).get('defaults') or {}).get('auth_mode') or config.get('auth_mode')
     if mode == 'chatgpt_plan':
@@ -37,20 +55,40 @@ async def test_message(provider, config, model, info=None):
                 'reachable': False, 'supported': False, 'elapsedMs': 0,
                 'errorType': 'UnsupportedMessageTest',
                 'error': 'ChatGPT plan does not support this test\'s output limit. Use Test connection to check the model catalog; no test message was sent.'}
+    if not callable(getattr(provider, 'complete', None)):
+        # The object that the helper built for this connection answers no
+        # request (a component can make its answering provider only when a
+        # chat mounts it). That is no failure of the service or of the key,
+        # and a saved model would not change it.
+        return {'method': 'provider.complete', 'model': safe_text(model or '', config),
+                'reachable': False, 'supported': False, 'elapsedMs': 0,
+                'errorType': 'UnsupportedMessageTest',
+                'error': 'This connection cannot send a test message here. No test message was sent. To try the connection, start a chat with it.'}
     if not isinstance(model, str) or not model.strip():
         raise ValueError('Choose and save a model before sending a test message.')
     started = time.monotonic()
     result = {'method': 'provider.complete', 'model': safe_text(model, config), 'reachable': False}
+    built = False
     try:
+        # One optional property: a service may refuse a tool with no property.
+        tool = ToolSpec(name='connection_test', description='Not used. Reply with text.',
+                        parameters={'type': 'object', 'properties': {'note': {'type': 'string'}}})
         request = ChatRequest(model=model, messages=[Message(role='user', content='Reply with only OK.')],
-                              tools=[], stream=False, max_output_tokens=256, timeout=45)
+                              tools=[tool], stream=False, max_output_tokens=256, timeout=45)
+        built = True
         reply = await asyncio.wait_for(provider.complete(request), 45)
-        text = ''.join(getattr(block, 'text', '') for block in reply.content if getattr(block, 'type', None) == 'text')
-        if not text.strip():
-            raise ValueError('The provider returned no text. Check model compatibility or its output limit.')
-        result.update(reachable=True, response=safe_text(text, config), model=safe_text(getattr(reply, 'model', None) or model, config))
+        blocks = getattr(reply, 'content', None) or []
+        text = ''.join(getattr(block, 'text', '') for block in blocks if getattr(block, 'type', None) == 'text')
+        # Core has a tool call in either place. The call is never run.
+        called = (any(getattr(block, 'type', None) == 'tool_call' for block in blocks)
+                  or bool(getattr(reply, 'tool_calls', None)))
+        if not text.strip() and not called:
+            raise ValueError('The provider returned no text and no tool call. Check model compatibility or its output limit.')
+        result.update(reachable=True, model=safe_text(getattr(reply, 'model', None) or model, config),
+                      response=safe_text(text, config) if text.strip() else 'The model answered with a tool call.')
     except Exception as exc:
-        result.update(error=safe_text('The provider did not respond within 45 seconds.' if isinstance(exc, TimeoutError) else exc, config), errorType=type(exc).__name__)
+        error = 'The provider did not respond within 45 seconds.' if isinstance(exc, TimeoutError) else exc
+        result.update(error=_failure(error, config, built), errorType=type(exc).__name__)
         status = getattr(exc, 'status_code', None)
         if type(status) is int: result['statusCode'] = status
     result['elapsedMs'] = round((time.monotonic() - started) * 1000)
