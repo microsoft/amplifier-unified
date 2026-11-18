@@ -61,6 +61,14 @@ the runtime checks installed capabilities and uses the first eligible provider b
 priority; with no eligible provider it exposes no image generation. Reading these
 preferences must never generate an image.
 
+Decision-service storage is separate from ordinary shared LLM providers:
+`decision_models.connections` owns decision-only accounts and decision-specific
+options for referenced chat accounts. The existing connection inventory/actions
+manage both, but ordinary model discovery and runtime provider selection exclude
+dedicated decision accounts. Saving preferences still requires explicit
+observation-transfer consent and affects new conversations only. See
+[decision setup and migration](clients/browser-and-decision-setup.md#shared-settings-and-the-cli).
+
 ### Save-control audit (2026-10-13)
 
 | Surface | Decision and reason |

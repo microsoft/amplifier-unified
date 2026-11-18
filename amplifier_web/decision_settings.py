@@ -9,8 +9,8 @@ def row_id(row):
     return row.get('id') or row.get('instance_id') or row['module'].removeprefix('provider-')
 
 
-def catalogs():
-    result = {}
+def catalogs(*, unique=False):
+    result, seen, ambiguous = {}, set(), set()
     for entry in entry_points(group='amplifier.decision_backends'):
         try:
             value = entry.load()()
@@ -18,6 +18,10 @@ def catalogs():
             if metadata is None:
                 continue
             module, definition, validate = metadata
+            if unique:
+                if module in seen:
+                    ambiguous.add(module)
+                seen.add(module)
             # Preserve the settings catalog's first valid declaration. Runtime
             # discovery separately refuses ambiguous mounts of the same module.
             if module in result:
@@ -34,7 +38,7 @@ def catalogs():
                 result[module] = (row, validate)
         except Exception:
             continue  # A broken optional provider cannot break ordinary setup.
-    return result
+    return {module: row for module, row in result.items() if not unique or module not in ambiguous}
 
 
 def _backends(row):
@@ -48,7 +52,8 @@ def _backends(row):
 
 def describe(settings, providers=None):
     definitions = catalogs()
-    providers = providers if providers is not None else settings.get('config', {}).get('providers', [])
+    from .decision_namespace import logical_rows
+    providers = logical_rows(settings)
     disabled = settings.get('configurator', {}).get('disabled', {}).get('providers', [])
     available, backends = [], {}
     for row in providers:
@@ -91,7 +96,7 @@ def configure(manager, args, workspace, scope):
         choice = args.get('backend') or {}
         if not isinstance(choice, dict) or set(choice) - {'provider', 'model', 'endpoint'}:
             raise ValueError('Select a saved connection; credentials belong to that connection')
-        selected = next((row for row in effective.providers if row_id(row) == choice.get('provider')), None)
+        selected = next((row for row in effective.connections if row_id(row) == choice.get('provider')), None)
         available = {row['id'] for row in describe(effective.settings, effective.providers)['catalog']}
         if not selected or choice.get('provider') not in available:
             raise ValueError('This decision connection is unavailable. Refresh your connections.')
@@ -101,35 +106,32 @@ def configure(manager, args, workspace, scope):
         backend = {**definition[1]({k: v for k, v in choice.items() if k != 'provider'}), 'enabled': True}
         bindings = {name: {'mode': 'decision', 'backend': 'ui-' + name + '-' + row_id(selected),
                            'allow_external_state': True} for name in purposes}
-    from .shared_settings import overlay, settings_paths, read_yaml
+    from .shared_settings import settings_paths, read_yaml
+    from .decision_namespace import connections, key, logical_rows, merge_settings, translate
     paths = settings_paths(workspace, shared_home=manager.store.shared_home, global_only=manager.global_only)
 
     def preview(settings, stop=None):
-        result, rows = {}, []
+        result = {}
         for level, path in paths.items():
             value = settings if level == scope else read_yaml(path)
-            result = overlay(result, value)
-            for row in value.get('config', {}).get('providers', []):
-                key = row.get('id') or row.get('module')
-                index = next((i for i, other in enumerate(rows) if (other.get('id') or other.get('module')) == key), None)
-                if index is None: rows.append(copy.deepcopy(row))
-                else: rows[index] = overlay(rows[index], row)
+            result = merge_settings(result, translate(value, catalogs(unique=True), inherited=result))
             if level == stop: break
-        result.setdefault('config', {})['providers'] = rows
         return result
 
     def save(settings):
         if selected:
             inherited = preview(settings, stop=scope)
-            if not any(row_id(row) == row_id(selected) for row in inherited['config']['providers']):
+            if not any(row_id(row) == row_id(selected) for row in logical_rows(inherited)):
                 raise ValueError('This connection belongs to the workspace. Save in its workspace scope.')
-            rows = settings.setdefault('config', {}).setdefault('providers', [])
-            row = next((row for row in rows if row_id(row) == row_id(selected)), None)
+            rows = settings.setdefault('decision_models', {}).setdefault('connections', {})
+            identity = key(selected)
+            row = rows.get(identity)
             if row is None:
-                row = {'module': selected['module'], 'config': {}}
-                if selected.get('id') or selected.get('instance_id'):
-                    row['id'] = row_id(selected)
-                rows.append(row)
+                dedicated = connections(inherited).get(identity, {})
+                row = ({k: copy.deepcopy(selected[k]) for k in ('module', 'id', 'instance_id') if k in selected}
+                       if dedicated and 'provider' not in dedicated else
+                       {'provider': identity, 'module': selected['module']})
+                rows[identity] = row
             config = row.setdefault('config', {})
             old = config.get('decisions') or {}
             models = copy.deepcopy(old.get('backends') or {})
@@ -144,18 +146,18 @@ def configure(manager, args, workspace, scope):
         if any(selections.get(name) != binding for name, binding in bindings.items()):
             raise ValueError('This workspace overrides decision preferences. Save in its workspace scope.')
         if selected:
-            row = next((r for r in combined['config']['providers'] if row_id(r) == row_id(selected)), {})
+            row = next((r for r in logical_rows(combined) if row_id(r) == row_id(selected)), {})
             if (any(_backends(row).get(binding['backend']) != backend for binding in bindings.values()) or
                     row.get('config', {}).get('decisions', {}).get('enabled') is not True):
                 raise ValueError('This workspace overrides decision models. Save in its workspace scope.')
-    manager.store.update(workspace, scope, save)
+    manager.store.update(workspace, scope, save, migrate_decisions=True)
     effective = manager.config(workspace)
     return {'decisionModels': describe(effective.settings, effective.providers), 'decisionModelsError': None, 'configurationChanged': True,
             'decisionSetupCompletion': {'purpose': purpose, 'mode': mode, 'scope': scope, 'takesEffect': 'new_sessions'}}
 
 
 def apply(bundle, settings):
-    """Provider configuration already merges normally; bind only present tools."""
+    """Bind purpose choices only; normal host assembly supplies logical accounts."""
     value = settings.get('decision_models')
     if not isinstance(value, dict):
         return
