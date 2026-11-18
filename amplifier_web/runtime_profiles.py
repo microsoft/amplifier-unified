@@ -34,7 +34,10 @@ def app_folders(value, roots, **options):
     folder ends. The values are changed before they are written. Only a text
     value that is the folder or a path below it loses the folder, also after
     "file://": the folder's path, and then the end of the value or a path
-    separator of this system. The name of an entry is never changed.
+    separator of this system. A value with ".." after the folder stays as it
+    is, because it can name a place outside the folder; so does an address
+    with "%" there, which can hide the dots. The name of an entry is never
+    changed.
     """
     ordered = sorted(roots, key=len, reverse=True)
     other = [root for root in ordered if json.dumps(root)[1:-1] != root]
@@ -45,7 +48,8 @@ def app_folders(value, roots, **options):
         for root in other:
             rest = text[len(start) + len(root):]
             if text.startswith(root, len(start)) and (not rest or rest.startswith(separators)):
-                return start + "$APP" + rest
+                outside = ".." in rest or bool(start) and "%" in rest
+                return text if outside else start + "$APP" + rest
         return text
 
     def walk(item):

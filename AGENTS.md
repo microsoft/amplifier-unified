@@ -354,7 +354,10 @@ folder beside it, a name with `#` or a backslash, and the name of an entry
 were each taken for it). The function changes the values before it writes
 them: only a text value that is the folder or a path below it, with a path
 separator of the system after the folder, also after `file://`; never the
-name of an entry. For a folder that JSON writes as it is, it replaces the
+name of an entry, and never a value with `..` after the folder (or with `%`
+there in an address), which can name a place outside it. A doubt leaves the
+value as it is: that is what the code before did for such a folder. For a
+folder that JSON writes as it is, it replaces the
 text wherever it stands in the JSON text, also in the name of a folder beside
 it and in the name of an entry, because installations have saved those
 values. The address of a Windows file
