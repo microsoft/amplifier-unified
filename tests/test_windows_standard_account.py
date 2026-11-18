@@ -814,22 +814,30 @@ def test_a_host_record_that_cannot_be_read_does_not_fail_the_read(case, tmp_path
 def test_the_watch_keeps_each_change_of_the_listeners_answer_and_of_the_owners_of_its_port(case):
     answers = iter(["unreachable", "unreachable", "unreachable", "trusted", "trusted", "unreachable", "trusted"])
     owners = iter([[], [], [4500], [4500], [4500], [4500], [5100]])
-    # The time of an entry is the time at which its question began: the clock is read before the question.
-    order = []
+    # The time of an entry is the time at which its question began: the watch reads its timer before the
+    # question. It reads the computer's clock once, when it is made: a time is that reading plus the timer's
+    # seconds since then. Here each question and the mark begin one second after the one before.
+    order, now = [], [50.0]
     def clock():
         order.append("clock")
-        return 100 + order.count("clock") - 1
+        return 100.0
+    def timer():
+        order.append("timer")
+        return now[0]
     def probe():
         order.append("probe")
         return next(answers)
-    watch = case.ListenerWatch(probe, lambda: next(owners), clock=clock, timer=lambda: 0)
+    watch = case.ListenerWatch(probe, lambda: next(owners), clock=clock, timer=timer)
     for _ in range(5):
         watch.look()
+        now[0] += 1
     watch.mark("the second start")
+    now[0] += 1
     watch.look()
+    now[0] += 1
     watch.look()
     kept = watch.stop()
-    assert order[:2] == ["clock", "probe"]
+    assert order[:4] == ["clock", "timer", "timer", "probe"] and order.count("clock") == 1
     # No answer and no listener; no answer with a listener (the host is there and does not answer); an answer;
     # no answer of the same process; an answer of another process. The mark is in the same list, in the order of time.
     assert "late" not in kept  # No gauge was given.
@@ -843,13 +851,20 @@ def test_the_watch_keeps_each_change_of_the_listeners_answer_and_of_the_owners_o
 
 
 def test_the_watch_keeps_how_long_a_question_took_and_the_slowest_one_while_nothing_changes(case):
-    # Each question: the timer is read before it, after it, and at the end of the look. The difference of the
-    # first two is the seconds of the question.
+    # The watch reads its timer once when it is made. Each question: the timer is read before it, after it,
+    # and at the end of the look. The difference of the first two is the seconds of the question. A mark reads
+    # the timer once. Here the watch is made at 10 seconds of its timer, and each of the nine (four questions,
+    # the mark, four questions) begins 5 seconds after the one before it. The clock says 100 when the watch
+    # is made; a second read of it would end this case with an error.
     seconds = [0.1, 0.09, 1.6, 0.1, 1.2, 2.0, 0.08, 0.5]
-    ticks = iter([value for took in seconds for value in (10.0, 10.0 + took, 10.0 + took)])
+    begins = [10.0 + 5 * number for number in range(9)]
+    asked = lambda begin, took: (begin, begin + took, begin + took)
+    ticks = iter([10.0]
+                 + [value for begin, took in zip(begins[:4], seconds[:4]) for value in asked(begin, took)]
+                 + [begins[4]]
+                 + [value for begin, took in zip(begins[5:], seconds[4:]) for value in asked(begin, took)])
     answers = iter(["trusted"] * 5 + ["unreachable"] + ["trusted"] * 2)
-    times = iter(range(100, 200))
-    watch = case.ListenerWatch(lambda: next(answers), clock=lambda: next(times), timer=lambda: next(ticks))
+    watch = case.ListenerWatch(lambda: next(answers), clock=iter([100.0]).__next__, timer=lambda: next(ticks))
     for _ in range(4):
         watch.look()
     watch.mark("the uninstall")  # A mark is no answer: the slowest question stays with the answer before it.
@@ -857,11 +872,11 @@ def test_the_watch_keeps_how_long_a_question_took_and_the_slowest_one_while_noth
         watch.look()
     assert watch.stop()["changes"] == [
         # The third question was the slowest of the five with this answer. A later one that took less changes nothing.
-        {"at": 100, "answer": "trusted", "owner": None, "seconds": 0.1, "slowest": {"at": 102, "seconds": 1.6}},
-        {"at": 104, "mark": "the uninstall"},
-        {"at": 106, "answer": "unreachable", "owner": None, "seconds": 2.0},
+        {"at": 100, "answer": "trusted", "owner": None, "seconds": 0.1, "slowest": {"at": 110, "seconds": 1.6}},
+        {"at": 120, "mark": "the uninstall"},
+        {"at": 130, "answer": "unreachable", "owner": None, "seconds": 2.0},
         # A question that took longer than the one that brought the change.
-        {"at": 107, "answer": "trusted", "owner": None, "seconds": 0.08, "slowest": {"at": 108, "seconds": 0.5}}]
+        {"at": 135, "answer": "trusted", "owner": None, "seconds": 0.08, "slowest": {"at": 140, "seconds": 0.5}}]
     # The seconds are those of the question to the listener. The read of the port's owners is not in them.
     clock = [0.0]
     def question():
@@ -874,7 +889,8 @@ def test_the_watch_keeps_how_long_a_question_took_and_the_slowest_one_while_noth
     timed.look()
     assert timed.changes[0]["seconds"] == 0.25
     # After the limit of the list no entry gets the time of a question that belongs to an answer that is not kept.
-    numbers, ticks = iter([1, 2, 2, 2]), iter([0, 0.1, 0.1, 0, 0.1, 0.1, 0, 5.0, 5.0, 0, 9.0, 9.0])
+    # (The first value of the timer is for the moment at which the watch is made.)
+    numbers, ticks = iter([1, 2, 2, 2]), iter([0, 0, 0.1, 0.1, 0, 0.1, 0.1, 0, 5.0, 5.0, 0, 9.0, 9.0])
     full = case.ListenerWatch(lambda: next(numbers), limit=1, timer=lambda: next(ticks))
     for _ in range(4):
         full.look()
@@ -943,8 +959,8 @@ def gauged(case, seconds, answers=None, **more):
         asked.append(list(owners))
         number = next(counts)
         return {"busy": 10.0 + number, "all": 20.0 + 4 * number, "processes": {str(pid): {"created": 7, "used": number / 2} for pid in owners}}
-    times = iter(range(100, 1000))
-    watch = case.ListenerWatch(probe, lambda: [4500], gauge=gauge, clock=lambda: next(times),
+    # The clock says 100 when the watch is made, where its timer says 50.
+    watch = case.ListenerWatch(probe, lambda: [4500], gauge=gauge, clock=lambda: 100.0,
                                timer=lambda: now[0], **more)
     return watch, asked
 
@@ -957,17 +973,18 @@ def test_the_watch_keeps_each_late_answer_with_what_was_busy_during_it(case):
     # Only the questions of half a second or more. Each with the processor time during it: one read of the gauge
     # before the question, and for a late one a second read after it.
     assert kept["late"] == [
-        {"at": 101, "seconds": 0.5, "answer": "trusted", "waitedBefore": 0.0,
+        {"at": 100.1, "seconds": 0.5, "answer": "trusted", "waitedBefore": 0.0,
          "used": {"computerBusy": 0.25, "processes": {"4500": 0.5}}, "after": {"seconds": 0.03, "certificates": 60}},
-        {"at": 103, "seconds": 1.7, "answer": "trusted", "waitedBefore": 0.0,
+        {"at": 100.8, "seconds": 1.7, "answer": "trusted", "waitedBefore": 0.0,
          "used": {"computerBusy": 0.25, "processes": {"4500": 0.5}}, "after": {"seconds": 0.03, "certificates": 60}}]
     # The gauge reads the processes that owned the port at the question before: none at the first question.
     assert asked == [[], [4500], [4500], [4500], [4500], [4500]]
 
 
 def test_the_time_that_the_watch_waited_before_a_late_question_is_kept(case):
-    # The timer: a question from 10 to 11; its end is read at 11.5; the next question begins at 14 and takes 2.
-    ticks = iter([10.0, 11.0, 11.5, 14.0, 16.0, 16.5])
+    # The timer: the watch is made at 10; a question from 10 to 11; its end is read at 11.5; the next question
+    # begins at 14 and takes 2.
+    ticks = iter([10.0, 10.0, 11.0, 11.5, 14.0, 16.0, 16.5])
     watch = case.ListenerWatch(lambda: "trusted", gauge=lambda owners: {"busy": 0, "all": 0, "processes": {}},
                                timer=lambda: next(ticks))
     watch.look()
@@ -989,7 +1006,7 @@ def test_the_list_of_late_answers_has_a_limit_and_a_gauge_that_fails_is_kept_as_
 
     def no_store():
         raise OSError("The store cannot be opened")
-    ticks = iter([0.0, 3.0, 3.5])
+    ticks = iter([0.0, 0.0, 3.0, 3.5])  # The first value: the watch is made.
     broken = case.ListenerWatch(lambda: "unreachable", gauge=no_gauge, after=no_store, timer=lambda: next(ticks))
     broken.look()  # No error: the watch goes on.
     [entry] = broken.late
@@ -997,7 +1014,7 @@ def test_the_list_of_late_answers_has_a_limit_and_a_gauge_that_fails_is_kept_as_
     assert entry["used"] == {"errorType": "OSError", "error": "Access is denied"}  # The gauge's own error.
     assert entry["after"] == {"errorType": "OSError", "error": "The store cannot be opened"}
     # Without a gauge the watch keeps no such list, and its result has none.
-    plain = case.ListenerWatch(lambda: "trusted", timer=iter([0.0, 9.0, 9.5]).__next__)  # A question of 9 seconds.
+    plain = case.ListenerWatch(lambda: "trusted", timer=iter([0.0, 0.0, 9.0, 9.5]).__next__)  # A question of 9 seconds.
     plain.look()
     assert plain.late == [] and "late" not in plain.stop()
     # A limit of the seconds that is given is used.
@@ -1159,7 +1176,7 @@ def test_the_watch_changes_and_copies_its_lists_under_one_lock(case):
 
 def test_an_error_of_the_watchs_own_code_ends_the_watch_and_the_stop_says_it(case):
     # A read of the processor time that gives no record: the watch's own code fails at the late answer.
-    ticks = iter([0.0, 3.0, 3.5])
+    ticks = iter([0.0, 0.0, 3.0, 3.5])  # The first value: the watch is made.
     watch = case.ListenerWatch(lambda: "trusted", gauge=lambda owners: 5, timer=lambda: next(ticks), every=0.01)
     watch.start()._thread.join(60)  # Up to 60 seconds for the thread's end by its own error.
     kept = watch.stop()  # This stop waits up to 10 seconds more.
@@ -1323,7 +1340,8 @@ def test_the_runs_page_names_the_first_question_of_a_silence_after_the_app_had_a
                         changed(105.4, "unreachable", [], 2.1)],
             "late": [asked_late(103.0, 1.9), asked_late(105.4, 2.1)]}
     assert case.late_answers({"listener": gone}, "x") == []
-    # The answer that ends such a silence came late, and no question of the silence took 2 seconds: one text.
+    # The answer that ends such a silence came late, and no question of the silence before it took 2 seconds:
+    # one text.
     ended = {"changes": [changed(100.0, "trusted", [4500]), changed(103.0, "unreachable", [4500], 1.9),
                          changed(105.4, "trusted", [4500], 2.4)],
              "late": [asked_late(103.0, 1.9), asked_late(105.4, 2.4, "trusted")]}
@@ -1338,10 +1356,46 @@ def test_the_runs_page_names_the_first_question_of_a_silence_after_the_app_had_a
              "late": [asked_late(103.0, 2.4, "trusted"), asked_late(130.0, 2.5, "trusted")]}
     assert case.late_answers({"listener": twice}, "x") == [
         f'After "x": {TOOK} 2.4 seconds.', f'After "x": {TOOK} 2.5 seconds.']
-    # An entry of the late answers that has another form is left out.
+    # An entry of the late answers that is no dictionary, or that has no time, is left out.
     odd = {"changes": [changed(100.0, "trusted", [4500])],
            "late": ["a text", {"seconds": 3.0}, asked_late(103.0, 2.4, "trusted")]}
     assert case.late_answers({"listener": odd}, "x") == [f'After "x": {TOOK} 2.4 seconds.']
+
+
+def test_the_times_of_the_watch_do_not_follow_a_clock_that_is_set_back_or_forward(case):
+    # Windows can set the computer's clock during a run. The watch reads that clock once, when it is made, and
+    # adds the seconds of its timer. A second read of this clock would say 400 (set back), a third 9000 (set
+    # forward).
+    now, said, took = [50.0], iter([1000.0, 400.0, 9000.0, 9000.0, 9000.0, 9000.0]), iter([2.1, 0.1, 2.2, 0.1])
+    answers = iter(["unreachable", "trusted", "unreachable", "trusted"])
+
+    def probe():
+        now[0] += next(took)  # The timer goes on by the seconds of this question.
+        return next(answers)
+    watch = case.ListenerWatch(probe, lambda: [4500], gauge=lambda owners: {"busy": 0, "all": 0, "processes": {}},
+                               clock=lambda: next(said), timer=lambda: now[0])
+    watch.look()  # The host has the port and has not answered yet.
+    now[0] += 0.5
+    watch.look()  # Its first answer.
+    now[0] += 0.25
+    watch.mark("the second start")
+    now[0] += 0.25
+    watch.look()  # No answer of the same host.
+    now[0] += 0.5
+    watch.look()  # The next answer.
+    kept = watch.stop()
+    assert next(said) == 400.0  # The clock was read once.
+    assert [(change["at"], change.get("mark") or change["answer"]) for change in kept["changes"]] == [
+        (1000.0, "unreachable"), (1002.6, "trusted"), (1002.95, "the second start"), (1003.2, "unreachable"),
+        (1005.9, "trusted")]
+    assert [(late["at"], late["seconds"]) for late in kept["late"]] == [(1000.0, 2.1), (1003.2, 2.2)]
+    # So the lines for the run's page have the order and the seconds as they were. With the clock's own time
+    # at each entry (1000, 400, 9000, ...) the first question would be after the first answer: it would get a
+    # text that says "the app had answered" and names 8000 seconds, and the second text would lose its clause
+    # on the next answer.
+    assert case.late_answers({"listener": kept}, "the first start") == [
+        f'After "the second start": {TOOK} 2.2 seconds and got no answer. {NEXT} 2.7 seconds after that '
+        "question began."]
 
 
 @pytest.mark.parametrize("changes, late, said", [

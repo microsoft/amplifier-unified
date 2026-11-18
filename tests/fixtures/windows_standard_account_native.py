@@ -136,9 +136,11 @@ NOT_SHOWN = (
      "the runner is Windows Server, and the user signs in through Remote Desktop to the same computer."),
     ("That the app answers one read with a limit of 2 seconds at every moment after a start",
      "the app can give no answer for some seconds, some seconds after a start (on hosted runners until "
-     "November 18, 2026: up to 19 seconds). Such a read is the status command with no wait, whose request has "
-     "a limit of 2 seconds, or one trust question, in which each step of a connection has a limit of 2 "
-     "seconds. After the second sign-in and after the start that follows the first uninstall, the case "
+     "November 18, 2026: up to 19 seconds from the start of the first question of the case's watch that got "
+     "no answer to the start of the question that got the next answer). Such a read is the status command "
+     "with no wait, whose request has a limit of 2 seconds, or one trust question, in which each step of a "
+     "connection has a limit of 2 seconds. After the second sign-in and after the start that follows the "
+     "first uninstall, the case "
      "reads the status and the connection with the two waits of the Start-menu start, each of 60 seconds "
      "(after the second sign-in the connection first). The time that an answer takes within its wait fails "
      "no step; the answer decides as before. The run's page can get a warning for a question of the case's "
@@ -1065,21 +1067,29 @@ def late_answers(report, begins):
 
     - The watch. A question to the listener took 2 seconds or more, and
       the watch had kept an answer of the listener before it ("trusted" or
-      "untrusted"; the last one counts). That answer has at least one
-      process number as the owner of the port, and every change that the
-      watch kept from that answer to this question, with the question's
-      own, has the same owners. When the watch has kept a change after that
-      answer, a silence has begun: of its questions, up to the one that
-      brings the next answer and with it, only the first of 2 seconds or
-      more gets a text. The text names what the case did then: the last
-      mark of the watch before the question, or `begins` when there is
-      none. For a question that got no answer, when the watch kept a later
-      change, the text also says when the question of that change began,
-      and whether it got an answer (a change with no answer is, for
-      example, a host that went away). A question whose last mark is one of
-      `STOPS` gets no text: the case itself stops the app there. A host
-      that has the port and has not answered yet gets no text either: it
-      starts, and the case waits for it in every case.
+      "untrusted"; the last one counts). Before and after are by the times
+      of the watch's entries, which never go back (`ListenerWatch._at`).
+      That answer has at least one process number as the owner of the
+      port, and every change that the watch kept from that answer to this
+      question, with the question's own, has the same owners. When that
+      answer has no such number (for example because the owners could not
+      be read), no question gets a text until the watch keeps a later
+      answer that has one. A change that the watch kept after that answer
+      and before this question is a change with no answer ("unreachable",
+      or an error of the question): a silence began there. Of the questions
+      of a silence, from the one that began it to the one that brings the
+      next answer, and with both, only the first of 2 seconds or more gets
+      a text. The text names what the case did then: the last mark of the
+      watch before the question, or `begins` when there is none. For a
+      question with the answer "unreachable" the text says that it got no
+      answer. When the watch kept a later change, that text also says when
+      the question of that change began, and whether it got an answer (a
+      change with no answer is, for example, a host that went away). A
+      question that ended with an error has only its seconds in the text.
+      A question whose last mark is one of `STOPS` gets no text: the case
+      itself stops the app there. A host that has the port and has not
+      answered yet gets no text either: it starts, and the case waits for
+      it in every case.
     - The read of trust after the second sign-in (`signInTrust`). A read of
       one of its two snapshots failed (`captureErrors`), or its request to the
       listener got no answer (`listenerAnswers`).
@@ -1093,10 +1103,18 @@ def late_answers(report, begins):
     Windows' root certificates. A silence that ends before a question has
     taken 2 seconds gets no text here: it shows in the record as a shorter
     late answer, or not at all. So a run without a text can have had a
-    silence. The seconds of the case's own reads (`reads` in the report)
-    get no text. Of its status reads, 939 with a healthy answer took 1.1
-    seconds or more on hosted runners, and half of them 2 seconds or more
-    (until November 18, 2026).
+    silence. A watch that did not start, or that an error of its own code
+    ended, asks no question from then on, and nothing after that gets a
+    text of this kind (the record says it: `started`, `notStarted`,
+    `endedBy`). The two other kinds are only for the read of trust after
+    the second sign-in. At every other place, for example after the start
+    that follows the uninstall, a text can come only from the watch.
+    The seconds of the case's own reads (`reads` in the report) get no
+    text; the record has them for each read. The seconds of a status read
+    are those of a whole command: on hosted runners a status command with
+    no wait and a healthy answer took 1.11 to 4.02 seconds, and 255 of 632
+    took 2 seconds or more (in 239 kept results, counted on November 18,
+    2026).
     The watch keeps at most 40 late answers and at most 400 changes. A late
     answer after the 40 gets no text. After 400 changes the watch keeps no
     new change, and a text then rests on the last change that it kept.
@@ -1172,8 +1190,9 @@ def page_warnings(report):
 
     GitHub shows a line that begins with `::warning` on the page of the run:
     at most 10 such lines of one step (the limit that GitHub's documents
-    name). Every line is in the job's log, and `run` saves them all in a
-    file. Such a line fails nothing. `%`, a line end and a carriage return are
+    name). `run` prints every line into the job's log and saves them all in
+    a file. Each of the two is a try, and an error of it is not kept. Such a
+    line fails nothing. `%`, a line end and a carriage return are
     written as GitHub's own codes, so that a text stays one line. The title
     has no comma and no colon: GitHub's own tool for such lines writes those
     two as codes in a title, and this title needs neither.
@@ -1298,8 +1317,10 @@ def run():
     save("result.json", report)
     print("\n".join(report["lines"]), flush=True)
     # For the run's page only, after the result is saved and its lines are printed. The lines, or the error
-    # that kept them from being made, go into a file of their own. The result is not written again and is not
-    # changed: an error of a part here changes no line, no status and nothing of the saved result.
+    # that kept them from being made, are saved in a file of their own, and the lines are printed. Each of the
+    # two is a try: an error of it is not kept, and the file or the printed lines can then be missing or cut
+    # short. The result is not written again and is not changed: an error of a part here changes no line, no
+    # status and nothing of the saved result.
     warnings = attempt(lambda: page_warnings(report))
     attempt(lambda: save("page-warnings.json", warnings))
     if isinstance(warnings, list) and warnings:
@@ -1881,7 +1902,15 @@ class ListenerWatch:
     watch asks `owner`, when it has one, which process numbers own the
     listener's port. It keeps a change of the answer or of those numbers,
     with the time at which that question began and the seconds that the
-    question took. It keeps a change only while its list has fewer than
+    question took. The time of an entry (`at`) is the computer's clock when
+    the watch was made, plus the seconds that the watch's timer counted
+    since then (`_at`). The timer does not follow a change of the computer's
+    clock. So the times of one watch never go back, and the difference of
+    two of them is the seconds that passed between them, also when Windows
+    sets its clock during a run. `late_answers` reads the order of the
+    entries from these times. A read of a step (`reads`) has the clock's
+    own time; after such a change of the clock the two differ by it.
+    It keeps a change only while its list has fewer than
     `limit` entries (400; the marks of the case are in the same list). A
     change after that is not kept. While nothing changes, it keeps the
     slowest of the questions that follow (`slowest`), when one of them took
@@ -1928,6 +1957,13 @@ class ListenerWatch:
         self.gauge, self.after, self.slow, self.late = gauge, after, slow, []
         self._halt, self._thread, self._last, self._entry = threading.Event(), None, self, None
         self._ended, self._lock, self.fault = None, threading.Lock(), None
+        # The computer's clock is read once, here, with the timer's value of the same moment (`_at`).
+        self._zero = (clock(), timer())
+
+    def _at(self, ticks):
+        """The time of an entry for the timer's value `ticks`: the clock's reading of when the watch was made,
+        plus the timer's seconds since then."""
+        return round(self._zero[0] + (ticks - self._zero[1]), 3)
 
     def look(self):
         """One question to the listener. A change is kept while the list has room; an error of the question is an
@@ -1935,7 +1971,8 @@ class ListenerWatch:
         owners = self._last[1] if isinstance(self._last, tuple) and isinstance(self._last[1], list) else []
         before = attempt(lambda: self.gauge(owners)) if self.gauge else None
         # The question begins here. The read of the processor time before it is in `waited`, not in its seconds.
-        at, began = round(self.clock(), 3), self.timer()
+        began = self.timer()
+        at = self._at(began)
         waited = None if self._ended is None else round(began - self._ended, 3)
         answer = attempt(self.probe)
         took = round(self.timer() - began, 3)
@@ -1976,9 +2013,9 @@ class ListenerWatch:
         return self
 
     def mark(self, text):
-        """What the case does now, in the same list as the changes."""
+        """What the case does now, in the same list as the changes, with a time of the same kind (`_at`)."""
         with self._lock:
-            self.changes.append({"at": round(self.clock(), 3), "mark": text})
+            self.changes.append({"at": self._at(self.timer()), "mark": text})
 
     def stop(self, wait=10):
         """End the watch and give what it kept. `ended` is false when its thread still runs after `wait` seconds.

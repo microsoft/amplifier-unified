@@ -2959,7 +2959,8 @@ and they fail no step. The page of the run can get a warning, which fails
 nothing: for a question to the listener that took 2 seconds or more after the
 app had answered, and for a read of that record that failed or got no answer.
 A warning is for a question, not for the silence itself: a silence that ends
-before a question has taken 2 seconds gets none. After the first start and
+before a question has taken 2 seconds gets none. The seconds of the case's
+own reads get no warning; the record keeps them. After the first start and
 after the second start of the first sign-in, the case still makes one status
 read each; none of those 257 runs failed there.
 
