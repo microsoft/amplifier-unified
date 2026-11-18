@@ -359,6 +359,18 @@ namespace UnifiedBootstrap {
                     File.Delete(entry);
                     Need(NativeInstaller.Unopened(left)==emptied,"without that entry: "+name);
                 }
+                // Another spelling of a data name. Windows gives that entry for the
+                // path with the name's own spelling, and the look treats it like
+                // any other entry. (The removal never examines such an entry and
+                // counts the name as holding something.)
+                string spelled=Path.Combine(left,"App"); Directory.CreateDirectory(spelled);
+                Need(Directory.GetFileSystemEntries(left).Select(entry=>Path.GetFileName(entry)).Contains("App") &&
+                    Directory.Exists(Path.Combine(left,"app")),"Windows gives the folder App for the path with app");
+                Need(NativeInstaller.Unopened(left)==emptied,"an empty folder under another spelling of a data name is not data");
+                File.WriteAllText(Path.Combine(spelled,"kept.txt"),"data");
+                Need(NativeInstaller.Unopened(left)==damaged,"a file in a folder under another spelling of a data name is data");
+                File.Delete(Path.Combine(spelled,"kept.txt")); Directory.Delete(spelled);
+                Need(NativeInstaller.Unopened(left)==emptied,"without the folder under another spelling");
                 // A link with a data name counts as data, also when it leads to
                 // an empty folder.
                 string elsewhere=Path.Combine(work,"elsewhere"); Directory.CreateDirectory(elsewhere);

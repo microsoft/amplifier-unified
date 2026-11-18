@@ -223,9 +223,12 @@ def test_setup_without_a_launcher_program_says_what_its_own_look_finds():
             assert change not in operations, change
     # A list of words does not name every operation (a property of a `FileInfo`, for example). So the
     # case also holds, for the two functions and for the one function of setup that they call: each name
-    # that stands before a `(`, with the number of its uses, and that every assignment is to one of the
-    # look's own local names. These are checks of the source text. They do not prove what a call does.
-    # The native case holds what the looks leave in the folder and in setup's list of names.
+    # that stands before a `(`, with the number of its uses; that each assignment whose target is a name
+    # is to one of the look's own local names; that nothing which ends with a bracket stands directly
+    # before an assignment operator; and that no comment stands in a line of code (a comment between
+    # two tokens would hide them from these expressions). These are checks of the source text for
+    # these forms. A form of C# that is not in this list is not checked, and they do not prove what a
+    # call does. The native case holds what the looks leave in the folder and in setup's list of names.
     def text(body):
         lines = "\n".join(line for line in body.splitlines() if not line.strip().startswith("//"))
         return re.sub(r'"(?:[^"\\]|\\.)*"', '""', lines)
@@ -250,8 +253,15 @@ def test_setup_without_a_launcher_program_says_what_its_own_look_finds():
         "journal", "bytes", "count", "read", "file", "record", "token", "kind", "entry"}
     for body in (unopened, reads):
         assert not re.findall(target, text(body))
+    # A target in brackets (`(Data)[6]=`) or after an index (`Data[6][0]=`) has no name directly before the
+    # operator. No assignment of the three functions has that form.
+    closed = r"[)\]]\s*(?:[-+*/%|&^]|<<|>>)?=(?![=>])"
     for body in (emptied, unopened, reads):
+        assert not re.findall(closed, text(body))
         assert "++" not in text(body) and "--" not in text(body)
+        # Every comment of these functions is a whole line. (`text` takes those lines and the string
+        # literals away.)
+        assert "//" not in text(body) and "/*" not in text(body)
     assert re.findall(r"\bnew\s+[A-Za-z_][A-Za-z0-9_.]*", text(emptied)) == ["new byte", "new FileStream"]
     assert "new" not in re.findall(r"[A-Za-z_]+", text(unopened) + text(reads))
     # The one place that shows the text: a finished installation with no launcher program. Setup ends with 1.
@@ -315,8 +325,8 @@ def test_setup_without_a_launcher_program_says_what_its_own_look_finds():
             "entry between two of those steps.",
             "Setup's stop for a damaged folder names the same step.",
             "The text tells the person to move or rename the folder, not to delete it:",
-            "Each statement of the first text is what setup found in this run, or what setup does; its last two "
-            "sentences are the next step.",
+            "Each statement of the first text is what setup found in this run, or what setup does, with the "
+            "reason why it does not change the folder; its last two sentences are the next step.",
             "Setup found the record's name when it classified the folder, and it looked for the launcher's start "
             "program directly before this look.",
             "setup's look for the launcher's start program found no file (`File.Exists`).",
@@ -325,8 +335,16 @@ def test_setup_without_a_launcher_program_says_what_its_own_look_finds():
             "The second text says \"a program file is missing\" for the same look, as it did before; that is not "
             "true for a file that setup cannot see.",
             "An emptied folder that Windows still keeps for a program is not data when Windows answers the look "
-            "at its attributes and its listing, as in the removal itself; an entry that Windows does not let "
-            "setup examine counts as data, also as there.",
+            "at its attributes and its listing; an entry that Windows does not let setup examine counts as data.",
+            "For an entry with the exact spelling of a name, the removal itself gives the same two answers "
+            "(`holding` in `windows_removal.py`).",
+            "For an entry under another spelling (`App` for `app`) the two differ.",
+            "The removal never examines such an entry: it counts the name as holding something, and it does not "
+            "begin in a folder that has one.",
+            "Setup's look asks Windows for the path with the name's own spelling and treats the entry that "
+            "Windows gives like any other.",
+            "Where Windows ignores the case of letters (an ordinary folder), that is the entry `App`: when it is "
+            "an empty folder it is not data, and with a file in it it is data.",
             "Setup does not read that file in this look, and it knows no more about the folder's history.",
             "The text does not say that an installation was made in the folder.",
             "In every other case, and when any part of the look fails, setup says what it said before:",
@@ -338,8 +356,26 @@ def test_setup_without_a_launcher_program_says_what_its_own_look_finds():
             "deletion of the journal because of this handle",
             "Setup reads the journal for one purpose only: to choose the text of one message (see Leftovers)."):
         assert sentence in design, sentence
+    # Where the look and the removal differ: an entry under another spelling of a name (`App` for `app`).
+    # The removal's look at what an entry holds never examines it and counts the name as holding
+    # something, and the removal does not begin in a folder that has one. Setup's look asks Windows for
+    # the path with the name's own spelling. The native case holds what Windows gives for that path.
+    removal = (ROOT / "amplifier_web/windows_removal.py").read_text(encoding="utf-8")
+    holding = removal.split("    def holding(self, names):\n", 1)[1].split("\n    def ", 1)[0]
+    assert ("            own = wanted.get(same_name(name))\n            if own is None:\n                continue\n"
+            "            if name != own:\n                held.add(own)\n                continue\n") in holding
+    assert "held = set(owned.holding(names))" in inspect.getsource(windows_uninstall._clear)
+    begins = inspect.getsource(windows_uninstall.remove)
+    refusal = ("            if altered(owned.names(), short):\n"
+               "                raise ValueError(\"An entry differs from this installation's own name only by case.\")\n")
+    assert begins.index(refusal) < begins.index("token = begin(root, choice, wait=wait, **fields)")
+    assert "string entry=Path.Combine(root,name);" in emptied
     # The numbers of the design's sentence on the native check.
     native = (ROOT / "tests/windows/native_setup.Tests.cs").read_text(encoding="utf-8")
+    for message in ("Windows gives the folder App for the path with app",
+                    "an empty folder under another spelling of a data name is not data",
+                    "a file in a folder under another spelling of a data name is data"):
+        assert f'"{message}");' in native, message
     others = native.split("string[] others={", 1)[1].split("};", 1)[0]
     assert "nineteen files that are not such a journal" in design
     assert ("that a look changes no creation time, no write time and no attribute of the journal, of setup's "
@@ -403,6 +439,7 @@ def test_the_check_that_runs_this_file_requires_every_case_to_run_and_pass(tmp_p
     for name in (".github/workflows/windows-private-shell.yml", "scripts/windows_bootstrap_native.cs",
                  "scripts/windows_bootstrap_native.py", "scripts/windows_bootstrap_capsule.py",
                  "scripts/windows_private_git.py", "scripts/install.ps1", "amplifier_web/windows_uninstall.py",
+                 "amplifier_web/windows_removal.py",
                  "amplifier_web/windows_consumer_shell.py", "tests/windows/native_setup.Tests.cs",
                  "tests/test_windows_setup_folder.py", "docs/design/native-windows-installation.md"):
         assert f"      - {name}\n" in paths, name

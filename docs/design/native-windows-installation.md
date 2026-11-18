@@ -2468,16 +2468,28 @@ between two texts:
   every sharing mode, so Windows does not refuse another program's deletion
   of the journal because of this handle (the step after exit deletes the
   journal), and on the runner the journal's name is gone from the folder
-  directly after such a deletion, while the handle is still open.
+  directly after such a deletion, while a handle of the look's kind is still
+  open.
 - Setup looks at the seven names of the person's data
   (`windows_uninstall.DATA`), one after the other. A name counts as data
   when the look at its attributes shows a file or a link, or when the
   listing of the folder shows anything in it. Setup lists an entry only
   after that look showed a folder that is no link. An emptied folder that
   Windows still keeps for a program is not data when Windows answers the look
-  at its attributes and its listing, as in the removal itself; an entry that
-  Windows does not let setup examine counts as data, also as there. Setup
-  looks for chats and settings under these seven names only.
+  at its attributes and its listing; an entry that Windows does not let
+  setup examine counts as data. For an entry with the exact spelling of a
+  name, the removal itself gives the same two answers (`holding` in
+  `windows_removal.py`). For an entry under another spelling (`App` for
+  `app`) the two differ. The removal never examines such an entry: it
+  counts the name as holding something, and it does not begin in a folder
+  that has one. Setup's look asks Windows for the path with the name's own
+  spelling and treats the entry that Windows gives like any other. Where
+  Windows ignores the case of letters (an ordinary folder), that is the
+  entry `App`: when it is an empty folder it is not data, and with a file
+  in it it is data. A folder can be set so that Windows compares its names
+  with the case of letters; there Windows gives no entry `App` for the path
+  with `app`, and the look does not see what `App` holds. That is not
+  shown. Setup looks for chats and settings under these seven names only.
 - The look is a row of separate steps on paths. Setup does not take the
   installation's lock for it, and it holds no handle on the folder or on an
   entry between two of those steps. A program of this account that replaces
@@ -2498,7 +2510,8 @@ between two texts:
   chats and settings. This version of setup cannot repair it."
 
 Each statement of the first text is what setup found in this run, or what
-setup does; its last two sentences are the next step. Setup found the record's
+setup does, with the reason why it does not change the folder; its last two
+sentences are the next step. Setup found the record's
 name when it classified the folder, and it looked for the launcher's start
 program directly before this look. "Setup found an installation record in this
 folder": the folder has a file with the name of setup's completion record,
@@ -2541,8 +2554,10 @@ stays.
 Proven on a Windows runner (Windows Server;
 `tests/windows/native_setup.Tests.cs`, job `windows-setup-folder`): both
 texts, complete; each of the seven names as an empty folder, as a folder with
-a file or a folder in it, and as a file; a link with a data name; an empty
-data folder that Windows refuses to list; a link to a journal, and a link to
+a file or a folder in it, and as a file; an empty folder, and a folder with
+a file in it, under another spelling of a data name (`App`); a link with a
+data name; an empty data folder that Windows refuses to list; a link to a
+journal, and a link to
 a folder, with the journal's name; nineteen files that are not such a
 journal, bytes that are not UTF-8, a record with one byte in a text value
 that is not UTF-8, and a folder with the journal's name; a journal of exactly
@@ -2552,7 +2567,8 @@ program holds for itself; that the folder holds afterwards what the case put
 there; and that a look changes no creation time, no write time and no
 attribute of the journal, of setup's record and of the person's file. Not
 proven: the message in setup's real window, the three states on a PC with
-this text, the look on Windows 11, a program that replaces an entry during
+this text, the look on Windows 11, the look in a folder whose names Windows
+compares with the case of letters, a program that replaces an entry during
 the look, and a setup run in the instant in which the step after exit deletes
 the journal.
 

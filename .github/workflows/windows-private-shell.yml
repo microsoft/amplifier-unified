@@ -16,6 +16,7 @@ on:
       - amplifier_web/windows_consumer_shell.py
       - amplifier_web/windows_files.py
       - amplifier_web/windows_read_files.py
+      - amplifier_web/windows_removal.py
       - amplifier_web/windows_uninstall.py
       - tests/fixtures/windows_private_shell_probe.py
       - tests/test_windows_private_git.py
