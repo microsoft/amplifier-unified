@@ -113,6 +113,230 @@ def remove_stage_keys(home, stage, *, expected=None):
         return 'refused'
 
 
+# An earlier version of the app copied its own config and routing folders into
+# each stage. One idle pass removes at most this many entries (files, links and
+# folders) of those copies; a larger copy goes on at the next pass.
+STAGE_CONFIG_ENTRIES = 256
+_STAGE_CONFIG_DEPTH = 32
+
+
+class _Removed:
+    """The entries that one call removed, and the most that it may remove."""
+
+    def __init__(self, limit):
+        self.limit, self.count = limit, 0
+
+    def full(self):
+        return self.count >= self.limit
+
+
+def _reparse(info):
+    """A link, a junction or another reparse point. It is never followed."""
+    return stat.S_ISLNK(info.st_mode) or bool(
+        getattr(info, 'st_file_attributes', 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+
+
+def _posix_remove_tree(parent, name, device, removed, depth=0):
+    """Remove the folder ``name`` of the open folder ``parent``, the deepest entries first.
+
+    Each step is relative to an open folder and follows no link: a link in the
+    tree is unlinked as a link, and its target stays. Return None when the
+    folder is gone, else a reason code. An entry that cannot be removed stays,
+    and the other entries are still handled.
+    """
+    try:
+        info = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        if (not stat.S_ISDIR(info.st_mode) or info.st_dev != device
+                or depth >= _STAGE_CONFIG_DEPTH):
+            return 'refused'
+        fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+        try:
+            if _identity(os.fstat(fd)) != _identity(info):
+                return 'refused'
+            reason = None
+            # The whole listing first: a removal during a listing can make it leave out an entry.
+            with os.scandir(fd) as listing:
+                entries = list(listing)
+            for entry in entries:
+                if removed.full():
+                    return 'more'
+                try:
+                    if entry.is_dir(follow_symlinks=False):
+                        result = _posix_remove_tree(fd, entry.name, device, removed, depth + 1)
+                        if result == 'more':
+                            return result
+                        reason = reason or result
+                    else:
+                        os.unlink(entry.name, dir_fd=fd)
+                        removed.count += 1
+                except FileNotFoundError:
+                    pass
+                except PermissionError:
+                    reason = reason or 'refused'
+                except OSError:
+                    reason = reason or 'io'
+        finally:
+            os.close(fd)
+        if reason:
+            return reason
+        if removed.full():
+            return 'more'
+        os.rmdir(name, dir_fd=parent)
+        removed.count += 1
+        return None
+    except FileNotFoundError:
+        return None
+    except PermissionError:
+        return 'refused'
+    except OSError:
+        return 'io'
+
+
+def _windows_remove_tree(folder, home, removed, depth=0):
+    """Windows: remove one folder through the private-file boundary, the deepest entries first.
+
+    The boundary pins the folder and every folder above it, checks their ACLs,
+    and deletes each file as the exact object whose bytes it read. A link, a
+    junction, a file above 1 MiB, a file with an ACL that is not private and a
+    file that another program holds open all stay, with their folders; the
+    other entries are still handled. A folder is removed only when it is empty
+    and is no link, and only after its own pin is closed.
+    """
+    from .windows_files import directory
+    try:
+        info = folder.lstat()
+        if _reparse(info) or not stat.S_ISDIR(info.st_mode) or depth >= _STAGE_CONFIG_DEPTH:
+            return 'refused'
+        reason = None
+        with directory(folder, owned_root=home, create=False) as pinned:
+            with os.scandir(folder) as listing:
+                entries = list(listing)
+            for entry in entries:
+                if removed.full():
+                    return 'more'
+                try:
+                    child = entry.stat(follow_symlinks=False)
+                    if _reparse(child):
+                        reason = reason or 'refused'
+                    elif stat.S_ISDIR(child.st_mode):
+                        result = _windows_remove_tree(folder / entry.name, home, removed, depth + 1)
+                        if result == 'more':
+                            return result
+                        reason = reason or result
+                    else:
+                        digest = hashlib.sha256(
+                            pinned.read_private(entry.name, limit=1024 * 1024)).hexdigest()
+                        pinned.remove_private(entry.name, digest)
+                        removed.count += 1
+                except FileNotFoundError:
+                    pass
+                except PermissionError:
+                    reason = reason or 'refused'
+                except OSError:
+                    reason = reason or 'io'
+                except Exception:
+                    reason = reason or 'refused'
+        if reason:
+            return reason
+        if removed.full():
+            return 'more'
+        if _reparse(folder.lstat()):
+            return 'refused'
+        os.rmdir(folder)
+        removed.count += 1
+        return None
+    except FileNotFoundError:
+        return None
+    except PermissionError:
+        return 'refused'
+    except OSError:
+        return 'io'
+    except Exception:
+        return 'refused'
+
+
+def _keep_times(folder, info, removed):
+    """Put a stage folder's times back after a removal directly below it.
+
+    A keys file of a stage with no receipt waits 24 hours from that time
+    (scrub_stage_keys). Those hours are for what a preparation wrote: this
+    removal must not start them again. ``folder`` is an open folder or a path.
+    """
+    try:
+        if removed.count:
+            os.utime(folder, ns=(info.st_atime_ns, info.st_mtime_ns))
+    except Exception:
+        pass  # The keys file then waits its 24 hours from this removal.
+
+
+def _posix_stage_config(stage, expected, removed):
+    reason = None
+    with _posix_directory(stage, expected) as (fd, check):
+        info = os.fstat(fd)
+        try:
+            for name in ('config', 'routing'):
+                check()
+                result = _posix_remove_tree(fd, name, info.st_dev, removed)
+                if result == 'more':
+                    return result
+                reason = reason or result
+        finally:
+            _keep_times(fd, info, removed)
+    return reason
+
+
+def _windows_stage_config(home, stage, expected, removed):
+    from .windows_files import directory
+    reason = None
+    with directory(stage, owned_root=home, create=False):
+        info = stage.lstat()
+        if expected and any(_identity(path.lstat()) != identity
+                            for path, identity in expected.items()):
+            raise ValueError('Stage identity changed')
+        try:
+            for name in ('config', 'routing'):
+                result = _windows_remove_tree(stage / name, home, removed)
+                if result == 'more':
+                    return result
+                reason = reason or result
+        finally:
+            _keep_times(stage, info, removed)
+    return reason
+
+
+def remove_stage_config(home, stage, *, expected=None, limit=STAGE_CONFIG_ENTRIES):
+    """Remove only one stage's copies of the app's own config and routing folders.
+
+    Only the entries ``config`` and ``routing`` directly below the stage go,
+    with their content. Nothing reads them. An entry of that name that is a
+    link, a junction or no folder is refused: it stays and is never followed.
+
+    Return (reason, count). The reason is None when neither entry is left.
+    'more' says that the call removed ``limit`` entries and stopped; 'refused'
+    and 'io' say that an entry could not be removed and stays. The count is the
+    number of entries (files, links and folders) that this call removed. What
+    is removed stays removed, and a later call goes on with the rest. Neither
+    value holds a name, a size or bytes of a file. The call never raises; a
+    reason is retryable and is no update failure.
+    """
+    removed = _Removed(limit)
+    try:
+        home, stage = _stage_address(home, stage)
+        if os.name == 'nt':
+            reason = _windows_stage_config(home, stage, expected, removed)
+        else:
+            reason = _posix_stage_config(stage, expected, removed)
+    except FileNotFoundError:
+        reason = None  # No such stage.
+    except PermissionError:
+        reason = 'refused'
+    except OSError:
+        reason = 'io'
+    except Exception:
+        reason = 'refused'
+    return reason, removed.count
+
+
 def refresh_stage_keys(home, stage, source):
     """Revalidation alone gets current credentials, never new settings/routing.
 
@@ -232,6 +456,17 @@ async def scrub_stage_keys(manager):
     before that listing. At an entry after the offset the pass stops when that
     second has gone, but it handles at least one entry first, so a slow folder
     or a long listing cannot hold the scan at one place.
+
+    The pass also removes the copies of the app's own config and routing
+    folders that an earlier version made in a stage (remove_stage_config). It
+    does that for every stage that it visits and that still has one: with or
+    without a receipt, a keys file or shared-config, and at every age, because
+    nothing reads those copies. The 24 hours below are for the keys file only.
+    A stage is one of the eight attempts, with both removals. One pass removes
+    at most STAGE_CONFIG_ENTRIES entries of such copies; it then ends, and the
+    next pass starts at the stage that it left. A refused removal leaves the
+    entry for a later pass. The removal puts the times of the stage folder
+    back, so it does not start those 24 hours again.
     """
     from .update_health import pending_preparation
     from .update_retention import maintenance_blocked
@@ -258,14 +493,14 @@ async def scrub_stage_keys(manager):
             protected = {batch.get('revision'), (batch.get('preparation') or {}).get('candidate')}
             root = manager.directory / 'releases'
             offset = getattr(manager, '_stage_keys_offset', 0)
-            deadline, attempts = time.monotonic() + 1, 0
+            deadline, attempts, left = time.monotonic() + 1, 0, STAGE_CONFIG_ENTRIES
             try:
                 with os.scandir(root) as entries:
                     progressed = False
                     for index, entry in enumerate(entries):
                         if index < offset:
                             continue
-                        if progressed and time.monotonic() >= deadline:
+                        if attempts >= 8 or (progressed and time.monotonic() >= deadline):
                             return
                         progressed = True
                         manager._stage_keys_offset = index + 1
@@ -274,8 +509,23 @@ async def scrub_stage_keys(manager):
                         stage = root / entry.name
                         shared = stage / 'shared-config'
                         try:
-                            stage_info, shared_info = stage.lstat(), shared.lstat()
-                            if not all(stat.S_ISDIR(info.st_mode) for info in (stage_info, shared_info)):
+                            stage_info = stage.lstat()
+                            if not stat.S_ISDIR(stage_info.st_mode):
+                                continue
+                            # Before the look at shared-config and the keys file, and independent
+                            # of them: a stage that settled or failed has no keys file any more.
+                            copies = any(os.path.lexists(stage / name) for name in ('config', 'routing'))
+                            if copies:
+                                attempts += 1
+                                reason, count = remove_stage_config(
+                                    manager.home, stage, expected={stage: _identity(stage_info)}, limit=left)
+                                left -= count
+                                if reason == 'more':
+                                    # The count of this pass is used up. The next pass starts here.
+                                    manager._stage_keys_offset = index
+                                    return
+                            shared_info = shared.lstat()
+                            if not stat.S_ISDIR(shared_info.st_mode):
                                 continue
                             # Already-scrubbed stages cost this one look and no effect budget.
                             (shared / 'keys.env').lstat()
@@ -295,7 +545,8 @@ async def scrub_stage_keys(manager):
                                     # proves that no other app process still prepares there.
                                     if not _ended_without_admission(stage):
                                         continue
-                            attempts += 1
+                            if not copies:  # A stage is one attempt, with both removals.
+                                attempts += 1
                             remove_stage_keys(manager.home, stage, expected={
                                 stage: _identity(stage_info), shared: _identity(shared_info)})
                             if attempts >= 8:

@@ -459,7 +459,18 @@ A stage holds no copy of the app's own `config` or `routing` folder. `config`
 holds the sign-in secrets and the TLS key of the installation, and a stage reads
 neither folder: its settings and routing are in `shared-config`, with the
 temporary copy of the keys file that the next paragraph describes.
-A stage that an earlier version of the app prepared can still hold such a copy.
+An earlier version of the app made such copies. Idle maintenance removes the
+entries `config` and `routing` from every stage that still has them, whether
+the stage settled or failed, and at every age. It does that in the pass that
+removes a stage's keys file (next paragraph): after an activation, after a
+start of the app and then about each hour, never while an update operation runs
+or waits, and not in the stage of an unresolved preparation. One pass handles
+at most eight stages and removes at most 256 entries (files, links and
+folders); the next pass goes on with the rest. An entry that cannot be removed
+stays, and a later pass tries again: no update, retry or restore fails or waits
+because of it. A link is never followed: an entry `config` or `routing` that is
+a link, a junction or no folder stays, and a link inside a copy is removed as a
+link (on Windows it stays).
 
 Component qualification uses a temporary `shared-config/keys.env` copy.
 The manager removes only that file after qualification succeeds or a handled
