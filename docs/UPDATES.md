@@ -777,10 +777,10 @@ health gives "Checking current configuration" when the proof that it holds,
 with this limit taken out, gives a quiet value (`projection`). After that
 read, an earlier rule of `current()` can decide the value, for example an
 operation that runs or waits, a failure that the proof does not cover, a
-listed update or a failed application check. When none does, and the check
-sequence is complete with the application current, or a local source change
-is listed, the value has the quiet status `unchecked`, with no attention item
-for it, so the Settings entry gets no unread mark from it: "The components
+listed update or a failed application check. When none does, and either the
+check sequence is complete with the application current or a local source
+change is listed, the value has the quiet status `unchecked`, with no
+attention item for it, so the Settings entry gets no unread mark from it: "The components
 need a new check for your current settings" / "The components that Amplifier
 recorded are installed as recorded. Amplifier has no record that it checked
 them with your current AI connections and other settings. A new AI connection
