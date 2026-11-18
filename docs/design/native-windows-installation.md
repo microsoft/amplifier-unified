@@ -1713,15 +1713,17 @@ So the order is:
 3. Check and pin every Start-menu shortcut and the Apps-list entry. A changed
    entry stops here, before the app is touched. Another program can have a
    shortcut open at that moment (on hosted runners `explorer.exe` had a new
-   shortcut open for a moment). Windows then refuses the pin with "the file
-   is used by another process", and uninstall tries again before it
-   stops here: at most 50 more times for this step, with a wait of a tenth of
-   a second before each. The waits are 5 seconds in all; the Windows calls of
-   each attempt take their own time.
+   shortcut open for a moment). Windows then refuses the pin with its error 32
+   ("The process cannot access the file because it is being used by another
+   process."), and uninstall tries again before it stops here: at most 50
+   more times for this step, with a wait of a tenth of a second before each.
+   The waits are 5 seconds in all; the Windows calls of each attempt take
+   their own time. Each attempt reads the shortcut's bytes again, so a
+   shortcut that changed meanwhile stops here too.
 4. Stop the app normally and remove its sign-in task. There is no forced stop.
 5. Remove the Apps-list entry, then the shortcuts ("Uninstall Amplifier" last),
    then the emptied Start-menu folder. A delete that Windows refuses with
-   "access is denied" is tried again with the same limit, counted for this
+   its error 5 ("Access is denied.") is tried again with the same limit, counted for this
    step alone. A mapped view of the shortcut gives that refusal for as long as
    the view exists. Hosted runners showed the refusal for a moment; which
    program caused it there is not known. A shortcut that is still refused

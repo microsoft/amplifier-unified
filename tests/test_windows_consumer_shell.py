@@ -1275,6 +1275,26 @@ def test_the_wait_for_held_shortcuts_is_bounded_for_the_whole_step_not_for_each_
     assert "Uninstall Amplifier.lnk" not in attempts
 
 
+def test_held_shortcut_that_changes_during_the_wait_refuses_at_once_when_the_hold_ends(uninstaller, monkeypatch):
+    # Each further attempt of a pin reads and compares the shortcut's bytes again. So a shortcut that
+    # changed while another program held it is refused, and not removed, when that program lets go.
+    state, folder, consumer, waits = uninstaller.state, uninstaller.folder, uninstaller.consumer, []
+    monkeypatch.setattr(shell.time, "sleep", waits.append)
+    name = "Amplifier status.lnk"
+    def refuse(entry):
+        if entry == name:
+            if len(waits) < 2:
+                raise held(32)
+            (folder / name).write_bytes(b"changed while another program held it")
+    another_program(state, "pin", refuse)
+    with pytest.raises(consumer.Unfinished) as stopped:
+        uninstaller.run()
+    assert stopped.value.step == "entries-check" and type(stopped.value.error) is ValueError
+    assert stopped.value.notice.startswith("This uninstall stopped before it changed anything.\n\n")
+    assert waits == [0.1] * 2 and not state["calls"] and state["task"] == "running"
+    assert state["registry"] is not None and len(list(folder.iterdir())) == 4 and not state["pins"]
+
+
 def test_the_pin_and_the_delete_each_have_their_own_wait(uninstaller, monkeypatch):
     # The app stops between the two steps, and that can take long. So the wait of the pin takes
     # nothing from the wait of the delete.
@@ -1786,6 +1806,30 @@ def test_native_shortcut_that_another_program_holds_is_waited_for_and_the_wait_h
         from amplifier_web import windows_files
         with windows_files.directory(native.root, owned_root=native.root) as owned:
             assert json.loads(owned.read_private(shell.FILE, limit=65536))["status"] == "removed"
+    finally:
+        release()
+
+
+def test_native_held_shortcut_that_changes_during_the_wait_refuses_when_the_hold_ends(native_uninstall):
+    """The held shortcut itself gets one more byte at the second wait, and the other program lets go at the third.
+
+    The next attempt of the pin opens the shortcut, reads its bytes again and
+    refuses them: nothing is removed, and the app is not asked to stop.
+    """
+    native, consumer = native_uninstall, native_uninstall.consumer
+    path = native.folder / "Amplifier status.lnk"
+    release = _another_program_holds(path, mapped=False)  # It shares writing, so the file can change.
+    def change():
+        with open(path, "ab") as stream:
+            stream.write(b"\0")
+    try:
+        native.at_wait[2], native.at_wait[3] = change, release
+        with pytest.raises(consumer.Unfinished) as stopped:
+            native.run()
+        assert stopped.value.step == "entries-check" and type(stopped.value.error) is ValueError, stopped.value.error
+        assert native.waits.count(0.1) == 3 and not native.at_wait and not native.events
+        assert shell.registry(native.root) == native.registration
+        assert {entry.name for entry in native.folder.iterdir()} == set(shell.LINKS)
     finally:
         release()
 

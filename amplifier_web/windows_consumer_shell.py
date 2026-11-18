@@ -489,8 +489,9 @@ def _held(code):
     """Try again, for a bounded time, while another program has a shortcut open.
 
     Windows refuses the pin of a shortcut with error 32 while another open of
-    that file does not share deleting; the Windows shell opens a new shortcut
-    like that for a moment. It refuses the delete through the pinned handle
+    that file does not share deleting. On hosted runners `explorer.exe` had a
+    new shortcut open at the moment of such a refusal; how it had opened the
+    file was not observed. Windows refuses the delete through the pinned handle
     with error 5 while a view of the file is mapped. It gives the same error 5
     for a shortcut with a read-only attribute, which no wait cures: that one
     stops the uninstall after the wait. Only a PermissionError that carries
