@@ -1030,15 +1030,24 @@ async def test_model_transition_preserves_source_checkpoint_without_foreground_i
         coordinator = first
     else:
         coordinator, raw, _, adapter, checkpoint, _, prepare = await native_fixture(tmp_path, source)
-    coordinator.loop.root_provider = SelectedProvider(raw, {
+    target = SelectedProvider(raw, {
         'instance': 'fixture', 'model': 'target-model', 'effort': 'low'})
+    coordinator.loop.root_provider = target
+    from amplifier_core import ChatRequest, Message
+    async def count_target(rows):
+        request = ChatRequest(messages=[Message(**row) for row in rows])
+        return {'dispatch': request, 'budget_decision':
+                await target.request_budget(request, context_estimate=10000)}
+    async def prepare_target():
+        return await coordinator.context.get_measured_request_view(
+            provider=target, count_view=count_target)
     before = (len(raw.compactions), len(raw.sent))
     await adapter.preserve(source)  # Passive restore/classification: zero model work.
     assert adapter.public()['status'] == 'transition_required'
     adapter.save()
     assert adapter.path.read_bytes() == saved
     with pytest.raises(ContextRecoveryError, match='transition_intent_required'):
-        await prepare()
+        await prepare_target()
     assert adapter.path.read_bytes() == saved
     assert (len(raw.compactions), len(raw.sent)) == before
     assert await coordinator.context.get_messages() == source

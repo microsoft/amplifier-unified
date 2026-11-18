@@ -106,6 +106,46 @@ def test_fork_keeps_full_system_tool_context_and_configuration_without_job_owner
     assert store.load('fork-session')[0][0]['role']=='system'
 
 
+@pytest.mark.parametrize('disposition', ['accepted', 'changed-prefix', 'unknown-install'])
+async def test_full_fork_retains_only_prefix_bound_accepted_context_checkpoint(tmp_path, disposition):
+    from amplifier_web.automatic_history import display_message, revision
+    from amplifier_web.session_files import project_slug
+    from test_context_continuity import native_fixture, native_history
+    original = native_history()
+    coordinator, _, _, adapter, checkpoint, _, prepare = await native_fixture(tmp_path / 'seed', original)
+    await prepare()
+    await checkpoint()
+    accepted = adapter.path.read_bytes()
+    home, workspace = tmp_path / 'home', tmp_path / 'workspace'
+    store = SessionStore.for_app(home, workspace)
+    if disposition == 'changed-prefix':
+        original[0]['content'] += ' Changed canonical input.'
+    store.save('source-session', original, {}, preserve_system=True)
+    directory = home / 'sessions' / 'source-session'
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / 'context-checkpoint.json').write_bytes(accepted)
+    if disposition == 'unknown-install':
+        (directory / 'context-recovery.json').write_text(json.dumps({
+            'version': 1, 'current': 'prior-install',
+            'attempts': {'prior-install': {'state': 'unknown',
+                'candidateSha256': json.loads(accepted)['sha256']}}}))
+    src = {**source(), 'workspace': str(workspace), 'nativeProject': project_slug(workspace)}
+    src['nativeRevision'] = revision(src)
+    src['messages'] = [view for i, row in enumerate(original)
+                       if (view := display_message(row, i, src, include_internal=True)) is not None]
+    before = (directory / 'context-checkpoint.json').read_bytes()
+    result = fork_session(home, src, 'context-fork')
+    target = home / 'sessions' / 'context-fork'
+    if disposition == 'accepted':
+        assert (target / 'context-checkpoint.json').read_bytes() == accepted
+    else:
+        assert not (target / 'context-checkpoint.json').exists()
+    assert not (target / 'context-recovery.json').exists()
+    assert (directory / 'context-checkpoint.json').read_bytes() == before
+    assert result['selection'] == src['selection']
+    assert (store.load('context-fork')[0])[:len(original)] == original
+
+
 @pytest.mark.parametrize('filename', ['configuration.json', 'effective-configuration.json'])
 def test_fork_retains_portable_module_identity_without_rewriting_source(managed_module_source, filename):
     c = managed_module_source
