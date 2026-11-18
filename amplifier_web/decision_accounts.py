@@ -21,13 +21,15 @@ from .provider_isolation import identity
 ACCOUNTS = "_decision_accounts"
 ENVELOPE = "_decision_account"
 # The time limit of one start of the catalog helper, in seconds. In a new
-# worker environment the first start finds no bytecode: it imports about 1,020
-# modules, compiles them and writes their bytecode. A later start reads it. On
-# a hosted Windows runner, with Windows Defender's real-time protection off,
-# 59 of 60 first starts took 1.4 to 6.2 s and one took 11.6 s; a person's PC
-# was not measured. A start over the limit fails the start of the conversation,
-# so the limit is far above a slow start. It still ends a helper that hangs.
-_CATALOG_START_SECONDS = 60
+# worker environment the first start finds no bytecode of the packages: it
+# imports about 1,020 modules and writes about 700 bytecode files. A later
+# start reads them. Measured on a hosted Windows runner, with Windows
+# Defender's real-time protection off: 83 of 85 first starts took 1.4 to
+# 7.0 s, and the two slowest took 11.6 s and 28.4 s. A person's PC was not
+# measured. A start over the limit fails the start of the conversation, so the
+# limit is about four times the slowest measured start. It still ends a helper
+# that hangs.
+_CATALOG_START_SECONDS = 120
 
 
 @lru_cache(maxsize=1)
