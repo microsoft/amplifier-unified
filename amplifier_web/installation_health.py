@@ -286,9 +286,10 @@ async def windows_working(home, *, wait=15.0):
     that time: on hosted test machines its loop stayed in one database commit
     for up to 11 seconds, some seconds after a start. With None the uninstall
     goes on and does not ask; a chat that is at work is then stopped with no
-    question. So a read that ends by its time limit is made again, in rounds.
-    A round reads its addresses in their order; the first round has every
-    address. What one read does:
+    question. So the reads are made in rounds, and a later round can read
+    again an address whose read ended by its time limit. A round reads its
+    addresses in their order; the first round has every address. What one
+    read does:
 
     - It ends by the time limit (`TimeoutError`): its address is in the next
       round, when one starts.
@@ -310,8 +311,9 @@ async def windows_working(home, *, wait=15.0):
     by since the clock was read before the first read. The bound does not
     end a round that has started. An installation from the setup file has
     one address: with the default `wait`, when each read ends by its limit,
-    that is five reads and about 15 seconds. When no further round starts,
-    the result is None, as it was after one read.
+    that is five reads and about 15 seconds. When the last round has ended
+    and no answer ended the function, the result is None, as it was after
+    one read.
 
     Only a time limit brings another read. It does not prove that a host is
     there: the limit can end a read while it connects, and while it waits for
