@@ -2393,8 +2393,9 @@ limit as not blocking.
   or that Amplifier opens. (When Windows gives that look no answer, setup
   does what it does on a folder with no such entry, without the sentences
   about chats and settings: with the launcher's start program it asks, and
-  on Yes it starts that program; without that program it shows the third
-  text of Leftovers below.) A folder that the person moved or
+  on Yes it runs the entries step when it found no Start-menu entry and then
+  tries to start that program; without that program it shows the third text
+  of Leftovers below.) A folder that the person moved or
   renamed on that step keeps what it held: both records, and Amplifier's
   program files when the last step did not remove them. Nothing removes
   them.
@@ -2747,8 +2748,8 @@ this run, what setup does, or the next step.
 
 The look finds no entry with the journal's name, or Windows gives it no
 answer (`kept`, `other`): setup asks, and on Yes it runs the entries step
-when it found no Start-menu entry, and then the start of the launcher, as
-described under "Uninstall stops the app before it removes an entry".
+when it found no Start-menu entry, and then it tries to start the launcher,
+as described under "Uninstall stops the app before it removes an entry".
 
 - Listed, the question: "Amplifier is already installed on this PC.", "Select
   Yes to open it now." and "You can also open it from the Start menu:
@@ -2773,9 +2774,9 @@ described under "Uninstall stops the app before it removes an entry".
 the text also said that Amplifier does not start when the person signs in; a
 second setup run does not read the start-at-sign-in task. With `other`
 because Windows gave the look for the journal's name no answer, setup asks
-as before, and on Yes it starts the launcher. The launcher's own look counts
-the same refusal as no journal (`os.path.lexists`), so the launcher does not
-refuse because of a journal then.
+as before, and on Yes it tries to start the launcher. The launcher's own
+look counts the same refusal as no journal (`os.path.lexists`), so the
+launcher does not refuse because of a journal then.
 
 The look finds an entry with the journal's name (`removal`): the launcher
 does not open Amplifier from such a folder (`Refused("removing")` in
@@ -2903,8 +2904,9 @@ source of both programs; none was seen on a PC):
 - `kept`, not listed: an uninstall that kept the folder.
 
 Limits that stay. Setup looks once, before its first message: an uninstall
-that begins after the look is not seen, setup starts the launcher, and the
-launcher refuses with its own text. "Your chats and settings are kept." in
+that begins after the look is not seen, setup tries to start the launcher,
+and a launcher that starts refuses with its own text. "Your chats and
+settings are kept." in
 the message after a failed entries step rests on that look, which is as old
 as the person's answer to the question. A launcher from a setup file before
 release 0.106.0 has no rule for the journal's name, and its uninstall writes

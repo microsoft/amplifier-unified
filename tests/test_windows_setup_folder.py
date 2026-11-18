@@ -803,11 +803,13 @@ def test_a_second_setup_run_says_that_chats_and_settings_are_kept_only_where_its
             "Where Windows ignores the case of letters, a folder `App` answers the look for `app`.",
             "a second setup run does not read the start-at-sign-in task.",
             "With `other` because Windows gave the look for the journal's name no answer, setup asks as before, "
-            "and on Yes it starts the launcher.",
+            "and on Yes it tries to start the launcher.",
+            "setup asks, and on Yes it runs the entries step when it found no Start-menu entry, and then it tries to "
+            "start the launcher, as described under",
             "The launcher's own look counts the same refusal as no journal (`os.path.lexists`), so the launcher "
             "does not refuse because of a journal then.",
             "Setup looks once, before its first message: an uninstall that begins after the look is not seen, "
-            "setup starts the launcher, and the launcher refuses with its own text.",
+            "setup tries to start the launcher, and a launcher that starts refuses with its own text.",
             "\"Your chats and settings are kept.\" in the message after a failed entries step rests on that look, "
             "which is as old as the person's answer to the question.",
             "The launcher uses the same two facts for its sentence \"It keeps your chats and settings\" "
@@ -1068,7 +1070,8 @@ def test_a_second_setup_run_starts_no_launcher_on_a_folder_with_an_uninstall_rec
             "Amplifier opens.",
             "(When Windows gives that look no answer, setup does what it does on a folder with no such entry, "
             "without the sentences about chats and settings: with the launcher's start program it asks, and on "
-            "Yes it starts that program; without that program it shows the third text of Leftovers below.)",
+            "Yes it runs the entries step when it found no Start-menu entry and then tries to start that program; "
+            "without that program it shows the third text of Leftovers below.)",
             "Everything in this section about a second setup run is for a run in which setup's look finds no "
             "entry with the journal's name (`unified-uninstall.json`).",
             "that `SecondRun` without a start runs the entries program and no launcher, shows its progress "
