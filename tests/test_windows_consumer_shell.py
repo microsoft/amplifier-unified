@@ -2066,3 +2066,35 @@ def test_native_shortcut_name_that_appears_after_the_check_is_not_overwritten(na
         ["My own note.txt", name, next(iter(shell.LINKS))])  # The first shortcut was written before the stop.
     assert shell.registry(root) is None and not shell.listed(root)
     assert _native_record(root)["status"] != "installed"
+
+
+def test_native_file_put_at_a_new_shortcut_path_before_the_shell_saves_is_written_over(native_uninstall, monkeypatch):
+    """The one moment that setup's step does not cover, on real files. A known limit, not a promise.
+
+    The writer makes each shortcut as a new, empty file, and the Windows shell
+    then saves the shortcut to that file's path. Here another program of this
+    account replaces the new file between the two. It uses the private writer,
+    so that its file is this account's own, as a file of a person's program is
+    on a PC. The shell saves to the path, and the other program's bytes are
+    gone. A change that closes this moment changes this case and the sentence
+    of the design that names the moment.
+    """
+    from amplifier_web import windows_files
+    native, root, folder = native_uninstall, native_uninstall.root, native_uninstall.folder
+    assert native.run()["ok"] and not folder.exists()
+    name, theirs, put = "Amplifier status.lnk", b"another program's file", []
+    publish = windows_files.PinnedDirectory.publish_private
+    def replaced(self, entry, content, *, replace=False):
+        publish(self, entry, content, replace=replace)
+        if entry == name and not put:
+            publish(self, name, theirs, replace=True)
+            assert (folder / name).read_bytes() == theirs
+            put.append(os.stat(folder / name).st_ino)
+    monkeypatch.setattr(windows_files.PinnedDirectory, "publish_private", replaced)
+    result = shell.install(root, "1.0.0")
+    after = (folder / name).read_bytes()
+    print("SAVED_BY_PATH " + json.dumps({
+        "writtenOver": after != theirs, "shortcut": after[:4] == b"L\x00\x00\x00",
+        "sameFileObject": os.stat(folder / name).st_ino == put[0],
+        "shortcuts": result["shortcuts"], "record": _native_record(root)["status"]}))
+    assert put and after != theirs and after[:4] == b"L\x00\x00\x00"

@@ -1872,8 +1872,10 @@ refusal of the paragraph before the last has a case there, with one
 exception: the path that Windows does not let the step look at has a case
 with a stand-in. Each case finds the folder, the record and the Apps list as
 they were. The folder that fails the check is, in these cases, one that the
-group Everyone can change. No hosted runner runs the setup program itself,
-which refuses Windows Server.
+group Everyone can change. One case shows the moment that is not covered: a
+file that another program of this account puts at a new shortcut's path
+before the shell saves is written over. No hosted runner runs the setup
+program itself, which refuses Windows Server.
 
 `.github/workflows/windows-start-again.yml` runs this path on a Windows
 runner with the product's own commands in setup's order: entries, first
