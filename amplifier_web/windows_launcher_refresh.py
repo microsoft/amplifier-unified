@@ -33,6 +33,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import sys
 import time
@@ -40,6 +41,9 @@ import tomllib
 
 RECORD = "launcher-refresh.json"
 JOURNAL = "launcher-refresh-journal.json"
+REQUEST = "launcher-refresh-request.json"
+KEPT = "launcher-refresh-kept.json"
+RUN_FIELDS = ("schema", "registration", "run", "pid", "created", "image")
 LOCK = "launcher-refresh.lock"
 RECEIPTS = ("consumer-install.json", "consumer-qualified.json")
 _WINDOWS = os.name == "nt"
@@ -47,6 +51,10 @@ _WINDOWS = os.name == "nt"
 
 class Refused(RuntimeError):
     """A plain reason. Nothing was changed."""
+
+
+class NoHold(RuntimeError):
+    """No running host gave permission for this stop."""
 
 
 def _python(prefix, windowless=False):
@@ -205,7 +213,9 @@ def plan(service, home):
     except (OSError, ValueError, KeyError, TypeError) as error:
         raise Refused("The active app version did not pass its own checks, so it cannot become the launcher.") from error
     uv = shutil.which("uv", path=os.pathsep.join([service.tool_path, os.environ.get("PATH", "")]))
-    if not uv:
+    # A path that is not absolute is a program in the current folder, which
+    # Windows tries first. Only a folder of the task's own path may give uv.
+    if not uv or not os.path.isabs(uv):
         raise Refused("Amplifier's setup helper (uv) was not found.")
     entries = _entry_points(prefix)
     bin_dir = service.launch_roots.get("UV_TOOL_BIN_DIR") or (str(entries[0].parent) if entries else None)
@@ -236,6 +246,41 @@ def _write(owner, path, raw):
     write_private(Path(path), raw, **({"owned_root": Path(owner)} if _WINDOWS else {}))
 
 
+def read_json(home, name):
+    """Read a private JSON object, allowing a short concurrent replacement."""
+    for attempt in range(6):
+        try:
+            if _WINDOWS:
+                from .windows_files import directory
+                with directory(_services(home), owned_root=home, create=False) as pinned:
+                    raw = pinned.read_private(name, limit=1024 * 1024)
+            else:
+                raw = (_services(home) / name).read_bytes()
+            break
+        except FileNotFoundError:
+            return None
+        except PermissionError:
+            if attempt == 5:
+                raise
+            time.sleep(0.1)
+    value = json.loads(raw)
+    if not isinstance(value, dict):
+        raise ValueError(f"The record is not a JSON object: {name}")
+    return value
+
+
+def write_json(home, name, value):
+    _write(home, _services(home) / name, json.dumps(value))
+
+
+def remove_json(home, name):
+    (_services(home) / name).unlink(missing_ok=True)
+
+
+def run_identity(record):
+    return None if record is None else {key: record[key] for key in RUN_FIELDS}
+
+
 def _record(home, value):
     try:
         _write(home, _services(home) / RECORD, json.dumps({"schema": 1, "at": time.time(), **value}))
@@ -254,12 +299,10 @@ def unfinished(home):
     """The saved record of a refresh that did not finish, or None. Reads only."""
     path = _services(home) / JOURNAL
     try:
-        value = json.loads(path.read_bytes())
-    except FileNotFoundError:
-        return None
+        value = read_json(home, JOURNAL)
     except (OSError, ValueError) as error:
         raise Refused(f"The record of an earlier, unfinished launcher refresh cannot be read: {path}") from error
-    if isinstance(value, dict) and value.get("done") is True:
+    if value is None or value.get("done") is True:
         return None  # That refresh finished; only its record could not be removed.
     if (not isinstance(value, dict) or value.get("schema") != 1
             or not all(isinstance(value.get(key), str) for key in ("prefix", "previous", "unused", "pointer"))
@@ -268,9 +311,38 @@ def unfinished(home):
     return value
 
 
+def journal_kind(home, registration):
+    journal = unfinished(home)
+    if journal is None:
+        return "none"
+    if "registration" not in journal:
+        return "manual"
+    return "live" if journal["registration"] == registration else "stale"
+
+
+def set_stale_aside(home):
+    if unfinished(home) is None:
+        return None
+    stamp = int(time.time())
+    name = f"launcher-refresh-journal-stale-{stamp}.json"
+    while (_services(home) / name).exists():
+        stamp += 1
+        name = f"launcher-refresh-journal-stale-{stamp}.json"
+    os.rename(_services(home) / JOURNAL, _services(home) / name)
+    return name
+
+
+def started(home, request):
+    if journal_kind(home, request["registration"]) == "live":
+        return True
+    record = read_json(home, RECORD)
+    return bool(record and record.get("request") == request["id"]
+                and record.get("state") in {"stopped", "waiting"})
+
+
 @contextmanager
-def _lock(home):
-    """One refresh per installation, from its saved record to its settled result."""
+def try_lock(home):
+    """Try once. The operating system releases this lock when its process ends."""
     from filelock import FileLock, Timeout
     folder = _services(home)
     with ExitStack() as stack:
@@ -283,11 +355,21 @@ def _lock(home):
         try:
             lock.acquire()
         except Timeout:
-            raise Refused("Another launcher refresh is running for this installation.") from None
+            yield False
+            return
         try:
-            yield
+            yield True
         finally:
             lock.release()
+
+
+@contextmanager
+def _lock(home):
+    """One refresh per installation, from its saved record to its settled result."""
+    with try_lock(home) as held:
+        if not held:
+            raise Refused("Another launcher refresh is running for this installation.")
+        yield
 
 
 async def _observe(service, wait):
@@ -310,19 +392,16 @@ def _state_text(running, ready):
 async def refresh(service, home, *, check=False, recover=False, wait=180, process=None):
     """Refresh, or first settle an unfinished refresh. The result has a plain `message`."""
     home = Path(home)
-    if service.inside_host():
-        raise Refused("This command was started from inside the running app. The refresh stops the app, "
-                      "which would end this command too. Start it from outside the app.")
-    if _same(sys.prefix, service.launcher):
-        raise Refused("This command was started with the launcher's own Python. Start it with the Python "
-                      "of the active app version.")
+    _outside(service)
     if check:
+        _refuse_stale(home, service.registration)
         if unfinished(home) is not None:
             return {"ok": True, "changed": False, "action": "recover",
                     "message": "An earlier launcher refresh did not finish. The next run of this command "
                                "first puts the previous launcher back. Nothing was changed now."}
         return _report(plan(service, home))
     with _lock(home):
+        _refuse_stale(home, service.registration)
         journal = unfinished(home)  # Read under the lock: another run may have settled it.
         if journal is not None:
             result = await _undo(service, home, journal, wait, earlier=True)
@@ -338,6 +417,21 @@ async def refresh(service, home, *, check=False, recover=False, wait=180, proces
         return await _run(service, home, wait, process)
 
 
+def _outside(service):
+    if service.inside_host():
+        raise Refused("This command was started from inside the running app. The refresh stops the app, "
+                      "which would end this command too. Start it from outside the app.")
+    if _same(sys.prefix, service.launcher):
+        raise Refused("This command was started with the launcher's own Python. Start it with the Python "
+                      "of the active app version.")
+
+
+def _refuse_stale(home, registration):
+    if journal_kind(home, registration) == "stale":
+        raise Refused(f"The file {_services(home) / JOURNAL} belongs to an earlier installation "
+                      "of Amplifier. It was not used.")
+
+
 def _report(selected):
     old = selected["old"]
     facts = {"launcher": {"version": old["version"], "revision": old["revision"]}, "app": selected.get("new")}
@@ -349,13 +443,15 @@ def _report(selected):
                        "and start Amplifier again. Nothing was changed now."}
 
 
-async def _run(service, home, wait, process):
+async def _run(service, home, wait, process, *, request=None):
     from . import app_component_graph as components, application_generations as generations
     from .app_updates import PROBE, install_requirement
     from .update_diagnostics import probe_record
     if process is None:
         from .updates import process
     selected = plan(service, home)
+    if request is not None:
+        _matches_request(selected, request)
     report = _report(selected)
     if selected["action"] == "none":
         return report
@@ -366,7 +462,9 @@ async def _run(service, home, wait, process):
     receipts = {name: (root / name).read_bytes() if (root / name).is_file() else None
                 for name in RECEIPTS} if root is not None else {}
     previous = _free(selected["store"] / f"launcher-{old['version']}-{old['identity']['digest'][:8]}")
-    journal = {"schema": 1, "prefix": str(prefix), "previous": str(previous), "old": old["identity"],
+    journal = {"schema": 1, "registration": service.registration,
+               "request": request["id"] if request else None,
+               "prefix": str(prefix), "previous": str(previous), "old": old["identity"],
                "from": facts["launcher"], "to": facts["app"],
                "wasRunning": await asyncio.to_thread(service.running),
                "pointer": base64.b64encode(pointer.read_bytes()).decode("ascii"),
@@ -379,6 +477,8 @@ async def _run(service, home, wait, process):
     # Everything that a rollback needs is saved before the first effect. If this
     # process is ended, the next run puts the previous state back from it.
     _write(home, _services(home) / JOURNAL, json.dumps(journal))
+    if request is not None:
+        _automatic_record(home, request, state="stopped", stoppedApp=True, previous=str(previous))
     state = {"step": "stopping Amplifier"}
 
     async def stopped():
@@ -457,8 +557,9 @@ async def _run(service, home, wait, process):
         _write(home, _services(home) / JOURNAL, json.dumps({**journal, "done": True}))
     except BaseException as error:
         result = await _undo(service, home, journal, wait)
-        _record(home, {"result": result["state"], "step": state["step"], "errorType": type(error).__name__,
-                       "from": facts["launcher"], "to": facts["app"]})
+        if request is None:
+            _record(home, {"result": result["state"], "step": state["step"], "errorType": type(error).__name__,
+                           "from": facts["launcher"], "to": facts["app"]})
         if not isinstance(error, Exception):
             raise
         return {"ok": False, "action": "refresh", **facts, "step": state["step"],
@@ -468,7 +569,8 @@ async def _run(service, home, wait, process):
                            + result["message"]}
     _retire(home)
     fresh = {"version": selected["new"]["version"], "revision": selected["new"]["revision"]}
-    _record(home, {"result": "refreshed", "from": facts["launcher"], "to": fresh, "previous": str(previous)})
+    if request is None:
+        _record(home, {"result": "refreshed", "from": facts["launcher"], "to": fresh, "previous": str(previous)})
     return {"ok": True, "changed": True, "action": "refresh", "launcher": fresh, "app": fresh,
             "previousLauncher": str(previous), "state": "refreshed", "running": True, "ready": True,
             "message": f"The launcher now has version {fresh['version']} (it had {old['version']}). "
@@ -633,6 +735,238 @@ async def _undo(service, home, journal, wait, *, earlier=False):
                        + (f" You can delete this unused folder: {leftover}" if leftover else "")}
 
 
+def _retire_task(home):
+    try:
+        from .windows_launcher_task import retire_task
+        retire_task(home)
+    except Exception:
+        pass  # The next trigger can try again.
+
+
+def _open_request(home, request_id, registration):
+    value = read_json(home, REQUEST)
+    return value if (value and value.get("id") == request_id and value.get("status") == "open"
+                     and value.get("registration") == registration) else None
+
+
+def _automatic_record(home, request, **changes):
+    """Merge only this request's record. A later state must not forget a stop."""
+    record = read_json(home, RECORD)
+    new = record is None or record.get("request") != request["id"]
+    if new:
+        record = {"schema": 1, "request": request["id"], "state": "ready", "result": None,
+                  "step": None, "errorType": None, "run": None, "stoppedApp": False,
+                  "attempts": 0, "lastAttempt": None, "from": {}, "to": {
+                      key: request["target"][key] for key in ("version", "revision")}, "previous": None}
+    if not new and all(record.get(key) == value for key, value in changes.items()):
+        return record  # Polling the same host needs no new private write.
+    stopped = record.get("stoppedApp", False)
+    record.update(changes)
+    record.update(at=time.time(), stoppedApp=bool(stopped or record["stoppedApp"]))
+    write_json(home, RECORD, record)
+    return record
+
+
+def _matches_request(selected, request):
+    target = selected.get("target") or {}
+    if (selected["action"] != "refresh" or selected["old"]["identity"] != request["launcher"]
+            or any(target.get(key) != request["target"].get(key) for key in ("generation", "revision"))):
+        raise Refused("The launcher or the active app version changed. The refresh did not start.")
+
+
+class _HeldService:
+    """Every automatic stop needs the hold of the exact host that it stops."""
+
+    def __init__(self, service, home, request, stop_wait, poll=5.0):
+        self.service, self.home, self.request, self.stop_wait = service, home, request, stop_wait
+        self.poll = poll
+
+    def __getattr__(self, name):
+        return getattr(self.service, name)
+
+    def stop(self):
+        deadline = time.monotonic() + self.stop_wait
+        while self.service.running():
+            run = self.service.run()
+            request = _open_request(self.home, self.request["id"], self.service.registration)
+            if run is not None and request and request.get("hold") == run:
+                if self.service.handoff_in_flight():
+                    raise NoHold("An app update is still finishing. No stop was sent.")
+                self.service.stop_exact(run)
+                return
+            _automatic_record(self.home, self.request, state="ready", run=run)
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise NoHold("No running host gave permission for this stop.")
+            time.sleep(min(self.poll, left))
+
+
+async def _recovery_hold(service, home, request, recover_wait, poll):
+    deadline = time.monotonic() + recover_wait
+    while service.running():
+        run = service.run()
+        current = _open_request(home, request["id"], service.registration)
+        if run is not None and current and current.get("hold") == run:
+            return True
+        _automatic_record(home, request, state="ready", run=run)
+        left = deadline - time.monotonic()
+        if left <= 0:
+            return False
+        await asyncio.sleep(min(poll, left))
+    return True
+
+
+async def _recover_automatic(service, home, request, journal, record, wait, recover_wait, poll):
+    attempts, last = (record or {}).get("attempts", 0), (record or {}).get("lastAttempt")
+    if attempts >= 6 and last is not None and time.time() - last < 3600:
+        return record
+    if _pending(home, journal) and service.running():
+        if not await _recovery_hold(service, home, request, recover_wait, poll):
+            return read_json(home, RECORD)
+    _automatic_record(home, request, attempts=attempts + 1, lastAttempt=time.time(),
+                      **{"from": journal.get("from", {}), "to": journal.get("to", {})})
+    result = await _undo(service, home, journal, wait, earlier=True)
+    if result["state"] == "rollback-incomplete":
+        return _automatic_record(home, request, state="waiting")
+    if journal.get("wasRunning") and not service.running():
+        return _automatic_record(home, request, state="waiting", stoppedApp=True)
+    return _automatic_record(home, request, state="settled", result="rolled-back")
+
+
+async def _settle_automatic(service, home, request, record, wait):
+    from .application_generations import bootstrap_identity
+    result = ("refreshed" if bootstrap_identity(service.launcher) != request["launcher"] else
+              "rolled-back" if record["state"] in {"stopped", "waiting"} else "withdrawn")
+    if record.get("stoppedApp") and not service.running():
+        try:
+            await asyncio.to_thread(service.start)
+            await service.ready(wait)
+        except Exception as error:
+            return _automatic_record(home, request, state="waiting", errorType=type(error).__name__)
+        if not service.running():
+            return _automatic_record(home, request, state="waiting")
+    return _automatic_record(home, request, state="settled", result=result)
+
+
+async def _first_automatic(service, home, request, wait, process, hold_wait, poll):
+    try:
+        selected = plan(service, home)
+        _matches_request(selected, request)
+    except Refused as error:
+        return _automatic_record(home, request, state="settled", result="refused",
+                                 errorType=type(error).__name__)
+    run = service.run()
+    if not service.running() or run is None:
+        return _automatic_record(home, request, state="settled", result="withdrawn")
+    _automatic_record(home, request, state="ready", run=run,
+                      **{"from": {key: selected["old"][key] for key in ("version", "revision")}})
+    deadline = time.monotonic() + hold_wait
+    while True:
+        current = _open_request(home, request["id"], service.registration)
+        if current is None or service.run() != run:
+            return _automatic_record(home, request, state="settled", result="withdrawn")
+        if current.get("hold") == run:
+            break
+        left = deadline - time.monotonic()
+        if left <= 0:
+            return _automatic_record(home, request, state="settled", result="not-started")
+        await asyncio.sleep(min(poll, left))
+    if service.run() != run or service.handoff_in_flight():
+        return _automatic_record(home, request, state="settled", result="withdrawn")
+    try:
+        result = await _run(service, home, wait, process, request=request)
+    except Refused as error:
+        return _automatic_record(home, request, state="settled", result="refused",
+                                 errorType=type(error).__name__)
+    if result["state"] == "refreshed":
+        return _automatic_record(home, request, state="settled", result="refreshed",
+                                 previous=result["previousLauncher"])
+    details = {key: result.get(key) for key in ("step", "errorType")}
+    if result["state"] == "rollback-incomplete" or not service.running():
+        return _automatic_record(home, request, state="waiting", **details)
+    return _automatic_record(home, request, state="settled",
+                             result="rolled-back" if result["rolledBack"] else "refused", **details)
+
+
+def _keep_previous(home, launcher, previous):
+    """Only folders recorded by automatic refreshes belong to this cleanup."""
+    kept = read_json(home, KEPT) or {"schema": 1, "paths": []}
+    protected = set()
+    for path in [_services(home) / JOURNAL, *_services(home).glob("launcher-refresh-journal-stale-*.json")]:
+        journal = read_json(home, path.name)
+        if journal and not journal.get("done"):
+            protected.update(journal.get(key) for key in ("prefix", "previous", "unused"))
+    store, remaining = Path(launcher).parent.parent.resolve(), []
+    for name in kept["paths"]:
+        path = Path(name)
+        safe = (path.parent.resolve() == store
+                and re.fullmatch(r"launcher-\d+\.\d+\.\d+-[a-f0-9]{8}(?:-\d+)?", path.name)
+                and not path.is_symlink() and not (getattr(path, "is_junction", lambda: False)())
+                and path.is_dir() and not any(name and _same(path, name) for name in protected)
+                and not _same(path, previous))
+        if safe:
+            try:
+                shutil.rmtree(path)
+            except OSError:
+                pass
+        if path.exists() or path.is_symlink():
+            remaining.append(name)
+    write_json(home, KEPT, {"schema": 1, "paths": list(dict.fromkeys([*remaining, previous]))})
+
+
+async def automatic(home, request_id, *, service, wait=180, process=None,
+                    hold_wait=300, recover_wait=600, stop_wait=90, poll=5.0):
+    """Run or recover one host request, with all decisions under the refresh lock.
+
+    Each look at the app is a Task Scheduler query, and that is a PowerShell
+    process. A wait can last 10 minutes: one look in 5 seconds, not one a second.
+    """
+    home, deadline = Path(home), time.monotonic() + 15
+    result = {}
+    while True:
+        with try_lock(home) as held:
+            if held:
+                request = read_json(home, REQUEST)
+                if not request or request.get("id") != request_id or request.get("status") != "open":
+                    return {}
+                if request.get("registration") != service.registration:
+                    _retire_task(home)
+                    return {}
+                _outside(service)
+                if journal_kind(home, service.registration) == "stale":
+                    set_stale_aside(home)
+                journal, record = unfinished(home), read_json(home, RECORD)
+                if record and record.get("request") != request_id:
+                    record = None
+                if journal and journal.get("request") != request_id:
+                    if record is None:
+                        return _automatic_record(home, request, state="settled", result="refused",
+                                                 step="an unfinished manual refresh")
+                    return record
+                guarded = _HeldService(service, home, request, stop_wait, poll)
+                if journal:
+                    result = await _recover_automatic(guarded, home, request, journal, record,
+                                                      wait, recover_wait, poll)
+                elif record is not None:
+                    if record.get("state") == "settled":
+                        return record
+                    result = await _settle_automatic(guarded, home, request, record, wait)
+                else:
+                    result = await _first_automatic(guarded, home, request, wait, process, hold_wait, poll)
+                break
+        left = deadline - time.monotonic()
+        if left <= 0:
+            return {}
+        # The lock is a file: a try costs nothing. Only a look at the app is slow.
+        await asyncio.sleep(min(poll, 1.0, left))
+    if result.get("state") == "settled" and result.get("result") == "refreshed" and result.get("previous"):
+        try:
+            _keep_previous(home, service.launcher, result["previous"])
+        except Exception:
+            pass  # A cleanup failure must not change a settled refresh.
+    return result
+
+
 class TaskService:
     """The owned start-at-sign-in task: where the launcher is, and how the app stops and starts."""
 
@@ -643,6 +977,7 @@ class TaskService:
         if spec is None:
             raise Refused("No Amplifier start-at-sign-in task exists for this data folder and this Windows account.")
         self.spec = spec
+        self.registration = spec.registration_id
         self.launcher = Path(spec.python).parent.parent
         self.tool_path, self.launch_roots = spec.tool_path, dict(spec.launch_roots)
         self.github_access = spec.github_access
@@ -675,6 +1010,23 @@ class TaskService:
     def stop(self):
         self._service.command("stop", self.home)
 
+    def run(self):
+        from .windows_task_runtime import read, process, matches
+        if not self.running():
+            return None
+        record = read(self.spec)
+        if record is not None:
+            with process(record["pid"]) as actual:
+                if actual and matches(record, actual) and not actual["exited"]():
+                    return run_identity(record)
+        return None
+
+    def stop_exact(self, run):
+        value, spec = self._service._read(self.home)
+        if spec != self.spec:
+            raise RuntimeError("The start-at-sign-in task changed.")
+        self._service._stop(value, spec, expected=run)
+
     def start(self):
         self._service.command("start", self.home)
 
@@ -686,20 +1038,46 @@ class TaskService:
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--data-dir", type=Path, required=True, help="Amplifier's data folder (the task's data folder)")
+    parser.add_argument("--data-dir", type=Path, help="Amplifier's data folder (the task's data folder)")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--check", action="store_true", help="Say what a run would do; change nothing")
     mode.add_argument("--recover", action="store_true",
                       help="Only put back the previous state after a refresh that did not finish")
+    mode.add_argument("--automatic", help="Private host request, encoded as URL-safe base64 JSON")
     parser.add_argument("--wait", type=int, default=180, help="Seconds to wait for the app to become ready")
     args = parser.parse_args(argv)
+    if args.automatic is not None:
+        code = 1
+        try:
+            from .windows_hidden_console import ensure_hidden_console
+            ensure_hidden_console()
+            if sys.platform != "win32":
+                raise Refused("The launcher refresh is for native Windows installations.")
+            value = json.loads(base64.urlsafe_b64decode(args.automatic))
+            home, request_id = Path(value["home"]), value["request"]
+            if not isinstance(request_id, str) or not re.fullmatch("[a-f0-9]{32}", request_id):
+                raise ValueError("Invalid launcher refresh request.")
+            try:
+                service = TaskService(home)
+            except Refused:
+                _retire_task(home)
+                raise SystemExit(0)
+            _task_environment(service, home)
+            result = asyncio.run(automatic(home, request_id, service=service, wait=args.wait))
+            code = 1 if result.get("state") == "waiting" else 0
+        except SystemExit:
+            raise
+        except BaseException:
+            pass  # A scheduled helper never opens a message box or waits for input.
+        raise SystemExit(code)
+    if args.data_dir is None:
+        parser.error("--data-dir is required without --automatic")
     if sys.platform != "win32":
         raise SystemExit("The launcher refresh is for native Windows installations.")
     try:
         service = TaskService(args.data_dir)
         # The same private roots as the task's own host, for this process only.
-        os.environ.update(AMPLIFIER_WEB_HOME=str(args.data_dir), AMPLIFIER_SESSION_STATE_HOME=service.spec.state_home,
-                          AMPLIFIER_GITHUB_ACCESS=service.github_access, **service.launch_roots)
+        _task_environment(service, args.data_dir)
         result = asyncio.run(refresh(service, args.data_dir, check=args.check, recover=args.recover, wait=args.wait))
     except Refused as reason:
         result = {"ok": False, "changed": False, "refused": True, "message": str(reason) + " Nothing was changed."}
@@ -712,6 +1090,17 @@ def main(argv=None):
     else:
         print(json.dumps(result))
     raise SystemExit(0 if result["ok"] else 1)
+
+
+def _task_environment(service, home):
+    os.environ.update(AMPLIFIER_WEB_HOME=str(home), AMPLIFIER_SESSION_STATE_HOME=service.spec.state_home,
+                      AMPLIFIER_GITHUB_ACCESS=service.github_access, **service.launch_roots)
+    # As in the host: Windows program lookup must not try the current folder
+    # before the task's own path. The helper task's folder is the app
+    # generation's Scripts folder, which holds a uv.exe of its own (a package
+    # that the app depends on); on a Windows runner the helper ran that one
+    # and not setup's. A person's terminal can be in any folder.
+    os.environ.setdefault("NoDefaultCurrentDirectoryInExePath", "1")
 
 
 if __name__ == "__main__":

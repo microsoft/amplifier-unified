@@ -197,6 +197,33 @@ restore. The stable launcher keeps the code that setup installed; an in-app
 update cannot change it. `amplifier_web.windows_launcher_refresh` is the only
 supported replacement: it runs with the active generation's Python from outside
 the host's Job, and it rolls back fully on failure.
+The app host asks for that refresh by itself (`windows_launcher_follow`): it
+registers a second task, `AmplifierUnifiedLauncher-<SID>`, whose helper runs
+the command with `--automatic` outside the Job. Keep its rules: an open request
+fences every update operation (`awaiting_restart`); a host names its run in the
+request only after it closed admission; the helper stops only the exact run
+whose hold it read under the refresh lock; a host reopens only with that lock
+and with no stop record for its run; a journal of another task registration is
+renamed and never used. No clock decides safety there, and the helper never
+shows a message box (a waiting box blocks the timed trigger that repairs an
+ended helper). Every app generation's `Scripts` folder holds a `uv.exe` of a
+package, and that folder is the helper's working folder: keep
+`NoDefaultCurrentDirectoryInExePath` in the refresh command's environment, or
+Windows runs that program before setup's. The refresh starts only when a file of
+`windows_launcher_files.FILES` or a distribution of `PACKAGES` differs, so a
+launcher-side fix reaches an installed PC only through that list. A change
+that makes the launcher load another file fails
+`tests/test_windows_launcher_files.py`: run
+`scripts/windows_launcher_files.py --write` and decide each new `DYNAMIC`
+entry. The Apps-list version is the confirmed app version; the host writes it
+(`windows_consumer_shell.set_version`), not the refresh. A host that an update
+started confirms its own start after it listens: the hand-over record still
+says `prepared` when the update loop first runs. Never keep that reading as a
+decision for the host run; read the record again until it says something else.
+A fixture that writes `acknowledged` before the start hides this. In
+`windows-launcher-follow.yml` the app is built as a version above every
+release: a host that is behind a public release updates itself in the middle
+of a case.
 A live conversation worker holds Foundation's session ownership below
 `<installation folder>\ownership`. A worker whose Foundation is older than
 `e37a946b` makes Windows refuse a rename, a move or a replacement of an entry

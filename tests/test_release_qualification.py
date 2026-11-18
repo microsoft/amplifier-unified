@@ -2386,7 +2386,13 @@ def test_recipe_probe_installs_its_declared_module_before_freezing_runtime(workf
     assert 'tree-sitter' not in commands
 
 
-def test_coordination_prepares_real_loop_before_first_contract_suite():
+def test_coordination_prepares_real_loop_before_first_contract_suite(tmp_path, monkeypatch, capsys):
+    import ast
+    import builtins
+    import hashlib
+    import xml.etree.ElementTree as ET
+    from types import SimpleNamespace
+
     workflow = yaml.load((ROOT / '.github/workflows/coordination.yml').read_text(), Loader=yaml.BaseLoader)
     assert workflow['permissions'] == {'contents': 'read'}
     assert set(workflow['on']) == {'pull_request'}
@@ -2409,11 +2415,182 @@ def test_coordination_prepares_real_loop_before_first_contract_suite():
     assert 'BundleLiveOrchestrator' in steps[verify]['run'] and 'selectedLoopRevision' in steps[verify]['run']
     assert 'importorskip' not in steps[verify]['run']
     assert not any('continue-on-error' in s for s in steps)
-    assert any(s.get('name') == 'Verify mounted child identity and file boundaries' for s in steps[contracts + 1:])
+    mounted = next(i for i, s in enumerate(steps) if s.get('name') == 'Verify mounted child identity and file boundaries')
+    first_suite = next(i for i, s in enumerate(steps) if 'pytest' in s.get('run', ''))
+    assert verify < first_suite <= contracts < mounted
+    for step in steps[verify:mounted + 1]:
+        assert not any(token in step.get('run', '') for token in ('uv sync', 'uv pip', '--with', '--locked'))
+
+    programs = []
+    for index in (verify, mounted):
+        lines = steps[index]['run'].splitlines()
+        assert lines[0] == "uv run --no-sync python - <<'PY'" and lines[-1] == 'PY'
+        programs.append(ast.parse('\n'.join(lines[1:-1])))
+    helpers = [next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                    and node.name == 'runtime_identity') for tree in programs]
+    assert ast.dump(helpers[0]) == ast.dump(helpers[1])
+    readiness_record = next(node.value for node in programs[0].body if isinstance(node, ast.Assign)
+                            and any(isinstance(target, ast.Name) and target.id == 'record'
+                                    for target in node.targets))
+    readiness_fields = {ast.literal_eval(key): value for key, value in
+                        zip(readiness_record.keys, readiness_record.values)}
+    assert ast.unparse(readiness_fields['runtime']) == 'runtime_identity()'
+    readiness_update = next(node for node in ast.walk(programs[0]) if isinstance(node, ast.Call)
+                            and ast.unparse(node.func) == 'record.update')
+    assert {ast.literal_eval(key) for key in readiness_update.args[0].keys} == {
+        'candidate', 'declaredLoopRevision', 'selectedLoopRevision', 'python', 'versions', 'imports'}
+    assert any(isinstance(node, ast.Assert) and ast.unparse(node.test) ==
+               'callable(BundleLiveOrchestrator) and callable(mount)' for node in programs[0].body)
+    tree = programs[1]
+    hard_imports = [node for node in tree.body if isinstance(node, ast.ImportFrom)
+                    and node.module in ('amplifier_module_loop_live', 'amplifier_module_context_simple')]
+    assert [(node.module, [name.name for name in node.names]) for node in hard_imports] == [
+        ('amplifier_module_loop_live', ['BundleLiveOrchestrator']),
+        ('amplifier_module_context_simple', ['mount'])]
+    assert 'importorskip' not in steps[mounted]['run']
+    pytest_import = next(node for node in tree.body if isinstance(node, ast.Import)
+                         and any(name.name == 'pytest' for name in node.names))
+    selection = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+                 and ast.unparse(node.func) == 'pytest.main']
+    assert len(selection) == 1
+    assert hard_imports[-1].lineno < pytest_import.lineno < selection[0].lineno
+    assert any(isinstance(node, ast.Assert) and ast.unparse(node.test) ==
+               'callable(BundleLiveOrchestrator) and callable(mount)'
+               and hard_imports[-1].lineno < node.lineno < pytest_import.lineno for node in tree.body)
+    pytest_args = ast.literal_eval(selection[0].args[0])
+    assert pytest_args == [
+        '-q', '-rs', '--junitxml=output/mounted-child-boundaries.xml',
+        'tests/test_child_app_authority.py', 'tests/test_child_file_policy.py',
+        'tests/test_child_image_policy.py', 'tests/test_child_resume_admission.py',
+        'tests/test_runtime_worker.py', 'tests/test_app_guidance.py']
+    assert any(ast.dump(node) == ast.dump(ast.parse(
+        "os.environ['UNIFIED_RUNTIME_PYTHON'] = sys.executable").body[0]) for node in tree.body)
+
+    # Execute the actual metadata/continuity guard, not product imports or pytest.
+    def dist(name, direct):
+        return SimpleNamespace(metadata={'Name': name}, version='1.0',
+                               read_text=lambda filename: json.dumps(direct))
+
+    installed = [
+        dist('amplifier-module-loop-live', {'url': 'file:///checkout/.ci/loop-live', 'dir_info': {}}),
+        dist('amplifier-module-loop-streaming', {'url': 'https://example/streaming',
+                                              'vcs_info': {'commit_id': 'streaming-commit'}}),
+        dist('amplifier-module-context-simple', {'url': 'https://example/context',
+                                              'vcs_info': {'commit_id': 'context-commit'}}),
+        dist('unrelated-package', None)]
+
+    def git(args, *, text):
+        assert args == ['git', '-C', '.ci/loop-live', 'rev-parse', 'HEAD'] and text
+        return 'checked-out-live-commit\n'
+
+    namespace = dict(hashlib=hashlib, json=json, Path=Path,
+                     subprocess=SimpleNamespace(check_output=git),
+                     sys=SimpleNamespace(executable='/venv/bin/python', prefix='/venv', version='3.13.test'),
+                     distributions=lambda: installed,
+                     find_spec=lambda name: SimpleNamespace(origin=f'/venv/{name}/__init__.py'))
+    prefix = tree.body[:tree.body.index(hard_imports[0])]
+    guard = compile(ast.Module(body=[node for node in prefix
+                                    if not isinstance(node, (ast.Import, ast.ImportFrom))],
+                               type_ignores=[]), '<mounted-runtime-guard>', 'exec')
+    exec(compile(ast.Module(body=[helpers[0]], type_ignores=[]), '<runtime-identity>', 'exec'), namespace)
+    expected = namespace['runtime_identity']()
+    assert expected['executable'] == '/venv/bin/python' and expected['prefix'] == '/venv'
+    assert expected['selectedLoopRevision'] == 'checked-out-live-commit'
+    assert set(expected['sources']) == {d.metadata['Name'] for d in installed[:3]}
+    for d in installed[:3]:
+        source = expected['sources'][d.metadata['Name']]
+        assert source['distribution'] == {'name': d.metadata['Name'], 'version': d.version,
+                                          'directUrl': json.loads(d.read_text('direct_url.json'))}
+        assert source['moduleOrigin'] == f"/venv/{d.metadata['Name'].replace('-', '_')}/__init__.py"
+    installed[-1].version = '2.0'
+    changed = namespace['runtime_identity']()
+    assert changed['sources'] == expected['sources']
+    assert changed['installedFingerprint'] != expected['installedFingerprint']
+    installed[-1].version = '1.0'
+    monkeypatch.chdir(tmp_path)
+    output = tmp_path / 'output/coordination-runtime-readiness.json'
+    early_imports = [node for node in programs[0].body if isinstance(node, ast.ImportFrom)
+                     and node.module in ('amplifier_module_loop_live', 'amplifier_module_context_simple')]
+    assert [node.module for node in early_imports] == [node.module for node in hard_imports]
+    for failed_import in early_imports:
+        def import_failure(name, *args, **kwargs):
+            assert name in {node.module for node in early_imports}
+            if name == failed_import.module:
+                raise ImportError('synthetic runtime import failure')
+            return SimpleNamespace(BundleLiveOrchestrator=lambda: None)
+
+        # Run the actual early prefix through a failing hard import: metadata survives.
+        namespace['__builtins__'] = {**vars(builtins), '__import__': import_failure}
+        early_prefix = programs[0].body[:programs[0].body.index(failed_import) + 1]
+        early = ast.Module(body=[node for node in early_prefix
+                                if not isinstance(node, (ast.Import, ast.ImportFrom))
+                                or node in early_imports], type_ignores=[])
+        with pytest.raises(ImportError, match='synthetic runtime import failure'):
+            exec(compile(early, '<early-readiness-import-failure>', 'exec'), namespace)
+        assert json.loads(output.read_text()) == json.loads(capsys.readouterr().out) == {'runtime': expected}
+    del namespace['__builtins__']
+    exec(guard, namespace)
+    assert json.loads(output.read_text())['mountedRuntime'] == expected
+    assert json.loads(capsys.readouterr().out)['mountedRuntime'] == expected
+    for field in expected:
+        output.write_text(json.dumps({'runtime': {**expected, field: 'changed'}}))
+        with pytest.raises(AssertionError, match='Coordination runtime changed after readiness'):
+            exec(guard, namespace)
+        # Both identities survive even when comparison fails, before either hard import.
+        assert json.loads(output.read_text()) == json.loads(capsys.readouterr().out) == {
+            'runtime': {**expected, field: 'changed'}, 'mountedRuntime': expected}
+
+    # Exercise the embedded post-pytest gate with synthetic XML, never the six suites.
+    invocation = next(node for node in tree.body if isinstance(node, ast.Assign) and node.value is selection[0])
+    junit_gate = compile(ast.Module(body=tree.body[tree.body.index(invocation):], type_ignores=[]),
+                         '<mounted-junit-gate>', 'exec')
+    families = {'tests.' + Path(arg).stem for arg in pytest_args if arg.endswith('.py')}
+    resume = 'tests.test_child_resume_admission'
+    counts = {family: 23 if family == resume else 1 for family in families}
+    junit = tmp_path / 'output/mounted-child-boundaries.xml'
+
+    def write_junit(case_counts, tag=None):
+        root = ET.Element('testsuite')
+        for family, count in sorted(case_counts.items()):
+            for index in range(count):
+                row = ET.SubElement(root, 'testcase', classname=family, name=f'synthetic_{index}')
+                if tag:
+                    ET.SubElement(row, tag)
+        ET.ElementTree(root).write(junit)
+
+    def run_gate(returncode):
+        def main(args):
+            assert args == pytest_args
+            return returncode
+        exec(junit_gate, dict(pytest=SimpleNamespace(main=main), sys=sys, json=json))
+
+    write_junit(counts)
+    with pytest.raises(SystemExit) as passed:
+        run_gate(0)
+    assert passed.value.code == 0
+    assert json.loads(capsys.readouterr().out)['mountedChildClassCounts'] == counts
+    for bad_counts, tag in [
+        (counts, 'skipped'), (counts, 'failure'), (counts, 'error'),
+        ({key: value for key, value in counts.items() if key != 'tests.test_child_app_authority'}, None),
+        ({**counts, resume: 22}, None)]:
+        write_junit(bad_counts, tag)
+        raw_xml = junit.read_bytes()
+        with pytest.raises(AssertionError):
+            run_gate(0)
+        assert junit.read_bytes() == raw_xml
+        assert json.loads(capsys.readouterr().out)['mountedChildClassCounts'] == bad_counts
+    # A failed pytest result exits unchanged, before XML parsing or extra assertions.
+    junit.write_text('synthetic malformed XML')
+    for returncode in range(1, 6):
+        with pytest.raises(SystemExit) as failed:
+            run_gate(returncode)
+        assert failed.value.code == returncode
+    assert capsys.readouterr().out == ''
     assert any(s.get('run', '').strip() == 'node tests/web/coordination-browser.mjs' for s in steps)
     assert steps[-1]['if'] == 'always()'
     assert '${{ runner.temp }}/test-environments' in steps[-1]['with']['path']
     assert 'output/coordination-runtime-readiness.json' in steps[-1]['with']['path']
+    assert 'output/mounted-child-boundaries.xml' in steps[-1]['with']['path']
 
 
 def test_remote_machine_queue_routing_has_a_focused_ci_owner():

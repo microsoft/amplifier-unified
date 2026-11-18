@@ -30,17 +30,19 @@ In a new worker environment the app's decision-catalog helper finds no
 bytecode of the provider packages (in each run so far this case counted 0
 bytecode files before its first start). The helper imports those packages,
 and the app gives one start of it a time limit
-(``decision_accounts._catalog_snapshot``). On a hosted runner most first
-starts take 2 to 6 seconds of the app's 10. When the app's own start was the
-first one, it reached the limit twice, and the preparation then failed by
-timing (pull request 2270, run 44143862317, two attempts). So this case
-starts the helper itself, with the app's own command, directly before the
-app's first probe command in each new environment: twice.
+(``decision_accounts._CATALOG_START_SECONDS``). That limit was 10 seconds. On
+a hosted runner most first starts take 2 to 6 seconds. When the app's own
+start was the first one, it reached the 10 seconds twice, and the preparation
+then failed by timing (pull request 2270, run 44143862317, two attempts). So
+this case starts the helper itself, with the app's own command, directly
+before the app's first probe command in each new environment: twice.
 It measures both starts and counts the bytecode files before and after the
 first one. The app's own start then finds bytecode and has less to compile.
-It still has the app's limit. Of the first 55 first starts that this case
-measured, one took longer than that limit (11.56 s, run 44170978228); the
-case passed, and the run's page has a warning.
+It still has the app's limit. Of 85 first starts that this case measured in
+17 runs, two took longer than 10 seconds: 11.56 s (run 44170978228) and
+28.44 s (run 44203691661). Both were in the environment of the preparation
+that the case starts directly after a stop. The limit is 120 seconds now.
+The case keeps its own two starts: they measure the first start on each run.
 
 What this case therefore does not show:
 
@@ -169,8 +171,9 @@ def of_attempt(listed, identity, known):
     member; otherwise it is a time before which the member ended.
 
     The rule rests on this: a list holds every process that ran from before the list was read until after
-    it. That is not from a text of Microsoft. The native case below reads the real list four times and
-    requires its two programs in each.
+    it. That is not from a text of Microsoft. The native case below reads the real list three more times
+    after the first list that holds both of its programs. It requires every process that it found in each
+    of them, with the same creation time.
 
     - A member is the same process in a later list only with that ID and that creation time.
     - A list without a member shows that the member ended before that list was read. A list that holds
@@ -182,11 +185,15 @@ def of_attempt(listed, identity, known):
     - Each list decides again for every process, from the members by their command line. A process that an
       earlier list took for a child of a member is no member, and what descends from it is none, from the
       list that shows that the member ended at or before the creation of that process.
-    - Without a creation time (Windows gave none: 0) the rule knows only the ID. A row without one, with
-      the ID of a member that runs, is taken for that member. A member without one that runs is taken for
-      the process that has its ID in a later list. A process without one is not excluded as a child, and
-      its name gets "(creation time not known)". A member without one takes every process that names its
-      ID and was created before its ``ended``.
+    - Without a creation time (Windows gave none: 0) the rule knows only the ID.
+      A row without one, with the ID of a member that runs and has one, is taken for that member, with the
+      member's creation time. It shows nothing about a member that ended and has one.
+      A member without one is taken for the process that has its ID in a later list: for a process with a
+      creation time while the member runs, and for a row without one also after a list showed that the
+      member ended.
+      A process without one is not excluded as a child. A member without one takes every process that
+      names its ID and was created before its ``ended``.
+      In the result, the name of a process with no creation time has "(creation time not known)".
 
     What stays open:
 
@@ -272,9 +279,10 @@ def session_programs(listed):
 
 
 def first_line(program, seconds):
-    """The first line that ``program`` prints. '' when it printed none in ``seconds``, and when its output
-    ended before a line. After a '' the reader of this call still waits for the program's output: the caller
-    ends the program, and that ends the reader."""
+    """The first line that ``program`` prints, without the space at its ends. Output that ends in the middle
+    of a line gives that part. '' for a line of only space, when the output ended with nothing in it, and
+    when ``seconds`` passed with no whole line and no end of the output. In that last case the reader of
+    this call still waits for the program's output: the caller ends the program, and that ends the reader."""
     import threading
     lines = []
     reader = threading.Thread(target=lambda: lines.append(program.stdout.readline()), daemon=True)
@@ -431,6 +439,31 @@ def test_a_row_without_a_creation_time_with_the_id_of_a_member_that_runs_is_that
     assert of_attempt(made_up(1030, child), ATTEMPT, known) == {5000: 'python.exe'}
 
 
+def test_a_row_without_a_creation_time_shows_nothing_about_an_ended_member_that_has_one():
+    known = {}
+    member, child = (4010, 4000, 'uv.exe', 905, PROBE), (5500, 4010, 'python.exe', 950)
+    assert of_attempt(made_up(1000, member, child), ATTEMPT, known) == {4010: 'uv.exe', 5500: 'python.exe'}
+    # The member ended before this list was read. Its child runs on.
+    assert of_attempt(made_up(1010, child), ATTEMPT, known) == {5500: 'python.exe'}
+    # Another process has the member's ID, and Windows gives no creation time for it. It is not the member,
+    # and what it started after 1010 is no child of the member. The member's own child stays: the row gives
+    # the member no other ending time.
+    other, started = (4010, 600, 'cmd.exe', 0), (5000, 4010, 'conhost.exe', 1016)
+    assert of_attempt(made_up(1020, other, started, child), ATTEMPT, known) == {5500: 'python.exe'}
+    assert of_attempt(made_up(1030, started, child), ATTEMPT, known) == {5500: 'python.exe'}
+
+
+def test_a_row_without_a_creation_time_is_taken_for_an_ended_member_with_its_id_that_has_none_either():
+    """Without a creation time the rule knows only the ID. This case holds what the rule then gives."""
+    known = {}
+    assert of_attempt(made_up(1000, (4010, 4000, 'uv.exe', 0, PROBE)), ATTEMPT, known) == {
+        4010: 'uv.exe (creation time not known)'}
+    assert of_attempt(made_up(1010), ATTEMPT, known) == {}   # the member ended before this list was read
+    other, started = (4010, 600, 'cmd.exe', 0), (5000, 4010, 'conhost.exe', 1016)
+    assert of_attempt(made_up(1020, other, started), ATTEMPT, known) == {
+        4010: 'cmd.exe (creation time not known)', 5000: 'conhost.exe'}
+
+
 def test_another_process_with_the_members_id_and_no_later_creation_time_shows_that_the_member_ended_before_the_read():
     known = {}
     member, child = (4010, 4000, 'uv.exe', 905, PROBE), (5000, 4010, 'python.exe', 950)
@@ -521,8 +554,14 @@ def test_the_real_list_has_the_creation_time_of_each_process_and_finds_what_a_st
         for _ in range(3):
             again, later = processes()
             assert set(found) <= set(again), (
-                f'A list did not hold a program of this case that runs: {sorted(set(found) - set(again))}')
-            assert all(again[pid][3] == snapshot[pid][3] for pid in found) and read <= later, (found, read, later)
+                f'A list did not hold a process of this case that the list with both programs held: '
+                f'{sorted(set(found) - set(again))}. The first program of this case '
+                f'{"still runs" if program.poll() is None else "ended"}.')
+            changed = [(pid, snapshot[pid][3], again[pid][3]) for pid in found
+                       if again[pid][3] != snapshot[pid][3]]
+            assert not changed, (
+                f'A process ID of this case has another creation time (ID, before, now): {changed}.')
+            assert read <= later, f'A later list has an earlier read time: {read}, then {later}.'
             assert set(found) <= set(of_attempt((again, later), token, known))
         unknown = sorted(row[1] for row in snapshot.values() if not row[3])
         print(f'MEASURED the real list of processes: {len(snapshot)} processes, {len(unknown)} of them with no '
