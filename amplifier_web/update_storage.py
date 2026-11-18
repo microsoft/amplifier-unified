@@ -258,7 +258,10 @@ def _windows_remove_tree(folder, home, work, depth=0):
     no more entries than the work may still handle, and one more.
 
     The pinned folder must be the folder that the walk looked at before the
-    pin. A folder is removed only when it is empty and is no link, and only
+    pin. A pin shares reading only (windows_files), so while it is open no
+    other process can rename or remove that folder: the listing and the
+    entries that the walk handles are of that folder.
+    A folder is removed only when it is empty and is no link, and only
     after its own pin is closed; the walk looks at it again directly before.
     Between that look and the removal another process of the same account can
     still put another folder at the name. The removal then takes that folder
@@ -387,6 +390,10 @@ def _remove_stage_config(home, stage, expected, work):
     """remove_stage_config with the work of a whole pass: the reason only. It never raises."""
     try:
         home, stage = _stage_address(home, stage)
+        if expected:
+            # The walk opens the stage by its whole path. A caller can name it from a relative app home.
+            from .windows_files import address
+            expected = {address(path): identity for path, identity in expected.items()}
         if os.name == 'nt':
             return _windows_stage_config(home, stage, expected, work)
         return _posix_stage_config(stage, expected, work)
@@ -546,9 +553,10 @@ def _scrub_stage_config(manager, root, protected):
     between two stages, as for the keys file. One pass goes at most once around
     the stages, and it starts where the pass before stopped. So a copy that was
     cut, or a stage whose entries stay, gets its next turn after every other
-    stage. The pass reads the list of stages twice, and it handles no stage
-    twice, also when another process changes the list between the two
-    readings; a stage that is added then can wait for a later pass.
+    stage. A pass that starts at a saved place reads the list of stages twice:
+    from that place to the end, then from the start to that place. It handles
+    no stage twice, also when another process changes the list between the two
+    readings; one stage can then wait for the next pass.
     It handles every stage that still has such an entry: with or without
     a receipt, a keys file or shared-config, and at every age, because nothing
     reads the copies. It leaves the stage of a preparation that is not

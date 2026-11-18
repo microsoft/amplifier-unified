@@ -9,7 +9,7 @@ idle pass that removes a stage's keys file removes them too
 Every private file here is made up. No case opens a real credential.
 """
 import asyncio
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 import copy
 import errno
 import hashlib
@@ -622,6 +622,27 @@ def test_remove_refuses_a_stage_that_is_no_longer_the_one_that_was_checked(tmp_p
     assert gone(stage)
 
 
+@posix
+def test_the_stage_identity_is_compared_when_the_app_home_is_a_relative_path(tmp_path, monkeypatch):
+    """The pass names a stage from the app home as the host has it. That can be a relative path.
+
+    The walk opens the stage by its whole path. The identity that the caller
+    gives is compared all the same: another folder at the stage's name is
+    refused, and the copies stay.
+    """
+    monkeypatch.chdir(tmp_path)
+    app_files(tmp_path / 'app')
+    stage = earlier_stage(tmp_path / 'app', 'a' * 32)
+    copies, total = held(stage), copied(stage)
+    home, named = Path('app'), Path('app/updates/releases') / stage.name
+    assert not home.is_absolute() and named.samefile(stage)
+    assert storage.remove_stage_config(home, named, expected={named: (0, 0)}) == ('refused', 0)
+    assert held(stage) == copies
+    real = {named: (stage.stat().st_dev, stage.stat().st_ino)}
+    assert storage.remove_stage_config(home, named, expected=real) == (None, total)
+    assert gone(stage)
+
+
 @pytest.mark.parametrize('name', ['A' * 32, 'a' * 31, 'not-a-release', 'a' * 32 + '/nested'])
 def test_remove_refuses_a_path_that_is_no_stage(tmp_path, name):
     home = tmp_path / 'app'
@@ -826,33 +847,60 @@ def test_the_entries_that_a_call_handles_never_pass_its_limit(tmp_path, monkeypa
             work = storage._Work(limit)
             reason = storage._remove_stage_config(home, stage, None, work)
             assert work.removed == 0 and work.stayed == min(limit, total), limit
-            # A walk that ends at its last folder with a full count leaves that folder and does not count it.
-            assert reason in (('more', 'refused') if 0 < limit < total else ('refused',) if limit else ('more',)), limit
+            # The count ends the walk ('more') while an entry is left that it did not come to. With one
+            # place less than the copy has entries, the walk's last folder stays and is not counted, and
+            # the walk ends with the reason of the entries that stay.
+            assert reason == ('refused' if limit >= total - 1 else 'more'), limit
     assert held(stage) == copies and held(home) == before
 
 
 # A folder that another process moves or replaces while the walk has it open.
 
 @posix
-@pytest.mark.parametrize('when', ['after the second file', 'after the last file of a folder'])
+@pytest.mark.parametrize('order', ['as the folder lists', 'by name', 'by name, the last first'])
+@pytest.mark.parametrize('next_removal', ['a file', 'a folder'])
 @pytest.mark.parametrize('moved, takes_the_name', [
     ('the copy', None), ('the copy', 'an empty folder'), ('the copy', 'a folder with a file'), ('the stage', None)])
 def test_a_copy_or_a_stage_that_is_moved_during_the_walk_loses_no_further_entry(
-        tmp_path, monkeypatch, moved, takes_the_name, when):
-    """Another process moves a folder away while the walk has it open, after a file of the copy is gone.
+        tmp_path, monkeypatch, moved, takes_the_name, next_removal, order):
+    """Another process moves a folder away while the walk has it open, directly before the walk's next removal.
 
     The walk looks at its folders again before each removal. It stops there:
     what was moved keeps its other entries, and a folder that took the name is
-    not touched. After the last file of a folder the next removal would be that
-    folder itself; after the second file it would be a file.
+    not touched.
+
+    The content of the open folder fixes what the next removal is, in every
+    order in which a folder lists its entries. A file is gone and the open
+    folder holds only files, at least one: the walk handles the entries of an
+    open folder before it leaves it, so its next removal is one of those
+    files. A file is gone and the open folder is empty: the next removal is
+    that folder. The case runs with three orders of the walk's listings.
     """
     home = tmp_path / 'app'
     before = app_files(home)
     stage = earlier_stage(home, 'a' * 32)
     source = stage if moved == 'the stage' else stage / 'config'
-    away, total, unlink, rmdir = tmp_path / 'away', entries(source), os.unlink, os.rmdir
+    away, total = tmp_path / 'away', entries(source)
+    unlink, rmdir, scandir = os.unlink, os.rmdir, os.scandir
     removals = {'before the move': 0, 'after the move': 0}
-    state = {'files': 0, 'moved': False}
+    state = {'moved': False}
+
+    def listed(folder):
+        # Only the walk lists an open folder. The order of that listing is the subject.
+        listing = scandir(folder)
+        if not isinstance(folder, int) or order == 'as the folder lists':
+            return listing
+        with listing:
+            found = sorted(listing, key=lambda entry: entry.name, reverse=order == 'by name, the last first')
+        return nullcontext(iter(found))
+
+    def the_moment(fd):
+        """Whether the walk's next removal is the wanted one, by the content of the open folder ``fd``."""
+        names = os.listdir(fd)
+        if next_removal == 'a folder':
+            return not names
+        return bool(names) and not any(
+            stat.S_ISDIR(os.stat(name, dir_fd=fd, follow_symlinks=False).st_mode) for name in names)
 
     def count(call):
         def counted(path, *args, **settings):
@@ -860,20 +908,18 @@ def test_a_copy_or_a_stage_that_is_moved_during_the_walk_loses_no_further_entry(
             result = call(path, *args, **settings)
             if inside:
                 removals['after the move' if state['moved'] else 'before the move'] += 1
-            if inside and call is unlink and not state['moved']:
-                state['files'] += 1
-                if (state['files'] == 2 if when == 'after the second file'
-                        else not os.listdir(settings['dir_fd'])):
-                    state['moved'] = True
-                    source.rename(away)
-                    if takes_the_name:
-                        source.mkdir()
-                    if takes_the_name == 'a folder with a file':
-                        (source / 'made-up').write_text('made-up file of another process')
+            if inside and call is unlink and not state['moved'] and the_moment(settings['dir_fd']):
+                state['moved'] = True
+                source.rename(away)
+                if takes_the_name:
+                    source.mkdir()
+                if takes_the_name == 'a folder with a file':
+                    (source / 'made-up').write_text('made-up file of another process')
             return result
         return counted
 
     with monkeypatch.context() as patch:
+        patch.setattr(os, 'scandir', listed)
         patch.setattr(os, 'unlink', count(unlink))
         patch.setattr(os, 'rmdir', count(rmdir))
         reason, gone_entries = storage.remove_stage_config(home, stage)   # No exception.
@@ -1088,8 +1134,8 @@ def test_the_walk_of_the_private_boundary_with_a_stand_in_for_the_boundary(tmp_p
         work = storage._Work(limit)
         reason = storage._remove_stage_config(home, stage, None, work)
         assert work.removed == 0 and work.stayed == min(limit, total), limit
-        # A walk that ends at its last folder with a full count leaves that folder and does not count it.
-        assert reason in (('more', 'refused') if 0 < limit < total else ('refused',) if limit else ('more',)), limit
+        # As for the walk that is not Windows: 'more' while an entry is left that the walk did not come to.
+        assert reason == ('refused' if limit >= total - 1 else 'more'), limit
     refused.clear()
     assert copied(stage) == total and not pins
     assert held(home) == before
