@@ -35,6 +35,13 @@ name: Source store bytecode
 # parameters) are for POSIX file permissions and skip on Windows, and the
 # Windows job allows no skip.
 #
+# tests/test_provider_message.py holds what "Send test message" of a
+# connection sends and what a person reads after it
+# (amplifier_web/provider_test.py, which the connection check's helper calls).
+# No pull-request workflow named that file, and one of its cases had fallen
+# behind the product. It is named here for the same reason and runs on the
+# Linux job. Its cases answer the request themselves: no AI service is called.
+#
 # It is not setup-file or clean-account acceptance: no installation, no app,
 # no real provider module and no chat.
 on:
@@ -84,6 +91,10 @@ on:
       - amplifier_web/host/config.py
       - amplifier_web/host/storage.py
       - tests/test_module_failures.py
+      # tests/test_provider_message.py: the test message. The helper that calls
+      # it (provider_probe.py) is among the helper files above.
+      - amplifier_web/provider_test.py
+      - tests/test_provider_message.py
       # A dependency change can bring a Foundation with another store rule.
       - pyproject.toml
       - uv.lock
@@ -162,6 +173,16 @@ jobs:
           set -euo pipefail
           uv run --no-sync pytest -q -vv -rA -p no:cacheprovider tests/test_module_failures.py | tee module-failures.txt
           summary=$(grep -v '^$' module-failures.txt | tail -n 1)
+          if ! grep -qE '^(=+ )?[0-9]+ passed(, [0-9]+ warnings?)? in ' <<<"$summary"; then
+            echo "A case did not pass or did not run; on this lane every case must run: $summary" >&2
+            exit 1
+          fi
+      - name: Require every case of the connection's test message with no skip
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --no-sync pytest -q -vv -rA -p no:cacheprovider tests/test_provider_message.py | tee provider-message.txt
+          summary=$(grep -v '^$' provider-message.txt | tail -n 1)
           if ! grep -qE '^(=+ )?[0-9]+ passed(, [0-9]+ warnings?)? in ' <<<"$summary"; then
             echo "A case did not pass or did not run; on this lane every case must run: $summary" >&2
             exit 1
