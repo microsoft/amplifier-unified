@@ -456,9 +456,10 @@ OpenAI module in the list and the branch in the manifest. On an installation
 whose "OpenAI API" connection takes its source from the list, no component
 update that prepares a worker environment could complete. An installation whose
 settings name the module's branch themselves was not affected: its profile does
-not take that module's source from the list. Change the two files together; `tests/test_provider_source_alignment.py` fails when they differ
-and names both. A commit in both files does not repair an installed PC: a new
-candidate keeps the reference that the installation already has
+not take that module's source from the list. Change the two files together;
+`tests/test_provider_source_alignment.py` fails when they differ and names both.
+A commit in both files does not repair an installed PC: a new candidate keeps
+the reference that the installation already has
 (`runtime_environment.augmented_manifest`), so the worker manifest's sources are
 branches (`tests/test_standalone.py`). The list is also an input of the web
 client: the selected client records its hash, and the built client holds its
@@ -468,7 +469,8 @@ text. A change of the list needs a client revision whose
 depends on the module's commit: `amplifier_web/host/media_sources.json` holds
 the hashes of the module files that the reviewed image route of ordinary Work
 accepts (`host/media_assembly.select_root`). While the list follows a branch,
-that route is on only as long as the branch has exactly those files.
+that route can be on only while the branch has exactly those files. On Windows
+it is off in every case (`host/media.bind_media`).
 
 The worker's transitive Foundation override names the distribution without
 independently declaring a URL/ref. The effective `tool.uv.sources` choice owns

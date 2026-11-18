@@ -81,7 +81,7 @@ jobs:
       - name: Clone the public provider module
         run: |
           git clone --quiet https://github.com/microsoft/amplifier-module-provider-openai "$RUNNER_TEMP/provider-openai"
-          echo "The module's main: $(git -C "$RUNNER_TEMP/provider-openai" rev-parse HEAD)"
+          echo "The module's branch main, where the cases start: $(git -C "$RUNNER_TEMP/provider-openai" rev-parse refs/heads/main)"
       - name: The real update owner in five installation states
         env:
           AMPLIFIER_PINNED_PROVIDER_UPDATE_NATIVE: '1'

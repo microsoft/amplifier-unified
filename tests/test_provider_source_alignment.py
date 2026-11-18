@@ -3,9 +3,10 @@
 A profile composes a provider that has no source of its own from
 `amplifier_web/provider_sources.json`. The worker environment gets the same
 repository from `amplifier_web/runtime_deps/pyproject.toml` (a decision support
-pack adds rows from `runtime_deps/features.toml`). A component update compares
-the two references in `runtime_source_alignment.verify_checked_selection` and
-refuses the update when they differ, also when both name the same commit.
+pack adds rows from `runtime_deps/features.toml`). A component update that
+prepares a worker environment compares the two references in
+`runtime_source_alignment.verify_checked_selection` and refuses the update when
+they differ, also when both name the same commit.
 
 Releases 0.108.0 and 0.109.0 named a commit in the first file and the branch
 `main` in the second for the OpenAI module. On a PC whose "OpenAI API"
@@ -15,8 +16,11 @@ branch themselves was not affected.) No test read both files, so no check
 failed. These cases read both.
 
 What the cases compare: a module of the list with a worker package, when both
-name the same repository as a Git source. A module that the worker manifest
-does not declare has one reference, and the cases compare nothing for it.
+name the same repository and subdirectory as a Git source. For a module that
+the worker manifest does not declare they compare nothing. One more case reads
+every entry of the list: it fails when the entry's reference is one that the
+update reads as fixed (`updates.pinned`: a commit, `refs/tags/...`, or a
+version number with a dot). It does not know another tag name.
 
 Changing only the worker manifest to the same commit does not repair an
 installed PC: `runtime_environment.augmented_manifest` keeps the reference that
@@ -92,17 +96,17 @@ def fixed(composed):
             if pinned(git_source(reference)['ref'])}
 
 
-def test_the_list_names_no_commit_and_no_version():
+def test_the_list_names_no_reference_that_the_update_reads_as_fixed():
     # tests/test_standalone.py holds this rule for the shipped .py, .toml, .yaml and .txt
     # files. It does not read .json files, and the pin of pull request 2294 was in this one.
     found = fixed(composed())
     assert not found, (
-        f'{LIST} names a commit or a version. The app\'s own sources follow a branch '
+        f'{LIST} names a commit, a tag or a version. The app\'s own sources follow a branch '
         '(tests/test_standalone.py); a fixed reference also stops component updates when the '
         f'worker manifest names a branch for the same module: {found}')
 
 
-def test_a_commit_or_a_version_in_the_list_is_found():
+def test_a_commit_and_a_version_number_in_the_list_are_found():
     address = 'git+https://github.com/microsoft/amplifier-module-provider-openai@'
     assert fixed({'a': address + COMMIT, 'b': address + 'v1.2.0', 'c': address + 'main'}) == {
         'a': address + COMMIT, 'b': address + 'v1.2.0'}
