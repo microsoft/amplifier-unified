@@ -1004,9 +1004,10 @@ def test_a_question_of_the_watch_that_fails_is_an_answer_and_the_list_has_a_limi
 
 
 def test_the_watch_asks_in_a_thread_of_its_own_and_ends_when_it_is_stopped(case):
-    # The watch's real thread runs here. Each of the two waits for it has a limit of 60 seconds. A limit ends the
-    # case when the thread asks too few questions or does not end. A machine that gives the thread no time for
-    # that long fails the case too.
+    # The watch's real thread runs here. A real thread runs in four more cases: the two with a question that the
+    # test holds back, the case of the lock, and the case of an error of the watch's own code. Each wait for such
+    # a thread to ask or to end has a limit of 60 seconds. A limit ends a case whose thread does not do that. A
+    # machine that gives the thread no time for that long fails the case too.
     asked, enough = [], case.threading.Event()
 
     def probe():
@@ -1047,7 +1048,7 @@ def test_a_watch_whose_thread_does_not_end_says_so(case):
         assert kept["started"] is True and kept["ended"] is False
     finally:
         release.set()
-        watch._thread.join(60)
+        watch._thread.join(60)  # The thread has 60 seconds to end after its question came back.
     assert watch.stop()["ended"] is True
 
 
@@ -1095,7 +1096,7 @@ def test_what_a_stopped_watch_gave_does_not_change_while_its_thread_still_asks(c
         given = copy.deepcopy(kept)
     finally:
         release.set()
-        watch._thread.join(60)
+        watch._thread.join(60)  # The thread has 60 seconds to end after its question came back.
     # The second question had the same answer, and it took some time (the stop waited 0.05 second for its thread
     # meanwhile). So the entry now has it as `slowest`, the slowest of the questions that follow a change.
     assert watch.questions == 2 and "slowest" in watch.changes[0]
@@ -1108,13 +1109,18 @@ def test_the_watch_changes_and_copies_its_lists_under_one_lock(case):
     watch, done = case.ListenerWatch(lambda: "trusted"), []
 
     def waits_for_the_lock(act):
-        """True when `act` waits while this test holds the watch's lock, and ends when the lock is free."""
+        """Whether `act`, in a thread of its own, has not ended 0.2 second after its start while this test holds
+        the watch's lock, and has ended 60 seconds or less after the lock is free.
+
+        An `act` that takes the lock cannot end in that 0.2 second. An `act` that takes no lock ends in it, unless
+        the machine gives its thread no time then: this case can then miss such a fault, and it cannot fail by it.
+        """
         thread = case.threading.Thread(target=lambda: done.append(act()), daemon=True)
         with watch._lock:
             thread.start()
             thread.join(0.2)
             waited = thread.is_alive()
-        thread.join(10)
+        thread.join(60)
         return waited and not thread.is_alive()
     assert waits_for_the_lock(watch.look) and watch.questions == 1
     assert waits_for_the_lock(lambda: watch.mark("a mark"))
@@ -1126,7 +1132,7 @@ def test_an_error_of_the_watchs_own_code_ends_the_watch_and_the_stop_says_it(cas
     # A read of the processor time that gives no record: the watch's own code fails at the late answer.
     ticks = iter([0.0, 3.0, 3.5])
     watch = case.ListenerWatch(lambda: "trusted", gauge=lambda owners: 5, timer=lambda: next(ticks), every=0.01)
-    watch.start()._thread.join(60)
+    watch.start()._thread.join(60)  # The thread has 60 seconds to end by its own error.
     kept = watch.stop()
     assert kept["started"] is True and kept["ended"] is True and kept["questions"] == 0 and kept["changes"] == []
     assert kept["endedBy"]["errorType"] == "TypeError"
