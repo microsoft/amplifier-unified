@@ -197,6 +197,14 @@ def test_the_stand_in_for_uv_is_put_in_place_and_taken_away(fixture, tmp_path, m
     assert "uv-real.exe" in fixture.STAND_IN and "TrimEnd(separators)" in fixture.STAND_IN
 
 
+# Test files that the listed files import and that `other-test-files.yml` does not run, each with
+# the workflow whose pytest command runs it.
+ELSEWHERE = {"tests/test_service.py": "coordination.yml",
+             "tests/test_update_health_setup_record.py": "platform-mechanisms.yml",
+             "tests/test_update_sequence.py": "update-ai-connection.yml",
+             "tests/test_windows_service.py": "platform-mechanisms.yml"}
+
+
 def given_to_pytest(program):
     """The files and the single cases that the step's program gives pytest: its `FILES` and `CASES`.
 
@@ -239,7 +247,7 @@ def test_a_pull_request_runs_every_launcher_case_file():
     assert step == job["steps"][-1] and "if" not in step
     # The step ends with a failure for a failed case, an unexpected skip and a file with no passed case.
     for refusal in ('problems.append(f"failed: {name}")', "does not expect that on this runner",
-                    "no case of this file passed", "sys.exit(1)"):
+                    "no case of this file passed", "this step expects a failure, and no case had it", "sys.exit(1)"):
         assert refusal in step["run"]
     files, cases, left_out = given_to_pytest(step["run"])
     run = sorted({*files, *(case.split("::")[0] for case in cases)})
@@ -265,6 +273,7 @@ def test_a_pull_request_runs_every_launcher_case_file():
     for needed in ("amplifier_web/windows_consumer.py", "amplifier_web/host/config.py", "uv.lock", "pyproject.toml",
                    "scripts/windows_launcher_files.py", "scripts/release.py",
                    WORKFLOW.relative_to(ROOT).as_posix(), FIXTURE.relative_to(ROOT).as_posix(),
+                   *(f".github/workflows/{name}" for name in set(ELSEWHERE.values())),
                    "tests/fixtures/windows_launcher_refresh_native.py", "tests/fixtures/windows_start_again_native.py",
                    "tests/fixtures/manual_app_handoff_native.py", "tests/conftest.py"):
         assert (ROOT / needed).is_file() and starts(needed), needed
@@ -279,9 +288,18 @@ def test_a_pull_request_runs_every_launcher_case_file():
                            else [alias.name for alias in node.names] if isinstance(node, ast.Import) else [])
                 queue += [f"tests/{module}.py" for module in modules if (ROOT / f"tests/{module}.py").is_file()]
     assert [name for name in sorted(reached) if not starts(name)] == []
-    # And the other way: a test file that the path filter names is run, or a run file imports it.
-    # A name below `paths:` that nothing runs is the gap that this workflow closes.
-    assert [path for path in paths if path.startswith("tests/test_") and "*" not in path and path not in reached] == []
+    # And the other way: the step runs every test file that the path filter names. A name below
+    # `paths:` that nothing runs is the gap that this workflow closes. The only others are test
+    # files that a run file imports. An import runs none of their cases, so each has a pytest
+    # command in another workflow that starts for a pull request.
+    named = [path for path in paths if path.startswith("tests/test_") and "*" not in path]
+    assert sorted(set(named) - set(run)) == sorted(ELSEWHERE)
+    for name, workflow in ELSEWHERE.items():
+        assert name in reached, name
+        other = yaml.safe_load((ROOT / ".github/workflows" / workflow).read_text(encoding="utf-8"))
+        assert "pull_request" in other[True], workflow
+        assert [job for job, body in other["jobs"].items() for step in body.get("steps", [])
+                if "pytest" in step.get("run", "") and name in step["run"].split()], (name, workflow)
     assert [path for path in paths if "*" not in path and not (ROOT / path).is_file()] == []
 
 
@@ -311,6 +329,8 @@ EXPECTED_ON_WINDOWS = "import pytest\n@pytest.mark.xfail(strict=True)\ndef test_
     # An expected failure that the list does not name.
     (EXPECTED_ON_WINDOWS.replace("test_one", "test_other"), True,
      "expected to fail, and this step does not expect that: tests/test_one.py::test_other"),
+    # The list names an expected failure for this runner, and the case has none: the list is behind.
+    ("def test_one(): pass\n", True, "this step expects a failure, and no case had it: tests/test_one.py::test_one"),
 ])
 def test_the_step_that_runs_the_listed_files_stops_for_a_wrong_result(tmp_path, body, windows, stops):
     """The step's own program, with one made-up test file in place of its list."""

@@ -108,6 +108,16 @@ def test_disabled_shipped_shell_does_not_select_its_skills_dependency(tmp_path):
     assert result['sources'] == [{'url':'https://github.com/microsoft/amplifier-bundle-skills', 'ref':'main'}]
 
 
+def test_shipped_shell_is_read_from_an_app_folder_whose_address_is_quoted(tmp_path, monkeypatch):
+    # The shipped behavior has a file address. A space in the app's folder is "%20" there.
+    import shutil
+    app = tmp_path/'an app'
+    shutil.copytree(builtin_behaviors.resource_root()/'behaviors', app/'behaviors')
+    monkeypatch.setattr(builtin_behaviors, 'resource_root', lambda: app)
+    result = selection(tmp_path, settings([builtin_behaviors.SHELL_BEHAVIOR_URI]))
+    assert result['sources'] == [{'url':'https://github.com/microsoft/amplifier-bundle-skills', 'ref':'main'}]
+
+
 def test_classification_keeps_exact_ref_and_both_source_and_package_roles(tmp_path, monkeypatch):
     monkeypatch.setattr(update_sequence, 'included_sources', lambda: (set(), []))
     chosen = selection(tmp_path, settings([URI]))
@@ -176,6 +186,39 @@ def test_only_existing_source_copy_relocation_is_witness_equivalent(tmp_path, mo
     copied['sources']['modules']['local-tool']=str(stage/'foundation/cache/tool')
     save_settings(stage/'shared-config',copied)
     update_sequence.verify_app_selection(SimpleNamespace(home=home),rows,stage=stage)
+
+
+def below(root):
+    return settings([URI], sources={'modules':{'local-tool':str(root/'foundation/cache/tool')}},
+                    overrides={'tool-x':{'source':str(root/'foundation/cache/other')}})
+
+
+def test_configuration_key_is_the_same_for_sources_below_another_data_folder(tmp_path):
+    from amplifier_web.runtime_profiles import configuration_key
+    one, two = tmp_path.resolve()/'one', tmp_path.resolve()/'two'
+    assert configuration_key(below(one), one) == configuration_key(below(two), two)
+    assert configuration_key(below(one), one, two) == configuration_key(below(two), one, two)
+    # A source outside the named folders keeps its own path.
+    assert configuration_key(below(one), one) != configuration_key(below(two), one)
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='the values of a Linux installation')
+def test_a_linux_installation_keeps_its_selection_witness_and_configuration_key():
+    # An installation saves these values in its checked rows and in its
+    # qualification records and compares them later. They were read from the
+    # code before it handled a Windows path. A change of that code must not
+    # move them: every saved row and record of a Linux installation would
+    # then count as changed.
+    from amplifier_web.runtime_profiles import configuration_key
+    home=Path('/srv/unified');stage=home/'updates/releases'/('b'*32)
+    live=HostConfig(home,home,below(home),home/'foundation',home/'shared',True)
+    staged=HostConfig(stage,stage,below(stage),stage/'foundation',stage/'shared-config',True)
+    witness='f3e506d1da2d497b7f9c74017650d5456fc9e454b7571f24cb0b4363408c19c3'
+    assert update_sequence.app_selection(home,config=live)['witness']==witness
+    assert update_sequence.app_selection(stage,config=staged,original_home=home)['witness']==witness
+    key='d3ecd70527a165b03ef15d1b8428bf9797e525644617a723ede05866cdcbe9e1'
+    assert configuration_key(below(home),home,stage)==key
+    assert configuration_key(below(stage),home,stage)==key
 
 
 async def test_index_invalidates_on_effective_selection_not_history_size(tmp_path,monkeypatch):
