@@ -910,8 +910,9 @@ async def test_native_windows_the_loop_runs_during_the_real_owner_questions_of_a
     The case's own part: the runner's account has no Amplifier task, so the real question answers
     "no task"; the case then gives the confirmation the spec of its own folder in the answer's place.
     The identity of the running app is a stand-in, as in every case of this file. So the comparison
-    of the installed packages with the update's record is not made; the case makes that check's reads
-    of every installed package (of this test environment) in its place and answers yes. The listener
+    of the installed packages with the update's record is not made; the case makes that check's two
+    reads of the installed packages (of this test environment) in its place and answers yes. The
+    line says for each of the two whether it read to its end ("installedPackagesRead"). The listener
     is a test application with one route and no TLS, not the product's server.
     The line HOST-LOOP-MEASUREMENT in the output holds the numbers. They are printed before the
     checks, so a run without the change prints them too.
@@ -983,12 +984,18 @@ async def test_native_windows_the_loop_runs_during_the_real_owner_questions_of_a
                 return spec
             monkeypatch.setattr(windows_service, 'update_owner', owner)
 
+            package_reads = {}
+
             def installed_packages(manager, target):
-                try:
-                    components.installed_graph()
-                    app_updates.installed_extras()
-                except ValueError:
-                    pass  # A package of the test environment with a source of its own. The reads are made.
+                # Both reads are made, also when the first one refuses a package of the test environment
+                # (a source of its own). The line names a read that did not reach its end.
+                for name, read in (('graph', components.installed_graph), ('extras', app_updates.installed_extras)):
+                    try:
+                        read()
+                    except ValueError as error:
+                        package_reads[name] = type(error).__name__
+                    else:
+                        package_reads[name] = 'complete'
                 return True
             monkeypatch.setattr(app_replacement, 'matches_running', timed('installed packages read', installed_packages))
             monkeypatch.setattr(recovery, 'acknowledge', timed('acknowledge', recovery.acknowledge))
@@ -1053,6 +1060,7 @@ async def test_native_windows_the_loop_runs_during_the_real_owner_questions_of_a
                                     'httpAnswersDuring': row['answersDuring']} for row in questions],
                 'otherWorkOnTheLoop': [{'what': name, 'seconds': seconds(second - first),
                                         'startedAfter': seconds(first - began)} for name, first, second in spans],
+                'installedPackagesRead': dict(package_reads),
             }
             state = service.state['updates']
             report['result'] = {'phase': state.get('phase'), 'pendingRestart': state.get('pendingRestart'),
@@ -1083,6 +1091,7 @@ async def test_native_windows_the_loop_runs_during_the_real_owner_questions_of_a
             assert report['result'] == {'phase': 'installed', 'pendingRestart': None, 'record': 'acknowledged'}
             assert len(questions) == 2, questions
             assert any(name == 'installed packages read' for name, _, _ in spans)
+            assert set(package_reads) == {'graph', 'extras'}, package_reads
             assert not any(row['onLoopThread'] for row in questions), 'An owner question ran on the event loop'
             assert all(row['ticksDuring'] >= 1 for row in questions), 'The event loop did not run during an owner question'
             assert all(row['answersDuring'] >= 1 for row in questions), 'No HTTP answer during an owner question'

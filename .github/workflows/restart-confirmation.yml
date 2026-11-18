@@ -33,6 +33,13 @@ on:
       - amplifier_web/windows_service.py
       - amplifier_web/windows_task_runtime.py
       - amplifier_web/app_replacement.py
+      # What the cases run besides: the update manager and its records, the
+      # app's generations, the private files of the native case.
+      - amplifier_web/updates.py
+      - amplifier_web/app_updates.py
+      - amplifier_web/update_diagnostics.py
+      - amplifier_web/application_generations.py
+      - amplifier_web/windows_files.py
       - tests/test_update_readiness.py
       - tests/test_windows_app_recovery.py
       # The native case takes its process owner setting from this file.
