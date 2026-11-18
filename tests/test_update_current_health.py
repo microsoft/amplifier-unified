@@ -10,6 +10,9 @@ import pytest
 from amplifier_web import update_health as health
 from amplifier_web.attention import snapshot
 from amplifier_web.update_diagnostics import UpdateDiagnostics
+from test_update_core_lookup_failure import checked_install
+from test_update_health_first_install import core_row
+from test_update_health_setup_record import INCOMPLETE, UP_TO_DATE, setup_record  # noqa: F401
 from test_updates import app, prepare, repo  # noqa: F401 -- existing real manager fixture
 
 CAPTURE = Path(__file__).parent / 'fixtures/update-current-health-captured060.json'
@@ -1192,3 +1195,103 @@ async def test_a_switch_that_ends_with_an_error_leaves_no_unread_mark_and_shows_
         status = state['currentStatus']
         assert status['title'] == 'Update could not finish' and status['actionRequired']
         assert status['failurePhase'] == 'ecosystem-activation'
+
+
+
+# The first read of a host's proof, when a hold kept the owner's passes from it.
+
+def new_host(c, monkeypatch, *, hold_returns=False, hold_stays=False, real_waits=1):
+    """A second manager for the same saved state, as a host start makes it, with a hold on its passes.
+
+    The loop and the pass are the real ones. Three stand-ins: the hold (on
+    Windows an open launcher request; ``fenced`` is false elsewhere), the step
+    after a pass that ends it (``consider``), and the clock. ``wait_for_work``
+    records each wait and whether the wake was set, and it does not wait. The
+    case ends at the wait number ``real_waits`` that would take its 60 seconds.
+    """
+    from amplifier_web import windows_launcher_follow as follow
+    from amplifier_web.updates import UpdateManager
+    import time
+    manager = UpdateManager(c.service)
+    manager._storage_last_pass = time.time()  # No storage pass: it is not the subject.
+    hold, waits, passes, tick = {'on': True}, [], [], manager.tick
+    monkeypatch.setattr(follow, 'fenced', lambda manager: hold['on'])
+
+    async def consider(manager):
+        hold['on'] = hold_stays
+
+    async def held_pass():
+        passes.append(len(waits))
+        if hold_returns and len(passes) > 1:
+            hold['on'] = True  # The hold is on again inside the next pass.
+        await tick()
+
+    async def wait(delay):
+        woken = manager.wakeup.is_set()
+        waits.append((delay, woken))
+        if delay == 60 and not woken:
+            real = sum(1 for seconds, wake in waits if seconds == 60 and not wake)
+            manager.closed = real >= real_waits
+        manager.closed = manager.closed or len(waits) > 12  # A loop that never waits ends here.
+
+    monkeypatch.setattr(follow, 'consider', consider)
+    monkeypatch.setattr(manager, 'tick', held_pass)
+    monkeypatch.setattr(manager, 'wait_for_work', wait)
+    return manager, waits, passes
+
+
+async def checked_new_installation(c):
+    await c.manager.check()
+    assert c.state['currentStatus']['detail'] == UP_TO_DATE
+
+
+def incomplete(c):
+    status = c.state['currentStatus']
+    return (status['status'], status['title'], status['detail'], status['actionRequired']) == (
+        'unverified', 'Component verification is incomplete', INCOMPLETE, True)
+
+
+async def test_the_first_read_of_a_host_follows_at_once_when_its_hold_ends_after_a_pass(
+        setup_record, monkeypatch):  # noqa: F811
+    """A new installation that is up to date. A host starts with a hold on its passes.
+
+    Seen on a PC after a launcher refresh: for the 60 seconds between two
+    passes the page said "Component verification is incomplete", with the
+    unread mark. The hold ends in the step after the first pass. The next pass
+    comes with no wait, reads the proof and publishes what the check found.
+    """
+    async with checked_install(setup_record.home, core_row(setup_record), monkeypatch) as c:
+        await checked_new_installation(c)
+        manager, waits, passes = new_host(c, monkeypatch)
+        assert incomplete(c) and manager._update_health_initial is True  # A host that has read no proof.
+        await asyncio.wait_for(manager.loop(), 60)
+        # The start, the wait after the held pass (the wake is set), the wait after the pass that read.
+        assert waits == [(3, False), (60, True), (60, False)] and len(passes) == 2
+        assert manager._update_health_initial is False and health.cached_evidence(manager).get('setupRecord')
+        status = c.state['currentStatus']
+        assert (status['status'], status['detail'], status['actionRequired']) == ('current', UP_TO_DATE, False)
+
+
+async def test_a_hold_that_is_on_again_in_the_next_pass_gets_no_second_pass_without_a_wait(
+        setup_record, monkeypatch):  # noqa: F811
+    """The hold ends after each pass and is on again inside the next one.
+
+    The wake starts one pass. That pass asks for no other: the loop waits its
+    60 seconds. So at most one pass without a wait follows each pass that
+    waited, and the loop cannot run without a wait.
+    """
+    async with checked_install(setup_record.home, core_row(setup_record), monkeypatch) as c:
+        await checked_new_installation(c)
+        manager, waits, passes = new_host(c, monkeypatch, hold_returns=True, real_waits=2)
+        await asyncio.wait_for(manager.loop(), 60)
+        assert waits == [(3, False), (60, True), (60, False), (60, True), (60, False)] and len(passes) == 4
+        assert manager._update_health_initial is True and incomplete(c)  # No pass came to the read.
+
+
+async def test_a_hold_that_stays_gets_no_wake(setup_record, monkeypatch):  # noqa: F811
+    async with checked_install(setup_record.home, core_row(setup_record), monkeypatch) as c:
+        await checked_new_installation(c)
+        manager, waits, passes = new_host(c, monkeypatch, hold_stays=True, real_waits=2)
+        await asyncio.wait_for(manager.loop(), 60)
+        assert waits == [(3, False), (60, False), (60, False)] and len(passes) == 2
+        assert manager._update_health_initial is True and incomplete(c)

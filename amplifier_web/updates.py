@@ -1952,7 +1952,10 @@ class UpdateManager:
         state=self.service.state['updates']
         from .update_drain import observe_waiters
         await observe_waiters(self)
-        if self.awaiting_restart():return
+        if self.awaiting_restart():
+            # See loop: this pass did not come to the first read of this host.
+            self._first_read_held = getattr(self, '_update_health_initial', False)
+            return
         if getattr(self, '_update_health_initial', False):
             self._update_health_initial = False
             from .manual_app_handoff import verify_current
@@ -2068,6 +2071,7 @@ class UpdateManager:
 
     async def loop(self):
         await self.wait_for_work(3)
+        woke = False
         while not self.closed:
             self.wakeup.clear()
             state = self.service.state['updates']
@@ -2086,6 +2090,18 @@ class UpdateManager:
                 await self.publish(phase='activating' if self.service.state['updates'].get('pendingRestart') else 'error',error=failure_guidance(self.diagnostics.state.get('lastFailure', {})) or 'Background update failed during '+phase.replace('-',' ')+'. Review its diagnostic receipt; no work was replayed.')
             from .windows_launcher_follow import consider
             await consider(self)  # After the except: a failing tick must not starve an open launcher request.
+            # A new host has no proof of the installed components until a pass
+            # reads it (tick), and a hold (awaiting_restart) keeps a pass from
+            # that read. The hold can end above, for example when a launcher
+            # request closes, and nothing else wakes this loop then. Without a
+            # wake the page keeps the text of a host with no proof for the 60
+            # seconds below. One wake for a pass that the hold stopped. A pass
+            # that this wake started asks for no second one: when its hold is
+            # on again, the loop waits its 60 seconds.
+            held, self._first_read_held = getattr(self, '_first_read_held', False), False
+            woke = held and not woke and not self.closed and not self.awaiting_restart()
+            if woke:
+                self.wakeup.set()
             state = self.service.state['updates']
             sequence = state.get('sequence', {})
             from .update_health import pending_preparation
