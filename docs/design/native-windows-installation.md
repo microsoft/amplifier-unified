@@ -4340,10 +4340,16 @@ sharing does not prevent reparse conversion through attribute access. Validate
 actual handle identity, type, filesystem and ACLs. Treat the owner and
 narrowly identified Windows system authorities as trusted; reject ordinary
 foreign mutation rights on traversal ancestors and ordinary foreign read
-access to private state. On a traversal ancestor two foreign grants are
-accepted: the right to add a subfolder alone, and an entry that applies only
-to new children (inherit-only). Do not silently rewrite an existing custom
-root's ACLs.
+access to private state. On a traversal ancestor (a folder above
+`owned_root`) the access check accepts a foreign allow entry in two cases. In
+the first, the entry holds none of the rights that the check counts as a
+change, except the right to add a subfolder; it can hold other rights, such
+as reading. In the second, the entry is inherit-only; the check then accepts
+it with any right that it knows. By Windows' documented rule an inherit-only
+entry gives no right on the folder that carries it; this work did not measure
+that. Every folder of the path is checked for itself, so an entry that a
+folder of the path inherited is checked there. Do not silently rewrite an
+existing custom root's ACLs.
 
 What a pin of this boundary holds (`amplifier_web/windows_files.py`), measured
 on hosted Windows runners (Windows Server 2025), not on Windows 11. A pin is
@@ -4357,8 +4363,9 @@ deleting. With a pin open:
   it then made a new folder at that name.
 - After the rename, and after the removal, the pin's next check refused, also
   with the new folder at the name. The check runs before each read, removal
-  and publication through the pin. A publication wrote nothing: not into the
-  folder that moved, and not into the new one.
+  and publication through the pin. After the rename a publication was refused
+  and wrote nothing: not into the folder that moved, and not into the new
+  one. After the removal a publication was refused too.
 - Windows refused a rename of the folder above the last one, and of the
   folder above that (error 5). After the pin closed, a rename of the folder
   directly above the last one worked. The folder above that was not tried
@@ -4368,14 +4375,16 @@ So a pin covers what goes through its handles and its checks. It does not
 cover an act by a path, while the pin is open or after it: the path can name
 another folder then. The access check accepts a folder of the path only when
 no access rule of that folder gives anyone but this account and the trusted
-Windows authorities a right to delete it or to delete an entry in it. The
-check reads the folder's owner and its access rules. It does not see a right
-that Windows gives in another way (a privilege). So, by the access rules,
-such a rename or removal needs a program of the same account or a trusted
-Windows authority, and both are inside this boundary's trust.
+Windows authorities a right to delete it or to delete an entry in it. An
+inherit-only entry on a traversal ancestor is not counted, as said above.
+The check reads the folder's owner and its access rules. It does not see a
+right that Windows gives in another way (a privilege). So, by the access
+rules, such a rename or removal needs a program of the same account or a
+trusted Windows authority, and both are inside this boundary's trust.
 
-In the same measurements a second handle of the same process was open on the
-last folder. The rename and the removal were tried with that handle alone.
+In further measurements of the same kind a second handle of the same process
+was open on the last folder. The rename and the removal were tried with that
+handle alone.
 The publication went through a pin that was opened beside it:
 
 | The second handle | Rename by another program | Removal of the empty folder by another program | Publication through a pin |
@@ -4392,9 +4401,9 @@ alone the rename, the removal and the publication worked, as in the first
 row.
 
 This is about the pins of `windows_files.py`. The pins of Amplifier
-Foundation's session ownership are other handles from other code: Windows
-refuses a rename of a folder that they pin
-(`tests/test_windows_live_worker_folders.py`).
+Foundation's session ownership are other handles from other code. For a
+folder that they pin, a case requires that Windows refuses a rename
+(`tests/test_windows_live_worker_folders.py`, on a hosted Windows runner).
 
 New private directories and temporary files receive their security descriptors
 at creation, before content is written. Credential initialization publishes

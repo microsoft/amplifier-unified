@@ -13,9 +13,10 @@ runners another program of this account renamed it, and removed it when it
 was empty, while a pin was open. The pin's next check (`_check`) then
 refused, and nothing was written. Windows refused a rename of the two folders
 above it. So a pin covers what goes through its handles and its checks. It
-does not cover an act by a path, during the pin or after it: the path can
-name another folder then. The measurements are in the design ("Private
-config and credential boundary", docs/design/native-windows-installation.md).
+does not cover an act by a path, while the pin is open or after it: the path
+can name another folder then. The measurements are described in the design
+("Private config and credential boundary",
+docs/design/native-windows-installation.md).
 """
 from __future__ import annotations
 
