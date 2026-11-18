@@ -592,6 +592,22 @@ namespace UnifiedBootstrap {
                 // No journal of a delete: the entries could not be added, and the step is a restart.
                 Need(!NativeInstaller.Emptied(seen) && NativeInstaller.Unstarted(seen,false)==restart && NativeInstaller.Unstarted(seen,true)==added,
                     "after the entries step, with no journal of a delete");
+                // After the entries step, the journal of a delete and none of the
+                // person's data: nothing in the product finishes that removal, and
+                // the step is to move the folder.
+                string moved="Setup could not add Amplifier to the Start menu. "+
+                    "Setup did not start Amplifier, because it found an uninstall record in this folder:\n"+seen+"\n\n"+
+                    "Setup found no chats or settings in the folder.\n\n"+
+                    "If another Amplifier message is open, answer it first. "+
+                    "If the folder is still there afterwards, move or rename it. Then run this setup file again.";
+                File.WriteAllText(seenJournal,record);
+                Need(NativeInstaller.Emptied(seen) && NativeInstaller.Unstarted(seen,false)==moved && NativeInstaller.Unstarted(seen,true)==added,
+                    "after the entries step, with the journal of a delete and no data");
+                // The same journal, and data: a restart.
+                Directory.CreateDirectory(seenApp); File.WriteAllText(Path.Combine(seenApp,"unified.sqlite3"),"data");
+                Need(!NativeInstaller.Emptied(seen) && NativeInstaller.Unstarted(seen,false)==restart,"after the entries step, with the journal of a delete and data");
+                File.Delete(Path.Combine(seenApp,"unified.sqlite3")); Directory.Delete(seenApp);
+                File.Delete(seenJournal);
                 // These looks changed nothing in the folder.
                 names=Directory.GetFileSystemEntries(seen).Select(entry=>Path.GetFileName(entry)).OrderBy(name=>name,StringComparer.Ordinal).ToArray();
                 Need(String.Join("|",names)=="unified-setup-complete.json" && File.ReadAllText(Path.Combine(seen,NativeInstaller.Complete))=="{}",

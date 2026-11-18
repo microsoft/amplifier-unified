@@ -204,6 +204,12 @@ ADDED = ("Setup added Amplifier to the Start menu. "
 RESTART = ("Setup could not add Amplifier to the Start menu. "
            "Setup did not start Amplifier, because it found an uninstall record in this folder:\n{root}\n\n"
            "Restart Windows. Then run this setup file again.")
+# The same state, when the look also finds the journal of a delete and none of the person's data.
+MOVED = ("Setup could not add Amplifier to the Start menu. "
+         "Setup did not start Amplifier, because it found an uninstall record in this folder:\n{root}\n\n"
+         "Setup found no chats or settings in the folder.\n\n"
+         "If another Amplifier message is open, answer it first. "
+         "If the folder is still there afterwards, move or rename it. Then run this setup file again.")
 
 
 def literal(body, name="root"):
@@ -335,7 +341,8 @@ def test_setup_without_a_launcher_program_says_what_its_own_look_finds():
     # Nothing but comments stands before that look in `OpenInstalled`.
     first = [line.strip() for line in opened.splitlines() if line.strip() and not line.strip().startswith("//")]
     assert first[:2] == ["string root) {", "if(!File.Exists(AppStart(root).FileName)) {"]
-    assert SOURCE.count("Unopened(") == 2 and SOURCE.count("Emptied(") == 2 and SOURCE.count("Signs(") == 3
+    # The look has one more use: the last text of a second run that could add no entry (`Unstarted`).
+    assert SOURCE.count("Unopened(") == 2 and SOURCE.count("Emptied(") == 3 and SOURCE.count("Signs(") == 3
     # The second and the third text. Neither says that a file is missing, tells the person to delete, move
     # or rename anything, or names a step that setup does not have.
     for text in (WHOLE, BARE):
@@ -786,7 +793,15 @@ def test_a_second_setup_run_starts_no_launcher_on_a_folder_with_an_uninstall_rec
     launcher's own step. Without a Start-menu entry it asks whether it adds the entries again: after a
     removal that stopped, the entries are what lets the person uninstall again. The states of this case:
     with a Start-menu entry; without one, after No; after Yes with the entries added; after Yes with the
-    entries not added. The native check runs the entries step without a start.
+    entries not added, with and without the journal of a delete and no data. The native check runs the
+    entries step without a start.
+
+    The last state: an uninstall with the delete choice deletes the records that the entries step needs
+    before its last message. When that message is open, or the PC was switched off while it was open,
+    setup can add no entry and installs nothing in the folder, and "Restart Windows. Then run this setup
+    file again." brings the same message. With the journal of a delete and none of the person's data
+    (`Emptied`, the look of follow-up A24, unchanged) setup gives the step of that follow-up's text: move
+    or rename the folder. It names the other Amplifier message first, and it never says "delete".
     """
     import inspect
     from amplifier_web import windows_consumer, windows_uninstall
@@ -823,18 +838,37 @@ def test_a_second_setup_run_starts_no_launcher_on_a_folder_with_an_uninstall_rec
     assert conditions == ["if(listed) ", ""] and [literal(text) for text in texts] == [HALTED, ASKED]
     # After the entries step: the text that names the Start menu only when the entries were added.
     conditions, texts = returns(between("internal static string Unstarted(", "static int OpenInstalled("))
-    assert conditions == ["if(added) ", ""] and [literal(text) for text in texts] == [ADDED, RESTART]
-    for text in (HALTED, ASKED, ADDED, RESTART):
+    assert conditions == ["if(added) ", "if(Emptied(root)) ", ""]
+    assert [literal(text) for text in texts] == [ADDED, MOVED, RESTART]
+    # The text with the step to move the folder: what setup did, what its look found (the words of the
+    # text for a folder with no launcher program), the launcher's own words for a message that is open
+    # in another window, then the step. It never says "delete".
+    assert MOVED.split("\n\n")[0] == RESTART.split("\n\n")[0]
+    assert "\n\nSetup found no chats or settings in the folder.\n\n" in MOVED
+    assert "Setup found no chats or settings in the folder. " in EMPTIED
+    open_message = "If another Amplifier message is open, answer it first."
+    assert open_message in windows_consumer._UNFINISHED["busy"]
+    assert MOVED.endswith("\n\n" + open_message + " If the folder is still there afterwards, move or rename it. "
+                          "Then run this setup file again.")
+    assert "Restart Windows" not in MOVED and "delete" not in MOVED.lower() and "your chats" not in MOVED
+    # An uninstall deletes the records that the entries step reads before its last message.
+    removal = inspect.getsource(windows_uninstall.remove)
+    assert removal.index("remove_program(owned, last=True, wait=wait, short=short)") < removal.index("return {")
+    assert "consumer-install.json" in windows_uninstall.LAST and windows_consumer.RECEIPT == "consumer-install.json"
+    assert "value = json.loads(owned.read_private(RECEIPT, limit=256 * 1024))" in inspect.getsource(
+        windows_consumer.installation)
+    assert "root, value = installation(root)" in inspect.getsource(windows_consumer.integrate)
+    for text in (HALTED, ASKED, ADDED, RESTART, MOVED):
         # What setup found, not a history: a file with that name is no proof of an uninstall.
         assert "Setup found an uninstall record in this folder:\n{root}" in text or (
             "because it found an uninstall record in this folder:\n{root}" in text)
         assert "did not finish" not in text and "is being removed" not in text and "already installed" not in text
         # No start that does not happen, and nothing about the person's chats and settings.
-        for words in ("open it now", "start it now", "starts now", "starts Amplifier", "chats", "settings", "kept"):
+        for words in ("open it now", "start it now", "starts now", "starts Amplifier", "your chats", "kept"):
             assert words not in text, (words, text)
-        assert "delete" not in text.lower()
+        assert ("chats" in text) == (text == MOVED) and "delete" not in text.lower()
     assert "Setup did not start it." in HALTED and "Setup does not start it." in ASKED
-    for text in (ADDED, RESTART):
+    for text in (ADDED, RESTART, MOVED):
         assert "Setup did not start Amplifier, because it found an uninstall record" in text
     # The step of each text: the launcher's own, where an entry is there or was added.
     assert ASKED.endswith("Select Yes to add Amplifier to the Start menu again, "
@@ -842,9 +876,35 @@ def test_a_second_setup_run_starts_no_launcher_on_a_folder_with_an_uninstall_rec
     assert ADDED.endswith("\n\nTo finish that uninstall, select Uninstall Amplifier in the Start menu.")
     assert RESTART.endswith("\n\nRestart Windows. Then run this setup file again.")
     design = " ".join(DESIGN.split())
-    for text in (HALTED, ASKED, ADDED, RESTART):
+    for text in (HALTED, ASKED, ADDED, RESTART, MOVED):
         in_design(text)
     for sentence in (
+            "The entries were not added, and the look of the first text above (`Emptied`, unchanged) finds the "
+            "journal of a delete and none of the person's data:",
+            "The entries were not added, in every other case: the same two sentences and the folder, then "
+            "\"Restart Windows. Then run this setup file again.\"",
+            "The text with the step to move the folder is for a removal that nothing in the product can finish.",
+            "An uninstall with the delete choice deletes the records that the entries program needs before it "
+            "shows its last message, so no entry can be added, and setup installs nothing in a folder that has "
+            "its completion record.",
+            "Setup makes that look after the entries step, directly before the message; it is a separate step, "
+            "and the look only chooses the text.",
+            "\"If another Amplifier message is open, answer it first\" are the launcher's own words.",
+            "While the last message of that uninstall is open, the uninstall program still runs from files in "
+            "the folder, and Windows does not rename a folder that holds a file which a program keeps open (the "
+            "header of `amplifier_web/windows_removal.py`).",
+            "When the PC was switched off while the message was open, no message is open afterwards, the last "
+            "step never ran, and the folder stays (L3).",
+            "The text does not tell the person to delete the folder, for the reason of the first text above.",
+            "The folder that the person moved or renamed still holds Amplifier's program files (`python`, "
+            "`tools`) and both records.",
+            "Nothing removes them.",
+            "When that program is still there and the entries cannot be added again, setup's last message gives "
+            "the same step.",
+            "A folder that the person moved or renamed on that step still holds Amplifier's program files and "
+            "both records.",
+            "Not proven: that Windows refuses to rename the folder while the last message of an uninstall is "
+            "open;",
             "An entry with the journal's name (`removal`): the launcher does not open Amplifier from such a "
             "folder (`Refused(\"removing\")` in `_start` of `amplifier_web/windows_consumer.py`, which looks "
             "with `windows_uninstall.unfinished`).",
@@ -866,16 +926,21 @@ def test_a_second_setup_run_starts_no_launcher_on_a_folder_with_an_uninstall_rec
             "While an entry with the journal's name is in the folder, no message of setup says that the "
             "person's chats and settings are in the folder or are kept, or that Amplifier opens.",
             "that `SecondRun` without a start runs the entries program and no launcher, shows no message, and "
-            "gives 0 when the entries program ended with 0 and 1 when it failed."):
+            "gives 0 when the entries program ended with 0 and 1 when it failed; that the last text gives the "
+            "step to move the folder with the journal of a delete and no data, and the restart with no such "
+            "journal and with data."):
         assert sentence in design, sentence
     # The native check: the same texts, and the window's work without a start.
     native = (ROOT / "tests/windows/native_setup.Tests.cs").read_text(encoding="utf-8")
     cases = native.split('string seen=Make(work,"Seen");', 1)[1]
-    for name, text in (("halted", HALTED), ("asked", ASKED), ("added", ADDED), ("restart", RESTART)):
+    for name, text in (("halted", HALTED), ("asked", ASKED), ("added", ADDED), ("restart", RESTART),
+                       ("moved", MOVED)):
         assert literal(cases.split(f"string {name}=", 1)[1].split(";", 1)[0], "seen") == text, name
     for message in (
             "the two first texts of a folder with an uninstall record",
-            "after the entries step, with no journal of a delete"):
+            "after the entries step, with no journal of a delete",
+            "after the entries step, with the journal of a delete and no data",
+            "after the entries step, with the journal of a delete and data"):
         assert f'"{message}");' in native, message
     assert 'if(ran!=null) File.AppendAllText(ran,integrate?"entries,":"start,");' in native
     assert ("var thread=new Thread(()=>{ result=NativeInstaller.SecondRun(root,listed,start,false); });"

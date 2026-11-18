@@ -869,10 +869,24 @@ namespace UnifiedBootstrap {
                 "Select Yes to add Amplifier to the Start menu again, so that you can finish that uninstall from there.";
         }
         internal static string Unstarted(string root, bool added) {
-            // The last text of that state, after the entries step.
+            // The last text of that state, after the entries step. When the
+            // entries could not be added and setup's look finds the journal
+            // of a delete and none of the person's data (Emptied), nothing
+            // in the product can finish that removal: an uninstall deletes
+            // the records that the entries step needs before its last
+            // message. The text then gives the step of the first text of
+            // Unopened, to move or rename the folder, and never to delete
+            // it. While that last message is open in another window, the
+            // uninstall still runs from the folder and Windows refuses to
+            // move it, so the text names that message first.
             if(added) return "Setup added Amplifier to the Start menu. "+
                 "Setup did not start Amplifier, because it found an uninstall record in this folder:\n"+root+"\n\n"+
                 "To finish that uninstall, select Uninstall Amplifier in the Start menu.";
+            if(Emptied(root)) return "Setup could not add Amplifier to the Start menu. "+
+                "Setup did not start Amplifier, because it found an uninstall record in this folder:\n"+root+"\n\n"+
+                "Setup found no chats or settings in the folder.\n\n"+
+                "If another Amplifier message is open, answer it first. "+
+                "If the folder is still there afterwards, move or rename it. Then run this setup file again.";
             return "Setup could not add Amplifier to the Start menu. "+
                 "Setup did not start Amplifier, because it found an uninstall record in this folder:\n"+root+"\n\n"+
                 "Restart Windows. Then run this setup file again.";

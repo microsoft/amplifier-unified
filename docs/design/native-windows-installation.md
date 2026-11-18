@@ -2381,9 +2381,13 @@ limit as not blocking.
   away. When the launcher's start program is gone and setup's look finds the
   journal of a delete and none of the person's data, setup's message says
   that it found no chats or settings, and it tells the person to move or
-  rename the folder (see Leftovers below). While an entry with the journal's
-  name is in the folder, no message of setup says that the person's chats
-  and settings are in the folder or are kept, or that Amplifier opens.
+  rename the folder (see Leftovers below). When that program is still there
+  and the entries cannot be added again, setup's last message gives the same
+  step. While an entry with the journal's name is in the folder, no message
+  of setup says that the person's chats and settings are in the folder or
+  are kept, or that Amplifier opens. A folder that the person moved or
+  renamed on that step still holds Amplifier's program files and both
+  records. Nothing removes them.
 - **L4.** A journal that is damaged, or that records another choice, proves
   nothing. When the look that an uninstall makes before its questions finds a
   journal, the uninstall reads it through the private-file boundary. When that
@@ -2767,10 +2771,35 @@ and setup does not read it for these texts.
   not start Amplifier, because it found an uninstall record in this folder:",
   the folder, and "To finish that uninstall, select Uninstall Amplifier in
   the Start menu."
-- The entries were not added: "Setup could not add Amplifier to the Start
-  menu. Setup did not start Amplifier, because it found an uninstall record
-  in this folder:", the folder, and "Restart Windows. Then run this setup
-  file again."
+- The entries were not added, and the look of the first text above
+  (`Emptied`, unchanged) finds the journal of a delete and none of the
+  person's data: "Setup could not add Amplifier to the Start menu. Setup did
+  not start Amplifier, because it found an uninstall record in this folder:",
+  the folder, "Setup found no chats or settings in the folder." and "If
+  another Amplifier message is open, answer it first. If the folder is still
+  there afterwards, move or rename it. Then run this setup file again."
+- The entries were not added, in every other case: the same two sentences
+  and the folder, then "Restart Windows. Then run this setup file again."
+
+The text with the step to move the folder is for a removal that nothing in
+the product can finish. An uninstall with the delete choice deletes the
+records that the entries program needs before it shows its last message, so
+no entry can be added, and setup installs nothing in a folder that has its
+completion record. Setup makes that look after the entries step, directly
+before the message; it is a separate step, and the look only chooses the
+text. "If another Amplifier message is open, answer it first" are the
+launcher's own words. While the last message of that uninstall is open, the
+uninstall program still runs from files in the folder, and Windows does not
+rename a folder that holds a file which a program keeps open (the header of
+`amplifier_web/windows_removal.py`). When the person answers that message,
+the last step removes the program files, and the folder too when nothing
+else is in it. When the PC was switched off while the message was open, no
+message is open afterwards, the last step never ran, and the folder stays
+(L3). The person then moves or renames the folder, and the next setup run
+finds no folder and installs. The text does not tell the person to delete
+the folder, for the reason of the first text above. The folder that the
+person moved or renamed still holds Amplifier's program files (`python`,
+`tools`) and both records. Nothing removes them.
 
 The entries program adds the entries only when the installation's own
 records are whole and no entry exists, and it does not look for the journal.
@@ -2785,7 +2814,8 @@ source of both programs; none was seen on a PC):
 - `removal`, not listed, the entries not added: the last message of an
   uninstall with the delete choice is still open, or the PC was switched off
   while it was open. The launcher's records are deleted by then, so the
-  entries program refuses.
+  entries program refuses. The person's data is deleted by then too, so the
+  look finds none, and setup gives the step to move the folder.
 - `kept`, not listed: an uninstall that kept the folder.
 
 Limits that stay. Setup looks once, before its first message: an uninstall
@@ -2801,8 +2831,11 @@ does not open afterwards.
 Proven on a Windows runner (the same native case): each text of this
 section, complete; that `SecondRun` without a start runs the entries program
 and no launcher, shows no message, and gives 0 when the entries program
-ended with 0 and 1 when it failed. Not proven: these texts in setup's real
-window, the question and the choice between the texts in `OpenInstalled`
+ended with 0 and 1 when it failed; that the last text gives the step to
+move the folder with the journal of a delete and no data, and the restart
+with no such journal and with data. Not proven: that Windows refuses to
+rename the folder while the last message of an uninstall is open; these
+texts in setup's real window, the question and the choice between the texts in `OpenInstalled`
 (the Python case holds that code as text), and every state on a PC.
 
 The program that adds the entries again takes the installation's lock and
