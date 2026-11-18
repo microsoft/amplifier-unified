@@ -940,6 +940,115 @@ async def test_the_limit_of_the_whole_step_also_stops_a_deletion(installation, s
     assert target.verify() == 'accepted'
 
 
+@pytest.mark.parametrize('slow, tried', [
+    # The folder above the first cache folder: its open fails, and the next cache folder is not begun.
+    ('a-first', [('a-first', False)]),
+    # The first cache folder itself: it is not tried again without the right to delete.
+    ('__pycache__', [('a-first', False), ('__pycache__', True)])])
+async def test_a_folder_open_that_fails_slowly_in_a_deletion_is_not_followed_by_more_work(
+        installation, monkeypatch, slow, tried):
+    """Two cache folders in one object. One open for the first fails and takes as long as the whole step may."""
+    target = await broken(installation)
+    with at_the_top(target) as top:  # An untracked folder with a cache folder. Its name sorts before the package.
+        (top / 'a-first' / '__pycache__').mkdir(parents=True)
+        (top / 'a-first' / '__pycache__' / ('first.' + TAG + '.pyc')).write_bytes(b'x')
+    now, real, opened = [0.0], installation.api.open, []
+
+    def open_(parent, name, *, enter, delete=True):
+        opened.append((name, delete))
+        if name == slow:
+            now[0] += repair.TOTAL_SECONDS
+            raise PermissionError(13, 'another program holds this folder')
+        return real(parent, name, enter=enter, delete=delete)
+    real_remove = repair._remove
+
+    def from_the_deletion_on():
+        installation.api.open = open_
+    between_git_and_the_removal(monkeypatch, from_the_deletion_on)
+    try:
+        result = repair.at_host_start(installation.data, clock=lambda: now[0], log=installation.lines.append)
+    finally:
+        installation.api.open = real
+        monkeypatch.setattr(repair, '_remove', real_remove)
+    assert opened == tried  # Nothing after the slow open: not the package's folder either.
+    assert facts(result, 'files', 'folders', 'repaired', 'complete') == (0, 0, 0, False)
+    assert installation.lines[0].endswith(' A bound was reached.') and len(bytecode(target.folder)) == 5
+    assert facts(installation.start(), 'files', 'folders', 'repaired', 'complete') == (3, 2, 1, True)
+    assert target.verify() == 'accepted'
+
+
+@contextmanager
+def a_program_has_the_folder_as_its_current_folder(installation, folder):
+    """Then Windows lets no program delete or rename the folder. Its files can still be deleted."""
+    if not NATIVE:
+        installation.steps.held.add(folder)
+        try:
+            yield
+        finally:
+            installation.steps.held.discard(folder)
+        return
+    program = subprocess.Popen([sys.executable, '-c', 'import sys; print("there", flush=True); sys.stdin.read()'],
+                               cwd=folder, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    try:
+        assert program.stdout.readline().strip() == 'there'
+        yield
+    finally:
+        program.stdin.close()
+        program.wait(30)
+
+
+async def test_a_cache_folder_that_another_program_holds_stays_and_its_bytecode_goes(installation):
+    target = await broken(installation)
+    cache = target.folder / PACKAGE / '__pycache__'
+    with a_program_has_the_folder_as_its_current_folder(installation, cache):
+        result = installation.start()
+        assert cache.is_dir() and not list(cache.iterdir())
+    assert facts(result, 'files', 'folders', 'repaired', 'later', 'complete') == (2, 0, 1, 0, True)
+    assert target.verify() == 'accepted'  # Git lists no empty folder.
+
+
+async def test_a_folder_on_the_way_that_became_a_link_is_not_entered_and_nothing_behind_it_is_deleted(
+        installation, monkeypatch):
+    """The package's folder, not the cache folder itself: each folder of a file's path is checked on its handle."""
+    target = await broken(installation)
+    package = target.folder / PACKAGE
+    names = sorted(path.name for path in (package / '__pycache__').iterdir())
+    (installation.outside / 'package' / '__pycache__').mkdir(parents=True)
+    for name in names:  # The same names behind the link, in the rest of the person's disk.
+        (installation.outside / 'package' / '__pycache__' / name).write_bytes(b'not Amplifier\'s')
+    behind = snapshot(installation.outside)
+
+    def swap():
+        with at_the_top(target) as top:
+            os.rename(package, top / 'moved')
+            installation.link(installation.outside / 'package', package)
+    between_git_and_the_removal(monkeypatch, swap)
+    result = installation.start()
+    assert snapshot(installation.outside) == behind
+    assert sorted(path.name for path in (target.folder / 'moved' / '__pycache__').iterdir()) == names
+    assert facts(result, 'files', 'folders', 'repaired', 'later') == (0, 0, 0, 1)
+
+
+async def test_an_object_that_became_a_link_after_the_listing_of_its_source_is_left(installation, monkeypatch):
+    target = await broken(installation)
+    an_object_with_bytecode(installation.outside / 'object')
+    behind = snapshot(installation.outside)
+    real = repair._object
+
+    def object_(*arguments):
+        if not NATIVE:
+            target.folder.parent.chmod(0o755)
+        os.rename(target.folder, target.folder.with_name('moved'))
+        installation.link(installation.outside / 'object', target.folder)
+        return real(*arguments)
+    monkeypatch.setattr(repair, '_object', object_)
+    result = installation.start()
+    assert snapshot(installation.outside) == behind and len(bytecode(target.folder.with_name('moved'))) == 3
+    assert facts(result, 'with_cache', 'git', 'files', 'left', 'change') == (0, 0, 0, 1, False)
+    if installation.steps:
+        assert not any(installation.outside in (path, *path.parents) for path in installation.steps.listed)
+
+
 def test_a_store_with_no_object_yet_is_a_complete_pass(installation):
     result = installation.start()
     assert facts(result, 'objects', 'listings', 'git', 'complete', 'change') == (0, 0, 0, True, False)
@@ -964,6 +1073,29 @@ async def test_a_source_folder_that_cannot_be_opened_does_not_stop_the_others(in
     installation.api.open = real
     assert facts(installation.start(), 'objects', 'repaired', 'complete') == (2, 1, True)
     assert refused.verify() == 'accepted'
+
+
+async def test_an_object_whose_source_could_not_be_opened_in_one_run_keeps_its_tries(installation):
+    """An object that is not seen in a run is not an object that is gone."""
+    left = await broken(installation)
+    _another_file_at_the_top(left, installation)
+    first = installation.start()
+    assert facts(first, 'left', 'git', 'complete') == (1, 2, True) and record(installation)['tries'] == {
+        left.key: repair.TRIES}
+    (installation.data / 'updates' / repair.RECORD).write_text(json.dumps(
+        {**record(installation), 'complete': False}), encoding='utf-8')  # The pass is open again.
+    real = installation.api.open
+
+    def open_(parent, name, *, enter, delete=True):
+        if name == left.folder.parent.name:
+            raise PermissionError(13, 'this source folder is refused')
+        return real(parent, name, enter=enter, delete=delete)
+    installation.api.open = open_
+    assert facts(installation.start(), 'objects', 'git', 'complete') == (0, 0, False)
+    assert record(installation)['tries'] == {left.key: repair.TRIES}
+    installation.api.open = real
+    # The source opens again. The object was left for good in this app version: it costs no Git command.
+    assert facts(installation.start(), 'objects', 'with_cache', 'git', 'left', 'complete') == (1, 0, 0, 0, True)
 
 
 def an_object_with_bytecode(folder):
@@ -1038,7 +1170,7 @@ def between_git_and_the_removal(monkeypatch, change):
 
 async def test_a_cache_folder_that_became_a_link_is_not_entered_and_nothing_behind_it_is_deleted(
         installation, monkeypatch):
-    """Nothing is deleted through a link, at any time: each folder of a file's path is opened again as itself."""
+    """Nothing is deleted through a link, at any time. Here the cache folder itself became a link."""
     target = await broken(installation)
     cache = target.folder / PACKAGE / '__pycache__'
     names = sorted(path.name for path in cache.iterdir())
@@ -1194,7 +1326,8 @@ def test_the_two_git_commands_and_the_exception_are_foundations_own():
 
 @pytest.mark.parametrize('others', [b'pkg/__pycache__/\xff.pyc\0', b'pkg/__pycache__/a.pyc\0../b/__pycache__/c.pyc\0',
                                     b'__pycache__\0', b'a.pyc\0', b'pkg/__pycache__/a.pyo\0', b'nested/\0',
-                                    b'pkg/other/b.pyc\0', b'pkg/__pycache__/unlisted.pyc\0'])
+                                    b'pkg/other/b.pyc\0', b'pkg/__pycache__/unlisted.pyc\0',
+                                    b'pkg/.amplifier_cache_meta.json\0'])
 def test_a_name_from_git_that_is_not_listed_bytecode_leaves_the_object(others):
     # Also when a listing had the name: it must be directly in a folder with the name __pycache__.
     caches = {('pkg', '__pycache__'): {'a.pyc', 'a.pyo'}, ('pkg', 'other'): {'b.pyc'}, (): {'a.pyc', '__pycache__'}}
@@ -1248,6 +1381,32 @@ def test_a_record_that_cannot_be_read_is_an_empty_record(installation):
     good = {**empty, 'version': 'x', 'change': 'ab' * 16, 'last': last}
     path.write_text(json.dumps({**good, 'more': 1}), encoding='utf-8')
     assert repair.read(installation.data) == good and mark(installation) == 'ab' * 16
+    # A record that lacks a field is not a whole record, also a field whose value may be null.
+    for name in good:
+        path.write_text(json.dumps({key: value for key, value in good.items() if key != name}), encoding='utf-8')
+        assert repair.read(installation.data) == empty and mark(installation) is None, name
+    path.unlink()
+    path.mkdir()  # A folder where the record must be.
+    assert repair.read(installation.data) == empty and mark(installation) is None
+
+
+@pytest.mark.parametrize('text', ['{"schema": 1, "version": "x", "complete": true, "runs": 1, "tries": {}}',
+                                  'not json', '{"schema": 1}', '[1, 2]', '"text"', 'null'])
+async def test_a_record_that_is_not_whole_does_not_stop_the_update_check_or_the_repair(installation, text):
+    """The update check reads the record for its signature. A reader that raises would end the check."""
+    from amplifier_web.update_inventory_index import inventory, signature
+    target = await broken(installation)
+    path = installation.data / 'updates' / repair.RECORD
+    path.parent.mkdir()
+    path.write_text(text, encoding='utf-8')
+    manager = SimpleNamespace(home=installation.data, directory=installation.data / 'updates',
+                              service=SimpleNamespace(state={'settings': {'bundle': 'work'}}))
+    before = signature(manager)
+    scan = AsyncMock(return_value=[{'id': 'binding'}])
+    assert await inventory(manager, scan) == [{'id': 'binding'}] and scan.await_count == 1
+    result = installation.start()  # It reads the same record as an empty one, and repairs.
+    assert facts(result, 'repaired', 'files', 'complete', 'change') == (1, 2, True, True)
+    assert signature(manager) != before and target.verify() == 'accepted'
 
 
 def test_a_store_of_thirty_objects_with_a_hundred_folders_each_costs_no_git(installation, capsys):

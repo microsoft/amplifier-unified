@@ -46,21 +46,29 @@ deleted in any of them.
 
 The record ``<data>\\updates\\source-store-repair.json`` holds the app version,
 whether the pass is complete, a change mark, the tries of each object that was
-left, and the counts and milliseconds of the last run. It holds no path and
-no time of day. A run writes the record before it looks at the store; a
+left, and the counts and milliseconds of the last run (the search's listings;
+the time until the run's last write of the record). It holds no path and no
+time of day. A run writes the record before it looks at the store; a
 record that cannot be written means that the store is not looked at. After a
 complete pass a start of the same app version reads the record and does
 nothing more. Every run that finds a file to delete writes a new change mark
 (32 random hexadecimal digits) before its first deletion; when that write
 fails, the run deletes nothing. The mark is an input of the update check's
 scan signature (``update_inventory_index``), so the check after a repair asks
-Foundation again. A mark is random and not a count: a record that was lost
-or could not be read can then never give a mark that an earlier check saw.
+Foundation again. A mark is random and not a count: after a record that was
+lost or could not be read, a new run cannot write a mark that an earlier
+check saw. Such a record itself gives no mark, as before the first repair;
+the update check keeps the rows of one signature only, so it scans again
+then too. One sequence keeps saved rows: the record is lost, a check saves
+rows, a run repairs, and the record is lost again before the next check. The
+check's own rule ends that after 4 hours (``RECONCILE_SECONDS``).
 
 The limits of a run are checked between operations: before each listing,
-before each Git command, and in a deletion before each file and before the
-last listing of each folder. One operation of the file system has no time
-limit of its own, and neither has the lookup of Git in the folders of PATH.
+before each Git command, and in a deletion before each open of a folder,
+before each file and before the last listing of each folder. One operation of
+the file system has no time limit of its own, and neither has the lookup of
+Git in the folders of PATH. No handle of this step reaches the Git program:
+each is opened without inheritance.
 
 ``at_host_start`` raises no error into the host's start. A stop of the
 process (``KeyboardInterrupt``, ``SystemExit``) passes through it.
@@ -162,21 +170,23 @@ def read(data_dir):
 
 
 def _read(path):
+    """Never raises: the update check reads the record too. Anything that is not a whole record is an empty one."""
     try:
         with path.open("rb") as stream:
             value = json.loads(stream.read(1_000_001))
-        if (not isinstance(value, dict) or value.get("schema") != 1
-                or not isinstance(value.get("version"), str) or type(value.get("complete")) is not bool
-                or not (value.get("change") is None
-                        or isinstance(value["change"], str) and re.fullmatch(r"[0-9a-f]{32}", value["change"]))
-                or not _whole(value.get("runs")) or not isinstance(value.get("tries"), dict)
-                or any(not isinstance(key, str) or not _whole(count) for key, count in value["tries"].items())
-                or not (value.get("next") is None or isinstance(value["next"], str))
-                or not (value.get("last") is None or isinstance(value["last"], dict)
-                        and set(value["last"]) == set(MEASURES) and all(map(_whole, value["last"].values())))):
+        record = {name: value[name] for name in _new()}  # Each field by its name; a missing one is an error.
+        if (record["schema"] != 1
+                or not isinstance(record["version"], str) or type(record["complete"]) is not bool
+                or not (record["change"] is None
+                        or isinstance(record["change"], str) and re.fullmatch(r"[0-9a-f]{32}", record["change"]))
+                or not _whole(record["runs"]) or not isinstance(record["tries"], dict)
+                or any(not isinstance(key, str) or not _whole(count) for key, count in record["tries"].items())
+                or not (record["next"] is None or isinstance(record["next"], str))
+                or not (record["last"] is None or isinstance(record["last"], dict)
+                        and set(record["last"]) == set(MEASURES) and all(map(_whole, record["last"].values())))):
             return _new()
-        return {name: value[name] for name in _new()}
-    except (OSError, ValueError):
+        return record
+    except Exception:
         return _new()
 
 
@@ -340,9 +350,11 @@ def _decide(others, caches):
 def _remove(api, handle, files, count, budget):
     """Delete each file through its handle, then a folder that this run emptied. True when no file stayed.
 
-    The limit of the whole step is checked before each file and before the
-    last listing of each folder. At the limit the deletion stops where it is:
-    what is deleted stays deleted, and a later start takes the rest.
+    The limit of the whole step is checked before each open of a folder,
+    before each file and before the last listing of each folder. So an open
+    that fails slowly is not followed by more work. At the limit the deletion
+    stops where it is: what is deleted stays deleted, and a later start takes
+    the rest.
     """
     folders, whole = {}, True
     for parts in files:
@@ -353,12 +365,14 @@ def _remove(api, handle, files, count, budget):
             parent = handle
             for position, part in enumerate(trail):
                 last = position == len(trail) - 1
+                budget.deadline()
                 try:
                     child = api.open(parent, part, enter=True, delete=last)
                 except OSError:
                     if not last:
                         raise
                     # Another program holds the folder. Its files can still go; the folder stays.
+                    budget.deadline()
                     child, deletable = api.open(parent, part, enter=True, delete=False), False
                 opened.append(child)
                 if api.kind(child) != "folder":
@@ -454,7 +468,7 @@ def _run(api, store, data_dir, record, clock, log):
             raise _Stop() from error
         announced.append(True)
 
-    reason, refused = "", False
+    reason, refused = "", set()  # The source folders that could not be listed in this run.
     try:
         with ExitStack() as stack:
             top = stack.enter_context(_held(api, store))
@@ -471,16 +485,18 @@ def _run(api, store, data_dir, record, clock, log):
                         continue
                     try:
                         with _entry(api, objects, source) as folder:
-                            if api.kind(folder) == "folder":
-                                ids += [source + "/" + commit for commit, attributes in budget.children(api, folder)
-                                        if COMMIT.fullmatch(commit) and attributes & _DIRECTORY
-                                        and not attributes & _LINK]
+                            if api.kind(folder) != "folder":
+                                raise OSError(20, "the source folder changed into a link")
+                            ids += [source + "/" + commit for commit, attributes in budget.children(api, folder)
+                                    if COMMIT.fullmatch(commit) and attributes & _DIRECTORY
+                                    and not attributes & _LINK]
                     except OSError:
-                        refused = True  # The other sources are still looked at. The pass stays open.
+                        refused.add(source)  # The other sources are still looked at. The pass stays open.
             ids.sort()
             count["objects"] = len(ids)
             for key in set(tries) - set(ids):
-                del tries[key]
+                if key.split("/")[0] not in refused:  # Gone from the store. An object that was not seen keeps its tries.
+                    del tries[key]
             first = True
             for position, key in enumerate(ids):
                 if (record["next"] is not None and key < record["next"]) or tries.get(key, 0) >= TRIES:
