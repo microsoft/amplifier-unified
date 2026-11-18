@@ -43,7 +43,24 @@ def test_duplicate_settings_stay_first_wins_but_runtime_mount_is_unavailable(mon
     assert runtime.discover() == {"provider-fixture": None}
     row, validate = settings.catalogs()["provider-fixture"]
     assert row["label"] == "Original" and validate is first["validate"]
+    assert settings.catalogs(unique=True) == {}
 
+
+def test_ambiguous_ownership_does_not_migrate_chat_rows_or_change_files(tmp_path, monkeypatch):
+    from amplifier_web.decision_namespace import migrate_paths
+    import yaml
+    first, second = declaration(), declaration()
+    second["backends"][0]["decision_only"] = False
+    catalog_entries(monkeypatch, [first, second])
+    path = tmp_path / "settings.yaml"
+    value = {"config": {"providers": [{"id": "chat", "module": "provider-fixture",
+                                      "config": {"default_model": "explicit-chat"}}]}}
+    path.write_text(yaml.safe_dump(value))
+    before = path.read_bytes()
+    assert migrate_paths([path]) == value
+    assert path.read_bytes() == before
+    assert settings.catalogs()["provider-fixture"][0]["decision_only"] is True
+    assert settings.catalogs(unique=True) == {}
 
 @pytest.mark.parametrize("when", [False, True, 0, None])
 def test_only_exact_false_condition_enables_a_mixed_provider(monkeypatch, when):

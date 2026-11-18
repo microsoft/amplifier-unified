@@ -328,15 +328,17 @@ def _conversation_connections(home, workspace, session_id, *, global_only=False)
     from .host.config import load_config, provider_mount_sources
     config = load_config(workspace, home=home, session_id=session_id, global_only=global_only)
     rows = config.configured_connections
+    source_rows = config.saved_connections
     path = Path(home)/'sessions'/session_id/'configuration.json'
     if path.exists():
         saved = json.loads(path.read_text())
         if 'providers' in saved:
             rows = saved['providers']
+            source_rows = rows
     # Disabled connections cannot donate an implementation to an enabled one.
     # Match configured_binding/SetupManager's intended-mount roster, while
     # retaining all rows below so disabled selections are still refused.
-    sources = provider_mount_sources([row for row in rows if row.get('enabled', True)], config.settings)
+    sources = provider_mount_sources([row for row in source_rows if row.get('enabled', True)], config.settings)
     by_id = {row.get('instance_id') or row.get('id') or row['module'].removeprefix('provider-'):row for row in rows}
     return by_id, sources
 
