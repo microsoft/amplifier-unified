@@ -290,3 +290,124 @@ async def test_inline_composer_and_authorized_tool_ref_remain_distinct_across_sw
                 assert_pixel_free_capture(tmp_path, pixels, tool=True)
         finally:
             await resumed.cleanup()
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("rule", ["drop", "request-only", "max-bytes", "max-pixels", "max-images", "exact-bounds"])
+async def test_composer_policy_real_loop_checkpoint_sdk_and_cold_switch(tmp_path, monkeypatch, legacy, rule):
+    from PIL import Image
+    from amplifier_foundation.session.media import MediaPolicy
+    from amplifier_module_loop_live.runtime import Input
+    from amplifier_web.attachments import file_path, save
+    from test_openai_work_tool_images import SDKRead, assert_pixel_free_capture
+
+    def png(size, color):
+        buffer = BytesIO()
+        Image.new("RGB", size, color).save(buffer, format="PNG")
+        return buffer.getvalue()
+
+    good = png((8, 8), "blue")
+    bad = png((16, 16), "green")
+    policy = {
+        "drop": {"retention": "drop"}, "request-only": {"retention": "request-only"},
+        "max-bytes": {"max_bytes": len(good)}, "max-pixels": {"max_pixels": 64},
+        # Existing upload ingestion is one image per origin, not a message quota.
+        "max-images": {"max_images": 1},
+        "exact-bounds": {"max_bytes": len(good), "max_pixels": 64, "max_images": 1},
+    }[rule]
+    if rule in {"max-bytes", "exact-bounds"}:
+        bad = good + b"\x00" * 80
+    originals = [bad, good, good]
+    expected = ([] if rule in {"drop", "request-only"} else
+                [good, good] if rule in {"max-bytes", "max-pixels", "exact-bounds"} else originals)
+    class CheckpointSDK(LegacySDK if legacy else SDKRead):
+        async def respond(self, request):
+            # Observe the real on-disk checkpoint at every physical SDK count/send,
+            # not merely after the loop finishes or via an in-memory callback.
+            saved, _ = store.load(session.session_id)
+            [saved_user] = [row for row in saved if row["role"] == "user"
+                           and ((row.get("metadata") or {}).get("amplifier_input") or {}).get("id") == command.id]
+            assert [base64.b64decode(block["source"]["data"]) for block in saved_user["content"]
+                    if block["type"] == "image"] == expected
+            return await super().respond(request)
+
+    sdk = CheckpointSDK() if legacy else CheckpointSDK(private_media=False)
+    session, store, checkpoint, checks, host = await work_root(tmp_path, monkeypatch, None,
+        prepared_host=True, worker_observers=True, live=True, provider_setup=sdk.setup,
+        provider_module="provider-anthropic" if legacy else "provider-openai",
+        model=MODEL if legacy else "gpt-6.1-sol")
+    # The composer must read the current host policy, not cache installation defaults.
+    session.coordinator.get_capability("web.media.store").policy = MediaPolicy(**policy)
+    uploads = [save(tmp_path / "app", f"image-{i}.png", base64.b64encode(pixels).decode())
+               for i, pixels in enumerate(originals)]
+    uploads.append(save(tmp_path / "app", "notes.txt", base64.b64encode(b"Keep attached text").decode()))
+    command = Input("user", "Keep user text", attachments=tuple({"id": row["id"]} for row in uploads))
+    runtime = session.coordinator.get_capability("live.runtime")
+    execution = asyncio.create_task(session.execute(""))
+    try:
+        await runtime.submit(command)
+        finished = await runtime.wait_for(lambda row:
+            row["type"] in {"generation.finished", "generation.failed"}
+            and command.id in row.get("input_ids", []), timeout=15)
+        assert finished["type"] == "generation.finished", finished
+        assert host.sealed and not checks
+        endpoint = "/v1/messages" if legacy else "/v1/responses"
+        sends = [body for route, body in sdk.wire if route == endpoint]
+        counts = [body for route, body in sdk.wire if route.endswith(("/count_tokens", "/input_tokens"))]
+        assert sends and counts
+        assert all([pixels for _, pixels in sdk.pixels(body)] == expected for body in sends + counts)
+        rows = await checkpoint()
+        [user] = [row for row in rows if row["role"] == "user"
+                  and ((row.get("metadata") or {}).get("amplifier_input") or {}).get("id") == command.id]
+        assert media.NAMESPACE not in user["metadata"]
+        assert "Keep user text" in json.dumps(user) and "Keep attached text" in json.dumps(user)
+        images = [base64.b64decode(block["source"]["data"]) for block in user["content"]
+                  if block["type"] == "image"]
+        assert images == expected
+        notices = [block for block in user["content"] if "Image unavailable:" in block.get("text", "")]
+        assert len(notices) == len(originals) - len(expected)
+        directory = store.directory(session.session_id)
+        canonical = (directory / "transcript.jsonl").read_text()
+        assert (base64.b64encode(bad).decode() in canonical) is (bad in expected)
+        issuance = directory / "media-upload-issuance.json"
+        assert issuance.exists() is bool(expected)
+        if expected:
+            assert command.id in json.loads(issuance.read_text())["inputs"]
+        for name in ("assets", "staging", "records", "origins"):
+            assert not list((directory / "media" / name).iterdir())
+        for pixels in originals:
+            encoded = base64.b64encode(pixels).decode()
+            assert encoded not in json.dumps(runtime.events)
+            assert encoded not in json.dumps(host.emitted)
+            if issuance.exists():
+                assert encoded not in issuance.read_text()
+            assert_pixel_free_capture(tmp_path, pixels, tool=False)
+        for upload in uploads:
+            file_path(tmp_path / "app", upload["id"])[0].unlink()
+    finally:
+        try:
+            if not execution.done():
+                await runtime.submit(Input("stop"))
+            await asyncio.wait_for(execution, 5)
+        finally:
+            await session.cleanup()
+
+    # Fresh store and opposite provider: permitted originals survive; refusals cannot resurrect.
+    cold = SDKRead(private_media=False) if legacy else LegacySDK()
+    reopened = SessionStore(store.base_dir)
+    resumed, _, checkpoint, checks, host = await work_root(tmp_path, monkeypatch, None,
+        store=reopened, prepared_host=True, worker_observers=True, provider_setup=cold.setup,
+        provider_module="provider-openai" if legacy else "provider-anthropic",
+        model="gpt-6.1-sol" if legacy else MODEL)
+    try:
+        await resumed.coordinator.get("context").set_messages(reopened.load(session.session_id)[0])
+        await checkpoint()
+        assert await resumed.execute("Use the saved input without rereading files") == "offline completion"
+        endpoint = "/v1/responses" if legacy else "/v1/messages"
+        sends = [body for route, body in cold.wire if route == endpoint]
+        assert sends and all([pixels for _, pixels in cold.pixels(body)] == expected for body in sends)
+        assert host.sealed and not checks
+        for pixels in originals:
+            assert_pixel_free_capture(tmp_path, pixels, tool=False)
+    finally:
+        await resumed.cleanup()

@@ -158,10 +158,10 @@ def test_image_snapshot_failure_uses_closed_notice_and_keeps_other_attachments(t
     bad_path, _ = attachments.file_path(tmp_path, bad['id'])
     original = attachments._image_source
     secret = 'data:image/png;base64,' + base64.b64encode(PNG).decode()
-    def read(path, row):
+    def read(path, row, policy=None):
         if path == bad_path:
             raise OSError(secret)
-        return original(path, row)
+        return original(path, row, policy)
     monkeypatch.setattr(attachments, '_image_source', read)
     content = attachments.encode(SimpleNamespace(text='Keep user text', attachments=[bad, good]))
     assert content[0]['text'] == 'Keep user text'
@@ -183,6 +183,56 @@ def test_composer_decoder_safety_refusal_keeps_text(tmp_path, monkeypatch, limit
     assert content[0]['text'] == 'Keep user text'
     assert any('Image unavailable:' in block.get('text', '') for block in content)
     assert not any(block['type'] == 'image' for block in content)
+
+
+@pytest.mark.parametrize('enabled', [False, True])
+@pytest.mark.parametrize('policy', [
+    {'retention': 'drop'}, {'retention': 'request-only'}, {'max_bytes': 1},
+    {'max_pixels': 1},
+])
+def test_composer_uses_active_store_policy_even_without_ready_consumer(tmp_path, monkeypatch, enabled, policy):
+    from io import BytesIO
+    from PIL import Image
+    from amplifier_foundation.session.media import MediaPolicy
+    from amplifier_web.host.media import NAMESPACE, RequestOnlyRegistry
+
+    buffer = BytesIO()
+    Image.new('RGB', (2, 2), 'blue').save(buffer, format='PNG')
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    image = upload(tmp_path, data=buffer.getvalue())
+    note = upload(tmp_path, 'notes.txt', b'Keep attached text')
+    registry = RequestOnlyRegistry(tmp_path / 'issuance.json')
+    store = SimpleNamespace(policy=MediaPolicy(**policy))
+    capabilities = {'web.media.store': store, 'web.media.composer': store,
+                    'web.media.request_only': registry,
+                    NAMESPACE: SimpleNamespace(enabled=enabled)}
+    coordinator = SimpleNamespace(get_capability=capabilities.get)
+    command = SimpleNamespace(id='policy-input', text='Keep user text', attachments=[image, note])
+    content = attachments.encode(command, coordinator)
+    assert content[0]['text'] == 'Keep user text'
+    assert 'Keep attached text' in json.dumps(content)
+    assert any('Image unavailable:' in block.get('text', '') for block in content)
+    assert not any(block['type'] == 'image' for block in content)
+    assert not (tmp_path / 'issuance.json').exists()
+
+
+@pytest.mark.parametrize('decoder_limit,admitted', [(None, True), (1, False)])
+def test_composer_reuses_foundation_finite_decoder_policy(tmp_path, monkeypatch, decoder_limit, admitted):
+    from io import BytesIO
+    from PIL import Image
+    from amplifier_foundation.session.media import MediaPolicy
+
+    source = BytesIO()
+    Image.new('RGB', (2, 2), 'blue').save(source, format='PNG')
+    row = upload(tmp_path, data=source.getvalue())
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    monkeypatch.setattr(Image, 'MAX_IMAGE_PIXELS', decoder_limit)
+    store = SimpleNamespace(policy=MediaPolicy(max_pixels=4))
+    coordinator = SimpleNamespace(get_capability={'web.media.store': store}.get)
+    content = attachments.encode(SimpleNamespace(text='Review', attachments=[row]), coordinator)
+    # A finite host bound can supply decoder safety; it cannot weaken Pillow's.
+    assert any(block['type'] == 'image' for block in content) is admitted
+    assert Image.MAX_IMAGE_PIXELS == decoder_limit
 
 
 async def test_draft_attachment_send_is_durable_and_private(tmp_path):
