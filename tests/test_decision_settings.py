@@ -179,6 +179,78 @@ def test_configuration_requires_explicit_scope():
     assert requirement('providers.configureDecisions',{'scope':'local'})==('connections','local')
 
 
+async def test_decision_only_connection_never_enters_cli_providers(manager, tmp_path, monkeypatch):
+    definitions = decisions.catalogs()
+    definitions['provider-fixture'][0]['decision_only'] = True
+    monkeypatch.setattr(decisions, 'catalogs', lambda: definitions)
+    await manager.perform('providers.save', {
+        'workspace': str(tmp_path), 'scope': 'global', 'id': 'specialist',
+        'module': 'provider-fixture', 'config': {'api_key': '${SYNTHETIC_ONLY}'}})
+    saved = manager.store.read(tmp_path, 'global')
+    assert not saved['config']['providers']
+    assert saved['decision_models']['connections']['specialist']['config']['api_key'] == '${SYNTHETIC_ONLY}'
+    result = await select(manager, tmp_path, backend={'provider': 'specialist', 'model': 'test'})
+    assert result['decisionModels']['backends']['ui-browser-specialist']['model'] == 'test'
+    assert manager.config(tmp_path).providers == []
+
+
+async def test_shared_chat_decisions_are_saved_outside_cli_provider_config(manager, tmp_path):
+    await select(manager, tmp_path)
+    saved = manager.store.read(tmp_path, 'global')
+    assert saved['config']['providers'] == [{
+        'module': 'provider-fixture',
+        'config': {'api_key': '${FIXTURE_KEY}', 'default_model': 'chat'}}]
+    assert saved['decision_models']['connections']['provider-fixture']['provider'] == 'provider-fixture'
+    assert saved['decision_models']['connections']['provider-fixture']['config']['decisions']['enabled'] is True
+
+
+@pytest.mark.parametrize('identity_fields, public_id', [
+    ({}, 'fixture'), ({'instance_id': 'mounted'}, 'mounted'), ({'id': 'saved'}, 'saved')])
+async def test_dedicated_legacy_identity_survives_edit_and_scoped_remove(manager, tmp_path, monkeypatch, identity_fields, public_id):
+    definitions = decisions.catalogs()
+    definitions['provider-fixture'][0]['decision_only'] = True
+    monkeypatch.setattr(decisions, 'catalogs', lambda: definitions)
+    manager.store.update(tmp_path, 'global', lambda value: value.clear())
+    manager.store.update(tmp_path, 'global', lambda value: value.update(config={'providers': [{
+        'module': 'provider-fixture', **identity_fields,
+        'config': {'api_key': '${FIXTURE_KEY}', 'chat_enabled': False}}]}))
+    result = await manager.perform('providers.save', {
+        'workspace': str(tmp_path), 'scope': 'global', 'id': public_id, 'module': 'provider-fixture',
+        'config': {'api_key': '${FIXTURE_KEY}', 'chat_enabled': False, 'opaque': 'edited'}})
+    assert [row['id'] for row in result['providers']] == [public_id]
+    assert manager.config(tmp_path).connections[0]['config']['opaque'] == 'edited'
+    await manager.perform('providers.remove', {'workspace': str(tmp_path), 'scope': 'local', 'id': public_id})
+    assert manager.config(tmp_path).saved_connections[0]['enabled'] is False
+    assert manager.config(tmp_path).providers == []
+    assert manager.store.read(tmp_path, 'local').get('config', {}).get('providers', []) == []
+    assert manager.store.read(tmp_path, 'global')['config']['providers'] == []
+
+
+async def test_all_account_reorder_preserves_client_contract_without_llm_pollution(manager, tmp_path, monkeypatch):
+    definitions = decisions.catalogs()
+    definitions['provider-only'] = ({'decision_only': True, 'label': 'Only', 'configuration_key': 'decisions'}, lambda row: row)
+    monkeypatch.setattr(decisions, 'catalogs', lambda: definitions)
+    await manager.perform('providers.save', {'workspace': str(tmp_path), 'scope': 'global',
+        'id': 'only', 'module': 'provider-only', 'config': {'priority': 200}})
+    result = await manager.perform('providers.reorder', {'workspace': str(tmp_path), 'scope': 'global',
+        'ids': ['only', 'fixture'], 'expectedIds': ['fixture', 'only']})
+    assert [row['id'] for row in result['providers']] == ['only', 'fixture']
+    saved = manager.store.read(tmp_path, 'global')
+    assert len(saved['config']['providers']) == 1
+    assert saved['decision_models']['connections']['only']['config']['priority'] == 1
+
+
+async def test_advanced_decision_config_edit_routes_to_dedicated_owner(manager, tmp_path):
+    await select(manager, tmp_path)
+    row = manager.config(tmp_path).connections[0]
+    raw = copy.deepcopy(row['config'])
+    raw['decisions']['backends']['ui-browser-fixture']['model'] = 'advanced-edit'
+    await manager.perform('providers.save', {'workspace': str(tmp_path), 'scope': 'global',
+        'id': 'fixture', 'module': 'provider-fixture', 'config': raw})
+    assert manager.config(tmp_path).connections[0]['config']['decisions']['backends']['ui-browser-fixture']['model'] == 'advanced-edit'
+    assert 'decisions' not in manager.store.read(tmp_path, 'global')['config']['providers'][0]['config']
+
+
 def test_conditional_hook_catalog_offers_a_decision_connection_without_changing_chat_metadata(monkeypatch):
     definition={'schema_version':2,'provider_module':'provider-mixed','validate':lambda value:value,
         'runtime':{'kind':'hook','module':'hooks-mixed-decisions','when':{'chat_enabled':False}},

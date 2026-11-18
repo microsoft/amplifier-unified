@@ -22,6 +22,18 @@ class SettingsStore:
         from .configuration_authority import check_current
         def checked_mutator(value):
             check_current(workspace=workspace, scope=scope)
-            return mutator(value)
+            from .decision_namespace import read_scopes, translate
+            from .decision_settings import catalogs
+            paths = settings_paths(workspace, shared_home=self.shared_home, session_id=session_id)
+            prior = []
+            for level, path in paths.items():
+                if level == scope:
+                    break
+                prior.append(path)
+            definitions = catalogs()
+            inherited = read_scopes(prior, definitions=definitions)
+            value = translate(value, definitions, inherited=inherited)
+            result = mutator(value)
+            return translate(value if result is None else result, definitions, inherited=inherited)
         check_current(workspace=workspace, scope=scope)
         return update_settings(self.path(workspace, scope, session_id=session_id), checked_mutator)

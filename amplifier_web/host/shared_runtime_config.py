@@ -62,7 +62,9 @@ def resolve_config(config, *, workspace, session_id):
     # instructions, session limits and agent declarations remain caller-owned.
     selected = {key: copy.deepcopy(settings[key]) for key in
                 ("routing", "overrides", "configurator", "sources") if key in settings}
-    selected["config"] = {"providers": settings.get("config", {}).get("providers", [])}
+    from ..decision_namespace import logical_rows, connections, key
+    dedicated = {identity for identity, row in connections(settings).items() if "provider" not in row}
+    selected["config"] = {"providers": [row for row in logical_rows(settings) if key(row) not in dedicated]}
     for section in ("config", "modules"):
         rows = settings.get(section, {}).get("hooks", [])
         selected.setdefault(section, {})["hooks"] = [copy.deepcopy(row) for row in rows if row.get("module") == "hooks-routing"]

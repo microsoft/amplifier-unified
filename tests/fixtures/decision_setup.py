@@ -29,8 +29,8 @@ def attach(app, workspace):
         if request.headers.get('Authorization') != 'Bearer fixture-browser-control-token':
             raise web.HTTPForbidden()
         current = manager.config(workspace)
-        ordinary = [row for row in current.providers if row['module'] != 'provider-jev']
-        accounts = [row for row in current.providers if row['module'] == 'provider-jev']
+        ordinary = current.providers
+        accounts = [row for row in current.connections if row['module'] == 'provider-jev']
         return web.json_response({
             'ordinaryProvidersPreserved': ordinary == initial.providers,
             'ordinaryRoutingPreserved': current.settings.get('routing') == initial.settings.get('routing'),

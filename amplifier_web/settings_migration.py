@@ -103,3 +103,17 @@ def migrate_settings(home, workspaces):
                 promote(Path(workspace) / '.amplifier-unified' / target.name, target)
             state['workspaces'].append(workspace)
         atomic_write(marker, json.dumps(state, indent=2), private=True)
+    # Decision accounts have their own namespace in the same settings owner.
+    # Each file is independently locked/atomic; repeated or interrupted startup
+    # does not replay credentials or depend on the older private-import marker.
+    from .decision_namespace import migrate_paths
+    for workspace in workspaces:
+        try:
+            migrate_paths(settings_paths(workspace, shared_home=shared).values())
+        except (OSError, ValueError):
+            # A refused optional migration must not prevent an unrelated chat
+            # from loading. Leave its original files for deliberate repair;
+            # never log account data, exception payloads or credential paths.
+            import logging
+            logging.getLogger(__name__).warning(
+                "Decision settings migration incomplete; original declarations were retained.")

@@ -84,6 +84,34 @@ async def test_provider_save_is_bounded_for_twenty_unmounted_chats(app,monkeypat
     await settled(app)
 
 
+async def test_decision_account_save_publishes_existing_client_contract_without_chat_probe(app, monkeypatch):
+    from amplifier_web import decision_settings
+    monkeypatch.setattr(decision_settings, 'catalogs', lambda: {
+        'provider-specialist': ({'decision_only': True, 'label': 'Specialist',
+                                'configuration_key': 'decisions'}, lambda row: row)})
+    probes = []
+    async def probe(self, action, args, workspace):
+        probes.append(args.get('id'))
+        return {'models': [], 'modelsProviderId': args.get('id')}
+    monkeypatch.setattr(SetupManager, 'probe', probe)
+    args = {'id': 'specialist', 'module': 'provider-specialist', 'scope': 'global',
+            'config': {'chat_enabled': False, 'api_key': '${SYNTHETIC_ONLY}'}}
+    receipt = await app.dispatch('providers.save', args, command_id='decision-save', include_state=False)
+    assert receipt['accepted'] and receipt['operationId']
+    await settled(app)
+    setup = app.state['setup']
+    assert setup['operations']['providers.save:specialist']['phase'] == 'ready'
+    assert {row['id'] for row in setup['providers']} == {'fixture', 'specialist'}
+    assert setup['decisionModels']['catalog'][0]['id'] == 'specialist'
+    assert setup['decisionModels']['selection'] == {}
+    assert 'specialist' not in probes
+    manager = SetupManager(app.data_dir)
+    assert [row['id'] for row in manager.config(app.default_workspace).configured_connections] == ['fixture']
+    saved = manager.store.read(app.default_workspace)
+    assert [row['id'] for row in saved['config']['providers']] == ['fixture']
+    assert saved['decision_models']['connections']['specialist']['config']['api_key'] == '${SYNTHETIC_ONLY}'
+
+
 @pytest.mark.parametrize('origin',['ui','agent'])
 async def test_receipt_precedes_retirement_and_retries_do_not_repeat_save(app,monkeypatch,origin):
     sid=app.state['selectedSessionId'];app.runtime.workers[sid]=object()
