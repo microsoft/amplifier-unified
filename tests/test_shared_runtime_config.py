@@ -152,3 +152,21 @@ def test_environment_model_changes_affect_resume_identity_but_key_rotation_does_
     monkeypatch.setenv('BRIDGE_MODEL', 'model-two')
     changed = bridge.resolve_config(base, workspace=workspace, session_id='native-session')
     assert first['config_adapter_state'] != changed['config_adapter_state']
+
+
+def test_model_only_bridge_preserves_shared_source_fallback_but_excludes_decision_account(setup, monkeypatch):
+    from amplifier_web.decision_namespace import migrate_paths
+    _, workspace, paths, base = setup
+    decision = {'id': 'decision', 'module': 'provider-conditional', 'source': 'shared-adapter',
+                'config': {'chat_enabled': False, 'api_key': '${SYNTHETIC_ONLY}'}}
+    chat = {'id': 'chat', 'module': 'provider-conditional', 'config': {
+        'chat_enabled': True, 'default_model': 'explicit-chat'}}
+    write(paths['global'], {'config': {'providers': [decision, chat]}})
+    definitions = {'provider-conditional': ({'decision_only_when': {'chat_enabled': False}}, lambda row: row)}
+    monkeypatch.setattr('amplifier_web.decision_accounts.bind_sources', lambda *args: None)
+    before = bridge.resolve_config(base, workspace=workspace, session_id='native-session')
+    migrate_paths(paths.values(), definitions=definitions)
+    after = bridge.resolve_config(base, workspace=workspace, session_id='native-session')
+    assert [row['id'] for row in after['providers']] == ['chat']
+    assert after['providers'][0]['source'] == 'shared-adapter'
+    assert after['providers'][0] == next(row for row in before['providers'] if row['id'] == 'chat')
