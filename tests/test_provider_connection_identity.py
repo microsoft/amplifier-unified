@@ -497,6 +497,9 @@ async def test_implicit_chatgpt_credential_rotation_invalidates_positive_and_neg
 ])
 def test_source_less_saved_connection_matches_actual_host_composition(tmp_path, monkeypatch, module, raw):
     """Settings created by the normal UI need no qualified runtime receipt."""
+    # Match the separate worker's synthetic home, including provider-default
+    # credential paths. Never inspect this test runner's real sign-in file.
+    monkeypatch.setenv('HOME', str(tmp_path))
     monkeypatch.setenv('AMPLIFIER_HOME', str(tmp_path / 'shared'))
     SettingsStore(tmp_path / 'app').update(tmp_path, 'global', lambda values: values.update(config={
         'providers': [{'id': 'one', 'module': module, 'config': raw}]}))

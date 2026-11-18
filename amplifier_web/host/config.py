@@ -257,16 +257,33 @@ class HostConfig:
 
     @property
     def providers(self):
-        rows=self.settings.get("config", {}).get("providers", [])
+        from ..decision_namespace import connections, logical_rows
+        dedicated = {key for key, row in connections(self.settings).items() if "provider" not in row}
+        from ..decision_namespace import key
+        rows = [row for row in logical_rows(self.settings) if key(row) not in dedicated]
         return sorted(rows, key=lambda row: row.get("config", {}).get("priority", 100))
+
+    @property
+    def connections(self):
+        """All logical accounts for setup/binding, not the ordinary LLM list."""
+        from ..decision_namespace import logical_rows
+        return sorted(logical_rows(self.settings), key=lambda row: row.get("config", {}).get("priority", 100))
 
     @property
     def configured_connections(self):
         """Explicit connection rows with the same overrides as bundle composition."""
+        return self._configured_connections(self.providers)
+
+    @property
+    def saved_connections(self):
+        """Settings inventory, including decision-only accounts, not LLM discovery."""
+        return self._configured_connections(self.connections)
+
+    def _configured_connections(self, originals):
         overrides = self.settings.get('overrides', {})
         disabled = self.settings.get('configurator', {}).get('disabled', {}).get('providers', [])
         rows = []
-        for original in self.providers:
+        for original in originals:
             identity = original.get('id') or original.get('instance_id') or original['module'].removeprefix('provider-')
             patch = merge(overrides.get(original['module'], {}), overrides.get(identity, {}))
             row = merge(original, {key:value for key,value in patch.items() if key in {'source','config'}})
@@ -279,7 +296,7 @@ class HostConfig:
         result = dict(self.settings.get("sources", {}).get("modules", {}))
         result.update({key:row["source"] for key,row in self.settings.get("overrides", {}).items()
             if isinstance(row, dict) and "source" in row})
-        result.update({row["module"]:row["source"] for row in self.providers if row.get("source")})
+        result.update({row["module"]:row["source"] for row in self.connections if row.get("source")})
         return result
 
     @property

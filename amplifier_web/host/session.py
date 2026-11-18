@@ -87,6 +87,8 @@ class _SelectedRequest:
     choices: dict
     selected: object
     refitted: bool = False
+    execution: object = None
+    release_options: object = None
 
 
 class SelectedProvider:
@@ -165,12 +167,21 @@ class SelectedProvider:
         if name == "request_budget" and callable(method):
             def selected_budget(request, *, request_options=None, **kwargs):
                 self._overflow_feedback.forget(request)
+                prior = next((row for row in self._selected_requests if row.original is request), None)
+                if prior is not None and prior.execution is not None and prior.execution is not execution:
+                    self._forget_request(request)
                 # Preserve named-option feature detection through this wrapper,
                 # translating to keywords only for a legacy provider budget.
                 kwargs['request_options'] = request_options
                 selected, kwargs = self._selected_request(request, kwargs)
                 try:
                     self._budget_options(kwargs)
+                    entry = next(row for row in self._selected_requests if row.selected is selected)
+                    entry.execution = execution
+                    entry.release_options = copy.deepcopy({
+                        **(kwargs.get('request_options') or {}),
+                        **{key: value for key, value in kwargs.items()
+                           if key not in {'request_options', 'context_estimate'}}})
                     result = method(selected, **kwargs)
                 except BaseException:
                     self._forget_request(request)
@@ -193,8 +204,34 @@ class SelectedProvider:
             overrides["reasoning_effort"] = self.selection["effort"]
         return info.model_copy(update={"defaults": {**info.defaults, **overrides}})
     def _forget_request(self, request):
+        for entry in self._selected_requests:
+            if entry.original is request and entry.execution is not None:
+                release = getattr(entry.execution, 'release_media_request', None)
+                if callable(release):
+                    release(entry.selected, request_options=entry.release_options)
         self._selected_requests = [row for row in self._selected_requests if row.original is not request]
         self._refused_requests = [row for row in self._refused_requests if row[0] is not request]
+
+    def release_media_request(self, canonical, *, request_options=None):
+        updates, options = self._selection_overrides(canonical, dict(request_options or {}))
+        entry = self._cached_request(canonical, updates)
+        if entry is None or entry.execution is None:
+            return False
+        release = getattr(entry.execution, 'release_media_request', None)
+        if not callable(release) or release(entry.selected, request_options=options) is not True:
+            return False
+        self._forget_request(canonical)
+        return True
+
+    def _check_media_fit(self, request, execution):
+        entry = next((row for row in self._selected_requests if row.original is request), None)
+        owns = getattr(entry.execution, 'has_prepared_media_request', None) if entry else None
+        if entry is None or not callable(owns) or owns(entry.selected) is not True:
+            return
+        updates, _ = self._selection_overrides(request, {})
+        if (entry.execution is not execution or entry.snapshot != request or entry.choices != updates):
+            self._forget_request(request)
+            raise ValueError("The fitted image source or selected provider changed; request a new explicit budget.")
 
     def _budget_options(self, kwargs):
         budget = getattr(self.original, 'request_budget', None)
@@ -242,6 +279,8 @@ class SelectedProvider:
             selected = request.model_copy(update=updates)
             self._forget_request(request)
             if not consume:
+                for old in self._selected_requests[:-3]:
+                    self._forget_request(old.original)
                 self._selected_requests = (self._selected_requests + [
                     _SelectedRequest(request, copy.deepcopy(request), dict(updates), selected)])[-4:]
                 self._refused_requests = [row for row in self._refused_requests
@@ -265,6 +304,7 @@ class SelectedProvider:
     async def _stream_selected(self, execution, method, request, kwargs):
         options = dict(kwargs)
         self._overflow_feedback.forget(request)
+        self._check_media_fit(request, execution)
         selected, kwargs = self._selected_request(request, kwargs)
         self._refused_requests = [row for row in self._refused_requests if row[0] is not request]
         feedback = self._overflow_feedback.capture(request, selected, options, kwargs,
@@ -289,8 +329,9 @@ class SelectedProvider:
     async def complete(self, request, **kwargs):
         options = dict(kwargs)
         self._overflow_feedback.forget(request)
-        selected, kwargs = self._selected_request(request, kwargs)
         execution = self._execution_provider()
+        self._check_media_fit(request, execution)
+        selected, kwargs = self._selected_request(request, kwargs)
         self._refused_requests = [row for row in self._refused_requests if row[0] is not request]
         feedback = self._overflow_feedback.capture(request, selected, options, kwargs,
                                                    execution, binding=self.selection)
@@ -347,7 +388,10 @@ def _apply_settings(bundle, config):
              for key in ('allowed_write_paths', 'allowed_read_paths') if key in row.get('config', {})}
         for row in bundle.tools if row.get('module') == 'tool-filesystem'
     }
-    bundle.providers = merge(bundle.providers, config.providers)
+    # Settings keeps decision services out of the ordinary LLM list. Runtime
+    # preparation still receives the same logical roster, in declaration order,
+    # before DecisionAccounts projects its accounts onto exact-source hooks.
+    bundle.providers = merge(bundle.providers, getattr(config, "connections", config.providers))
     bundle.providers.sort(key=lambda row: row.get("config", {}).get("priority", 100))
     for kind in ("tools", "hooks"):
         values = merge(getattr(bundle, kind), settings.get("modules", {}).get(kind, []))
@@ -562,6 +606,12 @@ def _apply_host_policy(bundle, config, *, execution_workspace=None):
     workspace = str(Path(execution_workspace or config.workspace).expanduser().resolve())
     history_root = Path(config.workspace).expanduser().resolve()
     execution_root = Path(workspace)
+    # The reference web mount fills this missing default in its supplied
+    # config from session.working_dir. Materialize the same root-host value
+    # before construction snapshots, rather than mutate the plan during mount.
+    for row in bundle.tools:
+        if isinstance(row, dict) and row.get("module") == "tool-web":
+            row.setdefault("config", {}).setdefault("working_dir", workspace)
     policy_keys = {"allowed_write_paths", "denied_write_paths", "allowed_read_paths", "denied_read_paths"}
     def paths(values):
         if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
@@ -1068,7 +1118,8 @@ def install_checkpoint_hooks(coordinator, runtime, checkpoint):
                         pass
         return HookResult()
     for event in ("tool:post", "tool:error", "orchestrator:complete", "context:compaction_finished"):
-        coordinator.hooks.register(event, checkpoint_hook, name="unified-checkpoint-" + event)
+        from .media import registration_hooks
+        registration_hooks(coordinator).register(event, checkpoint_hook, name="unified-checkpoint-" + event)
 
 
 async def prepare_manager(workspace, *, runtime=None, bundle=None, background_delegate=True,
@@ -1256,10 +1307,14 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         def retain_session(constructing):
             nonlocal session
             session = constructing
+        from .media import bind_media
+        from .media_assembly import select_root
+        def media(constructing):
+            bind_media(constructing, store, selection=select_root(constructing.config))
         initialization = initialization_hooks(isolation=isolation, decision_accounts=decision_accounts,
                                               routing=routing, retain=retain_session,
                                               ephemeral_servers=ephemeral_mcp_servers,
-                                              providers=prepared.mount_plan.get('providers', []))
+                                              providers=prepared.mount_plan.get('providers', []), media=media)
         with startup_timing.phase('manager.session.create'):
             session = await prepared.create_session(session_id=runtime.session_id,
                 session_cwd=execution_workspace, approval_system=approvals, is_resumed=messages is not None,
@@ -1310,7 +1365,9 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                                         copy.deepcopy(coordinator.config.get("agents", {})))
         with startup_timing.phase('manager.settings'):
             if not snapshot:
-                await configurator.apply_saved_settings(config.settings.get("configurator") or {})
+                from .media import hook_configuration
+                with hook_configuration(coordinator):
+                    await configurator.apply_saved_settings(config.settings.get("configurator") or {})
             configurator.take_snapshot()
         providers = coordinator.get("providers") or {}
         if not providers:
@@ -1392,6 +1449,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                 saved_rows = store.save(runtime.session_id, transcript, {**metadata, "status": status,
                     "last_updated": datetime.now(UTC).isoformat(),
                     "turn_count": sum(row.get("role") == "user" for row in transcript)})
+                from .media import acknowledge_media
+                acknowledge_media(coordinator, store, runtime.session_id, saved_rows)
                 if timing:timing.mark('store.end')
                 native_guard.saved()
                 if continuity:
@@ -1427,6 +1486,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                 published_anchors = anchors  # A failed emit remains retryable.
             return canonical
         coordinator.register_capability("live.checkpoint", checkpoint)
+        coordinator.register_capability("session.durable_checkpoint",
+                                        partial(checkpoint, capture_messages=False))
         from ..context_continuity import install as install_continuity
         continuity = install_continuity(coordinator, runtime.session_id, edited_path.parent,
                                        partial(checkpoint, capture_messages=False), writer_guard=recovery_write_guard)

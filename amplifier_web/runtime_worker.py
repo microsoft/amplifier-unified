@@ -772,6 +772,8 @@ class Worker:
 
     def install_activity(self, coordinator):
         from amplifier_core import HookResult
+        from amplifier_web.host.media import registration_hooks, replace_adapter
+        hooks = registration_hooks(coordinator)
         # ask_user is delivered over the host's durable approval channel even
         # though this worker has no terminal. This advertises transport only;
         # each request still waits for its own explicit client response.
@@ -782,8 +784,9 @@ class Worker:
             if self.telemetry:
                 providers = coordinator.get("providers") or {}
                 for name, provider in list(providers.items()):
-                    providers[name] = self.telemetry.instrument_provider(coordinator.session_id, provider,
-                        run_id=coordinator.get_capability("web.worker_run"))
+                    replace_adapter(coordinator, "providers", name, provider,
+                        self.telemetry.instrument_provider(coordinator.session_id, provider,
+                            run_id=coordinator.get_capability("web.worker_run")))
             return
         coordinator.register_capability("web.activity", True)
         from amplifier_web.performance_diagnostics import install_preparation_timing
@@ -797,7 +800,7 @@ class Worker:
                 return HookResult()
             # Run before loop-live's content-block observer (default priority).
             for event in ("content_block:start", "content_block:end"):
-                coordinator.hooks.register(event, response_block, priority=-100,
+                hooks.register(event, response_block, priority=-100,
                     name="amplifier-web-response-" + event)
             async def response_boundary(event, data):
                 from amplifier_web.execution_events import CALL_PURPOSE
@@ -805,7 +808,7 @@ class Worker:
                     self.response_blocks.reset()
                 return HookResult()
             for event in ("provider:request", "llm:request", "tool:pre"):
-                coordinator.hooks.register(event, response_boundary, priority=-100,
+                hooks.register(event, response_boundary, priority=-100,
                     name="amplifier-web-response-boundary-" + event)
         # A resumed child reuses its session ID but owns a new coordinator.
         # Bind hooks to their originating run, never the mutable registry row.
@@ -852,8 +855,9 @@ class Worker:
                 self.telemetry.lifecycle({"type":"child.updated", **registry.rows[coordinator.session_id]})
             providers = coordinator.get("providers") or {}
             for name, provider in list(providers.items()):
-                providers[name] = self.telemetry.instrument_provider(coordinator.session_id, provider,
-                        run_id=coordinator.get_capability("web.worker_run"))
+                replace_adapter(coordinator, "providers", name, provider,
+                    self.telemetry.instrument_provider(coordinator.session_id, provider,
+                        run_id=coordinator.get_capability("web.worker_run")))
         async def activity(event, data):
             identity = coordinator.session_id
             if data.get("session_id", identity) != identity:
@@ -922,7 +926,7 @@ class Worker:
         for event in ("provider:request", "provider:retry", "tool:pre", "tool:post", "tool:error", "llm:request", "llm:response", "context:compaction_started", "context:compaction_progress", "context:compaction_finished"):
             # Exact tool observation identity must precede the canonical
             # context-intelligence logger (priority 100), independent of mount order.
-            coordinator.hooks.register(event, activity, name="amplifier-web-activity-" + event,
+            hooks.register(event, activity, name="amplifier-web-activity-" + event,
                 priority=-100 if event.startswith('tool:') else 0)
 
     async def preparation_progress(self, directory):
@@ -1107,9 +1111,30 @@ class Worker:
                 self.install_collaboration_checkpoint(self.session.coordinator)
             original_host = self.session.coordinator.get_capability("live.host")
             class ObservedHost:
+                registrations = {}
                 def __getattr__(self, name):
                     return getattr(original_host, name)
+                def execution_registration(self, coordinator, hooks):
+                    """Loop-owned late registrations use this finite root view."""
+                    from contextlib import contextmanager
+                    from amplifier_web.host.media import hook_configuration, registration_coordinator, seal_hook_graph
+                    @contextmanager
+                    def construction():
+                        view = None
+                        try:
+                            with hook_configuration(coordinator):
+                                view = registration_coordinator(coordinator)
+                                self.registrations[id(view)] = (view, coordinator)
+                                yield view, view.hooks
+                            seal_hook_graph(coordinator)
+                        finally:
+                            if view is not None:
+                                self.registrations.pop(id(view), None)
+                    return construction()
                 async def prepare_execution(self, loop, coordinator, providers):
+                    entry = self.registrations.get(id(coordinator))
+                    if entry is not None and entry[0] is coordinator:
+                        coordinator = entry[1]
                     result = await original_host.prepare_execution(loop, coordinator, providers)
                     if coordinator:
                         host.install_activity(coordinator)
@@ -1122,6 +1147,8 @@ class Worker:
                         if isinstance(getattr(loop,'root_provider',None), SelectedProvider):
                             loop.root_provider.execution_adapter = transform
                         runtime, selected, scope = result
+                        from amplifier_web.host.media import flush_adapters
+                        await flush_adapters(coordinator)
                         return runtime, {name: transform(value) for name, value in selected.items()}, scope
                     return result
             # loop-live propagates this host through its existing ContextVar to
@@ -1134,6 +1161,12 @@ class Worker:
             from amplifier_web.host.naming import LiveSessionNaming
             completed=[identity for event in config.get('generations',[]) if event.get('event')=='generation.finished' for identity in event.get('input_ids',[]) if identity in {t['id'] for t in config.get('execution',{}).get('turns',[])}]
             self.naming=LiveSessionNaming(self.session.coordinator,self.home,publish,completed)
+            # All actual Worker observers participate before the first turn.
+            # The loop subsequently owns its execution_registration phase.
+            from amplifier_web.host.media import flush_adapters
+            if self.session.coordinator.get_capability("web.media.construction") is not None:
+                self.install_activity(self.session.coordinator)
+                await flush_adapters(self.session.coordinator)
             from amplifier_web.loaded_provenance import capture_mount
             self.provenance_mount = capture_mount(self.session)
             with startup_timing.phase('worker.ownership.register'):

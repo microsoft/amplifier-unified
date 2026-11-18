@@ -1711,10 +1711,27 @@ So the order is:
    work). An app that does not answer, or an older app that reports no count,
    gets no second question.
 3. Check and pin every Start-menu shortcut and the Apps-list entry. A changed
-   entry stops here, before the app is touched.
+   entry stops here, before the app is touched. Another program can have a
+   shortcut open at that moment (on hosted runners, asked which program had
+   the shortcut open, Windows named `explorer.exe` after 7 of 92 such refusals
+   and no program after the others). Windows then refuses the pin with its error 32
+   ("The process cannot access the file because it is being used by another
+   process."), and uninstall tries again before it stops here: at most 50
+   more times for this step, with a wait of a tenth of a second before each.
+   The waits are 5 seconds in all; the Windows calls of each attempt take
+   their own time. Each attempt reads the shortcut's bytes again, so a
+   shortcut that changed meanwhile stops here too.
 4. Stop the app normally and remove its sign-in task. There is no forced stop.
 5. Remove the Apps-list entry, then the shortcuts ("Uninstall Amplifier" last),
-   then the emptied Start-menu folder.
+   then the emptied Start-menu folder. A delete that Windows refuses with
+   its error 5 ("Access is denied.") is tried again with the same limit, counted for this
+   step alone. A mapped view of the shortcut gives that refusal for as long as
+   the view exists. Hosted runners showed the refusal for a moment; which
+   program caused it there is not known. A shortcut that is still refused
+   then stops the uninstall with "Uninstall Amplifier" still in the Start
+   menu. Another uninstall can finish when the shortcut is no longer held. A
+   shortcut with a read-only attribute gets the same refusal each time, and
+   no wait ends it.
 6. If Windows trusts this installation's own key-less certificate for this
    person, ask Windows to delete it, and each root that `setup-tls force`
    replaced and Windows still holds (`windows_trust.forget_roots`): one
@@ -1808,11 +1825,78 @@ the folder that the record names; setup's second run decides by the same two
 facts. Otherwise the next step is to run the setup file again. The record
 alone is not enough: the last write of an uninstall can be refused after every
 entry is gone. For the same reason the entries can be added again over a
-record that still says `installed`, when the folder that the record names,
-today's Start-menu folder and the Apps-list entry are all absent. The entries
-are added again only when all of them are gone. A partly damaged set (a person
-deleted one shortcut) is refused and nothing is overwritten; setup then says
-that it could not add the entries, and starts the app.
+record that still says `installed`, when the folder that the record names is
+absent.
+
+The entries are added again when no shortcut of this installation and no
+Apps-list entry is there. The Start-menu folder itself can be there. It stays
+after an uninstall when the person put a file into it (uninstall removes only
+an empty folder), and when another program still had a shortcut open in a way
+that let the delete pass. Setup's step uses that folder again when both hold:
+
+- It is this account's own private folder: a real folder and no link, owned
+  by this account, in which no access rule gives a right to anyone but this
+  account, SYSTEM, the Administrators group and TrustedInstaller. This is the
+  check that the first installation and every uninstall make.
+- No entry directly in it has the name of one of the four shortcuts. Such an
+  entry counts whatever it is (a file, a folder, a link), and the names are
+  compared without letter case.
+
+Every other entry in that folder is the person's. Setup's step does not open,
+change or remove it, and writes the four shortcuts beside it. The step
+replaces and takes over nothing that it finds: it looks before its first
+write, the writer of a shortcut refuses a name that exists (also one that
+appeared after the look), and the Apps-list entry is a key that the step
+itself creates new.
+
+Two moments are not covered, and a first installation has both. The writer
+makes each shortcut as a new, empty file. From there the step works with the
+shortcut by its name, in three separate steps, and holds nothing open between
+them: the Windows shell saves the shortcut to the path, the shell reads the
+path back, and the bytes for the record are read.
+
+- A program of this account that puts something else at that path before the
+  save gets it written: the shell writes to whatever the path names then. A
+  file there is written over (a case shows it). A link there was not tried.
+- A program of this account that replaces the saved shortcut with a private
+  file of its own before the last read gets that file's bytes recorded as
+  this installation's shortcut (a case shows it).
+
+The look refuses, before the first write and with the record unchanged: an
+entry with a shortcut's name in the folder, an Apps-list entry, a link or a
+file at the folder's path, a folder that fails the check, a path that Windows
+does not let the step look at. A partly damaged set whose record still says
+`installed` (a person deleted one shortcut) is refused by that record, before
+the look, as before. Setup then says that it could not add the entries, and
+starts the app.
+
+A failure after the first write is different, as it was before this rule.
+Examples are a shortcut's name or an Apps-list entry that appeared after the
+look, a folder that fails the check when the step opens it for its writes,
+and an error of the Windows shell. The record then says `preparing`, the
+shortcuts that this run already wrote stay, and that record refuses a later
+run. The step's last write is the exception. It says `installed`, and the
+writer can report an error after it published the file (its check of the
+published file failed, or the close of one of its handles). The step then
+ends with an error, and the record says `installed`.
+
+This rule replaced an earlier one, under which the entries were added again
+only when the Start-menu folder was gone too. A folder that stayed then kept
+every later setup run from adding them, and the person had no entry to open,
+stop or uninstall Amplifier. One state is still refused: a record that says
+`installed` (its last write was refused) beside a folder that stayed.
+
+The native cases in the `windows-local-connection` job run the step on the
+real Start-menu folder. After an uninstall that left a person's file there,
+the four shortcuts and the Apps-list entry are added beside the file. Each
+refusal of the look has a case there, with one exception: the path that
+Windows does not let the step look at has a case with a stand-in. Each of
+those cases, and the case of the partly damaged set, finds the folder, the
+record and the Apps list as they were. The folder that fails the check is, in
+these cases, one that the group Everyone can change. A shortcut's name that
+appears after the look has a case: the file keeps its bytes. Two cases show
+the two moments that are not covered. No hosted runner runs the setup program
+itself, which refuses Windows Server.
 
 `.github/workflows/windows-start-again.yml` runs this path on a Windows
 runner with the product's own commands in setup's order: entries, first
@@ -1902,7 +1986,9 @@ The native check in the `windows-local-connection` job uses the real
 shortcuts, the real registry transaction, private files and NTFS sharing on a
 Windows runner. It holds the throwaway installation folder open without write
 sharing to get the same refusal, and it uses a stand-in for Task Scheduler,
-because a runner cannot register the sign-in task. A real stop with a live
+because a runner cannot register the sign-in task. Two cases hold a shortcut
+as another program can (an open that does not share deleting, and a mapped
+view) and check the wait and its end. A real stop with a live
 conversation worker remains clean-room acceptance.
 
 ### Uninstall can delete the installation folder
@@ -2289,11 +2375,15 @@ limit as not blocking.
 - **L3.** After a power loss in the last seconds, or when the step after exit
   cannot run, program files and both records stay (see Leftovers below). They
   hold none of the person's data, Amplifier cannot start from that folder,
-  and setup installs and deletes nothing in it. But setup's messages there
-  say that Amplifier is already installed, and that the person's chats and
-  settings are in the folder or are kept. That is not true for this
-  leftover. Nothing in the product removes it: the person deletes the folder
-  by hand.
+  and setup installs and deletes nothing in it. Nothing in the product
+  removes this leftover: the person deletes the folder by hand, or moves it
+  away. When the launcher's start program is gone and setup's look finds the
+  journal of a delete and none of the person's data, setup's message says
+  that it found no chats or settings, and it tells the person to move or
+  rename the folder (see Leftovers below). In the other cases setup's
+  messages there say that Amplifier is already installed, and that the
+  person's chats and settings are in the folder or are kept. That is not
+  true for this leftover.
 - **L4.** A journal that is damaged, or that records another choice, proves
   nothing. When the look that an uninstall makes before its questions finds a
   journal, the uninstall reads it through the private-file boundary. When that
@@ -2432,7 +2522,8 @@ and with that record setup installs and removes nothing. The step after exit
 deletes the journal and then the record, when nothing else is left. A second
 setup run can add the Start-menu and Apps-list entries again and start the
 launcher (see Leftovers). The launcher does not open Amplifier while the
-journal exists.
+journal exists. Setup reads the journal for one purpose only: to choose the
+text of one message (see Leftovers).
 
 **Leftovers.** If the step after exit cannot run, the parked program files
 and both records stay; they hold none of the person's data, and the message
@@ -2444,7 +2535,130 @@ folder, that entry and both records stay.
 
 A later setup run finds its completion record in such a folder. It installs
 nothing and deletes nothing. When the launcher's start program is gone, setup
-says that a program file is missing. When it is still there (a removal that
+shows one message and ends. Before it shows that message, it looks once
+(`Emptied` in `scripts/windows_bootstrap_native.cs`), and the look chooses
+between two texts:
+
+- Setup looks at the attributes of the entry with the journal's name. When
+  they show a file that is no folder and no link, setup opens that path and
+  reads it. It takes what it read for the journal of a delete when it is at
+  most 4096 bytes of UTF-8 that hold a record with `schema` 1, the choice
+  `delete` and a token of 32 lower-case hexadecimal digits. The schema and
+  the token are what uninstall's own reader requires
+  (`windows_uninstall.pending`). That reader requires a choice that is a
+  text; uninstall compares the choice in `remove` and in `finish`. Setup
+  requires the choice `delete` in the look itself. Setup reads the file
+  with its own JSON reader, as UTF-8 only, and not through the private-file
+  boundary; the two readers were not compared on a file in another encoding
+  or on one that is not strict JSON. Setup opens the file for reading with
+  every sharing mode, so Windows does not refuse another program's deletion
+  of the journal because of this handle (the step after exit deletes the
+  journal), and on the runner the journal's name is gone from the folder
+  directly after such a deletion, while a handle of the look's kind is still
+  open.
+- Setup looks at the seven names of the person's data
+  (`windows_uninstall.DATA`), one after the other. A name counts as data
+  when the look at its attributes shows a file or a link, or when the
+  listing of the folder shows anything in it. Setup lists an entry only
+  after that look showed a folder that is no link. An emptied folder that
+  Windows still keeps for a program is not data when Windows answers the look
+  at its attributes and its listing; an entry that Windows does not let
+  setup examine counts as data. For an entry with the exact spelling of a
+  name, the removal itself gives the same two answers (`holding` in
+  `windows_removal.py`). For an entry under another spelling (`App` for
+  `app`) the two differ. The removal never examines such an entry: it
+  counts the name as holding something, and it does not begin in a folder
+  that has one. Setup's look asks Windows for the path with the name's own
+  spelling and treats the entry that Windows gives like any other. Where
+  Windows ignores the case of letters (an ordinary folder), that is the
+  entry `App`: when it is an empty folder it is not data, and with a file
+  in it it is data. A folder can be set so that Windows compares its names
+  with the case of letters; there Windows gives no entry `App` for the path
+  with `app`, and the look does not see what `App` holds. That is not
+  shown. Setup looks for chats and settings under these seven names only.
+- The look is a row of separate steps on paths. Setup does not take the
+  installation's lock for it, and it holds no handle on the folder or on an
+  entry between two of those steps. A program of this account that replaces
+  an entry between the look at its attributes and the read or the listing
+  gets the read or the listing of what it put there, also when that is a
+  link. The look then answers for what it read. It still only chooses a
+  text.
+- When the look finds such a journal and no data, setup says: "Setup cannot
+  install Amplifier yet. Setup found an installation record in this
+  folder:", the folder, then "Setup cannot find a program file that it needs
+  to open Amplifier from that folder. Setup found no chats or settings in the
+  folder. It does not change the folder, because the folder can hold files or
+  folders that are not Amplifier's." and "Move or rename that folder. Then
+  run this setup file again."
+- In every other case, and when any part of the look fails, setup says what
+  it said before: "Amplifier is already installed in", the folder, "but setup
+  cannot open it: a program file is missing. Keep that folder. It holds your
+  chats and settings. This version of setup cannot repair it."
+
+Each statement of the first text is what setup found in this run, or what
+setup does, with the reason why it does not change the folder; its last two
+sentences are the next step. Setup found the record's
+name when it classified the folder, and it looked for the launcher's start
+program directly before this look. "Setup found an installation record in this
+folder": the folder has a file with the name of setup's completion record,
+which setup writes at the end of an installation. Setup does not read that
+file in this look, and it knows no more about the folder's history. The text
+does not say that an installation was made in the folder. (The second text
+says "Amplifier is already installed in" on the same evidence, as it did
+before.) "Setup cannot find a program file that it needs to open Amplifier
+from that folder": setup's look for the launcher's start program found no file
+(`File.Exists`). That look also finds no file when Windows does not let setup
+see one that is there, so the first text says "cannot find" and not "is
+missing". The second text says "a program file is missing" for the same look,
+as it did before; that is not true for a file that setup cannot see. "Setup
+found no chats or settings in the folder": none of the seven names held
+anything at the look. The text does not say that Amplifier was uninstalled,
+and it does not say that Amplifier cannot start: a file that reads as a
+journal is no proof of an uninstall (a program of this account can write one),
+and setup looked for one program file only. The text tells the person to move
+or rename the folder, not to delete it: the folder can hold something of the
+person's that the look did not see, and a program can put data into it after
+the look. Setup's stop for a damaged folder names the same step. A setup run
+that finds no folder at that path goes on as for a first installation. The
+look only chooses a text. With either text setup installs nothing, deletes
+nothing and ends with status 1.
+
+Three states give the first text (a program of this account can make
+others): an uninstall with the delete choice left the folder because it holds
+something that is not Amplifier's (seen on a PC on November 17, 2026, with
+the earlier text; that is why the first text exists); the leftover of L3
+when the launcher's start program is gone; and a setup run while the step
+after exit still works (that step can still delete the folder, and Windows
+can refuse to move the folder while that step holds it). The second text can
+still be false after a delete: when the look finds no journal of a delete
+(the journal is gone, a program replaced or damaged it, or Windows refused
+the look), and when one of the seven names holds something again (a folder
+that the person made under that name, for example). The text then says that
+the folder holds chats and settings that the uninstall deleted. That limit
+stays.
+
+Proven on a Windows runner (Windows Server;
+`tests/windows/native_setup.Tests.cs`, job `windows-setup-folder`): both
+texts, complete; each of the seven names as an empty folder, as a folder with
+a file or a folder in it, and as a file; an empty folder, and a folder with
+a file in it, under another spelling of a data name (`App`); a link with a
+data name; an empty data folder that Windows refuses to list; a link to a
+journal, and a link to
+a folder, with the journal's name; nineteen files that are not such a
+journal, bytes that are not UTF-8, a record with one byte in a text value
+that is not UTF-8, and a folder with the journal's name; a journal of exactly
+4096 bytes; a journal that another program has open for writing, one that is
+deleted while a handle of the look's kind is open, and one that another
+program holds for itself; that the folder holds afterwards what the case put
+there; and that a look changes no creation time, no write time and no
+attribute of the journal, of setup's record and of the person's file. Not
+proven: the message in setup's real window, the three states on a PC with
+this text, the look on Windows 11, the look in a folder whose names Windows
+compares with the case of letters, a program that replaces an entry during
+the look, and a setup run in the instant in which the step after exit deletes
+the journal.
+
+When the launcher's start program is still there (a removal that
 stopped before its last step), setup asks, and on Yes it lets the
 installation's own program add the Start-menu and Apps-list entries again,
 and then it starts the launcher. That program adds the entries only when the
@@ -4121,12 +4335,75 @@ Keep app data, shared settings/native history and Foundation coordination roots
 distinct and preserve their explicit overrides.
 
 Pin and inspect each traversal ancestor before creating or opening its child.
-Denying delete sharing protects against rename, but sharing alone does not
-prevent reparse conversion through attribute access. Validate actual handle
-identity, type, filesystem and ACLs. Treat the owner and narrowly identified
-Windows system authorities as trusted; reject ordinary foreign mutation rights
-on traversal ancestors and ordinary foreign read access to private state.
-Do not silently rewrite an existing custom root's ACLs.
+A pin does not keep the last folder of its path in its place (see below), and
+sharing does not prevent reparse conversion through attribute access. Validate
+actual handle identity, type, filesystem and ACLs. Treat the owner and
+narrowly identified Windows system authorities as trusted; reject ordinary
+foreign mutation rights on traversal ancestors and ordinary foreign read
+access to private state. On a traversal ancestor (a folder above
+`owned_root`) the access check accepts a foreign allow entry in two cases. In
+the first, the entry holds none of the rights that the check counts as a
+change, except the right to add a subfolder; it can hold other rights, such
+as reading. In the second, the entry is inherit-only; the check then accepts
+it with any right that it knows. By Windows' documented rule an inherit-only
+entry gives no right on the folder that carries it; this work did not measure
+that. Every folder of the path is checked for itself, so an entry that a
+folder of the path inherited is checked there. Do not silently rewrite an
+existing custom root's ACLs.
+
+What a pin of this boundary holds (`amplifier_web/windows_files.py`), measured
+on hosted Windows runners (Windows Server 2025), not on Windows 11. A pin is
+an open handle on every folder of a path, from the drive's root down to the
+folder that the caller named. Each handle asks for the folder's attributes
+and security information only. Its share mode leaves out writing and
+deleting. With a pin open:
+
+- In one measurement another program of the same account renamed the last
+  pinned folder. In another it removed that folder, which was empty. In both
+  it then made a new folder at that name.
+- After the rename, and after the removal, the pin's next check refused, also
+  with the new folder at the name. The check runs before each read, removal
+  and publication through the pin. After the rename a publication was refused
+  and wrote nothing: not into the folder that moved, and not into the new
+  one. After the removal a publication was refused too.
+- Windows refused a rename of the folder above the last one, and of the
+  folder above that (error 5). After the pin closed, a rename of the folder
+  directly above the last one worked. The folder above that was not tried
+  again.
+
+So a pin covers what goes through its handles and its checks. It does not
+cover an act by a path, while the pin is open or after it: the path can name
+another folder then. The access check accepts a folder of the path only when
+no access rule of that folder gives anyone but this account and the trusted
+Windows authorities a right to delete it or to delete an entry in it. An
+inherit-only entry on a traversal ancestor is not counted, as said above.
+The check reads the folder's owner and its access rules. It does not see a
+right that Windows gives in another way (a privilege). So, by the access
+rules, such a rename or removal needs a program of the same account or a
+trusted Windows authority, and both are inside this boundary's trust.
+
+In further measurements of the same kind a second handle of the same process
+was open on the last folder. The rename and the removal were tried with that
+handle alone.
+The publication went through a pin that was opened beside it:
+
+| The second handle | Rename by another program | Removal of the empty folder by another program | Publication through a pin |
+| --- | --- | --- | --- |
+| Attributes and security information only; shares nothing | worked | worked | worked |
+| Can list the folder; shares reading and writing | refused (error 32) | refused (error 32) | worked |
+| Can list the folder; shares reading only | refused (error 32) | not tried | refused (error 32) |
+| Has the right to delete; shares reading only | refused (error 32) | refused (error 32) | refused (error 32) |
+
+A read and a removal of a file through a pin worked beside each of the four.
+The pins of this boundary open no handle of the last three kinds. A pin's own
+handle asks for the same as the first row and shares reading. With a pin
+alone the rename, the removal and the publication worked, as in the first
+row.
+
+This is about the pins of `windows_files.py`. The pins of Amplifier
+Foundation's session ownership are other handles from other code. For a
+folder that they pin, a case requires that Windows refuses a rename
+(`tests/test_windows_live_worker_folders.py`, on a hosted Windows runner).
 
 New private directories and temporary files receive their security descriptors
 at creation, before content is written. Credential initialization publishes

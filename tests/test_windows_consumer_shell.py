@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import time
 from types import SimpleNamespace
 import uuid
 
@@ -36,6 +37,9 @@ def model(tmp_path, monkeypatch):
     monkeypatch.setattr(shell, "SETTLE_SECONDS", 0)  # One attempt; the wait has its own test.
     @contextmanager
     def directory(path, **kwargs):
+        # The real check refuses a link, and a folder that this account does not own alone.
+        if path.is_symlink() or (state.get("refuse_folder") and state["refuse_folder"](path)):
+            raise PermissionError("The private-folder check refused this path")
         if kwargs.get("create"):
             path.mkdir(parents=True, exist_ok=True)
         elif not path.is_dir():
@@ -57,6 +61,8 @@ def model(tmp_path, monkeypatch):
             try:
                 def remove():
                     assert name in state["pins"]
+                    if state.get("before_remove"):
+                        state["before_remove"](name)
                     if state.get("link_failure") == name:
                         raise OSError("The shortcut could not be deleted")
                     state["calls"].append(("remove", name))
@@ -699,17 +705,173 @@ def test_listed_needs_the_installed_record_and_the_entry_that_opens_amplifier(
     assert shell.listed(root) is expected
 
 
-@pytest.mark.parametrize("collision", ["folder", "registry"])
-def test_removed_receipt_does_not_allow_overwriting_entries(model, collision):
+EXIST = "The Windows app entries already exist; nothing was overwritten."
+
+
+def _everything(top):
+    """Every entry below `top`: its name, what it is, a file's bytes and time of change. No link is followed."""
+    found = []
+    for folder, folders, files in os.walk(top):
+        for name in folders + files:
+            path = Path(folder, name)
+            what = "link" if path.is_symlink() else "folder" if path.is_dir() else "file"
+            found.append((str(path.relative_to(top)), what,
+                          (path.read_bytes(), path.stat().st_mtime_ns) if what == "file"
+                          else os.readlink(path) if what == "link" else None))
+    return sorted(found)
+
+
+# What is at the path of the Start-menu folder, or directly in that folder, when setup adds the entries.
+# Each of these refuses, and nothing is written: not a shortcut, not the record, not the Apps-list entry.
+REFUSED = ["apps-list-entry", "shortcut-name", "shortcut-name-in-other-letter-case", "folder-with-a-shortcut-name",
+           "all-four-shortcuts", "folder-of-another-owner", "link-to-another-folder", "link-to-nothing",
+           "file-at-the-folder-path"]
+
+
+@pytest.mark.parametrize("record", ['{"status":"removed"}', None])
+@pytest.mark.parametrize("there", REFUSED)
+def test_entries_are_not_added_where_one_of_them_or_something_foreign_is_there(model, tmp_path, there, record):
     root, programs, state = model
-    (root / shell.FILE).write_text('{"status":"removed"}')
-    if collision == "folder":
-        (programs / ("Amplifier Unified - " + shell.identity(root))).mkdir()
+    if record:
+        (root / shell.FILE).write_text(record)
+    folder = programs / ("Amplifier Unified - " + shell.identity(root))
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "theirs.txt").write_text("theirs")
+    if there == "link-to-another-folder":
+        folder.symlink_to(elsewhere, target_is_directory=True)
+    elif there == "link-to-nothing":
+        folder.symlink_to(tmp_path / "absent", target_is_directory=True)
+    elif there == "file-at-the-folder-path":
+        folder.write_text("a file, not a folder")
     else:
+        folder.mkdir()
+        (folder / "My own note.txt").write_text("mine")
+    if there == "apps-list-entry":
         state["registry"] = {"foreign": "entry"}
-    with pytest.raises(ValueError, match="entries already exist; nothing was overwritten"):
+    elif there == "shortcut-name":
+        (folder / "Amplifier status.lnk").write_bytes(b"not this installation's")
+    elif there == "shortcut-name-in-other-letter-case":
+        (folder / "AMPLIFIER Status.LNK").write_bytes(b"not this installation's")
+    elif there == "folder-with-a-shortcut-name":
+        (folder / "Uninstall Amplifier.lnk").mkdir()
+    elif there == "all-four-shortcuts":
+        for name in shell.LINKS:
+            (folder / name).write_bytes(b"of an earlier installation")
+    elif there == "folder-of-another-owner":
+        state["refuse_folder"] = lambda path: path == folder
+    before = _everything(programs), _everything(elsewhere), state["registry"]
+    with pytest.raises(ValueError) as refused:
         shell.install(root, "1.0.0")
-    assert not state["links"] and json.loads((root / shell.FILE).read_text())["status"] == "removed"
+    assert str(refused.value) == EXIST
+    assert (_everything(programs), _everything(elsewhere), state["registry"]) == before
+    assert not state["links"] and not state["writes"]
+    assert (root / shell.FILE).read_text() == record if record else not (root / shell.FILE).exists()
+
+
+@pytest.mark.parametrize("record", ['{"status":"removed"}', None])
+def test_entries_are_not_added_when_windows_refuses_the_look_at_the_folder(model, monkeypatch, record):
+    # A look that Windows refuses does not say that nothing is there. The folder holds only the
+    # person's file, so the entries would be added if the refusal counted as "absent".
+    root, programs, state = model
+    if record:
+        (root / shell.FILE).write_text(record)
+    folder = programs / ("Amplifier Unified - " + shell.identity(root))
+    folder.mkdir()
+    (folder / "My own note.txt").write_bytes(b"mine")
+    before = _everything(programs)
+    look = os.lstat
+    def refused(path, *args, **options):
+        if Path(path) == folder:
+            raise PermissionError(13, "Windows refused the look at this path")
+        return look(path, *args, **options)
+    with monkeypatch.context() as patch:
+        patch.setattr(shell.os, "lstat", refused)
+        with pytest.raises(ValueError) as stopped:
+            shell.install(root, "1.0.0")
+    assert str(stopped.value) == EXIST
+    assert _everything(programs) == before and state["registry"] is None
+    assert not state["links"] and not state["writes"]
+    assert (root / shell.FILE).read_text() == record if record else not (root / shell.FILE).exists()
+
+
+@pytest.mark.parametrize("record", ['{"status":"removed"}', None])
+@pytest.mark.parametrize("there", ["nothing", "own-file", "own-folder-and-near-names"])
+def test_entries_are_added_to_a_start_menu_folder_that_stayed_and_holds_none_of_them(model, there, record):
+    # The folder stays after an uninstall when the person put a file into it, and when another program
+    # still had a shortcut open. The record is gone after an uninstall that deleted the installation folder.
+    root, programs, state = model
+    if record:
+        (root / shell.FILE).write_text(record)
+    folder = programs / ("Amplifier Unified - " + shell.identity(root))
+    folder.mkdir()
+    if there != "nothing":
+        (folder / "My own note.txt").write_bytes(b"mine")
+    if there == "own-folder-and-near-names":
+        # Only an entry directly in the folder with exactly one of the four names counts.
+        (folder / "Mine").mkdir()
+        (folder / "Mine" / "Amplifier status.lnk").write_bytes(b"my copy, in my own folder")
+        (folder / "Amplifier status.lnk.txt").write_bytes(b"a longer name")
+        (folder / "Amplifier status").write_bytes(b"a shorter name")
+    before = _everything(folder)
+    assert shell.install(root, "1.0.0") == {"startMenu": str(folder), "installedAppEntry": True, "shortcuts": 4}
+    assert shell.listed(root) and state["registry"]["InstallLocation"] == str(root)
+    assert json.loads((root / shell.FILE).read_text())["status"] == "installed"
+    after = _everything(folder)
+    # The four shortcuts are beside what was there. Nothing that was there has another name, kind,
+    # content or time of change.
+    assert [row for row in after if row[0] not in shell.LINKS] == before
+    assert {row[0] for row in after} - {row[0] for row in before} == set(shell.LINKS)
+
+
+def test_file_that_the_person_put_into_the_start_menu_folder_no_longer_keeps_the_entries_away(uninstaller):
+    root, folder, state = uninstaller.root, uninstaller.folder, uninstaller.state
+    (folder / "My own note.txt").write_bytes(b"mine")
+    mine = [row for row in _everything(folder) if row[0] not in shell.LINKS]
+    assert [row[0] for row in mine] == ["My own note.txt"]
+    # The uninstall finishes. The folder stays, with the person's file alone.
+    assert uninstaller.run()["ok"]
+    assert _everything(folder) == mine and state["registry"] is None and not shell.listed(root)
+    assert json.loads((root / shell.FILE).read_text())["status"] == "removed"
+    # A second setup run adds the entries again, beside that file.
+    assert shell.install(root, "1.0.0")["shortcuts"] == 4 and shell.listed(root)
+    assert {path.name for path in folder.iterdir()} == set(shell.LINKS) | {"My own note.txt"}
+    assert [row for row in _everything(folder) if row[0] not in shell.LINKS] == mine
+    assert state["registry"]["InstallLocation"] == str(root)
+    # The next uninstall removes them again and leaves the file.
+    state["task"] = "running"
+    assert uninstaller.run()["ok"]
+    assert _everything(folder) == mine and state["registry"] is None
+
+
+def test_record_that_still_says_installed_beside_a_folder_that_stayed_is_still_refused(uninstaller):
+    # Two things at one uninstall: the person's file kept the folder, and the last write of the record
+    # was refused. The record then names a folder that exists, and it is not replaced.
+    root, folder, state = uninstaller.root, uninstaller.folder, uninstaller.state
+    installed = (root / shell.FILE).read_text()
+    (folder / "My own note.txt").write_bytes(b"mine")
+    assert uninstaller.run()["ok"]
+    (root / shell.FILE).write_text(installed)  # As if that last write had been refused.
+    with pytest.raises(ValueError, match="^Windows shell integration already has a receipt; inspect it before retrying\\.$"):
+        shell.install(root, "1.0.0")
+    assert [path.name for path in folder.iterdir()] == ["My own note.txt"] and state["registry"] is None
+    assert (root / shell.FILE).read_text() == installed and not shell.listed(root)
+
+
+def test_shortcut_that_another_program_still_lists_refuses_once_and_then_the_entries_are_added(uninstaller):
+    # Another program had a shortcut open and shared deleting: the uninstall finished, and Windows
+    # removed the shortcut only when that program closed it. Until then the folder still lists it.
+    root, folder, state = uninstaller.root, uninstaller.folder, uninstaller.state
+    assert uninstaller.run()["ok"] and not folder.exists()
+    folder.mkdir()
+    (folder / "Amplifier status.lnk").write_bytes(b"still listed for the other program")
+    record = (root / shell.FILE).read_text()
+    with pytest.raises(ValueError) as refused:
+        shell.install(root, "1.0.0")
+    assert str(refused.value) == EXIST and (root / shell.FILE).read_text() == record
+    assert [path.name for path in folder.iterdir()] == ["Amplifier status.lnk"] and state["registry"] is None
+    (folder / "Amplifier status.lnk").unlink()  # The other program closed it.
+    assert shell.install(root, "1.0.0")["shortcuts"] == 4 and shell.listed(root)
 
 
 def test_removed_folder_keeps_a_file_the_person_added(model):
@@ -1059,6 +1221,178 @@ def test_failed_shortcut_removal_is_finished_by_a_second_uninstall(uninstaller):
     assert not folder.exists() and json.loads((uninstaller.root / shell.FILE).read_text())["status"] == "removed"
 
 
+# Another program (the shell, a search index, a scanner) can have a shortcut open for a moment. Windows
+# refuses the uninstall's pin with error 32 while another open of the shortcut does not share deleting.
+# It refuses the delete with error 5 while a view of the file is mapped. Hosted Windows runners showed
+# both errors for a moment after the shortcuts were made. Which program caused error 5 there is not known.
+HELD = [("pin", 32, "entries-check"), ("delete", 5, "shortcuts")]
+
+
+def held(code):
+    """Windows' refusal while another program has the shortcut: a PermissionError with this Windows code."""
+    error = PermissionError(13, "Another program has the shortcut open")
+    error.winerror = code  # Off Windows the class has no such field; the product reads it by name.
+    return error
+
+
+def another_program(state, place, refuse):
+    """`refuse(name)` runs at each attempt to pin (`pin`) or to delete (`delete`) a shortcut."""
+    state["before_pin" if place == "pin" else "before_remove"] = lambda *where: refuse(where[-1])
+
+
+@pytest.mark.parametrize("place,code,step", HELD)
+def test_shortcut_that_another_program_holds_for_a_moment_does_not_stop_the_uninstall(
+        uninstaller, monkeypatch, place, code, step):
+    state, folder, waits = uninstaller.state, uninstaller.folder, []
+    monkeypatch.setattr(shell.time, "sleep", waits.append)
+    def refuse(name):
+        if name == "Amplifier status.lnk" and len(waits) < 3:
+            raise held(code)
+    another_program(state, place, refuse)
+    assert uninstaller.run()["ok"]
+    assert waits == [0.1] * 3
+    assert state["task"] == "absent" and state["registry"] is None and not folder.exists() and not state["pins"]
+    assert json.loads((uninstaller.root / shell.FILE).read_text())["status"] == "removed"
+    assert not saved_record(uninstaller.root).exists()
+
+
+@pytest.mark.parametrize("place,code,step", HELD)
+def test_shortcut_that_stays_held_stops_the_uninstall_after_a_bounded_wait(
+        uninstaller, monkeypatch, place, code, step):
+    state, folder, consumer = uninstaller.state, uninstaller.folder, uninstaller.consumer
+    registration, waits, attempts = state["registry"].copy(), [], []
+    monkeypatch.setattr(shell, "HOLD_SECONDS", 2)
+    monkeypatch.setattr(shell.time, "sleep", waits.append)
+    def refuse(name):
+        if name == "Amplifier status.lnk":
+            attempts.append(name)
+            assert len(attempts) <= 21, "The wait for a held shortcut has no end."
+            raise held(code)
+    another_program(state, place, refuse)
+    with pytest.raises(consumer.Unfinished) as stopped:
+        uninstaller.run()
+    assert (stopped.value.step, stopped.value.error.winerror) == (step, code)
+    # Two seconds: one attempt, then twenty more, a tenth of a second apart. No wait after the last.
+    assert waits == [0.1] * 20 and len(attempts) == 21 and not state["pins"]
+    if place == "pin":
+        # Nothing was changed, and the app still runs.
+        assert stopped.value.notice.startswith("This uninstall stopped before it changed anything.\n\n")
+        assert not state["calls"] and state["task"] == "running" and state["registry"] == registration
+        assert {path.name for path in folder.iterdir()} == set(shell.LINKS)
+    else:
+        # The app has stopped and the Apps-list entry is gone. The held shortcut and every later one
+        # stay. The shortcut that uninstalls is the last, so the person can uninstall again.
+        assert "Uninstall again to finish." in stopped.value.notice
+        assert state["calls"][:3] == [("stop",), ("task-remove",), ("registry-remove",)]
+        assert state["task"] == "absent" and state["registry"] is None
+        assert [path.name for path in sorted(folder.iterdir())] == sorted(list(shell.LINKS)[1:])
+        assert list(shell.LINKS)[-1] == "Uninstall Amplifier.lnk"
+    # The other program has closed the shortcut: the same command completes.
+    another_program(state, place, lambda name: None)
+    assert uninstaller.run()["ok"]
+    assert state["task"] == "absent" and state["registry"] is None and not folder.exists()
+
+
+@pytest.mark.parametrize("place", ["pin", "delete"])
+def test_the_wait_for_held_shortcuts_is_bounded_for_the_whole_step_not_for_each_shortcut(
+        uninstaller, monkeypatch, place):
+    state, consumer, waits, attempts = uninstaller.state, uninstaller.consumer, [], {}
+    code = dict((where, number) for where, number, _ in HELD)[place]
+    monkeypatch.setattr(shell, "HOLD_SECONDS", 2)
+    monkeypatch.setattr(shell.time, "sleep", waits.append)
+    def refuse(name):
+        # Each of two shortcuts is held for its first fifteen attempts.
+        attempts[name] = attempts.get(name, 0) + 1
+        if name in ("Amplifier status.lnk", "Stop Amplifier.lnk") and attempts[name] <= 15:
+            raise held(code)
+    another_program(state, place, refuse)
+    with pytest.raises(consumer.Unfinished) as stopped:
+        uninstaller.run()
+    assert stopped.value.error.winerror == code
+    # Fifteen waits for the first of them, and only the five that are left for the second.
+    assert waits == [0.1] * 20
+    assert (attempts["Amplifier status.lnk"], attempts["Stop Amplifier.lnk"]) == (16, 6)
+    assert "Uninstall Amplifier.lnk" not in attempts
+
+
+def test_held_shortcut_that_changes_during_the_wait_refuses_at_once_when_the_hold_ends(uninstaller, monkeypatch):
+    # Each further attempt of a pin reads and compares the shortcut's bytes again. So a shortcut that
+    # changed while another program held it is refused, and not removed, when that program lets go.
+    state, folder, consumer, waits = uninstaller.state, uninstaller.folder, uninstaller.consumer, []
+    monkeypatch.setattr(shell.time, "sleep", waits.append)
+    name = "Amplifier status.lnk"
+    def refuse(entry):
+        if entry == name:
+            if len(waits) < 2:
+                raise held(32)
+            (folder / name).write_bytes(b"changed while another program held it")
+    another_program(state, "pin", refuse)
+    with pytest.raises(consumer.Unfinished) as stopped:
+        uninstaller.run()
+    assert stopped.value.step == "entries-check" and type(stopped.value.error) is ValueError
+    assert stopped.value.notice.startswith("This uninstall stopped before it changed anything.\n\n")
+    assert waits == [0.1] * 2 and not state["calls"] and state["task"] == "running"
+    assert state["registry"] is not None and len(list(folder.iterdir())) == 4 and not state["pins"]
+
+
+def test_the_pin_and_the_delete_each_have_their_own_wait(uninstaller, monkeypatch):
+    # The app stops between the two steps, and that can take long. So the wait of the pin takes
+    # nothing from the wait of the delete.
+    state, folder, waits, attempts = uninstaller.state, uninstaller.folder, [], {"pin": 0, "delete": 0}
+    monkeypatch.setattr(shell, "HOLD_SECONDS", 2)
+    monkeypatch.setattr(shell.time, "sleep", waits.append)
+    def refuse(place):
+        def refused(name):
+            if name == "Amplifier status.lnk":
+                attempts[place] += 1
+                if attempts[place] <= 15:
+                    raise held(dict((where, number) for where, number, _ in HELD)[place])
+        return refused
+    state["before_pin"] = lambda path, name: refuse("pin")(name)
+    state["before_remove"] = refuse("delete")
+    assert uninstaller.run()["ok"]
+    assert waits == [0.1] * 30 and attempts == {"pin": 16, "delete": 16}
+    assert state["registry"] is None and not folder.exists() and not state["pins"]
+
+
+@pytest.mark.parametrize("place,code", [("pin", 5), ("delete", 32), ("pin", 33), ("delete", 33),
+                                        ("pin", None), ("delete", None)])
+def test_only_the_refusal_of_a_held_shortcut_is_tried_again(uninstaller, monkeypatch, place, code):
+    # Error 5 at the pin and error 32 at the delete are not what a short hold gives. A PermissionError
+    # without a Windows code is the product's own refusal (an owner, an access rule, a replaced file).
+    state, consumer, waits = uninstaller.state, uninstaller.consumer, []
+    monkeypatch.setattr(shell.time, "sleep", waits.append)
+    def refuse(name):
+        if name == "Amplifier status.lnk":
+            raise held(code) if code else PermissionError("Windows private files require trusted ownership")
+    another_program(state, place, refuse)
+    with pytest.raises(consumer.Unfinished) as stopped:
+        uninstaller.run()
+    assert stopped.value.step == ("entries-check" if place == "pin" else "shortcuts")
+    assert isinstance(stopped.value.error, PermissionError) and not waits
+
+
+@pytest.mark.parametrize("change", ["bytes", "binding"])
+def test_changed_shortcut_refuses_at_once_while_another_shortcut_was_held(uninstaller, monkeypatch, change):
+    state, folder, consumer, waits = uninstaller.state, uninstaller.folder, uninstaller.consumer, []
+    monkeypatch.setattr(shell.time, "sleep", waits.append)
+    first, changed = list(shell.LINKS)[0], list(shell.LINKS)[2]
+    if change == "bytes":
+        (folder / changed).write_bytes(b"changed after setup")
+    else:
+        state["links"][str(folder / changed)] = ("other.exe", "")
+    def refuse(name):
+        if name == first and len(waits) < 2:
+            raise held(32)
+    another_program(state, "pin", refuse)
+    with pytest.raises(consumer.Unfinished) as stopped:
+        uninstaller.run()
+    # The wait for the first shortcut ended. The changed one then refuses with no further wait.
+    assert stopped.value.step == "entries-check" and type(stopped.value.error) is ValueError
+    assert waits == [0.1] * 2 and not state["calls"] and state["task"] == "running"
+    assert len(list(folder.iterdir())) == 4 and not state["pins"]
+
+
 def test_app_left_running_without_entries_by_the_earlier_order_can_be_uninstalled(uninstaller):
     # What clean-room runs 2 and 3 left behind: no entry, receipt "installed", app running.
     state, folder = uninstaller.state, uninstaller.folder
@@ -1352,3 +1686,450 @@ def test_native_uninstall_order_failure_and_second_uninstall(monkeypatch):
             pass
         shutil.rmtree(folder, ignore_errors=True)
         shutil.rmtree(root, ignore_errors=True)
+
+
+@pytest.fixture
+def native_uninstall(monkeypatch):
+    """The public uninstall over the real Windows entries of a throwaway installation folder.
+
+    Real: ShellLink COM, the per-user Start-menu folder, the HKCU registry
+    transaction, pinned private files and NTFS sharing. Stand-ins: Task
+    Scheduler, the dialogs and the installation receipt check. No app is
+    started. `waits` holds each wait that the uninstall asked for; the wait
+    itself is real. `at_wait[n]` is called at the n-th wait of a tenth of a
+    second: what another program does at that moment.
+    """
+    if os.name != "nt":
+        if os.environ.get("AMPLIFIER_REQUIRE_WINDOWS_SHELL_CHECKS") == "1":
+            pytest.fail("This lane requires the real Windows shell checks.")
+        pytest.skip("Real Start-menu shortcuts, NTFS sharing and a mapped view of a file")
+    import shutil
+    import winreg
+    from amplifier_web import installation_health, windows_consumer as consumer
+    from amplifier_web import windows_files, windows_installation, windows_service
+    root = windows_files.address(Path.home() / ("au-held-test-" + uuid.uuid4().hex[:12]))
+    with windows_files.directory(root, owned_root=root, create=True):
+        pass
+    folder = shell.programs() / ("Amplifier Unified - " + shell.identity(root))
+    events, waits, at_wait, sleep = [], [], {}, time.sleep
+    monkeypatch.setattr(consumer, "installation", lambda value: (windows_files.address(value), {}))
+    monkeypatch.setattr(consumer, "environment", lambda *a: {})
+    monkeypatch.setattr(windows_installation, "owner_notice", lambda text, confirm=False: True)
+    async def working(home):
+        return None
+    monkeypatch.setattr(installation_health, "windows_working", working)
+    def uninstall(home, *, progress):
+        for step in ("task-read", "stop", "task-remove"):
+            progress(step)
+        events.append("stop")
+    monkeypatch.setattr(windows_service, "uninstall", uninstall)
+    def wait(seconds):
+        waits.append(seconds)
+        if seconds == 0.1 and waits.count(0.1) in at_wait:
+            at_wait.pop(waits.count(0.1))()
+        sleep(seconds)
+    monkeypatch.setattr(shell.time, "sleep", wait)
+    try:
+        registration = _install_native_entries(root)
+        assert registration and {path.name for path in folder.iterdir()} == set(shell.LINKS)
+        yield SimpleNamespace(root=root, folder=folder, registration=registration, events=events, waits=waits,
+                              at_wait=at_wait,
+                              consumer=consumer, run=lambda: asyncio.run(consumer.maintenance(root, "uninstall")))
+    finally:
+        # Only this test's own throwaway objects, by their exact names.
+        try:
+            winreg.DeleteKey(winreg.HKEY_CURRENT_USER, shell.REGISTRY + shell.identity(root))
+        except OSError:
+            pass
+        shutil.rmtree(folder, ignore_errors=True)
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def _another_program_holds(path, *, mapped):
+    """What another program can do with a shortcut for a moment. Returns the function that ends it.
+
+    Not mapped: an open for reading that shares reading and writing and does
+    not share deleting. Many programs open a file like that. Mapped: a view of
+    the file. The program closed its handles and kept the view.
+
+    Windows keeps sharing for each open of a file and a view for each mapping,
+    not for each process. So this process's own second open and its own view
+    are refused exactly like another program's.
+    """
+    import ctypes
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.CreateFileW.restype = ctypes.c_void_p
+    kernel.CreateFileW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p,
+                                   ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p]
+    kernel.CreateFileMappingW.restype = ctypes.c_void_p
+    kernel.CreateFileMappingW.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32,
+                                          ctypes.c_uint32, ctypes.c_wchar_p]
+    kernel.MapViewOfFile.restype = ctypes.c_void_p
+    kernel.MapViewOfFile.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint32,
+                                     ctypes.c_size_t]
+    kernel.UnmapViewOfFile.argtypes = [ctypes.c_void_p]
+    kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+    # GENERIC_READ; FILE_SHARE_READ | FILE_SHARE_WRITE, and for the view also FILE_SHARE_DELETE; OPEN_EXISTING.
+    handle = kernel.CreateFileW(str(path), 0x80000000, 7 if mapped else 3, None, 3, 0, None)
+    assert handle and handle != ctypes.c_void_p(-1).value, ctypes.WinError(ctypes.get_last_error())
+    view = None
+    if mapped:
+        mapping = kernel.CreateFileMappingW(handle, None, 2, 0, 0, None)  # PAGE_READONLY
+        assert mapping, ctypes.WinError(ctypes.get_last_error())
+        view = kernel.MapViewOfFile(mapping, 4, 0, 0, 0)  # FILE_MAP_READ
+        assert view, ctypes.WinError(ctypes.get_last_error())
+        assert kernel.CloseHandle(mapping) and kernel.CloseHandle(handle)
+    once = [True]
+
+    def release():
+        if once:
+            once.clear()
+            assert kernel.UnmapViewOfFile(view) if mapped else kernel.CloseHandle(handle)
+    return release
+
+
+@pytest.mark.parametrize("mapped", [False, True], ids=["open-without-delete-sharing", "mapped-view"])
+def test_native_shortcut_that_another_program_holds_is_waited_for_and_the_wait_has_an_end(
+        native_uninstall, monkeypatch, mapped):
+    """The two stops that hosted Windows runners showed, made on purpose with real NTFS handles.
+
+    An open without delete sharing refuses the uninstall's pin: Windows error
+    32 at `entries-check`, and nothing is changed. A mapped view lets the pin
+    pass and refuses the delete: Windows error 5 at `shortcuts`, after the app
+    stopped and the Apps-list entry went.
+
+    1. The shortcut stays held: the uninstall waits its bounded time, then
+       stops with that refusal.
+    2. The other program lets go at the third wait of the next uninstall:
+       that uninstall waits three times and finishes.
+    """
+    native, consumer = native_uninstall, native_uninstall.consumer
+    name = "Amplifier status.lnk"  # The second of the four in the order of removal.
+    step, code = ("shortcuts", 5) if mapped else ("entries-check", 32)
+    longest = shell.HOLD_SECONDS
+    release = _another_program_holds(native.folder / name, mapped=mapped)
+    try:
+        monkeypatch.setattr(shell, "HOLD_SECONDS", 1)
+        began = time.monotonic()
+        with pytest.raises(consumer.Unfinished) as stopped:
+            native.run()
+        seconds = round(time.monotonic() - began, 2)  # The whole uninstall, with its ten waits.
+        left = sorted(path.name for path in native.folder.iterdir())
+        # The workflow reads the first three keys of this line, in this order.
+        seen = {"step": stopped.value.step, "error": type(stopped.value.error).__name__,
+                "code": getattr(stopped.value.error, "winerror", None), "waits": native.waits.count(0.1),
+                "events": list(native.events), "left": left, "appsEntry": shell.registry(native.root) is not None,
+                "seconds": seconds}
+        print("UNINSTALL_HELD " + json.dumps(seen))
+        assert (seen["step"], seen["error"], seen["code"]) == (step, "PermissionError", code), seen
+        if mapped:
+            # The app has stopped and the Apps-list entry is gone. The shortcut before the held one is
+            # gone. The held one and every later one stay: the person can still uninstall again.
+            assert seen["events"] == ["stop"] and not seen["appsEntry"], seen
+            assert left == sorted(list(shell.LINKS)[1:]) and "Uninstall Amplifier.lnk" in left, seen
+            assert "Uninstall again to finish." in stopped.value.notice
+        else:
+            # Nothing was changed, and the app was not asked to stop.
+            assert not seen["events"] and shell.registry(native.root) == native.registration, seen
+            assert left == sorted(shell.LINKS), seen
+            assert stopped.value.notice.startswith("This uninstall stopped before it changed anything.\n\n")
+        # One second: one attempt, then ten more, a tenth of a second apart.
+        assert seen["waits"] == 10, seen
+        # The other program lets go at the third wait of the next uninstall.
+        monkeypatch.setattr(shell, "HOLD_SECONDS", longest)
+        del native.waits[:]
+        native.at_wait[3] = release
+        result = native.run()
+        assert result["ok"] and result["certificate"] == "none", result
+        assert native.waits.count(0.1) == 3 and not native.at_wait, native.waits
+        assert shell.registry(native.root) is None and not native.folder.exists()
+        from amplifier_web import windows_files
+        with windows_files.directory(native.root, owned_root=native.root) as owned:
+            assert json.loads(owned.read_private(shell.FILE, limit=65536))["status"] == "removed"
+    finally:
+        release()
+
+
+def test_native_held_shortcut_that_changes_during_the_wait_refuses_when_the_hold_ends(native_uninstall):
+    """The held shortcut itself gets one more byte at the second wait, and the other program lets go at the third.
+
+    The next attempt of the pin opens the shortcut, reads its bytes again and
+    refuses them: nothing is removed, and the app is not asked to stop.
+    """
+    native, consumer = native_uninstall, native_uninstall.consumer
+    path = native.folder / "Amplifier status.lnk"
+    release = _another_program_holds(path, mapped=False)  # It shares writing, so the file can change.
+    def change():
+        with open(path, "ab") as stream:
+            stream.write(b"\0")
+    try:
+        native.at_wait[2], native.at_wait[3] = change, release
+        with pytest.raises(consumer.Unfinished) as stopped:
+            native.run()
+        assert stopped.value.step == "entries-check" and type(stopped.value.error) is ValueError, stopped.value.error
+        assert native.waits.count(0.1) == 3 and not native.at_wait and not native.events
+        assert shell.registry(native.root) == native.registration
+        assert {entry.name for entry in native.folder.iterdir()} == set(shell.LINKS)
+    finally:
+        release()
+
+
+@pytest.mark.parametrize("change", ["bytes", "target"])
+def test_native_changed_shortcut_still_refuses_at_once(native_uninstall, change):
+    """A shortcut that differs from setup's record is not a held shortcut: no wait, and nothing is removed."""
+    native, consumer = native_uninstall, native_uninstall.consumer
+    path = native.folder / "Amplifier status.lnk"
+    if change == "bytes":
+        path.write_bytes(path.read_bytes() + b"\0")
+    else:
+        python, links = shell.entries(native.root)
+        other = python.with_name("other.exe")
+        other.write_bytes(b"MZ")  # A shortcut target must exist. Nothing starts it.
+        with shell.shell_link() as link:
+            link.create(path, other, links[path.name], native.root / "workspace")
+    with pytest.raises(consumer.Unfinished) as stopped:
+        native.run()
+    assert stopped.value.step == "entries-check" and type(stopped.value.error) is ValueError, stopped.value.error
+    assert 0.1 not in native.waits and not native.events
+    assert shell.registry(native.root) == native.registration
+    assert {path.name for path in native.folder.iterdir()} == set(shell.LINKS)
+
+
+def _native_record(root):
+    from amplifier_web import windows_files
+    with windows_files.directory(root, owned_root=root) as owned:
+        return json.loads(owned.read_private(shell.FILE, limit=65536))
+
+
+def _native_entries(folder):
+    """What is at the Start-menu folder's path: each entry directly in it, with a file's bytes and time of change."""
+    if os.path.isjunction(folder):
+        return ["a link to", os.readlink(folder)]
+    if folder.is_file():
+        return ["a file", folder.read_bytes(), folder.stat().st_mtime_ns]
+    return sorted((path.name, "folder" if path.is_dir() else "file",
+                   None if path.is_dir() else (path.read_bytes(), path.stat().st_mtime_ns))
+                  for path in folder.iterdir())
+
+
+def test_native_entries_are_added_again_beside_a_file_that_the_person_put_into_the_start_menu_folder(
+        native_uninstall):
+    """A second setup run after an uninstall that left the Start-menu folder, on the real folder.
+
+    A file that the person put into Amplifier's Start-menu folder keeps that
+    folder at an uninstall. Setup's step for the entries then adds the four
+    shortcuts and the Apps-list entry again, beside that file. The file keeps
+    its name, its bytes and its time of change, here and at the next uninstall.
+    """
+    native, root, folder = native_uninstall, native_uninstall.root, native_uninstall.folder
+    (folder / "My own note.txt").write_bytes(b"the person's own file")
+    mine = [row for row in _native_entries(folder) if row[0] not in shell.LINKS]
+    assert [row[0] for row in mine] == ["My own note.txt"]
+    assert native.run()["ok"]
+    # The uninstall finished, and the folder stays with the person's file alone.
+    assert _native_entries(folder) == mine and shell.registry(root) is None
+    assert _native_record(root)["status"] == "removed" and not shell.listed(root)
+    result = shell.install(root, "1.0.0")
+    python, links = shell.entries(root)
+    for name, args in links.items():
+        with shell.shell_link() as link:
+            assert link.read(folder / name) == (str(python), args)
+    after = _native_entries(folder)
+    # The workflow reads this line from its start to the end of "unchanged".
+    seen = {"shortcuts": result["shortcuts"], "appsEntry": shell.registry(root) == native.registration,
+            "kept": [row[0] for row in after if row[0] not in shell.LINKS],
+            "unchanged": [row for row in after if row[0] not in shell.LINKS] == mine,
+            "listed": shell.listed(root), "record": _native_record(root)["status"]}
+    print("ENTRIES_AGAIN " + json.dumps(seen))
+    assert seen == {"shortcuts": 4, "appsEntry": True, "kept": ["My own note.txt"], "unchanged": True,
+                    "listed": True, "record": "installed"}, seen
+    assert {row[0] for row in after} == set(shell.LINKS) | {"My own note.txt"}
+    # The next uninstall removes the entries again and leaves the file.
+    assert native.run()["ok"]
+    assert _native_entries(folder) == mine and shell.registry(root) is None
+
+
+@pytest.mark.parametrize("there", ["shortcut-name-in-other-letter-case", "folder-with-a-shortcut-name",
+                                   "three-of-the-four-shortcut-names", "link-to-another-folder", "link-to-nothing",
+                                   "file-at-the-folder-path", "folder-that-everyone-can-change", "apps-list-entry"])
+def test_native_entries_are_not_added_where_one_of_them_or_something_foreign_is_there(native_uninstall, there):
+    """Each of these refuses on the real folder, and nothing is written: no shortcut, no record, no Apps-list entry."""
+    import _winapi
+    import subprocess
+    from amplifier_web import windows_files
+    native, root, folder = native_uninstall, native_uninstall.root, native_uninstall.folder
+    assert native.run()["ok"] and not folder.exists() and shell.registry(root) is None
+    elsewhere = root / "elsewhere"
+    with windows_files.directory(elsewhere, owned_root=root, create=True):
+        pass
+    (elsewhere / "theirs.txt").write_bytes(b"theirs")
+    try:
+        if there == "link-to-another-folder":
+            _winapi.CreateJunction(str(elsewhere), str(folder))
+        elif there == "link-to-nothing":
+            gone = root / "gone"
+            gone.mkdir()
+            _winapi.CreateJunction(str(gone), str(folder))
+            gone.rmdir()
+            assert os.path.lexists(folder) and not folder.exists()
+        elif there == "file-at-the-folder-path":
+            folder.write_bytes(b"a file, not a folder")
+        else:
+            # The folder as the first installation makes it: this account's own private folder.
+            with windows_files.directory(folder, owned_root=folder, create=True):
+                pass
+            (folder / "My own note.txt").write_bytes(b"mine")
+        if there == "shortcut-name-in-other-letter-case":
+            (folder / "AMPLIFIER Status.LNK").write_bytes(b"not this installation's")
+        elif there == "folder-with-a-shortcut-name":
+            (folder / "Uninstall Amplifier.lnk").mkdir()
+        elif there == "three-of-the-four-shortcut-names":
+            # As after an installation folder that was deleted by hand, and one shortcut with it.
+            for name in list(shell.LINKS)[1:]:
+                (folder / name).write_bytes(b"of an earlier installation")
+        elif there == "folder-that-everyone-can-change":
+            # The group Everyone (S-1-1-0) gets the right to change the folder: it is not private any more.
+            granted = subprocess.run([str(Path(os.environ["SystemRoot"]) / "System32" / "icacls.exe"), str(folder),
+                                      "/grant", "*S-1-1-0:(OI)(CI)M"], capture_output=True, text=True, timeout=60)
+            assert granted.returncode == 0, granted.stdout[-500:] + granted.stderr[-500:]
+            with pytest.raises(PermissionError):
+                with windows_files.directory(folder, owned_root=folder):
+                    pass
+        elif there == "apps-list-entry":
+            shell.registry(root, shell.registration_values(root, "1.0.0"))
+        before = _native_record(root), shell.registry(root), _native_entries(folder), _native_entries(elsewhere)
+        assert before[0]["status"] == "removed"
+        with pytest.raises(ValueError) as refused:
+            shell.install(root, "1.0.0")
+        assert str(refused.value) == EXIST
+        assert (_native_record(root), shell.registry(root), _native_entries(folder),
+                _native_entries(elsewhere)) == before
+    finally:
+        if os.path.isjunction(folder):
+            os.rmdir(folder)  # The link itself, never its target.
+        elif folder.is_file():
+            folder.unlink()
+
+
+def test_native_set_from_which_a_person_deleted_one_shortcut_is_refused_by_its_record(native_uninstall):
+    """The record says that the entries are installed, and three of them are there: nothing is added or changed."""
+    native, root, folder = native_uninstall, native_uninstall.root, native_uninstall.folder
+    (folder / "Amplifier status.lnk").unlink()
+    before = _native_record(root), shell.registry(root), _native_entries(folder)
+    assert before[0]["status"] == "installed" and len(before[2]) == 3
+    with pytest.raises(ValueError) as refused:
+        shell.install(root, "1.0.0")
+    assert str(refused.value) == "Windows shell integration already has a receipt; inspect it before retrying."
+    assert (_native_record(root), shell.registry(root), _native_entries(folder)) == before
+
+
+@pytest.mark.parametrize("made", ["as-a-private-file-of-this-account", "as-a-plain-file"])
+def test_native_shortcut_name_that_appears_after_the_check_is_not_overwritten(native_uninstall, monkeypatch, made):
+    """The real writer refuses a name that exists: a file that appears after the look keeps its bytes.
+
+    Another program makes a file with a shortcut's name in the instant after
+    setup's step looked at the folder and before it writes that shortcut. The
+    step stops with the writer's refusal. It adds no Apps-list entry, and its
+    record does not say that the entries are installed.
+
+    The other program's file is made in two ways. As a private file of this
+    account (its owner is this account, as for a person's own program on a
+    PC): the writer answers that the name exists. As a plain file: the writer
+    can refuse that file at one of its own checks of an existing file before
+    it answers that the name exists. Both are the writer's refusals, and
+    neither carries a Windows error code. The case prints which refusal it
+    got, with the refusal's text.
+    """
+    from amplifier_web import windows_files
+    native, root, folder = native_uninstall, native_uninstall.root, native_uninstall.folder
+    (folder / "My own note.txt").write_bytes(b"mine")
+    assert native.run()["ok"] and [path.name for path in folder.iterdir()] == ["My own note.txt"]
+    name, theirs = "Amplifier status.lnk", b"another program's file"
+    publish = windows_files.PinnedDirectory.publish_private
+    def appears(self, entry, content, *, replace=False):
+        if entry == name and not (folder / name).exists():
+            if made == "as-a-plain-file":
+                (folder / name).write_bytes(theirs)
+            else:
+                publish(self, name, theirs)
+        return publish(self, entry, content, replace=replace)
+    monkeypatch.setattr(windows_files.PinnedDirectory, "publish_private", appears)
+    with pytest.raises((FileExistsError, PermissionError)) as refused:
+        shell.install(root, "1.0.0")
+    print("NAME_APPEARED " + json.dumps({"made": made, "refusal": type(refused.value).__name__,
+                                         "code": getattr(refused.value, "winerror", None),
+                                         "text": str(refused.value).replace(str(folder), "<folder>")}))
+    assert getattr(refused.value, "winerror", None) is None, refused.value  # Not a sharing refusal of Windows.
+    if made != "as-a-plain-file":
+        assert type(refused.value) is FileExistsError, refused.value
+    assert (folder / name).read_bytes() == theirs and (folder / "My own note.txt").read_bytes() == b"mine"
+    assert sorted(path.name for path in folder.iterdir()) == sorted(
+        ["My own note.txt", name, next(iter(shell.LINKS))])  # The first shortcut was written before the stop.
+    assert shell.registry(root) is None and not shell.listed(root)
+    assert _native_record(root)["status"] != "installed"
+
+
+def test_native_file_put_at_a_new_shortcut_path_before_the_shell_saves_is_written_over(native_uninstall, monkeypatch):
+    """The first moment that setup's step does not cover, on real files. A known limit, not a promise.
+
+    The writer makes each shortcut as a new, empty file, and the Windows shell
+    then saves the shortcut to that file's path. Here another program of this
+    account replaces the new file between the two. It uses the private writer,
+    so that its file is this account's own, as a file of a person's program is
+    on a PC. The shell saves to the path, and the other program's bytes are
+    gone. A change that closes this moment changes this case and the sentence
+    of the design that names the moment.
+    """
+    from amplifier_web import windows_files
+    native, root, folder = native_uninstall, native_uninstall.root, native_uninstall.folder
+    assert native.run()["ok"] and not folder.exists()
+    name, theirs, put = "Amplifier status.lnk", b"another program's file", []
+    publish = windows_files.PinnedDirectory.publish_private
+    def replaced(self, entry, content, *, replace=False):
+        publish(self, entry, content, replace=replace)
+        if entry == name and not put:
+            publish(self, name, theirs, replace=True)
+            assert (folder / name).read_bytes() == theirs
+            put.append(os.stat(folder / name).st_ino)
+    monkeypatch.setattr(windows_files.PinnedDirectory, "publish_private", replaced)
+    result = shell.install(root, "1.0.0")
+    after = (folder / name).read_bytes()
+    print("SAVED_BY_PATH " + json.dumps({
+        "writtenOver": after != theirs, "shortcut": after[:4] == b"L\x00\x00\x00",
+        "sameFileObject": os.stat(folder / name).st_ino == put[0],
+        "shortcuts": result["shortcuts"], "record": _native_record(root)["status"]}))
+    assert put and after != theirs and after[:4] == b"L\x00\x00\x00"
+
+
+def test_native_file_put_at_a_saved_shortcut_path_before_the_record_reads_it_is_recorded(native_uninstall, monkeypatch):
+    """The second moment that setup's step does not cover, on real files. A known limit, not a promise.
+
+    After the Windows shell saved a shortcut and read its target back, the
+    step reads the shortcut's bytes by its name for its record. Here another
+    program of this account replaces the saved shortcut between the two, with
+    a private file of its own. The record then holds the hash of that file as
+    this installation's shortcut. A change that closes this moment changes
+    this case and the sentence of the design that names the moment.
+    """
+    from amplifier_web import windows_files
+    native, root, folder = native_uninstall, native_uninstall.root, native_uninstall.folder
+    assert native.run()["ok"] and not folder.exists()
+    name, theirs, saved = "Amplifier status.lnk", b"another program's file", []
+    read = windows_files.PinnedDirectory.read_private
+    publish = windows_files.PinnedDirectory.publish_private
+    def replaced(self, entry, *, limit):
+        if entry == name and not saved:
+            saved.append(read(self, name, limit=limit))  # The shortcut that this run saved.
+            publish(self, name, theirs, replace=True)
+        return read(self, entry, limit=limit)
+    monkeypatch.setattr(windows_files.PinnedDirectory, "read_private", replaced)
+    result = shell.install(root, "1.0.0")
+    monkeypatch.setattr(windows_files.PinnedDirectory, "read_private", read)
+    record = _native_record(root)
+    seen = {"savedWasAShortcut": bool(saved) and saved[0][:4] == b"L\x00\x00\x00",
+            "recordedTheirs": record["links"][name] == hashlib.sha256(theirs).hexdigest(),
+            "fileIsTheirs": (folder / name).read_bytes() == theirs,
+            "shortcuts": result["shortcuts"], "record": record["status"]}
+    print("RECORDED_BY_NAME " + json.dumps(seen))
+    assert seen == {"savedWasAShortcut": True, "recordedTheirs": True, "fileIsTheirs": True,
+                    "shortcuts": 4, "record": "installed"}, seen

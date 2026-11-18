@@ -123,4 +123,9 @@ def encode(command, coordinator=None):
             remaining_text -= row['size']
         else:
             content.append({'type': 'text', 'text': 'Read this attachment from its local file with an appropriate tool when needed.'})
+    if coordinator is not None:
+        from .host.media import RequestOnlyRegistry
+        registry = coordinator.get_capability('web.media.request_only')
+        if type(registry) is RequestOnlyRegistry and any(block['type'] == 'image' for block in content):
+            registry.issue_upload(command.id, content)
     return content

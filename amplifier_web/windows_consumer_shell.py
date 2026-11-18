@@ -23,6 +23,17 @@ import uuid
 FILE = "consumer-shell.json"
 NOTE = "apps-list-version.json"
 SETTLE_SECONDS = 15  # Longest wait for a closing app to release the installation folder.
+# The waits for another program to close a Start-menu shortcut add up to at
+# most this many seconds: once for the step that pins the shortcuts, and once
+# for the step that deletes them. The Windows calls of each attempt take their
+# own time, so a step that waits can take longer than this.
+# Measured on hosted Windows runners, about 3 seconds after the shortcuts were
+# made: the pin was refused for 0.01 s, and the delete was refused for at most
+# 0.25 s. Asked which program had the file open, Windows named explorer.exe
+# after 7 of 92 refused pins, and no program after the others and after the
+# refused deletes. The waits are twenty times the longest of those refusals.
+# A shortcut that is still held then stops the uninstall as before.
+HOLD_SECONDS = 5
 LINKS = {"Amplifier Unified.lnk": "", "Amplifier status.lnk": " --status",
          "Stop Amplifier.lnk": " --stop", "Uninstall Amplifier.lnk": " --uninstall"}
 REGISTRY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\AmplifierUnified-"
@@ -394,6 +405,46 @@ def listed(root) -> bool:
         return False
 
 
+def _free(folder):
+    """Setup can add its entries at this Start-menu folder's path: none of them is there.
+
+    True when nothing has that name. True also for the folder that stayed
+    after an uninstall, when it is this account's own private folder (the
+    check that every later step makes again) and no entry directly in it has
+    one of the names of LINKS. Such an entry counts whatever it is (a file, a
+    folder, a link), and names are compared without letter case. The folder
+    stays when the person put a file into it, and when another program still
+    had a shortcut open. An entry of another name is the person's: it is not
+    opened, changed or removed here.
+
+    Private means: a real folder and no link, owned by this account, in which
+    no access rule gives a right to anyone but this account, SYSTEM, the
+    Administrators group and TrustedInstaller.
+
+    Every doubt is False: a link or a file at that path, a folder that fails
+    that check, a folder that cannot be listed, and a path that Windows does
+    not let this program look at.
+    """
+    from .windows_files import directory
+    from .windows_removal import same_name
+    try:
+        os.lstat(folder)  # The entry itself: a link that leads to nothing is an entry.
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False  # Windows refused the look. That does not say that nothing is there.
+    ours = {same_name(name) for name in LINKS}
+    try:
+        with directory(folder, owned_root=folder), os.scandir(folder) as listing:
+            return not any(same_name(entry.name) in ours for entry in listing)
+    except (OSError, ValueError, RuntimeError):
+        # OSError: the check refused the folder, Windows refused the listing,
+        # or the folder went away after the look above (a later run then adds
+        # the entries). ValueError: a path that the private-file boundary does
+        # not take. RuntimeError: that boundary is not available here.
+        return False
+
+
 def install(root, version):
     from .windows_files import address, directory
     from .deployment import write_private
@@ -404,10 +455,13 @@ def install(root, version):
         # removal. A record that still says `installed` counts the same when
         # the entries are gone: the last write of an uninstall can be refused
         # after every entry is removed. "Gone" means the folder that this
-        # record names, so that a record of entries in another place is never
-        # replaced. The check below also refuses when today's Start-menu
-        # folder or the Apps-list entry exists, so nothing is ever overwritten.
-        # Every other record is refused.
+        # record names, so that a record of entries in another place is not
+        # replaced. That holds for the record that this step reads here. The
+        # step writes the record later and compares nothing between the two:
+        # a private file that another program of this account puts there
+        # meanwhile is written over. The check below also refuses when the
+        # Apps-list entry exists, and in every case in which `_free` answers
+        # False for today's Start-menu folder. Every other record is refused.
         try:
             row = _receipt(root)
             status = row.get("status") if isinstance(row, dict) else None
@@ -419,7 +473,8 @@ def install(root, version):
         if not again:
             raise ValueError("Windows shell integration already has a receipt; inspect it before retrying.")
     folder = programs() / ("Amplifier Unified - " + identity(root))
-    if folder.exists() or registry(root) is not None:
+    # Before the first write: a refusal here leaves the record as it was.
+    if registry(root) is not None or not _free(folder):
         raise ValueError("The Windows app entries already exist; nothing was overwritten.")
     python, links = entries(root)
     values = registration_values(root, version)
@@ -429,7 +484,19 @@ def install(root, version):
     with directory(folder, owned_root=folder, create=True) as owned:
         for name, args in links.items():
             path = folder / name
-            # The private directory is pinned, no pre-existing file is adopted.
+            # The private directory is pinned, no pre-existing file is adopted:
+            # the writer refuses a name that exists, also one that appeared
+            # after the check above. From there to the end of this pass the
+            # step works with the new shortcut by its name, in three separate
+            # steps, and holds nothing open between them: the Windows shell
+            # saves to the path, the shell reads the path back, and the bytes
+            # for the record are read. Two moments are therefore not covered,
+            # and a first installation has both. A program of this account
+            # that puts something else at that path before the save gets it
+            # written: the shell writes to whatever the path names then. One
+            # that replaces the saved shortcut with a private file of its own
+            # before the last read gets that file's bytes recorded as this
+            # installation's shortcut.
             owned.publish_private(name, b"")
             with shell_link() as link:
                 link.create(path, python, args, root / "workspace")
@@ -443,6 +510,38 @@ def install(root, version):
     return {"startMenu": str(folder), "installedAppEntry": True, "shortcuts": len(links)}
 
 
+def _held(code):
+    """Try again, for a bounded time, while another program has a shortcut open.
+
+    Windows refuses the pin of a shortcut with error 32 while another open of
+    that file does not share deleting. On hosted runners, asked which program
+    had the shortcut open, Windows named `explorer.exe` after 7 of 92 such
+    refusals and no program after the others; how `explorer.exe` had opened
+    the file was not observed. Windows refuses the delete through the pinned handle
+    with error 5 while a view of the file is mapped. It gives the same error 5
+    for a shortcut with a read-only attribute, which no wait cures: that one
+    stops the uninstall after the wait. Only a PermissionError that carries
+    exactly `code` is tried again. Every other refusal, and a shortcut that
+    differs from setup's record, raises at once.
+
+    The returned function counts its waits for all shortcuts of one step
+    together: HOLD_SECONDS in all, a tenth of a second each. It limits the
+    number of waits, not the time of the step: the Windows calls of each
+    attempt take their own time.
+    """
+    waits = [HOLD_SECONDS * 10]
+    def attempt(action):
+        while True:
+            try:
+                return action()
+            except PermissionError as refused:
+                if getattr(refused, "winerror", None) != code or waits[0] <= 0:
+                    raise
+            waits[0] -= 1
+            time.sleep(0.1)
+    return attempt
+
+
 @contextmanager
 def removal(root, *, progress=None):
     """Prepare removal of this installation's own entries; `finish` removes them.
@@ -451,6 +550,8 @@ def removal(root, *, progress=None):
     so the caller can stop the app first and remove the entries last. An entry
     that an earlier, interrupted removal already took away is skipped: a second
     uninstall completes. An entry that differs from setup's record refuses.
+    A shortcut that another program has open is tried again, in the pin and in
+    the delete, with waits of HOLD_SECONDS in all for each (`_held`).
 
     `progress(name)` names the step that is about to run: `apps-entry`,
     `shortcuts`, `receipt`. `finish` releases the pins itself, so the entries
@@ -475,6 +576,7 @@ def removal(root, *, progress=None):
         except FileNotFoundError:
             owned = None  # The whole Start-menu folder is already gone.
         # Keep ALL verified handles (deny WRITE/DELETE sharing) through effects.
+        pin = _held(32)
         for name, args in links.items() if owned else ():
             if not (folder / name).exists():
                 continue
@@ -483,7 +585,8 @@ def removal(root, *, progress=None):
                     raise ValueError("A Windows shortcut target changed; no entries were removed.")
             # COM can open without DELETE sharing. Close it first, then pin the
             # exact audited bytes: a change between those reads is refused.
-            removers.append(stack.enter_context(owned.removal_private(name, row["links"][name])))
+            # Each further attempt reads and compares the bytes again.
+            removers.append(pin(lambda: stack.enter_context(owned.removal_private(name, row["links"][name]))))
         try:
             commit = stack.enter_context(registry_change(root, row["registry"], remove=True))
         except FileNotFoundError:
@@ -496,8 +599,9 @@ def removal(root, *, progress=None):
             if commit is not None:
                 commit()
             step("shortcuts")
+            delete = _held(5)
             for remove_link in removers:
-                remove_link()
+                delete(remove_link)
             stack.close()  # Release the pins: Windows removes the shortcuts now.
             try:
                 os.rmdir(folder)  # Only when empty; a file the person added stays.
