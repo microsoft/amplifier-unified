@@ -412,6 +412,8 @@ def test_a_linux_installation_keeps_its_selection_witness_and_configuration_key(
 async def test_index_invalidates_on_effective_selection_not_history_size(tmp_path,monkeypatch):
     from amplifier_web import update_inventory_index as index
     home=tmp_path/'app';home.mkdir();directory=home/'updates';directory.mkdir()
+    # The product names its data folder as the app home before it builds the service (cli.py).
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME',str(home))
     shared=Path(os.environ['AMPLIFIER_HOME']);save_settings(shared,settings([URI]))
     manager=SimpleNamespace(home=home,directory=directory,service=SimpleNamespace(state={'settings':{},'sessions':[]}))
     calls=[]
@@ -440,6 +442,8 @@ async def test_real_check_includes_selected_source_before_other_tier(tmp_path,mo
     (cache/'.amplifier_cache_meta.json').write_text(json.dumps({'git_url':URL,'ref':'main','commit':current}))
     class Runtime:
         async def close(self):pass
+    # The product names its data folder as the app home before it builds the service (cli.py).
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME',str(home))
     app=AppService(home,Runtime(),workspace=tmp_path);manager=updates.UpdateManager(app);app.update_manager=manager
     async def application():return {'id':'application','status':'current'}
     async def runtime_rows(_):return []

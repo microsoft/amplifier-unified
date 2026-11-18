@@ -190,8 +190,8 @@ jobs:
           # no reason was confirmed by a repair.
           POSIX_STATUS = ("the case is for the status that Linux and macOS give; on Windows another function gives it, "
                           "and platform-mechanisms.yml runs its cases")
-          OTHER_APP_HOME = ("its cases fail on a Windows runner; by a reading of the code they build the app in a folder "
-                            "that is not the test process's app home, and the app's file writer on Windows refuses a write there")
+          NO_FILE_MODE = ("the case changes a file's mode with chmod, and on a Windows runner nothing is protected after it; "
+                          "by a reading, Windows has no executable bit and Git for Windows records no change of a mode")
           NOT_ON_WINDOWS = {
               "tests/test_reset.py":
                   "the reset command is for Linux, WSL and macOS; on Windows it says so and stops",
@@ -200,17 +200,13 @@ jobs:
               "tests/test_windows_launcher_refresh.py":
                   "the cases turn the refresh module's Windows switch off, and the app's file writer on Windows "
                   "then refuses their writes; windows-launcher-refresh.yml runs the native case",
-              "tests/test_update_partial_review.py":
-                  "its fixture, in tests/test_update_sequence.py, writes the shared settings file with the app's "
-                  "writer and names no owner folder, which that writer needs on Windows",
-              "tests/test_updates_cache.py":
-                  OTHER_APP_HOME + "; other cases there compare a path that has the runner's separator",
-              "tests/test_update_core_lookup_failure.py": OTHER_APP_HOME,
-              "tests/test_update_health_first_install.py": OTHER_APP_HOME,
-              "tests/test_effective_behavior_updates.py::test_index_invalidates_on_effective_selection_not_history_size":
-                  OTHER_APP_HOME,
-              "tests/test_effective_behavior_updates.py::test_real_check_includes_selected_source_before_other_tier":
-                  OTHER_APP_HOME,
+              "tests/test_updates_cache.py::test_real_edits_and_unproven_links_stay_protected[bytecode-mode]": NO_FILE_MODE,
+              "tests/test_updates_cache.py::test_real_edits_and_unproven_links_stay_protected[link-mode]": NO_FILE_MODE,
+              "tests/test_updates_cache.py::test_unproven_wiki_versions_stay_protected[version-mode]": NO_FILE_MODE,
+              "tests/test_updates_cache.py::test_unproven_wiki_versions_stay_protected[hook-mode]": NO_FILE_MODE,
+              "tests/test_updates_cache.py::test_unproven_wiki_versions_stay_protected[project-mode]": NO_FILE_MODE,
+              "tests/test_updates_cache.py::test_nul_paths_and_renames_cannot_be_misclassified":
+                  "the case makes a file whose name has a tab, a line end and a space at each end; Windows refuses that name",
               "tests/test_application_generations.py::test_qualified_launch_preserves_arguments_and_data_scope":
                   "the case stands in for os.execv; on Windows the app starts a child and waits for it",
               "tests/test_installation_health.py::test_status_reports_every_verified_listener_and_partial_failure":
