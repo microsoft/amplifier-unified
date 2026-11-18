@@ -19,6 +19,28 @@ CURRENT_CALL = contextvars.ContextVar("amplifier_web_public_call", default=None)
 CURRENT_PROVIDER = contextvars.ContextVar("amplifier_web_public_provider", default=None)
 ADMITTED_CALL = contextvars.ContextVar("amplifier_web_admitted_provider_call", default=None)
 
+_CONTINUATION_WARNING = (
+    "Older context may be incomplete. Tell the user if missing history affects the answer. "
+    "Do not invent missing details or assume earlier actions should be replayed."
+)
+
+
+def _incomplete_history(request):
+    from amplifier_core.message_models import Message, TextBlock
+
+    for message in getattr(request, "messages", ()) or ():
+        if not isinstance(message, Message) or message.role != "developer":
+            continue
+        metadata = message.metadata or {}
+        if metadata.get("source") != "context-managed-continuation" or metadata.get("ephemeral") is not True:
+            continue
+        content = message.content
+        if isinstance(content, list) and len(content) == 1 and isinstance(content[0], TextBlock):
+            content = content[0].text
+        if content == _CONTINUATION_WARNING:
+            return True
+    return False
+
 
 @dataclass(frozen=True)
 class AdmittedProviderCall:
@@ -248,7 +270,8 @@ class ExecutionEvents:
                    defaults, captured_budget, diagnostic)
         return row
 
-    async def provider_call(self, sid, provider, request, invoke, *, label=None, run_id=None, request_options=None):
+    async def provider_call(self, sid, provider, request, invoke, *, label=None, run_id=None,
+                            request_options=None, foreground=False):
         """Observe one host-owned provider action through the same admission gate.
 
         Optional provider actions such as explicit compaction do not implement
@@ -263,7 +286,8 @@ class ExecutionEvents:
             purpose_token = CALL_PURPOSE.set({**(CALL_PURPOSE.get() or {}), "label": "Context compaction", "purpose": "context_compaction"})
             label = "Context compaction"
         try:
-            return await self._observed_provider_call(sid, provider, request, invoke, label=label, run_id=run_id, request_options=request_options)
+            return await self._observed_provider_call(sid, provider, request, invoke, label=label,
+                run_id=run_id, request_options=request_options, foreground=foreground)
         finally:
             if purpose_token is not None:
                 CALL_PURPOSE.reset(purpose_token)
@@ -285,15 +309,22 @@ class ExecutionEvents:
         finally:
             CALL_PURPOSE.reset(purpose)
 
-    async def _observed_provider_call(self, sid, provider, request, invoke, *, label=None, run_id=None, request_options=None):
+    def _degraded_foreground(self, row, request):
+        return (self.admission_guard is not None and row["sessionId"] == self.root_id
+                and row.get("generationId") and row.get("admissionInputId")
+                and not CALL_PURPOSE.get() and _incomplete_history(request))
+
+    async def _observed_provider_call(self, sid, provider, request, invoke, *, label=None, run_id=None,
+                                      request_options=None, foreground=False):
         row = await self._begin_provider_call(sid, provider, request, label=label, run_id=run_id, request_options=request_options)
         from .context_inspection_adapter import safe_observe
         token = CURRENT_CALL.set(row["id"])
         owner = CURRENT_PROVIDER.set(id(provider))
         admitted = ADMITTED_CALL.set(AdmittedProviderCall(row['id'], self.root_id, sid,
                                                         self.admission_guard is not None))
-        self.publish(row)
         try:
+            self.publish({**row, "incompleteHistoryDispatched": True}
+                         if foreground and self._degraded_foreground(row, request) else row)
             response = await invoke()
             usage = response.get("usage") if isinstance(response, dict) else getattr(response, "usage", None)
             metadata = response.get("metadata") if isinstance(response, dict) else getattr(response, "metadata", None)
@@ -335,7 +366,8 @@ class ExecutionEvents:
         async def complete(request, **kwargs):
             if CURRENT_PROVIDER.get() == id(provider):
                 return await original(request, **kwargs)
-            return await self.provider_call(sid, provider, request, lambda: original(request, **kwargs), run_id=run_id, request_options=kwargs)
+            return await self.provider_call(sid, provider, request,
+                lambda: original(request, **kwargs), run_id=run_id, request_options=kwargs, foreground=True)
 
         original_budget = getattr(provider, 'request_budget', None)
         @wraps(original_budget)
@@ -390,7 +422,6 @@ class ExecutionEvents:
                 return
             row = await self._begin_provider_call(sid, provider, request, run_id=run_id, request_options=kwargs)
             self.streaming_calls.add(row["id"])
-            self.publish(row)
             iterator = None
             phase = "completed"
             admission = AdmittedProviderCall(row['id'], self.root_id, sid, self.admission_guard is not None)
@@ -407,6 +438,9 @@ class ExecutionEvents:
                     CURRENT_PROVIDER.reset(owner)
                     ADMITTED_CALL.reset(admitted)
             try:
+                # Preparing a stream is not dispatch. Pulling it is.
+                self.publish({**row, "incompleteHistoryDispatched": True}
+                             if self._degraded_foreground(row, request) else row)
                 iterator = original_stream(request, **kwargs).__aiter__()
                 while True:
                     try:
