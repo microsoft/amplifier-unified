@@ -1,0 +1,106 @@
+name: Windows launcher follows the app
+# An installation with an earlier launcher (a published release, in setup's
+# layout) runs a newer app version. The app asks for a launcher refresh by
+# itself. Task Scheduler, the launcher's supervisor, the app host, the helper
+# task, the helper, uv and the Apps-list key are real.
+# Required: a forced failure rolls back and the app runs on the earlier
+# launcher; no second attempt starts for the same app version; a helper that is
+# ended part-way is repaired by Task Scheduler's timed trigger with no other
+# action; then the launcher follows, on the same port; a helper task that was
+# left removes itself. A failed or unreached check fails the job. No check is
+# skipped.
+# Not a setup file run, a standard account, a sign-out, a restart of the PC or
+# a browser. The fixture's own part is named at the top of its file.
+# Slow: the case waits for the app's own decisions (one a minute) and for Task
+# Scheduler's timed trigger (5 minutes). It starts only for the files below.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/windows-launcher-follow.yml
+      - tests/fixtures/windows_launcher_follow_native.py
+      - tests/fixtures/windows_launcher_refresh_native.py
+      - tests/fixtures/windows_start_again_native.py
+      - tests/fixtures/manual_app_handoff_native.py
+      - amplifier_web/windows_launcher_follow.py
+      - amplifier_web/windows_launcher_refresh.py
+      - amplifier_web/windows_launcher_task.py
+      - amplifier_web/windows_launcher_files.py
+      - amplifier_web/windows_consumer_shell.py
+      - amplifier_web/windows_service.py
+      - amplifier_web/windows_task_runtime.py
+      - amplifier_web/windows_app_recovery.py
+      - amplifier_web/update_drain.py
+permissions:
+  contents: read
+jobs:
+  windows-launcher-follow:
+    runs-on: windows-latest
+    timeout-minutes: 100
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUTF8: '1'
+      UV_NO_BUILD_PACKAGE: amplifier-core
+      UV_PYTHON_DOWNLOADS: never
+      UV_LINK_MODE: copy
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        timeout-minutes: 2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        timeout-minutes: 3
+        with:
+          python-version: '3.13'
+          architecture: x64
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        timeout-minutes: 2
+      - name: Install a published earlier launcher and three generations of the app version in setup's layout
+        timeout-minutes: 25
+        shell: pwsh
+        run: |
+          python -I -B tests/fixtures/windows_launcher_follow_native.py prepare
+          if ($LASTEXITCODE -ne 0) { throw 'Preparation failed; inspect preparation.json.' }
+      - name: The app asks, the helper fails and rolls back, the timed trigger repairs, the launcher follows
+        timeout-minutes: 60
+        shell: pwsh
+        run: |
+          & "$env:FOLLOW_PYTHON" -I -B tests/fixtures/windows_launcher_follow_native.py run
+          if ($LASTEXITCODE -ne 0) { throw 'The case failed; inspect result.json.' }
+      - name: Remove only this case's tasks, entries and folder
+        if: always()
+        timeout-minutes: 6
+        shell: pwsh
+        run: |
+          python -I -B tests/fixtures/windows_launcher_follow_native.py cleanup
+          if ($LASTEXITCODE -ne 0) { throw 'Cleanup failed; the folder was retained.' }
+      - name: Require every check
+        timeout-minutes: 1
+        shell: pwsh
+        run: |
+          $report = Get-Content -Raw "$env:RUNNER_TEMP/launcher-follow-evidence/result.json" | ConvertFrom-Json
+          $missing = @($report.checks | Where-Object { $_.status -ne 'PASS' })
+          if ($report.status -ne 'PASS' -or $report.checks.Count -ne 10 -or $missing.Count -ne 0) {
+            throw 'Not every check passed; inspect result.json.'
+          }
+      - name: Print the bounded result
+        if: always()
+        timeout-minutes: 1
+        shell: pwsh
+        run: |
+          foreach ($name in @('preparation.json', 'result.json', 'cleanup.json')) {
+            $file = Join-Path "$env:RUNNER_TEMP/launcher-follow-evidence" $name
+            if (Test-Path $file) { Write-Output $name; Get-Content -Raw $file }
+          }
+      - name: Retain only bounded evidence
+        if: always()
+        timeout-minutes: 2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-launcher-follow
+          path: |
+            ${{ runner.temp }}/launcher-follow-evidence/*.json
+            ${{ runner.temp }}/launcher-follow-evidence/*.cs
+          if-no-files-found: warn
+          retention-days: 7

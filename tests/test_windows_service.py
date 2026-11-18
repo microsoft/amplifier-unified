@@ -850,6 +850,87 @@ def test_timeout_is_unknown_not_automatic_retry(monkeypatch):
     assert len(calls) == 1
 
 
+@pytest.mark.parametrize("expected", [None, {"registration": "a" * 32, "run": "b" * 32}])
+def test_stop_passes_the_exact_expected_run_and_timeout(backend, monkeypatch, expected):
+    from amplifier_web import windows_task_runtime
+    value = spec()
+    backend["xml"], backend["running"] = service.task_xml(value), True
+    calls = []
+
+    def request_stop(installed, **kwargs):
+        calls.append((installed, kwargs))
+        backend["running"] = False
+
+    monkeypatch.setattr(windows_task_runtime, "request_stop", request_stop)
+    stopped = service._stop({"xml": backend["xml"], "instances": 1}, value, timeout=17, expected=expected)
+    assert stopped["instances"] == 0
+    assert calls == [(value, {"timeout": 17, "expected": expected})]
+    assert calls[0][1]["expected"] is expected
+
+
+@pytest.mark.parametrize("exists", [False, True])
+def test_retire_transport_preserves_name_and_previous_and_requires_absence(monkeypatch, exists):
+    calls = []
+    name = "AmplifierUnifiedLauncher-" + SID
+    previous = "<exact-helper-definition/>"
+    monkeypatch.setattr(service, "_owner", lambda: SID)
+    monkeypatch.setattr(service, "_powershell", lambda: r"C:\Windows\powershell.exe")
+
+    def run(argv, **kwargs):
+        calls.append(json.loads(kwargs["input"]))
+        return SimpleNamespace(returncode=0, stdout=json.dumps({"exists": exists}).encode())
+
+    monkeypatch.setattr(service.subprocess, "run", run)
+    if exists:
+        with pytest.raises(service.WindowsServiceError, match="did not confirm"):
+            service._scheduler("retire", SID, previous=previous, name=name)
+    else:
+        assert service._scheduler("retire", SID, previous=previous, name=name) == {"exists": False}
+    assert calls == [{"op": "retire", "sid": SID, "name": name, "previous": previous, "xml": None}]
+    # The static COM branch shares the exact-XML guard, not the no-instances guard.
+    assert "elseif ($null -eq $task -or $task.Xml -cne $p.previous)" in service._SCRIPT
+    assert "if ($p.op -in @('remove', 'replace'))" in service._SCRIPT
+    assert "'retire' { $folder.DeleteTask($p.name, 0); $task = $null }" in service._SCRIPT
+
+
+@pytest.mark.parametrize("present", [False, True])
+@pytest.mark.parametrize("outcome", [True, False, "error"])
+def test_uninstall_removes_helper_after_main_removal_best_effort(backend, monkeypatch, present, outcome):
+    from amplifier_web import windows_launcher_task
+    if present:
+        service.install(spec().data_dir)
+    backend["calls"].clear()
+    calls = []
+
+    def remove_task(home):
+        assert backend["xml"] is None
+        calls.append((home, list(backend["calls"])))
+        if outcome == "error":
+            raise OSError("helper cleanup failed")
+        return outcome
+
+    monkeypatch.setattr(windows_launcher_task, "remove_task", remove_task)
+    service.uninstall(spec().data_dir)
+    assert calls == [(spec().data_dir, ["query", "request_stop", "query", "remove"] if present else ["query"])]
+
+
+def test_uninstall_does_not_touch_helper_if_main_removal_fails(backend, monkeypatch):
+    from amplifier_web import windows_launcher_task
+    service.install(spec().data_dir)
+    original = service._scheduler
+
+    def refuse(op, sid, **kwargs):
+        if op == "remove":
+            raise service.WindowsServiceError("main removal failed")
+        return original(op, sid, **kwargs)
+
+    monkeypatch.setattr(service, "_scheduler", refuse)
+    monkeypatch.setattr(windows_launcher_task, "remove_task",
+                        lambda *a: pytest.fail("the main task must be removed first"))
+    with pytest.raises(service.WindowsServiceError, match="main removal failed"):
+        service.uninstall(spec().data_dir)
+
+
 def test_wrong_platform_refuses_before_any_subprocess(monkeypatch):
     monkeypatch.setattr(service.sys, "platform", "linux")
     monkeypatch.setattr(service.subprocess, "run", lambda *a, **kw: pytest.fail("no service mutation"))
