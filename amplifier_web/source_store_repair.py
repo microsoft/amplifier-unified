@@ -36,37 +36,44 @@ resolved twice, and no link is followed. Git gets a path; the folders of that
 path are held open meanwhile. Git only gives the answer: what is deleted is
 checked again on handles.
 
-Git runs with the Git configuration of this computer, as it does in
-Foundation's own check. This step tells it to start no file system monitor.
-It gives both commands ``--no-optional-locks`` (Foundation gives it to
-``git status``): without it ``git status`` can write the object's index again.
-With it Git itself only reads the object.
+This step does not turn off Git's configuration. Git reads the computer's
+system configuration, the person's global configuration and the object's
+``.git\\config``, each with the files that it includes. Foundation's own
+check does not turn it off either. This step tells Git to start no file
+system monitor. It gives both commands ``--no-optional-locks`` (Foundation
+gives it to ``git status``), so ``git status`` does not write the object's
+index again. That is not a promise that Git writes nothing: Git still writes
+what its configuration tells it to write, for example a trace file
+(``trace2.eventTarget``).
 
-It does not stop a content filter. When an attribute file that Git reads for
-the object gives a tracked file a filter, and a Git configuration that Git
-reads names a program for that filter (Git LFS is the usual one), ``git
-status`` can start that program for a file whose content it must compare. Git
-reads four attribute sources for an object: a ``.gitattributes`` file of the
-object, the object's ``.git\\info\\attributes``, and the computer's global and
-system attribute files. So a filter needs no attribute file in a module. The
-committed content of a repository cannot name the program. A configuration
-names it: the computer's, or the ``.git\\config`` of the object's folder.
+It does not stop a content filter. An attribute file that Git reads for the
+object can give a tracked file a filter by its name. Git's configuration can
+name a program for that filter (Git LFS is the usual one). Then ``git
+status`` can start that program for a file whose content it must compare.
+Git reads four attribute sources for an object: a ``.gitattributes`` file in
+a folder of the object, the object's ``.git\\info\\attributes``, the person's
+global attribute file and the computer's system attribute file. So a filter
+needs no attribute file in a module. A committed attribute file alone names
+no program.
 
-Foundation's check starts the same command in the same object at every check
-of the object. Where both read the same configuration and the same attribute
-files, this step starts no program that does not start there already. That
-is a stated limit, because they do not always read the same ones: this step
-removes every ``GIT_*`` name from Git's environment, and Foundation's check
-starts Git with the environment of its process as it is. Some of those names
-change the configuration that Git reads: ``GIT_CONFIG_GLOBAL``,
-``GIT_CONFIG_SYSTEM`` and ``GIT_CONFIG_NOSYSTEM`` name or drop a file, and
-``GIT_CONFIG_COUNT`` adds values. A person's environment can have one, and
-the app gives some to child processes that it starts
-(``reset.repository_environment``; with anonymous GitHub access, an empty
-global and system configuration). Against a check in a process that has such
-a name, this step can start a filter program that the check does not start,
-or start none where the check starts one. What such a program does is not
-bound by the rule above.
+Foundation's check also runs ``git status`` in the object, each time that it
+checks the object. This step adds at most one ``git status`` for each try of
+an object. This step can still start a filter program that Foundation's
+check does not start, or start none where that check starts one. That is a
+stated limit. This step removes every ``GIT_*`` name from Git's environment.
+Foundation's check starts Git with the environment of its process as it is.
+Some of those names change what Git reads. ``GIT_CONFIG_GLOBAL``,
+``GIT_CONFIG_SYSTEM`` and ``GIT_CONFIG_NOSYSTEM`` name or drop a
+configuration file. ``GIT_CONFIG_COUNT`` with ``GIT_CONFIG_KEY_<n>`` and
+``GIT_CONFIG_VALUE_<n>`` adds configuration values. ``GIT_ATTR_NOSYSTEM``
+drops the system attribute file. ``GIT_INDEX_FILE`` names another index. A
+person's environment can have such a name. The app gives some to child
+processes that it starts: ``reset.repository_environment`` can add values
+through ``GIT_CONFIG_COUNT``, and with anonymous GitHub access it names an
+empty file as the global and as the system configuration file. The two can
+also run different Git programs (``_program``), and each Git installation
+has its own system configuration file and system attribute file. What a
+filter program does is not bound by the rule above.
 
 It runs only on Windows, only in the host that the start-at-sign-in task
 started, only on the store of the installation that this host belongs to, and
@@ -416,9 +423,9 @@ def _git(program, folder, budget, *words):
             # The limit ends the program that this step started, and the step
             # stops waiting. An installation's ``git\cmd\git.exe`` is Git's
             # starter program: the Git program behind it can run on until its
-            # read ends. Git itself only reads there (a content filter that it
-            # started is another program, which a Git configuration names),
-            # and this step leaves the object as it is.
+            # read ends. It does not write the object's index
+            # (``--no-optional-locks``). What else it writes or starts is what
+            # Git's configuration names. This step leaves the object as it is.
             process.kill()
             for last in (process.communicate, process.wait):
                 try:
