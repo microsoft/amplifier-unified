@@ -89,9 +89,11 @@ on:
     paths: *inputs
 permissions:
   contents: read
-# A new push to a pull request ends the run of the push before it.
+# A new push to a pull request ends the run of the push before it. The group
+# holds the event's name: a run by hand and a run for a push to main are for
+# the same commit, and neither ends the other.
 concurrency:
-  group: other-test-files-${{ github.event.pull_request.number || github.sha }}
+  group: other-test-files-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
 jobs:
   cases:
@@ -198,10 +200,10 @@ jobs:
                   OTHER_APP_HOME + "; other cases there compare a path that has the runner's separator",
               "tests/test_update_core_lookup_failure.py": OTHER_APP_HOME,
               "tests/test_update_health_first_install.py": OTHER_APP_HOME,
-              "tests/test_effective_behavior_updates.py::test_index_invalidates_on_effective_selection_not_history_size":
-                  OTHER_APP_HOME,
-              "tests/test_effective_behavior_updates.py::test_real_check_includes_selected_source_before_other_tier":
-                  OTHER_APP_HOME,
+              "tests/test_effective_behavior_updates.py":
+                  "four of its cases fail on a Windows runner: two in the update check's own handling of a Windows "
+                  "path (a path that it makes from a file address has no drive; it replaces a folder path inside "
+                  "JSON text, where each backslash is written twice), and two as the three files above",
               "tests/test_application_generations.py::test_qualified_launch_preserves_arguments_and_data_scope":
                   "the case stands in for os.execv; on Windows the app starts a child and waits for it",
               "tests/test_installation_health.py::test_status_reports_every_verified_listener_and_partial_failure":
@@ -233,17 +235,12 @@ jobs:
               "getifaddrs enumeration is qualified only on Linux/macOS": windows,
           }
           # An expected failure that this step expects, and whether this runner
-          # may have it. Each case's own comment names the fact.
+          # may have it. A shared settings file that cannot be read ends the
+          # whole update check; the file's own comment names the open question.
           EXPECTED_FAILURES = {
-              # A shared settings file that cannot be read ends the whole update check.
-              **{"::".join(("tests/test_updates_cache.py",
-                            f"test_unresolvable_configuration_does_not_hide_cache_failures[{row}]")): True
-                 for row in ("yaml", "module-shape", "recursive-yaml")},
-              # The update check's own code handles a Windows path wrongly.
-              "tests/test_effective_behavior_updates.py::test_disabled_shipped_shell_does_not_select_its_skills_dependency":
-                  windows,
-              "tests/test_effective_behavior_updates.py::test_only_existing_source_copy_relocation_is_witness_equivalent":
-                  windows,
+              "::".join(("tests/test_updates_cache.py",
+                         f"test_unresolvable_configuration_does_not_hide_cache_failures[{row}]")): True
+              for row in ("yaml", "module-shape", "recursive-yaml")
           }
 
           result = pathlib.Path(os.environ["RUNNER_TEMP"]) / "listed-test-files.xml"

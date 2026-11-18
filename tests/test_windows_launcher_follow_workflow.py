@@ -228,6 +228,11 @@ def test_a_pull_request_runs_every_launcher_case_file():
     triggers = document[True]  # YAML reads the key `on` as True.
     paths = triggers["pull_request"]["paths"]
     assert triggers["push"] == {"branches": ["main"], "paths": paths} and "workflow_dispatch" in triggers
+    # A new push to a pull request ends only that pull request's earlier run. A run by hand and a run
+    # for a push to main are for the same commit; the event's name keeps them in two groups.
+    assert document["concurrency"] == {
+        "group": "other-test-files-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}",
+        "cancel-in-progress": True}
     (job,) = document["jobs"].values()
     assert job["strategy"]["matrix"] == {"os": ["ubuntu-latest", "windows-latest"]} and "if" not in job
     (step,) = [step for step in job["steps"] if "pytest" in step.get("run", "")]
@@ -274,6 +279,9 @@ def test_a_pull_request_runs_every_launcher_case_file():
                            else [alias.name for alias in node.names] if isinstance(node, ast.Import) else [])
                 queue += [f"tests/{module}.py" for module in modules if (ROOT / f"tests/{module}.py").is_file()]
     assert [name for name in sorted(reached) if not starts(name)] == []
+    # And the other way: a test file that the path filter names is run, or a run file imports it.
+    # A name below `paths:` that nothing runs is the gap that this workflow closes.
+    assert [path for path in paths if path.startswith("tests/test_") and "*" not in path and path not in reached] == []
     assert [path for path in paths if "*" not in path and not (ROOT / path).is_file()] == []
 
 
@@ -281,6 +289,7 @@ NEEDS_WINDOWS = "import pytest\n@pytest.mark.skip(reason='native prototype Power
 
 
 ONE_FAILS = "def test_one(): assert False\ndef test_two(): pass\n"
+EXPECTED_ON_WINDOWS = "import pytest\n@pytest.mark.xfail(strict=True)\ndef test_one(): assert False\ndef test_two(): pass\n"
 
 
 @pytest.mark.parametrize("body,windows,stops", [
@@ -296,8 +305,12 @@ ONE_FAILS = "def test_one(): assert False\ndef test_two(): pass\n"
     (NEEDS_WINDOWS + "def test_two(): pass\n", False, None),
     (NEEDS_WINDOWS + "def test_two(): pass\n", True, "skipped, and this step does not expect that on this runner"),
     (NEEDS_WINDOWS, False, "no case of this file passed: tests/test_one.py"),
-    ("import pytest\n@pytest.mark.xfail(strict=True)\ndef test_one(): assert False\ndef test_two(): pass\n",
-     False, "expected to fail, and this step does not expect that: tests/test_one.py::test_one"),
+    # An expected failure that the step's list names only for Windows: Windows may have it, Linux not.
+    (EXPECTED_ON_WINDOWS, True, None),
+    (EXPECTED_ON_WINDOWS, False, "expected to fail, and this step does not expect that: tests/test_one.py::test_one"),
+    # An expected failure that the list does not name.
+    (EXPECTED_ON_WINDOWS.replace("test_one", "test_other"), True,
+     "expected to fail, and this step does not expect that: tests/test_one.py::test_other"),
 ])
 def test_the_step_that_runs_the_listed_files_stops_for_a_wrong_result(tmp_path, body, windows, stops):
     """The step's own program, with one made-up test file in place of its list."""
@@ -308,6 +321,7 @@ def test_the_step_that_runs_the_listed_files_stops_for_a_wrong_result(tmp_path, 
     for pattern, replacement in ((r'FILES = """.*?"""\.split\(\)', 'FILES = ["tests/test_one.py"]'),
                                  (r"CASES = \[[^\]]*\]", "CASES = []"),
                                  (r"NOT_ON_WINDOWS = \{.*?\n\}", leave),
+                                 (r"EXPECTED_FAILURES = \{.*?\n\}", 'EXPECTED_FAILURES = {"tests/test_one.py::test_one": windows}'),
                                  (r'windows = sys\.platform == "win32"', f"windows = {windows}"),
                                  # The job requires CI's Python. This case is about the step's decisions.
                                  (r"assert sys\.version_info\[:2\] == \(3, 13\), sys\.version", "pass")):

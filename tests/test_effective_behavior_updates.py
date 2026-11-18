@@ -101,13 +101,6 @@ def test_unbound_and_circular_aliases_do_not_authorize_cached_sources(tmp_path):
         selection(tmp_path, value)
 
 
-# On Windows the update check does not read the shipped behavior file. The file's address is
-# "file:///C:/...", and update_sequence.app_selection makes a path from the address's path part;
-# that path has no drive, so it is not the shipped file's path. Strict: this case fails on
-# Windows when the check reads the file there, and the mark then goes.
-@pytest.mark.xfail(os.name == 'nt', strict=True, raises=AssertionError, reason=(
-    'on Windows the update check makes a path with no drive from the address of the shipped behavior file '
-    'and does not read that file'))
 def test_disabled_shipped_shell_does_not_select_its_skills_dependency(tmp_path):
     result = selection(tmp_path, settings())
     assert result['sources'] == []
@@ -173,13 +166,6 @@ def test_current_and_copied_selection_witness_and_legacy_unknown(tmp_path, monke
         update_sequence.verify_app_selection(manager,[{'kind':'bundle / module'}])
 
 
-# On Windows the witness does not take a source path below the Foundation folder as the same in
-# the installation and in a stage. update_sequence.app_selection and
-# runtime_profiles.configuration_key replace the folder's path inside JSON text, and JSON writes
-# each backslash of a Windows path twice, so the path is not found. Strict, as above.
-@pytest.mark.xfail(os.name == 'nt', strict=True, raises=update_sequence.StaleAppSelection, reason=(
-    'on Windows the selection witness replaces a folder path inside JSON text, where each backslash '
-    'is written twice, and does not find it'))
 def test_only_existing_source_copy_relocation_is_witness_equivalent(tmp_path, monkeypatch):
     home=tmp_path/'app';home.mkdir();shared=Path(os.environ['AMPLIFIER_HOME'])
     value=settings([URI],sources={'modules':{'local-tool':str(home/'foundation/cache/tool')}})

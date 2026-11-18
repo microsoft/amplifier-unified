@@ -2268,7 +2268,7 @@ def test_workflow_keeps_old_lane_commands_and_bounded_installed_candidate_job():
         found = hashlib.sha256(json.dumps(job, sort_keys=True).encode()).hexdigest()
         assert found == expected, (
             f"The job {name} of platform-mechanisms.yml differs from its frozen commands. Put a new check into "
-            f"a new job. For an accepted new step of this job, add its name to `added` above.")
+            f"a new job. For an accepted new step of this job, add its name and its hash to `added` above.")
     job = workflow["jobs"]["windows-user-trial"]
     assert job["timeout-minutes"] == 15 and job["runs-on"] == "windows-latest"
     commands = "\n".join(step.get("run", "") for step in job["steps"])
