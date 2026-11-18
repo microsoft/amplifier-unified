@@ -298,9 +298,10 @@ namespace UnifiedBootstrap {
                 Environment.SetEnvironmentVariable("AMPLIFIER_SETUP_TEST_RAN",ran);
                 shown=Window(second,false,true);
                 Need(shown==0 && File.ReadAllText(ran)=="entries,start,","second run without entries: added, started, closed (result "+shown+")");
-                // Without a start (an entry with the journal's name is in the
-                // folder): the entries step only. No launcher starts, and this
-                // window shows no message. The result says whether the entries
+                // Without a start (setup's look found an entry with the
+                // journal's name): the entries step only. No launcher starts,
+                // and no message box is shown (one would keep the window open,
+                // and the case would fail). The result says whether the entries
                 // were added.
                 File.Delete(ran);
                 shown=Window(second,false,false);
@@ -523,7 +524,7 @@ namespace UnifiedBootstrap {
                 File.WriteAllText(seenJournal,"");
                 string seenFacts=facts(seenJournal);
                 Need(NativeInstaller.Signs(seen)=="removal" && NativeInstaller.Unopened(seen)==bare(seen),"an empty file with the journal's name");
-                Need(facts(seenJournal)==seenFacts,"the look changes no time and no attribute of the entry with the journal's name");
+                Need(facts(seenJournal)==seenFacts,"the look changes no creation time, no write time and no attribute of the entry with the journal's name");
                 File.WriteAllText(seenJournal,"{");
                 Need(NativeInstaller.Signs(seen)=="removal" && !NativeInstaller.Emptied(seen),"a file with the journal's name that is no record");
                 using(new FileStream(seenJournal,FileMode.Open,FileAccess.ReadWrite,FileShare.None))
@@ -570,7 +571,7 @@ namespace UnifiedBootstrap {
                 string opening="Amplifier is already installed on this PC.\n\nSelect Yes to open it now.\n\n"+
                     "You can also open it from the Start menu: Amplifier Unified.";
                 Need(NativeInstaller.Offer(true,true)==opening && NativeInstaller.Offer(true,false)==opening,"the question with a Start-menu entry");
-                string unadded="Setup could not add Amplifier to the Start menu. Setup starts Amplifier now.\n\n"+
+                string unadded="Setup could not add Amplifier to the Start menu. Setup tries to start Amplifier now.\n\n"+
                     "To open it later, run this setup file again.";
                 Need(NativeInstaller.Unadded(true)==unadded+" Your chats and settings are kept." && NativeInstaller.Unadded(false)==unadded,
                     "the message after a failed entries step names chats and settings only when the looks say so");
@@ -593,8 +594,8 @@ namespace UnifiedBootstrap {
                 Need(!NativeInstaller.Emptied(seen) && NativeInstaller.Unstarted(seen,false)==restart && NativeInstaller.Unstarted(seen,true)==added,
                     "after the entries step, with no journal of a delete");
                 // After the entries step, the journal of a delete and none of the
-                // person's data: nothing in the product finishes that removal, and
-                // the step is to move the folder.
+                // person's data: setup cannot finish that removal, and the step
+                // is to move the folder.
                 string moved="Setup could not add Amplifier to the Start menu. "+
                     "Setup did not start Amplifier, because it found an uninstall record in this folder:\n"+seen+"\n\n"+
                     "Setup found no chats or settings in the folder.\n\n"+

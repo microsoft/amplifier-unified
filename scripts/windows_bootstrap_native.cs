@@ -54,9 +54,9 @@ namespace UnifiedBootstrap {
         // Uninstall's own names (amplifier_web/windows_uninstall.py): the journal
         // that an uninstall with the delete choice writes before its first
         // deletion, and the entries that hold the person's data. Setup only
-        // looks at them: to choose a text, and to start no launcher while an
-        // entry with the journal's name is there. It never writes or deletes
-        // them.
+        // looks at them: to choose a text, and to start no launcher when its
+        // look finds an entry with the journal's name. It never writes or
+        // deletes them.
         internal const string Journal="unified-uninstall.json";
         internal static readonly string[] Data={"shared","app","capture","ownership","import","workspace","export"};
         internal static string Diagnostics;
@@ -790,13 +790,16 @@ namespace UnifiedBootstrap {
             // Second: the attributes of the entry "app". A folder that is no
             // link answers "kept"; setup does not look into it. An uninstall
             // that deletes the folder writes its journal before it deletes
-            // anything, and this folder is gone before the journal is (the
-            // launcher's rule for its sentence on chats and settings,
-            // _setup_again in amplifier_web/windows_consumer.py). Everything
-            // else, and every doubt, is "other".
+            // anything, and this folder is gone before the journal is. The
+            // launcher uses the same two facts for its sentence on chats and
+            // settings (_setup_again in amplifier_web/windows_consumer.py);
+            // it also reads setup's completion record, and setup knows only
+            // that record's name. Everything else, and every doubt, is
+            // "other".
             // The answer chooses a text. With "removal" setup also starts no
-            // launcher. Only with "kept" does a text name the person's chats
-            // and settings.
+            // launcher. Only with "kept" does a text say that Amplifier keeps
+            // the person's chats and settings in the folder, or that they
+            // are kept.
             try { File.GetAttributes(Path.Combine(root,Journal)); return "removal"; }
             catch(FileNotFoundException) {}
             catch(Exception) { return "other"; }
@@ -819,10 +822,11 @@ namespace UnifiedBootstrap {
             // setup's stop for a damaged folder, and not to delete it: the
             // folder can hold something of the person's that this look did
             // not see.
-            // The second text is the only one that names the person's chats
-            // and settings (Signs: "kept"). The third names no chats and no
-            // settings: an entry with the journal's name is there, or setup
-            // could not look for one, or the folder "app" is not there.
+            // The second text is the only one that says that Amplifier
+            // keeps the person's chats and settings in the folder (Signs:
+            // "kept"). The third names no chats and no settings: the look
+            // found an entry with the journal's name, or Windows gave that
+            // look no answer, or the folder "app" is not there.
             if(Emptied(root)) return
                 "Setup cannot install Amplifier yet. Setup found an installation record in this folder:\n"+root+"\n\n"+
                 "Setup cannot find a program file that it needs to open Amplifier from that folder. "+
@@ -846,13 +850,15 @@ namespace UnifiedBootstrap {
                 "Select Yes to add it to the Start menu again and start it now."+(kept?" Your chats and settings are kept.":"");
         }
         internal static string Unadded(bool kept) {
-            // After a failed entries step, before the start. `kept` as in Offer.
-            return "Setup could not add Amplifier to the Start menu. Setup starts Amplifier now.\n\n"+
+            // After a failed entries step, before the start. `kept` as in
+            // Offer. "tries": the start comes after this message, Windows
+            // can refuse it, and the launcher can refuse to open Amplifier.
+            return "Setup could not add Amplifier to the Start menu. Setup tries to start Amplifier now.\n\n"+
                 "To open it later, run this setup file again."+(kept?" Your chats and settings are kept.":"");
         }
         internal static string Removing(string root, bool listed) {
-            // The first text for a folder with the launcher program and an
-            // entry with the journal's name. The launcher does not open
+            // The first text for a folder with the launcher program in which
+            // the look found an entry with the journal's name. The launcher does not open
             // Amplifier from such a folder, so setup does not start it. A
             // file with that name is no proof of an uninstall, so the text
             // says only that setup found the record. The step is the
@@ -872,16 +878,19 @@ namespace UnifiedBootstrap {
         internal static string Unstarted(string root, bool added) {
             // The last text of that state, after the entries step. When the
             // entries could not be added and setup's look finds the journal
-            // of a delete and none of the person's data (Emptied), nothing
-            // in the product can finish that removal: an uninstall deletes
-            // the records that the entries step needs before its last
-            // message. The text then gives the step of the first text of
+            // of a delete and none of the person's data (Emptied), setup
+            // cannot finish that removal, and it has no entry to offer for
+            // the launcher's step. An uninstall with the delete choice
+            // deletes the records that the entries step needs, when it can
+            // delete them, before its last message. An uninstall whose last
+            // message is still open in another window can finish the
+            // removal itself, so the text names that message first; until
+            // the answer that uninstall runs from the folder, and Windows
+            // refuses to move it. After the answer the uninstall's last
+            // step holds the folder while it works, so the text says "a few
+            // minutes later". Then the step is the one of the first text of
             // Unopened, to move or rename the folder, and never to delete
-            // it. While that last message is open in another window, the
-            // uninstall still runs from the folder and Windows refuses to
-            // move it, so the text names that message first. After the
-            // answer the uninstall's last step holds the folder while it
-            // works, so the text says "a few minutes later".
+            // it.
             if(added) return "Setup added Amplifier to the Start menu. "+
                 "Setup did not start Amplifier, because it found an uninstall record in this folder:\n"+root+"\n\n"+
                 "To finish that uninstall, select Uninstall Amplifier in the Start menu.";
@@ -897,8 +906,8 @@ namespace UnifiedBootstrap {
         static int OpenInstalled(string root) {
             // A second setup run adds missing Start-menu and Apps-list entries
             // again and starts the app. It never installs again and never removes
-            // anything. While an entry with the journal's name is in the
-            // folder it does not start the app: the launcher would refuse.
+            // anything. When its look finds an entry with the journal's name
+            // it does not start the app: the launcher would refuse.
             if(!File.Exists(AppStart(root).FileName)) {
                 Say(Unopened(root),MessageBoxButtons.OK,MessageBoxIcon.Warning);
                 return 1;
@@ -926,9 +935,10 @@ namespace UnifiedBootstrap {
             return SecondRun(root,listed,true,signs=="kept");
         }
         internal static int SecondRun(string root, bool listed, bool start, bool kept) {
-            // `start`: false while an entry with the journal's name is in the
-            // folder. Setup then adds the entries only, shows no message here
-            // and starts nothing; the result is 0 when the entries exist.
+            // `start`: false when setup's look found an entry with the
+            // journal's name. Setup then adds the entries only, shows no
+            // message box here (its progress window is shown) and starts
+            // nothing; the result is 0 when the entries exist.
             // The person sees that setup works: a start can take minutes, and
             // the launcher has no window of its own.
             Stage=listed?"Starting Amplifier (this can take a few minutes)":"Adding Amplifier to the Start menu";
