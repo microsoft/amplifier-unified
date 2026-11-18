@@ -217,6 +217,42 @@ async def test_cold_choice_only_override_then_bound_ack_keeps_one_revision(tmp_p
     await again.restore(selection_override=other)
     assert again.selection_revision == mounted and again.selection_binding == 'account-B'
     await again.close()
+
+
+async def test_h4_legacy_explicit_selection_migrates_once_only_with_verified_binding(tmp_path, monkeypatch):
+    import pytest
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    controls, _, providers = mounted_controls(SELECTION)
+    controls.state_path().parent.mkdir(parents=True, exist_ok=True)
+    legacy = {'selection': SELECTION, 'budget': {}}
+    controls.state_path().write_text(json.dumps(legacy))
+    controls.coordinator.get_capability = lambda name: (
+        {'connectionKeys': {'terra': 'verified-current'}} if name == 'web.provider_catalog' else None)
+    await controls.restore()
+    revision = controls.selection_revision
+    assert revision and controls.selection_binding == 'verified-current'
+    assert all(not p.calls for p in providers.values())
+    await controls.close()
+    restored, _, _ = mounted_controls(SELECTION)
+    restored.coordinator.get_capability = controls.coordinator.get_capability
+    await restored.restore()
+    assert restored.selection_revision == revision
+    await restored.close()
+    # An explicit null marks independent fork/non-admission, not old schema.
+    controls.state_path().write_text(json.dumps({**legacy, 'selectionRevision': None}))
+    excluded, _, _ = mounted_controls(SELECTION)
+    excluded.coordinator.get_capability = controls.coordinator.get_capability
+    await excluded.restore()
+    assert excluded.selection_revision is None
+    await excluded.close()
+    # Missing or mismatched connection evidence cannot mint model work authority.
+    controls.state_path().write_text(json.dumps({**legacy, 'selectionBinding': 'stale'}))
+    invalid, _, _ = mounted_controls(SELECTION)
+    invalid.coordinator.get_capability = controls.coordinator.get_capability
+    with pytest.raises(ValueError, match='mounted connection differs'):
+        await invalid.restore()
+    assert invalid.selection_revision is None
+    await invalid.close()
 def test_selected_provider_info_reports_effort_without_mutating_bundle_defaults():
     provider = Provider('bundle-model', 'high')
     selected = SelectedProvider(provider, SELECTION)

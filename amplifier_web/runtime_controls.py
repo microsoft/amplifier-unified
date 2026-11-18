@@ -159,6 +159,9 @@ class RuntimeControls:
         self.coordinator.register_capability("web.controls.persist", self.persist)
         self.coordinator.register_capability("web.context_recovery.contract", self.recovery_contract)
         self.coordinator.register_capability("web.context_transition.foreground", self.transition_foreground)
+        self.coordinator.register_capability("web.context_transition.selection", lambda: copy.deepcopy({
+            "selection": self.selection, "selectionRevision": self.selection_revision,
+            "connection": self.selection_binding}))
         from .task_continuity import TaskController
         self.tasks = TaskController(self)
         from .capacity import CapacityController
@@ -228,6 +231,21 @@ class RuntimeControls:
             await self._perform("provider.reset", {})
         if saved.get("mode"):
             await self.mode("mode.set", {"name":saved["mode"]})
+        if ("selectionRevision" not in saved and saved.get("selection")
+                and self.selection == saved["selection"] and not self.selection_revision):
+            # Old explicit controls predate transition revisions. Migrate only
+            # an actual saved choice and a currently verified mounted account;
+            # absent selection/default drift and explicit null fork markers do
+            # not gain foreground admission by being restored.
+            from .provider_catalog import require_mounted_binding
+            instance = self.selection.get("instance")
+            catalog = self.coordinator.get_capability("web.provider_catalog") or {}
+            binding = saved.get("selectionBinding") or catalog.get("connectionKeys", {}).get(instance)
+            if binding:
+                require_mounted_binding(self.coordinator, instance, binding)
+                self.selection_revision = str(uuid.uuid4())
+                self.selection_binding = binding
+                self._selection_unbound_override = False
 
     def persist(self, *, task_only=False):
         if self.preserve_configuration or self._restoring:

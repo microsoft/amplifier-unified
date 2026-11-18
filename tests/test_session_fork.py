@@ -87,7 +87,9 @@ def test_fork_keeps_full_system_tool_context_and_configuration_without_job_owner
     store.save('source-session',original,{'bundle_name':'anchors'},preserve_system=True)
     source_dir=tmp_path/'sessions/source-session';source_dir.mkdir(parents=True)
     (source_dir/'effective-configuration.json').write_text(json.dumps({'session':{'orchestrator':{'module':'loop-live'}},'tools':[{'module':'tool-test'}]}))
-    (source_dir/'control-state.json').write_text(json.dumps({'goal':{'condition':'do not continue automatically'},'budget':{'maxOutputTokens':50}}))
+    (source_dir/'control-state.json').write_text(json.dumps({'goal':{'condition':'do not continue automatically'},
+        'selection': source()['selection'], 'selectionRevision': 'source-choice',
+        'budget':{'maxOutputTokens':50}}))
     (source_dir/'live-jobs').mkdir();(source_dir/'live-jobs/job-old.json').write_text('{}')
     result=fork_session(tmp_path,source(),'fork-session',turn=1)
     messages,metadata=store.load('fork-session')
@@ -99,6 +101,7 @@ def test_fork_keeps_full_system_tool_context_and_configuration_without_job_owner
     assert not (store.directory('fork-session')/'live-jobs').exists()
     controls=json.loads((tmp_path/'sessions/fork-session/control-state.json').read_text())
     assert controls['goal'] is None and controls['budget']['maxOutputTokens']==50
+    assert 'selectionRevision' in controls and controls['selectionRevision'] is None
     assert (tmp_path/'sessions/fork-session/configuration.json').stat().st_mode & 0o777==0o600
     assert store.load('source-session')[0]==original
     # Subsequent standalone checkpoints retain an explicitly forked system row.

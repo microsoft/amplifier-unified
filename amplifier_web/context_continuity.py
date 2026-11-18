@@ -99,6 +99,7 @@ class ContextContinuity:
         self._suppress_save = False
         self._accepted_record = None
         self._transition = None
+        self._foreign_rejected = False
         self._prepared_identity = None
         self._preserved_identity = None
         self._reconciling = None
@@ -109,6 +110,8 @@ class ContextContinuity:
         coordinator.register_capability("web.continuity.status", self.public)
         coordinator.register_capability("web.continuity.recovery", self)
         coordinator.register_capability("context.recovery.run_pending", self.run_pending)
+        coordinator.register_capability("context.transition_policy", lambda: "host-managed" if callable(
+            coordinator.get_capability("web.context_transition.foreground")) else None)
 
     def public(self):
         getter = self.coordinator.get_capability("context.checkpoint.status")
@@ -152,7 +155,7 @@ class ContextContinuity:
             if present:
                 try:
                     record = json.loads(self.path.read_text())
-                    self._accepted_record = copy.deepcopy(record)
+                    self._accepted_record = copy.deepcopy(record) if isinstance(record, dict) else None
                 except (ValueError, OSError, TypeError) as exc:
                     read_failed = True
                     self.status.update(status="rejected", reason=str(exc), originalsAvailable=True)
@@ -160,21 +163,20 @@ class ContextContinuity:
         # Context's disposable source-identity view. Never reinterpret a reason
         # string from a rejected import as selection authority.
         accepted = self._accepted_record
-        if accepted is not None and accepted.get("identity") != self._identity:
+        self._foreign_rejected = False
+        if isinstance(accepted, dict) and accepted.get("identity") != self._identity:
             classifier = self.coordinator.get_capability("context.checkpoint.transition")
             if callable(classifier):
                 classified = classifier(copy.deepcopy(accepted), copy.deepcopy(self._identity))
                 self.status.update(classified)
                 self._transition = classified if classified.get("status") == "transition_required" else None
+                self._foreign_rejected = self._transition is None
                 self._suppress_save = True
                 # A prepared originals view is not a source checkpoint. Its
                 # confirmed target binding prevents another historical campaign.
-                if (self._prepared_identity == self._identity
-                        and classified.get("status") == "transition_required"):
-                    self._transition = None
-                    self.status.update(status="prepared-originals")
             else:
                 self._transition = None
+                self._foreign_rejected = True
                 self._suppress_save = True
                 self.status.update(status="rejected", code="transition_unsupported",
                     reason="The mounted context cannot prepare a model transition.",
@@ -184,7 +186,15 @@ class ContextContinuity:
             if callable(restore):
                 self.status.update(restore(copy.deepcopy(accepted), self._identity))
                 self._transition = None
-                self._suppress_save = self.status.get("status") == "rejected"
+                self._suppress_save = False
+        settled_originals = self._settled_originals(messages)
+        if settled_originals:
+            self._prepared_identity = copy.deepcopy(self._identity)
+            self._transition = None
+            self._suppress_save = False
+            self.status.update(status="prepared-originals")
+        else:
+            self._prepared_identity = None
         # Native storage is already lossless for these messages. Commit it before
         # any request fitter sees and potentially clips a derived copy.
         current = _source_digest(messages)
@@ -225,7 +235,7 @@ class ContextContinuity:
         if not self.loaded or self._recovery_busy:
             return
         self._recovery_record()
-        if self._transition is not None or self.status.get("status") == "rejected":
+        if self._transition is not None or self._foreign_rejected:
             return
         if self._suppress_save and self._prepared_identity != self._identity:
             return
@@ -461,6 +471,35 @@ class ContextContinuity:
             raise ContextRecoveryError("transition_intent_required")
         return copy.deepcopy(value)
 
+    def _settled_originals(self, messages):
+        """Reuse a completed zero-paid disposition, never rearm its campaign."""
+        if self._foreign_rejected:
+            return False
+        empty = self.coordinator.get_capability("context.checkpoint.prepared_originals")
+        selection = self.coordinator.get_capability("web.context_transition.selection")
+        if not callable(empty) or not callable(selection) or empty(copy.deepcopy(self._identity)) is not True:
+            return False
+        current = _sync(selection)
+        checkpoint_digest = digest(self._accepted_record)
+        for row in self._journal["attempts"].values():
+            verification = row.get("verification") or {}
+            if (row.get("kind") != "model-transition" or row["state"] != "committed"
+                    or row.get("outcome") != "prepared-originals" or row.get("calls")
+                    or row.get("progress") or row.get("candidateSha256") or row.get("installedCandidate")
+                    or row["identity"] != self._identity
+                    or verification.get("status") != "prepared-originals"
+                    or verification.get("targetIdentity") != self._identity
+                    or row.get("sourceCheckpointDigest") != checkpoint_digest):
+                continue
+            foreground = row["foreground"]
+            if current != {key: foreground.get(key) for key in ("selection", "selectionRevision", "connection")}:
+                continue
+            source = row["sourceRevision"]
+            if (verification.get("sourceRevision") == source and 0 < source["messages"] <= len(messages)
+                    and _source_digest(messages[:source["messages"]]) == source["sha256"]):
+                return True
+        return False
+
     def _transition_guard(self, record):
         check, contract = self._fresh_guard()
         foreground = self._foreground()
@@ -554,7 +593,7 @@ class ContextContinuity:
             # Only acknowledged completed progress can continue on another
             # legitimate foreground input. Never repeat a reserved/unknown call.
             if (existing["state"] not in {"failed", "refused"}
-                    or not existing.get("progress")
+                    or existing["calls"] and not existing.get("progress")
                     or any(call["state"] != "completed" for call in existing["calls"])
                     or existing.get("candidateSha256")
                     or existing["foreground"]["inputId"] == foreground["inputId"]
@@ -604,6 +643,13 @@ class ContextContinuity:
 
     async def _run_pending(self, *, provider, retain_contents=(), count_view):
         record = self._recovery_record()
+        policy = self.coordinator.get_capability("context.transition_policy")
+        if ((record is None or record["state"] == "committed")
+                and (not callable(policy) or _sync(policy) != "host-managed")):
+            # Mounted Context wrappers also serve finite/delegated consumers.
+            # Without actual host participation they keep Context's ordinary
+            # compatibility path, not an impossible root-Send admission.
+            return None
         transition = record is not None and record.get("kind") == "model-transition"
         if transition and record["state"] != "committed" and record.get("candidateSha256"):
             await self.refresh_identity()
@@ -612,15 +658,18 @@ class ContextContinuity:
             previous_identity = copy.deepcopy(self._identity)
             await self.refresh_identity()
             checkpointless = (self._accepted_record is None and
+                self._prepared_identity != self._identity and
                 self.coordinator.get_capability("web.context_transition.originals") is True)
             if (self.loaded and previous_identity == self._identity and self._transition is None
                     and not checkpointless and (record is None or record["state"] == "committed")):
-                return None  # Ordinary preparation will preserve once, as before.
+                if self._accepted_record is None or self._accepted_record.get("identity") == self._identity:
+                    return None  # Ordinary preparation will preserve once, as before.
             messages = await self.coordinator.get_capability("context.history")()
             await self.preserve(messages)
-            if self.status.get("status") == "rejected":
+            if self._foreign_rejected:
                 raise ContextRecoveryError("recovery_checkpoint_rejected")
             checkpointless = (self._accepted_record is None and
+                self._prepared_identity != self._identity and
                 self.coordinator.get_capability("web.context_transition.originals") is True)
             if record is not None and record is self._reconciling:
                 pass  # This exact digest needs measured activation, not rearming.
@@ -634,11 +683,19 @@ class ContextContinuity:
                         return None
                     raise
                 transition = record is not None and record.get("kind") == "model-transition"
-            elif transition and record["state"] in {"failed", "refused"} and not record.get("candidateSha256"):
+            elif transition and not record.get("candidateSha256") and not self._recovery_busy:
                 # Returning to a source identity is permitted only after the
-                # ordinary strict restore above accepted its entire checkpoint.
-                if self.status.get("status") in {"restored", "saved", "ready"}:
-                    return None
+                # entire source unit verifies under that exact source identity.
+                # This neither settles nor resumes a foreign uncertain call.
+                source_identity = (record.get("sourceCheckpoint") or {}).get("identity")
+                accepted = self._accepted_record
+                restore = self.coordinator.get_capability("context.checkpoint.restore")
+                if (source_identity == self._identity and isinstance(accepted, dict)
+                        and accepted.get("identity") == source_identity and callable(restore)):
+                    disposition = restore(copy.deepcopy(accepted), copy.deepcopy(self._identity))
+                    if disposition.get("status") == "restored":
+                        self.status.update(disposition)
+                        return None
         if record is None or record["state"] == "committed":
             return None
         if self._recovery_busy or record["state"] != "pending":

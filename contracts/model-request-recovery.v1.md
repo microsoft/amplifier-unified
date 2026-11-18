@@ -125,6 +125,11 @@ logical paid call. Repeated preparation and restarts do not reset it. Provider
 SDK retries retain their own bounded policy: a logical-call bound is not a claim
 about physical HTTP requests or exactly-once billing. Completed acknowledged
 progress survives; unknown paid calls never automatically replay.
+An uncertain target call without an installation candidate does not prevent
+ordinary continuation under the fully revalidated source identity. Its journal
+and target-call fence remain intact. A known refused preparation with no call
+reservations, no progress and no installation effect may be prepared again only
+on a new genuine foreground input under the same binding and cumulative budget.
 
 The complete target request must fit under the unchanged allowance. Immediately
 before installing its derived checkpoint, recheck source, selection, options,
@@ -136,6 +141,28 @@ If original history already fits, report **prepared originals**, not checkpoint
 installation: buy no compaction, preserve the old checkpoint inactive, and
 activate only the guarded measured target view. Later ordinary target
 compaction retains its normal trigger policy.
+The settled zero-paid disposition is reusable after cold startup or within a
+tool continuation without another selection or new transition campaign.
+Current identity, saved choice/account, exact retained checkpoint, canonical
+prefix and an empty derived unit must verify; an old identity-only marker cannot
+hide changed source/configuration or a foreign active summary/paid partial.
+Current ordinary request fitting still applies, with ordinary target compaction
+and persistence enabled.
+
+An invalid same-identity checkpoint may be reconstructed from canonical
+originals through ordinary preparation. It is never transition provenance.
+Older saved explicit model selections without a revision acquire one stable
+revision only after verification of the mounted connection; restoring a default,
+an absent selection or an explicit null fork revision does not grant admission.
+
+Only participating roots declare the host-managed transition policy. Other
+Context consumers retain supported ordinary preparation, including one-window
+native or existing portable generation when no durable writer participates.
+A nonparticipating durable host with only a zero-argument checkpoint writer
+cannot atomically retain old and staged target units: fitting originals remains
+zero-paid, but oversized replacement is refused before generation with an
+actionable persistence limitation. This is not an automatic memory-only
+downgrade, native batching fallback, or permission to discard uncertain progress.
 
 An unchanged full fork may carry a prefix-bound accepted checkpoint, but never
 the source recovery journal, execution ownership or call reservations. Partial,

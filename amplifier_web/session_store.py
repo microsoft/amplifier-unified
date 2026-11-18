@@ -569,7 +569,7 @@ def fork_session(home, source, target_id, *, turn=None, after_message_id=None, b
                 # Model choice is inherited, its source execution's transition
                 # admission is not. A later explicit target choice gets its own
                 # revision on the independent fork.
-                data.pop("selectionRevision", None)
+                data["selectionRevision"] = None  # Explicit fork, not a legacy absent-key control.
                 data.pop("selectionBinding", None)
                 data.pop("selectionBindingPending", None)
                 if bundle:

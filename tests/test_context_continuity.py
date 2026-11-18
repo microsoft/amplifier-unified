@@ -437,7 +437,7 @@ class RecoveryWire:
 
 
 @asynccontextmanager
-async def ordinary_recovery_case(directory, wire, messages=()):
+async def ordinary_recovery_case(directory, wire, messages=(), *, live=False):
     """Maintained native_case pattern: Core + PreparedBundle + the real loop.
 
     The fixture supplies host ownership/Stop observations and synthetic HTTP, not
@@ -456,6 +456,10 @@ async def ordinary_recovery_case(directory, wire, messages=()):
             'native_min_new_tokens': 0, 'compaction_notice_enabled': False}}}}
     paths = {'loop-streaming': Path(amplifier_module_loop_streaming.__file__).parent,
              'context-managed': Path(amplifier_module_context_managed.__file__).parent}
+    if live:
+        import amplifier_module_loop_live
+        paths['loop-live'] = Path(amplifier_module_loop_live.__file__).parent
+        plan['session']['orchestrator']['module'] = 'loop-live'
     session = await PreparedBundle(plan, BundleModuleResolver(paths),
         Bundle(name='ordinary-recovery', session=plan['session'])).create_session(
             session_id='ordinary-recovery')
@@ -464,6 +468,9 @@ async def ordinary_recovery_case(directory, wire, messages=()):
     gate = ActivationGate()
     activation = gate.activate()
     runtime = SimpleNamespace(generation=None, queued_inputs=0, stop_requested=False, closed=False)
+    if live:
+        from amplifier_module_loop_live.runtime import Runtime
+        runtime = Runtime(session.session_id)
     sdk = openai.AsyncOpenAI(api_key='synthetic-not-live', max_retries=0,
         http_client=httpx.AsyncClient(transport=httpx.MockTransport(wire.transport)))
     raw = provider_module.OpenAIProvider(client=sdk, config={
@@ -624,6 +631,77 @@ async def test_ordinary_sdk_model_transition_counts_compacts_and_dispatches_sele
         first.gate.release(first.activation)
     async with ordinary_recovery_case(directory, wire, canonical) as second:
         await target_request(second)
+
+
+async def test_real_worker_controls_live_sdk_model_transition_admission(tmp_path, monkeypatch):
+    """No foreground lambda: Worker admission → native delivery → controls → SDK."""
+    import asyncio
+    from amplifier_web.runtime_worker import Worker
+    from amplifier_module_loop_live.runtime import Input
+    wire, target_model = RecoveryWire(), 'gpt-6.1-sol'
+    async with ordinary_recovery_case(tmp_path, wire, live=True) as case:
+        worker = Worker()
+        worker.session, worker.runtime, worker.controls = case.session, case.runtime, case.controls
+        worker.activation_gate, worker.activation = case.gate, case.activation
+        worker.start_config = {'interruptionRevision': 7}
+        case.runtime.capture_activation = case.gate.current
+        token = case.gate.bind(case.activation)
+        try:
+            worker.execution = asyncio.create_task(case.session.execute(''))
+        finally:
+            case.gate.reset(token)
+        case.runtime.observer = worker.observe
+        monkeypatch.setattr('amplifier_web.runtime_worker.publish', lambda _: None)
+        coordinator = case.session.coordinator
+        coordinator.register_capability('web.context_transition.input', worker.transition_input)
+        async def send(identity, text):
+            before = case.runtime.sequence
+            await worker._command_serial({'op': 'send', 'id': 'command-' + identity,
+                'input_id': identity, 'text': text, 'interruptionRevision': 7})
+            await asyncio.wait_for(case.runtime.wait_for(lambda event:
+                event['type'] in {'generation.finished', 'generation.failed'}
+                and event.get('sequence', 0) > before and identity in event.get('input_ids', []),
+                timeout=10), 12)
+            terminal = next(event for event in reversed(case.runtime.events)
+                            if event['type'] in {'generation.finished', 'generation.failed'})
+            assert terminal['type'] == 'generation.finished', terminal
+        try:
+            await send('seed', 'SEED-EFFECT: preserve ORBIT.')
+            await append_recovery_evidence(case.context, ['A'])
+            await send('source', 'Establish accepted source context.')
+            await case.checkpoint()
+            await append_recovery_evidence(case.context, [str(n) for n in range(10)])
+            await coordinator.mount('providers', case.raw, name='openai')
+            # Same accepted model family but a different exact identity.
+            target_model = 'gpt-6.1-astra'
+            await case.controls.perform('provider.select', {
+                'instance': 'openai', 'model': target_model, 'effort': 'high'})
+            before = (len(wire.counts), len(wire.compactions), len(wire.completions))
+            wire.reducing_models.add(target_model)
+            await send('target', 'New authorized target input; never replay effects.')
+            assert case.adapter.recovery_status()['state'] == 'committed'
+            assert all(body['model'] == target_model for body, _ in wire.counts[before[0]:])
+            assert all(body['model'] == target_model for body, _, _ in wire.compactions[before[1]:])
+            assert len(wire.compactions) > before[1]
+            assert len(wire.completions) == before[2] + 1
+            assert wire.completions[-1]['model'] == target_model
+            assert wire.effects == 1 and wire.unknown_invocations == 0
+            row = case.adapter._recovery_record()
+            assert row['foreground']['inputId'] == 'target'
+            assert row['foreground']['selectionRevision'] == case.controls.selection_revision
+            print(json.dumps({'composedAdmission': {
+                'inputId': row['foreground']['inputId'],
+                'durableHostStop': worker.context_bindings['target']['interruptionRevision'],
+                'localStop': worker.context_bindings['target']['localStopRevision'],
+                'counts': len(wire.counts) - before[0],
+                'compactions': len(wire.compactions) - before[1],
+                'creates': len(wire.completions) - before[2],
+                'target': target_model, 'effects': wire.effects,
+                'unknownInvocations': wire.unknown_invocations}}, sort_keys=True))
+        finally:
+            if not case.runtime.closed:
+                await case.runtime.submit(Input('stop', activation=case.activation))
+            await asyncio.wait_for(worker.execution, 5)
 
 
 async def sdk_transition_process_phase(directory, phase):
@@ -1178,6 +1256,8 @@ async def target_transition_fixture(directory, *, model='target-model', foregrou
               'connection': 'fixture-connection', 'inputIds': ['new-input']}
     coordinator.register_capability('web.context_transition.foreground',
         lambda: copy.deepcopy(origin) if foreground else None)
+    coordinator.register_capability('web.context_transition.selection', lambda: {
+        key: copy.deepcopy(origin.get(key)) for key in ('selection', 'selectionRevision', 'connection')})
     async def count_view(rows):
         request = ChatRequest(model=model, messages=[Message(**row) for row in rows])
         return {'dispatch': request, 'budget_decision':
@@ -1289,14 +1369,15 @@ async def test_prepared_originals_b_a_b_revalidates_active_source_instead_of_sta
     assert case.coordinator.context.summary is None
     assert case.adapter.public()['status'] == 'prepared-originals'
     assert case.raw.compactions == []
-    # A cold reader of the same completed zero-paid receipt also remeasures,
-    # never activates a nonexistent saved target checkpoint or buys work.
+    # A cold reader of the completed zero-paid receipt uses ordinary fitting;
+    # it does not rearm the already settled historical transition.
     case.adapter._prepared_identity = None
     case.adapter.loaded = False
     case.adapter._journal = None
     case.origin.update(inputId='cold-B-input', generationId='cold-B-generation')
-    assert (await case.prepare())['outcome'] == 'transition_fitted'
-    assert case.raw.compactions == []
+    journal = case.adapter.recovery_path.read_bytes()
+    assert (await case.prepare())['outcome'] != 'transition_fitted'
+    assert case.adapter.recovery_path.read_bytes() == journal
 
 
 async def test_warm_foreign_checkpoint_without_classifier_is_unsupported_not_overwritten(tmp_path):
@@ -1552,6 +1633,163 @@ async def test_transition_foreign_refusal_does_not_brick_fully_valid_source_iden
     assert case.adapter.path.read_bytes() == case.accepted
 
 
+@pytest.mark.parametrize('state', ['unknown', 'running'])
+async def test_h1_unknown_target_call_does_not_brick_strict_source_continuation(tmp_path, state):
+    from amplifier_core import ChatRequest, Message
+    from amplifier_web.host.session import SelectedProvider
+    case = await target_transition_fixture(tmp_path)
+    compact = case.raw.compact_context
+    async def lost(request):
+        raise RuntimeError('lost target reply')
+    case.raw.compact_context = lost
+    with pytest.raises(RuntimeError, match='lost target'):
+        await case.prepare()
+    row = case.adapter._recovery_record()
+    row['state'] = state  # A crashed running reservation is equally uncertain.
+    case.adapter._write_recovery()
+    journal = case.adapter.recovery_path.read_bytes()
+    case.raw.compact_context = compact
+    source = SelectedProvider(case.raw, {'instance': 'fixture', 'model': 'selected-model'})
+    case.coordinator.loop.root_provider = source
+    async def count(rows):
+        request = ChatRequest(model='selected-model', messages=[Message(**r) for r in rows])
+        return {'dispatch': request, 'budget_decision': source.request_budget(request)}
+    paid = len(case.raw.compactions)
+    result = await case.coordinator.context.get_measured_request_view(
+        provider=source, retain_contents=(), count_view=count)
+    assert result['final_attempt']['dispatch'].model == 'selected-model'
+    assert len(case.raw.compactions) == paid
+    assert case.adapter.recovery_path.read_bytes() == journal
+    case.coordinator.loop.root_provider = case.selected
+    case.origin.update(inputId='new-target-request', generationId='later-generation')
+    with pytest.raises(RuntimeError, match='recovery_unreconciled'):
+        await case.prepare()
+    assert case.adapter.recovery_path.read_bytes() == journal
+
+
+async def test_h2_zero_reservation_refusal_can_retry_only_new_foreground_same_binding(tmp_path):
+    case = await target_transition_fixture(tmp_path)
+    recover = case.coordinator.get_capability('context.recovery.recover')
+    async def refuse_before_call(**kwargs):
+        raise RuntimeError('known preparation refusal before paid admission')
+    case.coordinator.register_capability('context.recovery.recover', refuse_before_call)
+    with pytest.raises(RuntimeError, match='known preparation'):
+        await case.prepare()
+    row = case.adapter._recovery_record()
+    assert row['state'] == 'refused' and row['calls'] == [] and row['progress'] is None
+    case.coordinator.register_capability('context.recovery.recover', recover)
+    with pytest.raises(RuntimeError, match='recovery_unreconciled'):
+        await case.prepare()
+    case.origin.update(inputId='new-authorized-input', generationId='new-generation')
+    assert (await case.prepare())['outcome'] == 'transitioned'
+    assert case.adapter.recovery_status()['attempts'] == 1
+    assert case.adapter.recovery_status()['logicalCalls'] <= row['maxCalls'] == 16
+
+
+@pytest.mark.parametrize('checkpointless', [False, True], ids=['checkpoint', 'canonical-originals'])
+async def test_h2_settled_originals_tool_continuation_uses_ordinary_compaction(tmp_path, checkpointless):
+    from amplifier_web.context_continuity import ContextContinuity
+    case = await target_transition_fixture(tmp_path)
+    case.raw.input_limit = 50000
+    if checkpointless:
+        directory = tmp_path / 'fork'
+        directory.mkdir()
+        case.origin['originals'] = True
+        case.coordinator.register_capability('web.context_transition.originals', True)
+        case.adapter = ContextContinuity(case.coordinator, 'session', directory,
+            AsyncMock(), writer_guard=case.gate.check_current)
+    assert (await case.prepare())['outcome'] == 'transition_fitted'
+    journal = case.adapter.recovery_path.read_bytes()
+    recover = AsyncMock(side_effect=AssertionError('settled originals transition rearmed'))
+    case.coordinator.register_capability('context.recovery.recover', recover)
+    # Same generation/initial input can have ordinary tool continuations. They
+    # do not need another Send to reuse an acknowledged originals disposition.
+    await case.prepare()
+    assert case.raw.compactions, 'ordinary target trigger must remain enabled'
+    recover.assert_not_awaited()
+    assert case.adapter.recovery_path.read_bytes() == journal
+
+
+async def test_h2_cold_settled_originals_needs_no_new_selection_intent_or_old_contract(tmp_path):
+    from amplifier_core import ChatRequest, Message
+    from amplifier_web.host.session import SelectedProvider
+    case = await target_transition_fixture(tmp_path)
+    case.raw.input_limit = 50000
+    assert (await case.prepare())['outcome'] == 'transition_fitted'
+    journal = case.adapter.recovery_path.read_bytes()
+    coordinator, raw, _, adapter, _, _, _ = await native_fixture(tmp_path, case.source)
+    raw.input_limit = 50000
+    target = SelectedProvider(raw, {'instance': 'fixture', 'model': 'target-model', 'effort': 'high'})
+    coordinator.loop.root_provider = target
+    # No host foreground callback/generation on cold ordinary preparation; a
+    # newer harmless options contract must not rearm historical work.
+    bind_continuity_recovery_guards(coordinator, adapter, {'new-options': 1})
+    coordinator.register_capability('web.context_transition.selection', lambda: {
+        key: copy.deepcopy(case.origin.get(key)) for key in ('selection', 'selectionRevision', 'connection')})
+    recover = AsyncMock(side_effect=AssertionError('cold settled originals rearmed'))
+    coordinator.register_capability('context.recovery.recover', recover)
+    async def count(rows):
+        request = ChatRequest(model='target-model', messages=[Message(**r) for r in rows])
+        return {'dispatch': request, 'budget_decision': target.request_budget(request)}
+    result = await coordinator.context.get_measured_request_view(
+        provider=target, retain_contents=(), count_view=count)
+    assert result['outcome'] != 'transition_fitted'
+    recover.assert_not_awaited()
+    assert raw.compactions and raw.sent == []
+    assert adapter.recovery_path.read_bytes() == journal
+
+
+@pytest.mark.parametrize('damage', ['source-prefix', 'source-record', 'choice', 'connection', 'active-derived'])
+async def test_h2_settled_originals_cannot_mask_changed_provenance_or_derived_unit(tmp_path, damage):
+    case = await target_transition_fixture(tmp_path)
+    case.raw.input_limit = 50000
+    assert (await case.prepare())['outcome'] == 'transition_fitted'
+    if damage == 'source-prefix':
+        case.coordinator.context.messages[0]['content'] += ' changed'
+    elif damage == 'source-record':
+        case.adapter._accepted_record['summary']['message']['content'] += ' corrupt'
+    elif damage == 'choice':
+        case.origin['selectionRevision'] = 'new-choice'
+    elif damage == 'connection':
+        case.origin['connection'] = 'different-account'
+    else:
+        accepted = json.loads(case.accepted)
+        restore = case.coordinator.get_capability('context.checkpoint.restore')
+        assert restore(accepted, accepted['identity'])['status'] == 'restored'
+    messages = await case.coordinator.context.get_messages()
+    await case.adapter.preserve(messages)
+    assert not case.adapter._settled_originals(messages)
+    assert case.adapter._prepared_identity is None
+
+
+@pytest.mark.parametrize('damage', ['configuration', 'digest', 'unreadable', 'non-object'])
+async def test_h3_rejected_same_identity_reconstructs_from_originals_and_saves(tmp_path, damage):
+    original = native_history()
+    first, _, _, old, checkpoint, _, prepare = await native_fixture(tmp_path, original)
+    await prepare()
+    await checkpoint()
+    if damage == 'digest':
+        record = json.loads(old.path.read_text())
+        record['summary']['message']['content'] += ' INVALID'
+        old.path.write_text(json.dumps(record))
+    elif damage == 'unreadable':
+        old.path.write_text('{invalid')
+    elif damage == 'non-object':
+        old.path.write_text('[]')
+    newer, raw, _, adapter, _, _, prepare_new = await native_fixture(tmp_path, original)
+    if damage == 'configuration':
+        newer.context.config['summary_max_output_tokens'] = 999
+    await prepare_new()
+    adapter.save()
+    assert adapter.public()['status'] != 'rejected'
+    record = json.loads(adapter.path.read_text())
+    assert record['sha256'] == digest({k: v for k, v in record.items() if k != 'sha256'})
+    assert record['identity']['model'] == 'selected-model'
+    assert raw.compactions and raw.sent == []
+    assert not adapter.recovery_path.exists()
+    assert await newer.context.get_messages() == original
+
+
 async def test_transition_fitting_originals_has_no_paid_work_or_fake_install(tmp_path):
     case = await target_transition_fixture(tmp_path)
     case.raw.input_limit = 50000
@@ -1609,6 +1847,7 @@ async def test_model_transition_preserves_source_checkpoint_without_foreground_i
     target = SelectedProvider(raw, {
         'instance': 'fixture', 'model': 'target-model', 'effort': 'low'})
     coordinator.loop.root_provider = target
+    coordinator.register_capability('web.context_transition.foreground', lambda: None)
     from amplifier_core import ChatRequest, Message
     async def count_target(rows):
         request = ChatRequest(model='target-model', messages=[Message(**row) for row in rows])
