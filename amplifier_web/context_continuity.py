@@ -130,13 +130,13 @@ class ContextContinuity:
         self._identity = {"provider": instance or name, "model": (defaults or {}).get("model") or (defaults or {}).get("default_model")}
 
     async def preserve(self, messages):
-        self._check_restore_disposition()
+        restore_allowed = self._ordinary_restore_allowed()
         guard = self._recovery_guard
         await _guarded(guard, self.refresh_identity)
         # Read before checkpoint(): that callback can itself call save(). An
         # unloaded accepted checkpoint must never be replaced by active defaults.
         record, restore, present, read_failed = None, None, False, False
-        if not self.loaded:
+        if not self.loaded and restore_allowed:
             restore = self.coordinator.get_capability("context.checkpoint.restore")
             present = bool(restore and self.path.exists())
             if present:
@@ -152,9 +152,9 @@ class ContextContinuity:
             await _guarded(guard, self.checkpoint)
             self.saved_digest = current
         if not self.loaded:
-            self._check_restore_disposition()
+            restore_allowed = self._ordinary_restore_allowed()
             self.loaded = True
-            if present:
+            if present and restore_allowed:
                 try:
                     if not read_failed:
                         self.status.update(restore(record, self._identity))
@@ -182,8 +182,7 @@ class ContextContinuity:
     def save(self):
         if not self.loaded or self._recovery_busy:
             return
-        self._recovery_record()
-        if self._suppress_save:
+        if self._suppress_save or not self._ordinary_restore_allowed():
             return
         export = self.coordinator.get_capability("context.checkpoint.export")
         if export is None or not self._identity or not all(self._identity.values()):
@@ -201,12 +200,21 @@ class ContextContinuity:
             write_private(self.path, text)
             self.status = {"supported": True, "status": "progress_saved" if record.get("progress") else "saved", "sourceRevision": record["sourceRevision"], "originalsAvailable": True}
 
-    def _check_restore_disposition(self):
-        current = self._recovery_record()
+    def _ordinary_restore_allowed(self):
+        try:
+            current = self._recovery_record()
+        except ContextRecoveryError:
+            # A private journal read failure fences derived state, not the
+            # canonical transcript. Explicit recovery still sees the error.
+            if self._recovery_guard is not None:
+                raise
+            return False
         if current and current["state"] != "committed" and current.get("candidateSha256"):
-            # Storage acknowledgement is not activation/commit. In particular,
-            # a non-measured preparation must not reconcile an unknown install.
-            raise ContextRecoveryError("recovery_unreconciled")
+            # A stored candidate is not activation/commit.
+            if self._recovery_guard is not None:
+                raise ContextRecoveryError("recovery_unreconciled")
+            return False
+        return True
 
     def _recovery_record(self):
         # One read per mount; ordinary no-intent preparation does not scan history
@@ -220,6 +228,7 @@ class ContextContinuity:
                 for key, row in journal["attempts"].items():
                     source = row.get("sourceRevision") or {}
                     contract = row.get("contract")
+                    candidate = row.get("candidateSha256")
                     if (not isinstance(key, str) or not 0 < len(key) <= 200 or row.get("commandId") != key
                             or row.get("state") not in {"pending", "running", "installing", "committed", "failed", "refused", "unknown"}
                             or type(row.get("interruptionRevision")) is not int or row["interruptionRevision"] < 0
@@ -229,6 +238,9 @@ class ContextContinuity:
                             or contract["version"] != 1 or not isinstance(contract["sha256"], str)
                             or len(contract["sha256"]) != 64
                             or any(char not in "0123456789abcdef" for char in contract["sha256"])
+                            or ((row.get("state") == "installing" or "candidateSha256" in row)
+                                and (not isinstance(candidate, str) or len(candidate) != 64
+                                     or any(char not in "0123456789abcdef" for char in candidate)))
                             or type(source.get("messages")) is not int or source["messages"] < 1
                             or not isinstance(source.get("sha256"), str) or len(source["sha256"]) != 64
                             or type(row.get("completedParts")) is not int or row["completedParts"] < 0):
@@ -382,11 +394,16 @@ class ContextContinuity:
             self._recovery_busy = False
 
     async def run_pending(self, *, provider, retain_contents=(), count_view):
-        record = self._recovery_record()
-        if record is None or record["state"] == "committed":
-            return None
-        if self._recovery_busy or record["state"] != "pending":
+        if self._recovery_busy:
             raise ContextRecoveryError("recovery_unreconciled")
+        try:
+            record = self._recovery_record()
+        except ContextRecoveryError:
+            return None
+        if record is None or record["state"] != "pending":
+            # Only a freshly armed explicit command may spend recovery work.
+            # Historical dispositions are neither retried nor reconciled here.
+            return None
         self._recovery_busy = True
         entered = False
         compaction_error = ()
