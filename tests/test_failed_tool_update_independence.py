@@ -129,17 +129,119 @@ async def test_explicit_tool_recovery_preserves_foreground_app_state(app, monkey
         assert app.state['updates']['skippedSmartTools'] == {'old': pending['revision']}
 
 
-async def test_healthy_unfinished_ordinary_tool_still_blocks_app_check_and_install(app, monkeypatch):
+@pytest.mark.parametrize('action', ['app', 'install'])
+async def test_published_app_can_proceed_while_a_smart_tool_is_waiting(app, monkeypatch, action):
+    from amplifier_web import __version__
+
+    manager = app.update_manager
+    pending = [{'previous': 'healthy', 'target': 'healthy-new'}]
+    cached = {'id': 'application', 'current': __version__, 'latest': __version__,
+              'revision': manager.running_identity['revision'], 'status': 'current'}
+    published = {**cached, 'status': 'update', 'latest': 'v99.1.0', 'revision': 'b' * 40}
+    await manager.publish(pendingSmartTools=copy.deepcopy(pending), phase='error',
+                          application=cached, appAvailable=False, items=[cached], available=0)
+    monkeypatch.setattr(app_updates, 'check', AsyncMock(return_value=published))
+    monkeypatch.setattr(manager, 'activateSmartTools', AsyncMock(side_effect=AssertionError('Tool activated')))
+    monkeypatch.setattr(app_updates, 'stage', AsyncMock())
+    monkeypatch.setattr(app_updates, 'activate', AsyncMock())
+
+    if action == 'install':
+        await manager.command('check')
+        assert app.state['updates']['appAvailable'] and app.state['updates']['available'] == 1
+        assert app.state['updates']['pendingSmartTools'] == pending
+        app_updates.stage.assert_not_awaited()
+    await manager.command(action)
+    app_updates.check.assert_awaited_once()
+    app_updates.stage.assert_awaited_once_with(manager)
+    app_updates.activate.assert_awaited_once_with(manager)
+    assert app.state['updates']['application']['revision'] == published['revision']
+    assert app.state['updates']['pendingSmartTools'] == pending
+
+
+@pytest.mark.parametrize('status', ['current', 'check_failed'])
+async def test_explicit_app_request_with_waiting_tool_does_not_stage_a_stale_selection(app, monkeypatch, status):
+    manager = app.update_manager
+    tool = {'previous': 'healthy', 'target': 'healthy-new'}
+    await manager.publish(pendingSmartTools=[tool.copy()], phase='staged', appAvailable=False,
+                          applicationIntent={'id': 'old', 'scope': 'whole'},
+                          sequence={'stage': 'other', 'install': True, 'nextStage': 'other'})
+    monkeypatch.setattr(app_updates, 'check', AsyncMock(return_value={'id': 'application', 'status': status}))
+    monkeypatch.setattr(app_updates, 'stage', AsyncMock())
+    monkeypatch.setattr(manager, 'activateSmartTools', AsyncMock())
+    await manager.command('app')
+    app_updates.check.assert_awaited_once()
+    app_updates.stage.assert_not_awaited()
+    manager.activateSmartTools.assert_not_awaited()
+    assert app.state['updates']['pendingSmartTools'] == [tool]
+    assert app.state['updates']['phase'] == 'staged'
+    assert app.state['updates']['applicationIntent']['scope'] == 'app'
+    assert app.state['updates']['sequence'] == {'stage': 'application', 'install': False}
+
+
+@pytest.mark.parametrize('auto_install', [False, True])
+async def test_due_app_check_respects_install_policy_while_tool_is_waiting(app, monkeypatch, auto_install):
+    manager = app.update_manager
+    app.state['settings']['updates'].update(autoCheck=True, autoInstall=auto_install)
+    tool = {'previous': 'healthy', 'target': 'healthy-new'}
+    await manager.publish(pendingSmartTools=[tool.copy()], phase='staged', lastCheck=0, lastAttempt=0)
+    monkeypatch.setattr(app_updates, 'check', AsyncMock(return_value={
+        'id': 'application', 'status': 'update', 'latest': 'v99.1.0', 'revision': 'b' * 40}))
+    monkeypatch.setattr(manager, 'app', AsyncMock())
+    monkeypatch.setattr(manager, 'activateSmartTools', AsyncMock())
+    await manager.tick()
+    app_updates.check.assert_awaited_once()
+    assert app.state['updates']['appAvailable'] is True
+    assert app.state['updates']['pendingSmartTools'] == [tool]
+    assert manager.app.await_count == int(auto_install)
+    assert manager.activateSmartTools.await_count == int(not auto_install)
+
+
+async def test_tool_handoff_protects_inventory_and_known_release_during_checks(app, monkeypatch):
+    manager = app.update_manager
+    tool = {'previous': 'healthy', 'target': 'healthy-new'}
+    cache = {'id': 'application', 'status': 'update', 'latest': 'v99.1.0', 'revision': 'b' * 40}
+    other = {'id': 'other', 'status': 'update'}
+    await manager.publish(pendingSmartTools=[tool.copy()], phase='staged', appAvailable=True,
+                          application=cache.copy(), items=[cache.copy(), other], available=2)
+    manager.inventory = [other.copy()]
+    monkeypatch.setattr(app_updates, 'check', AsyncMock(side_effect=[
+        {**cache, 'revision': 'c' * 40}, {**cache, 'latest': 'v99.0.0', 'revision': 'd' * 40},
+        {**cache, 'latest': 'v99.2.0', 'revision': 'e' * 40, 'canInstall': False},
+        {'status': 'check_failed'}]))
+    for tier in ['included', 'other']:
+        await manager.check(tier=tier)
+    app_updates.check.assert_not_awaited()
+    for _ in range(4):
+        await manager.command('check')
+    assert app.state['updates']['items'] == [cache, other]
+    assert app.state['updates']['application'] == cache
+    assert app.state['updates']['available'] == 2
+    assert app.state['updates']['pendingSmartTools'] == [tool]
+    assert manager.inventory == [other]
+
+
+async def test_app_staging_rechecks_tool_target_under_its_lock(app, monkeypatch):
+    manager = app.update_manager
+    await manager.publish(appAvailable=True, pendingSmartTools=[{'previous': 'ordinary'}],
+                          application={'status': 'update', 'latest': 'v99.1.0', 'revision': 'b' * 40})
+    monkeypatch.setattr(app_updates, 'stage', AsyncMock())
+    monkeypatch.setattr(app_updates, 'activate', AsyncMock())
+    await manager.app()
+    app_updates.stage.assert_not_awaited()
+    app_updates.activate.assert_not_awaited()
+
+
+async def test_healthy_unfinished_tool_keeps_its_install_when_there_is_no_new_app(app, monkeypatch):
     await failed_tool(app)
     manager = app.update_manager
     await manager.publish(pendingSmartTools=[*app.state['updates']['pendingSmartTools'],
                                            {'previous': 'healthy', 'target': 'healthy-new'}],
                           appAvailable=True, phase='staged')
-    monkeypatch.setattr(app_updates, 'check', AsyncMock())
+    monkeypatch.setattr(app_updates, 'check', AsyncMock(return_value={'id': 'application', 'status': 'current'}))
     monkeypatch.setattr(manager, 'app', AsyncMock())
     monkeypatch.setattr(manager, 'activateSmartTools', AsyncMock())
     await manager.check()
     await manager.install()
-    app_updates.check.assert_not_called()
+    app_updates.check.assert_awaited_once()
     manager.app.assert_not_called()
     manager.activateSmartTools.assert_awaited_once()
