@@ -421,11 +421,20 @@ jobs:
       # Uninstall: real Start-menu shortcuts (ShellLink COM), the real HKCU
       # registry transaction, private files and NTFS sharing, in a throwaway
       # installation folder that the test removes. Task Scheduler is a stand-in.
-      - name: Check uninstall order, a failed stop and restored real Windows entries
+      # Two cases hold a shortcut as another program can: an open that does not
+      # share deleting (Windows error 32 at the pin) and a mapped view (error 5
+      # at the delete). The uninstall waits its bounded time and stops; when the
+      # other program lets go, it finishes. Each case prints what it saw.
+      - name: Check uninstall order, a failed stop, a held shortcut and restored real Windows entries
         shell: pwsh
         run: |
-          .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -p no:cacheprovider tests/test_windows_consumer_shell.py
+          .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -s -p no:cacheprovider tests/test_windows_consumer_shell.py | Tee-Object -Variable report
           if ($LASTEXITCODE -ne 0) { throw 'Windows uninstall entry checks failed.' }
+          $text = $report -join "`n"
+          if ($text -match '\d+ skipped') { throw 'A native uninstall entry case was skipped; on this lane it must run.' }
+          foreach ($held in '"step": "entries-check", "error": "PermissionError", "code": 32', '"step": "shortcuts", "error": "PermissionError", "code": 5') {
+            if (-not $text.Contains('UNINSTALL_HELD {' + $held)) { throw ('The case of a held shortcut did not print: ' + $held) }
+          }
       # Uninstall asks the running app whether a chat is at work. Real sockets
       # and aiohttp's own errors on Windows: a listener that takes the
       # connection and gives no answer is asked again, and the refusal of a
