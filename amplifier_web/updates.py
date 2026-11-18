@@ -1845,7 +1845,7 @@ class UpdateManager:
                     componentResults=public_results(partial, adopted=True),
                     includedCanProceed=False,
                     **({'sequence': sequence} if sequence else {}),
-                    available=sum(row.get('status')=='update' for row in items),installedAt=time.time(),detail='Previous ecosystem restored. Automatic installation is now off.' if rollback else 'Update ready for new work. Active conversations adopt it after their current work finishes.')
+                    available=sum(row.get('status')=='update' for row in items),installedAt=time.time(),detail='Amplifier went back to the earlier components. "Keep Amplifier up to date" is now off, so that the same update is not installed again by itself.' if rollback else 'Update ready for new work. Active conversations adopt it after their current work finishes.')
                 if rollback or 'pendingRollback' in self.service.state['updates']:
                     async with self.service.lock:
                         self.service.state['updates'].pop('pendingRollback', None)
