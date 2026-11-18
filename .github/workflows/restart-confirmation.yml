@@ -91,8 +91,10 @@ jobs:
         run: |
           uv run --no-sync python -c "import os, sys, struct; assert os.name == 'nt'; assert sys.version_info[:2] == (3, 13); assert struct.calcsize('P') == 8"
           if ($LASTEXITCODE -ne 0) { throw 'Native Windows preflight failed.' }
-          uv run --no-sync pytest -q -rA -p no:cacheprovider tests/test_update_readiness.py -k native_windows | Tee-Object -FilePath restart-confirmation-native.txt -Variable report
-          if ($LASTEXITCODE -ne 0) { throw 'The native case failed; the line HOST-LOOP-MEASUREMENT above holds what it measured.' }
+          uv run --no-sync pytest -q -rA -p no:cacheprovider tests/test_update_readiness.py -k native_windows | Tee-Object -Variable report
+          $status = $LASTEXITCODE
+          $report | Out-File -FilePath restart-confirmation-native.txt -Encoding utf8
+          if ($status -ne 0) { throw 'The native case failed; the line HOST-LOOP-MEASUREMENT above holds what it measured.' }
           $summary = [string]($report | Where-Object { $_ } | Select-Object -Last 1)
           if ($summary -notmatch '^(=+ )?1 passed, \d+ deselected(, \d+ warnings?)? in ') { throw "The native case did not run or did not pass; on this lane it must run: $summary" }
           if (-not ($report | Where-Object { $_ -match '^HOST-LOOP-MEASUREMENT ' })) { throw 'The native case printed no measurement.' }
