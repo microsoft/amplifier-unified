@@ -32,7 +32,7 @@
         "tests/test_surface_context.py",
         "tests/test_native_job_recovery.py",
         "tests/test_agent_actions.py::test_catalog_and_permissions_fit_real_programmatic_output_limit",
-        "tests/test_attachments.py::test_real_core_loop_live_receives_multimodal_message",
+        "tests/test_attachments.py::test_real_core_loop_live_persists_composer_image",
         "tests/test_compaction_failure_contract.py::test_real_compaction_error_reaches_app_without_private_payload",
         "tests/test_context_source.py::test_real_boundary_import_and_core_loader_remount",
         "tests/test_history_edit_worker.py::test_current_edit_parks_and_resumes_without_replaying",
@@ -499,7 +499,7 @@
       "prerequisite": "UNIFIED_RUNTIME_PYTHON"
     },
     {
-      "node": "tests/test_attachments.py::test_real_core_loop_live_receives_multimodal_message",
+      "node": "tests/test_attachments.py::test_real_core_loop_live_persists_composer_image",
       "kind": "test_case",
       "owner": "native",
       "prerequisite": "UNIFIED_RUNTIME_PYTHON"
