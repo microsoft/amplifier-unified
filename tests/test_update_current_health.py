@@ -1192,18 +1192,26 @@ async def test_a_switch_that_ends_with_an_error_leaves_no_unread_mark_and_shows_
     assert status['failurePhase'] == 'ecosystem-activation'
 
 
+@pytest.mark.parametrize('where', ['its own read', 'the publication after its own read'])
 @pytest.mark.parametrize('found', ['a proof', 'no proof'])
-async def test_a_switch_that_is_cancelled_in_its_own_read_leaves_that_read_to_the_owners_next_pass(
-        app, repo, monkeypatch, found):
-    """The switch is cancelled while it reads the proof of the new selection. An earlier failed attempt is in the record.
+async def test_a_switch_that_is_cancelled_before_it_published_the_result_of_its_own_read_leaves_that_to_the_owner(
+        app, repo, monkeypatch, where, found):
+    """The task of the switch is cancelled in its own read, or in the publication after that read.
 
-    At that moment the page holds "Checking components", and nothing read the
-    proof. The cancelled switch publishes nothing. It ends the mark, it leaves
-    the read to the owner's next pass, and it wakes the owner. The real pass
-    then reads and publishes what it found, before its other work: "You're up
-    to date" with a proof of the new selection, the earlier attempt without
-    one. The page does not keep "Checking components" in either case.
+    An earlier failed attempt is in the record. At the cancellation the page
+    holds "Checking components". In the first place nothing read the proof of
+    the new selection. In the second place the read ended and the mark ended,
+    and the publication of its result waits for the service's lock. The
+    cancelled switch publishes nothing (the case records every publication
+    from before the switch). It ends the mark, it asks the update owner for
+    the read, and it wakes the owner. The real pass then reads and publishes
+    what it found as its first publication: "You're up to date" with a proof
+    of the new selection, the earlier attempt without one. That pass is quiet
+    otherwise (no check is due, the sequence is complete): the same pass with
+    no such request publishes nothing, so without the request the page would
+    keep "Checking components".
     """
+    import time
     from amplifier_web.updates import active_release
     manager, failure = await earlier_failed_attempt(app, repo)
 
@@ -1219,58 +1227,95 @@ async def test_a_switch_that_is_cancelled_in_its_own_read_leaves_that_read_to_th
                 'startedAt': batch['startedAt'], 'configuration': 'a' * 64,
                 'attemptId': batch['attemptId'], 'packages': set(), 'components': set()}
     monkeypatch.setattr(health, 'active_evidence', evidence)
-    read, reads = health.refresh, []
+    read, reads, reached, never = health.refresh, [], asyncio.Event(), asyncio.Event()
 
     async def refresh(m):
-        reads.append((getattr(m, '_update_proof_unread', None), copy.deepcopy(app.state['updates']['currentStatus'])))
-        if len(reads) == 1:
-            raise asyncio.CancelledError('the switch was cancelled in its own read')
-        return await read(m)
+        reads.append(getattr(m, '_update_proof_unread', None))
+        if len(reads) > 1:
+            return await read(m)   # The owner's pass: the real read.
+        if where == 'its own read':
+            reached.set()
+            await never.wait()     # The cancellation comes here, inside the switch's read.
+        await read(m)              # The switch's read ends.
+        await app.lock.acquire()   # Its publication must now wait for the service's lock.
+        reached.set()
     monkeypatch.setattr(health, 'refresh', refresh)
-    manager._update_health_initial = False   # The first read of this host is over.
-    manager.wakeup.clear()
-    with pytest.raises(asyncio.CancelledError):
-        await manager.install()
-    # The mark was set and the page had the working value when the cancellation came.
-    assert reads == [(True, CHECKING_COMPONENTS)]
-    assert manager._update_proof_unread is False
-    state = app.state['updates']
-    assert state['phase'] == 'installed' and state['currentStatus'] == CHECKING_COMPONENTS
-    # The read is the next pass's, and the owner is woken for it.
-    assert manager._update_health_initial is True and manager.wakeup.is_set()
     published, publish = [], app._publish_changes
 
     def observe(**kwargs):
-        published.append((copy.deepcopy(app.state['updates']['currentStatus']),
+        published.append((app.state['updates']['phase'], copy.deepcopy(app.state['updates']['currentStatus']),
                           [item['id'] for item in snapshot(app.state)['items']]))
         return publish(**kwargs)
     app._publish_changes = observe
-    await manager.tick()   # The real pass. After its read it goes on with its other work (here: a check).
-    assert reads[1][0] is False and manager._update_health_initial is False
-    # The first publication of the pass is the result of its read, and no later one is the working value.
-    status, attention = published[0]
-    assert CHECKING_COMPONENTS not in [row[0] for row in published]
+    manager._update_health_initial = False   # The first read of this host is over.
+    switch = asyncio.create_task(manager.install())
+    try:
+        await asyncio.wait_for(reached.wait(), 60)
+        for _ in range(10):
+            await asyncio.sleep(0)   # The switch is at its wait now.
+        # What the page holds when the cancellation comes, and where the switch is.
+        at_cancel = len(published)
+        assert published[-1][:2] == ('installed', CHECKING_COMPONENTS) and not switch.done()
+        assert manager._update_proof_unread is (where == 'its own read')
+        assert app.lock.locked() is (where != 'its own read')
+        manager.wakeup.clear()
+        switch.cancel()
+        await asyncio.wait({switch}, timeout=60)
+    finally:
+        if app.lock.locked():
+            app.lock.release()
+        never.set()
+    assert switch.cancelled()
+    # The cancelled switch published nothing: the page still holds the working value.
+    assert len(published) == at_cancel and app.state['updates']['currentStatus'] == CHECKING_COMPONENTS
+    assert manager._update_proof_unread is False
+    # It asked the owner for the read, and it woke the owner.
+    assert manager._update_health_initial is True and manager.wakeup.is_set()
+    # An otherwise quiet pass: no check is due, the sequence is complete, no storage pass is due.
+    app.state['updates'].update(lastCheck=time.time(), sequence={'stage': 'complete', 'install': False})
+    manager._start_check_open = False
+    manager._storage_last_pass, manager._storage_policy_due = time.time(), False
+    await manager.tick()   # The real pass.
+    after = published[at_cancel:]
+    assert reads[1:] == [False] and manager._update_health_initial is False
+    # Its first publication is the result of its read, and no publication of it is the working value.
+    assert after and CHECKING_COMPONENTS not in [row[1] for row in after]
+    _, status, attention = after[0]
     if found == 'a proof':
         assert (status['status'], status['title'], status['actionRequired']) == ('current', 'You\u2019re up to date', False)
         assert 'updates:current' not in attention
     else:
         assert status['title'] == 'Update could not finish' and status['actionRequired']
         assert status['failureAttemptId'] == failure['attemptId']
+    assert app.state['updates']['currentStatus'] == status
     # The earlier attempt stays in the record.
     assert failure in manager.diagnostics.state['events']
+    # The same pass with no request for a read: it reads nothing and publishes nothing.
+    count = len(published)
+    await manager.tick()
+    assert len(reads) == 2 and len(published) == count
 
 
-async def test_a_switch_that_is_cancelled_before_it_selects_asks_for_no_read(app, repo, monkeypatch):
-    """A cancellation before the mark is set: the page holds no working value, so no read is asked for."""
+async def test_a_switch_that_is_cancelled_before_it_publishes_its_selection_asks_for_no_read(app, repo, monkeypatch):
+    """The cancellation comes inside the switch, at the write of the pointer: before the mark and its first publication.
+
+    The page holds no working value then. The cancelled switch asks the owner for no read and does not wake it.
+    """
+    from amplifier_web import updates
     manager, _ = await earlier_failed_attempt(app, repo)
+    write, seen = updates.write_private, []
 
-    async def validate(stage, release):
-        raise asyncio.CancelledError('the switch was cancelled before it selected')
-    manager.validate = validate
+    def cancelled_at_the_pointer(path, *args, **settings):
+        if Path(path).name == 'active.json':
+            seen.append(app.state['updates']['phase'])
+            raise asyncio.CancelledError('the switch was cancelled before it published its selection')
+        return write(path, *args, **settings)
+    monkeypatch.setattr(updates, 'write_private', cancelled_at_the_pointer)
     manager._update_health_initial = False
     manager.wakeup.clear()
     with pytest.raises(asyncio.CancelledError):
         await manager.install()
+    assert seen == ['activating']   # Inside the switch, after it published that it switches.
     assert getattr(manager, '_update_proof_unread', False) is False
     assert manager._update_health_initial is False and not manager.wakeup.is_set()
     assert app.state['updates']['currentStatus'] != CHECKING_COMPONENTS

@@ -1760,6 +1760,9 @@ class UpdateManager:
                 self.service.state['updates'].update(phase='activating',detail='Switching ecosystem version…')
                 self.service._publish_changes(globals={'updates','settings'})
             candidate = None
+            # True while the page has the publication of the new selection and
+            # not yet the result of this switch's own read of its proof.
+            unsettled = False
             try:
                 # New work is gated during this short phase. Old sessions remain
                 # durable.  The pointer is committed only after replacement
@@ -1846,6 +1849,7 @@ class UpdateManager:
                     includedCanProceed=False,
                     **({'sequence': sequence} if sequence else {}),
                     available=sum(row.get('status')=='update' for row in items),installedAt=time.time(),detail='Amplifier went back to the earlier components. "Keep Amplifier up to date" is now off, so that the same update is not installed again by itself.' if rollback else 'Update ready for new work. Active conversations adopt it after their current work finishes.')
+                unsettled = True  # The page has the new selection now.
                 if rollback or 'pendingRollback' in self.service.state['updates']:
                     async with self.service.lock:
                         self.service.state['updates'].pop('pendingRollback', None)
@@ -1856,6 +1860,7 @@ class UpdateManager:
                 await refresh_health(self)
                 self._update_proof_unread = False  # This switch's own read ended, with or without a proof.
                 await self.publish()  # Publish settled attention, not just the preceding installed status.
+                unsettled = False
                 self.inventory=[]
                 if self.cleanup_task is None or self.cleanup_task.done():
                     self.cleanup_task = asyncio.create_task(self.retire_storage())
@@ -1867,14 +1872,16 @@ class UpdateManager:
                 except OSError:
                     pass
             except asyncio.CancelledError:
-                # The switch ended before its own read ended. When the mark was
-                # set, the page can hold "Checking components", and nothing
-                # read the proof of the new selection. Nothing can be published
-                # for sure in a cancelled task. So the owner's next pass makes
-                # that read and publishes (tick), as after a settings change,
-                # and the owner is woken for it.
-                unread, self._update_proof_unread = getattr(self, '_update_proof_unread', False), False
-                if unread:
+                # The mark ends with the switch. When the switch had published
+                # its selection and not yet the result of its own read (the
+                # cancellation came in that read, or in the publication after
+                # it), the page can hold "Checking components" with nothing
+                # that checks. Nothing can be published for sure in a cancelled
+                # task. So the switch asks the update owner for that read: the
+                # owner's next pass that no hold stops reads and publishes
+                # (tick), as after a settings change. The owner is woken for it.
+                self._update_proof_unread = False
+                if unsettled:
                     self._update_health_initial = True
                     self.wakeup.set()
                 await self.service.discard_runtime(candidate)
