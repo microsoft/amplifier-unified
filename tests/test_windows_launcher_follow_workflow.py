@@ -15,6 +15,7 @@ from __future__ import annotations
 import ast
 import importlib
 import importlib.util
+import itertools
 import json
 import os
 from pathlib import Path
@@ -291,6 +292,108 @@ def test_the_stand_in_for_uv_is_put_in_place_and_taken_away(fixture, tmp_path, m
     assert "uv-real.exe" in fixture.STAND_IN and "TrimEnd(separators)" in fixture.STAND_IN
 
 
+# Test files that the listed files import and that `other-test-files.yml` does not run, each with
+# the workflow whose pytest command runs it.
+ELSEWHERE = {"tests/test_service.py": "coordination.yml",
+             "tests/test_update_health_setup_record.py": "platform-mechanisms.yml",
+             "tests/test_update_sequence.py": "update-ai-connection.yml",
+             "tests/test_windows_service.py": "platform-mechanisms.yml"}
+
+
+def starts_pytest(line, name):
+    """A line of a step that starts pytest with this file: `uv run ... pytest` or `<python> ... -m pytest`.
+
+    Only the plain form counts: the line is one command, it starts with that command, and
+    no quotation, variable or comment stands before the file. A second command, a pipe, a
+    redirection, a command in the background or a quoted text can hold the words and run
+    nothing, or lose the result.
+    So a line with another form is no run, and the case fails for it. One line is read at a
+    time: a text of several lines that only holds the command is not told from a command.
+    Not read: an option after the file that selects none of its cases (`-k`, `-m`).
+    """
+    words = line.split()
+    if name not in words or re.search("[;&|`<>]", line):
+        return False
+    if any(mark in word for word in words[:words.index(name)] for mark in "\"'#$"):
+        return False
+    return _starts_pytest(words, name)
+
+
+def _starts_pytest(words, name):
+    if "pytest" not in words:
+        return False
+    before, after = words[:words.index("pytest")], words[words.index("pytest"):]
+    # `uv run` and then only options. Then `pytest`, or a Python with only options and `-m` last.
+    wrapper = before[:2] == ["uv", "run"]
+    if wrapper:
+        before = list(itertools.dropwhile(lambda word: word.startswith("-"), before[2:]))
+    python = (len(before) > 1 and "python" in before[0].lower() and before[-1] == "-m"
+              and all(word.startswith("-") for word in before[1:]))
+    if not (wrapper and not before or python):
+        return False
+    # A collection only runs no case.
+    if {"--collect-only", "--co"} & set(after):
+        return False
+    # The file is an argument, not the value of an option. So the word before it is `pytest`,
+    # another argument, an option that holds its value (`--tb=short`), or a known option with no value.
+    def argument(index):
+        last = after[index - 1]
+        return not last.startswith("-") or "=" in last or last in ("-q", "-ra", "-s", "-x", "-v")
+    return any(word == name and argument(index) for index, word in enumerate(after))
+
+
+def command_lines(run):
+    """The lines of a step's text. A line that continues on the next one is joined to it."""
+    return re.sub(r"[\\`][ \t]*\n", " ", run).splitlines()
+
+
+@pytest.mark.parametrize("text,runs", [
+    ("uv run --no-sync pytest -q tests/test_one.py", True),
+    (".\\.native-test-venv\\Scripts\\python.exe -B -m pytest -q -ra tests/test_one.py", True),
+    ("uv run --no-sync python -m pytest tests/test_one.py", True),
+    ("uv run --no-sync pytest -q \\\n  tests/test_one.py", True),
+    ("python -m pytest -q `\n  tests/test_one.py", True),
+    ("uv run echo pytest tests/test_one.py", False),
+    ("echo pytest tests/test_one.py", False),
+    ("# uv run pytest tests/test_one.py", False),
+    ("uv run pytest tests/test_two.py # tests/test_one.py", False),
+    ("uv run pytest --ignore tests/test_one.py", False),
+    ("uv run pytest --ignore-glob tests/test_one.py", False),
+    ("uv run pytest tests/test_one.py || true", False),
+    ("uv run pytest --collect-only tests/test_one.py", False),
+    ("uv run pytest tests/test_one.py::test_x", False),
+    ("uv run pytest tests/test_two.py\necho tests/test_one.py", False),
+    ("uv run pytest tests/test_two.py; echo tests/test_one.py", False),
+    ("uv run pytest tests/test_two.py && echo tests/test_one.py", False),
+    ("uv run pytest tests/test_one.py | tee log", False),
+    ("echo start; uv run pytest tests/test_one.py; echo done", False),
+    ("uv run pytest tests/test_two.py && uv run pytest tests/test_one.py", False),
+    ("uv run pytest tests/test_one.py & wait", False),
+    ('echo "note; uv run pytest tests/test_one.py ; end"', False),
+    ('echo "uv run pytest tests/test_one.py"', False),
+    ('uv run pytest -k "x tests/test_one.py y"', False),
+    ("uv run pytest -k 'x tests/test_one.py y' tests/test_two.py", False),
+    ("uv run pytest tests/test_one.py --collect-only", False),
+    ("uv run pytest tests/test_one.py # a note; with a mark", False),
+    ("x=$(uv run pytest tests/test_one.py)", False),
+    ("if uv run pytest tests/test_one.py", False),
+    ("uv run pytest tests/test_two.py > tests/test_one.py", False),
+    ("uv run pytest tests/test_two.py 2> tests/test_one.py", False),
+    ("uv run pytest < tests/test_one.py", False),
+    ("uv run pytest $OPTIONS tests/test_one.py", False),
+    ("uv run pytest -k tests/test_one.py", False),
+    ("uv run pytest -c tests/test_one.py tests/test_two.py", False),
+    ("uv run pytest --deselect tests/test_one.py", False),
+    ("uv run pytest --junitxml tests/test_one.py", False),
+    ("uv run pytest -p no:cacheprovider tests/test_one.py", True),
+    ("uv run pytest -q -ra --tb=short tests/test_two.py tests/test_one.py", True),
+    ('python -m pytest -q tests/test_one.py -k "not slow"', True),
+    ("uv run pytest tests/test_one.py # a note", True),
+])
+def test_a_line_that_starts_pytest_with_a_file_is_told_from_a_line_that_has_the_words(text, runs):
+    assert any(starts_pytest(line, "tests/test_one.py") for line in command_lines(text)) == runs
+
+
 def given_to_pytest(program):
     """The files and the single cases that the step's program gives pytest: its `FILES` and `CASES`.
 
@@ -318,7 +421,7 @@ def test_a_pull_request_runs_every_launcher_case_file():
     starts it.
     """
     document = yaml.safe_load(LISTED.read_text(encoding="utf-8"))
-    assert "continue-on-error" not in json.dumps(document)
+    assert not [word for word in ("continue-on-error", "working-directory", '"defaults"') if word in json.dumps(document)]
     triggers = document[True]  # YAML reads the key `on` as True.
     paths = triggers["pull_request"]["paths"]
     assert triggers["push"] == {"branches": ["main"], "paths": paths} and "workflow_dispatch" in triggers
@@ -333,7 +436,7 @@ def test_a_pull_request_runs_every_launcher_case_file():
     assert step == job["steps"][-1] and "if" not in step
     # The step ends with a failure for a failed case, an unexpected skip and a file with no passed case.
     for refusal in ('problems.append(f"failed: {name}")', "does not expect that on this runner",
-                    "no case of this file passed", "sys.exit(1)"):
+                    "no case of this file passed", "this step expects a failure, and no case had it", "sys.exit(1)"):
         assert refusal in step["run"]
     files, cases, left_out = given_to_pytest(step["run"])
     run = sorted({*files, *(case.split("::")[0] for case in cases)})
@@ -359,6 +462,7 @@ def test_a_pull_request_runs_every_launcher_case_file():
     for needed in ("amplifier_web/windows_consumer.py", "amplifier_web/host/config.py", "uv.lock", "pyproject.toml",
                    "scripts/windows_launcher_files.py", "scripts/release.py",
                    WORKFLOW.relative_to(ROOT).as_posix(), FIXTURE.relative_to(ROOT).as_posix(),
+                   *(f".github/workflows/{name}" for name in set(ELSEWHERE.values())),
                    "tests/fixtures/windows_launcher_refresh_native.py", "tests/fixtures/windows_start_again_native.py",
                    "tests/fixtures/manual_app_handoff_native.py", "tests/conftest.py"):
         assert (ROOT / needed).is_file() and starts(needed), needed
@@ -373,9 +477,28 @@ def test_a_pull_request_runs_every_launcher_case_file():
                            else [alias.name for alias in node.names] if isinstance(node, ast.Import) else [])
                 queue += [f"tests/{module}.py" for module in modules if (ROOT / f"tests/{module}.py").is_file()]
     assert [name for name in sorted(reached) if not starts(name)] == []
-    # And the other way: a test file that the path filter names is run, or a run file imports it.
-    # A name below `paths:` that nothing runs is the gap that this workflow closes.
-    assert [path for path in paths if path.startswith("tests/test_") and "*" not in path and path not in reached] == []
+    # And the other way: the step runs every test file that the path filter names. A name below
+    # `paths:` that nothing runs is the gap that this workflow closes. The only others are test
+    # files that a run file imports. An import runs none of their cases, so each has a line that
+    # starts pytest with it, in a step with no condition and no folder of its own whose failure
+    # fails its job, in another workflow that starts for a pull request (a step in another
+    # folder runs another file of that name). Not read here: the condition of that step's job,
+    # whether that workflow starts for a change of the file alone, and what the step's other
+    # lines do with the command's result (a step in PowerShell ends with the status of its last
+    # command, so a line after the command must check it; a shell can be told to go on after a
+    # failure). A command form that this case does not know fails it; that does not say that
+    # the file is not run.
+    named = [path for path in paths if path.startswith("tests/test_") and "*" not in path]
+    assert sorted(set(named) - set(run)) == sorted(ELSEWHERE)
+    for name, workflow in ELSEWHERE.items():
+        assert name in reached, name
+        other = yaml.safe_load((ROOT / ".github/workflows" / workflow).read_text(encoding="utf-8"))
+        assert "pull_request" in other[True], workflow
+        assert [job for job, body in other["jobs"].items() for step in body.get("steps", [])
+                if "if" not in step and not step.get("continue-on-error") and not body.get("continue-on-error")
+                and "working-directory" not in step and "defaults" not in body and "defaults" not in other
+                and any(starts_pytest(line, name) for line in command_lines(step.get("run", "")))
+                ], (name, workflow)
     assert [path for path in paths if "*" not in path and not (ROOT / path).is_file()] == []
 
 
@@ -383,6 +506,8 @@ NEEDS_WINDOWS = "import pytest\n@pytest.mark.skip(reason='native prototype Power
 
 
 ONE_FAILS = "def test_one(): assert False\ndef test_two(): pass\n"
+BY_NAME = "def test_one(): pass\n# The step gives pytest this case by its name, not the whole file.\n"
+SIBLING = "def test_one(): pass\ndef test_two(): pass\n# The step gives pytest only the second case, by its name.\n"
 EXPECTED_ON_WINDOWS = "import pytest\n@pytest.mark.xfail(strict=True)\ndef test_one(): assert False\ndef test_two(): pass\n"
 
 
@@ -405,6 +530,11 @@ EXPECTED_ON_WINDOWS = "import pytest\n@pytest.mark.xfail(strict=True)\ndef test_
     # An expected failure that the list does not name.
     (EXPECTED_ON_WINDOWS.replace("test_one", "test_other"), True,
      "expected to fail, and this step does not expect that: tests/test_one.py::test_other"),
+    # The list names an expected failure for this runner, and the case has none: the list is behind.
+    ("def test_one(): pass\n", True, "this step expects a failure, and no case had it: tests/test_one.py::test_one"),
+    (BY_NAME, True, "this step expects a failure, and no case had it: tests/test_one.py::test_one"),
+    # pytest did not get the case with the expected failure, only another case of its file.
+    (SIBLING, True, None),
 ])
 def test_the_step_that_runs_the_listed_files_stops_for_a_wrong_result(tmp_path, body, windows, stops):
     """The step's own program, with one made-up test file in place of its list."""
@@ -412,8 +542,11 @@ def test_the_step_that_runs_the_listed_files_stops_for_a_wrong_result(tmp_path, 
     (job,) = document["jobs"].values()
     program = job["steps"][-1]["run"]
     leave = 'NOT_ON_WINDOWS = {"tests/test_one.py::test_one": "a reason"}' if body == ONE_FAILS else "NOT_ON_WINDOWS = {}"
-    for pattern, replacement in ((r'FILES = """.*?"""\.split\(\)', 'FILES = ["tests/test_one.py"]'),
-                                 (r"CASES = \[[^\]]*\]", "CASES = []"),
+    given = (('FILES = []', 'CASES = ["tests/test_one.py::test_one"]') if body == BY_NAME else
+             ('FILES = []', 'CASES = ["tests/test_one.py::test_two"]') if body == SIBLING else
+             ('FILES = ["tests/test_one.py"]', "CASES = []"))
+    for pattern, replacement in ((r'FILES = """.*?"""\.split\(\)', given[0]),
+                                 (r"CASES = \[[^\]]*\]", given[1]),
                                  (r"NOT_ON_WINDOWS = \{.*?\n\}", leave),
                                  (r"EXPECTED_FAILURES = \{.*?\n\}", 'EXPECTED_FAILURES = {"tests/test_one.py::test_one": windows}'),
                                  (r'windows = sys\.platform == "win32"', f"windows = {windows}"),
