@@ -428,9 +428,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Windows uninstall entry checks failed.' }
       # Uninstall asks the running app whether a chat is at work. Real sockets
       # and aiohttp's own errors on Windows: a listener that takes the
-      # connection and gives no answer is asked again, and a port with no
-      # listener ends the wait by its refusal. The case prints how long
-      # Windows took to refuse. No app runs here.
+      # connection and gives no answer is asked again, and the refusal of a
+      # port with no listener ends the wait. The case prints how many reads
+      # that took, how long, and how each read ended. No app runs here.
       - name: Check the uninstall's question to a silent app and to a port with no app
         shell: pwsh
         run: |

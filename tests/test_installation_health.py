@@ -779,16 +779,29 @@ def test_windows_working_asks_again_when_a_read_ends_by_its_time_limit(working_c
     assert state["credentialReads"] == 1
 
 
-def test_windows_working_asks_every_address_again_while_one_of_them_stays_silent(working_chain, monkeypatch):
+def test_windows_working_asks_again_only_the_address_whose_read_ended_by_its_time_limit(working_chain, monkeypatch):
     import aiohttp
     from amplifier_web import browser_entry
     state = working_chain
-    urls = ["https://127.0.0.1:8942/api/health", "https://[::1]:8942/api/health"]
-    monkeypatch.setattr(browser_entry, "_owner_probe_targets", lambda *a: (urls, state["pin"]))
+    first, second = urls = ["https://127.0.0.1:8942/api/health", "https://[::1]:8942/api/health"]
+    monkeypatch.setattr(browser_entry, "_owner_probe_targets", lambda *a: (list(urls), state["pin"]))
+    # The first address is silent and the second refuses: only the first is asked again.
     clock, left = reads_end(state, monkeypatch, [
         TimeoutError(), aiohttp.ClientConnectionError("refused"), TimeoutError(), None])
     assert asyncio.run(health.windows_working(state["home"])) == 2
-    assert [url for url, _ in state["requests"]] == urls * 2 and left == [] and clock == [6.0]
+    assert [url for url, _ in state["requests"]] == [first, second, first, first] and left == [] and clock == [6.0]
+    # The other order: the first address refuses and is not asked again.
+    state["requests"].clear()
+    clock, left = reads_end(state, monkeypatch, [
+        ConnectionRefusedError(10061, "No connection could be made"), TimeoutError(), None])
+    assert asyncio.run(health.windows_working(state["home"])) == 2
+    assert [url for url, _ in state["requests"]] == [first, second, second] and left == [] and clock == [3.0]
+    # Both addresses stay silent: both are asked again. A round that has started is completed, so the third
+    # round (it starts at 12 seconds) ends at 18 seconds.
+    state["requests"].clear()
+    clock, left = reads_end(state, monkeypatch, [TimeoutError()] * 6)
+    assert asyncio.run(health.windows_working(state["home"])) is None
+    assert [url for url, _ in state["requests"]] == urls * 3 and left == [] and clock == [18.0]
 
 
 def test_windows_working_is_unknown_when_the_host_stays_silent_for_about_fifteen_seconds(working_chain, monkeypatch):
@@ -845,12 +858,29 @@ def test_windows_working_with_aiohttp_itself_asks_a_silent_listener_again_and_en
     monkeypatch.setattr(auth, "data_identity", lambda home: "owned-data")
     monkeypatch.setattr(browser_entry, "current_owner_sid", lambda: "S-1-5-21-100-200-300-1001")
     monkeypatch.setattr(browser_entry, "_control_token", lambda home, sid: "synthetic-control")
-    asked, clock, seconds = [], [], [0.3]
+    asked, ends, clock, seconds = [], [], [], [0.3]
     request, limit = aiohttp.ClientSession.get, aiohttp.ClientTimeout
+
+    class Kept:
+        """The request of aiohttp itself. It keeps how each read ended."""
+
+        def __init__(self, read):
+            self.read = read
+
+        async def __aenter__(self):
+            try:
+                return await self.read.__aenter__()
+            except BaseException as error:
+                ends.append("limit" if isinstance(error, TimeoutError) else
+                            "refused" if isinstance(error, aiohttp.ClientConnectorError) else type(error).__name__)
+                raise
+
+        async def __aexit__(self, *error):
+            return await self.read.__aexit__(*error)
 
     def get(self, url, **kwargs):
         asked.append(url)
-        return request(self, url, **kwargs)
+        return Kept(request(self, url, **kwargs))
 
     def limited(total):
         assert total == 3  # The time limit of one read. The silent listener gets a tenth of it here.
@@ -872,17 +902,22 @@ def test_windows_working_with_aiohttp_itself_asks_a_silent_listener_again_and_en
         # The silent listener, with a bound of 5 seconds: asked at 0, again at 3, and not at 6.
         monkeypatch.setattr(browser_entry, "_owner_probe_targets", lambda *a: (urls[:1], pin))
         assert asyncio.run(health.windows_working(tmp_path, wait=5)) is None
-        assert asked == urls[:1] * 2 and clock == [0.0, 3.0, 6.0]
+        assert asked == urls[:1] * 2 and ends == ["limit", "limit"] and clock == [0.0, 3.0, 6.0]
         # No listener, with the real limit of 3 seconds and the bound of 15 seconds.
-        asked.clear(), clock.clear()
+        asked.clear(), ends.clear(), clock.clear()
         seconds[0] = 3
         monkeypatch.setattr(browser_entry, "_owner_probe_targets", lambda *a: (urls[1:], pin))
         began = time.perf_counter()
         assert asyncio.run(health.windows_working(tmp_path)) is None
-        print(f"A port with no listener: {len(asked)} read(s), {time.perf_counter() - began:.2f} s in all.")
-        # The refusal ends the wait: one read. On a machine that gives this program no time for the rest of
-        # the limit, that read can end by the limit; the next read is then refused, and it ends the wait.
-        assert asked in (urls[1:], urls[1:] * 2) and clock == [0.0, 3.0][:len(asked)]
+        print(f"A port with no listener: {len(asked)} read(s), {time.perf_counter() - began:.2f} s in all; "
+              f"the reads ended: {', '.join(ends)}.")
+        # A refusal ends the wait: no read comes after it. Nothing here requires that the first read is the
+        # refusal: a machine that gives this program no time can end a read by the limit, and only such a read
+        # is made again, at most to the bound of 15 seconds (five reads).
+        assert asked == urls[1:] * len(ends) and 1 <= len(ends) <= 5
+        assert ends[:-1] == ["limit"] * (len(ends) - 1)
+        assert ends[-1] == "refused" or ends == ["limit"] * 5
+        assert clock == [3.0 * number for number in range(len(ends) + (ends[-1] == "limit"))]
     finally:
         silent.close()
         refusing.close()
