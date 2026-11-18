@@ -168,6 +168,18 @@ and persistence enabled. An ordinary target failure/cooldown latch without a
 derived result is not a foreign derived unit: preserve that latch and let the
 ordinary retry policy decide, without rearming the settled transition.
 
+Model-transition preparation does not expand image-input eligibility. In the
+selected OpenAI generic-image route, a provider-owned native compaction carrier
+prevents stored-image projection, including after target-side native regeneration.
+The request uses the existing **Image unavailable** warning and supplies no stored
+pixels; canonical history and image references remain intact. Fitting original
+history may retain supported image projection. Successful text continuation does
+not mean the model saw those images: continue only work that does not need their
+pixels, or use a separately supported image workflow. Do not edit opaque native
+state or automatically change compaction strategy, model, endpoint or cost tier
+to restore images. A checkpoint installation acknowledgement and Foundation's
+canonical-image acknowledgement are separate boundaries; neither proves the other.
+
 An invalid same-identity checkpoint may be reconstructed from canonical
 originals through ordinary preparation. It is never transition provenance.
 Older saved explicit model selections without a revision acquire one stable
