@@ -27,6 +27,8 @@ class SettingsStore:
             from .decision_namespace import read_scopes, translate, preflight_paths
             from .decision_settings import catalogs
             paths = settings_paths(workspace, shared_home=self.shared_home, session_id=session_id)
+            if paths[scope].exists() and paths[scope].stat().st_mode & 0o222 == 0:
+                raise PermissionError("Decision settings need a writable settings owner.")
             prior = []
             for level, path in paths.items():
                 if level == scope:

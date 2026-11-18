@@ -20,7 +20,7 @@ def _mapping(value):
 
 
 def connections(settings):
-    return _mapping(_mapping(settings.get("decision_models", {})).get("connections", {}))
+    return _mapping(_mapping(settings.get("decision_models") or {}).get("connections", {}))
 
 
 def decision_only(row, definitions):
@@ -46,9 +46,18 @@ def merge_settings(base, patch):
             rows[index] = overlay(rows[index], row)
     if rows or "providers" in patch.get("config", {}):
         result.setdefault("config", {})["providers"] = rows
-    order = list(dict.fromkeys([*base.get("decision_models", {}).get("connection_order", []),
-                               *patch.get("decision_models", {}).get("connection_order", [])]))
-    if order:
+    base_decisions = _mapping(base.get("decision_models") or {})
+    patch_decisions = _mapping(patch.get("decision_models") or {})
+    if (result.get("decision_models") is not None
+            and (base_decisions.get("connection_order") or patch_decisions.get("connection_order"))):
+        # A persisted narrower hint must not move a newly added inherited
+        # account behind a descendant. Compose each scope's current roster
+        # first, then append only identities first introduced at this scope.
+        order = list(dict.fromkeys([
+            *(key(row) for row in logical_rows(base)),
+            *patch_decisions.get("connection_order", []),
+            *(key(row) for row in patch.get("config", {}).get("providers", [])),
+            *connections(patch)]))
         result.setdefault("decision_models", {})["connection_order"] = order
     return result
 
@@ -83,7 +92,7 @@ def logical_rows(settings):
                 raise ValueError("Conflicting decision connection identities; no account was rebound.")
             rows.append(deepcopy(connection))
             seen.add(identity)
-    order = settings.get("decision_models", {}).get("connection_order", [])
+    order = (settings.get("decision_models") or {}).get("connection_order", [])
     return sorted(rows, key=lambda row: order.index(key(row)) if key(row) in order else len(order))
 
 

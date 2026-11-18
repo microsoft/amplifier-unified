@@ -545,12 +545,13 @@ class SetupManager:
             candidate = {'module': args.get('module') or (existing or {}).get('module'),
                          'config': args.get('config', (existing or {}).get('config', {}))}
             definitions = catalogs(unique=True)
-            if (existing and candidate['module'] in definitions
-                    and decision_only(existing, definitions) != decision_only(candidate, definitions)):
+            previously_dedicated = any('provider' not in value and key(value) == key(existing or {})
+                                       for value in connections(effective.settings).values())
+            if (existing and not remove and
+                    ((previously_dedicated and candidate['module'] != existing['module']) or
+                     decision_only(existing, definitions) != decision_only(candidate, definitions))):
                 raise ValueError('Changing a saved connection between chat and decision-only roles needs a new connection.')
-            dedicated = (decision_only(candidate, catalogs()) or
-                         any('provider' not in value and key(value) == key(existing or {})
-                             for value in connections(effective.settings).values()))
+            dedicated = decision_only(candidate, definitions) or previously_dedicated
             if dedicated:
                 accounts = settings.setdefault('decision_models', {}).setdefault('connections', {})
                 account_key = key(existing) if existing else identity
@@ -561,6 +562,8 @@ class SetupManager:
             if remove:
                 if not existing: raise ValueError('Provider instance does not exist.')
                 row={'id':identity,'module':existing['module']}
+                if dedicated and existing.get('config', {}).get('chat_enabled') is False:
+                    row['config'] = {'chat_enabled': False}
             else:
                 module=safe_name(args.get('module') or (existing or {}).get('module',''))
                 if not module.startswith('provider-'): raise ValueError('Choose a provider module.')

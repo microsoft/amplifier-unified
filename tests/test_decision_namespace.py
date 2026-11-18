@@ -246,6 +246,47 @@ def test_narrower_first_migration_hint_preserves_inherited_ordinary_order(tmp_pa
     assert config(new, tmp_path).module_sources == config(old, tmp_path).module_sources
 
 
+def test_later_ancestor_account_insert_preserves_current_scope_order(tmp_path, monkeypatch):
+    from amplifier_web.preferences import SettingsStore
+    from amplifier_web.shared_settings import settings_paths
+    monkeypatch.setattr(decision_settings, 'catalogs', lambda **kwargs: DEFINITIONS)
+    store = SettingsStore(tmp_path / 'app')
+    paths = settings_paths(tmp_path, shared_home=store.shared_home)
+    chat = provider('provider-conditional', 'chat', chat_enabled=True)
+    decision = provider('provider-conditional', 'decision', chat_enabled=False)
+    decision['source'] = '/synthetic/decision'
+    for path in paths.values():
+        path.parent.mkdir(parents=True, exist_ok=True)
+    paths['global'].write_text(yaml.safe_dump(old_settings(chat)))
+    paths['local'].write_text(yaml.safe_dump({'config': {'providers': [decision]}}))
+    ns.migrate_paths(paths.values(), definitions=DEFINITIONS)
+    new = provider('provider-conditional', 'new-chat', chat_enabled=True)
+    new['source'] = '/synthetic/new-chat'
+    for migrate in (False, True):
+        def append(value):
+            rows = value['config']['providers']
+            if not any(row.get('id') == 'new-chat' for row in rows):
+                rows.append(copy.deepcopy(new))
+        store.update(tmp_path, 'global', append, migrate_decisions=migrate)
+        current = ns.read_scopes(paths.values())
+        assert ns.logical_rows(current) == [chat, new, decision]
+        assert config(current, tmp_path).module_sources['provider-conditional'] == '/synthetic/decision'
+
+
+def test_null_optional_section_keeps_ordinary_reads_inert(tmp_path):
+    path = tmp_path / 'settings.yaml'
+    old = {'config': {'providers': [provider('provider-chat')]}, 'decision_models': None}
+    path.write_text(yaml.safe_dump(old))
+    assert ns.read_scopes([path]) == old
+    assert config(ns.read_scopes([path]), tmp_path).providers == old['config']['providers']
+    base = ns.translate(old_settings(provider()), DEFINITIONS)
+    path.write_text(yaml.safe_dump(base))
+    local = tmp_path / 'local.yaml'
+    local.write_text('decision_models: null\n')
+    assert ns.read_scopes([path, local])['decision_models'] is None
+    assert config(ns.read_scopes([path, local]), tmp_path).connections == []
+
+
 def test_unrelated_shared_save_cannot_bypass_role_transition_refusal(tmp_path, monkeypatch):
     from amplifier_web.preferences import SettingsStore
     from amplifier_web.shared_settings import settings_paths

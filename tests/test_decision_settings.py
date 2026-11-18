@@ -6,6 +6,7 @@ from amplifier_web import decision_settings as decisions
 from amplifier_web.setup import SetupManager
 from amplifier_web.host.session import _apply_settings
 
+REAL_CATALOGS = decisions.catalogs
 
 @pytest.mark.parametrize(('row', 'expected'), [
     ({'module': 'provider-fixture', 'id': 'saved', 'instance_id': 'mounted'}, 'saved'),
@@ -268,6 +269,34 @@ async def test_conditional_account_role_change_refuses_before_publication(manage
         await manager.perform('providers.save', {'workspace': str(tmp_path), 'scope': 'global',
             'id': 'conditional', 'module': 'provider-conditional', 'config': {'chat_enabled': True}})
     assert manager.store.read(tmp_path) == before
+    await manager.perform('providers.remove', {'workspace': str(tmp_path), 'scope': 'global', 'id': 'conditional'})
+    await manager.perform('providers.save', {'workspace': str(tmp_path), 'scope': 'global',
+        'id': 'conditional', 'module': 'provider-conditional', 'config': {'chat_enabled': False}})
+    assert next(row for row in manager.config(tmp_path).saved_connections
+                if row.get('id') == 'conditional')['enabled'] is True
+    before = manager.store.read(tmp_path)
+    with pytest.raises(ValueError, match='new connection'):
+        await manager.perform('providers.save', {'workspace': str(tmp_path), 'scope': 'global',
+            'id': 'conditional', 'module': 'provider-unknown', 'config': {'default_model': 'chat'}})
+    assert manager.store.read(tmp_path) == before
+
+
+async def test_ambiguous_metadata_never_classifies_new_connection_as_dedicated(manager, tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    def declaration(decision_only):
+        return {'schema_version': 2, 'provider_module': 'provider-ambiguous',
+            'validate': lambda row: row, 'backends': [{'label': 'Ambiguous', 'configuration_key': 'decisions',
+                'decision_only': decision_only}], 'runtime': {'kind': 'hook', 'module': 'hooks-ambiguous'}}
+    entries = [SimpleNamespace(load=lambda value=value: lambda: value)
+               for value in (declaration(True), declaration(False))]
+    monkeypatch.setattr(decisions, 'catalogs', REAL_CATALOGS)
+    monkeypatch.setattr(decisions, 'entry_points', lambda **kwargs: entries)
+    result = await manager.perform('providers.save', {'workspace': str(tmp_path), 'scope': 'global',
+        'id': 'ambiguous', 'module': 'provider-ambiguous', 'config': {'default_model': 'chat'}})
+    assert any(row['id'] == 'ambiguous' for row in result['providers'])
+    saved = manager.store.read(tmp_path)
+    assert any(row['id'] == 'ambiguous' for row in saved['config']['providers'] if row.get('id'))
+    assert 'ambiguous' not in saved.get('decision_models', {}).get('connections', {})
 
 def test_conditional_hook_catalog_offers_a_decision_connection_without_changing_chat_metadata(monkeypatch):
     definition={'schema_version':2,'provider_module':'provider-mixed','validate':lambda value:value,
