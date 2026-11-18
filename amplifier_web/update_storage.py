@@ -144,12 +144,6 @@ class _Moved(Exception):
     """A folder of the walk is no longer the entry of its name in the folder above it."""
 
 
-def _reparse(info):
-    """A link, a junction or another reparse point. It is never followed."""
-    return stat.S_ISLNK(info.st_mode) or bool(
-        getattr(info, 'st_file_attributes', 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT)
-
-
 def _posix_remove_tree(parent, name, device, work, still, depth=0):
     """Remove the folder ``name`` of the open folder ``parent``, the deepest entries first.
 
@@ -247,36 +241,127 @@ def _posix_tree(parent, name, device, work, still, depth):
         return 'io'
 
 
+def _windows_open(folder, access, share):
+    """Windows: a handle of the folder that is at this path, of that entry itself.
+
+    It refuses a junction (and each other reparse point, by the same test), a
+    file, and a path that goes through a junction (windows_files). It gives the
+    boundary's API object, the handle, and what the handle says about the
+    folder.
+    """
+    import ctypes
+    from .windows_files import _API, _INVALID, _local
+    _local(str(folder))  # The same bounds for a path as the boundary has.
+    api = _API()
+    # Open what exists, and the entry itself: FILE_FLAG_OPEN_REPARSE_POINT, and the flag that a folder needs.
+    handle = api.CreateFileW(str(folder), access, share, None, 3, 0x2200000, None)
+    if handle == _INVALID:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        return api, handle, api.info(handle, folder, directory=True)
+    except BaseException:
+        api.close(handle)
+        raise
+
+
+def _windows_listing(handle, limit):
+    """Windows: at most ``limit`` entries of the folder that this handle has open: the name and the attributes of each.
+
+    The handle lists the folder that it opened. A listing by the path would
+    list what the path names at that moment, and another program can make an
+    empty folder a junction in place.
+    """
+    import ctypes
+    import struct
+    from .windows_files import BOOL, DWORD, HANDLE, PVOID
+    read = ctypes.WinDLL('kernel32', use_last_error=True).GetFileInformationByHandleEx
+    read.restype, read.argtypes = BOOL, [HANDLE, ctypes.c_int32, PVOID, DWORD]
+    buffer = ctypes.create_string_buffer(64 * 1024)
+    found, kind = [], 15  # FileFullDirectoryRestartInfo: from the first entry. After it FileFullDirectoryInfo.
+    while len(found) < limit:
+        if not read(handle, kind, buffer, len(buffer)):
+            error = ctypes.get_last_error()
+            if error == 18:  # ERROR_NO_MORE_FILES
+                break
+            raise OSError(f'Windows could not list a folder of a stage copy (error {error}).')
+        kind, offset = 14, 0
+        while len(found) < limit:
+            # FILE_FULL_DIR_INFO: the offset of the next record, ..., the attributes, the bytes of the name, ..., the name.
+            following, = struct.unpack_from('<I', buffer, offset)
+            attributes, length = struct.unpack_from('<II', buffer, offset + 56)
+            name = buffer[offset + 68:offset + 68 + length].decode('utf-16-le')
+            if name not in ('.', '..'):
+                found.append((name, attributes))
+            if not following:
+                break
+            offset += following
+    return found
+
+
 @contextmanager
 def _windows_hold(folder):
-    """Windows: open one folder of a copy as that exact object, and give the removal of that object.
+    """Windows: hold one folder of a copy as that exact object; give its listing and its removal.
 
     The private-file boundary pins a folder with a handle that asks for its
     attributes only. Windows lets another program rename a folder that has
-    only such a handle. So the walk opens its own handle first. The open
-    refuses a junction (and each other reparse point, by the same test), a
-    file, and a path that goes through a junction (windows_files). The handle
-    asks for the right to delete and shares reading only. While it is open,
-    Windows refuses every program the rename of this folder and its removal by
-    its path, and the rename of a folder above it: the path of the folder
-    names this object until the handle is closed. The function that this gives
-    removes the folder through the handle: this object, only when it is empty,
-    and never what its path names at that moment.
+    only such a handle. So the walk opens its own handle first (_windows_open).
+    The handle asks for the right to list and to delete, and shares reading
+    only. While it is open, Windows refuses every program the rename of this
+    folder and its removal by its path, and the rename of a folder above it.
+    A program that has the folder open without sharing deletion, for example
+    as its working folder, gets Windows to refuse the hold.
 
-    A native case shows each of these on a hosted Windows runner: the rename
-    that passes with the boundary's pin alone, the refusals while the handle
-    is open (by this process and by another one), the removal through the
-    handle, and the three refusals of the open.
+    Another program can still make the held folder a junction in place, when
+    the folder is empty. So nothing here goes by the path. The listing reads
+    the folder through the handle: the held folder, never what a junction at
+    its path names. The removal looks at the handle again and refuses a folder
+    that is a junction by then. Then it removes the folder through the handle:
+    this object, only when it is empty, and never what its path names. A
+    folder that becomes a junction after that look goes as the junction itself.
+
+    Native cases show each of these on a hosted Windows runner.
     """
     import ctypes
-    from .windows_files import BYTE, _API
-    api = _API()
-    handle = api.open(folder, directory=True, cleanup=True)
+    from .windows_files import BYTE
+    # FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, READ_CONTROL and DELETE. Shared: reading.
+    api, handle, _ = _windows_open(folder, 0x30081, 1)
     try:
+        def listing(limit):
+            return _windows_listing(handle, limit)
+
         def remove():
+            api.info(handle, folder, directory=True)
             delete = BYTE(1)  # FileDispositionInfo: delete this open object when its last handle is closed.
             api.ok(api.SetFileInformationByHandle(handle, 4, ctypes.byref(delete), ctypes.sizeof(delete)))
-        yield remove
+        yield listing, remove
+    finally:
+        api.close(handle)
+
+
+@contextmanager
+def _windows_stage_hold(stage):
+    """Windows: hold the stage folder for one removal of its copies; give the function that puts its times back.
+
+    The times are read from the handle when it opens, and the function writes
+    them through the same handle. So the times of one folder never go to
+    another folder, and never through a junction. The handle asks for the
+    right to list, and shares reading and writing. While it is open, Windows
+    refuses every program the rename of the stage and of a folder above it. It
+    asks for no right to delete, so a program that has the stage as its
+    working folder does not stop it.
+    """
+    import ctypes
+    import struct
+    # FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FILE_WRITE_ATTRIBUTES and READ_CONTROL. Shared: reading and writing.
+    api, handle, info = _windows_open(stage, 0x20181, 3)
+    try:
+        def restore():
+            # FILE_BASIC_INFO: creation, access, write, change, attributes. A zero leaves a value as it is.
+            times = struct.pack('<qqqqI4x', 0, info.access.high << 32 | info.access.low,
+                                info.write.high << 32 | info.write.low, 0, 0)
+            buffer = ctypes.create_string_buffer(times, len(times))
+            api.ok(api.SetFileInformationByHandle(handle, 0, buffer, len(times)))
+        yield restore
     finally:
         api.close(handle)
 
@@ -290,13 +375,14 @@ def _windows_remove_tree(folder, home, work, depth=0):
     exact object whose bytes it read. A link, a junction, a file above 1 MiB,
     a file with an ACL that is not private and a file that another program
     holds open all stay, with their folders, and each counts; the other
-    entries are still handled. The listing of a folder takes no more entries
-    than the work may still handle, and one more.
+    entries are still handled. A folder that gets no hold stays with
+    everything below it, and counts as one entry. The listing of a folder
+    takes no more entries than the work may still handle, and one more.
 
-    The pin, the listing and the step into a folder of the copy go by the
-    path. The hold keeps that path on the held folder for all of that time. A
-    folder is removed only when it is empty, after its own pin is closed, and
-    through its hold: never by its path. What takes a name of the copy before
+    The walk reads the entries of a folder through its hold, and it removes a
+    folder through its hold, only when it is empty and after its own pin is
+    closed. The step into a folder of the copy goes by the path, and that
+    folder gets its own hold first. So what takes a name of the copy before
     the walk comes to that name is handled as what it is: a folder as a folder
     of the copy, a link or a junction not at all.
     """
@@ -311,29 +397,30 @@ def _windows_tree(folder, home, work, depth):
     try:
         if depth >= _STAGE_CONFIG_DEPTH:
             return 'refused'
-        with _windows_hold(folder) as remove:
+        with _windows_hold(folder) as (listing, remove):
             reason = None
             with directory(folder, owned_root=home, create=False) as pinned:
-                with os.scandir(folder) as listing:
-                    entries = list(itertools.islice(listing, work.remaining() + 1))
+                try:
+                    entries = listing(work.remaining() + 1)
+                except OSError:
+                    return 'io'
                 cut = len(entries) > work.remaining()
-                for entry in entries:
+                for name, attributes in entries:
                     if work.full():
                         return 'more'
                     try:
-                        child = entry.stat(follow_symlinks=False)
-                        if _reparse(child):
+                        if attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT:
                             work.stayed += 1
                             reason = reason or 'refused'
-                        elif stat.S_ISDIR(child.st_mode):
-                            result = _windows_remove_tree(folder / entry.name, home, work, depth + 1)
+                        elif attributes & stat.FILE_ATTRIBUTE_DIRECTORY:
+                            result = _windows_remove_tree(folder / name, home, work, depth + 1)
                             if result == 'more':
                                 return result
                             reason = reason or result
                         else:
                             digest = hashlib.sha256(
-                                pinned.read_private(entry.name, limit=1024 * 1024)).hexdigest()
-                            pinned.remove_private(entry.name, digest)
+                                pinned.read_private(name, limit=1024 * 1024)).hexdigest()
+                            pinned.remove_private(name, digest)
                             work.removed += 1
                     except FileNotFoundError:
                         pass
@@ -365,46 +452,16 @@ def _windows_tree(folder, home, work, depth):
         return 'refused'
 
 
-def _windows_times(folder, info):
-    """Windows: write a folder's times through a handle of that folder.
-
-    ``os.utime`` with a path follows a link or a junction at the path, and on
-    Windows it has no other form. The handle is of the entry itself. A link, a
-    junction and a path that names the folder through another spelling are
-    refused (windows_files), and then no time is written.
-    """
-    import ctypes
-    import struct
-    from .windows_files import _API, _INVALID
-    api = _API()
-    # READ_CONTROL, and the attributes to read and to write. The entry itself, and a folder.
-    handle = api.CreateFileW(str(folder), 0x20180, 7, None, 3, 0x2200000, None)
-    if handle == _INVALID:
-        raise ctypes.WinError(ctypes.get_last_error())
-    try:
-        api.info(handle, folder, directory=True)
-        epoch = 116444736000000000  # 1970, in the units of 100 ns since 1601 that Windows keeps.
-        # FILE_BASIC_INFO: creation, access, write, change, attributes. A zero leaves a value as it is.
-        times = struct.pack('<qqqqI4x', 0, info.st_atime_ns // 100 + epoch, info.st_mtime_ns // 100 + epoch, 0, 0)
-        buffer = ctypes.create_string_buffer(times, len(times))
-        api.ok(api.SetFileInformationByHandle(handle, 0, buffer, len(times)))
-    finally:
-        api.close(handle)
-
-
 def _keep_times(folder, info):
-    """Put a stage folder's times back after a removal directly below it.
+    """Put a stage folder's times back after a removal directly below it. Not Windows.
 
     A keys file of a stage with no receipt waits 24 hours from that time
     (scrub_stage_keys). Those hours are for what a preparation wrote: this
-    removal must not start them again. ``folder`` is an open folder, or on
-    Windows a path.
+    removal must not start them again. ``folder`` is the open stage folder.
+    On Windows the stage's hold does this (_windows_stage_hold).
     """
     try:
-        if os.name == 'nt':
-            _windows_times(folder, info)
-        else:
-            os.utime(folder, ns=(info.st_atime_ns, info.st_mtime_ns))
+        os.utime(folder, ns=(info.st_atime_ns, info.st_mtime_ns))
     except Exception:
         pass  # The keys file then waits its 24 hours from this removal.
 
@@ -428,8 +485,8 @@ def _posix_stage_config(stage, expected, work):
 def _windows_stage_config(home, stage, expected, work):
     from .windows_files import directory
     reason, before = None, work.removed
-    with directory(stage, owned_root=home, create=False):
-        info = stage.lstat()
+    # The hold first: from here the stage's path names this folder until the removal ends.
+    with _windows_stage_hold(stage) as restore, directory(stage, owned_root=home, create=False):
         if expected and any(_identity(path.lstat()) != identity
                             for path, identity in expected.items()):
             raise ValueError('Stage identity changed')
@@ -441,7 +498,10 @@ def _windows_stage_config(home, stage, expected, work):
                 reason = reason or result
         finally:
             if work.removed != before:
-                _keep_times(stage, info)
+                try:
+                    restore()
+                except Exception:
+                    pass  # The keys file then waits its 24 hours from this removal.
     return reason
 
 

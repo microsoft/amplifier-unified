@@ -475,7 +475,9 @@ each folder from its start again. So when the first 64 listed entries of a
 folder all stay, the entries behind them stay too. A link is
 never followed: an entry `config` or `routing` that is a link, a junction or no
 folder stays, and a link inside a copy is removed as a link (on Windows it
-stays).
+stays). On Windows a folder of a copy that another program has open, for
+example as its working folder, stays with everything below it until that
+program lets it go.
 
 Component qualification uses a temporary `shared-config/keys.env` copy.
 The manager removes only that file after qualification succeeds or a handled
