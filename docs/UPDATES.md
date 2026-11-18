@@ -739,30 +739,35 @@ discard history. A missing older activation receipt alone remains neutral,
 does not request reinstallation, and does not claim full component verification.
 If the selected installation's graph, lock and activation still verify but its
 source-configuration key no longer matches, nothing failed and nothing is
-required of the person. A saved AI connection for all folders gives this state:
-a second connection, a connection of another kind, or another order of
+required of the person. A saved AI connection for all folders can give this
+state: a second connection, a connection of another kind, or another order of
 connections of different kinds changes the key; another model for the same
 connection does not. A new app version that computes another key for the same
 settings gives it too, and health cannot tell the two apart. So the text says
 only that the record of the component check is not for the current settings.
-After the save the page first says "Checking current configuration". Then the
-owner's next health read gives the quiet status `unchecked`, with no attention
-item and no unread mark on the Settings entry: "The components need a new
-check for your current settings" / "The installed components are as recorded.
-Amplifier has no record that it checked them with your current AI connections
-and other settings. A new AI connection is one cause. The next update check
-looks for the components that your current settings need. To check now, select
-Check for updates." The state ends when a check lists an update; a check
-lists the row "Qualify current component configuration" for the other key.
-A save is not a reason for an update check (`UpdateManager.check_due`). The
-text is the same with automatic checks on and off, and it promises no result
-of the next check. It is not a renewed claim that an older source conflict is
-occurring. On Windows the launcher step (`windows_launcher_follow.project`)
+After the save, health first gives "Checking current configuration". The
+owner's next health read then gives the quiet status `unchecked`, with no
+attention item for it, so the Settings entry gets no unread mark from it:
+"The components need a new check for your current settings" / "The installed
+components are as recorded. Amplifier has no record that it checked them with
+your current AI connections and other settings. A new AI connection is one
+cause. The next update check looks for the components that your current
+settings need. To check now, select Check for updates." The bundled page
+shows a quiet health value when no update operation runs or waits; while one
+does, the page shows its own text of that operation. The state ends when a
+check lists an update. For the other key a check's inventory adds the row
+"Qualify current component configuration", unless it already lists a row for
+the worker environment; each such row is an update. The save wakes the update
+owner, and that pass reads health again (`UpdateManager.configuration_changed`,
+`tick`). A health read is not an update check, and no rule for a check reads
+this status. The text is the same with automatic checks on and off, and it
+promises no result of the next check. It is not a renewed claim that an older
+source conflict is occurring. On Windows the launcher step
+(`windows_launcher_follow.project`)
 treats this status as it treats every quiet status. With no open launcher
 request, in the phases `waiting`, `ready`, `failed` and `failed-unchanged` of
 that step, the launcher's text shows in place of this text, in the last three
 with its button; with no phase, and in the phase `done`, this text stays.
-With an open launcher request its text shows over every status.
 Only covered failures predating that installation remain historical; newer
 failures, missing source scope and uncertain operations retain their priority.
 This explanatory proof cannot authorize partial-source retention or declare the

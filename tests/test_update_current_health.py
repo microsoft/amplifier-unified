@@ -681,7 +681,12 @@ NEW_CHECK = ('unchecked', 'The components need a new check for your current sett
              'current AI connections and other settings. A new AI connection is one cause. The next update check '
              'looks for the components that your current settings need. To check now, select Check for updates.')
 # What the state said before, with the unread mark.
-ALARM = ('unverified', 'Component verification is incomplete')
+ALARM = ('unverified', 'Component verification is incomplete',
+         'The active installation still matches its recorded graph, but the current source configuration differs '
+         'from its qualification. Current components are kept; earlier attempts remain in history. Check for '
+         'updates and review the changed source choices before installing.')
+QUALIFY_ROW = {'id': 'runtime:environment', 'kind': 'runtime environment', 'status': 'update', 'eligible': True,
+               'label': 'Qualify current component configuration'}
 CHECKING_SETTINGS = {'status': 'unchecked', 'title': 'Checking current configuration',
                      'detail': 'Update health will refresh against the changed settings. Existing components remain active.',
                      'actionRequired': False, 'action': None, 'component': None}
@@ -767,7 +772,8 @@ def test_the_states_beside_it_keep_their_text_and_their_mark(neighbour):
             'The current application and qualified components are ready. Earlier attempts remain in history; '
             'configured fixed versions are kept.'), False, None),
         # A listed update ends the state. (The journey case below takes the row from the real inventory.)
-        'a-listed-update': (settled(available=1), generation_proof(configurationChanged=True),
+        'a-listed-update': (settled(available=1, items=[dict(QUALIFY_ROW)]),
+                            generation_proof(configurationChanged=True),
             ('available', 'Updates available',
              'The app and eligible components can update while preserving configured pins and local sources.'),
             False, 'install'),
@@ -787,8 +793,14 @@ def test_the_states_beside_it_keep_their_text_and_their_mark(neighbour):
     count, unread, item = settings_entry({'updates': {**state, 'currentStatus': value}})
     assert item == (['updates:current'] if mark else [])
     # A local source is information and counts nothing. With automatic installation
-    # (the default) a listed update is progress and counts nothing either.
+    # (the default) the row of a listed update is progress and counts nothing either.
     assert (count, unread) == ((1, 1) if mark else (0, 0))
+    if neighbour == 'a-listed-update':
+        # With "Keep Amplifier up to date" off, that row is an unread item of its own. Not changed.
+        off = snapshot({'updates': {**state, 'currentStatus': value},
+                        'settings': {'updates': {'autoInstall': False}}})
+        assert [row['id'] for row in off['items']] == ['source:runtime:environment']
+        assert (off['pages']['updates'], off['settingsUnread']) == (1, 1)
 
 
 def test_an_earlier_component_issue_keeps_its_own_sentence_about_the_settings():
@@ -875,6 +887,11 @@ async def test_a_second_ai_connection_gives_the_quiet_text_until_an_update_is_li
     # two keys that the health read compared. A listed update ends the state.
     assert listed() == [('runtime:environment', 'Qualify current component configuration', 'update',
                          qualified, keys[3])]
+    # When the inventory already lists a row for the worker environment (here: the app declares other
+    # worker packages than the generation's record), that row stands for both. It is an update too.
+    (stage / 'runtime-base.toml').write_text('another manifest')
+    assert [row[:3] for row in listed()] == [('runtime:environment', 'Conversation worker environment', 'update')]
+    (stage / 'runtime-base.toml').unlink()
     u['available'] = 1
     health.publish(m)
     assert (u['currentStatus']['status'], u['currentStatus']['title']) == ('available', 'Updates available')
@@ -914,8 +931,8 @@ def this_state(rig, phase, *, alarm=False):
     from amplifier_web import windows_launcher_follow as follow
     value = health.current(settled(), generation_proof(configurationChanged=True))
     if alarm:
-        # The value that the state had: its status, its title, and the mark.
-        value = {**value, 'status': ALARM[0], 'title': ALARM[1], 'actionRequired': True}
+        # The value that the state had: its status, its title, its text, and the mark.
+        value = {**value, 'status': ALARM[0], 'title': ALARM[1], 'detail': ALARM[2], 'actionRequired': True}
     m = rig.m
     m._launcher_follow.phase = phase
     m.state['launcherRefresh'] = {**(m.state.get('launcherRefresh') or {}), 'phase': phase,
@@ -1000,7 +1017,7 @@ async def test_the_button_over_this_state_asks_for_a_launcher_refresh(rig, setti
     assert 'request' not in rig.records
     # With the alarm value that this state had, the button is not the launcher's: a click asks for nothing.
     _, row, button = this_state(rig, phase, alarm=True)
-    assert (row['status'], row['title'], row['action'], button) == (*ALARM, 'check', None)
+    assert (row['status'], row['title'], row['action'], button) == (*ALARM[:2], 'check', None)
     assert not await follow.request_by_button(m)
     await follow.consider(m)
     assert 'request' not in rig.records
