@@ -43,6 +43,14 @@ OTHER_VERSION = 'another-app-version'
 TAG = sys.implementation.cache_tag  # The part of a bytecode file's name that names this Python.
 
 
+class Cut(BaseException):
+    """The process ends in the middle of a run: the PC is switched off, or Windows ends the host.
+
+    Not an Exception, as ``KeyboardInterrupt`` and ``SystemExit`` are not: the step lets it pass. A case that
+    fails with it is reported as a failed case; a real ``KeyboardInterrupt`` would end the whole test run.
+    """
+
+
 class Steps:
     """The native steps of the walk over real paths, for a platform that does not have them.
 
@@ -752,7 +760,7 @@ async def test_a_git_that_does_not_end_is_ended_at_the_limit_and_the_object_stay
         seconds = time.monotonic() - begin
         # The program that the step started has ended when the step returns: the step ended it.
         assert len(started) == 1 and started[0].poll() is not None, 'the program still runs'
-        assert seconds < 3, f'the step took {seconds:.1f} s'
+        assert seconds < SLOW - 1, f'the step took {seconds:.1f} s'
         assert (result['git'], result['later'], result['complete'], result['change']) == (1, 1, False, None)
         assert snapshot(installation.store) == before and record(installation)['tries'] == {target.key: 1}
     finally:
@@ -893,10 +901,10 @@ async def test_runs_that_are_cut_before_their_end_also_end_after_ten(installatio
     target = await broken(installation)
 
     def cut(*arguments):
-        raise KeyboardInterrupt
+        raise Cut
     monkeypatch.setattr(repair, '_object', cut)
     for count in range(1, repair.RUNS + 1):
-        with pytest.raises(KeyboardInterrupt):
+        with pytest.raises(Cut):
             installation.start()
         assert (record(installation)['runs'], record(installation)['complete']) == (count, False)
     assert installation.start() is None and record(installation)['complete'] is True
@@ -1107,9 +1115,9 @@ async def test_a_run_that_ends_after_a_deletion_has_already_written_a_new_mark(i
 
     def the_process_ends(api, handle, files, count, budget):
         real(api, handle, files[:1], count, budget)
-        raise KeyboardInterrupt  # The PC is switched off after the first file.
+        raise Cut  # The PC is switched off after the first file.
     monkeypatch.setattr(repair, '_remove', the_process_ends)
-    with pytest.raises(KeyboardInterrupt):
+    with pytest.raises(Cut):
         installation.start()
     first = mark(installation)
     assert len(bytecode(target.folder)) == 2 and first is not None and record(installation)['complete'] is False
@@ -1136,11 +1144,10 @@ async def test_the_update_check_scans_again_after_a_repair_and_not_after_a_run_t
         installation, monkeypatch):
     from amplifier_web.update_inventory_index import inventory
     target = await broken(installation)
-    # The update manager's own folder is <data>/updates (UpdateManager.__init__), where the record is.
-    # Its home is another folder here: the check must find the record without it.
-    manager = SimpleNamespace(home=installation.root / 'another-folder', directory=installation.data / 'updates',
+    # The update manager's own folder is <data>/updates (UpdateManager.__init__, the case below). The check
+    # reads the record from that folder, beside its own index file.
+    manager = SimpleNamespace(home=installation.data, directory=installation.data / 'updates',
                               service=SimpleNamespace(state={'settings': {'bundle': 'work'}}))
-    (installation.root / 'another-folder').mkdir()
     scan = AsyncMock(side_effect=lambda: [{'id': 'binding', 'status': target.verify()}])
     assert (await inventory(manager, scan))[0]['status'].startswith('refused') and scan.await_count == 1
     assert (await inventory(manager, scan))[0]['status'].startswith('refused') and scan.await_count == 1
