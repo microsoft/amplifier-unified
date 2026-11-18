@@ -118,6 +118,13 @@ def test_shipped_shell_is_read_from_an_app_folder_whose_address_is_quoted(tmp_pa
     assert result['sources'] == [{'url':'https://github.com/microsoft/amplifier-bundle-skills', 'ref':'main'}]
 
 
+def test_a_file_address_that_is_no_path_of_this_system_selects_nothing(tmp_path):
+    # On Windows the part "a:b" cannot be in a path. The reference stays in the selection as it is.
+    reference = 'file:///C:/a:b/behaviors/behavior.yaml'
+    assert selection(tmp_path, settings([reference]))['sources'] == []
+    assert selection(tmp_path, settings([reference]))['witness'] != selection(tmp_path, settings())['witness']
+
+
 def test_classification_keeps_exact_ref_and_both_source_and_package_roles(tmp_path, monkeypatch):
     monkeypatch.setattr(update_sequence, 'included_sources', lambda: (set(), []))
     chosen = selection(tmp_path, settings([URI]))
@@ -193,13 +200,35 @@ def below(root):
                     overrides={'tool-x':{'source':str(root/'foundation/cache/other')}})
 
 
-def test_configuration_key_is_the_same_for_sources_below_another_data_folder(tmp_path):
+# The second name has a letter that JSON text writes in another form, on every system.
+@pytest.mark.parametrize('name', ['app', 'caf\u00e9 app'])
+def test_an_installation_and_its_stage_have_one_configuration_key_and_one_witness(tmp_path, name):
+    # The settings name sources below the data folder. The stage's copy names them below the stage.
     from amplifier_web.runtime_profiles import configuration_key
-    one, two = tmp_path.resolve()/'one', tmp_path.resolve()/'two'
-    assert configuration_key(below(one), one) == configuration_key(below(two), two)
-    assert configuration_key(below(one), one, two) == configuration_key(below(two), one, two)
+    home = tmp_path.resolve()/name
+    stage = home/'updates/releases'/('b'*32)
+    assert configuration_key(below(home), home, stage) == configuration_key(below(stage), home, stage)
+    live = HostConfig(home, home, below(home), home/'foundation', home/'shared', True)
+    staged = HostConfig(stage, stage, below(stage), stage/'foundation', stage/'shared-config', True)
+    assert (update_sequence.app_selection(home, config=live)['witness']
+            == update_sequence.app_selection(stage, config=staged, original_home=home)['witness'])
     # A source outside the named folders keeps its own path.
-    assert configuration_key(below(one), one) != configuration_key(below(two), one)
+    other = tmp_path.resolve()/'another folder'
+    assert configuration_key(below(home), home, stage) != configuration_key(below(other), home, stage)
+
+
+def test_settings_that_name_no_folder_keep_their_configuration_key_and_witness(tmp_path):
+    # Most installations: the settings name Git addresses only. The two values
+    # hold no path then, so they are the same on every system and for every
+    # data folder. They were read from the code before it handled a Windows
+    # path; a change of that code must not move them (see the next case).
+    from amplifier_web.runtime_profiles import configuration_key
+    home = tmp_path.resolve()/'app'
+    stage = home/'updates/releases'/('b'*32)
+    value = settings([URI], sources={'modules': {'tool-x': 'git+' + URL + '@main#subdirectory=modules/tool-x'}})
+    assert configuration_key(value, home, stage) == 'bd8517dcc00253948dc827b31b5f172f83c281d4372df6732d287cc21a2f44c4'
+    config = HostConfig(home, home, value, home/'foundation', home/'shared', True)
+    assert update_sequence.app_selection(home, config=config)['witness'] == 'd053b29f08226ee87e125cb19a251ee6e1bbb8b9164f6062fa6a41b0af86815c'
 
 
 @pytest.mark.skipif(os.name == 'nt', reason='the values of a Linux installation')
