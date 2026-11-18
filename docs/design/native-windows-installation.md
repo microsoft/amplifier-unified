@@ -1712,16 +1712,19 @@ So the order is:
    gets no second question.
 3. Check and pin every Start-menu shortcut and the Apps-list entry. A changed
    entry stops here, before the app is touched. Another program can have a
-   shortcut open at that moment (on hosted runners `explorer.exe` had a new
-   shortcut open for a moment). Windows then refuses the pin with "the file
-   is used by another process", and uninstall tries again before it
-   stops here: at most 50 more times for this step, with a wait of a tenth of
-   a second before each. The waits are 5 seconds in all; the Windows calls of
-   each attempt take their own time.
+   shortcut open at that moment (on hosted runners, asked which program had
+   the shortcut open, Windows named `explorer.exe` after 7 of 92 such refusals
+   and no program after the others). Windows then refuses the pin with its error 32
+   ("The process cannot access the file because it is being used by another
+   process."), and uninstall tries again before it stops here: at most 50
+   more times for this step, with a wait of a tenth of a second before each.
+   The waits are 5 seconds in all; the Windows calls of each attempt take
+   their own time. Each attempt reads the shortcut's bytes again, so a
+   shortcut that changed meanwhile stops here too.
 4. Stop the app normally and remove its sign-in task. There is no forced stop.
 5. Remove the Apps-list entry, then the shortcuts ("Uninstall Amplifier" last),
    then the emptied Start-menu folder. A delete that Windows refuses with
-   "access is denied" is tried again with the same limit, counted for this
+   its error 5 ("Access is denied.") is tried again with the same limit, counted for this
    step alone. A mapped view of the shortcut gives that refusal for as long as
    the view exists. Hosted runners showed the refusal for a moment; which
    program caused it there is not known. A shortcut that is still refused
@@ -1822,11 +1825,74 @@ the folder that the record names; setup's second run decides by the same two
 facts. Otherwise the next step is to run the setup file again. The record
 alone is not enough: the last write of an uninstall can be refused after every
 entry is gone. For the same reason the entries can be added again over a
-record that still says `installed`, when the folder that the record names,
-today's Start-menu folder and the Apps-list entry are all absent. The entries
-are added again only when all of them are gone. A partly damaged set (a person
-deleted one shortcut) is refused and nothing is overwritten; setup then says
-that it could not add the entries, and starts the app.
+record that still says `installed`, when the folder that the record names is
+absent.
+
+The entries are added again when no shortcut of this installation and no
+Apps-list entry is there. The Start-menu folder itself can be there. It stays
+after an uninstall when the person put a file into it (uninstall removes only
+an empty folder), and when another program still had a shortcut open in a way
+that let the delete pass. Setup's step uses that folder again when both hold:
+
+- It is this account's own private folder: a real folder and no link, owned
+  by this account, in which no access rule gives a right to anyone but this
+  account, SYSTEM, the Administrators group and TrustedInstaller. This is the
+  check that the first installation and every uninstall make.
+- No entry directly in it has the name of one of the four shortcuts. Such an
+  entry counts whatever it is (a file, a folder, a link), and the names are
+  compared without letter case.
+
+Every other entry in that folder is the person's. Setup's step does not open,
+change or remove it, and writes the four shortcuts beside it. The step
+replaces and takes over nothing that it finds: it looks before its first
+write, the writer of a shortcut refuses a name that exists (also one that
+appeared after the look), and the Apps-list entry is a key that the step
+itself creates new.
+
+Two moments are not covered, and a first installation has both. The writer
+makes each shortcut as a new, empty file. From there the step works with the
+shortcut by its name, in three separate steps, and holds nothing open between
+them: the Windows shell saves the shortcut to the path, the shell reads the
+path back, and the bytes for the record are read.
+
+- A program of this account that puts something else at that path before the
+  save gets it written: the shell writes to whatever the path names then. A
+  file there is written over (a case shows it). A link there was not tried.
+- A program of this account that replaces the saved shortcut with a private
+  file of its own before the last read gets that file's bytes recorded as
+  this installation's shortcut (a case shows it).
+
+The look refuses, before the first write and with the record unchanged: an
+entry with a shortcut's name in the folder, an Apps-list entry, a link or a
+file at the folder's path, a folder that fails the check, a path that Windows
+does not let the step look at. A partly damaged set whose record still says
+`installed` (a person deleted one shortcut) is refused by that record, before
+the look, as before. Setup then says that it could not add the entries, and
+starts the app.
+
+A failure after the first write is different, as it was before this rule: a
+shortcut's name or an Apps-list entry that appeared after the look, or a
+folder that fails the check when the step opens it for its writes. The record
+then says `preparing`, the shortcuts that this run already wrote stay, and
+that record refuses a later run.
+
+This rule replaced an earlier one, under which the entries were added again
+only when the Start-menu folder was gone too. A folder that stayed then kept
+every later setup run from adding them, and the person had no entry to open,
+stop or uninstall Amplifier. One state is still refused: a record that says
+`installed` (its last write was refused) beside a folder that stayed.
+
+The native cases in the `windows-local-connection` job run the step on the
+real Start-menu folder. After an uninstall that left a person's file there,
+the four shortcuts and the Apps-list entry are added beside the file. Each
+refusal of the look has a case there, with one exception: the path that
+Windows does not let the step look at has a case with a stand-in. Each of
+those cases, and the case of the partly damaged set, finds the folder, the
+record and the Apps list as they were. The folder that fails the check is, in
+these cases, one that the group Everyone can change. A shortcut's name that
+appears after the look has a case: the file keeps its bytes. Two cases show
+the two moments that are not covered. No hosted runner runs the setup program
+itself, which refuses Windows Server.
 
 `.github/workflows/windows-start-again.yml` runs this path on a Windows
 runner with the product's own commands in setup's order: entries, first
