@@ -551,8 +551,8 @@ def test_a_first_start_of_the_catalog_helper_as_slow_as_the_slowest_measured_one
 
 
 def test_a_catalog_helper_that_does_not_end_is_ended_at_the_limit(monkeypatch, real_catalogs, tmp_path):
-    """A real helper, started as the app starts it. It connects to this case, sends one word, and then waits
-    until the connection ends. Only that one process has its end of the connection. So the word shows that
+    """A real helper, started as the app starts it. It connects to this case, sends one byte, and then waits
+    until the connection ends. Only that one process has its end of the connection. So the byte shows that
     the helper ran. The end of the connection, which this case does not cause, shows that the process ended.
 
     The limit is 4 s here. The start must return not before it, and in less than 9 s. So a start with another
@@ -569,7 +569,7 @@ def test_a_catalog_helper_that_does_not_end_is_ended_at_the_limit(monkeypatch, r
     script = tmp_path / "catalog.py"
     script.write_text("import socket\n"
                       f"link = socket.create_connection(('127.0.0.1', {listener.getsockname()[1]}))\n"
-                      "link.sendall(b'runs')\n"
+                      "link.sendall(b'r')\n"
                       "link.recv(1)\n", encoding="utf-8")
     monkeypatch.setattr(accounts, "Path", lambda _: SimpleNamespace(with_name=lambda _: script))
     monkeypatch.setattr(accounts, "_CATALOG_START_SECONDS", limit)
@@ -591,7 +591,7 @@ def test_a_catalog_helper_that_does_not_end_is_ended_at_the_limit(monkeypatch, r
         except TimeoutError:
             pytest.fail(f"The helper did not connect to this case in 60 s. The start gave: {outcome}")
         link.settimeout(60)
-        assert link.recv(4) == b"runs"   # the helper runs
+        assert link.recv(1) == b"r"   # the helper runs
         call.join(90)
         assert not call.is_alive(), "The start of a helper that does not end did not return in 90 s."
         assert len(outcome) == 1 and isinstance(outcome[0], ValueError), outcome
@@ -613,6 +613,7 @@ def test_a_catalog_helper_that_does_not_end_is_ended_at_the_limit(monkeypatch, r
                 used.close()
         call.join(60)
         accounts._catalog_snapshot.cache_clear()
+        assert not call.is_alive(), "The start still runs 60 s after this case ended the helper's connection."
 
 
 @pytest.mark.parametrize("value", [

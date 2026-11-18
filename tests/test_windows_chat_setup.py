@@ -279,10 +279,10 @@ def session_programs(listed):
 
 
 def first_line(program, seconds):
-    """The first line that ``program`` prints, without the space at its ends. '' when it printed no whole
-    line in ``seconds``, and when its output ended with nothing in it. (Output that ends in the middle of a
-    line gives that part.) When it printed no whole line in ``seconds``, the reader of this call still waits
-    for the program's output: the caller ends the program, and that ends the reader."""
+    """The first line that ``program`` prints, without the space at its ends. Output that ends in the middle
+    of a line gives that part. '' for a line of only space, when the output ended with nothing in it, and
+    when ``seconds`` passed with no whole line and no end of the output. In that last case the reader of
+    this call still waits for the program's output: the caller ends the program, and that ends the reader."""
     import threading
     lines = []
     reader = threading.Thread(target=lambda: lines.append(program.stdout.readline()), daemon=True)
