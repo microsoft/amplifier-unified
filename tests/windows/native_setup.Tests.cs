@@ -8,6 +8,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Reflection;
 using System.Security.AccessControl;
@@ -34,6 +35,24 @@ namespace UnifiedBootstrap {
                 UseShellExecute=false,CreateNoWindow=true});
             process.WaitForExit();
             Need(process.ExitCode==0,"junction created");
+        }
+        static void FileLink(string link, string target) {
+            // A symbolic link to a file. Windows creates one for an elevated
+            // account (a hosted runner's) or with Developer Mode on.
+            var process=Process.Start(new ProcessStartInfo("cmd.exe","/d /c mklink \""+link+"\" \""+target+"\"") {
+                UseShellExecute=false,CreateNoWindow=true});
+            process.WaitForExit();
+            Need(process.ExitCode==0,"file link created (this needs an elevated account or Developer Mode)");
+        }
+        static void Unlistable(string folder, bool on) {
+            // A folder that Windows refuses to list for this account: one deny
+            // entry for the right to list it, added and taken away again.
+            var security=Directory.GetAccessControl(folder);
+            FileSystemAccessRule rule;
+            using(var identity=WindowsIdentity.GetCurrent())
+                rule=new FileSystemAccessRule(identity.User,FileSystemRights.ListDirectory,AccessControlType.Deny);
+            if(on) security.AddAccessRule(rule); else security.RemoveAccessRule(rule);
+            Directory.SetAccessControl(folder,security);
         }
         static void OpenToOthers(string folder) {
             var security=Directory.GetAccessControl(folder);
@@ -283,6 +302,172 @@ namespace UnifiedBootstrap {
                 }
                 Need(!NativeInstaller.AddEntries(empty),"entries step: a missing program is a failure");
                 Need(Refused(()=>NativeInstaller.StartApp(empty)),"start step: a missing launcher is refused");
+
+                // The text for a finished installation whose launcher program is
+                // missing. Only setup's own look at the folder chooses it.
+                string left=Make(work,"Left");
+                File.WriteAllText(Path.Combine(left,NativeInstaller.Complete),"{}");
+                // The creation time, the write time and the attributes of a file. A
+                // look changes none of them: the step after exit refuses a journal
+                // whose creation time is later than its own start, and a record
+                // that is read-only, hidden or a system file (`Later` and
+                // `Get-Record` in amplifier_web/windows_removal.py). The case reads
+                // these facts of a file before the first look that can reach it.
+                Func<string,string> facts=one=>File.GetCreationTimeUtc(one).Ticks+","+File.GetLastWriteTimeUtc(one).Ticks+","+File.GetAttributes(one);
+                string completeFacts=facts(Path.Combine(left,NativeInstaller.Complete));
+                string damaged="Amplifier is already installed in "+left+", but setup cannot open it: a program file is missing.\n\n"+
+                    "Keep that folder. It holds your chats and settings. This version of setup cannot repair it.";
+                string emptied="Setup cannot install Amplifier yet. Setup found an installation record in this folder:\n"+left+"\n\n"+
+                    "Setup cannot find a program file that it needs to open Amplifier from that folder. "+
+                    "Setup found no chats or settings in the folder. "+
+                    "It does not change the folder, because the folder can hold files or folders that are not Amplifier's.\n\n"+
+                    "Move or rename that folder. Then run this setup file again.";
+                string journal=Path.Combine(left,NativeInstaller.Journal), notes=Path.Combine(left,"my notes.txt");
+                string record="{\"schema\": 1, \"choice\": \"delete\", \"token\": \"0123456789abcdef0123456789abcdef\"}";
+                Need(NativeInstaller.Journal=="unified-uninstall.json" && String.Join(",",NativeInstaller.Data)==
+                    "shared,app,capture,ownership,import,workspace,export","uninstall's names");
+                // The case's own list of the seven names. Its folders do not follow
+                // setup's list, and the looks must leave setup's list as it is.
+                string[] seven={"shared","app","capture","ownership","import","workspace","export"};
+                Need(!NativeInstaller.Emptied(left) && NativeInstaller.Unopened(left)==damaged,"no journal: the text of a damaged installation");
+                // What an uninstall with the delete choice leaves when the folder
+                // holds a file of the person: that file, setup's record, the journal.
+                File.WriteAllText(notes,"mine");
+                string notesFacts=facts(notes);
+                File.WriteAllText(journal,record);
+                string journalFacts=facts(journal);
+                Need(NativeInstaller.Emptied(left) && NativeInstaller.Unopened(left)==emptied,"a delete journal and no data: the text with the next step");
+                Need(facts(journal)==journalFacts,"the first looks change no time and no attribute of the journal");
+                // What stays when the last step did not finish: program files.
+                Directory.CreateDirectory(Path.Combine(left,"unified-uninstall-last"));
+                File.WriteAllText(Path.Combine(left,"unified-uninstall-last","python313.dll"),"program");
+                Need(NativeInstaller.Unopened(left)==emptied,"program files that stayed are not data");
+                // Each data name: an empty folder is not data; a folder with
+                // anything in it, and a file of that name, are data.
+                foreach(string name in seven) {
+                    string entry=Path.Combine(left,name);
+                    Directory.CreateDirectory(entry);
+                    Need(NativeInstaller.Unopened(left)==emptied,"an empty data folder is not data: "+name);
+                    Directory.CreateDirectory(Path.Combine(entry,"inner"));
+                    Need(!NativeInstaller.Emptied(left) && NativeInstaller.Unopened(left)==damaged,"a folder in a data folder is data: "+name);
+                    Directory.Delete(Path.Combine(entry,"inner"));
+                    File.WriteAllText(Path.Combine(entry,"kept.txt"),"data");
+                    Need(NativeInstaller.Unopened(left)==damaged,"a file in a data folder is data: "+name);
+                    File.Delete(Path.Combine(entry,"kept.txt")); Directory.Delete(entry);
+                    File.WriteAllText(entry,"data");
+                    Need(NativeInstaller.Unopened(left)==damaged,"a file with a data name is data: "+name);
+                    File.Delete(entry);
+                    Need(NativeInstaller.Unopened(left)==emptied,"without that entry: "+name);
+                }
+                // Another spelling of a data name. Windows gives that entry for the
+                // path with the name's own spelling, and the look treats it like
+                // any other entry. (The removal never examines such an entry and
+                // counts the name as holding something.)
+                string spelled=Path.Combine(left,"App"); Directory.CreateDirectory(spelled);
+                Need(Directory.GetFileSystemEntries(left).Select(entry=>Path.GetFileName(entry)).Contains("App") &&
+                    Directory.Exists(Path.Combine(left,"app")),"Windows gives the folder App for the path with app");
+                Need(NativeInstaller.Unopened(left)==emptied,"an empty folder under another spelling of a data name is not data");
+                File.WriteAllText(Path.Combine(spelled,"kept.txt"),"data");
+                Need(NativeInstaller.Unopened(left)==damaged,"a file in a folder under another spelling of a data name is data");
+                File.Delete(Path.Combine(spelled,"kept.txt")); Directory.Delete(spelled);
+                Need(NativeInstaller.Unopened(left)==emptied,"without the folder under another spelling");
+                // A link with a data name counts as data, also when it leads to
+                // an empty folder.
+                string elsewhere=Path.Combine(work,"elsewhere"); Directory.CreateDirectory(elsewhere);
+                Junction(Path.Combine(left,"app"),elsewhere);
+                Need(NativeInstaller.Unopened(left)==damaged,"a link with a data name is data");
+                Directory.Delete(Path.Combine(left,"app"),false);
+                Need(NativeInstaller.Unopened(left)==emptied,"without the link");
+                // An empty data folder that Windows refuses to list is a doubt.
+                string refused=Path.Combine(left,"shared"); Directory.CreateDirectory(refused);
+                Unlistable(refused,true);
+                Need(Refused(()=>Directory.GetFileSystemEntries(refused)),"Windows refuses to list the folder");
+                Need(NativeInstaller.Unopened(left)==damaged,"a data folder that Windows does not list is data");
+                Unlistable(refused,false);
+                Need(NativeInstaller.Unopened(left)==emptied,"the same folder, empty, when Windows lists it");
+                Directory.Delete(refused);
+                // A link with the journal's name is no journal, also when it leads
+                // to a file that is one.
+                File.Move(journal,Path.Combine(elsewhere,"journal.json"));
+                FileLink(journal,Path.Combine(elsewhere,"journal.json"));
+                Need(File.ReadAllText(journal)==record,"the link leads to a journal");
+                Need(NativeInstaller.Unopened(left)==damaged,"a file link with the journal's name");
+                File.Delete(journal);
+                Junction(journal,elsewhere);
+                Need(NativeInstaller.Unopened(left)==damaged,"a folder link with the journal's name");
+                Directory.Delete(journal,false);
+                File.Move(Path.Combine(elsewhere,"journal.json"),journal);
+                Need(NativeInstaller.Unopened(left)==emptied,"the journal is back");
+                // A file that uninstall does not read as a journal with the
+                // delete choice: the text of a damaged installation.
+                string[] others={"","{","[]","null","\"delete\"",
+                    record.Replace("\"delete\"","\"keep\""),record.Replace("\"delete\"","\"Delete\""),
+                    record.Replace("\"choice\": \"delete\"","\"choice\": 1"),
+                    record.Replace("\"schema\": 1","\"schema\": 2"),record.Replace("\"schema\": 1","\"schema\": \"1\""),
+                    record.Replace("\"schema\": 1","\"schema\": true"),record.Replace("\"schema\": 1","\"schema\": 1.5"),
+                    record.Replace("\"schema\": 1, ",""),
+                    record.Replace("0123456789abcdef0123456789abcdef","0123456789ABCDEF0123456789abcdef"),
+                    record.Replace("0123456789abcdef0123456789abcdef","0123456789abcdef0123456789abcde"),
+                    record.Replace("0123456789abcdef0123456789abcdef","0123456789abcdef0123456789abcdef0"),
+                    record.Replace("0123456789abcdef0123456789abcdef","0123456789abcdef0123456789abcdef\\n"),
+                    record.Replace(", \"token\": \"0123456789abcdef0123456789abcdef\"",""),
+                    record+new string(' ',4097-record.Length)};
+                for(int index=0;index<others.Length;index++) {
+                    File.WriteAllText(journal,others[index]);
+                    Need(!NativeInstaller.Emptied(left) && NativeInstaller.Unopened(left)==damaged,"not a journal with the delete choice: file "+index);
+                }
+                // The largest file that is read, with a further field, as uninstall accepts it.
+                string largest=record.Replace("{","{\"more\": \""+new string('x',4096-record.Length-12)+"\", ");
+                File.WriteAllText(journal,largest);
+                journalFacts=facts(journal);
+                Need(new FileInfo(journal).Length==4096 && NativeInstaller.Unopened(left)==emptied,"a journal of 4096 bytes is read");
+                Need(facts(journal)==journalFacts,"the look at a journal of 4096 bytes changes no time and no attribute of it");
+                // Bytes that are not UTF-8 are no journal.
+                File.WriteAllBytes(journal,new byte[]{0x7b,0xff,0x7d});
+                Need(NativeInstaller.Unopened(left)==damaged,"bytes that are not UTF-8");
+                // A record that is whole, except for one byte in a text value
+                // that is not UTF-8. A reader that put another character in the
+                // place of that byte would take the record.
+                byte[] broken=System.Text.Encoding.ASCII.GetBytes(record.Replace("{","{\"more\": \"X\", "));
+                broken[Array.IndexOf(broken,(byte)'X')]=0xff;
+                File.WriteAllBytes(journal,broken);
+                Need(NativeInstaller.Unopened(left)==damaged,"a record with one byte in a text value that is not UTF-8");
+                // A folder with the journal's name is no journal.
+                File.Delete(journal); Directory.CreateDirectory(journal);
+                Need(NativeInstaller.Unopened(left)==damaged,"a folder with the journal's name");
+                Directory.Delete(journal); File.WriteAllText(journal,record);
+                // The look shares the journal with every other access. A program
+                // that has it open for writing does not stop the look, and while
+                // the look's kind of handle is open, the file can be deleted (the
+                // last step of a removal deletes it).
+                using(new FileStream(journal,FileMode.Open,FileAccess.ReadWrite,FileShare.ReadWrite|FileShare.Delete))
+                    Need(NativeInstaller.Unopened(left)==emptied,"a journal that another program has open for writing is read");
+                using(new FileStream(journal,FileMode.Open,FileAccess.Read,FileShare.ReadWrite|FileShare.Delete)) {
+                    File.Delete(journal);
+                    // The name goes at once, also while that handle is open: the
+                    // last step lists the folder directly after its deletion.
+                    Need(!Directory.GetFileSystemEntries(left).Any(entry=>Path.GetFileName(entry)==NativeInstaller.Journal),
+                        "the journal's name is gone while a handle of the look's kind is open");
+                    Need(NativeInstaller.Unopened(left)==damaged,"a journal that was deleted is no journal");
+                }
+                Need(!File.Exists(journal),"the journal could be deleted while a handle of the look's kind was open");
+                File.WriteAllText(journal,record);
+                // The case wrote this journal anew, and no look has reached it yet.
+                journalFacts=facts(journal);
+                // A journal that another program holds for itself is a doubt.
+                using(new FileStream(journal,FileMode.Open,FileAccess.ReadWrite,FileShare.None))
+                    Need(NativeInstaller.Unopened(left)==damaged,"a journal that cannot be opened");
+                Need(NativeInstaller.Unopened(left)==emptied,"the journal is read again");
+                // The looks changed nothing in the folder.
+                string[] names=Directory.GetFileSystemEntries(left).Select(entry=>Path.GetFileName(entry)).OrderBy(name=>name,StringComparer.Ordinal).ToArray();
+                Need(String.Join("|",names)=="my notes.txt|unified-setup-complete.json|unified-uninstall-last|unified-uninstall.json",
+                    "the folder holds what the case put there: "+String.Join("|",names));
+                Need(File.ReadAllText(notes)=="mine" && File.ReadAllText(journal)==record &&
+                    File.ReadAllText(Path.Combine(left,NativeInstaller.Complete))=="{}","the person's file and both records are unchanged");
+                Need(facts(journal)==journalFacts && facts(Path.Combine(left,NativeInstaller.Complete))==completeFacts &&
+                    facts(notes)==notesFacts,"a look changes no creation time, no write time and no attribute of the journal, of setup's record and of the person's file");
+                Need(String.Join(",",NativeInstaller.Data)==String.Join(",",seven),"the looks leave setup's list of the seven names as it was");
+                Need(NativeInstaller.RootState(left)=="installed","setup still takes the folder for a finished installation");
 
                 // A folder above the target that other accounts can change is named.
                 string open=Path.Combine(work,"open"); Directory.CreateDirectory(Path.Combine(open,"inner"));

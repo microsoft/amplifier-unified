@@ -9,11 +9,15 @@ on:
       - scripts/windows_private_git.py
       - scripts/windows_bootstrap_native.cs
       - scripts/windows_bootstrap_native.py
+      - scripts/windows_bootstrap_capsule.py
       - scripts/install.ps1
       - amplifier_web/host_dependencies.py
       - amplifier_web/windows_consumer.py
+      - amplifier_web/windows_consumer_shell.py
       - amplifier_web/windows_files.py
       - amplifier_web/windows_read_files.py
+      - amplifier_web/windows_removal.py
+      - amplifier_web/windows_uninstall.py
       - tests/fixtures/windows_private_shell_probe.py
       - tests/test_windows_private_git.py
       - tests/fixtures/windows_setup_native.py
@@ -103,6 +107,27 @@ jobs:
         run: |
           & "$env:SHELL_BASE/env/Scripts/python.exe" -B -m pytest -q -ra -p no:cacheprovider tests/test_windows_private_git.py
           if ($LASTEXITCODE -ne 0) { throw 'Private Git unpacking checks failed.' }
+      # The Python cases on setup's source: its folder rules, its texts, the
+      # design's sentences and the texts of the native case. They read
+      # uninstall's names from amplifier_web. No other job runs this file.
+      # Every case must run and pass. pytest ends with status 0 also for a
+      # skipped case and for an expected failure, a case with that mark can be
+      # set not to run, and a case can end the run early with status 0. So the
+      # step reads pytest's own lines (pytest writes them without colour): there
+      # must be exactly one line "collected N items", and the last line must
+      # name passed cases only, with the same N. Any other outcome gives other
+      # lines. The file's own case gives real output of pytest to these two
+      # expressions. The step does not see a case that pytest never collects.
+      - name: Check setup's folder rules and texts against its source and the design
+        shell: pwsh
+        run: |
+          & "$env:SHELL_BASE/env/Scripts/python.exe" -B -m pytest -ra --color=no -p no:cacheprovider tests/test_windows_setup_folder.py | Tee-Object -Variable log
+          if ($LASTEXITCODE -ne 0) { throw 'Setup folder and text checks failed.' }
+          $lines = @($log | ForEach-Object { "$_".Trim() } | Where-Object { $_ })
+          $summary = if ($lines.Count) { $lines[-1] } else { '' }
+          $listed = [regex]::Match((@($lines | Where-Object { $_.StartsWith('collected ') }) -join "`n"), '^collected (\d+) items?$')
+          $passed = [regex]::Match($summary, '^=+ (\d+) passed(, \d+ warnings?)? in [0-9.]+s( \([0-9:]+\))? =+$')
+          if (-not ($listed.Success -and $passed.Success -and $listed.Groups[1].Value -eq $passed.Groups[1].Value)) { throw "Not every setup folder case ran and passed. pytest collected: '$($listed.Value)'. Its last line: $summary" }
       - name: Unpack the pinned Git and run the real shell tool without developer tools on PATH
         timeout-minutes: 10
         shell: pwsh

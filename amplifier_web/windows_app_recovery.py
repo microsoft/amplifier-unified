@@ -165,11 +165,15 @@ def automatic_retry_held(state):
 
 async def confirm(manager, health):
     """Prove an old serving host after rollback, never credit the failed update."""
+    import asyncio
     from . import app_component_graph as components, app_updates, application_generations as generations
     from . import windows_service, windows_task_runtime
     from .auth import data_identity
     from .update_readiness import _observed_artifact
-    spec = windows_service.update_owner(manager.home)
+    # The owner question starts a PowerShell process that asks the Task
+    # Scheduler: seconds on some PCs. In a thread, so that the host answers
+    # meanwhile. Every value below is read after it.
+    spec = await asyncio.to_thread(windows_service.update_owner, manager.home)
     if spec is None:
         return False
     value = read(spec)

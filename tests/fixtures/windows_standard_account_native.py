@@ -51,6 +51,7 @@ import argparse
 import asyncio
 import base64
 from contextlib import contextmanager
+import copy
 import ctypes as C
 from ctypes import wintypes as W
 import hashlib
@@ -1455,6 +1456,39 @@ def cleanup():
 
 
 # ---- As the standard user, in the user's own desktop session.
+def replace_report(partial, path, *, replace=os.replace, wait=time.sleep, timer=time.monotonic, limit=5.0):
+    """Put a written report in the place of the report file.
+
+    The program of the runner's account starts this user's program of the
+    phases `first`, `second` and `third` (`in_session`). While such a
+    program runs, the program of the runner's account reads that phase's
+    report file to see whether it has finished: in a loop, with a pause of
+    3 seconds before the read of each round, and once more before it gives
+    up.
+    While a program has the file open in that way, Windows refuses the
+    replacement (`PermissionError`, "Access is denied"). One run failed a
+    step with this error (run 44204538909, November 17, 2026). Which program
+    had the file open in that run is not recorded. The record makes the
+    report larger, so a read of it takes longer.
+
+    A replacement that Windows refuses is made again. After each refusal the
+    clock is read. When `limit` seconds or more have gone by since the clock
+    was read before the first try, the error of that refusal goes on to the
+    caller, as before. Else the next try follows after a pause of 0.05
+    second. The clock is not read between that pause and the try: a try can
+    begin later than `limit` seconds, and when it works, the report is
+    replaced. Another error goes on at once.
+    """
+    deadline = timer() + limit
+    while True:
+        try:
+            return replace(partial, path)
+        except PermissionError:
+            if timer() >= deadline:
+                raise
+            wait(0.05)
+
+
 class Steps:
     """The user's report: one entry for each step, saved after each change."""
 
@@ -1462,13 +1496,16 @@ class Steps:
         self.path, self.names, self.lock = Path(path), names, threading.Lock()
         self.report = {"finished": False, **facts,
                        "steps": [{"name": name, "status": "FAIL", "reason": "Not reached"} for name in names]}
+        # For the record only (`observed`, `keep_after_failure`): the reads that were not as required, and the
+        # installation's app folder while a read of it for the record is safe.
+        self.again, self.evidence = [], None
         self.save()
 
     def save(self):
         with self.lock:
             partial = self.path.with_suffix(".partial")
             partial.write_text(json.dumps(self.report, indent=2, default=str) + "\n", encoding="utf-8")
-            os.replace(partial, self.path)
+            replace_report(partial, self.path)
 
     def begin(self, name):
         self.report["steps"][self.names.index(name)]["reason"] = "In progress"
@@ -1491,6 +1528,475 @@ class Steps:
         self.report["finished"] = True
         self.save()
         return all(step["status"] == "PASS" for step in self.report["steps"])
+
+
+def attempt(read):
+    """The answer of a read, or what kept it from an answer. An error of a read for the record fails no step.
+
+    Only an error (`Exception`). What ends the program (`KeyboardInterrupt`, `SystemExit`) goes on.
+    """
+    try:
+        return read()
+    except Exception as error:
+        return {"errorType": type(error).__name__, "error": str(error)[-300:]}
+
+
+def host_record(home):
+    """What the installation's own record says about its host: its run, its process and its phase.
+
+    Read with the product's reader for its private files. The host replaces
+    this file while it runs, and that reader opens the file so that Windows
+    permits the replacement meanwhile. Python's ordinary open does not ask
+    Windows for that.
+    """
+    from amplifier_web.windows_files import address, directory
+    from amplifier_web.windows_task_runtime import LIMIT, RECEIPT
+    root = address(home)
+    with directory(root / "config/services", owned_root=root, create=False) as pinned:
+        value = json.loads(pinned.read_private(RECEIPT, limit=LIMIT))
+    return {name: value.get(name) for name in ("run", "pid", "created", "phase")}
+
+
+def host_output(home):
+    """The end of the host's own log: its last 60 lines, at most 8000 characters. Read as `host_record` reads."""
+    from amplifier_web.windows_files import address, directory
+    from amplifier_web.windows_task_runtime import LOG, LOG_LIMIT
+    root = address(home)
+    with directory(root / "config/services", owned_root=root, create=False) as pinned:
+        text = pinned.read_private(LOG, limit=LOG_LIMIT).decode("utf-8", errors="replace")
+    return "\n".join(text.splitlines()[-60:])[-8000:]
+
+
+UPDATE_FACTS = ("phase", "lastCheck", "lastAttempt", "checkTiming", "recentChecks", "available", "appAvailable",
+                "initialPreparation")
+
+
+def update_record(home):
+    """The installation's saved update state: when the app checked for updates, and what waits.
+
+    Read only, from the app's database, where the app saves it. Only the
+    fields that say when a check ran, in which stage the update work is,
+    whether an update waits, and whether the host prepares to restart for one.
+    """
+    import sqlite3
+    connection = sqlite3.connect((Path(home) / "app.sqlite3").as_uri() + "?mode=ro", uri=True, timeout=2)
+    try:
+        row = connection.execute("SELECT value FROM state_records WHERE kind='global' AND id='updates'").fetchone()
+    finally:
+        connection.close()
+    need(row is not None, "The app's database has no update state")
+    state = json.loads(row[0])["value"]
+    application, sequence = state.get("application") or {}, state.get("sequence") or {}
+    latest = (state.get("diagnostics") or {}).get("latest") or {}
+    return {**{name: state.get(name) for name in UPDATE_FACTS},
+            "restartPhase": (state.get("drain") or {}).get("phase"),
+            "latestEvent": {name: latest.get(name) for name in ("kind", "phase", "status", "at")},
+            "waiting": sorted(name for name in ("pendingApp", "pendingRelease", "pendingRestart", "pendingSmartTools")
+                              if state.get(name)),
+            "sequence": {name: sequence.get(name) for name in ("stage", "nextStage", "install")},
+            "application": {**{name: application.get(name) for name in ("status", "latest", "checkStage", "checkReason")},
+                            "componentUpdates": len(application.get("componentUpdates") or [])}}
+
+
+def seconds_since(created, at):
+    """Seconds from a Windows creation time (100 nanoseconds since the year 1601, as text) to a time of `time.time()`."""
+    return round(at - (int(created) / 10 ** 7 - 11644473600), 3)
+
+
+def brief(answer):
+    """The part of an answer that this case's conditions read, short enough for the record of a read."""
+    if not isinstance(answer, dict):
+        plain = answer is None or isinstance(answer, (bool, int, str)) and len(str(answer)) <= 120
+        return answer if plain else repr(answer)[:120]
+    if "exitCode" not in answer:  # Task Scheduler's answer, or what kept a read from an answer.
+        return {name: str(answer[name])[-300:] if name == "error" else answer[name]
+                for name in ("managed", "state", "instances", "lastResult", "errorType", "error") if name in answer}
+    said = answer.get("json")
+    return {"exitCode": answer.get("exitCode"), "seconds": answer.get("seconds"),
+            **({name: said[name] for name in ("ok", "processVerified", "responding", "background", "pid", "created")
+                if name in said} if isinstance(said, dict) else {"json": repr(said)[:60]})}
+
+
+def observed(steps, home, name, read, good, later=None):
+    """Make one read of the app for a step, and keep when it was made and which host the installation recorded.
+
+    The answer goes back to the step as it is. The step decides with its own
+    condition. `good` is that condition for this one answer. It only marks
+    the entry of the record. After a step has failed, `keep_after_failure`
+    makes a read once more when that read gave an answer and the answer was
+    not as required (`later`, or the same read). A read that ended with an
+    error is not made again. Only `journey` and `second` call
+    `keep_after_failure`, and it reads only while the app folder is safe to
+    read. The certificate program
+    makes its reads through this function too, and does not make them again.
+    An error of the read itself goes on to the step.
+    """
+    entry = {"read": name, "at": round(time.time(), 3), "hostBefore": attempt(lambda: host_record(home))}
+    steps.report.setdefault("reads", []).append(entry)
+    started = time.monotonic()
+    try:
+        answer = read()
+    except BaseException as error:
+        entry.update(seconds=round(time.monotonic() - started, 3), failed=type(error).__name__)
+        raise
+    entry.update(seconds=round(time.monotonic() - started, 3), hostAfter=attempt(lambda: host_record(home)),
+                 secondsSinceHostStart=attempt(lambda: seconds_since(entry["hostBefore"]["created"], entry["at"])),
+                 answer=attempt(lambda: brief(answer)), asRequired=attempt(lambda: good(answer)) is True)
+    if not entry["asRequired"]:
+        steps.again.append((entry, later or read, good))
+    return answer
+
+
+def cpu_seconds(processes=()):
+    """Processor time until now, in seconds: of the whole computer, and of each given process whose times Windows
+    gives.
+
+    `busy` is the time in which the computer's processors worked, `all` is
+    that time plus their idle time; both are sums over the processors. A
+    process has its creation time (`created`, as Windows counts it) beside
+    its seconds (`used`): Windows uses a process number again, and only the
+    number together with the creation time is one process.
+    """
+    kernel = C.WinDLL("kernel32", use_last_error=True)
+    kernel.OpenProcess.argtypes, kernel.OpenProcess.restype = [W.DWORD, W.BOOL, W.DWORD], W.HANDLE
+    kernel.CloseHandle.argtypes = [W.HANDLE]
+    kernel.GetProcessTimes.argtypes = [W.HANDLE] + [C.POINTER(W.FILETIME)] * 4
+    kernel.GetSystemTimes.argtypes = [C.POINTER(W.FILETIME)] * 3
+    seconds = lambda value: ((value.dwHighDateTime << 32) | value.dwLowDateTime) / 10 ** 7
+    idle, system, user = W.FILETIME(), W.FILETIME(), W.FILETIME()
+    if not kernel.GetSystemTimes(C.byref(idle), C.byref(system), C.byref(user)):
+        raise _failed()
+    used = {"busy": seconds(system) + seconds(user) - seconds(idle), "all": seconds(system) + seconds(user),
+            "processes": {}}
+    for number in processes or ():
+        handle = kernel.OpenProcess(0x1000, False, number)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if handle:
+            try:
+                times = [W.FILETIME() for _ in range(4)]
+                if kernel.GetProcessTimes(handle, *[C.byref(value) for value in times]):
+                    used["processes"][str(number)] = {
+                        "created": (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime,
+                        "used": seconds(times[2]) + seconds(times[3])}
+            finally:
+                kernel.CloseHandle(handle)
+    return used
+
+
+def cpu_between(before, after):
+    """What two reads of `cpu_seconds` say about the time between them.
+
+    `computerBusy` is the share of that time in which the computer's
+    processors worked, from 0 to 1. It is None when the second read's total
+    is not above the first read's. `processes` is the processor time that
+    each process used, in seconds. A process that only one of the reads has
+    is left out. So is a number that the two reads have with different
+    creation times: that is another process with the same number. More than
+    the seconds of the clock is possible there: a process can use several
+    processors at once.
+    """
+    whole, later = after["all"] - before["all"], after["processes"]
+    return {"computerBusy": round((after["busy"] - before["busy"]) / whole, 3) if whole > 0 else None,
+            "processes": {number: round(later[number]["used"] - first["used"], 3)
+                          for number, first in before["processes"].items()
+                          if number in later and later[number]["created"] == first["created"]}}
+
+
+def root_store_read():
+    """How long one read of Windows' root certificates takes now. `trust_state` makes this read before it asks."""
+    import ssl
+    began = time.monotonic()
+    count = sum(1 for _ in ssl.enum_certificates("ROOT"))
+    return {"seconds": round(time.monotonic() - began, 3), "certificates": count}
+
+
+class ListenerWatch:
+    """Asks the app's listener for an answer again and again, beside the steps of the case.
+
+    After a question and the reads that belong to it, the watch pauses for
+    half a second (`every`); then the next question follows. A question that
+    gets no answer can take some seconds itself. After each question the
+    watch asks `owner`, when it has one, which process numbers own the
+    listener's port. It keeps a change of the answer or of those numbers,
+    with the time at which that question began and the seconds that the
+    question took. It keeps a change only while its list has fewer than
+    `limit` entries (400; the marks of the case are in the same list). A
+    change after that is not kept. While nothing changes, it keeps the
+    slowest of the questions that follow (`slowest`). That one can be
+    quicker than the question that brought the change, whose seconds the
+    entry has itself.
+
+    Of the listener, the report has what these questions saw: each kept
+    change of the answer (for example to no answer after a host start, and
+    back to an answer) with the process numbers that owned the port at that
+    question. What the listener did between two questions is not there. A
+    number is not a process: Windows uses a number again. A listener that
+    answers late can show there, also in a run where every read of the case
+    is as required. A host that is busy only between two questions does not
+    show.
+
+    With a read of the processor time (`gauge`), the watch keeps each
+    question that took `slow` seconds or more, at most 40 (`late`). An entry
+    says what can make an answer late: how busy the computer was during the
+    question, how much processor time the processes used in it that owned
+    the port at the question before (none at the first question, and none
+    when that read gave no list), how long the watch itself waited before
+    the question, and what `after` reads directly afterwards. That wait
+    holds the watch's pause and its read of
+    the processor time; the seconds of a question hold neither. Much more
+    than the pause can mean that this program got no time. The number alone
+    does not say why. The watch gives these numbers. It does not decide the
+    cause.
+    The watch opens no file of the installation, it asks without a
+    credential, and it decides no step. A watch without a question (`probe`)
+    never starts. When `watch_listener` could not start the watch, `reason`
+    says why; the watch that a phase holds before that call has no reason.
+
+    The watch's thread and the case's thread change the lists under one lock,
+    and `stop` gives copies that it makes under that lock. So what `stop`
+    gave does not change afterwards, also when the watch's thread still runs.
+    An error of the watch's own code ends the watch, and `stop` then says it
+    (`endedBy`).
+    """
+
+    def __init__(self, probe=None, owner=None, *, gauge=None, after=None, slow=0.5, every=0.5, limit=400,
+                 clock=time.time, timer=time.monotonic):
+        self.probe, self.owner, self.every, self.limit, self.clock = probe, owner, every, limit, clock
+        self.changes, self.questions, self.reason, self.timer = [], 0, None, timer
+        self.gauge, self.after, self.slow, self.late = gauge, after, slow, []
+        self._halt, self._thread, self._last, self._entry = threading.Event(), None, self, None
+        self._ended, self._lock, self.fault = None, threading.Lock(), None
+
+    def look(self):
+        """One question to the listener. A change is kept while the list has room; an error of the question is an
+        answer too."""
+        owners = self._last[1] if isinstance(self._last, tuple) and isinstance(self._last[1], list) else []
+        before = attempt(lambda: self.gauge(owners)) if self.gauge else None
+        # The question begins here. The read of the processor time before it is in `waited`, not in its seconds.
+        at, began = round(self.clock(), 3), self.timer()
+        waited = None if self._ended is None else round(began - self._ended, 3)
+        answer = attempt(self.probe)
+        took = round(self.timer() - began, 3)
+        late = None
+        if self.gauge and took >= self.slow and len(self.late) < 40:
+            used = attempt(lambda: self.gauge(owners))
+            unread = next((read for read in (before, used) if "errorType" in read), None)  # The gauge's own error.
+            late = {"at": at, "seconds": took, "answer": answer, "waitedBefore": waited,
+                    "used": unread or attempt(lambda: cpu_between(before, used)),
+                    **({"after": attempt(self.after)} if self.after else {})}
+        now = (answer, attempt(self.owner) if self.owner else None)
+        self._ended = self.timer()
+        with self._lock:  # Only the lists change here. No question and no read is made under the lock.
+            self.questions += 1
+            if late is not None:
+                self.late.append(late)
+            if now != self._last:
+                # A change that the full list does not keep has no entry: no later time is written to an earlier
+                # answer.
+                self._entry = ({"at": at, "answer": now[0], "owner": now[1], "seconds": took}
+                               if len(self.changes) < self.limit else None)
+                if self._entry is not None:
+                    self.changes.append(self._entry)
+            elif self._entry is not None and took > self._entry.get("slowest", {}).get("seconds", 0):
+                self._entry["slowest"] = {"at": at, "seconds": took}
+            self._last = now
+
+    def start(self):
+        def run():
+            while not self._halt.is_set():
+                self.fault = attempt(self.look)  # An error of the watch's own code ends the watch. `stop` says it.
+                if self.fault:
+                    return
+                self._halt.wait(self.every)
+        if self.probe is not None and self._thread is None:
+            self._thread = threading.Thread(target=run, name="listener-watch", daemon=True)
+            self._thread.start()
+        return self
+
+    def mark(self, text):
+        """What the case does now, in the same list as the changes."""
+        with self._lock:
+            self.changes.append({"at": round(self.clock(), 3), "mark": text})
+
+    def stop(self, wait=10):
+        """End the watch and give what it kept. `ended` is false when its thread still runs after `wait` seconds.
+
+        Whether the thread still runs is read once, after the wait and before
+        the copies. So a watch that is called ended gave everything that it
+        kept. A thread that ends while the copies are made is still called
+        running; the copies can then lack its last question.
+        """
+        self._halt.set()
+        if self._thread is not None:
+            self._thread.join(wait)
+        running = self._thread is not None and self._thread.is_alive()  # Before the copies, never after them.
+        with self._lock:  # Copies: a thread that still runs changes its own lists, never what this gave.
+            kept = {"questions": self.questions, "changes": copy.deepcopy(self.changes),
+                    **({"late": copy.deepcopy(self.late)} if self.gauge else {}),
+                    **({"endedBy": self.fault} if self.fault else {})}
+        return {"started": self._thread is not None, "ended": not running,
+                **kept, **({"notStarted": self.reason} if self.reason else {})}
+
+
+def watch_listener(home):
+    """Start the watch of this installation's listener. Its addresses are read once, here, not by the watch.
+
+    A watch that cannot start fails no step: the watch that comes back then never starts and holds the reason.
+    """
+    def start():
+        from amplifier_web import windows_installation, windows_task_runtime
+        urls, pin = trust_targets(home)
+        port = windows_installation.saved_port(home)
+        # The product's function as it is now. `sign_in_trust` puts a function of its own in that place while
+        # it reads. The watch does not ask through that one: its questions are no reads of a step.
+        ask = windows_installation.trust_state
+        return ListenerWatch(lambda: ask(urls, pin),
+                             lambda: sorted(windows_task_runtime.listener_owners("127.0.0.1", port)),
+                             gauge=cpu_seconds, after=root_store_read).start()
+    watch = attempt(start)
+    if not isinstance(watch, ListenerWatch):
+        watch, reason = ListenerWatch(), watch
+        watch.reason = reason
+    return watch
+
+
+def note_updates(steps, home, when):
+    """Keep the installation's update record and its host record at this moment of the case. For the record only."""
+    steps.report.setdefault("updateRecords", []).append(
+        {"when": when, "at": round(time.time(), 3), "host": attempt(lambda: host_record(home)),
+         "updates": attempt(lambda: update_record(home))})
+    attempt(steps.save)
+
+
+def keep_after_failure(steps, watch, *, wait=time.sleep, seconds=20):
+    """After a step has failed: what the installation recorded then and 20 seconds later, and the end of the host's log.
+
+    The failed step has its text already, and the report is saved with it.
+    Nothing here changes that text, and nothing here can make a step pass.
+    A watch that still runs goes on in those seconds. Then each read that
+    gave an answer which was not as its step requires is made once more, and
+    that answer is kept beside the first. A read that ended with an error is
+    not made again. Without an app folder that is safe to read
+    (`steps.evidence`), this does nothing.
+    """
+    home = steps.evidence
+    if home is None:
+        return
+    kept = steps.report["afterFailure"] = {"at": round(time.time(), 3), "host": attempt(lambda: host_record(home)),
+                                           "updates": attempt(lambda: update_record(home))}
+    attempt(steps.save)
+    attempt(lambda: watch.mark("a step failed"))
+    attempt(lambda: wait(seconds))
+    for entry, read, good in steps.again:
+        answer = attempt(read)
+        entry["later"] = {"at": round(time.time(), 3), "answer": attempt(lambda: brief(answer)),
+                          "asRequired": attempt(lambda: good(answer)) is True,
+                          "host": attempt(lambda: host_record(home))}
+    kept.update(hostLater=attempt(lambda: host_record(home)), updatesLater=attempt(lambda: update_record(home)),
+                hostOutput=attempt(lambda: host_output(home)))
+    attempt(steps.save)
+
+
+def kept(answer):
+    """An answer as the report keeps it: the answer itself, or its Python form when JSON cannot write it.
+
+    A report that holds an answer which JSON cannot write (for example a
+    dictionary with a tuple as a key) cannot be saved. The save of a failed
+    step then fails too, and the step's text is not in the report. The
+    Python form is cut at 4000 characters, at its end. When Python cannot
+    make that form either, the report keeps the error of that try.
+    """
+    if isinstance(attempt(lambda: json.dumps(answer, default=str)), str):
+        return answer
+    return attempt(lambda: repr(answer)[:4000])
+
+
+def accept_start(steps, key, again, home, root, started, state, status, text, *, wait=time.sleep):
+    """Require one start of the launcher, and say which answer was not as required.
+
+    A start has three answers: the launcher's own, Task Scheduler's, and the
+    app's status. The report gets all three before the check. That save is
+    for the record: when it fails, its error is kept with the answers
+    (`notSavedBeforeTheCheck`), and it fails no step and replaces no text.
+    Task Scheduler's rule and the status's rule are those of the start-again
+    case. The launcher's rule is this case's own, as before. A step fails
+    when an answer is not as its rule requires, and also when the rule cannot
+    read the answer.
+
+    The text of such a step has this order: the names of those parts; for each
+    part the values that its rule reads; whether Task Scheduler and the status
+    were as required five seconds later; then more of each answer. A value
+    that is not short is given as the first 60 characters of its Python form.
+    The text is cut at 2900 characters, at its end. So it keeps its start,
+    also in the report, which keeps the last 3000 characters of a step's text.
+    The report holds the three answers as the case got them and, after a
+    start that is not accepted, the pair of five seconds later or the error
+    of that read. An answer that JSON cannot write alone is there in its
+    Python form, or as the error of that form (`kept`). In the text, a
+    detail that JSON cannot write is given in its Python form.
+
+    The read five seconds later never makes the step pass. It, the read of the
+    host's log (`host_output`) and the second save of the report can each
+    fail. The step then keeps its text, and the text or the report holds that
+    error.
+
+    One run of this case failed at a start with only the launcher's answer in
+    its text, and the launcher had said that the start worked (run 44149453625,
+    November 17, 2026). That run does not say which other answer was wrong.
+    """
+    record = steps.report[key] = {"launcher": kept(started), "task": kept(state),
+                                  "serviceStatus": kept(status)}
+    unsaved_first = attempt(steps.save)
+    if unsaved_first:
+        record["notSavedBeforeTheCheck"] = unsaved_first
+
+    rules = {"the launcher": lambda: started["exitCode"] == 0 and (started["json"] or {}).get("background") is True,
+             "Task Scheduler": lambda: again.running(state),
+             "the app's status": lambda: again.healthy(status)}
+    wrong = [name for name, rule in rules.items() if attempt(rule) is not True]
+    if not wrong:
+        return
+    answers = {"the launcher": (started, ("background",)),
+               "the app's status": (status, ("ok", "processVerified", "responding"))}
+
+    def short(value):
+        plain = value is None or isinstance(value, (bool, int, str)) and len(str(value)) <= 60
+        return value if plain else repr(value)[:60]
+
+    def values(name):
+        if name == "Task Scheduler":
+            return {field: short(state.get(field)) for field in ("managed", "state", "instances")}
+        result, fields = answers[name]
+        said = result.get("json")
+        return {"exitCode": short(result.get("exitCode")),
+                **({field: short(said.get(field)) for field in fields} if isinstance(said, dict)
+                   else {"json": short(said)})}
+
+    def more(name):
+        if name == "Task Scheduler":
+            return state
+        result = answers[name][0]
+        printed = {} if isinstance(result.get("json"), dict) else {"stdout": str(result.get("stdout") or "")[-300:]}
+        return {"json": result.get("json"), **printed, "stderr": str(result.get("stderr") or "")[-300:]}
+
+    def later():
+        wait(5)
+        pair = {"task": again.task_facts(home), "serviceStatus": again.cli(root, "service", "status", "--json")}
+        record["fiveSecondsLater"] = kept(pair)
+        return {"Task Scheduler": again.running(pair["task"]), "the app's status": again.healthy(pair["serviceStatus"])}
+
+    then = attempt(later)
+    record.setdefault("fiveSecondsLater", then)
+    record["taskOutput"] = attempt(lambda: host_output(home))
+    unsaved = attempt(steps.save)
+    detail = {**{name: attempt(lambda: values(name)) for name in wrong}, "fiveSecondsLater": then,
+              **({"notSavedBeforeTheCheck": unsaved_first} if unsaved_first else {}),
+              **({"notSavedInTheReport": unsaved} if unsaved else {}),
+              "more": {name: attempt(lambda: more(name)) for name in wrong}}
+    said = attempt(lambda: json.dumps(detail, default=str))
+    # A detail that JSON cannot write (for example a dictionary with a tuple as a key) is in the text in its Python
+    # form. The error of that write does not replace the text.
+    raise AssertionError((text + ". Not as required: " + ", ".join(wrong) + ": "
+                          + (said if isinstance(said, str) else repr(detail)))[:2900])
 
 
 def installation_folder():
@@ -1639,11 +2145,12 @@ def stop(again, root, notices):
 
 def journey(stage, exchange, account, token):
     """Setup's last steps and the starts, with the installation's own Python."""
-    steps = Steps(exchange / "journey.json", JOURNEY)
+    steps, watch = Steps(exchange / "journey.json", JOURNEY), ListenerWatch()
     try:
         prepared = json.loads((stage / "prepared.json").read_text(encoding="utf-8"))
         root = installation_folder()
         home, again = product(stage, root)
+        steps.evidence = home
         from amplifier_web import app_component_graph as components
         from amplifier_web import windows_consumer as consumer
         from amplifier_web import windows_consumer_shell as shell, windows_installation, windows_service
@@ -1685,12 +2192,15 @@ def journey(stage, exchange, account, token):
         for name in JOURNEY[2:5]:
             steps.begin(name)
         started = again.launcher(root, "--no-open", timeout=1500)
-        state, status = again.task_facts(home), again.cli(root, "service", "status", "--json")
+        state = observed(steps, home, "Task Scheduler after the first start", lambda: again.task_facts(home),
+                         again.running)
+        status = observed(steps, home, "the app's status after the first start",
+                          lambda: again.cli(root, "service", "status", "--json"), again.healthy)
+        # After the two reads: the start of the watch reads the saved addresses, and that takes a moment.
+        watch = watch_listener(home)
         steps.report["firstStart"] = {"launcher": started, "task": state, "serviceStatus": status}
         if started["exitCode"] or not again.running(state) or not again.healthy(status):
-            log = home / "config/services/task-output.log"
-            steps.report["firstStart"]["taskOutput"] = "\n".join(
-                log.read_text(encoding="utf-8", errors="replace").splitlines()[-40:])[-6000:] if log.exists() else None
+            steps.report["firstStart"]["taskOutput"] = attempt(lambda: host_output(home))
         steps.save()
         need(state.get("managed") is True, "The task was not registered. The launcher said", started["json"] or started)
         steps.passed(JOURNEY[2], task=state.get("taskPath"))
@@ -1702,15 +2212,18 @@ def journey(stage, exchange, account, token):
         port = windows_installation.saved_port(home)
         need(isinstance(port, int), "No port was saved")
         steps.passed(JOURNEY[4], task=state, port=port, host=again.process_identity(started["json"]["health"]))
+        note_updates(steps, home, "after the first start")
 
         steps.begin(JOURNEY[5])
-        shown = again.launcher(root, "--status")
+        shown = observed(steps, home, "the launcher's status", lambda: again.launcher(root, "--status"),
+                         lambda value: value["exitCode"] == 0 and (value["json"] or {}).get("ok") is True)
         need(shown["exitCode"] == 0 and (shown["json"] or {}).get("ok") is True,
              "Status did not report a working app", shown["json"] or shown)
         steps.passed(JOURNEY[5], message=shown["json"].get("message"))
 
         steps.begin(JOURNEY[6])
         notices = []
+        watch.mark("Stop Amplifier")
         stopped = stop(again, root, notices)
         need(notices == [{"confirm": True, "message": "Stop Amplifier's background app?"}],
              "Stop asked something else than its one question", notices)
@@ -1722,13 +2235,16 @@ def journey(stage, exchange, account, token):
         steps.passed(JOURNEY[6], result=stopped, task=state)
 
         steps.begin(JOURNEY[7])
+        watch.mark("the second start")
         again_started = again.launcher(root, "--no-open")
-        state, status = again.task_facts(home), again.cli(root, "service", "status", "--json")
+        state = observed(steps, home, "Task Scheduler after the second start", lambda: again.task_facts(home),
+                         again.running)
+        status = observed(steps, home, "the app's status after the second start",
+                          lambda: again.cli(root, "service", "status", "--json"), again.healthy)
+        # As before this record: the report must hold the three answers, or the step fails with the save's error.
         steps.report["secondStart"] = {"launcher": again_started, "task": state, "serviceStatus": status}
         steps.save()
-        need(again_started["exitCode"] == 0 and (again_started["json"] or {}).get("background") is True
-             and again.running(state) and again.healthy(status),
-             "The second start failed. The launcher said", again_started["json"] or again_started)
+        accept_start(steps, "secondStart", again, home, root, again_started, state, status, "The second start failed")
         need(again.process_identity(status["json"]) != again.process_identity(started["json"]["health"])
              and windows_installation.saved_port(home) == port,
              "The second start did not give a new host on the same port")
@@ -1738,6 +2254,7 @@ def journey(stage, exchange, account, token):
         steps.begin(CERTIFICATE)
         # In a program of its own, with a time limit: a Windows question that
         # nothing answers would wait without end.
+        watch.mark("the certificate step")
         try:
             ran = again.execute([sys.executable, "-I", "-B", Path(__file__), "standard", "--stage", stage,
                                  "--exchange", exchange, "--phase", "certificate"], cwd=exchange, timeout=240)
@@ -1757,8 +2274,13 @@ def journey(stage, exchange, account, token):
              and reads.get("taskProgramExists") is True,
              "Setup's own code does not read this installation and its sign-in task", reads)
         steps.passed(JOURNEY[9], account=reads)
+        note_updates(steps, home, "at the end of the steps after the first sign-in")
     except BaseException as error:
         steps.failed(error)
+        attempt(lambda: keep_after_failure(steps, watch))
+    # Once: `second` stops the watch before the delete choice, and the report then holds its result already.
+    if "listener" not in steps.report:
+        steps.report["listener"] = attempt(watch.stop)
     return steps.finish()
 
 
@@ -1780,7 +2302,8 @@ def certificate(stage, exchange, account, token):
         os.environ.update(consumer.environment(root, consumer.installation(root)[1]))
         steps.begin(CERTIFICATE)
         urls, pin = trust_targets(home)
-        before = windows_installation.trust_state(urls, pin)
+        before = observed(steps, home, "trust before the Windows question",
+                          lambda: windows_installation.trust_state(urls, pin), lambda value: value == "untrusted")
         need(before == "untrusted", "Before the question Windows must not trust the connection yet. It read", before)
         need(windows_trust.user_roots_disabled() is False, "This computer's policy disables a person's own certificates")
         marks = certificate_marks(home)
@@ -1807,7 +2330,8 @@ def certificate(stage, exchange, account, token):
         # Amplifier tells the person which thumbprint the Windows message shows.
         need(marks[1] in asked[0]["text"],
              "The Windows question does not show the thumbprint as Amplifier's message shows it", asked)
-        after = windows_installation.trust_state(urls, pin)
+        after = observed(steps, home, "trust after Yes", lambda: windows_installation.trust_state(urls, pin),
+                         lambda value: value == "trusted")
         need(accepted is True and after == "trusted",
              "After Yes, Windows does not trust the connection", {"accepted": accepted, "state": after})
         need(windows_root_has(marks[1]) is True,
@@ -1936,19 +2460,24 @@ def sign_in_trust(steps, again, root, home, urls, pin, status, state):
 
 def second(stage, exchange, account, token):
     """After the sign-out and the new sign-in. No launcher command runs before the first check."""
-    steps = Steps(exchange / "second.json", SECOND, token=token)
+    steps, watch = Steps(exchange / "second.json", SECOND, token=token), ListenerWatch()
     try:
         before = json.loads((exchange / "journey.json").read_text(encoding="utf-8"))
         root = installation_folder()
         home, again = product(stage, root)
+        steps.evidence = home
         from amplifier_web import windows_consumer as consumer
         from amplifier_web import windows_consumer_shell as shell, windows_installation, windows_uninstall
         os.environ.update(consumer.environment(root, consumer.installation(root)[1]))
 
         steps.begin(SECOND[0])
         need(standard_token(token, account), "This is not a standard user in a desktop session of its own sign-in", token)
-        status = again.cli(root, "service", "status", "--wait", "120", "--json", timeout=180)
-        state = again.task_facts(home)
+        # From before the first read: the sign-in started the host, and the watch sees when its listener answers.
+        watch = watch_listener(home)
+        status = observed(steps, home, "the app's status after the sign-in",
+                          lambda: again.cli(root, "service", "status", "--wait", "120", "--json", timeout=180),
+                          again.healthy, later=lambda: again.cli(root, "service", "status", "--json"))
+        state = observed(steps, home, "Task Scheduler after the sign-in", lambda: again.task_facts(home), again.running)
         need(again.running(state) and again.healthy(status),
              "After the sign-in the task did not start a host that answers", {"task": state, "status": status["json"]})
         # The sign-out ended the earlier host. This one is new, and only the sign-in started it.
@@ -1957,7 +2486,13 @@ def second(stage, exchange, account, token):
              "The host after the sign-in is not a new host on the same port")
         urls, pin = trust_targets(home)
         marks = certificate_marks(home)
-        trusted = sign_in_trust(steps, again, root, home, urls, pin, status, state)
+        # `sign_in_trust` decides this read and keeps its own observation (`signInTrust`). The record keeps
+        # beside it when the read began, how long it took, and what the installation recorded about its host.
+        # It gives "trusted" or it ends with an error, and a read that ended with an error is not made again
+        # after a failed step: a second one would put another observation in the place of the first.
+        trusted = observed(steps, home, "trust after the sign-in",
+                           lambda: sign_in_trust(steps, again, root, home, urls, pin, status, state),
+                           lambda value: value == "trusted")
         after = steps.report["signInTrust"]["after"]
         need(again.running(after["task"]) and again.healthy(after["serviceStatus"]),
              "After the TLS probe the task no longer has a verified responsive host", after)
@@ -1968,8 +2503,10 @@ def second(stage, exchange, account, token):
         steps.report["thumbprint"] = marks[1]  # For the check after the delete choice.
         steps.passed(SECOND[0], task=state, host=again.process_identity(status["json"]), port=before["port"],
                      trust=trusted)
+        note_updates(steps, home, "after the sign-in")
 
         steps.begin(SECOND[1])
+        watch.mark("the uninstall that keeps the folder")
         notices, asked = [], []
         with answering(steps, asked, "delete", "no", marks):
             removed = again.uninstall(root, notices)
@@ -1997,18 +2534,26 @@ def second(stage, exchange, account, token):
         # As setup's second run: the entries come back, then the start.
         entries = again.launcher(root, "--integrate")
         need(entries["exitCode"] == 0 and shell.listed(root), "The entries were not added again", entries)
+        watch.mark("the start after the uninstall")
         started = again.launcher(root, "--no-open")
-        state, status = again.task_facts(home), again.cli(root, "service", "status", "--json")
-        need(started["exitCode"] == 0 and (started["json"] or {}).get("background") is True
-             and again.running(state) and again.healthy(status),
-             "The start after the uninstall failed. The launcher said", started["json"] or started)
+        state = observed(steps, home, "Task Scheduler after the start that follows the uninstall",
+                         lambda: again.task_facts(home), again.running)
+        status = observed(steps, home, "the app's status after the start that follows the uninstall",
+                          lambda: again.cli(root, "service", "status", "--json"), again.healthy)
+        accept_start(steps, "startAfterUninstall", again, home, root, started, state, status,
+                     "The start after the uninstall failed")
         need(windows_installation.saved_port(home) == before["port"], "The start after the uninstall changed the port")
         # The certificate stayed (No). The connection needs no new question.
-        trusted = windows_installation.trust_state(urls, pin)
+        trusted = observed(steps, home, "trust after the start that follows the uninstall",
+                           lambda: windows_installation.trust_state(urls, pin), lambda value: value == "trusted")
         need(trusted == "trusted", "After the start Windows does not trust the connection. It read", trusted)
         steps.passed(SECOND[2], seconds=started["seconds"], task=state, port=before["port"], trust=trusted)
+        note_updates(steps, home, "after the start that follows the uninstall")
 
         steps.begin(SECOND[3])
+        # The watch is stopped here (`stop` waits up to 10 seconds for its thread), and from here nothing reads
+        # the installation for the record: its folder goes. A thread that still runs then opens no file of it.
+        steps.report["listener"], steps.evidence = attempt(watch.stop), None
         notices, asked = [], []
         with answering(steps, asked, "delete", "yes", marks):
             removed = delete_everything(again, root, notices)
@@ -2023,6 +2568,10 @@ def second(stage, exchange, account, token):
         steps.passed(SECOND[3], result=removed, notices=notices, windowsQuestion=asked[0])
     except BaseException as error:
         steps.failed(error)
+        attempt(lambda: keep_after_failure(steps, watch))
+    # Once: `second` stops the watch before the delete choice, and the report then holds its result already.
+    if "listener" not in steps.report:
+        steps.report["listener"] = attempt(watch.stop)
     return steps.finish()
 
 

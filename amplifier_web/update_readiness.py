@@ -325,6 +325,16 @@ async def confirm_readiness(manager, health, expected=None, command_id=None, *, 
                 await qualify_browser(manager, sys.executable)
             except (ValueError, OSError, RuntimeError, TimeoutError):
                 pass  # Preserve browser attention; app health has its own receipt.
+        owner = None
+        if sys.platform == 'win32' and target.get('generation') and not successor and not target.get('legacy'):
+            from .windows_service import update_owner
+            # The owner question starts a PowerShell process that asks the Task
+            # Scheduler: seconds on some PCs. In a thread and before the service
+            # lock, so that the host answers meanwhile. The first check under
+            # that lock reads the pending target again after this wait.
+            owner = await asyncio.to_thread(update_owner, manager.home)
+            if owner is None:
+                return False
         async with manager.service.lock:
             state = manager.service.state['updates']
             # The isolated import check awaited another process. A changed
@@ -377,14 +387,12 @@ async def confirm_readiness(manager, health, expected=None, command_id=None, *, 
                 phase = 'restart-reconcile'
             else:
                 if sys.platform == 'win32' and target.get('generation'):
-                    from .windows_service import update_owner
                     from .windows_app_recovery import acknowledge
-                    spec = update_owner(manager.home)
-                    if spec is None:
-                        return False
                     # Retire parent rollback authority before publishing the
                     # authenticated new-host result. Unknown commits stay fenced.
-                    if not acknowledge(spec, target):
+                    # The owner is the answer from before this lock; the record
+                    # is read now. No owner means no acknowledgement.
+                    if owner is None or not acknowledge(owner, target):
                         return False
                 manager.diagnostics.clear_failure()
                 state.pop('reconciliation', None)
