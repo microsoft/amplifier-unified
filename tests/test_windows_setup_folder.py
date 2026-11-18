@@ -138,6 +138,84 @@ def test_unfinished_attempts_are_removed_and_installations_never_are():
     assert "Directory.CreateDirectory" not in saved and "File.Copy" not in saved
 
 
+EMPTIED = ("Setup cannot install Amplifier yet. The folder of an earlier installation is still on this PC:\n{root}\n\n"
+           "Amplifier cannot start from that folder, and setup found no chats or settings in it. "
+           "Setup does not change the folder: it can hold files that are not Amplifier's.\n\n"
+           "If a file in the folder is yours, move it to another place. Then delete the folder and run this setup "
+           "file again.")
+DAMAGED = ("Amplifier is already installed in {root}, but setup cannot open it: a program file is missing.\n\n"
+           "Keep that folder. It holds your chats and settings. This version of setup cannot repair it.")
+
+
+def literal(body):
+    """The text that a C# expression of string literals and `root` gives, with `{root}` for the folder."""
+    parts = re.findall(r'"((?:[^"\\]|\\.)*)"|\b(root)\b', body)
+    return "".join("{root}" if name else text.replace("\\n", "\n").replace('\\"', '"') for text, name in parts)
+
+
+def test_setup_without_a_launcher_program_says_what_its_own_look_finds():
+    """Setup's text for a finished installation whose launcher program is missing (follow-up A24).
+
+    Seen on a PC on November 17, 2026: an uninstall with the delete choice left the folder, because a file of
+    the person was in it. The next setup run said "Keep that folder. It holds your chats and settings." The
+    chats and settings were deleted, and the text named no next step. Setup now looks: with a journal that
+    records the delete choice, and with none of the person's data, it says what it found and gives the next
+    step. Every other case keeps the earlier text. Setup still installs nothing there and deletes nothing.
+    The native check compiles these functions and runs them on real folders (tests/windows/native_setup.Tests.cs).
+    """
+    import inspect
+    from amplifier_web import windows_uninstall
+    # Uninstall owns the names. Setup has a copy, and only looks.
+    assert re.search(r'internal const string Journal="([^"]+)";', SOURCE).group(1) == windows_uninstall.JOURNAL
+    names = re.search(r"internal static readonly string\[\] Data=\{([^}]+)\};", SOURCE).group(1)
+    assert tuple(name.strip().strip('"') for name in names.split(",")) == windows_uninstall.DATA
+    # The values that uninstall's own reader requires. A change there must come here too.
+    reader = inspect.getsource(windows_uninstall.pending)
+    assert 'value["schema"] == 1' in reader and 're.fullmatch("[0-9a-f]{32}", value["token"])' in reader
+    assert "owned.read_private(name, limit=4096)" in inspect.getsource(windows_uninstall._private_json)
+    emptied = between("internal static bool Emptied(", "internal static string Unopened(")
+    order = [emptied.index(text) for text in (
+        "string journal=Path.Combine(root,Journal);",
+        "if(new FileInfo(journal).Length>4096) return false;",
+        "Json.Deserialize<Dictionary<string,object>>(File.ReadAllText(journal));",
+        'if(record==null || !record.TryGetValue("schema",out schema) || !(schema is int) || (int)schema!=1) return false;',
+        r'if(Text(record,"choice")!="delete" || !Regex.IsMatch(token,"\\A[0-9a-f]{32}\\z")) return false;',
+        "return !Data.Any(name=>{",
+        "return File.Exists(entry) || (Directory.Exists(entry) && Directory.EnumerateFileSystemEntries(entry).Any());});",
+        "} catch(Exception) { return false; }")]
+    assert order == sorted(order)
+    assert emptied.count("return") == 6  # Four refusals, the answer, and the look at one data name.
+    # The two texts, complete. The one with the next step only after the look said yes.
+    unopened = between("internal static string Unopened(", "static int OpenInstalled(")
+    code = "\n".join(line for line in unopened.splitlines() if not line.strip().startswith("//"))
+    first, second = code.split("if(Emptied(root)) return", 1)[1].split(";\n            return ", 1)
+    assert literal(first) == EMPTIED and literal(second.split(";", 1)[0]) == DAMAGED
+    assert code.count("return") == 2 and code.count("Emptied(") == 1
+    # They only look and build a text.
+    for body in (emptied, code):
+        for change in ("Delete", "Write", "Create", "Move", "Remove", "Process", "Say(", "Install", "Storage"):
+            assert change not in body, change
+    # The one place that shows the text: a finished installation with no launcher program. Setup ends with 1.
+    opened = between("static int OpenInstalled(", "static int ConsumerWindow()")
+    assert opened.index("if(!File.Exists(AppStart(root).FileName)) {\n"
+                        "                Say(Unopened(root),MessageBoxButtons.OK,MessageBoxIcon.Warning);\n"
+                        "                return 1;\n            }") < opened.index("bool listed=false;")
+    assert SOURCE.count("Unopened(") == 2 and SOURCE.count("Emptied(") == 2
+    # What the new text does not say.
+    assert "your chats and settings" not in EMPTIED and "already installed" not in EMPTIED
+    assert "uninstall" not in EMPTIED.lower()  # A file that reads as a journal is no proof of an uninstall.
+    # The launcher's program, which the Start-menu entry also starts.
+    from amplifier_web import windows_consumer_shell
+    assert 'Path.Combine(root,"tools","amplifier-unified","Scripts","pythonw.exe")' in between(
+        "static ProcessStartInfo AppStart(", "internal static bool AddEntries(")
+    assert '"tools/amplifier-unified/Scripts/pythonw.exe"' in inspect.getsource(windows_consumer_shell.entries)
+    # The native check has the same two texts.
+    native = (ROOT / "tests/windows/native_setup.Tests.cs").read_text(encoding="utf-8")
+    cases = native.split('string left=Make(work,"Left");', 1)[1]
+    assert literal(cases.split("string damaged=", 1)[1].split(";", 1)[0].replace("left", "root")) == DAMAGED
+    assert literal(cases.split("string emptied=", 1)[1].split(";", 1)[0].replace("left", "root")) == EMPTIED
+
+
 def test_second_setup_restores_entries_before_start_and_waits_without_pins():
     opened = between("static int OpenInstalled(", "static int ConsumerWindow()")
     assert ("Amplifier is already installed on this PC, but it is not in the Start menu "

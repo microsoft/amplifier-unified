@@ -8,6 +8,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Reflection;
 using System.Security.AccessControl;
@@ -283,6 +284,81 @@ namespace UnifiedBootstrap {
                 }
                 Need(!NativeInstaller.AddEntries(empty),"entries step: a missing program is a failure");
                 Need(Refused(()=>NativeInstaller.StartApp(empty)),"start step: a missing launcher is refused");
+
+                // The text for a finished installation whose launcher program is
+                // missing. Only setup's own look at the folder chooses it.
+                string left=Make(work,"Left");
+                File.WriteAllText(Path.Combine(left,NativeInstaller.Complete),"{}");
+                string damaged="Amplifier is already installed in "+left+", but setup cannot open it: a program file is missing.\n\n"+
+                    "Keep that folder. It holds your chats and settings. This version of setup cannot repair it.";
+                string emptied="Setup cannot install Amplifier yet. The folder of an earlier installation is still on this PC:\n"+left+"\n\n"+
+                    "Amplifier cannot start from that folder, and setup found no chats or settings in it. "+
+                    "Setup does not change the folder: it can hold files that are not Amplifier's.\n\n"+
+                    "If a file in the folder is yours, move it to another place. Then delete the folder and run this setup file again.";
+                string journal=Path.Combine(left,NativeInstaller.Journal), notes=Path.Combine(left,"my notes.txt");
+                string record="{\"schema\": 1, \"choice\": \"delete\", \"token\": \"0123456789abcdef0123456789abcdef\"}";
+                Need(NativeInstaller.Journal=="unified-uninstall.json" && String.Join(",",NativeInstaller.Data)==
+                    "shared,app,capture,ownership,import,workspace,export","uninstall's names");
+                Need(!NativeInstaller.Emptied(left) && NativeInstaller.Unopened(left)==damaged,"no journal: the text of a damaged installation");
+                // What an uninstall with the delete choice leaves when the folder
+                // holds a file of the person: that file, setup's record, the journal.
+                File.WriteAllText(notes,"mine");
+                File.WriteAllText(journal,record);
+                Need(NativeInstaller.Emptied(left) && NativeInstaller.Unopened(left)==emptied,"a delete journal and no data: the text with the next step");
+                // What stays when the last step did not finish: program files.
+                Directory.CreateDirectory(Path.Combine(left,"unified-uninstall-last"));
+                File.WriteAllText(Path.Combine(left,"unified-uninstall-last","python313.dll"),"program");
+                Need(NativeInstaller.Unopened(left)==emptied,"program files that stayed are not data");
+                // Each data name: an empty folder is not data; a folder with
+                // anything in it, and a file of that name, are data.
+                foreach(string name in NativeInstaller.Data) {
+                    string entry=Path.Combine(left,name);
+                    Directory.CreateDirectory(entry);
+                    Need(NativeInstaller.Unopened(left)==emptied,"an empty data folder is not data: "+name);
+                    Directory.CreateDirectory(Path.Combine(entry,"inner"));
+                    Need(!NativeInstaller.Emptied(left) && NativeInstaller.Unopened(left)==damaged,"a folder in a data folder is data: "+name);
+                    Directory.Delete(Path.Combine(entry,"inner"));
+                    File.WriteAllText(Path.Combine(entry,"kept.txt"),"data");
+                    Need(NativeInstaller.Unopened(left)==damaged,"a file in a data folder is data: "+name);
+                    File.Delete(Path.Combine(entry,"kept.txt")); Directory.Delete(entry);
+                    File.WriteAllText(entry,"data");
+                    Need(NativeInstaller.Unopened(left)==damaged,"a file with a data name is data: "+name);
+                    File.Delete(entry);
+                    Need(NativeInstaller.Unopened(left)==emptied,"without that entry: "+name);
+                }
+                // A file that uninstall does not read as a journal with the
+                // delete choice: the text of a damaged installation.
+                string[] others={"","{","[]","null","\"delete\"",
+                    record.Replace("\"delete\"","\"keep\""),record.Replace("\"delete\"","\"Delete\""),
+                    record.Replace("\"choice\": \"delete\"","\"choice\": 1"),
+                    record.Replace("\"schema\": 1","\"schema\": 2"),record.Replace("\"schema\": 1","\"schema\": \"1\""),
+                    record.Replace("\"schema\": 1","\"schema\": true"),record.Replace("\"schema\": 1","\"schema\": 1.5"),
+                    record.Replace("\"schema\": 1, ",""),
+                    record.Replace("0123456789abcdef0123456789abcdef","0123456789ABCDEF0123456789abcdef"),
+                    record.Replace("0123456789abcdef0123456789abcdef","0123456789abcdef0123456789abcde"),
+                    record.Replace("0123456789abcdef0123456789abcdef","0123456789abcdef0123456789abcdef0"),
+                    record.Replace("0123456789abcdef0123456789abcdef","0123456789abcdef0123456789abcdef\\n"),
+                    record.Replace(", \"token\": \"0123456789abcdef0123456789abcdef\"",""),
+                    record+new string(' ',4097-record.Length)};
+                for(int index=0;index<others.Length;index++) {
+                    File.WriteAllText(journal,others[index]);
+                    Need(!NativeInstaller.Emptied(left) && NativeInstaller.Unopened(left)==damaged,"not a journal with the delete choice: file "+index);
+                }
+                // The largest file that is read, with a further field, as uninstall accepts it.
+                string largest=record.Replace("{","{\"more\": \""+new string('x',4096-record.Length-12)+"\", ");
+                File.WriteAllText(journal,largest);
+                Need(new FileInfo(journal).Length==4096 && NativeInstaller.Unopened(left)==emptied,"a journal of 4096 bytes is read");
+                // A folder with the journal's name is no journal.
+                File.Delete(journal); Directory.CreateDirectory(journal);
+                Need(NativeInstaller.Unopened(left)==damaged,"a folder with the journal's name");
+                Directory.Delete(journal); File.WriteAllText(journal,record);
+                // The looks changed nothing in the folder.
+                string[] names=Directory.GetFileSystemEntries(left).Select(entry=>Path.GetFileName(entry)).OrderBy(name=>name,StringComparer.Ordinal).ToArray();
+                Need(String.Join("|",names)=="my notes.txt|unified-setup-complete.json|unified-uninstall-last|unified-uninstall.json",
+                    "the folder holds what the case put there: "+String.Join("|",names));
+                Need(File.ReadAllText(notes)=="mine" && File.ReadAllText(journal)==record &&
+                    File.ReadAllText(Path.Combine(left,NativeInstaller.Complete))=="{}","the person's file and both records are unchanged");
+                Need(NativeInstaller.RootState(left)=="installed","setup still takes the folder for a finished installation, and installs nothing there");
 
                 // A folder above the target that other accounts can change is named.
                 string open=Path.Combine(work,"open"); Directory.CreateDirectory(Path.Combine(open,"inner"));
