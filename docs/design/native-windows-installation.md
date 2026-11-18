@@ -4335,12 +4335,52 @@ Keep app data, shared settings/native history and Foundation coordination roots
 distinct and preserve their explicit overrides.
 
 Pin and inspect each traversal ancestor before creating or opening its child.
-Denying delete sharing protects against rename, but sharing alone does not
-prevent reparse conversion through attribute access. Validate actual handle
-identity, type, filesystem and ACLs. Treat the owner and narrowly identified
-Windows system authorities as trusted; reject ordinary foreign mutation rights
-on traversal ancestors and ordinary foreign read access to private state.
-Do not silently rewrite an existing custom root's ACLs.
+A pin does not keep the last folder of its path in its place (see below), and
+sharing does not prevent reparse conversion through attribute access. Validate
+actual handle identity, type, filesystem and ACLs. Treat the owner and
+narrowly identified Windows system authorities as trusted; reject ordinary
+foreign mutation rights on traversal ancestors and ordinary foreign read
+access to private state. Do not silently rewrite an existing custom root's
+ACLs.
+
+What a pin of this boundary holds (`amplifier_web/windows_files.py`), measured
+on hosted Windows runners (Windows Server 2025), not on Windows 11. A pin is
+an open handle on every folder of a path, from the drive's root down to the
+folder that the caller named. Each handle asks for the folder's attributes
+and security information only. Its share mode leaves out writing and
+deleting. With a pin open:
+
+- Another program of the same account renamed the last pinned folder. It
+  removed that folder when it was empty. It then made a new folder at that
+  name.
+- After the rename, and after the removal, the pin's next check refused, also
+  with the new folder at the name. The check runs before each read, removal
+  and publication through the pin. A publication wrote nothing: not into the
+  folder that moved, and not into the new one.
+- Windows refused a rename of the folder above the last one, and of the
+  folder above that (error 5). After the pin closed, the rename worked.
+
+So a pin covers what goes through its handles and its checks. It does not
+cover an act by a path, while the pin is open or after it: the path can name
+another folder then. The access check accepts a folder of the path only when
+no account but this one and the trusted Windows authorities has a right to
+delete it or to delete an entry in it. So such a rename or removal needs a
+program of the same account or a trusted Windows authority, and both are
+inside this boundary's trust.
+
+In the same measurements a second handle of the same process was open on the
+last folder. The rename and the removal were tried with that handle alone.
+The publication went through a pin that was opened beside it:
+
+| The second handle | Rename by another program | Removal of the empty folder by another program | Publication through a pin |
+| --- | --- | --- | --- |
+| Attributes and security information only; shares nothing | worked | worked | worked |
+| Can list the folder; shares reading and writing | refused (error 32) | refused (error 32) | worked |
+| Can list the folder; shares reading only | refused (error 32) | not tried | refused (error 32) |
+| Has the right to delete; shares reading only | refused (error 32) | refused (error 32) | refused (error 32) |
+
+A read and a removal of a file through a pin worked beside each of the four.
+The pins of this boundary open no handle of the last three kinds.
 
 New private directories and temporary files receive their security descriptors
 at creation, before content is written. Credential initialization publishes
