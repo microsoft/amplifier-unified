@@ -405,6 +405,33 @@ def listed(root) -> bool:
         return False
 
 
+def _free(folder):
+    """Setup can add its entries at this Start-menu folder's path: none of them is there.
+
+    True when nothing has that name. True also for the folder that stayed
+    after an uninstall, when it is this account's own private folder (the
+    check that every later step makes again) and no entry directly in it has
+    one of the names of LINKS. Such an entry counts whatever it is (a file, a
+    folder, a link), and names are compared without letter case. The folder
+    stays when the person put a file into it, and when another program still
+    had a shortcut open. An entry of another name is the person's: it is not
+    opened, changed or removed, here or later.
+
+    Every doubt is False: a link or a file at that path, a folder that
+    another account owns or can change, a folder that cannot be listed.
+    """
+    from .windows_files import directory
+    from .windows_removal import same_name
+    if not os.path.lexists(folder):
+        return True
+    ours = {same_name(name) for name in LINKS}
+    try:
+        with directory(folder, owned_root=folder), os.scandir(folder) as listing:
+            return not any(same_name(entry.name) in ours for entry in listing)
+    except (OSError, ValueError, RuntimeError):
+        return False
+
+
 def install(root, version):
     from .windows_files import address, directory
     from .deployment import write_private
@@ -416,9 +443,10 @@ def install(root, version):
         # the entries are gone: the last write of an uninstall can be refused
         # after every entry is removed. "Gone" means the folder that this
         # record names, so that a record of entries in another place is never
-        # replaced. The check below also refuses when today's Start-menu
-        # folder or the Apps-list entry exists, so nothing is ever overwritten.
-        # Every other record is refused.
+        # replaced. The check below also refuses when the Apps-list entry
+        # exists, or when today's Start-menu folder holds one of the
+        # shortcuts or is not this account's own (`_free`). So nothing is
+        # ever overwritten. Every other record is refused.
         try:
             row = _receipt(root)
             status = row.get("status") if isinstance(row, dict) else None
@@ -430,7 +458,8 @@ def install(root, version):
         if not again:
             raise ValueError("Windows shell integration already has a receipt; inspect it before retrying.")
     folder = programs() / ("Amplifier Unified - " + identity(root))
-    if folder.exists() or registry(root) is not None:
+    # Before the first write: a refusal here leaves the record as it was.
+    if registry(root) is not None or not _free(folder):
         raise ValueError("The Windows app entries already exist; nothing was overwritten.")
     python, links = entries(root)
     values = registration_values(root, version)
@@ -440,7 +469,9 @@ def install(root, version):
     with directory(folder, owned_root=folder, create=True) as owned:
         for name, args in links.items():
             path = folder / name
-            # The private directory is pinned, no pre-existing file is adopted.
+            # The private directory is pinned, no pre-existing file is adopted:
+            # the writer refuses a name that exists, also one that appeared
+            # after the check above.
             owned.publish_private(name, b"")
             with shell_link() as link:
                 link.create(path, python, args, root / "workspace")
