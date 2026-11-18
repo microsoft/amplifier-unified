@@ -136,6 +136,19 @@ Unified is the sole installed owner of its Kernels copy; ACP's separately select
 artifact is unchanged. No user records or active work move with these authoring
 handoffs. Publication, app selection and live adoption remain distinct.
 
+## Current shell SDK delivery
+
+[amplifier-shell-sdk](https://github.com/bkrabach/amplifier-shell-sdk) owns the
+public JavaScript API, types, direct package tests and controls example. Unified
+selects the original public tarball and qualification receipt, preserving the
+`packages/shell-sdk` and `examples/shell-controls` compatibility paths as generated
+delivery inputs. Ordinary wheel, editable and Git-free source builds verify these
+selected bytes offline; installing Unified does not require Node or npm.
+Unified retains host/browser integration, authority and trusted-component policy.
+Client source locks must select the same three SDK build inputs; no lock bypass
+or second SDK author is introduced. Component publication and app adoption remain
+separate. See [SDK delivery](../docs/shell/sdk-delivery.md).
+
 ## Not in v1
 
 Mandatory microservices or a new central runtime framework; promote only when a

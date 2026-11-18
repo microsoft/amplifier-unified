@@ -125,3 +125,8 @@ package-lock.json source-context=locks
 /amplifier_operations/** source-context=generated linguist-vendored=true linguist-generated=true -text
 /components/kernels.source.json source-context=configuration
 /amplifier_kernels/** source-context=generated linguist-vendored=true linguist-generated=true -text
+
+# Public SDK artifact and authoring-example projection; edit in its public owner.
+/components/shell-sdk.source.json source-context=configuration
+/packages/shell-sdk/** source-context=generated linguist-vendored=true linguist-generated=true -text
+/examples/shell-controls/** source-context=generated linguist-vendored=true linguist-generated=true -text

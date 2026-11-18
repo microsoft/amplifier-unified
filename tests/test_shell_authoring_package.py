@@ -11,7 +11,9 @@ from hatchling.builders.wheel import WheelBuilder
 def test_shell_authoring_wheel_excludes_local_dependencies_and_builds(tmp_path):
     root = Path(__file__).resolve().parents[1]
     expected = {
-        'packages/shell-sdk': {'index.js', 'index.d.ts', 'package.json', 'README.md', 'LICENSE'},
+        'packages/shell-sdk': {'index.js', 'index.d.ts', 'package.json', 'README.md', 'LICENSE', 'ORIGIN.json',
+                               *(f'examples/shell-controls/{name}' for name in
+                                 ('index.js', 'manifest.json', 'README.md', 'package.json', 'build.mjs'))},
         'examples/shell-controls': {'index.js', 'manifest.json', 'README.md', 'package.json', 'build.mjs'},
     }
     # Exercise the real mappings, including directory mappings if they regress.
@@ -24,6 +26,7 @@ def test_shell_authoring_wheel_excludes_local_dependencies_and_builds(tmp_path):
         target = project / folder
         target.mkdir(parents=True)
         for name in files:
+            (target / name).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(root / folder / name, target / name)
         for name in ['node_modules/dependency/index.js', 'dist/module.mjs', 'local-sdk.tgz', 'package-lock.json']:
             extra = target / name
