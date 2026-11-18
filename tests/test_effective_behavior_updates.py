@@ -289,16 +289,51 @@ def test_a_folder_beside_a_named_folder_keeps_its_own_path(tmp_path, name):
             == witness_of(stage, 'file://' + str(stage/'foundation/cache/tool'), home))
 
     # The same for an enabled app behavior that is a file beside the Foundation folder: the
-    # selection itself names that path, not only the settings.
-    def beside(root):
-        path = root/'foundation-extra/behavior.yaml'
+    # selection itself names that path, not only the settings. "#" can be in a folder's name.
+    def beside(root, folder):
+        path = root/folder/'behavior.yaml'
         path.parent.mkdir(parents=True)
         path.write_text('bundle: {name: fixture}\n')
         return settings([str(path)])
-    live = HostConfig(home, home, beside(home), home/'foundation', home/'shared', True)
-    staged = HostConfig(stage, stage, beside(stage), stage/'foundation', stage/'shared-config', True)
-    assert (update_sequence.app_selection(home, config=live)['witness']
-            == update_sequence.app_selection(stage, config=staged, original_home=home)['witness']) == as_before
+    for folder in ('foundation-extra', 'foundation#extra'):
+        live = HostConfig(home, home, beside(home, folder), home/'foundation', home/'shared', True)
+        staged = HostConfig(stage, stage, beside(stage, folder), stage/'foundation', stage/'shared-config', True)
+        assert (update_sequence.app_selection(home, config=live)['witness']
+                == update_sequence.app_selection(stage, config=staged, original_home=home)['witness']) == as_before, folder
+
+
+@pytest.mark.parametrize('name', ['app', 'caf\u00e9 app'])
+def test_only_a_value_that_is_a_named_folder_or_a_path_below_it_loses_the_folder(tmp_path, name):
+    # The rule for a folder path that JSON text does not write as it is: every Windows path,
+    # and the second name on every system. A folder path that JSON writes as it is keeps the
+    # replacement of before, wherever its text stands (`as_before`).
+    from amplifier_web.runtime_profiles import configuration_key
+    home = tmp_path.resolve()/name
+    stage = home/'updates/releases'/('b'*32)
+    as_before = json.dumps(str(home))[1:-1] == str(home)
+
+    def one_key(value):
+        # Do an installation and its stage have one key for the same value, each with its own folder?
+        return configuration_key(value(str(home)), home, stage) == configuration_key(value(str(stage)), home, stage)
+
+    # The folder itself, and a path below it with each path separator of this system.
+    assert one_key(named)
+    assert one_key(lambda folder: named(folder + '/tool'))
+    assert one_key(lambda folder: named(folder + os.sep + 'tool'))
+    assert one_key(lambda folder: named('file://' + folder + os.sep + 'tool'))
+    # The name of a folder beside it can go on with "#", with a letter that JSON writes in
+    # another form, or with a quote.
+    for more in ('#extra', '#extra' + os.sep + 'tool', '\u00e9', '\u00e9' + os.sep + 'tool', '"x'):
+        assert one_key(lambda folder: named(folder + more)) == as_before, more
+    # A backslash is a part of a name on Linux and macOS, and a path separator on Windows.
+    assert one_key(lambda folder: named(folder + '\\tool')) == (as_before or os.sep == '\\')
+    # The name of an entry is not a source.
+    assert one_key(lambda folder: settings([URI], sources={'modules': {folder: URI}})) == as_before
+    assert one_key(lambda folder: settings([URI], sources={'modules': {folder + os.sep + 'tool': URI}})) == as_before
+    # The same in the witness, where the named folders are the Foundation folders.
+    assert witness_of(home, home/'foundation') == witness_of(stage, stage/'foundation', home)
+    assert (witness_of(home, str(home/'foundation') + '#extra')
+            == witness_of(stage, str(stage/'foundation') + '#extra', home)) == as_before
 
 
 @pytest.mark.parametrize('name', ['app', 'caf\u00e9 app'])
@@ -349,6 +384,14 @@ def test_a_linux_installation_keeps_its_selection_witness_and_configuration_key(
     address='07793ce887e6bbe5d82004e6fc43db875f06bb5e2070a86cb8be77647b620bcd'
     assert witness_of(home,'file:///srv/unified/foundation/cache/tool')==address
     assert witness_of(stage,'file://'+str(stage/'foundation/cache/tool'),home)==address
+    # One call with a folder of each kind: each folder keeps its own rule.
+    other=Path('/srv/caf\u00e9')
+    def two(first,second): return settings([URI],sources={'modules':{'one':first,'two':second}})
+    assert (configuration_key(two('/srv/unified/x','/srv/caf\u00e9/y'),home,other)
+            ==configuration_key(two('/srv/caf\u00e9/x','/srv/unified/y'),home,other))
+    assert (configuration_key(two('/srv/unified-extra/x',URI),home,other)
+            !=configuration_key(two('/srv/caf\u00e9-extra/x',URI),home,other))
+    assert configuration_key(two('/srv/unified-extra/x',URI),home,other)==configuration_key(two('/srv/unified-extra/x',URI),home)
 
 
 async def test_index_invalidates_on_effective_selection_not_history_size(tmp_path,monkeypatch):

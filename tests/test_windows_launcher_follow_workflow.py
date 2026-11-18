@@ -209,16 +209,18 @@ ELSEWHERE = {"tests/test_service.py": "coordination.yml",
 def starts_pytest(line, name):
     """A line of a step that starts pytest with this file: `uv run ... pytest` or `<python> ... -m pytest`.
 
-    A comment, or another command that only has the words, is no run. A line can hold more
-    than one command; the file must be an argument of the command that starts pytest.
+    Only the plain form counts: the line is one command, it starts with that command, and
+    no quotation or comment stands before the file. A second command, a pipe, a command in
+    the background or a quoted text can hold the words and run nothing, or lose the result.
+    So a line with another form is no run, and the case fails for it. One line is read at a
+    time: a text of several lines that only holds the command is not told from a command.
     """
-    words = list(itertools.takewhile(lambda word: not word.startswith("#"), line.replace(";", " ; ").split()))
-    # A pipe or "||" after a command can take its result away.
-    if {"|", "||"} & set(words):
+    words = line.split()
+    if name not in words or re.search("[;&|`]", line):
         return False
-    commands = [list(group) for between, group in itertools.groupby(words, lambda word: word in (";", "&&", "&"))
-                if not between]
-    return any(_starts_pytest(command, name) for command in commands)
+    if any(mark in word for word in words[:words.index(name)] for mark in "\"'#"):
+        return False
+    return _starts_pytest(words, name)
 
 
 def _starts_pytest(words, name):
@@ -264,7 +266,19 @@ def command_lines(run):
     ("uv run pytest tests/test_two.py; echo tests/test_one.py", False),
     ("uv run pytest tests/test_two.py && echo tests/test_one.py", False),
     ("uv run pytest tests/test_one.py | tee log", False),
-    ("echo start; uv run pytest tests/test_one.py; echo done", True),
+    ("echo start; uv run pytest tests/test_one.py; echo done", False),
+    ("uv run pytest tests/test_two.py && uv run pytest tests/test_one.py", False),
+    ("uv run pytest tests/test_one.py & wait", False),
+    ('echo "note; uv run pytest tests/test_one.py ; end"', False),
+    ('echo "uv run pytest tests/test_one.py"', False),
+    ('uv run pytest -k "x tests/test_one.py y"', False),
+    ("uv run pytest -k 'x tests/test_one.py y' tests/test_two.py", False),
+    ("uv run pytest tests/test_one.py --collect-only", False),
+    ("uv run pytest tests/test_one.py # a note; with a mark", False),
+    ("x=$(uv run pytest tests/test_one.py)", False),
+    ("if uv run pytest tests/test_one.py", False),
+    ('python -m pytest -q tests/test_one.py -k "not slow"', True),
+    ("uv run pytest tests/test_one.py # a note", True),
 ])
 def test_a_line_that_starts_pytest_with_a_file_is_told_from_a_line_that_has_the_words(text, runs):
     assert any(starts_pytest(line, "tests/test_one.py") for line in command_lines(text)) == runs
