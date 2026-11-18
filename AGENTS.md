@@ -349,11 +349,14 @@ installation's folders inside JSON text. JSON writes each backslash of a
 Windows path twice: look for a folder there in the form
 `json.dumps(folder)[1:-1]`, never as plain text, and with the same
 `ensure_ascii` setting as the text. The address of a Windows file
-(`Path.as_uri()`) is `file:///C:/...`, and its path part has a slash before the
-drive: on Windows take that one slash away and change nothing else. Do not use
-`urllib.request.url2pathname` there: on every system it also takes
-`//localhost` away, so an address that was not the shipped file's becomes it
-and the witness of a Linux installation can move. An installation saves both
+on a drive (`Path.as_uri()`) is `file:///C:/...`: it has no server name, and
+its path part has a slash before the drive. On Windows take that one slash
+away, only for an address with no server name, and change nothing else. Do not
+use `urllib.request.url2pathname` there: on every system it also takes
+`//localhost` away, and it does not look at a server name, so an address that
+was not the shipped file's becomes it and the witness of a Linux installation
+can move. The address of an app in a network folder (`file://server/share/...`)
+is not read as the shipped file's on Windows. An installation saves both
 values and compares them later. A change of either function must keep the
 values in `tests/test_effective_behavior_updates.py` for settings that name no
 folder; else every saved row and qualification record counts as changed. The

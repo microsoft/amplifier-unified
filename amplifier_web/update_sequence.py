@@ -107,12 +107,13 @@ def app_selection(home, *, config=None, original_home=None):
         if parsed.scheme == 'file':
             sub = parse_qs(parsed.fragment).get('subdirectory', [''])[0]
             text = unquote(parsed.path)
-            # The address of a Windows file is file:///C:/...: its path part
-            # has a slash before the drive. Take only that slash away. A
-            # general conversion (urllib.request.url2pathname) also takes
-            # "//localhost" away, on every system, and an address that was
-            # not the shipped file's would become it.
-            if os.name == 'nt' and re.match('/[A-Za-z]:(/|$)', text):
+            # The address of a Windows file on a drive is file:///C:/...: it
+            # has no server name, and its path part has a slash before the
+            # drive. Take only that slash away. A general conversion
+            # (urllib.request.url2pathname) also takes "//localhost" away, on
+            # every system, and does not look at a server name: an address
+            # that was not the shipped file's would become it.
+            if os.name == 'nt' and not parsed.netloc and re.match('/[A-Za-z]:(/|$)', text):
                 text = text[1:]
             path = Path(text) / sub
             if path.parent == resource_root() / 'behaviors' and path.suffix == '.yaml':
