@@ -783,9 +783,9 @@ namespace UnifiedBootstrap {
             // installation is not true ("It holds your chats and settings"), and
             // it names no next step. Each sentence of the other text is what
             // setup found at this look, or what setup does. Its next step is to
-            // move or rename the folder, as at setup's other stops, and not to
-            // delete it: the folder can hold something of the person's that
-            // this look did not see.
+            // move or rename the folder, as at setup's stop for a damaged
+            // folder, and not to delete it: the folder can hold something of
+            // the person's that this look did not see.
             if(Emptied(root)) return
                 "Setup cannot install Amplifier yet. The folder of an earlier installation is still on this PC:\n"+root+"\n\n"+
                 "Setup cannot open Amplifier from that folder: a program file is missing. "+

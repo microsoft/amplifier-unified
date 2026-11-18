@@ -2284,14 +2284,14 @@ between two texts:
   the token are what uninstall's own reader requires
   (`windows_uninstall.pending`). That reader requires a choice that is a
   text; uninstall compares the choice in `remove` and in `finish`. Setup
-  requires the choice `delete` in the look itself. Setup reads the file with
-  its own JSON reader and not through the private-file boundary; the two
-  readers were not compared on a file that is not strict JSON. Setup opens
-  the file for reading with every sharing mode, so Windows does not refuse
-  another program's deletion of the journal because of this handle (the step
-  after exit deletes the journal), and on the runner the journal's name is
-  gone from the folder directly after such a deletion, while the handle is
-  still open.
+  requires the choice `delete` in the look itself. Setup reads the file
+  with its own JSON reader, as UTF-8 only, and not through the private-file
+  boundary; the two readers were not compared on a file in another encoding
+  or on one that is not strict JSON. Setup opens the file for reading with
+  every sharing mode, so Windows does not refuse another program's deletion
+  of the journal because of this handle (the step after exit deletes the
+  journal), and on the runner the journal's name is gone from the folder
+  directly after such a deletion, while the handle is still open.
 - Setup looks at the seven names of the person's data
   (`windows_uninstall.DATA`), one after the other. A name counts as data
   when the look at its attributes shows a file or a link, or when the
@@ -2299,12 +2299,13 @@ between two texts:
   after that look showed a folder that is no link. An emptied folder that
   Windows still keeps for a program is not data, as in the removal itself.
   Setup looks for chats and settings under these seven names only.
-- The look is a row of separate steps on paths. Setup holds no lock and no
-  handle on the folder or on an entry between two of them. A program of this
-  account that replaces an entry between the look at its attributes and the
-  read or the listing gets the read or the listing of what it put there,
-  also when that is a link. The look then answers for what it read. It still
-  only chooses a text.
+- The look is a row of separate steps on paths. Setup does not take the
+  installation's lock for it, and it holds no handle on the folder or on an
+  entry between two of those steps. A program of this account that replaces
+  an entry between the look at its attributes and the read or the listing
+  gets the read or the listing of what it put there, also when that is a
+  link. The look then answers for what it read. It still only chooses a
+  text.
 - When the look finds such a journal and no data, setup says: "Setup cannot
   install Amplifier yet. The folder of an earlier installation is still on
   this PC:", the folder, then "Setup cannot open Amplifier from that folder:
@@ -2317,8 +2318,9 @@ between two texts:
   cannot open it: a program file is missing. Keep that folder. It holds your
   chats and settings. This version of setup cannot repair it."
 
-Each sentence of the first text is what setup found at that look, or what
-setup does. "The folder of an earlier installation": the folder has setup's
+Each statement of the first text is what setup found at that look, or what
+setup does; its last two sentences are the next step. "The folder of an
+earlier installation": the folder has a file with the name of setup's
 completion record, which setup writes at the end of an installation. Setup
 knows no more about the folder's history; the second text says "Amplifier is
 already installed in" on the same evidence. "a program file is missing": the
@@ -2330,8 +2332,8 @@ proof of an uninstall (a program of this account can write one), and setup
 looked for one program file only. The text tells the person to move or rename
 the folder, not to delete it: the folder can hold something of the person's
 that the look did not see, and a program can put data into it after the
-look. These are setup's words at its other stops for a folder that it does
-not change. A setup run that finds no folder is a first installation. The
+look. Setup's stop for a damaged folder names the same step. A setup run
+that finds no folder at that path goes on as for a first installation. The
 look only chooses a text. With either text setup installs nothing, deletes
 nothing and ends with status 1.
 
@@ -2342,9 +2344,9 @@ the earlier text; that is why the first text exists); the leftover of L3
 when the launcher's start program is gone; and a setup run while the step
 after exit still works (that step can still delete the folder, and Windows
 can refuse to move the folder while that step holds it). The second text can
-still be false after a delete, in two cases: the look does not take the
-journal as one (a journal that a program replaced or damaged, a look that
-Windows refused), or one of the seven names holds something again (a folder
+still be false after a delete: when the look finds no journal of a delete
+(the journal is gone, a program replaced or damaged it, or Windows refused
+the look), and when one of the seven names holds something again (a folder
 that the person made under that name, for example). The text then says that
 the folder holds chats and settings that the uninstall deleted. That limit
 stays.

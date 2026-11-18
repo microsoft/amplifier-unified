@@ -233,8 +233,11 @@ def test_setup_without_a_launcher_program_says_what_its_own_look_finds():
     # The next step loses nothing: the text tells nobody to delete anything.
     assert "delete" not in EMPTIED.lower() and EMPTIED.endswith(
         "\n\nMove or rename that folder. Then run this setup file again.")
-    # Setup's own words at its other stops for a folder that it does not change.
-    assert SOURCE.count('"Move or rename that folder. Then run setup again."') == 1
+    # The same step as at setup's stop for a damaged folder.
+    damaged = between('if(state=="damaged") throw new SetupStop(', "string program=null;")
+    assert '"Move or rename that folder. Then run setup again.");' in damaged
+    # Setup's own lock is against a second setup run. It is not the installation's lock.
+    assert "AmplifierUnified-installation" not in SOURCE and SOURCE.count("Mutex(") == 1
     # The launcher's program, which the Start-menu entry also starts.
     from amplifier_web import windows_consumer_shell
     assert 'Path.Combine(root,"tools","amplifier-unified","Scripts","pythonw.exe")' in between(
@@ -257,7 +260,9 @@ def test_setup_without_a_launcher_program_says_what_its_own_look_finds():
             "A name counts as data when the look at its attributes shows a file or a link, or when the listing of "
             "the folder shows anything in it.",
             "Setup lists an entry only after that look showed a folder that is no link.",
-            "Setup holds no lock and no handle on the folder or on an entry between two of them.",
+            "Setup does not take the installation's lock for it, and it holds no handle on the folder or on an "
+            "entry between two of those steps.",
+            "Setup's stop for a damaged folder names the same step.",
             "The text tells the person to move or rename the folder, not to delete it:",
             "In every other case, and when any part of the look fails, setup says what it said before:",
             "The text does not say that Amplifier was uninstalled, and it does not say that Amplifier cannot start: "
