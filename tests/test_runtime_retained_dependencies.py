@@ -188,7 +188,7 @@ async def test_refresh_refuses_unowned_or_changed_override_before_any_write(tmp_
     assert path.read_bytes() == before
 
 
-@pytest.mark.parametrize('case', ['moving-url', 'version-conflict', 'authored-constraint'])
+@pytest.mark.parametrize('case', ['moving-url', 'declared-moving-url', 'version-conflict', 'authored-constraint'])
 async def test_real_resolver_preserves_pin_and_rejects_hidden_incompatibility(tmp_path, monkeypatch, case):
     uv = shutil.which('uv')
     assert uv, 'This resolver regression requires the qualification environment to provide uv'
@@ -220,12 +220,17 @@ async def test_real_resolver_preserves_pin_and_rejects_hidden_incompatibility(tm
     monkeypatch.setenv('UV_PYTHON_DOWNLOADS', 'never')
     monkeypatch.setenv('UV_CACHE_DIR', str(tmp_path / 'uv-cache'))
     baseline = {**BASE}
+    root = row(ref=old)
+    if case == 'declared-moving-url':
+        baseline['project'] = {**BASE['project'], 'dependencies': [NAME]}
+        baseline['tool'] = {'uv': {'sources': {NAME: {'git': URL, 'rev': 'main'}}}}
+        root['provenance'] = 'installed Git distribution'
     if case == 'authored-constraint':
         baseline['tool'] = {'uv': {'constraint-dependencies': [NAME + '>=2']}}
-    content = runtime.augmented_manifest(encode(baseline), [row(ref=old), row('fixture-hook', old, 'hook')])
+    content = runtime.augmented_manifest(encode(baseline), [root, row('fixture-hook', old, 'hook')])
     project = runtime.prepare_project(tmp_path / 'app', 'e' * 32, content=content)
     command = [uv, 'sync', '--project', str(project), '--python', sys.executable]
-    if case == 'moving-url':
+    if case in {'moving-url', 'declared-moving-url'}:
         original = tomllib.loads(content.decode())
         del original['tool']['uv']['override-dependencies']
         del original['tool']['amplifier-unified']
