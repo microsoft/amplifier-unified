@@ -170,13 +170,14 @@ def configuration_references(manager):
 
 
 def saved_configuration_references(manager):
-    from urllib.parse import parse_qs, unquote
+    from .host.components import declarations
     from .runtime_environment_retention import stat_witness
 
     sessions = Path(manager.home) / 'sessions'
     if stat_witness(sessions) is None:
         return
     workspaces = workspace_paths(manager)
+    inspected = set()  # A later admission gets a fresh probe and resolves links again.
     # Resume reads the saved plan. A same-bundle fork may inherit the last
     # effective plan, including explicit module directories in an old release.
     plans = (session / name for session in sessions.iterdir()
@@ -199,20 +200,48 @@ def saved_configuration_references(manager):
                 pending.extend(value.values())
             elif isinstance(value, str):
                 yield value
-                if value.startswith('file://'):
-                    uri_path, _, fragment = value[7:].partition('#')
-                    value = unquote(uri_path)
-                    subpaths = parse_qs(fragment).get('subdirectory', [])
-                    if subpaths:
-                        value = os.path.join(value, subpaths[0])
-                    if os.name == 'nt' and re.match(r'^/[a-z]:/', value, re.I):
-                        value = value[1:]
-                if os.path.normcase(value).startswith(('.' + os.sep, '..' + os.sep)):
-                    # The worker may use its saved workspace as its base.
-                    for base in workspaces:
-                        yield os.path.normpath(os.path.join(base, value))
-                elif os.path.isabs(value) or value.startswith(('~/', '~\\')):
-                    yield os.path.normpath(os.path.expanduser(value))
+        # The loader follows local module sources through symlinks. Only
+        # declarations may cause filesystem lookups; other settings are data.
+        for row in declarations(plan):
+            source = row.get('source') if isinstance(row, dict) else None
+            if isinstance(source, str) and source not in inspected:
+                inspected.add(source)
+                yield from local_source_paths(source, workspaces)
+
+
+def local_source_paths(source, workspaces):
+    from urllib.parse import unquote
+
+    paths = [source]
+    if source.startswith('file://'):
+        path, _, fragment = source[7:].partition('#')
+        if os.name == 'nt' and re.match(r'^/[a-z]:/', path, re.I):
+            path = path[1:]
+        subdir = next((part.removeprefix('subdirectory=') for part in fragment.split('&')
+                       if part.startswith('subdirectory=')), '')
+        path = os.path.join(path, subdir) if subdir else path
+        # Local loaders can retain the literal spelling of a file URI.
+        paths = dict.fromkeys((path, unquote(path)))
+    for value in paths:
+        folded = os.path.normcase(value)
+        if folded.startswith(('.' + os.sep, '..' + os.sep)):
+            if not workspaces:
+                raise ValueError('The base of a relative module source could not be verified')
+            candidates = (Path(base) / value for base in workspaces)
+        elif os.path.isabs(value) or folded.startswith('~' + os.sep):
+            candidates = (Path(value).expanduser(),)
+        else:
+            continue
+        for candidate in candidates:
+            yield os.path.normpath(candidate)
+            # strict=True distinguishes an unavailable old path from ambiguous
+            # resolution (redirect loops or permissions). The latter keeps
+            # storage; a missing leaf can still have a redirected parent.
+            try:
+                physical = candidate.resolve(strict=True)
+            except FileNotFoundError:
+                physical = candidate.resolve(strict=False)
+            yield str(physical)
 
 
 def storage_references(manager):

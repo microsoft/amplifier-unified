@@ -528,3 +528,36 @@ def test_case_insensitive_probe_returns_the_storage_owners_spelling(tmp_path, mo
     monkeypatch.setattr(retention, 'process_references', lambda home: '')
     monkeypatch.setattr(retention, 'configuration_references', lambda manager: str(folder).upper() + '/source')
     assert retention.storage_references(SimpleNamespace(home=tmp_path)) == sorted(map(str, (short, folder)))
+
+
+@pytest.mark.parametrize('link_target', ['old-module', 'loop'])
+async def test_saved_module_link_keeps_generation_until_repointed(tmp_path, monkeypatch, link_target):
+    manager, names, _ = manager_fixture(tmp_path, monkeypatch)
+    old = manager.directory / 'releases' / names[3]
+    module = old / 'tool'
+    module.mkdir()
+    link = tmp_path / 'workspace' / 'pinned-tool'
+    link.parent.mkdir()
+    link.symlink_to(module if link_target == 'old-module' else link, target_is_directory=True)
+    plan = manager.home / 'sessions/chat/configuration.json'
+    plan.parent.mkdir(parents=True)
+    plan.write_text(json.dumps({'tools': [{'module': 'pinned', 'source': str(link)}]}))
+    monkeypatch.setenv('AMPLIFIER_HOME', str(tmp_path / 'shared'))
+
+    async def actual(manager, *, timeout):
+        return await retention._probe('references', {'home': str(manager.home), 'workspaces': []}, timeout=timeout)
+    monkeypatch.setattr(retention, 'inspect_references', actual)
+    assert (await retention.reclaim(manager, selected={old.name}))['removed'] == 0
+    assert module.is_dir()
+    replacement = tmp_path / 'replacement'
+    replacement.mkdir()
+    link.unlink()
+    link.symlink_to(replacement, target_is_directory=True)
+    # Unrelated data may contain an invalid link; only declared module
+    # sources are resolved against the filesystem.
+    unrelated = tmp_path / 'unrelated'
+    unrelated.symlink_to(unrelated, target_is_directory=True)
+    plan.write_text(json.dumps({'tools': [{'module': 'pinned', 'source': str(link),
+                                          'config': {'path': str(unrelated)}}]}))
+    assert (await retention.reclaim(manager, selected={old.name}))['removed'] == 1
+    assert link.resolve() == replacement and not old.exists()
