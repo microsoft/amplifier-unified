@@ -165,15 +165,21 @@ def app_declarations(content):
     data = tomllib.loads(content.decode())
     from .runtime_environment import package_name
     direct, _, restrictions = _declaration_evidence(content)
-    mapped = {package_name(key) for key in data.get('tool', {}).get('uv', {}).get('sources', {})}
+    uv = data.get('tool', {}).get('uv', {})
+    mapped = {package_name(key) for key, entry in uv.get('sources', {}).items() if isinstance(entry, dict)}
+    requirements = [Requirement(value) for value in data.get('project', {}).get('dependencies', [])]
+    # Retain any authored version bounds, including a second requirement or
+    # resolver override for a package that also has a bare root declaration.
+    limits = uv.get('override-dependencies', []) + uv.get('constraint-dependencies', [])
+    versioned = {package_name(req.name) for req in requirements + [Requirement(value) for value in limits]
+                 if req.specifier}
     result = {}
-    for value in data.get('project', {}).get('dependencies', []):
-        requirement = Requirement(value)
+    for requirement in requirements:
         name = package_name(requirement.name)
         declaration = direct.get(name)
         # The shipped loops use a bare direct requirement with an explicit
         # uv Git source. An optional/dependency-group URL cannot select it.
-        if ((not requirement.url and (name not in mapped or requirement.specifier))
+        if ((not requirement.url and (name not in mapped or name in versioned))
                 or requirement.marker or requirement.extras or not declaration
                 or declaration.get('refKind') not in {'rev', 'branch'}
                 or re.fullmatch('[a-f0-9]{40}', declaration['ref'])

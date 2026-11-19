@@ -11,6 +11,35 @@ from amplifier_web import runtime_source_policy as policy
 from test_runtime_ref_identity import normalized_runtime, ROW, REVISION
 
 
+@pytest.mark.parametrize('protection', ['version', 'second-version', 'marker', 'source-array', 'override',
+                                        'version-override', 'version-constraint', 'optional-only', 'local'])
+def test_mapped_root_with_additional_policy_is_not_recovered(protection):
+    name = 'fixture-component'
+    source = {'git': ROW['url'], 'rev': 'main'}
+    uv = {'sources': {name: source}}
+    project = {'dependencies': [name]}
+    if protection == 'version':
+        project['dependencies'] = [name + '>=2']
+    elif protection == 'second-version':
+        project['dependencies'].append(name + '==1')
+    elif protection == 'marker':
+        source['marker'] = "sys_platform == 'darwin'"
+    elif protection == 'source-array':
+        uv['sources'][name] = [source]
+    elif protection == 'override':
+        uv['override-dependencies'] = [name + ' @ git+' + ROW['url'] + '@other']
+    elif protection in {'version-override', 'version-constraint'}:
+        key = 'override-dependencies' if protection == 'version-override' else 'constraint-dependencies'
+        uv[key] = [name + '==1']
+    elif protection == 'optional-only':
+        project = {'optional-dependencies': {'contributor': [name]}}
+    else:
+        uv['sources'][name] = {'path': './local'}
+    content = ('project = ' + environments.toml_value(project) +
+               '\ntool = ' + environments.toml_value({'uv': uv})).encode()
+    assert name not in policy.app_declarations(content)
+
+
 @pytest.fixture
 def prepared(tmp_path):
     home = tmp_path / 'app'
