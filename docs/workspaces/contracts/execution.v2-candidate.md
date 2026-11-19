@@ -599,6 +599,15 @@ provider-enforced maxima. Settled receipts replace their allowances; missing
 outcomes remain unknown. Limits cannot promise an exact spend cap. Already
 running effects may finish. Admission is serialized before provider effects.
 
+Model admission uses current explicit conversation and assignment limits with
+current execution receipts. A saved prior refusal is diagnostic evidence, not
+another policy or a veto on task continuation, peer input or yielding. A fresh
+eligible attempt rechecks those current owners regardless of input origin; it
+does not replay an admitted call, free unknown reservations, reset consumption,
+resume a deliberately paused/stopped task, or start terminal work after restart.
+A current nonrenewable refusal ends that attempt rather than spinning or
+re-notifying until policy changes.
+
 The host-wide model waiting policy defaults to no queue-count or wait-time
 ceiling (`maxWaitingCalls=0`, `waitTimeoutSeconds=0`). Positive values are optional
 operator limits. Waiting uses the existing admission queue and resumes on capacity

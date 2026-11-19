@@ -48,7 +48,7 @@ async def test_completed_input_charge_preserves_task_and_restart(tmp_path, monke
                 restored.tasks.reserve_peer_input('second', completed=True)
                 assert restored.tasks.record()['goalState']['turns_used'] == 4
             restored.capacity.last_denial = {'budgetRevision': restored.capacity.policy['revision']}
-            assert not await restored.tasks.peer_input_allowed(completed=True)
+            assert await restored.tasks.peer_input_allowed(completed=True)
             assert restored.capacity.last_denial
         finally:
             await restored.close()

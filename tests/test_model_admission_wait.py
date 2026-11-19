@@ -185,6 +185,34 @@ async def test_current_cumulative_policy_still_blocks_when_slot_releases(app, pr
     assert app.assignments.usage(app.assignments.current(source))['metrics']['grossTotalTokens']['value'] == 10
 
 
+async def test_nonrenewable_refusal_finishes_once_without_spin_or_renotification(app, providers, monkeypatch):
+    from amplifier_web import capacity_wait
+    source = app.state['sessions'][0]
+    app.assignments.ensure(source, 'nonrenewable-refusal')
+    await limits(app, source, maxTotalTokens=1, reserveTokens=2)
+    attempts, notifications = [], []
+    original_admit, original_notify = capacity_wait.admission, app.coordination.notify
+    async def counted(*args, **kwargs):
+        attempts.append(True)
+        return await original_admit(*args, **kwargs)
+    def notify():
+        notifications.append(True)
+        return original_notify()
+    monkeypatch.setattr(capacity_wait, 'admission', counted)
+    monkeypatch.setattr(app.coordination, 'notify', notify)
+    refused = providers(source)
+    with pytest.raises(ValueError, match='insufficient unreserved'):
+        await refused.start()
+    observed = len(notifications)
+    app.coordination.notify()  # Unrelated capacity publication cannot restart a terminal attempt.
+    await asyncio.sleep(.1)
+    assert attempts == [True] and len(notifications) == observed + 1
+    assert all(task.done() for task in refused.running) and not refused.called
+    assert not app._model_admission_waiters
+    assert refused.control.capacity.last_denial
+    assert app.assignments.usage(app.assignments.current(source))['calls'] == 0
+
+
 async def test_held_reservations_wait_but_real_spend_is_not_erased(app, providers):
     source, target, first, second, a, b = await waiting_pair(
         app, providers, maxTotalTokens=100, reserveTokens=60)
