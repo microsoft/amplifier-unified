@@ -91,9 +91,30 @@ def test_reset_preserves_installed_optional_features(repair_tree, monkeypatch, e
     monkeypatch.setattr(reset, "verify", lambda prefix, env, selected=(): probes.append((list(selected), dict(env))))
     reset.repair(home, "uv", tool, bins, "trusted.whl", {}, None, True)
     install = next(call for call in calls if call[:3] == ("uv", "tool", "install"))
-    assert install[-1] == ("amplifier-unified[" + ",".join(extras) + "]" if extras else "amplifier-unified")
+    assert install[-1] == ("amplifier-unified[" + ",".join(extras) + "] @ trusted.whl" if extras else "trusted.whl")
+    assert "--from" not in install
     expected_env = {"PLAYWRIGHT_BROWSERS_PATH": str(home / "browsers")} if "managed-browser" in extras else {}
     assert probes == [(extras, expected_env)]
+
+
+@pytest.mark.parametrize("kind", ["wheel", "directory", "git", "https"])
+def test_reset_attaches_extras_to_explicit_source(repair_tree, monkeypatch, kind, tmp_path):
+    home, tool, bins = repair_tree
+    monkeypatch.setenv("TEST_RESET_TOOLS", str(tool))
+    monkeypatch.setattr(reset, "installed_extras", lambda prefix: ["managed-browser"])
+    if kind in ("wheel", "directory"):
+        local = tmp_path / ("candidate with spaces.whl" if kind == "wheel" else "source tree")
+        local.touch() if kind == "wheel" else local.mkdir()
+        source, origin = str(local), local.as_uri()
+    else:
+        source = ("git+https://github.com/microsoft/amplifier-unified.git@" + "a" * 40
+                  if kind == "git" else "https://example.invalid/candidate.whl#sha256=" + "b" * 64)
+        origin = source
+    calls = fake_install(monkeypatch)
+    reset.repair(home, "uv", tool, bins, source, {}, None, True)
+    install = next(call for call in calls if call[:3] == ("uv", "tool", "install"))
+    assert install == ("uv", "tool", "install", "--force", "--python", "3.13",
+                       "amplifier-unified[managed-browser] @ " + origin)
 
 
 def test_verify_passes_preserved_extras_to_probe(monkeypatch, tmp_path):
@@ -223,13 +244,13 @@ def test_running_old_worker_prevents_reset(monkeypatch, tmp_path):
         reset.assert_no_processes(tmp_path / "tools/amplifier-unified", tmp_path)
 
 
-def wheel(folder, name, files, requires=()):
+def wheel(folder, name, files, requires=(), extras=()):
     path = folder / f"{name}-1.0.0-py3-none-any.whl"
     with zipfile.ZipFile(path, "w") as archive:
         for key, value in files.items():
             archive.writestr(key, value)
         info = f"{name}-1.0.0.dist-info"
-        archive.writestr(info + "/METADATA", f"Metadata-Version: 2.1\nName: {name}\nVersion: 1.0.0\n" + "".join(f"Requires-Dist: {dep}\n" for dep in requires))
+        archive.writestr(info + "/METADATA", f"Metadata-Version: 2.1\nName: {name}\nVersion: 1.0.0\n" + "".join(f"Requires-Dist: {dep}\n" for dep in requires) + "".join(f"Provides-Extra: {extra}\n" for extra in extras))
         archive.writestr(info + "/WHEEL", "Wheel-Version: 1.0\nGenerator: reset-test\nRoot-Is-Purelib: true\nTag: py3-none-any\n")
         if name == "amplifier_unified":
             archive.writestr(info + "/entry_points.txt", "[console_scripts]\namplifier-unified = amplifier_web.cli:main\n")
@@ -238,11 +259,13 @@ def wheel(folder, name, files, requires=()):
 
 
 @pytest.mark.skipif(not os.environ.get("AMPLIFIER_RESET_TEST_UV"), reason="explicit DTU-only uv installation test")
-def test_real_uv_repairs_modified_packages_and_missing_dependencies(tmp_path):
+@pytest.mark.parametrize("preserve_extra", [False, True])
+def test_real_uv_repairs_modified_packages_and_missing_dependencies(tmp_path, preserve_extra):
     """Actual launcher/self replacement with uv, using synthetic local wheels."""
     uv = os.environ["AMPLIFIER_RESET_TEST_UV"]
     package = Path(reset.__file__).parent
-    dep = wheel(tmp_path, "reset_fixture_dependency", {"reset_fixture_dependency/__init__.py": "VALUE = 'fresh'\n"})
+    dep_name = "playwright" if preserve_extra else "reset_fixture_dependency"
+    dep = wheel(tmp_path, dep_name, {"reset_fixture_dependency/__init__.py": "VALUE = 'fresh'\n"})
     app = wheel(tmp_path, "amplifier_unified", {
         "amplifier_web/__init__.py": "__version__ = '1.0.0'\n",
         "amplifier_web/cli.py": (package / "cli.py").read_bytes(),
@@ -259,7 +282,7 @@ def test_real_uv_repairs_modified_packages_and_missing_dependencies(tmp_path):
         "amplifier_web/host/config.py": "from pathlib import Path\ndef app_home(): return Path.home() / '.amplifier-unified'\n",
         "amplifier_web/installation_health.py": "import json\ndef doctor(home): return {'ok': True}\nasync def status(home, wait=0): return {'ok': False, 'service': 'stopped'}\ndef display(result, **kw): print(json.dumps(result))\n",
         "amplifier_web/app_updates.py": "PROBE = \"import reset_fixture_dependency; assert reset_fixture_dependency.VALUE == 'fresh'\"\n",
-    }, [f"reset-fixture-dependency @ {dep.as_uri()}"])
+    }, [f"{dep_name.replace("_", "-")} @ {dep.as_uri()}" + ('; extra == "managed-browser"' if preserve_extra else "")], extras=["managed-browser"] if preserve_extra else [])
     # uv tool deliberately ignores virtualenv interpreters while resolving 3.13.
     # Keep the already-running standalone Python discoverable after HOME changes.
     interpreter_bin = str(Path(sys._base_executable).resolve().parent)
@@ -268,7 +291,7 @@ def test_real_uv_repairs_modified_packages_and_missing_dependencies(tmp_path):
            "AMPLIFIER_WEB_HOME": str(tmp_path / "data")}
     for key in ("AMPLIFIER_SOURCE_STORE", "PYTHONPATH"):
         env.pop(key, None)
-    installed = subprocess.run([uv, "tool", "install", "--no-cache", "--python", "3.13", str(app)], env=env, capture_output=True, text=True)
+    installed = subprocess.run([uv, "tool", "install", "--no-cache", "--python", "3.13", str(app) + ("[managed-browser]" if preserve_extra else "")], env=env, capture_output=True, text=True)
     assert installed.returncode == 0, installed.stdout + installed.stderr
     prefix = tmp_path / "tools/amplifier-unified"
     sites = next(prefix.glob("lib/python*/site-packages"))

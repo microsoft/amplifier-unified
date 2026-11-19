@@ -724,7 +724,13 @@ def _repair(home, uv, tool_root, bin_root, source, env, service, no_start, opera
         wait_until_unused(locks, prefix, home, timeout=30 if service else 0)
         progress("Unified is stopped", done=True)
         extras = installed_extras(prefix)
-        requirement = "amplifier-unified[" + ",".join(extras) + "]" if extras else "amplifier-unified"
+        # Put extras on the source requirement itself. uv rejects --from SOURCE
+        # combined with a separate NAME[extras] install request. Local paths need
+        # file URIs in a named PEP 508 direct reference (also handles spaces).
+        requirement = source
+        if extras:
+            origin = Path(source).resolve().as_uri() if "://" not in source and Path(source).exists() else source
+            requirement = "amplifier-unified[" + ",".join(extras) + "] @ " + origin
         if prefix.exists() or prefix.is_symlink():
             prefix.rename(tool_backup)
             moves.append((prefix, tool_backup))
@@ -733,7 +739,7 @@ def _repair(home, uv, tool_root, bin_root, source, env, service, no_start, opera
         progress("Recovery backup saved", done=True)
         installing = True
         progress("Installing a fresh copy")
-        download_command(uv, "tool", "install", "--force", "--python", "3.13", "--from", source, requirement,
+        download_command(uv, "tool", "install", "--force", "--python", "3.13", requirement,
                 env=env, timeout=1800)
         progress("Fresh copy installed", done=True)
         progress("Checking installed components")
