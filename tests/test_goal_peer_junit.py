@@ -13,7 +13,7 @@ spec.loader.exec_module(checker)
 
 def report():
     root = ET.Element("testsuites")
-    suite = ET.SubElement(root, "testsuite", tests="43", failures="0", errors="0", skipped="0")
+    suite = ET.SubElement(root, "testsuite", tests="44", failures="0", errors="0", skipped="0")
     for module, names in checker.EXPECTED.items():
         for name in sorted(names):
             ET.SubElement(suite, "testcase", classname=module, name=name)
