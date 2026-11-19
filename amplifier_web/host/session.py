@@ -13,6 +13,7 @@ from pathlib import Path
 from .config import HostConfig, expand_environment, load_config, merge, write_private, provider_mount_sources, provider_dropped
 from .components import HostComponents, ComponentResolver, compose_bundles, imagegen_defaults, capability_defaults, explicit_context_forwarding, installed_package_source
 from .components import declarations, git_source
+from ..surface_delivery import _accepts_exact_count
 from ..provider_environment import iter_provider_rows, materialize_bundle_providers
 
 LOOP_SOURCE = "git+https://github.com/microsoft/amplifier-module-loop-live@main"
@@ -48,6 +49,7 @@ def live_plan(plan, background_delegate=True):
             context.setdefault("config", {}).setdefault("durable_checkpoints", True)
             context["config"].setdefault("archive_recovery", True)
             context["config"].setdefault("foreground_continuation", True)
+            context["config"].setdefault("compaction_schedule", "after_turn")
         loop = node.get("session", {}).get("orchestrator", {})
         if loop.get("module") in {"loop-streaming", "loop-live"}:
             original = loop["module"]
@@ -166,7 +168,7 @@ class SelectedProvider:
                 return self._stream_selected(execution, method, request, kwargs)
             return selected_stream
         if name == "request_budget" and callable(method):
-            def selected_budget(request, *, request_options=None, **kwargs):
+            def selected_budget(request, *, request_options=None, require_measurement=False, **kwargs):
                 self._overflow_feedback.forget(request)
                 prior = next((row for row in self._selected_requests if row.original is request), None)
                 if prior is not None and prior.execution is not None and prior.execution is not execution:
@@ -183,6 +185,8 @@ class SelectedProvider:
                         **(kwargs.get('request_options') or {}),
                         **{key: value for key, value in kwargs.items()
                            if key not in {'request_options', 'context_estimate'}}})
+                    if require_measurement and _accepts_exact_count(method):
+                        kwargs['require_measurement'] = True
                     result = method(selected, **kwargs)
                 except BaseException:
                     self._forget_request(request)
@@ -1365,8 +1369,12 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                                         copy.deepcopy(coordinator.config.get("agents", {})))
         with startup_timing.phase('manager.settings'):
             if not snapshot:
-                with hook_configuration(coordinator):
-                    await configurator.apply_saved_settings(config.settings.get("configurator") or {})
+                settings = config.settings.get("configurator") or {}
+                if settings:
+                    with hook_configuration(coordinator):
+                        await configurator.apply_saved_settings(settings)
+                else:
+                    await configurator.apply_saved_settings(settings)
             configurator.take_snapshot()
         providers = coordinator.get("providers") or {}
         if not providers:

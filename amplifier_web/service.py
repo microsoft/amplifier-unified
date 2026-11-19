@@ -3363,7 +3363,9 @@ class AppService:
                     session['historyEdit'] = {'operationId':command_id or str(uuid.uuid4()),'messageId':original['id'],
                         'text':text,'via':'text' if original.get('via')=='text' else 'chat','inputOrigin':origin,
                         'attachments':copy.deepcopy(original.get('attachments',[])), 'replyTo':copy.deepcopy(original.get('replyTo')), 'phase':'working'}
-                    pending.append((self._edit_current,(copy.deepcopy(session),)))
+                    from .history_revision import edit_source
+                    pending.append((self._edit_current,({
+                        **edit_source(session), 'historyEdit': copy.deepcopy(session['historyEdit'])},)))
                 else:
                     session = self._new_session({'title':source['title']+' · edited','workspace':source['workspace'],'bundle':source['bundle']})
                     from .session_store import fork_session
@@ -4404,8 +4406,9 @@ class AppService:
             from .session_store import capture_edit_context
             source['historyEditContextDigest'] = await asyncio.to_thread(capture_edit_context, self.data_dir, source)
             await self.runtime.start(source, self.on_runtime_event)
+            from .history_revision import edit_source
             result = await self.runtime.control(source['id'], 'history.edit', {
-                'source':source,'messageId':edit['messageId'],'operationId':edit['operationId'],
+                'source':edit_source(source),'messageId':edit['messageId'],'operationId':edit['operationId'],
                 'text':edit['text'],'reply_context':edit.get('replyTo'),'attachments':edit['attachments']})
             async with self.lock:
                 current = self._session(source['id'])

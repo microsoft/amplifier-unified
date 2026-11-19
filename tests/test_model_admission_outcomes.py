@@ -12,7 +12,8 @@ from test_assignments import app, limits, start
 from test_task_continuity import controls
 
 
-async def native_attempt(app, source, control, *, identity, tools=(), history=(), final=False):
+async def native_attempt(app, source, control, *, identity, tools=(), history=(), final=False,
+                         active_goal=False):
     pytest.importorskip('amplifier_module_loop_live')
     from amplifier_core import AmplifierSession
     from amplifier_core.message_models import ChatResponse, TextBlock, ToolCall
@@ -22,6 +23,7 @@ async def native_attempt(app, source, control, *, identity, tools=(), history=()
     pending = None
     emitted = []
     telemetry = None
+    evaluations = []
 
     async def project(previous, event):
         if previous:
@@ -45,6 +47,13 @@ async def native_attempt(app, source, control, *, identity, tools=(), history=()
         'context': {'module': 'context-simple'}}, 'providers': []}, session_id=sid)
     await native.initialize()
     native.coordinator.register_capability('live.runtime', live)
+    if active_goal:
+        native.coordinator.session_state['goal'] = control.coordinator.session_state['goal']
+        native.coordinator.register_capability('live.continuation_guard', control.tasks.continuation_allowed)
+        async def unexpected_evaluation(*args):
+            evaluations.append(True)
+            raise AssertionError('A denied model request must not reach automatic goal evaluation')
+        native.coordinator.get('orchestrator')._evaluate_goal = unexpected_evaluation
     context = native.coordinator.get('context')
     for message in history:
         await context.add_message(message)
@@ -89,6 +98,15 @@ async def native_attempt(app, source, control, *, identity, tools=(), history=()
         else:
             await live.wait_for(lambda event: event['type'] == 'generation.failed', 3)
         await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), 3)
+        if active_goal:
+            assert task.done() and live.closed and live.generation is None
+            assert live.queued_inputs == 0 and live.inbox.empty() and not live.pending_steering
+            assert evaluations == []  # An orchestrator could swallow a raised evaluation error.
+            count = len(emitted)
+            await asyncio.sleep(.1)
+            assert len(emitted) == count  # No retry/notification loop after the failed attempt.
+            assert sum(e['type'] == 'generation.started' for e in emitted) == 1
+            assert sum(e['type'] == 'generation.failed' for e in emitted) == 1
         if pending:
             await pending
         if not final:
@@ -160,6 +178,44 @@ async def test_actual_loop_local_limit_retains_actionable_cause_and_fresh_contin
         assert not source.get('failure')
         assert control.capacity.last_denial is None
         assert any(e['type'] == 'generation.finished' for e in fresh_events)
+    finally:
+        await control.close()
+
+
+@pytest.mark.parametrize('restart', [False, True])
+async def test_current_nonrenewable_denial_ends_native_active_goal_without_spin(app, monkeypatch, restart):
+    source = app.state['sessions'][0]
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(app.data_dir))
+    await start(app)
+    await limits(app, source, maxTotalTokens=1, reserveTokens=2)
+    control = controls(source['id'])
+    try:
+        await control.perform('task.create', {
+            'commandId': 'active-denied-goal', 'expectedRevision': 0,
+            'objective': 'Keep working until verified', 'maxTurns': 4})
+        assert control.capacity.last_denial is None
+        if restart:
+            control.persist(task_only=True)
+            await control.close()
+            control = controls(source['id'])
+            await control.restore()
+        used = control.tasks.record()['goalState']['turns_used']
+        for index in range(3):
+            # Native user commands also carry host-framed peer inputs; source
+            # is always "user" at this adapter (not service observation).
+            # Each fresh input is one bounded attempt, not automatic re-entry.
+            calls, _, events = await native_attempt(
+                app, source, control, identity=f'current-denied-input-{index}',
+                active_goal=True)
+            assert calls == 0
+            assert not any(e['type'] == 'generation.finished' for e in events)
+            assert control.tasks.record()['goalState']['turns_used'] == used
+        assert control.tasks.record()['status'] == 'active'
+        assert source['failure']['category'] == 'model_capacity'
+        assert any('insufficient unreserved' in reason
+                   for reason in source['failure']['admission']['reasons'])
+        assert app.assignments.usage(app.assignments.current(source))['calls'] == 0
+        assert not app._model_admission_waiters
     finally:
         await control.close()
 

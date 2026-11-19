@@ -313,6 +313,20 @@ class Worker:
                               'costUsd': 0, 'costSource': 'host: provider not invoked'}})
             return {'allowed': False, 'state': 'cancelled',
                     'reasons': ['The native child execution changed before provider invocation.']}
+        from amplifier_web.execution_events import CALL_PURPOSE
+        if (result.get('allowed') and not CALL_PURPOSE.get() and not row.get('purpose')
+                and row.get('lifecycle') != 'background'):
+            # Some providers emit no provider:request hook. Successful ordinary
+            # admission supersedes optional preparation activity, not its
+            # retained failure diagnostics or any terminal generation outcome.
+            if row.get('sessionId') == self.session.session_id:
+                publish({'type': 'runtime.activity', 'phase': 'model', 'detail': 'Thinking...'})
+            else:
+                child_row = registry.rows.get(row['sessionId'], {})
+                publish({'type': 'worker.activity', 'workerId': row['sessionId'],
+                         'phase': 'model', 'detail': 'Thinking...',
+                         'name': child_row.get('agent', 'Worker'), 'callId': child_row.get('callId'),
+                         'runId': row.get('runId'), 'time': time.time()})
         return result
 
     def app_access_bridge(self, coordinator, *, assignment=None):
@@ -869,8 +883,9 @@ class Worker:
                       if event in {'tool:pre', 'tool:post', 'tool:error'} and isinstance(stamped, dict)
                       else HookResult())
             from amplifier_web.execution_events import CALL_PURPOSE
-            if CALL_PURPOSE.get() or event.startswith("llm:"):
-                # Naming calls retain their measured usage, but do not own the
+            maintenance = event.startswith("context:compaction_") and data.get("context_work") == "settled_maintenance"
+            if CALL_PURPOSE.get() or event.startswith("llm:") or maintenance:
+                # Auxiliary work retains telemetry without taking over the
                 # conversation's busy indicator or a delegated worker's state.
                 return result
             phase = "model"
@@ -901,7 +916,9 @@ class Worker:
                 if outcome == "completed":
                     detail = "Conversation context prepared; continuing work."
                 elif isinstance(outcome, str) and outcome in {"failed", "cancelled", "superseded"}:
-                    detail = f"Context preparation {outcome}."
+                    # This event closes optional compaction. Foreground fitting
+                    # can still run before admission or a real terminal error.
+                    detail = "Preparing the current request."
             elif event == "provider:retry":
                 phase = "retrying"
                 attempt, maximum = data.get("attempt"), data.get("max_retries")
@@ -1511,6 +1528,10 @@ class Worker:
         if op == "stop":
             self.stop_revision += 1
             self.computer_episodes.fence()
+            if self.session:
+                cancel = getattr(self.session.coordinator.get('context'), 'cancel_settled_compaction', None)
+                if callable(cancel):
+                    cancel()
         if op == "computer.stop":
             # Independent input path: do not await a selector, native worker,
             # serialized control or the next model/tool hook.

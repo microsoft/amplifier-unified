@@ -1,7 +1,7 @@
 """Steering contracts run with worker dependencies, without the host service."""
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -180,10 +180,16 @@ async def test_worker_rejects_closing_or_stopped_run_before_admission(monkeypatc
 
 
 @pytest.mark.parametrize('stop_at', ['preparation', 'admission_lock'])
-async def test_outer_worker_stop_fences_waiting_ordinary_input(monkeypatch, stop_at):
+@pytest.mark.parametrize('settled_maintenance', [False, True], ids=['no-maintenance', 'cancellable'])
+async def test_outer_worker_stop_fences_waiting_ordinary_input(monkeypatch, stop_at, settled_maintenance):
+    from amplifier_core import AmplifierSession
     from amplifier_module_loop_live.runtime import Runtime
     runtime = Runtime()
-    worker = owned_worker(runtime, SimpleNamespace(coordinator=object()), object())
+    session = AmplifierSession({'session': {'orchestrator': 'loop-live', 'context': 'context-simple'}})
+    cancel = Mock()
+    context = SimpleNamespace(cancel_settled_compaction=cancel) if settled_maintenance else SimpleNamespace()
+    await session.coordinator.mount('context', context)
+    worker = owned_worker(runtime, session, object())
     replies, entered, release = [], asyncio.Event(), asyncio.Event()
     monkeypatch.setattr('amplifier_web.runtime_worker.publish', replies.append)
     async def prepare(*args, **kwargs):
@@ -199,6 +205,7 @@ async def test_outer_worker_stop_fences_waiting_ordinary_input(monkeypatch, stop
     else:
         await asyncio.sleep(0)
     await worker.command({'op': 'stop'})
+    assert cancel.call_count == int(settled_maintenance)
     release.set()
     if stop_at == 'admission_lock':
         worker.command_lock.release()
@@ -207,6 +214,7 @@ async def test_outer_worker_stop_fences_waiting_ordinary_input(monkeypatch, stop
     assert result['accepted'] is False and result['effect'] == 'none'
     assert 'old-intent' not in runtime.accepted
     assert runtime.stop_requested
+    await session.cleanup()
 
 
 async def test_outer_worker_rechecks_owner_and_preserves_payload_dedup(monkeypatch):

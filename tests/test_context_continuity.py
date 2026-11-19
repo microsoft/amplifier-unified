@@ -1,4 +1,5 @@
 """Host adapter against the actual context-managed module and maintained dev dependencies."""
+import asyncio
 import copy
 from contextlib import asynccontextmanager
 import inspect
@@ -46,6 +47,50 @@ async def mount(directory, messages, *, context_config=None):
         if adapter: adapter.save()
     adapter = ContextContinuity(coordinator, 'session', directory, checkpoint)
     return coordinator, provider, adapter, checkpoint, transcript
+
+
+@pytest.mark.parametrize('concurrent_change', [False, True])
+async def test_warm_idle_model_switch_binds_current_identity_before_fitting(
+        tmp_path, monkeypatch, concurrent_change):
+    from amplifier_core import ProviderInfo
+    from amplifier_web.host.session import SelectedProvider
+    original = [{'role': 'user', 'content': 'Retain originals and answer.'}]
+    coordinator, raw, adapter, _, _ = await mount(tmp_path, original,
+        context_config={'durable_checkpoints': True, 'foreground_continuation': True,
+                        'max_tokens': 6000, 'summarize_trigger': .9, 'archive_recovery': False})
+    raw.name = 'fixture'
+    raw.get_info = lambda: ProviderInfo(id='fixture', display_name='Fixture',
+                                      defaults={'model': 'model-a'})
+    providers = {'connection': raw}
+    get = coordinator.get
+    coordinator.get = lambda name: providers if name == 'providers' else get(name)
+    coordinator.loop.root_provider = SelectedProvider(raw, {'instance': 'connection', 'model': 'model-a'})
+    await adapter.preserve(original)  # Warm A is already cached.
+    assert adapter._identity == {'provider': 'connection', 'model': 'model-a'}
+    coordinator.loop.root_provider = SelectedProvider(raw, {'instance': 'connection', 'model': 'model-b'})
+    selected = coordinator.loop.root_provider
+    assert selected.default_model == 'model-b'
+    counted = []
+
+    async def count(view):
+        from amplifier_core.message_models import ChatRequest, Message
+        counted.append(copy.deepcopy(view))
+        if concurrent_change:
+            coordinator.loop.root_provider = SelectedProvider(raw, {'instance': 'connection', 'model': 'model-c'})
+        return {'dispatch': ChatRequest(messages=[Message(**row) for row in view]),
+                'budget_decision': None}
+
+    if concurrent_change:
+        with pytest.raises(RuntimeError, match='Request contract changed'):
+            await coordinator.context.get_measured_request_view(
+                provider=selected, count_view=count, retain_contents=[])
+    else:
+        view = await coordinator.context.get_measured_request_view(
+            provider=selected, count_view=count, retain_contents=[])
+        assert view and counted
+        assert adapter._identity == {'provider': 'connection', 'model': 'model-b'}
+    assert await coordinator.context.get_messages() == original
+    raw.complete.assert_not_awaited()
 
 
 async def test_actual_context_multiple_compactions_restart_and_saved_task(tmp_path, monkeypatch):
@@ -199,7 +244,7 @@ class SyntheticNativeProvider:
 
     async def complete(self, request, **kwargs):
         self.sent.append(request.model_copy(deep=True))
-        return SimpleNamespace(content=[])
+        return SimpleNamespace(content=[SimpleNamespace(type='text', text='Synthetic final answer.')])
 
 
 async def native_fixture(directory, original, *, provider=None, context_config=None):
@@ -228,10 +273,42 @@ async def native_fixture(directory, original, *, provider=None, context_config=N
             tools=[ToolSpec(name='fixture_read', description='Read only', parameters={})])
         return {'dispatch': request, 'budget_decision':
                 await selected.request_budget(request, context_estimate=10000)}
-    async def prepare():
-        return await coordinator.context.get_measured_request_view(
-            provider=selected, retain_contents=['Accepted reminder: retain result identities.'],
-            count_view=count_view)
+    async def prepare(*, finish_turn=False):
+        options = dict(provider=selected, retain_contents=['Accepted reminder: retain result identities.'],
+                       count_view=count_view)
+        before = len(raw.compactions)
+        result = await coordinator.context.get_measured_request_view(**options)
+        if not finish_turn:
+            return result
+        after_turn = coordinator.context.requires_measured_foreground
+        expected = before if after_turn else before + 1
+        assert len(raw.compactions) == expected
+        if transaction := result.get('transaction'):
+            assert await transaction.commit()
+        response = await selected.complete(result['final_attempt']['dispatch'])
+        await coordinator.context.add_message({'role': 'assistant', 'content': response.content[0].text})
+        await checkpoint()
+        schedule = coordinator.context.schedule_settled_compaction
+        if not after_turn:
+            assert not schedule(**options)
+            return result
+
+        # Wait for maintenance to change the durable checkpoint through the host.
+        previous = adapter.path.read_bytes() if adapter.path.exists() else None
+        saved = asyncio.Event()
+        persist = coordinator.get_capability('context.persist_checkpoint')
+        def observe_save():
+            outcome = persist()
+            if adapter.path.is_file() and adapter.path.read_bytes() != previous:
+                saved.set()
+            return outcome
+        coordinator.register_capability('context.persist_checkpoint', observe_save)
+        try:
+            assert schedule(**options)
+            await asyncio.wait_for(saved.wait(), timeout=5)
+        finally:
+            coordinator.register_capability('context.persist_checkpoint', persist)
+        return result
     return coordinator, raw, selected, adapter, checkpoint, transcript, prepare
 
 
@@ -1352,43 +1429,53 @@ async def test_lazy_restore_requires_committed_recovery_candidate(tmp_path, stat
 
 
 @pytest.mark.parametrize('explicit_engine', [False, True])
-async def test_live_plan_default_boundary_retains_native_checkpoint_across_reload(tmp_path, explicit_engine):
+@pytest.mark.parametrize('foreground_opt_out', [False, True], ids=['after_turn', 'foreground'])
+async def test_live_plan_default_boundary_retains_native_checkpoint_across_reload(
+        tmp_path, explicit_engine, foreground_opt_out):
     from amplifier_web.host.session import live_plan
     from amplifier_core import ChatRequest, Message
     requested = {'module': 'context-managed', 'config': {
         'max_tokens': 20000, 'summarize_trigger': .2,
         # This checks checkpoint continuity, not archive selection/omission.
         'archive_recovery': False,
+        **({'compaction_schedule': 'foreground'} if foreground_opt_out else {}),
         **({'engine': 'boundary'} if explicit_engine else {})}}
     plan, _ = live_plan({'session': {'orchestrator': 'loop-live', 'context': requested}})
     config = plan['session']['context']['config']
     original = native_history()
     original[1]['content'] = 'FILLER:' + 'research ' * 12000
 
-    c, raw, _, adapter, checkpoint, transcript, prepare = await native_fixture(
+    c, raw, _, adapter, _, transcript, prepare = await native_fixture(
         tmp_path, original, context_config=config)
+    assert c.context.requires_measured_foreground is (not foreground_opt_out)
     raw_limit = raw.input_limit
     # Canonical history is larger than the continuation budget, not merely
     # above a trigger. The fake native compactor accepts a larger source window.
     base_budget = raw.request_budget(ChatRequest(messages=[Message(**row) for row in original]))
     assert base_budget['estimated_input_tokens'] > raw_limit
     raw.input_limit = 50000
-    result = await prepare()
+    if not foreground_opt_out:
+        foreground = await prepare()
+        assert foreground['final_attempt']['budget_decision']['estimated_input_tokens'] < raw_limit
+        assert raw.compactions == raw.sent == []
+        assert c.context.summary is None and not adapter.path.exists()
+    result = await prepare(finish_turn=True)
+    settled = await c.context.get_messages()
     assert result['final_attempt']['budget_decision']['estimated_input_tokens'] < raw_limit
-    await checkpoint()
     assert adapter.path.is_file(), 'Default Boundary must persist the accepted native checkpoint'
     first = json.loads(adapter.path.read_text())
     saved_bytes = adapter.path.read_bytes()
     assert first['summary']['kind'] == 'native'
-    assert json.loads(transcript.read_text()) == original
-    assert raw.sent == [] and len(raw.compactions) == 1
+    assert settled[:-1] == original
+    assert json.loads(transcript.read_text()) == settled
+    assert len(raw.sent) == len(raw.compactions) == 1
 
     # A fresh context/host adapter receives the same originals but cannot
     # compact this prefix again. Only restoring the accepted checkpoint works.
     next_raw = SyntheticNativeProvider()
     next_raw.nonreducing = True
     newer, next_raw, _, restored, _, _, next_prepare = await native_fixture(
-        tmp_path, original, provider=next_raw, context_config=config)
+        tmp_path, settled, provider=next_raw, context_config=config)
     restored.save()
     assert restored.path.read_bytes() == saved_bytes
     fitted = await next_prepare()
@@ -1397,7 +1484,7 @@ async def test_live_plan_default_boundary_retains_native_checkpoint_across_reloa
     assert next_raw.compactions == next_raw.sent == []
     assert next_raw.counted, 'Restoration still counts; it is not zero provider calls'
     assert fitted['final_attempt']['budget_decision']['estimated_input_tokens'] < raw_limit
-    assert await newer.context.get_messages() == original
+    assert await newer.context.get_messages() == settled
 
     next_raw.nonreducing = False
     for row in [
@@ -1408,12 +1495,17 @@ async def test_live_plan_default_boundary_retains_native_checkpoint_across_reloa
     ]:
         await newer.context.add_message(row)
     next_raw.input_limit = 50000
+    if not foreground_opt_out:
+        foreground = await next_prepare()
+        assert foreground['final_attempt']['budget_decision']['estimated_input_tokens'] < raw_limit
+        assert next_raw.compactions == next_raw.sent == []
+        assert restored.path.read_bytes() == saved_bytes
+    await next_prepare(finish_turn=True)
     second_view = await next_prepare()
-    restored.save()
     second = json.loads(restored.path.read_text())
     assert second['summary']['throughMessage'] > first['summary']['throughMessage']
     assert second_view['final_attempt']['budget_decision']['estimated_input_tokens'] < raw_limit
-    assert len(next_raw.compactions) == 1 and next_raw.sent == []
+    assert len(next_raw.compactions) == len(next_raw.sent) == 1
     text = json.dumps(next_raw.expanded(second_view['final_attempt']['dispatch']))
     for required in ('Build report; keep originals.', 'report-v1; effect completed once.',
                      'Correction: use report-v2.', 'Correction: keep report-v3 too.',

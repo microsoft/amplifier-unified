@@ -35,6 +35,49 @@ def source(tmp_path):
             ('user','First user turn'),('assistant','First answer'),('user','Second user turn'),('assistant','Second answer')])]}
 
 
+async def test_edit_transport_projects_unrelated_host_state_before_copy(tmp_path, monkeypatch):
+    from amplifier_web import history_revision
+    from amplifier_web.runtime_protocol import encode_message, MAX_MESSAGE_BYTES
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    src = source(tmp_path)
+    blob = 'x' * MAX_MESSAGE_BYTES
+    src.update(execution={'nodes': [{'kind': 'tool', 'output': blob}]},
+               historyEdit={'text': blob}, draft=blob, workers=[{'report': blob}])
+    attachment = {'id': 'a' * 32, 'name': 'fixture.png', 'size': 1_000_000}
+    src['messages'][2]['attachments'] = [attachment]
+    arguments = {'source': src, 'messageId': '2', 'operationId': 'projected-edit',
+                 'text': 'Small edited question', 'attachments': [attachment]}
+    envelope = {'op': 'control', 'operation': 'history.edit', 'arguments': arguments}
+    with pytest.raises(ValueError, match='48 MB transport limit'):
+        encode_message(envelope)  # Baseline causal path, before native mutation.
+
+    class NoCopy(dict):
+        def __deepcopy__(self, memo):
+            raise AssertionError('Unrelated execution must not be copied')
+    src['execution'] = NoCopy(src['execution'])
+    frozen = history_revision.edit_source(src)
+    arguments['source'] = frozen
+    assert len(encode_message(envelope)) < 10_000
+    assert frozen['messages'] == src['messages']
+    assert frozen['messages'] is not src['messages']
+    assert frozen['messages'][2]['attachments'] == [attachment]
+    assert not {'execution', 'historyEdit', 'draft', 'workers'} & frozen.keys()
+    controls = Controls(tmp_path, frozen, transcript())
+    await controls.checkpoint()
+    result = await rewind(controls, arguments)
+    assert controls.rows == transcript()[:6]
+    assert [row['text'] for row in result['messages']] == ['First user turn', 'First answer']
+    assert len(encode_message({'type': 'history.revised', **result})) < 10_000
+    assert src['draft'] == blob and src['messages'][2]['attachments'] == [attachment]
+
+    # Required message content is never truncated to fit. Reject it before the
+    # worker command, checkpoint, rewind or input submission can run.
+    src['messages'][0]['text'] = blob
+    required = history_revision.edit_source(src)
+    with pytest.raises(ValueError, match='48 MB transport limit'):
+        encode_message({**envelope, 'arguments': {**arguments, 'source': required}})
+
+
 async def test_rewind_retains_tool_context_and_all_events_under_same_identity(tmp_path, monkeypatch):
     monkeypatch.setenv('AMPLIFIER_WEB_HOME',str(tmp_path))
     src=source(tmp_path);controls=Controls(tmp_path,src,transcript());await controls.checkpoint()
@@ -257,9 +300,9 @@ def test_edit_snapshot_metadata_retry_preserves_content_guard(tmp_path, monkeypa
     original = history._read_metadata
     calls = 0
 
-    def racing_read(path):
+    def racing_read(path, **kwargs):
         nonlocal calls
-        result = original(path)
+        result = original(path, **kwargs)
         calls += 1
         if calls == 1:
             path.write_text(json.dumps({**result, 'name': 'New title'}))

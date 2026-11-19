@@ -99,6 +99,7 @@ DYNAMIC = {
     'amplifier_web/reset_retention.py::Retention::__file__::spec = importlib.util.spec_from_file_location("reset", Path(__file__).with_name("reset.py"))': ('amplifier_web/reset.py',),  # Loads the standalone reset command.
     'amplifier_web/reset_retention.py::Retention::spec_from_file_location::spec = importlib.util.spec_from_file_location("reset", Path(__file__).with_name("reset.py"))': ('amplifier_web/reset.py',),  # Loads the standalone reset command.
     "amplifier_web/update_readiness.py::running_identity::__file__::if Path(distribution.locate_file('amplifier_web')).resolve() == Path(__file__).parent.resolve():": (),  # Compares the package path.
+    "amplifier_web/updates.py::process::__file__::launcher = Path(__file__).with_name('mac_uv_exec.py')": (),  # macOS-only uv child.
     'amplifier_web/windows_app_recovery.py::restore::-c::result = subprocess.run([str(prefix / "Scripts/python.exe"), "-I", "-c", components.GRAPH_PROBE],': (),  # Reads metadata; imports no app code.
     'amplifier_web/windows_consumer.py::audit::-c::result = subprocess.run([sys.executable, "-I", "-c", GRAPH_PROBE],': (),  # Reads metadata; imports no app code.
     'amplifier_web/windows_consumer.py::installation::__file__::if (Path(sys.prefix) != prefix or Path(dist.locate_file("amplifier_web")) != Path(__file__).parent': (),  # Compares the package path.

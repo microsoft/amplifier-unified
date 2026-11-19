@@ -142,6 +142,7 @@ async def test_native_child_continues_after_parent_finished(app, tmp_path, monke
         value = normalize_event(event, sid)
         if value: emissions.append(asyncio.create_task(app.on_runtime_event(*value)))
     telemetry = ExecutionEvents(sid, publish)
+    monkeypatch.setattr('amplifier_web.runtime_worker.publish', publish)
     worker.telemetry = telemetry
     telemetry.lifecycle({'type': 'input.delivered', 'input_id': original_input})
     telemetry.admission_guard = control.capacity.guard

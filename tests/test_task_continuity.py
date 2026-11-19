@@ -78,7 +78,7 @@ async def test_dependency_block_input_policy_is_owned_and_not_goal_resume(tmp_pa
                 assert restored.tasks.record()["revision"] == before["revision"]
                 assert restored.coordinator.session_state["goal"] is None
                 restored.capacity.last_denial = {"budgetRevision": restored.capacity.policy["revision"]}
-                assert not await restored.tasks.peer_input_allowed()
+                assert await restored.tasks.peer_input_allowed()
                 assert restored.capacity.last_denial
                 restored.tasks.reserve_peer_input("third")
                 with pytest.raises(ValueError, match="exhausted"):
@@ -92,6 +92,38 @@ async def test_dependency_block_input_policy_is_owned_and_not_goal_resume(tmp_pa
         assert not await control.tasks.peer_input_allowed()
     finally:
         await control.close()
+
+
+@pytest.mark.parametrize("status", ["active", "paused", "blocked", "completed"])
+async def test_saved_denial_does_not_rewrite_lifecycle_or_consumption_after_restart(tmp_path, monkeypatch, status):
+    monkeypatch.setenv("AMPLIFIER_WEB_HOME", str(tmp_path))
+    control = controls()
+    restored = None
+    try:
+        await create(control, maxTurns=4)
+        control.coordinator.session_state["goal"]["turns_used"] = 2
+        if status != "active":
+            action = {"paused": "pause", "blocked": "block", "completed": "complete"}[status]
+            extra = {"reason": "Human hold"} if status == "blocked" else (
+                {"condition": control.tasks.record()["objective"], "evidence": ["exact result"]}
+                if status == "completed" else {})
+            await control.perform("task." + action, {
+                "commandId": status, "expectedRevision": 1, "origin": "ui", **extra})
+        control.capacity.last_denial = {
+            "budgetRevision": control.capacity.policy["revision"], "reasons": ["Old allowance"]}
+        control.persist(task_only=True)
+        before = copy.deepcopy(control.tasks.record())
+        restored = controls()
+        await restored.restore()
+        assert await restored.tasks.continuation_allowed() is (status == "active")
+        assert not await restored.tasks.peer_input_allowed()
+        assert restored.tasks.record() == before
+        assert restored.tasks.record()["goalState"]["turns_used"] == 2
+        assert restored.capacity.last_denial == control.capacity.last_denial
+    finally:
+        await control.close()
+        if restored:
+            await restored.close()
 
 
 def test_legacy_dependency_origin_requires_recorded_active_transition():

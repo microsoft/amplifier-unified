@@ -341,7 +341,7 @@ async def test_image_dispatch_retains_child_run_and_rejects_replaced_coordinator
     root_capabilities = {'live.children': registry}
     worker = Worker()
     worker.session = SimpleNamespace(session_id=sid, coordinator=SimpleNamespace(
-        session_id=sid, get_capability=root_capabilities.get))
+        session_id=sid, session_state={}, get_capability=root_capabilities.get))
     worker.runtime = SimpleNamespace(session_id=sid, closed=False, stop_requested=False,
         generation={'id': generation['id'], 'input_ids': list(generation['inputIds'])})
     worker.activation_gate = SimpleNamespace(current_valid=True)

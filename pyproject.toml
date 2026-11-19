@@ -1,6 +1,6 @@
 [project]
 name = "amplifier-unified"
-version = "0.111.1"
+version = "0.111.4"
 description = "A local voice-first Amplifier workspace with a shared user and agent interface"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -131,8 +131,8 @@ default = true
 dev = [
     "pytest>=8", "pytest-asyncio>=0.25", "pytest-aiohttp>=1.1", "hatchling>=1.27",
     # Offline native-input fixtures use the real loop/context, not a fake mount.
-    # Accepted source includes session image delivery and compaction failures.
-    "amplifier-module-loop-live @ git+https://github.com/microsoft/amplifier-module-loop-live@eafd20d31afa2635563deb333b931c1663398aec",
+    # Accepted main includes the bounded compaction failure vocabulary.
+    "amplifier-module-loop-live @ git+https://github.com/microsoft/amplifier-module-loop-live@ddc44d50352c5015c7e27617de5eb389168b3f32",
     # Real finite/resumed/persistent custody checks use the selected Foundation tool.
     "amplifier-module-tool-delegate @ git+https://github.com/microsoft/amplifier-foundation@05082c89a171758f8d0fb9d8df630ea581e5bdb5#subdirectory=modules/tool-delegate",
     # Match context-managed's authored source; uv.lock records the exact test
@@ -140,10 +140,10 @@ dev = [
     "amplifier-module-context-simple @ git+https://github.com/microsoft/amplifier-module-context-simple@main",
     # Accepted ordinary-turn continuation source; provider stays on the existing locked
     # source shared with the optional decisions extra.
-    "amplifier-module-context-managed @ git+https://github.com/microsoft/amplifier-bundle-context-managed@694cf37c00f3f09fbc16c6120289298759c0c06a#subdirectory=modules/context-managed",
+    "amplifier-module-context-managed @ git+https://github.com/microsoft/amplifier-bundle-context-managed@a4464af2027f4e03fe7fc388d8d8e3e8ff436da2#subdirectory=modules/context-managed",
     "amplifier-module-provider-openai[native] @ git+https://github.com/microsoft/amplifier-module-provider-openai@main",
     # Cold selected-model budget and private overflow feedback integration.
-    "amplifier-module-provider-anthropic @ git+https://github.com/microsoft/amplifier-module-provider-anthropic@fa1adae32eea495b0b9214cd03baa9d63f43517b",
+    "amplifier-module-provider-anthropic @ git+https://github.com/microsoft/amplifier-module-provider-anthropic@498d20d6caebb45d7493888b38c5358be02ac595",
     # Same real QuickJS dispatcher used by the maintained native-check workflow.
     "amplifier-module-tool-exec @ git+https://github.com/microsoft/amplifier-module-tool-exec@f267548ccd1b38a236a46afb96252bb6dd474dcd",
     # Ordinary-root switch fixtures retain the real local capture hook offline.

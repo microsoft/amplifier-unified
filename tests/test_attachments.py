@@ -294,7 +294,7 @@ async def test_attachment_http_images_inline_documents_download(authenticated_cl
     assert (await client.get('/api/attachments/' + '0' * 32)).status == 404
 
 
-def test_real_core_loop_live_persists_composer_image():
+def test_real_core_loop_live_receives_multimodal_message():
     python = os.environ.get('UNIFIED_RUNTIME_PYTHON')
     if not python:
         pytest.skip('Set UNIFIED_RUNTIME_PYTHON for real Core/loop-live multimodal verification')

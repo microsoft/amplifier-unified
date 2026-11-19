@@ -10,6 +10,25 @@ from .session_store import fork_session
 from .session_files import validate_id
 
 
+def edit_source(session):
+    """Freeze only edit provenance, visible content and runtime startup inputs.
+
+    The owned worker loads canonical native history from its existing store.
+    Host execution/accounting, drafts and duplicate edit/UI state are neither
+    rewind inputs nor provider context. Keep complete required message content,
+    attachments and anchors; oversized required inputs still fail the wire bound.
+    """
+    fields = (
+        'id', 'workspace', 'workingDirectory', 'executionRevision', 'interruptionRevision',
+        'bundle', 'selection', 'forkContext', 'replaceSavedSelection', 'bundleReplacement',
+        'runtimeSessionId', 'nativeIdentity', 'nativeProject', 'nativeRevision',
+        'configurationPendingRevision', 'runtimeReport', 'messages', 'createdAt',
+        'historyManaged', 'historyEditContextDigest', 'sharedHistoryOffset',
+        'sharedHistoryUserTurnOffset', 'sharedHistoryTotal',
+    )
+    return copy.deepcopy({key: session[key] for key in fields if key in session})
+
+
 def receipt_path(home, identity, operation_id):
     validate_id(identity)
     # Command IDs are protocol identities, not filesystem path components.

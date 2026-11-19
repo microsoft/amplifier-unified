@@ -146,7 +146,7 @@ def version_tuple(value):
 def supersedes_staged(release, pending):
     """Only a newer published app may supersede an unactivated app candidate."""
     latest = version_tuple(release.get('latest'))
-    staged = version_tuple(pending.get('latest'))
+    staged = version_tuple(pending.get('latest') or pending.get('version'))
     return bool(not pending.get('featureSelection') and release.get('status') == 'update'
                 and release.get('canInstall') is not False and latest and staged and latest > staged
                 and re.fullmatch('[a-f0-9]{40}', str(release.get('revision', '')))
@@ -161,25 +161,31 @@ async def check_staged(manager):
     leaves the previously qualified target usable, including while offline.
     """
     state = manager.service.state['updates']
-    pending = state['pendingApp']
+    pending_app = state.get('pendingApp')
+    pending = pending_app or manager.running_identity
     await manager.publish(applicationCheckPending=True, lastAttempt=time.time())
     try:
         release = await check()
         previous = state.get('application', {})
         if release.get('status') == 'check_failed':
-            await manager.publish(applicationCheckWarning='Could not check for a newer release. The prepared update is still available.')
+            await manager.publish(applicationCheckWarning=(
+                'Could not check for a newer release. The prepared update is still available.'
+                if pending_app else 'Could not check for a newer application release. The staged Smart Tool is kept.'))
             return
         # A stale mirror/older channel result must not discard a newer known
         # target, downgrade a candidate, or relabel a moved tag as validated.
         known = previous if supersedes_staged(previous, pending) else pending
-        if (supersedes_staged(release, known)
-                or (release.get('revision') == known.get('revision')
-                    and version_tuple(release.get('latest')) == version_tuple(known.get('latest')))):
+        matches = (release.get('revision') == known.get('revision')
+                   and version_tuple(release.get('latest')) == version_tuple(known.get('latest')))
+        if supersedes_staged(release, known) or (
+                matches and (pending_app or supersedes_staged(release, manager.running_identity))):
             release['runningRevision'] = manager.running_identity['revision']
             items = [release if row.get('id') == 'application' else row for row in state.get('items', [])]
             if not any(row.get('id') == 'application' for row in items):
                 items.append(release)
-            await manager.publish(application=release, items=items, appAvailable=True)
+            counts = {} if pending_app else {
+                'available': max(1, state.get('available', 0) + int(not state.get('appAvailable')))}
+            await manager.publish(application=release, items=items, appAvailable=True, **counts)
         await manager.publish(lastCheck=time.time(), applicationCheckWarning=None)
     finally:
         await manager.publish(applicationCheckPending=False, pendingAppCheckAt=time.time())

@@ -442,6 +442,10 @@ async def native_wait(tmp_path, monkeypatch):
     host.pump = asyncio.create_task(host.route_events())
     try:
         worker = await host.mount(source, parent, paths)
+        worker.controls.capacity.policy.update(enabled=True, maxTotalTokens=1000)
+        worker.controls.capacity.last_denial = {
+            "budgetRevision": worker.controls.capacity.policy["revision"], "reasons": ["Obsolete allowance"]}
+        worker.controls.persist(task_only=True)
         peer_worker = await host.mount(target, peer, paths)
         unavailable_request_boundary(worker)
         async def satisfied(*args):
@@ -485,6 +489,9 @@ def saved_receipts(f):
 
 async def test_eligibility_is_read_only_and_preserves_exact_goal_state(native_wait):
     f = native_wait
+    f.worker.controls.capacity.last_denial = {
+        "budgetRevision": f.worker.controls.capacity.policy["revision"], "reasons": ["Old allowance"]}
+    f.worker.controls.persist(task_only=True)
     goal = f.coordinator.session_state["goal"]
     goal.update(extra_progress={"retain": ["unknown fields"]},
                 escalated=True, recovery_pending={"before": [{"turn": 0}]})
@@ -579,7 +586,7 @@ async def test_host_readiness_requires_actual_root_and_generation(native_wait, b
 
 
 @pytest.mark.parametrize("change", [
-    "pause", "revision", "goal-replaced", "progress", "cap", "capacity",
+    "pause", "revision", "goal-replaced", "progress", "cap", "capacity-policy", "past-denial",
     "stop", "activation", "error",
 ])
 async def test_yield_rechecks_after_awaited_real_bridge(native_wait, change):
@@ -611,7 +618,9 @@ async def test_yield_rechecks_after_awaited_real_bridge(native_wait, change):
             goal["extra_progress"] = "concurrent progress must survive"
         elif change == "cap":
             goal["turns_used"] = goal["cap"]
-        elif change == "capacity":
+        elif change == "capacity-policy":
+            f.worker.controls.capacity.policy["revision"] += 1
+        elif change == "past-denial":
             f.worker.controls.capacity.last_denial = {
                 "budgetRevision": f.worker.controls.capacity.policy["revision"]}
         elif change == "stop":
@@ -623,7 +632,7 @@ async def test_yield_rechecks_after_awaited_real_bridge(native_wait, change):
         before = saved_receipts(f)
         release.set()
         await asyncio.wait_for(pending, 5)
-        assert f.coordinator.session_state["goal"] is expected
+        assert (f.coordinator.session_state["goal"] is expected) is (change != "past-denial")
         assert f.coordinator.session_state["goal"] == state
         assert saved_receipts(f) == before
         assert f.parent.continuation_id not in f.worker.runtime.accepted
@@ -632,15 +641,12 @@ async def test_yield_rechecks_after_awaited_real_bridge(native_wait, change):
         await asyncio.gather(pending, return_exceptions=True)
 
 
-@pytest.mark.parametrize("denial", ["cap", "capacity", "terminal-event", "foreign-event"])
+@pytest.mark.parametrize("denial", ["cap", "terminal-event", "foreign-event"])
 async def test_goal_denials_do_not_probe_or_yield(native_wait, denial):
     f = native_wait
     goal = f.coordinator.session_state["goal"]
     if denial == "cap":
         goal["turns_used"] = goal["cap"]
-    if denial == "capacity":
-        f.worker.controls.capacity.last_denial = {
-            "budgetRevision": f.worker.controls.capacity.policy["revision"]}
     data = {"state": "achieved" if denial == "terminal-event" else "continuing",
             "condition": goal["condition"], "turn": goal["turns_used"]}
     if denial == "foreign-event":
@@ -680,12 +686,24 @@ async def test_irrelevant_queues_cannot_hide_qualified_continuation(native_wait)
             assert attempt["effect"] == "none" and attempt["waitingForBoundary"] is True
 
 
-async def test_host_capacity_denial_is_read_only(native_wait):
+@pytest.mark.parametrize("usage", [{"totalTokens": 1}, {}], ids=["exhausted", "unknown"])
+async def test_host_capacity_denial_is_read_only(native_wait, usage):
     f = native_wait
     capacity = f.worker.controls.capacity
     capacity.policy.update(enabled=True, maxTotalTokens=1)
     capacity.last_denial = {"budgetRevision": capacity.policy["revision"], "reasons": ["Synthetic budget exhausted"]}
     f.worker.controls.persist(task_only=True)
+    assert await f.ready() is True  # A past refusal alone cannot deny readiness.
+    # This transport fixture does not project model telemetry. Supply an explicit
+    # accounting fixture: current exhausted/unknown usage must deny readiness.
+    from amplifier_web.execution import ingest
+    ingest(f.source, {"id": "readiness-usage", "kind": "llm", "sessionId": f.source["id"],
+                     "rootSessionId": f.source["id"], "phase": "completed",
+                     "revision": 1, "endedAt": 1, "usage": usage})
+    from amplifier_web.capacity import evaluate, usage_snapshot
+    decision = evaluate(capacity.policy, usage_snapshot(f.source))
+    assert not decision["allowed"]
+    assert "Synthetic budget exhausted" not in decision["reasons"]
     before, changes = saved_receipts(f), f.app.db.total_changes
     assert await f.ready() is False
     assert saved_receipts(f) == before and f.app.db.total_changes == changes
