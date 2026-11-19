@@ -117,6 +117,26 @@ def test_reset_attaches_extras_to_explicit_source(repair_tree, monkeypatch, kind
                        "amplifier-unified[managed-browser] @ " + origin)
 
 
+@pytest.mark.parametrize("discovered", [[], ["managed-browser"], ["decisions-openai", "managed-browser"]])
+@pytest.mark.parametrize("explicit", [[], ["decisions-openai"]])
+def test_reset_combines_named_source_and_discovered_extras(repair_tree, monkeypatch, discovered, explicit):
+    home, tool, bins = repair_tree
+    monkeypatch.setenv("TEST_RESET_TOOLS", str(tool))
+    monkeypatch.setattr(reset, "installed_extras", lambda prefix: discovered)
+    origin = "git+https://github.com/microsoft/amplifier-unified.git@" + "a" * 40
+    source = "amplifier-unified" + ("[" + ",".join(explicit) + "]" if explicit else "") + " @ " + origin
+    selected = sorted(set(explicit + discovered))
+    calls = fake_install(monkeypatch)
+    probes = []
+    monkeypatch.setattr(reset, "verify", lambda prefix, env, extras=(): probes.append((list(extras), dict(env))))
+    reset.repair(home, "uv", tool, bins, source, {}, None, True)
+    install = next(call for call in calls if call[:3] == ("uv", "tool", "install"))
+    expected = "amplifier-unified" + ("[" + ",".join(selected) + "]" if selected else "") + " @ " + origin
+    assert install[-1] == expected
+    assert "--from" not in install
+    assert probes == [(selected, {"PLAYWRIGHT_BROWSERS_PATH": str(home / "browsers")} if "managed-browser" in selected else {})]
+
+
 def test_verify_passes_preserved_extras_to_probe(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(reset, "command", lambda *args, **kwargs: calls.append(args))
@@ -260,7 +280,8 @@ def wheel(folder, name, files, requires=(), extras=()):
 
 @pytest.mark.skipif(not os.environ.get("AMPLIFIER_RESET_TEST_UV"), reason="explicit DTU-only uv installation test")
 @pytest.mark.parametrize("preserve_extra", [False, True])
-def test_real_uv_repairs_modified_packages_and_missing_dependencies(tmp_path, preserve_extra):
+@pytest.mark.parametrize("named_source", [False, True])
+def test_real_uv_repairs_modified_packages_and_missing_dependencies(tmp_path, preserve_extra, named_source):
     """Actual launcher/self replacement with uv, using synthetic local wheels."""
     uv = os.environ["AMPLIFIER_RESET_TEST_UV"]
     package = Path(reset.__file__).parent
@@ -304,7 +325,8 @@ def test_real_uv_repairs_modified_packages_and_missing_dependencies(tmp_path, pr
     (data / "updates").mkdir(parents=True)
     (data / "updates/application-active.json").write_text("broken receipt")
     (data / "keep").write_text("history sentinel")
-    result = subprocess.run([str(tmp_path / "bin/amplifier-unified"), "reset", "--yes", "--no-start", "--source", str(app)], env=env, capture_output=True, text=True, timeout=180)
+    source = "amplifier-unified" + ("[managed-browser]" if preserve_extra else "") + " @ " + app.as_uri() if named_source else str(app)
+    result = subprocess.run([str(tmp_path / "bin/amplifier-unified"), "reset", "--yes", "--no-start", "--source", source], env=env, capture_output=True, text=True, timeout=180)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "Unified is ready." not in result.stdout
     assert "left stopped" in result.stdout

@@ -728,9 +728,18 @@ def _repair(home, uv, tool_root, bin_root, source, env, service, no_start, opera
         # combined with a separate NAME[extras] install request. Local paths need
         # file URIs in a named PEP 508 direct reference (also handles spaces).
         requirement = source
-        if extras:
-            origin = Path(source).resolve().as_uri() if "://" not in source and Path(source).exists() else source
-            requirement = "amplifier-unified[" + ",".join(extras) + "] @ " + origin
+        named = re.fullmatch(r"\s*([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[([A-Za-z0-9._,\s-]*)\])?\s*@\s*(.+?)\s*", source)
+        name, origin = "amplifier-unified", source
+        if named:
+            name, requested, origin = named.groups()
+            # An explicit PEP 508 reference already has a name and may request
+            # additional features. Preserve those alongside discovered extras,
+            # in both the install requirement and post-install verification.
+            extras = sorted(set(extras) | {extra.strip() for extra in (requested or "").split(",") if extra.strip()})
+        if extras or named:
+            if "://" not in origin and Path(origin).exists():
+                origin = Path(origin).resolve().as_uri()
+            requirement = name + ("[" + ",".join(extras) + "]" if extras else "") + " @ " + origin
         if prefix.exists() or prefix.is_symlink():
             prefix.rename(tool_backup)
             moves.append((prefix, tool_backup))
