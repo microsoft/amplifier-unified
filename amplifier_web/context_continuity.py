@@ -175,6 +175,42 @@ class ContextContinuity:
         self._identity = {"provider": instance or name, "model": (defaults or {}).get("model") or (defaults or {}).get("default_model")}
         self._identity_provider = provider
 
+    def _classify_foreign(self, record):
+        classifier = self.coordinator.get_capability("context.checkpoint.transition")
+        if callable(classifier):
+            return classifier(copy.deepcopy(record), copy.deepcopy(self._identity))
+        source = record.get("identity")
+        if isinstance(source, dict) and all(isinstance(source.get(key), str)
+                and source[key].strip() for key in ("provider", "model")):
+            return {"status": "rejected", "code": "transition_unsupported",
+                    "reason": _UNSUPPORTED_TRANSITION_GUIDANCE, "originalsAvailable": True}
+        return {"status": "rejected", "code": "transition_source_invalid",
+                "reason": "The saved checkpoint has an incomplete source identity.", "originalsAvailable": True}
+
+    @staticmethod
+    def _foreign_error(classified):
+        if classified.get("code") == "transition_unsupported":
+            return "transition_unsupported"
+        return "recovery_checkpoint_rejected"
+
+    def _check_manual_source(self):
+        # An explicit recovery can be the first operation after a cold start.
+        # Inspect the saved source passively before creating a pending journal.
+        if not callable(self.coordinator.get_capability("context.checkpoint.restore")):
+            return
+        try:
+            record = json.loads(self.path.read_text())
+        except FileNotFoundError:
+            return
+        except (OSError, ValueError) as exc:
+            raise ContextRecoveryError("recovery_checkpoint_rejected") from exc
+        if not isinstance(record, dict):
+            raise ContextRecoveryError("recovery_checkpoint_rejected")
+        if record.get("identity") != self._identity:
+            classified = self._classify_foreign(record)
+            if classified.get("status") != "transition_required":
+                raise ContextRecoveryError(self._foreign_error(classified))
+
     async def preserve(self, messages):
         restore_allowed = self._ordinary_restore_allowed()
         guard = self._recovery_guard
@@ -202,24 +238,11 @@ class ContextContinuity:
         accepted = self._accepted_record if restore_allowed else None
         self._foreign_rejection = None
         if isinstance(accepted, dict) and accepted.get("identity") != self._identity:
-            classifier = self.coordinator.get_capability("context.checkpoint.transition")
-            if callable(classifier):
-                classified = classifier(copy.deepcopy(accepted), copy.deepcopy(self._identity))
-            else:
-                source = accepted.get("identity")
-                if isinstance(source, dict) and all(isinstance(source.get(key), str)
-                        and source[key].strip() for key in ("provider", "model")):
-                    classified = {"status": "rejected", "code": "transition_unsupported",
-                                  "reason": _UNSUPPORTED_TRANSITION_GUIDANCE, "originalsAvailable": True}
-                else:
-                    classified = {"status": "rejected", "code": "transition_source_invalid",
-                                  "reason": "The saved checkpoint has an incomplete source identity.",
-                                  "originalsAvailable": True}
+            classified = self._classify_foreign(accepted)
             self.status = {"supported": self.status["supported"], **classified}
             self._transition = classified if classified.get("status") == "transition_required" else None
             if self._transition is None:
-                self._foreign_rejection = ("transition_unsupported" if classified.get("code") == "transition_unsupported"
-                                           else "recovery_checkpoint_rejected")
+                self._foreign_rejection = self._foreign_error(classified)
             self._suppress_save = True
         elif accepted is not None and previous_identity != self._identity and self.loaded:
             restore = self.coordinator.get_capability("context.checkpoint.restore")
@@ -481,7 +504,7 @@ class ContextContinuity:
             if (existing["interruptionRevision"], existing["targetBytes"]) != (interruption_revision, target_bytes):
                 raise ContextRecoveryError("recovery_command_changed")
             return self._recovery_public(existing)
-        if self._foreign_rejection:
+        if self._foreign_rejection and self.current_identity() == self._preserved_identity:
             raise ContextRecoveryError(self._foreign_rejection)
         if self._recovery_busy or current and current["state"] in {"pending", "running", "installing", "unknown"}:
             raise ContextRecoveryError("recovery_unreconciled")
@@ -498,6 +521,8 @@ class ContextContinuity:
             source = {"messages": len(messages), "sha256": digest(messages)}
             if await _guarded(guard, self._interruption_revision) != interruption_revision:
                 raise ContextRecoveryError("recovery_interrupted")
+            self._check_manual_source()
+            guard()
             record = {"commandId": command_id, "state": "pending", "code": None,
                       "interruptionRevision": interruption_revision, "targetBytes": target_bytes,
                       "contract": configuration, "identity": copy.deepcopy(self._identity),

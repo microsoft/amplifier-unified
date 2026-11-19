@@ -2905,6 +2905,73 @@ async def test_transition_rejects_invalid_source_without_laundering_identity(tmp
     assert case.raw.compactions == [] and not case.adapter.recovery_path.exists()
 
 
+@pytest.mark.parametrize(('source', 'code'), [
+    ('legacy', 'transition_unsupported'),
+    ('missing-identity', 'recovery_checkpoint_rejected'),
+    ('corrupt-current', 'recovery_checkpoint_rejected'),
+    ('unreadable', 'recovery_checkpoint_rejected'),
+])
+async def test_cold_manual_recovery_checks_source_before_recording_intent(tmp_path, source, code):
+    from amplifier_web.context_continuity import ContextRecoveryError
+    case = await target_transition_fixture(tmp_path)
+    adapter = case.adapter
+    assert not adapter.loaded and not adapter.recovery_path.exists()
+    record = json.loads(case.accepted)
+    if source in ('legacy', 'missing-identity'):
+        case.coordinator.register_capability('context.checkpoint.transition', None)
+    if source == 'missing-identity':
+        record['identity'] = {'provider': 'fixture', 'model': ''}
+        adapter.path.write_text(json.dumps(record))
+    elif source == 'corrupt-current':
+        record['summary']['message']['content'] += ' damaged'
+        adapter.path.write_text(json.dumps(record))
+    elif source == 'unreadable':
+        adapter.path.write_text('{')
+    saved = adapter.path.read_bytes()
+    with pytest.raises(ContextRecoveryError) as failure:
+        await adapter.request_recovery('first-command-on-restart', 0)
+    assert failure.value.code == code
+    assert adapter.path.read_bytes() == saved
+    assert not adapter.loaded and not adapter.recovery_path.exists()
+    assert await case.coordinator.context.get_messages() == case.source
+    assert not (case.raw.counted or case.raw.compactions or case.raw.sent)
+
+
+async def test_cold_manual_recovery_keeps_existing_unknown_and_honors_stop(tmp_path):
+    from amplifier_web.context_continuity import ContextRecoveryError
+    case = await target_transition_fixture(tmp_path)
+    adapter = case.adapter
+    with pytest.raises(ContextRecoveryError, match='recovery_interrupted'):
+        await adapter.request_recovery('old-stop-revision', 1)
+    assert not adapter.recovery_path.exists()
+    # Current Context can validate a foreign source; manual admission is inert.
+    row = await adapter.request_recovery('real-manual', 0)
+    assert row['state'] == 'pending' and not adapter.loaded
+    adapter._recovery_record()['state'] = 'unknown'
+    adapter._write_recovery()
+    prior = adapter.recovery_path.read_bytes()
+    case.coordinator.register_capability('context.checkpoint.transition', None)
+    # An old writer may already have submitted recovery. Never reclassify or
+    # erase that receipt, even if the new request would fail source validation.
+    assert (await adapter.request_recovery('real-manual', 0))['state'] == 'unknown'
+    with pytest.raises(ContextRecoveryError, match='recovery_unreconciled'):
+        await adapter.request_recovery('second-command', 0)
+    assert prior == adapter.recovery_path.read_bytes()
+    assert case.accepted == adapter.path.read_bytes()
+    assert not (case.raw.counted or case.raw.compactions or case.raw.sent)
+
+
+async def test_cold_manual_recovery_with_unknown_target_never_arms(tmp_path, monkeypatch):
+    from amplifier_web.context_continuity import ContextRecoveryError
+    case = await target_transition_fixture(tmp_path)
+    monkeypatch.setattr(case.selected, 'get_info', lambda: {'id': 'fixture', 'defaults': {}})
+    with pytest.raises(ContextRecoveryError, match='recovery_identity_unavailable'):
+        await case.adapter.request_recovery('unknown-model', 0)
+    assert not case.adapter.recovery_path.exists()
+    assert case.adapter.path.read_bytes() == case.accepted
+    assert not (case.raw.counted or case.raw.compactions or case.raw.sent)
+
+
 @pytest.mark.parametrize('prior_unknown', [False, True], ids=['no-attempt', 'unknown-target'])
 async def test_known_rejected_foreign_checkpoint_cannot_arm_generic_explicit_recovery(tmp_path, prior_unknown):
     case = await target_transition_fixture(tmp_path)
