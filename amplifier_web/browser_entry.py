@@ -73,8 +73,13 @@ def is_windows() -> bool:
 
 
 def _local_sockets(request) -> bool:
-    """Both real socket ends are this computer's own addresses."""
-    if request.transport is None:
+    """Both real socket ends are this computer's own addresses.
+
+    A request relayed by a configured trusted proxy is never local: the proxy
+    connects from this computer on behalf of a browser that may be anywhere.
+    """
+    from .forwarding import VIA_PROXY
+    if request.transport is None or request.get(VIA_PROXY):
         return False
     for name in ("peername", "sockname"):
         address = request.transport.get_extra_info(name)

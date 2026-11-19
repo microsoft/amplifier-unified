@@ -2,6 +2,7 @@
 from __future__ import annotations
 import asyncio
 import hmac
+import ipaddress
 import json
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -18,6 +19,7 @@ from .live_clients import client_context
 from .setup_page import detect_platform, render_setup_page
 from .tls import ca_bytes
 from .request_timing import request_timing
+from .forwarding import forwarded_request
 from .static_files import BundledStaticResource
 from . import browser_entry
 
@@ -100,9 +102,10 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     # could erase a junction/alias before the native boundary can reject it.
     data_dir = validated_data_dir(data_dir, create=True)
     config = validate_server(server_config) if server_config is not None else load_server_config(data_dir)
-    app = web.Application(middlewares=[request_timing, boundaries, auth_required, client_context], client_max_size=MAX_REQUEST_BYTES)
+    app = web.Application(middlewares=[request_timing, forwarded_request, boundaries, auth_required, client_context], client_max_size=MAX_REQUEST_BYTES)
     app["windows_socket_cleanup"] = socket_cleanup
     app["server_config"] = config
+    app["trusted_proxies"] = tuple(ipaddress.ip_network(item) for item in config["trusted_proxies"])
     app["permitted_hosts"] = frozenset({"localhost", "127.0.0.1", "::1"} |
                                        {canonical_host(urlsplit(origin).hostname) for origin in config["public_origins"]})
     app["allowed_origins"] = frozenset(config["public_origins"]) | frozenset(
