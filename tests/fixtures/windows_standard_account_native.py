@@ -28,7 +28,8 @@ Not shown: see NOT_SHOWN below. In short: the setup file itself (setup refuses
 Windows Server, and every hosted x64 runner is Windows Server), a person's own
 answer to the Windows certificate question, the browser, a click on a
 Start-menu entry and the messages of the windowless launcher, a chat,
-Windows 11, and a sign-in at the PC's own screen.
+Windows 11, a sign-in at the PC's own screen, and an answer of the app to one
+read with a limit of 2 seconds at every moment after a start.
 
 The delete choice removes the folder %LOCALAPPDATA%\\Amplifier of the account
 that runs it. Here that is only the user that this run created: `standard`
@@ -133,6 +134,17 @@ NOT_SHOWN = (
     ("A chat and a model request", "no AI account is connected."),
     ("Windows 11, and a sign-in at the PC's own screen",
      "the runner is Windows Server, and the user signs in through Remote Desktop to the same computer."),
+    ("That the app answers one read with a limit of 2 seconds at every moment after a start",
+     "the app can give no answer for some seconds, some seconds after a start (on hosted runners until "
+     "November 18, 2026: up to 19 seconds from the start of the first question of the case's watch that got "
+     "no answer to the start of the question that got the next answer). Such a read is the status command "
+     "with no wait, whose request has a limit of 2 seconds, or one trust question, in which each step of a "
+     "connection has a limit of 2 seconds. After the second sign-in and after the start that follows the "
+     "first uninstall, the case "
+     "reads the status and the connection with the two waits of the Start-menu start, each of 60 seconds "
+     "(after the second sign-in the connection first). The time that an answer takes within its wait fails "
+     "no step; the answer decides as before. The run's page can get a warning for a question of the case's "
+     "watch that took 2 seconds or more after the app had answered."),
 )
 
 
@@ -391,13 +403,26 @@ class _Member(C.Structure):
     _fields_ = [("sid", C.c_void_p)]
 
 
-def new_password():
-    """Random, with every character class that a password policy can require. Never shown."""
+def new_password(name):
+    """Random, with every character class that a password policy can require, for the user `name`. Never shown.
+
+    It holds no three characters in a row of the name, in either case. On a
+    hosted runner Windows refused a password that held a whole part of the
+    user's name (`NetUserAdd` then gives status 2245). In this case's names
+    the parts are what the dashes divide: "amp", "std" and the six characters
+    of the run. Asked of Windows there (run 44270851072, November 18, 2026):
+    it refused "amp", "AMP", "Amp", "std", the whole last part and the whole
+    name; it took two characters of a part, three characters across a dash,
+    and three characters out of the last part. One run of the case failed
+    with that status before any step (run 44204522612, November 17, 2026).
+    """
     alphabet = string.ascii_letters + string.digits + "!#%+-_="
+    parts = {name[at:at + 3].lower() for at in range(len(name) - 2)}
     while True:
         value = "".join(secrets.choice(alphabet) for _ in range(30))
         if (any(c.islower() for c in value) and any(c.isupper() for c in value)
-                and any(c.isdigit() for c in value) and any(not c.isalnum() for c in value)):
+                and any(c.isdigit() for c in value) and any(not c.isalnum() for c in value)
+                and not any(part in value.lower() for part in parts)):
             return value
 
 
@@ -1032,6 +1057,152 @@ def lines(report):
     return out
 
 
+STOPS = ("Stop Amplifier", "the uninstall that keeps the folder")
+
+
+def late_answers(report, begins):
+    """What the run's page says about one program of the user: answers of the app that came late or not at all.
+
+    Three kinds, each read from the record in that program's report. None decides a step.
+
+    - The watch. A question to the listener took 2 seconds or more, and
+      the watch had kept an answer of the listener before it ("trusted" or
+      "untrusted"; the last one counts). Before and after are by the times
+      of the watch's entries, which never go back (`ListenerWatch._at`).
+      That answer has at least one process number as the owner of the
+      port, and every change that the watch kept from that answer to this
+      question, with the question's own, has the same owners. When that
+      answer has no such number (for example because the owners could not
+      be read), no question gets a text until the watch keeps a later
+      answer that has one. A change that the watch kept after that answer
+      and before this question is a change with no answer ("unreachable",
+      or an error of the question): a silence began there. Of the questions
+      of a silence, from the one that began it to the one that brings the
+      next answer, and with both, only the first of 2 seconds or more gets
+      a text. The text names what the case did then: the last mark of the
+      watch before the question, or `begins` when there is none. For a
+      question with the answer "unreachable" the text says that it got no
+      answer. When the watch kept a later change, that text also says when
+      the question of that change began, and whether it got an answer (a
+      change with no answer is, for example, a host that went away). A
+      question that ended with an error has only its seconds in the text.
+      A question whose last mark is one of `STOPS` gets no text: the case
+      itself stops the app there. A host that has the port and has not
+      answered yet gets no text either: it starts, and the case waits for
+      it in every case.
+    - The read of trust after the second sign-in (`signInTrust`). A read of
+      one of its two snapshots failed (`captureErrors`), or its request to the
+      listener got no answer (`listenerAnswers`).
+    - The same read. A question of it got no answer ("unreachable"), so it
+      used the product's wait.
+
+    A text of the first kind is for one question, not for the silence of the
+    app itself. After a question and its reads the watch pauses for half a
+    second. In a question each step of a connection has a limit of 2 seconds
+    (`trust_state`), and the seconds of a question also hold its read of
+    Windows' root certificates. A silence that ends before a question has
+    taken 2 seconds gets no text here: it shows in the record as a shorter
+    late answer, or not at all. So a run without a text can have had a
+    silence. A watch that did not start, or that an error of its own code
+    ended, asks no question from then on, and nothing after that gets a
+    text of this kind (the record says it: `started`, `notStarted`,
+    `endedBy`). The two other kinds are only for the read of trust after
+    the second sign-in. At every other place, for example after the start
+    that follows the uninstall, a text can come only from the watch.
+    The seconds of the case's own reads (`reads` in the report) get no
+    text; the record has them for each read. The seconds of a status read
+    are those of a whole command: on hosted runners a status command with
+    no wait and a healthy answer took 1.11 to 4.02 seconds, and 255 of 632
+    took 2 seconds or more (in 239 kept results, counted on November 18,
+    2026).
+    The watch keeps at most 40 late answers and at most 400 changes. A late
+    answer after the 40 gets no text. After 400 changes the watch keeps no
+    new change, and a text then rests on the last change that it kept.
+
+    A text holds fixed words, numbers, a mark of the record (the marks are
+    the texts of this file's `watch.mark` calls), and the names of the
+    snapshot's parts and of error classes, each with only letters, digits,
+    the dot and the underscore. It holds no answer and no error text. The
+    seconds of the read of trust are in a text only when the record has them
+    as a number.
+    """
+    found = []
+    watch = report.get("listener")
+    if isinstance(watch, dict):
+        changes = [change for change in watch.get("changes") or [] if isinstance(change, dict) and "at" in change]
+        answers = [change for change in changes if "mark" not in change]
+        lates = [late for late in watch.get("late") or [] if isinstance(late, dict) and "at" in late]
+        answered = lambda change: change.get("answer") in ("trusted", "untrusted")
+        slow = lambda late: isinstance(late.get("seconds"), (int, float)) and late["seconds"] >= 2
+        for late in lates:
+            if not slow(late):
+                continue
+            earlier = [change for change in answers if change["at"] < late["at"]]
+            last = max((number for number, change in enumerate(earlier) if answered(change)), default=None)
+            if last is None:
+                continue  # The watch kept no answer before this question.
+            # From that answer to this question: each change that the watch kept, with the question's own.
+            since = earlier[last + 1:] + [change for change in answers if change["at"] == late["at"]]
+            owner = earlier[last].get("owner")
+            marks = [change["mark"] for change in changes if "mark" in change and change["at"] <= late["at"]]
+            if (not (isinstance(owner, list) and owner and all(change.get("owner") == owner for change in since))
+                    or (marks and marks[-1] in STOPS)):
+                continue
+            # Questions that follow one another with no answer: one text, for the first of 2 seconds or more.
+            if since and any(slow(other) and since[0]["at"] <= other["at"] < late["at"] for other in lates):
+                continue
+            said = (f'After "{marks[-1] if marks else begins}": the app had answered, and then one question to '
+                    f'its listener took {late["seconds"]} seconds')
+            if late.get("answer") == "unreachable":
+                said += " and got no answer"
+                later = [change for change in answers if change["at"] > late["at"]]
+                if later:
+                    # A kept change has the time at which its question began, and the text gives only that
+                    # time. The watch keeps a change of the owners of the port too: a host that went away is
+                    # a change with no answer.
+                    began = f'began {round(later[0]["at"] - late["at"], 1)} seconds after that question began'
+                    said += (f". The question that got the next answer {began}" if answered(later[0])
+                             else f". The watch's next change was not an answer; its question {began}")
+            found.append(said + ".")
+    trust = report.get("signInTrust")
+    if isinstance(trust, dict):
+        for side, when in (("before", "before its first question"), ("after", "after its last question")):
+            facts = trust.get(side) if isinstance(trust.get(side), dict) else {}
+            plain = lambda value: re.sub("[^A-Za-z0-9_.]", "", str(value))  # A name, and nothing else.
+            parts = [f'{plain(error.get("part"))} ({plain(error.get("errorType"))})'
+                     for error in facts.get("captureErrors") or [] if isinstance(error, dict)]
+            if facts.get("listenerAnswers") is False:
+                parts.append("listenerAnswers (no answer)")
+            if parts:
+                found.append(f"The read of trust after the sign-in: {len(parts)} read(s) for the record {when} "
+                             "failed or got no answer: " + ", ".join(parts) + ".")
+        silent = [probe for probe in trust.get("probes") or [] if isinstance(probe, dict)
+                  and probe.get("state") == "unreachable"]
+        if silent:
+            ended = trust.get("seconds")
+            found.append(f"The read of trust after the sign-in waited: {len(silent)} question(s) got no answer"
+                         + (f", and the read ended after {ended} seconds." if type(ended) in (int, float) else "."))
+    return found
+
+
+def page_warnings(report):
+    """The texts of `late_answers` for the two programs of the user that have a watch, as lines for the run's page.
+
+    GitHub shows a line that begins with `::warning` on the page of the run:
+    at most 10 such lines of one step (the limit that GitHub's documents
+    name). `run` prints every line into the job's log and saves them all in
+    a file. Each of the two is a try, and an error of it is not kept. Such a
+    line fails nothing. `%`, a line end and a carriage return are
+    written as GitHub's own codes, so that a text stays one line. The title
+    has no comma and no colon: GitHub's own tool for such lines writes those
+    two as codes in a title, and this title needs neither.
+    """
+    texts = (late_answers((report.get("first") or {}).get("journey") or {}, "the first start")
+             + late_answers(report.get("second") or {}, "the second sign-in"))
+    return ["::warning title=Standard-account case - a late answer or a failed read of the record::"
+            + text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A") for text in texts]
+
+
 def run():
     report = {"status": "FAIL", "stage": "the account",
               "steps": [{"name": name, "status": "FAIL", "reason": "Not reached"}
@@ -1059,7 +1230,7 @@ def run():
         # and this mark as its comment, also when a later line here fails.
         mark = MARK + uuid.uuid4().hex
         save("ownership.json", {"user": name, "mark": mark})
-        password = new_password()
+        password = new_password(name)
         sid = create_user(name, password, mark)
         save("ownership.json", {"user": name, "mark": mark, "sid": sid})
         need(account_comment(name) == mark, "Windows does not show this run's mark on the new account")
@@ -1145,6 +1316,15 @@ def run():
     report["lines"] = lines(report)
     save("result.json", report)
     print("\n".join(report["lines"]), flush=True)
+    # For the run's page only, after the result is saved and its lines are printed. The lines, or the error
+    # that kept them from being made, are saved in a file of their own, and the lines are printed. Each of the
+    # two is a try: an error of it is not kept, and the file or the printed lines can then be missing or cut
+    # short. The result is not written again and is not changed: an error of a part here changes no line, no
+    # status and nothing of the saved result.
+    warnings = attempt(lambda: page_warnings(report))
+    attempt(lambda: save("page-warnings.json", warnings))
+    if isinstance(warnings, list) and warnings:
+        attempt(lambda: print("\n".join(warnings), flush=True))
     print(json.dumps({key: report.get(key) for key in ("status", "stage", "errorType", "error")}), flush=True)
     return report["status"] == "PASS"
 
@@ -1538,7 +1718,11 @@ def attempt(read):
     try:
         return read()
     except Exception as error:
-        return {"errorType": type(error).__name__, "error": str(error)[-300:]}
+        try:
+            said = str(error)[-300:]
+        except Exception:  # An error whose own text cannot be made.
+            said = "(this error gives no text)"
+        return {"errorType": type(error).__name__, "error": said}
 
 
 def host_record(home):
@@ -1718,12 +1902,20 @@ class ListenerWatch:
     watch asks `owner`, when it has one, which process numbers own the
     listener's port. It keeps a change of the answer or of those numbers,
     with the time at which that question began and the seconds that the
-    question took. It keeps a change only while its list has fewer than
+    question took. The time of an entry (`at`) is the computer's clock when
+    the watch was made, plus the seconds that the watch's timer counted
+    since then (`_at`). The timer does not follow a change of the computer's
+    clock. So the times of one watch never go back, and the difference of
+    two of them is the seconds that passed between them, also when Windows
+    sets its clock during a run. `late_answers` reads the order of the
+    entries from these times. A read of a step (`reads`) has the clock's
+    own time; after such a change of the clock the two differ by it.
+    It keeps a change only while its list has fewer than
     `limit` entries (400; the marks of the case are in the same list). A
     change after that is not kept. While nothing changes, it keeps the
-    slowest of the questions that follow (`slowest`). That one can be
-    quicker than the question that brought the change, whose seconds the
-    entry has itself.
+    slowest of the questions that follow (`slowest`), when one of them took
+    more than 0 milliseconds. That one can be quicker than the question that
+    brought the change, whose seconds the entry has itself.
 
     Of the listener, the report has what these questions saw: each kept
     change of the answer (for example to no answer after a host start, and
@@ -1765,6 +1957,13 @@ class ListenerWatch:
         self.gauge, self.after, self.slow, self.late = gauge, after, slow, []
         self._halt, self._thread, self._last, self._entry = threading.Event(), None, self, None
         self._ended, self._lock, self.fault = None, threading.Lock(), None
+        # The computer's clock is read once, here, with the timer's value of the same moment (`_at`).
+        self._zero = (clock(), timer())
+
+    def _at(self, ticks):
+        """The time of an entry for the timer's value `ticks`: the clock's reading of when the watch was made,
+        plus the timer's seconds since then."""
+        return round(self._zero[0] + (ticks - self._zero[1]), 3)
 
     def look(self):
         """One question to the listener. A change is kept while the list has room; an error of the question is an
@@ -1772,7 +1971,8 @@ class ListenerWatch:
         owners = self._last[1] if isinstance(self._last, tuple) and isinstance(self._last[1], list) else []
         before = attempt(lambda: self.gauge(owners)) if self.gauge else None
         # The question begins here. The read of the processor time before it is in `waited`, not in its seconds.
-        at, began = round(self.clock(), 3), self.timer()
+        began = self.timer()
+        at = self._at(began)
         waited = None if self._ended is None else round(began - self._ended, 3)
         answer = attempt(self.probe)
         took = round(self.timer() - began, 3)
@@ -1785,7 +1985,7 @@ class ListenerWatch:
                     **({"after": attempt(self.after)} if self.after else {})}
         now = (answer, attempt(self.owner) if self.owner else None)
         self._ended = self.timer()
-        with self._lock:  # Only the lists change here. No question and no read is made under the lock.
+        with self._lock:  # Only the watch's own fields change here. No question and no read is made under it.
             self.questions += 1
             if late is not None:
                 self.late.append(late)
@@ -1813,9 +2013,9 @@ class ListenerWatch:
         return self
 
     def mark(self, text):
-        """What the case does now, in the same list as the changes."""
+        """What the case does now, in the same list as the changes, with a time of the same kind (`_at`)."""
         with self._lock:
-            self.changes.append({"at": round(self.clock(), 3), "mark": text})
+            self.changes.append({"at": self._at(self.timer()), "mark": text})
 
     def stop(self, wait=10):
         """End the watch and give what it kept. `ended` is false when its thread still runs after `wait` seconds.
@@ -1924,15 +2124,18 @@ def accept_start(steps, key, again, home, root, started, state, status, text, *,
 
     The text of such a step has this order: the names of those parts; for each
     part the values that its rule reads; whether Task Scheduler and the status
-    were as required five seconds later; then more of each answer. A value
+    were as required five seconds later; a save of the report that failed, when
+    one did; then more of each answer. A value
     that is not short is given as the first 60 characters of its Python form.
     The text is cut at 2900 characters, at its end. So it keeps its start,
     also in the report, which keeps the last 3000 characters of a step's text.
     The report holds the three answers as the case got them and, after a
     start that is not accepted, the pair of five seconds later or the error
-    of that read. An answer that JSON cannot write alone is there in its
-    Python form, or as the error of that form (`kept`). In the text, a
-    detail that JSON cannot write is given in its Python form.
+    of that read. Each of the three answers, and that pair, is kept through
+    `kept`: what JSON cannot write is there in its Python form, or as the error
+    of that form. In the text, a detail that JSON cannot write is given in its
+    Python form; when Python cannot make that form either, the text says so
+    and keeps its start.
 
     The read five seconds later never makes the step pass. It, the read of the
     host's log (`host_output`) and the second save of the report can each
@@ -1995,8 +2198,11 @@ def accept_start(steps, key, again, home, root, started, state, status, text, *,
     said = attempt(lambda: json.dumps(detail, default=str))
     # A detail that JSON cannot write (for example a dictionary with a tuple as a key) is in the text in its Python
     # form. The error of that write does not replace the text.
+    if not isinstance(said, str):
+        said = attempt(lambda: repr(detail))
     raise AssertionError((text + ". Not as required: " + ", ".join(wrong) + ": "
-                          + (said if isinstance(said, str) else repr(detail)))[:2900])
+                          + (said if isinstance(said, str) else "(the detail has no form that can be written)")
+                          )[:2900])
 
 
 def installation_folder():
@@ -2215,8 +2421,11 @@ def journey(stage, exchange, account, token):
         note_updates(steps, home, "after the first start")
 
         steps.begin(JOURNEY[5])
+        # After a failed step the record makes this read once more when its answer was not as required. That
+        # read has a limit of 2 minutes, not the 10 minutes of a launcher command.
         shown = observed(steps, home, "the launcher's status", lambda: again.launcher(root, "--status"),
-                         lambda value: value["exitCode"] == 0 and (value["json"] or {}).get("ok") is True)
+                         lambda value: value["exitCode"] == 0 and (value["json"] or {}).get("ok") is True,
+                         later=lambda: again.launcher(root, "--status", timeout=120))
         need(shown["exitCode"] == 0 and (shown["json"] or {}).get("ok") is True,
              "Status did not report a working app", shown["json"] or shown)
         steps.passed(JOURNEY[5], message=shown["json"].get("message"))
@@ -2343,6 +2552,26 @@ def certificate(stage, exchange, account, token):
     return steps.finish()
 
 
+def exact_identity(value):
+    """The host of a status answer, as its process number and its creation time, or None when it names none.
+
+    The same rule as in `sign_in_snapshot`: the number is a whole number that
+    Windows can give a process, and the creation time is the text that the
+    product gives: decimal digits with no zero in front, at most 20, a number
+    of 64 bits. The identity has that text itself, and the step compares the
+    text. Until pull request 2316 an answer without such an identity failed
+    the step through a snapshot. The step's two conditions on the host
+    require it now.
+    """
+    if not isinstance(value, dict):
+        return None
+    pid, created = value.get("pid"), value.get("created")
+    if (type(pid) is int and 0 < pid <= 0xFFFFFFFF and isinstance(created, str)
+            and re.fullmatch(r"[1-9][0-9]{0,19}", created) and int(created) <= 0xFFFFFFFFFFFFFFFF):
+        return [pid, created]
+    return None
+
+
 def sign_in_snapshot(again, root, home, *, status=None, state=None):
     """A few read-only public fixture calls; keep facts, never raw settings or output."""
     from amplifier_web import windows_installation
@@ -2416,16 +2645,34 @@ def sign_in_snapshot(again, root, home, *, status=None, state=None):
 
 
 def sign_in_trust(steps, again, root, home, urls, pin, status, state):
-    """Observe the maintained settling rule, without changing its defaults or TLS inputs."""
+    """Observe the maintained settling rule, without changing its defaults or TLS inputs.
+
+    Of the reads here, only the answer of that rule (`settled_trust`)
+    decides: the step goes on with "trusted" and fails with every other
+    answer. As before, an error of that read, or of a save of the report
+    here, fails the step too.
+
+    The two snapshots, before the first question and after the last one
+    (also when the read ended with an error), are for the record
+    (`signInTrust`: `before`, `probes`, `after`). A read of a
+    snapshot that fails is kept there (`captureErrors`) and fails no step;
+    `late_answers` gives it a text for the run's page. `stage` says where the
+    read is: "BEFORE PROBE", then "AFTER PROBE" after the answer "trusted",
+    or "FAIL" after another answer or an error of the read.
+
+    Until pull request 2316 a failed read of a snapshot failed the step. A
+    snapshot reads the app with short limits: a request to the listener
+    with a limit of 3 seconds, and in the second snapshot one status read
+    with no wait, whose request has a limit of 2 seconds. The app can give
+    no answer for longer than that, some seconds after a start. One run
+    failed so with "trusted" after 0.065 second (run 44242661736, November
+    17, 2026).
+    """
     from amplifier_web import windows_installation
     observation = {"stage": "BEFORE PROBE", "probes": [],
                    "before": sign_in_snapshot(again, root, home, status=status, state=state)}
     steps.report["signInTrust"] = observation
-    if observation["before"]["captureErrors"]:
-        observation["stage"] = "FAIL"
     steps.save()
-    need(not observation["before"]["captureErrors"], "Before-probe evidence capture failed",
-         observation["before"]["captureErrors"])
     started, original, trusted = time.monotonic(), windows_installation.trust_state, None
 
     def recorded(targets, fingerprint):
@@ -2447,10 +2694,8 @@ def sign_in_trust(steps, again, root, home, urls, pin, status, state):
                            after=sign_in_snapshot(again, root, home))
         pre, post = observation["before"]["host"], observation["after"]["host"]
         observation["hostChanged"] = pre != post if pre is not None and post is not None else None
-        observation["stage"] = "AFTER PROBE" if trusted == "trusted" and not observation["after"]["captureErrors"] else "FAIL"
+        observation["stage"] = "AFTER PROBE" if trusted == "trusted" else "FAIL"
         steps.save()
-    need(not observation["after"]["captureErrors"], "After-probe evidence capture failed",
-         observation["after"]["captureErrors"])
     need(trusted == "trusted",
          "After the new sign-in the TLS listener stayed unreachable during the bounded wait; trust was not established"
          if trusted == "unreachable" else "After the new sign-in Windows returned an untrusted connection",
@@ -2481,7 +2726,7 @@ def second(stage, exchange, account, token):
         need(again.running(state) and again.healthy(status),
              "After the sign-in the task did not start a host that answers", {"task": state, "status": status["json"]})
         # The sign-out ended the earlier host. This one is new, and only the sign-in started it.
-        need(list(again.process_identity(status["json"])) != list(before["hostBeforeSignOut"])
+        need(exact_identity(status["json"]) not in (None, list(before["hostBeforeSignOut"]))
              and windows_installation.saved_port(home) == before["port"],
              "The host after the sign-in is not a new host on the same port")
         urls, pin = trust_targets(home)
@@ -2493,11 +2738,21 @@ def second(stage, exchange, account, token):
         trusted = observed(steps, home, "trust after the sign-in",
                            lambda: sign_in_trust(steps, again, root, home, urls, pin, status, state),
                            lambda value: value == "trusted")
-        after = steps.report["signInTrust"]["after"]
-        need(again.running(after["task"]) and again.healthy(after["serviceStatus"]),
-             "After the TLS probe the task no longer has a verified responsive host", after)
-        need(after["host"] != list(before["hostBeforeSignOut"]) and after["savedPort"] == before["port"],
-             "After the TLS probe the host is not a new host on the same port", after)
+        # The two conditions after the read of trust have reads of their own. The status waits as the Start-menu
+        # start waits for its app (`service status --wait 60`), and Task Scheduler is read after that wait.
+        # Before, they read the snapshot that `sign_in_trust` takes after its last question: one status read
+        # with no wait, whose request has a limit of 2 seconds.
+        ready = observed(steps, home, "the app's status after the read of trust",
+                         lambda: again.cli(root, "service", "status", "--wait", "60", "--json", timeout=120),
+                         again.healthy, later=lambda: again.cli(root, "service", "status", "--json"))
+        scheduled = observed(steps, home, "Task Scheduler after the read of trust",
+                             lambda: again.task_facts(home), again.running)
+        need(again.running(scheduled) and again.healthy(ready),
+             "After the TLS probe the task no longer has a verified responsive host",
+             {"task": scheduled, "status": ready["json"]})
+        host, port = exact_identity(ready["json"]), windows_installation.saved_port(home)
+        need(host not in (None, list(before["hostBeforeSignOut"])) and port == before["port"],
+             "After the TLS probe the host is not a new host on the same port", {"host": host, "port": port})
         need(windows_root_has(marks[1]) is True,
              "After the new sign-in Windows does not list the certificate among this user's root certificates")
         steps.report["thumbprint"] = marks[1]  # For the check after the delete choice.
@@ -2538,14 +2793,20 @@ def second(stage, exchange, account, token):
         started = again.launcher(root, "--no-open")
         state = observed(steps, home, "Task Scheduler after the start that follows the uninstall",
                          lambda: again.task_facts(home), again.running)
+        # As the Start-menu start reads its app: the status with the product's wait of 60 seconds
+        # (`prepare_background`), then the connection with the product's wait (`settled_trust`). Before, each
+        # was one read with no wait: a status command whose request has a limit of 2 seconds, and one trust
+        # question, in which each step of a connection has a limit of 2 seconds.
         status = observed(steps, home, "the app's status after the start that follows the uninstall",
-                          lambda: again.cli(root, "service", "status", "--json"), again.healthy)
+                          lambda: again.cli(root, "service", "status", "--wait", "60", "--json", timeout=120),
+                          again.healthy, later=lambda: again.cli(root, "service", "status", "--json"))
         accept_start(steps, "startAfterUninstall", again, home, root, started, state, status,
                      "The start after the uninstall failed")
         need(windows_installation.saved_port(home) == before["port"], "The start after the uninstall changed the port")
         # The certificate stayed (No). The connection needs no new question.
         trusted = observed(steps, home, "trust after the start that follows the uninstall",
-                           lambda: windows_installation.trust_state(urls, pin), lambda value: value == "trusted")
+                           lambda: windows_installation.settled_trust(urls, pin), lambda value: value == "trusted",
+                           later=lambda: windows_installation.trust_state(urls, pin))
         need(trusted == "trusted", "After the start Windows does not trust the connection. It read", trusted)
         steps.passed(SECOND[2], seconds=started["seconds"], task=state, port=before["port"], trust=trusted)
         note_updates(steps, home, "after the start that follows the uninstall")

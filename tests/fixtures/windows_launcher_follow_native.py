@@ -24,9 +24,22 @@ The fixture's own part:
   the launcher's folder. Every other call goes to the real uv.
 - In check 6 it ends the helper's processes. After that it only reads.
 
+A second case, `run --case setting`, in a second job: its own installation of
+the same layout, with "Keep Amplifier up to date" off. One build of the app can refresh the
+launcher once, so the two cases cannot share a job. Its own part:
+- It signs in as the owner's browser does: a ticket from the app's own entry
+  for the owner (the launcher's `open` gets it there), the form token of the
+  sign-in page, and the session cookie that the host gives for the two. With
+  that session it sends the two requests that the bundled page sends: the
+  switch ("settings.update", automatic installation off) and the install
+  button ("updates.install"). tests/test_windows_launcher_follow_workflow.py
+  reads both requests from the bundled page.
+- The launcher installation is never made to fail there.
+
 Not shown: the setup file, a standard account (the runner's account is
-elevated), a sign-out, a restart of the PC, the Updates page in a browser and
-its button, a message that is sent while Amplifier restarts, a count of
+elevated), a sign-out, a restart of the PC, the Updates page in a browser
+(the second case sends the page's requests; no browser draws the page or its
+button), a message that is sent while Amplifier restarts, a count of
 console windows, a helper that is ended after it started the app, the Arcade
 layout. No AI connection exists, so the app starts no update of its own.
 """
@@ -72,6 +85,17 @@ CHECKS = (
     "9. The new launcher's uninstall removes a helper task; a helper task that was left removes itself",
     "10. Folder cleanup",
 )
+# The second case: "Keep Amplifier up to date" is off. Checks 1 and 2 are those of the first case.
+SETTING_CHECKS = (
+    *CHECKS[:2],
+    "3. The owner's browser session turns \"Keep Amplifier up to date\" off; then the app version is confirmed",
+    "4. With the setting off no launcher refresh starts by itself, and the page offers it",
+    "5. The page's install request starts one refresh: the launcher follows, and the app is ready on the same port",
+    "6. No second refresh, and the setting is still off",
+    "7. The new launcher's uninstall leaves no task and no Apps-list entry",
+    "8. Folder cleanup",
+)
+CASES = {"follow": CHECKS, "setting": SETTING_CHECKS}
 # In the place of setup's private uv, for the failure cases only. It acts on
 # "tool install" into the installation's own tools folder: the launcher. Every
 # other call goes to the real program beside it.
@@ -357,18 +381,23 @@ def bounded(value, limit=6000):
     return value if len(raw) <= limit else {"truncated": raw[:limit]}
 
 
-def saved_updates(home):
-    """What the app last saved about updates. Read only; the app keeps its database open."""
+def saved_part(home, key):
+    """One part of the state that the app last saved. Read only; the app keeps its database open."""
     database = sqlite3.connect((home / "app.sqlite3").as_uri() + "?mode=ro", uri=True, timeout=5)
     try:
-        row = database.execute("SELECT value FROM state_records WHERE kind='global' AND id='updates'").fetchone()
+        row = database.execute("SELECT value FROM state_records WHERE kind='global' AND id=?", (key,)).fetchone()
         if row is not None:
             value = json.loads(row[0])
             return value["value"] if value["present"] else {}
         row = database.execute("SELECT value FROM state WHERE id=1").fetchone()
-        return (json.loads(row[0]).get("updates") or {}) if row else {}
+        return (json.loads(row[0]).get(key) or {}) if row else {}
     finally:
         database.close()
+
+
+def saved_updates(home):
+    """What the app last saved about updates."""
+    return saved_part(home, "updates")
 
 
 def app_state(home):
@@ -385,17 +414,18 @@ def app_state(home):
         return {"errorType": type(error).__name__}
 
 
-def run():
-    report = {"status": "FAIL", "scheduledTask": "real", "stage": "records",
-              "checks": [{"name": name, "status": "FAIL", "reason": "Not reached"} for name in CHECKS]}
+def run(case="follow"):
+    names = CASES[case]
+    report = {"status": "FAIL", "case": case, "scheduledTask": "real", "stage": "records",
+              "checks": [{"name": name, "status": "FAIL", "reason": "Not reached"} for name in names]}
 
     def begin(index):
-        report["stage"] = CHECKS[index - 1]
+        report["stage"] = names[index - 1]
         report["checks"][index - 1]["reason"] = "In progress"
         save("result.json", report)
 
     def passed(index, **facts):
-        report["checks"][index - 1] = {"name": CHECKS[index - 1], "status": "PASS", **facts}
+        report["checks"][index - 1] = {"name": names[index - 1], "status": "PASS", **facts}
         save("result.json", report)
 
     observe = None
@@ -412,12 +442,14 @@ def run():
                           AMPLIFIER_SESSION_STATE_HOME=str(root / "ownership"),
                           AMPLIFIER_GITHUB_ACCESS="anonymous")
         from amplifier_web import app_component_graph as components, application_generations as generations
+        from amplifier_web import auth, browser_entry
         from amplifier_web import windows_app_recovery as recovery, windows_consumer as consumer
         from amplifier_web import windows_consumer_shell as shell, windows_installation
-        from amplifier_web import windows_launcher_files as listed_files, windows_launcher_refresh as refresher
+        from amplifier_web import windows_launcher_files as listed_files, windows_launcher_follow as offer
+        from amplifier_web import windows_launcher_refresh as refresher
         from amplifier_web import windows_launcher_task as task, windows_service
         from amplifier_web import windows_task_runtime as runtime, windows_uninstall
-        from amplifier_web.deployment import write_private
+        from amplifier_web.deployment import load_server_config, write_private
         from amplifier_web.installation_health import status
         from amplifier_web.updates import process
         launcher_python = launcher / "Scripts/python.exe"
@@ -515,6 +547,64 @@ def run():
                     if attempt == 9:
                         raise
                     time.sleep(1)
+
+        def unhurried(look):
+            # As follow_state: the app writes its database at any moment.
+            for attempt in range(10):
+                try:
+                    return look()
+                except sqlite3.Error:
+                    if attempt == 9:
+                        raise
+                    time.sleep(1)
+
+        def switches():
+            """The two update switches as the app saved them."""
+            return unhurried(lambda: (saved_part(home, "settings") or {}).get("updates") or {})
+
+        def automatic():
+            # The app's own rule for "Keep Amplifier up to date": both switches, and each is on when it is absent.
+            value = switches()
+            return value.get("autoCheck", True) and value.get("autoInstall", True)
+
+        def page_row():
+            """The headline that the app gives the Updates page: the saved current status."""
+            return unhurried(lambda: saved_updates(home).get("currentStatus") or {})
+
+        def page_request(action, args):
+            """One request of the Updates page, from a browser session of the owner.
+
+            The ticket comes from the app's own entry for the owner, as the
+            launcher's `open` gets it. The sign-in page gives the form token,
+            and the host gives the session cookie for the two. The action then
+            goes with that cookie only, as the page sends it. The report gets
+            the host's answer and no ticket, token or cookie.
+            """
+            from aiohttp import ClientSession, ClientTimeout, DummyCookieJar, TCPConnector
+
+            async def send():
+                config = load_server_config(home)
+                _, pin = browser_entry._owner_probe_targets(home, config)
+                url = await browser_entry.owner_browser_url(home, config)
+                origin, separator, ticket = url.partition("/login#ticket=")
+                assert separator and ticket, "The owner's entry gave no ticket"
+                async with ClientSession(connector=TCPConnector(ssl=pin), trust_env=False, cookie_jar=DummyCookieJar(),
+                                         timeout=ClientTimeout(total=120)) as client:
+                    async with client.get(origin + "/login") as page:
+                        assert page.status == 200, page.status
+                        token = page.cookies[auth.CSRF_COOKIE].value
+                    headers = {"Origin": origin, "Cookie": f"{auth.CSRF_COOKIE}={token}"}
+                    async with client.post(origin + browser_entry.REDEEM_PATH, headers=headers,
+                                           data={"csrf": token, "ticket": ticket}, allow_redirects=False) as entry:
+                        assert entry.status == 303, entry.status
+                        session = entry.cookies[auth.SESSION_COOKIE].value
+                    headers = {"Origin": origin, "Cookie": f"{auth.SESSION_COOKIE}={session}"}
+                    async with client.post(origin + "/api/actions", headers=headers,
+                                           json={"action": action, "args": args, "id": uuid.uuid4().hex}) as answer:
+                        value = await answer.json()
+                        return {"action": action, "args": args, "status": answer.status,
+                                "error": value.get("error"), "accepted": value.get("accepted")}
+            return asyncio.run(send())
 
         def settle(what):
             """Wait until the app had two passes with one update state. Then it has decided."""
@@ -702,15 +792,51 @@ def run():
                 wait("the helper task is removed", lambda: helper_task().get("exists") is False, 240)
                 return helper, now
 
+            def followed(request, result, prefix):
+                """After a refresh that worked: the launcher is the app's, and everything else is as before."""
+                assert result["result"] == "refreshed", result
+                helper = record(refresher.RECORD)
+                assert (helper["request"], helper["state"], helper["result"]) == (request["id"], "settled", "refreshed"), helper
+                fresh = refresher.launcher_facts(launcher)
+                assert (fresh["version"], fresh["revision"]) == (new["version"], new["revision"])
+                assert fresh["identity"]["prefix"] == earlier["identity"]["prefix"], "The launcher is at another path"
+                assert generations.active(home)["bootstrap"] == fresh["identity"], "The launch record names another launcher"
+                assert refresher.unfinished(home) is None
+                previous = Path(helper["previous"])
+                assert generations.bootstrap_identity(previous)["digest"] == earlier["identity"]["digest"]
+                assert set_aside() == [previous.name]
+                # The helper writes this record after it released the refresh lock.
+                wait("the record of the kept launcher folder",
+                     lambda: record(refresher.KEPT) == {"schema": 1, "paths": [str(previous)]}, 60)
+                assert json.loads((root / consumer.RECEIPT).read_text())["version"] == new["version"]
+                assert (root / consumer.QUALIFICATION).is_file()
+                wait("the app is ready on the new launcher", lambda: (lambda value: healthy(value) and value)(health()), 240)
+                assert windows_installation.saved_port(home) == port and windows_service._read(home)[1] == spec
+                assert apps_list() == new["version"] and shell.listed(root)
+                wait("the helper task is removed", lambda: helper_task().get("exists") is False, 240)
+                difference = listed_files.differs(launcher, prefix)
+                assert difference == {"differs": False, "files": [], "packages": [], "unreadable": []}, difference
+                return helper, fresh, previous, difference
+
             begin(3)
             # As after a real update: the app starts, and the record does not say yet
             # that this start is confirmed. The app must not take that for an answer.
-            confirmed = update(0, "fail", status="prepared")
+            # Only the first case makes the launcher installation fail.
+            confirmed = update(0, "fail" if case == "follow" else None, status="prepared")
             undecided = settle("before the app's start is confirmed")
             assert recovery.read(spec)["status"] == "prepared"
             assert apps_list() == old["version"] and not follow_state().get("appsList"), follow_state()
             assert record(refresher.REQUEST) is None and helper_task().get("exists") is False
             assert not follow_state().get("attempt") and not calls(root)
+            switched = {}
+            if case == "setting":
+                # The switch of the Updates page, before the app can decide anything about the launcher.
+                assert automatic(), switches()
+                switch = page_request("settings.update", {"patch": {"updates": {"autoInstall": False}}})
+                assert switch["status"] == 200 and not switch["error"], switch
+                wait("the app has saved the switch", lambda: not automatic(), 60)
+                assert switches().get("autoCheck", True) is True and switches().get("autoInstall") is False, switches()
+                switched = {"switch": switch, "switches": switches()}
             confirmed_at = time.time()
             assert recovery.acknowledge(spec, {
                 key: validated[0][key] for key in ("revision", "generation", "attemptId")})
@@ -723,7 +849,76 @@ def run():
                            lambda: follow_state().get("appsList"), 120)
             assert written == {"settled": None, "result": {
                 "changed": True, "from": old["version"], "to": new["version"]}}, written
-            passed(3, appsList=apps_list(), written=written, launcher=launcher_now(), undecided=undecided)
+            passed(3, appsList=apps_list(), written=written, launcher=launcher_now(), undecided=undecided, **switched)
+
+            if case == "setting":
+                # The second case, to its end. The setting is off, and nothing makes the installation fail.
+                begin(4)
+                wait("the app has saved that the refresh waits for a person",
+                     lambda: follow_state().get("phase") == "ready", 600)
+                offer_seconds = round(time.time() - confirmed_at)
+                # The app decides at each pass, one a minute. With the setting on, its request comes
+                # at the first pass after the confirmation: the first case measures 49 to 50 seconds.
+                # The offer is saved at that same pass. `settle` then waits until the update state has
+                # been the same for 130 seconds. It does not count passes: the offer shows that the app
+                # took the branch that refuses, and nothing that this branch reads changes with time.
+                decided = settle("with the setting off")
+                state = follow_state()
+                assert not automatic(), switches()
+                assert state.get("phase") == "ready" and not state.get("attempt") and not state.get("requested"), state
+                assert record(refresher.REQUEST) is None and helper_task().get("exists") is False
+                assert not processes(HELPER)
+                assert refresher.launcher_facts(launcher) == earlier and not set_aside()
+                assert healthy(health())
+                # The launcher's own offer is the page's headline, with the page's install action.
+                ready, row = offer._TEXT["ready"], page_row()
+                assert (row.get("status"), row.get("title"), row.get("action")) == (ready[0], ready[1], ready[3]), row
+                assert old["version"] in row["detail"] and offer._BUTTON in row["detail"], row
+                passed(4, offerSeenSecondsAfterConfirmation=offer_seconds,
+                       secondsWithNoRequest=round(time.time() - confirmed_at), decided=decided,
+                       switches=switches(), pageRow=row, appState=app_state(home))
+
+                begin(5)
+                pressed_at = time.time()
+                pressed = page_request("updates.install", {})
+                assert pressed["status"] == 200 and not pressed["error"], pressed
+                one = wait("the request that the page's install action started", request_after(), 300)
+                request_seconds = round(one["at"] - pressed_at)
+                assert request_seconds >= 0, (one["at"], pressed_at)
+                assert one["target"]["generation"] == validated[0]["generation"] and one["registration"] == spec.registration_id
+                settled = wait("the request is closed", closed(one["id"]), 1500)
+                helper, fresh, previous, difference = followed(one, settled, prefixes[0])
+                # The app saved this attempt before the refresh, with no result. Wait for the result.
+                done = wait("the app has saved the result", lambda: (lambda value: (
+                    value.get("attempt") or {}).get("id") == one["id"] and value["attempt"].get("result")
+                    and value)(follow_state()), 120)
+                assert done["attempt"]["result"] == "refreshed" and done["phase"] == "done", done
+                # A person's request, not the app's own decision. It is used up, and the setting is as it was.
+                assert done["attempt"]["automatic"] is False and not done.get("requested"), done
+                assert not automatic(), switches()
+                passed(5, action=pressed, secondsFromActionToRequest=request_seconds, helperRecord=helper,
+                       launcher=launcher_now(), keptLauncher=previous.name, port=port, appsList=apps_list(),
+                       difference=difference, appState=app_state(home))
+
+                begin(6)
+                decided = settle("after the refresh that the page asked for")
+                state = follow_state()
+                assert record(refresher.REQUEST) == settled
+                assert helper_task().get("exists") is False and not processes(HELPER)
+                assert refresher.launcher_facts(launcher) == fresh and set_aside() == [previous.name]
+                assert state.get("attempt") == done["attempt"] and not state.get("requested"), state
+                assert not automatic() and healthy(health())
+                passed(6, decided=decided, switches=switches(), appState=app_state(home))
+
+                begin(7)
+                removed = execute([launcher_python, "-I", "-B", Path(__file__), "uninstall"], timeout=600)
+                report["uninstall"] = removed
+                assert removed["exitCode"] == 0 and removed["json"]["question"] is True, removed
+                assert not windows_service.managed(home) and not shell.listed(root)
+                assert helper_task().get("exists") is False and not processes(HELPER)
+                passed(7)
+                report.update(status="PENDING", stage="Folder cleanup pending")
+                return True
 
             begin(4)
             one = wait("the app's own request", request_after(), 600)
@@ -800,28 +995,7 @@ def run():
             three = wait("the app's request for the next app version", request_after(one["id"], two["id"]), 600)
             assert three["target"]["generation"] == validated[2]["generation"]
             settled_three = wait("the request is closed", closed(three["id"]), 1500)
-            assert settled_three["result"] == "refreshed", settled_three
-            helper = record(refresher.RECORD)
-            assert (helper["request"], helper["state"], helper["result"]) == (three["id"], "settled", "refreshed"), helper
-            fresh = refresher.launcher_facts(launcher)
-            assert (fresh["version"], fresh["revision"]) == (new["version"], new["revision"])
-            assert fresh["identity"]["prefix"] == earlier["identity"]["prefix"], "The launcher is at another path"
-            assert generations.active(home)["bootstrap"] == fresh["identity"], "The launch record names another launcher"
-            assert refresher.unfinished(home) is None
-            previous = Path(helper["previous"])
-            assert generations.bootstrap_identity(previous)["digest"] == earlier["identity"]["digest"]
-            assert set_aside() == [previous.name]
-            # The helper writes this record after it released the refresh lock.
-            wait("the record of the kept launcher folder",
-                 lambda: record(refresher.KEPT) == {"schema": 1, "paths": [str(previous)]}, 60)
-            assert json.loads((root / consumer.RECEIPT).read_text())["version"] == new["version"]
-            assert (root / consumer.QUALIFICATION).is_file()
-            now = wait("the app is ready on the new launcher", lambda: (lambda value: healthy(value) and value)(health()), 240)
-            assert windows_installation.saved_port(home) == port and windows_service._read(home)[1] == spec
-            assert apps_list() == new["version"] and shell.listed(root)
-            wait("the helper task is removed", lambda: helper_task().get("exists") is False, 240)
-            difference = listed_files.differs(launcher, prefixes[2])
-            assert difference == {"differs": False, "files": [], "packages": [], "unreadable": []}, difference
+            helper, fresh, previous, difference = followed(three, settled_three, prefixes[2])
             assert calls(root) == ["fail", "hang"]
             done = wait("the app has saved the result", lambda: (lambda value: (
                 value.get("attempt") or {}).get("id") == three["id"] and value)(follow_state()), 120)
@@ -881,8 +1055,10 @@ def run():
         for check in report["checks"]:
             if check.get("reason") == "In progress":
                 check["reason"] = report["error"]
-    save("result.json", report)
-    print(json.dumps(report), flush=True)
+    finally:
+        # Also for the second case, which ends inside the block above.
+        save("result.json", report)
+        print(json.dumps(report), flush=True)
     return report["status"] == "PENDING"
 
 
@@ -938,7 +1114,9 @@ def cleanup():
     if (evidence() / "result.json").exists():
         report = read("result.json")
         if report["status"] == "PENDING":
-            report["checks"][9] = {"name": CHECKS[9], "status": "PASS", "folderRemoved": True}
+            names = CASES[report["case"]]  # The last check of each case is the folder.
+            assert len(report["checks"]) == len(names)
+            report["checks"][-1] = {"name": names[-1], "status": "PASS", "folderRemoved": True}
             assert all(check["status"] == "PASS" for check in report["checks"])
             report.update(status="PASS", stage="Complete")
             save("result.json", report)
@@ -948,5 +1126,8 @@ def cleanup():
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("operation", choices=("prepare", "run", "uninstall", "cleanup"))
+    parser.add_argument("--case", choices=tuple(CASES), default="follow", help="For `run`: which case")
     shared().require_ci()
-    raise SystemExit(0 if globals()[parser.parse_args().operation]() else 1)
+    options = parser.parse_args()
+    done = run(options.case) if options.operation == "run" else globals()[options.operation]()
+    raise SystemExit(0 if done else 1)

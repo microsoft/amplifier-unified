@@ -148,7 +148,7 @@ class ContextContinuity:
         self._identity = {"provider": instance or name, "model": (defaults or {}).get("model") or (defaults or {}).get("default_model")}
 
     async def preserve(self, messages):
-        self._check_restore_disposition()
+        restore_allowed = self._ordinary_restore_allowed()
         guard = self._recovery_guard
         previous_identity = self._preserved_identity
         await _guarded(guard, self.refresh_identity)
@@ -158,7 +158,7 @@ class ContextContinuity:
         # Read before checkpoint(): that callback can itself call save(). An
         # unloaded accepted checkpoint must never be replaced by active defaults.
         record, restore, present, read_failed = None, None, False, False
-        if not self.loaded:
+        if not self.loaded and restore_allowed:
             restore = self.coordinator.get_capability("context.checkpoint.restore")
             present = bool(restore and self.path.exists())
             if present:
@@ -171,7 +171,7 @@ class ContextContinuity:
         # Classification is passive and fully validates the original record on
         # Context's disposable source-identity view. Never reinterpret a reason
         # string from a rejected import as selection authority.
-        accepted = self._accepted_record
+        accepted = self._accepted_record if restore_allowed else None
         self._foreign_rejected = False
         if isinstance(accepted, dict) and accepted.get("identity") != self._identity:
             classifier = self.coordinator.get_capability("context.checkpoint.transition")
@@ -196,7 +196,7 @@ class ContextContinuity:
                 self.status.update(restore(copy.deepcopy(accepted), self._identity))
                 self._transition = None
                 self._suppress_save = False
-        settled_originals = self._settled_originals(messages)
+        settled_originals = restore_allowed and self._settled_originals(messages)
         if settled_originals:
             self._prepared_identity = copy.deepcopy(self._identity)
             self._transition = None
@@ -211,9 +211,9 @@ class ContextContinuity:
             await _guarded(guard, self.checkpoint)
             self.saved_digest = current
         if not self.loaded:
-            self._check_restore_disposition()
+            restore_allowed = self._ordinary_restore_allowed()
             self.loaded = True
-            if present:
+            if present and restore_allowed:
                 try:
                     if (not read_failed and self._transition is None
                             and self.status.get("status") != "rejected"
@@ -243,7 +243,8 @@ class ContextContinuity:
     def save(self):
         if not self.loaded or self._recovery_busy:
             return
-        self._recovery_record()
+        if not self._ordinary_restore_allowed():
+            return
         if self._transition is not None or self._foreign_rejected:
             return
         if self._suppress_save and self._prepared_identity != self._identity:
@@ -267,13 +268,22 @@ class ContextContinuity:
             self._suppress_save = False
             self.status = {"supported": True, "status": "progress_saved" if record.get("progress") else "saved", "sourceRevision": record["sourceRevision"], "originalsAvailable": True}
 
-    def _check_restore_disposition(self):
-        self._recovery_record()
+    def _ordinary_restore_allowed(self):
+        try:
+            self._recovery_record()
+        except ContextRecoveryError:
+            # A private journal read failure fences derived state, not the
+            # canonical transcript. Explicit recovery still sees the error.
+            if self._recovery_guard is not None:
+                raise
+            return False
         if any(row["state"] != "committed" and row.get("candidateSha256")
                and row is not self._reconciling for row in self._journal["attempts"].values()):
-            # Storage acknowledgement is not activation/commit. In particular,
-            # a non-measured preparation must not reconcile an unknown install.
-            raise ContextRecoveryError("recovery_unreconciled")
+            # A stored candidate is not activation/commit.
+            if self._recovery_guard is not None:
+                raise ContextRecoveryError("recovery_unreconciled")
+            return False
+        return True
 
     def _recovery_record(self):
         # One read per mount; ordinary no-intent preparation does not scan history
@@ -287,6 +297,7 @@ class ContextContinuity:
                 for key, row in journal["attempts"].items():
                     source = row.get("sourceRevision") or {}
                     contract = row.get("contract")
+                    candidate = row.get("candidateSha256")
                     if (not isinstance(key, str) or not 0 < len(key) <= 200 or row.get("commandId") != key
                             or row.get("state") not in {"pending", "running", "installing", "committed", "failed", "refused", "unknown"}
                             or type(row.get("interruptionRevision")) is not int or row["interruptionRevision"] < 0
@@ -296,6 +307,9 @@ class ContextContinuity:
                             or contract["version"] != 1 or not isinstance(contract["sha256"], str)
                             or len(contract["sha256"]) != 64
                             or any(char not in "0123456789abcdef" for char in contract["sha256"])
+                            or ((row.get("state") == "installing" or "candidateSha256" in row)
+                                and (not isinstance(candidate, str) or len(candidate) != 64
+                                     or any(char not in "0123456789abcdef" for char in candidate)))
                             or type(source.get("messages")) is not int or source["messages"] < 1
                             or not isinstance(source.get("sha256"), str) or len(source["sha256"]) != 64
                             or type(row.get("completedParts")) is not int or row["completedParts"] < 0):
@@ -717,7 +731,17 @@ class ContextContinuity:
                     and empty(copy.deepcopy(self._identity)) is True)
 
     async def _run_pending(self, *, provider, retain_contents=(), count_view):
-        record = self._recovery_record()
+        if self._recovery_busy:
+            raise ContextRecoveryError("recovery_unreconciled")
+        try:
+            record = self._recovery_record()
+        except ContextRecoveryError as exc:
+            if exc.code != "recovery_journal_unavailable":
+                raise
+            return None  # Ordinary fitting uses canonical history, never this journal.
+        if (record is not None and record.get("kind") != "model-transition"
+                and record["state"] not in {"pending", "committed"}):
+            return None  # Historical explicit recovery is not a fresh command.
         policy = self.coordinator.get_capability("context.transition_policy")
         if ((record is None or record["state"] == "committed")
                 and (not callable(policy) or _sync(policy) != "host-managed")):

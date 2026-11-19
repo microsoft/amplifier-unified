@@ -491,7 +491,7 @@ async def test_captured_cli_children_never_need_a_windows_console(monkeypatch, n
 
     class Child:
         # The process reads both pipes to their end and waits itself (#2307).
-        # As a real child, this one has no exit status before the wait.
+        # The exit status stays unset until the wait, so that a missing wait fails the case.
         def __init__(self):
             self.stdout, self.stderr, self.returncode = Pipe(b"fixture output"), Pipe(b""), None
 

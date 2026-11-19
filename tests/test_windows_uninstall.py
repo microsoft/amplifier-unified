@@ -3302,12 +3302,17 @@ def test_setup_creates_no_top_level_name_that_uninstall_does_not_know():
     # Every way in which setup builds a name directly in the folder. A new way fails here.
     assert forms == {"Started", "Complete", "SourceStore", "Journal", "name", 'name+".zip"', 'name+".lnk"',
                      'name+".stderr.txt"', 'name+".failure.json"', "relative", "pair.Substring(split+1"}
-    # Setup builds the journal's name in one place, to read that file: the look that chooses the text
-    # for a folder with no launcher program (`Emptied`). It never writes or deletes the journal. In the
-    # same look it builds each of uninstall's data names, to look at it.
-    look = text.split("internal static bool Emptied(", 1)[1].split("internal static string Unopened(", 1)[0]
-    assert text.count("Journal") == 2 and 'internal const string Journal="' + plan.JOURNAL + '";' in text
+    # Setup builds the journal's name in two places, and it never writes or deletes the journal. The
+    # first reads that file: the look that chooses the text for a folder with no launcher program
+    # (`Emptied`). In the same look it builds each of uninstall's data names, to look at it. The second
+    # place only looks at the attributes of the entry with that name (`Signs`, the looks of a second
+    # setup run): it does not open the entry.
+    look = text.split("internal static bool Emptied(", 1)[1].split("internal static string Signs(", 1)[0]
+    assert text.count("Journal") == 3 and 'internal const string Journal="' + plan.JOURNAL + '";' in text
     assert "string journal=Path.Combine(root,Journal);" in look
+    signs = text.split("internal static string Signs(", 1)[1].split("internal static string Unopened(", 1)[0]
+    assert 'try { File.GetAttributes(Path.Combine(root,Journal)); return "removal"; }' in signs
+    assert "FileStream" not in signs and "File.Read" not in signs and "File.Open" not in signs
     assert "foreach(string name in Data) {\n                    string entry=Path.Combine(root,name);" in look
     # Its one open is for reading. The sharing modes let another program write or delete the file meanwhile.
     opened = "new FileStream(journal,FileMode.Open,FileAccess.Read,FileShare.ReadWrite|FileShare.Delete)"

@@ -1,8 +1,9 @@
 # Supported ACP pilot composition
 
-This is the public summary of the bounded synthetic ACP pilot completed on
-November 16, 2026. It records the combinations exercised and their limits; it is
-not a deployment pin, full ACP conformance claim or live-adoption decision.
+This is the public summary of the bounded synthetic ACP pilot, with recorded
+checks on November 16 and 18, 2026. It records the combinations exercised and
+their limits; it is not a deployment pin, full ACP conformance claim or live-adoption
+decision.
 Use the [installed backend guide](../architecture/unified-acp-backend.md) for
 current setup, [AP](../../contracts/agent-protocol.v1.md) for the promises, and
 [protocol fit](../architecture/protocol-fit.md) for capability boundaries.
@@ -15,7 +16,39 @@ not introduce another conversation store or recovery protocol. The
 [Conversations room contract](https://github.com/microsoft/amplifier-constellation-conversations/blob/8b1e01417d3d1d15729ec663d67cd894a988af09/docs/shared-rooms.md)
 describes the source-side ownership and removal policy.
 
-## Recorded fresh-grant context read
+## Current published composition checked on November 18
+
+| Part | Exact exercised selection |
+| --- | --- |
+| Unified native ACP backend | [0.109.0, `b051ff4e85af`](https://github.com/microsoft/amplifier-unified/tree/b051ff4e85af4c42e69da38445d3fd1b83335c2b); exact published wheel and installed source witnesses |
+| Constellation Instance | [0.22.11, `918109f9399a`](https://github.com/microsoft/amplifier-constellation-instance/tree/918109f9399af959d86d25454c9cdd17a2f508b4); published Linux ARM64 archive and embedded build metadata agree |
+| Constellation Conversations | [0.14.1, `8b1e01417d3d`](https://github.com/microsoft/amplifier-constellation-conversations/tree/8b1e01417d3d1d15729ec663d67cd894a988af09); exact published Linux ARM64 archive/tag, without an embedded compiled-commit witness |
+| Native profile | The backend guide's explicit [Work 0.4.0](https://github.com/microsoft/amplifier-bundle-work/tree/b5154aabf0aaed0ad9465f711abb3bfb18dee6f8) and [MCP 0.3.1](https://github.com/microsoft/amplifier-module-tool-mcp/tree/77bba04693963b0fb24ce6fe1313c39c35e2d3be), with a deterministic local provider; all three workers used the normally qualified 137-distribution graph including Core 2.0.2 |
+
+One passing run exercised three public inputs: seed A, seed B, then B's source
+read after removing A from an idle room. Removal preserved B's binding and native
+ID, revoked the old room grants and left the four seed/reply rows unchanged.
+B resumed that exact ID with a fresh room-only grant. Its actual mounted MCP
+`context_read` returned those four exact source rows and the new read input,
+with one tool start, one successful result, no tool error and matching
+Instance/source read audits. A's registered credential was refused for a read of
+that room; this was not an intercepted old-grant bearer request.
+
+Canonical prompt-start and prompt-finish events paired A's one input and B's two.
+Each participant created one native session; B resumed once, with no replacement,
+Load, cancellation, replay or automatic retry. The run and normal service cleanup
+completed successfully. No paid model, live account, browser, background job or
+approval flow was exercised. Source/graph witnesses and fixed fixture inputs
+were retained; this is no claim that every default profile includes MCP.
+
+This passing current-composition check closes the bounded pilot's remaining
+fresh-grant acceptance check. It does not relabel the earlier failed harness run
+below or extend the separately recorded lifecycle and capability coverage. The
+standalone adapter remains
+[`microsoft/amplifier-app-acp`](https://github.com/microsoft/amplifier-app-acp);
+this native composition requires neither that package nor a new SDK extraction.
+
+## Historical fresh-grant context read — November 16
 
 | Part | Exact recorded selection |
 | --- | --- |
@@ -82,8 +115,9 @@ Source review through [Unified 0.105.0, `c5cd4b57655f`](https://github.com/micro
 and documentation base `f3fc2837f338` found the native `/api/acp` attachment and
 exact-ID resume path retained. Later approval forwarding and optional
 Instance-owned matching policy are described by the current backend guide;
-the recorded cases above do not qualify those changes. This closeout performs
-no new runtime test or policy change.
+neither fresh-grant case above qualifies those approval-policy changes. The
+November 18 check exercises the narrower composition described above and changes
+no policy.
 
 The [retired Unified `/api/companion` observation adapter](https://github.com/microsoft/amplifier-unified/commit/08b102fac773038ba78ab3f8551b8d05caf2dfbd)
 is distinct from **Constellation Companion**, the separate voice experience.
@@ -91,10 +125,20 @@ Its replacement by generalized client observations does not retire `/api/acp`.
 This source finding neither resumes nor qualifies Companion voice work.
 
 The bounded pilot's ordinary participation, removal, fresh-grant retrieval and
-named lifecycle outcomes are recorded above. Concurrent participant/source
-removal versus input admission remains a named follow-up: qualify the serving
-owners' accepted/refused outcome, current authority and preserved identities
-without implicit retry. Do not infer that race from sequential removal tests.
+named lifecycle outcomes are recorded above.
+[Conversations #89](https://github.com/microsoft/amplifier-constellation-conversations/pull/89),
+accepted as `b6d3eae5633c`, adds four maintained service tests for public admission
+ordering. For both participant removal and whole-room deletion, admitted input
+makes removal refuse with 409. After participant removal, new input targeting
+that participant refuses with 400; a deleted room refuses with 404. The controls
+preserve the unaffected participant's binding, cursor and
+history, use another room for the whole-room deletion control, and cover ordinary
+single-participant continuation after detach. This is a test-only contribution,
+not a separate runtime release or a new Stop policy.
+
+An internal check-to-delete interleaving was not deterministically injected.
+That narrower concurrency question remains a follow-up; the four public ordering
+cases do not establish an atomicity result for an uncontrolled internal window.
 
 Full legacy `session/load`, complete media/resource replay, client terminals,
 arbitrary host-loss survival, live-provider behavior, broad feature parity and

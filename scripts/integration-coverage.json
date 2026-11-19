@@ -435,7 +435,6 @@
       "paths": [
         "amplifier_web/status_emitter.py",
         "amplifier_web/status_protocol/**",
-        "components/status/**",
         "components/status-emitter.source.json",
         "amplifier_web/execution_events.py",
         "amplifier_web/service.py",

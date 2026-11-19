@@ -6,6 +6,8 @@ install packages, or activate any cached source.
 from pathlib import Path
 import hashlib
 import json
+import os
+import re
 import tomllib
 from urllib.parse import urlsplit
 
@@ -62,7 +64,7 @@ def app_selection(home, *, config=None, original_home=None):
     from .host.config import read_config
     from .host.bundle_paths import configured_bundle_reference, local_bundle_path
     from .builtin_behaviors import resolve_builtin_behavior, resource_root
-    from .runtime_profiles import configuration_key
+    from .runtime_profiles import app_folders, configuration_key
     from .updates import source_key
     from urllib.parse import parse_qs, unquote
     import yaml
@@ -104,7 +106,16 @@ def app_selection(home, *, config=None, original_home=None):
         parsed = urlsplit(reference)
         if parsed.scheme == 'file':
             sub = parse_qs(parsed.fragment).get('subdirectory', [''])[0]
-            path = Path(unquote(parsed.path)) / sub
+            text = unquote(parsed.path)
+            # The address of a Windows file on a drive is file:///C:/...: it
+            # has no server name, and its path part has a slash before the
+            # drive. Take only that slash away. A general conversion
+            # (urllib.request.url2pathname) also takes "//localhost" away, on
+            # every system, and does not look at a server name: an address
+            # that was not the shipped file's would become it.
+            if os.name == 'nt' and not parsed.netloc and re.match('/[A-Za-z]:(/|$)', text):
+                text = text[1:]
+            path = Path(text) / sub
             if path.parent == resource_root() / 'behaviors' and path.suffix == '.yaml':
                 shipped(yaml.safe_load(path.read_text()))
     # Only the source roots that installation actually relocates are equivalent.
@@ -113,10 +124,7 @@ def app_selection(home, *, config=None, original_home=None):
     if original_home is not None:
         from .updates import foundation_home
         roots.update((str(Path(original_home) / 'foundation'), str(foundation_home(original_home))))
-    text = json.dumps([configuration_key(config.settings, *roots),
-                       references], sort_keys=True)
-    for root in sorted(roots, key=len, reverse=True):
-        text = text.replace(root, '$APP')
+    text = app_folders([configuration_key(config.settings, *roots), references], roots, sort_keys=True)
     return {'sources': list(sources.values()), 'witness': hashlib.sha256(text.encode()).hexdigest()}
 
 

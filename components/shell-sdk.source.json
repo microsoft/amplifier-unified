@@ -1,0 +1,130 @@
+{
+  "schema": 1,
+  "kind": "amplifier-shell-sdk-artifact",
+  "source": {
+    "repository": "bkrabach/amplifier-shell-sdk",
+    "revision": "5114e5ecee18dfdc6af70876846adb0291fe2f1b",
+    "tree": "d4744fca80c7a73a8f78d1266117aa4f9161d062",
+    "tag": "v1.0.0",
+    "version": "1.0.0"
+  },
+  "artifact": {
+    "url": "https://github.com/bkrabach/amplifier-shell-sdk/releases/download/v1.0.0/amplifier-shell-sdk-1.0.0.tgz",
+    "sha256": "09154103baabe7403fc19f3fc550e302fbf59b2a0a14620263a894eb16054091",
+    "bytes": 8014
+  },
+  "qualification": {
+    "url": "https://github.com/bkrabach/amplifier-shell-sdk/releases/download/v1.0.0/qualification.json",
+    "sha256": "f4d37c7b2ce44ea69bc7c8b3515b265a8b52cc9c4bd3d300cd646cf94fc94de8",
+    "bytes": 1386,
+    "receipt": {
+      "package": "@amplifier/shell-sdk",
+      "version": "1.0.0",
+      "tarball": "amplifier-shell-sdk-1.0.0.tgz",
+      "tarballSha256": "09154103baabe7403fc19f3fc550e302fbf59b2a0a14620263a894eb16054091",
+      "moduleSha256": "a02be73fd586930366131f0cf4cfb237f67a86c63b9c20fad08b32ab0bfffb1d",
+      "files": [
+        {
+          "path": "LICENSE",
+          "size": 1141
+        },
+        {
+          "path": "ORIGIN.json",
+          "size": 2156
+        },
+        {
+          "path": "README.md",
+          "size": 6611
+        },
+        {
+          "path": "examples/shell-controls/build.mjs",
+          "size": 426
+        },
+        {
+          "path": "examples/shell-controls/index.js",
+          "size": 2120
+        },
+        {
+          "path": "examples/shell-controls/manifest.json",
+          "size": 397
+        },
+        {
+          "path": "examples/shell-controls/package.json",
+          "size": 228
+        },
+        {
+          "path": "examples/shell-controls/README.md",
+          "size": 1603
+        },
+        {
+          "path": "index.d.ts",
+          "size": 3919
+        },
+        {
+          "path": "index.js",
+          "size": 636
+        },
+        {
+          "path": "package.json",
+          "size": 779
+        }
+      ],
+      "node": "v22.23.4",
+      "npm": "10.9.9",
+      "platform": "linux",
+      "typescript": "5.9.3",
+      "strictConsumer": "passed",
+      "inputs": [
+        "node_modules/@amplifier/shell-sdk/index.js",
+        "index.js"
+      ],
+      "hostAcceptance": "Separate Unified DTU validation is required for changed interface or component behavior."
+    }
+  },
+  "files": {
+    "LICENSE": {
+      "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
+      "bytes": 1141
+    },
+    "ORIGIN.json": {
+      "sha256": "73eab1858f53951e9e9081dc3ed5bd52e69e2f8b2403f91c6f09087e72c608d0",
+      "bytes": 2156
+    },
+    "README.md": {
+      "sha256": "bba979b2d9c060f53ccd5c2154baf4575e2e57f45067a6cae5203261bb7c5696",
+      "bytes": 6611
+    },
+    "examples/shell-controls/README.md": {
+      "sha256": "e3a8a5834a31e1853bb4d1cf2bfe047ea986c2ae0423969ea1ccf0f37ff8afdf",
+      "bytes": 1603
+    },
+    "examples/shell-controls/build.mjs": {
+      "sha256": "f6f2dd632beccea1b5e2f035fad1ba340414a5385a77ac589dd20a66b16adcc1",
+      "bytes": 426
+    },
+    "examples/shell-controls/index.js": {
+      "sha256": "3ccc480a87c6353fc63e3f538e811f785dce570336113c7978e4685731761a92",
+      "bytes": 2120
+    },
+    "examples/shell-controls/manifest.json": {
+      "sha256": "5b244070622710d8a7e81200818ea51bedbd6d8d2611237e3ceb1388ecddadc5",
+      "bytes": 397
+    },
+    "examples/shell-controls/package.json": {
+      "sha256": "e586d73a5175bb22815043203bf9429e63875baf7d50ef4136403092dc99ae89",
+      "bytes": 228
+    },
+    "index.d.ts": {
+      "sha256": "113e4778f031d44852261d0202f7c62673879f07cee2834e25d68067066a6b64",
+      "bytes": 3919
+    },
+    "index.js": {
+      "sha256": "1b358735db3b8de9802370cbe9c03911388b78ae36c20ed44fcba68fb915bbae",
+      "bytes": 636
+    },
+    "package.json": {
+      "sha256": "ab3f528d82e6322b6d91a5f82bb1ea11157a55a28ce2db022b614412dac01dd8",
+      "bytes": 779
+    }
+  }
+}

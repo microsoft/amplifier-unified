@@ -443,6 +443,35 @@ new candidate's policy, never the old generation's receipts. Explicit pins, tags
 external resolver policy do not acquire branch authority from an `originalRef`
 spelling or matching commit.
 
+A provider module has one reference in the app's own files. A profile composes a
+provider that has no source of its own from `amplifier_web/provider_sources.json`.
+The worker environment declares the same repository in
+`amplifier_web/runtime_deps/pyproject.toml`; a decision support pack adds rows
+from `runtime_deps/features.toml`. A component update that prepares a worker
+environment compares the two references of each provider that a profile
+composes, and it refuses the update when they differ, also when both name the
+same commit (`runtime_source_alignment.verify_checked_selection`, reason
+`protected-runtime-source`). Releases 0.108.0 and 0.109.0 named a commit for the
+OpenAI module in the list and the branch in the manifest. On an installation
+whose "OpenAI API" connection takes its source from the list, no component
+update that prepares a worker environment could complete. An installation whose
+settings name the module's branch themselves was not affected: its profile does
+not take that module's source from the list. Change the two files together;
+`tests/test_provider_source_alignment.py` fails when they differ and names both.
+A commit in both files does not repair an installed PC: a new candidate keeps
+the reference that the installation already has
+(`runtime_environment.augmented_manifest`), so the worker manifest's sources are
+branches (`tests/test_standalone.py`). The list is also an input of the web
+client: the selected client records its hash, and the built client holds its
+text. A change of the list needs a client revision whose
+`build-inputs.lock.json` has the new hash, that selection in
+`components/web-client.source.json`, and the normal client build. One more file
+depends on the module's commit: `amplifier_web/host/media_sources.json` holds
+the hashes of the module files that the reviewed image route of ordinary Work
+accepts (`host/media_assembly.select_root`). While the list follows a branch,
+that route can be on only while the branch has exactly those files. On Windows
+it is off in every case (`host/media.bind_media`).
+
 The worker's transitive Foundation override names the distribution without
 independently declaring a URL/ref. The effective `tool.uv.sources` choice owns
 that identity, including an installed fork or pin carried into a new candidate.
@@ -459,7 +488,28 @@ A stage holds no copy of the app's own `config` or `routing` folder. `config`
 holds the sign-in secrets and the TLS key of the installation, and a stage reads
 neither folder: its settings and routing are in `shared-config`, with the
 temporary copy of the keys file that the next paragraph describes.
-A stage that an earlier version of the app prepared can still hold such a copy.
+An earlier version of the app made such copies. Idle maintenance removes the
+entries `config` and `routing` from every stage that still has them, whether
+the stage settled or failed, and at every age. It does that before it looks for
+keys files (next paragraph), with the same admission: after an activation,
+after a start of the app and then about each hour, never while an update
+operation runs or waits, and not in the stage of an unresolved preparation.
+This removal has its own bounds, and it changes no rule of a keys file. One
+pass handles at most eight stages with such a copy and at most 64 entries
+(files, links and folders): an entry that it removes, and an entry that it must
+leave. A larger copy goes on when a later pass comes to its stage again, after
+the other stages. An entry that cannot be removed stays, and a later pass tries
+again: no update, retry or restore fails or waits because of it. A pass lists
+each folder from its start again. So when the first 64 listed entries of a
+folder all stay, the entries behind them stay too. A link is
+never followed: an entry `config` or `routing` that is a link, a junction or no
+folder stays, and a link inside a copy is removed as a link (on Windows it
+stays). This removal reads the list of stages, and it looks at each stage, through
+an open folder and not by a path: at a link or a junction that has the name of
+the folder of the stages, or of a stage, it lists nothing and handles nothing.
+On Windows a folder of a copy that another program has open in a way that does
+not permit its deletion, for example as its working folder, stays with
+everything below it until that program lets it go.
 
 Component qualification uses a temporary `shared-config/keys.env` copy.
 The manager removes only that file after qualification succeeds or a handled
@@ -707,6 +757,17 @@ evidence can establish current health without matching old requested URL labels
 or update-tier batch counts. This does not rewrite or resolve the historical
 attempt. A missing package, changed configuration/source, newer failure, incomplete
 desired check, partial or uncertain activation remains a current limitation.
+A package that the generation's record does not name does not end the health
+proof: a connection check can add one. A recorded package that is missing or
+changed ends it. A preparation still compares the installed packages with the
+record exactly.
+After a switch to another generation, the owner publishes the new selection
+before it has read that generation's proof. Until that read ends, the page shows
+"Checking components" in place of a result from an earlier component failure
+record; an error of the switch itself is shown at once. When the switch is
+cancelled before it has published the result of that read, or its own error,
+the update owner's next pass that no hold stops makes the read and
+publishes what it found.
 No installation or model call runs just to clear old attention.
 An exact verified app restart also supersedes older candidate failures only when
 their requested feature scope is known and present. Intentional local source
@@ -726,9 +787,54 @@ failure summaries, total/omitted counts, and activation/configuration proof
 limitations. It does not rename the selected record as the last failure or
 discard history. A missing older activation receipt alone remains neutral,
 does not request reinstallation, and does not claim full component verification.
-If the selected installation's graph, lock and activation still verify but its
-source-configuration key no longer matches, health reports incomplete component
-verification, not a renewed claim that an older source conflict is occurring.
+If the selected installation's graph and lock still verify, and its activation
+receipt verifies or is no longer kept, but its source-configuration key no
+longer matches, that alone is no failure and requires nothing of the person.
+A saved AI connection for all folders can give this
+state: a second connection, a connection of another kind, or another order of
+connections of different kinds changes the key; another model for the same
+connection does not. A new app version that computes another key for the same
+settings gives it too, and health cannot tell the two apart. So the text says
+only that the record of the component check is not for the current settings.
+After a save that moved `configurationRevision`, the next publication of
+changes marks health for another read and wakes the update owner
+(`UpdateManager.configuration_changed`). The owner makes that read in its
+first pass that reaches it: `tick` returns before the
+read while the outcome of a manual hand-over commit is not known, and while
+`awaiting_restart()` holds. Until a health read for the new revision ends,
+health gives "Checking current configuration" when the proof that it holds,
+with this limit taken out, gives a quiet value (`projection`). When that
+read finds this state, an earlier rule of `current()` can still decide the
+value, for example an
+operation that runs or waits, a failure that the proof does not cover, a
+listed update or a failed application check. When none does, and either the
+check sequence is complete with the application current or a local source
+change is listed, the value has the quiet status `unchecked`, with no
+attention item for it, so the Settings entry gets no unread mark from it: "The components
+need a new check for your current settings" / "The components that Amplifier
+recorded are installed as recorded. Amplifier has no record that it checked
+them with your current AI connections and other settings. A new AI connection
+is one cause. The next update check looks for the components that your current
+settings need. To check now, select Check for updates." The first sentence
+speaks of the recorded components because the health proof accepts a package
+that the record does not name. When no earlier rule decides and neither of
+those two holds, the value is "Check for updates" / "The full desired
+component state has not been checked.", also with the status `unchecked`. The
+bundled page shows a quiet health value when no update operation runs or
+waits; while one does, the page shows its own text of that operation. The
+text of this state ends when a check lists an update, or when the settings
+again have the key of the record. For the other key a check's
+inventory adds the row "Qualify current component configuration", unless it
+already lists a row for the worker environment; each such row is an update.
+A health read is not an update check, and no rule for a check reads this
+status. The text is the same with automatic checks on and off, and it promises
+no result of the next check. It is not a renewed claim that an older source
+conflict is occurring. On Windows the launcher step
+(`windows_launcher_follow.project`) reads this status as a quiet one. With no
+open launcher request, in the phases `waiting`, `ready`, `failed` and
+`failed-unchanged` of that step, the published value holds the launcher's text
+in place of this text, in the last three with its button; with no phase, and
+in the phase `done`, this text stays.
 Only covered failures predating that installation remain historical; newer
 failures, missing source scope and uncertain operations retain their priority.
 This explanatory proof cannot authorize partial-source retention or declare the

@@ -41,17 +41,16 @@ React and the public `useShellComponent(React, host)` helper. Bundle dependencie
 into one ESM artifact; do not import private frontend implementation files.
 See [the independent example](../../examples/shell-controls/README.md).
 
-On Linux/macOS, check the package boundary with `node scripts/qualify_shell_sdk.mjs`. It packs
-the SDK, installs it into a disposable consumer outside the checkout, builds the
-actual controls example and checks that its only bundled dependency is the SDK.
-The resulting `output/shell-sdk-proof` holds the tarball, component and receipt;
-temporary dependencies are removed. This is a package check, not host acceptance.
-Inside an owned test environment, set `AMPLIFIER_SHELL_COMPONENT_PACKAGE` to that
-output directory when running `tests/web/shell-components-browser.mjs` to
+The [public SDK owner](https://github.com/bkrabach/amplifier-shell-sdk) qualifies
+its package, strict TypeScript consumer and controls example on Linux, macOS and
+Windows. Unified selects that original artifact through its
+[SDK delivery workflow](sdk-delivery.md); SDK authoring and direct tests stay in
+the public repository. Package qualification is separate from host acceptance.
+Inside an owned test environment, set `AMPLIFIER_SHELL_COMPONENT_PACKAGE` to a
+qualified component output directory when running `tests/web/shell-components-browser.mjs` to
 exercise the same installed artifact through real host validation, preview/apply,
 dirty-edit deferral, stale callbacks and recovery. The fixture also rejects an
-unsupported API revision. Registry publication and repository extraction remain
-separate delivery steps.
+unsupported API revision. Unified retains these host/browser integration checks.
 
 This profile remains **trusted same-origin code**. Capability checks constrain
 SDK operations, not arbitrary native JavaScript. Compatibility validation is

@@ -109,6 +109,61 @@ def test_fork_keeps_full_system_tool_context_and_configuration_without_job_owner
     assert store.load('fork-session')[0][0]['role']=='system'
 
 
+@pytest.mark.parametrize('bundle,reset_model', [(None, False), ('work', False), ('work', True)])
+async def test_converted_fork_inherited_pin_never_inherits_transition_admission(
+        tmp_path, monkeypatch, bundle, reset_model):
+    from types import SimpleNamespace
+    from test_provider_selection_lifecycle import mounted_controls, SELECTION
+
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    src = {**source(), 'selection': SELECTION}
+    store = SessionStore.for_app(tmp_path, src['workspace'])
+    store.save(src['id'], transcript(), {}, preserve_system=True)
+    directory = tmp_path / 'sessions' / src['id']
+    directory.mkdir(parents=True)
+    control = directory / 'control-state.json'
+    control.write_text(json.dumps({
+        'selection': SELECTION, 'selectionRevision': 'source-admission',
+        'selectionBinding': 'source-account', 'selectionBindingPending': True,
+        'goal': {'condition': 'source work'}, 'budget': {'maxOutputTokens': 50}}))
+    before = control.read_bytes()
+    fork_session(tmp_path, src, 'independent-fork', bundle=bundle, reset_model=reset_model)
+    target = tmp_path / 'sessions' / 'independent-fork'
+    saved = json.loads((target / 'control-state.json').read_text())
+    assert 'selectionRevision' in saved and saved['selectionRevision'] is None
+    assert 'selectionBinding' not in saved and 'selectionBindingPending' not in saved
+    assert saved.get('selection') == (None if reset_model else SELECTION)
+    assert control.read_bytes() == before
+    assert not (target / 'context-recovery.json').exists()
+
+    controls, _, providers = mounted_controls(None)
+    controls.session.session_id = 'independent-fork'
+    caps = {
+        'web.provider_catalog': {'connectionKeys': {'terra': 'verified-current'}},
+        'web.context_transition.originals': True,
+        'web.context_transition.input': lambda: {
+            'inputId': 'fresh', 'selectionRevision': controls.selection_revision},
+    }
+    controls.coordinator.get_capability = caps.get
+    try:
+        await controls.restore()
+        assert controls.selection_revision is None
+        assert controls.selection_binding is None
+        controls.runtime.accepted = {'fresh': SimpleNamespace(kind='user')}
+        controls.runtime.generation = {
+            'id': 'generation', 'initial_input_id': 'fresh', 'input_ids': ['fresh']}
+        # Even a new delivered input cannot turn the inherited choice into intent.
+        assert controls.transition_foreground() is None
+        assert all(not provider.calls for provider in providers.values())
+        controls.runtime.generation = None
+        await controls.perform('provider.select', {
+            **SELECTION, 'expectedConnectionKey': 'verified-current'})
+        assert controls.selection_revision not in {None, 'source-admission'}
+        assert controls.selection_binding == 'verified-current'
+    finally:
+        await controls.close()
+
+
 @pytest.mark.parametrize('disposition', ['accepted', 'changed-prefix', 'unknown-install', 'changed-config'])
 async def test_full_fork_retains_only_prefix_bound_accepted_context_checkpoint(tmp_path, disposition):
     from amplifier_web.automatic_history import display_message, revision

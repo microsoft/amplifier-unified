@@ -277,6 +277,10 @@ class SSHClient:
                 return self.verify_target()
             if self.service_id is None or request.get("method") in MUTATIONS:
                 self.verify_target()
+            if request.get("method") in {"page", "release"}:
+                target = self.verify_target()
+                if target.get("pagination", {}).get("version") != 1:
+                    raise PublishingError("unsupported_capability", "Target does not support bounded pages; upgrade its service before browsing")
             # The server checks this identity on the actual operation request,
             # not merely on a separate preflight susceptible to a target swap.
             guarded = {**request, "expectedServiceId": self.service_id}
@@ -287,6 +291,15 @@ class SSHClient:
             if method == "receipt":
                 if result is not None and not isinstance(result, dict):
                     raise PublishingError("invalid_response", "Receipt lookup must return an object or null")
+                return result
+            if method == "page":
+                if not isinstance(result, dict) or result.get("collection") != request.get("collection") or not isinstance(result.get("items"), list) or len(result["items"]) > request.get("limit", 25) or (result.get("nextCursor") is not None and (not isinstance(result["nextCursor"], str) or len(result["nextCursor"]) > 2048)):
+                    raise PublishingError("invalid_response", "Invalid bounded publishing page")
+                if any(not isinstance(row, dict) or row.get("sessionId") != request.get("sessionId") or (request.get("siteId") is not None and (row.get("id") if request["collection"] == "sites" else row.get("siteId")) != request["siteId"]) for row in result["items"]):
+                    raise PublishingError("invalid_response", "Publishing page contains records outside its requested scope")
+                # Receipts remain raw for caller reconciliation, exactly like receipt reads.
+                if request["collection"] != "receipts":
+                    self.validate_result("list" if request["collection"] == "sites" else "releases", result["items"], summary=True)
                 return result
             if method == "receipts":
                 if not isinstance(result, list):
@@ -304,7 +317,7 @@ class SSHClient:
                     raise unknown_outcome(guarded) from exc
                 raise
 
-    def validate_result(self, method, result):
+    def validate_result(self, method, result, *, summary=False):
         """Validate URL-bearing results or receipt projections without IO.
 
         Live and historical deployment URLs use the configured target. Preview
@@ -362,7 +375,9 @@ class SSHClient:
         def release(record, receipt=None, *, require_retention=False):
             if not isinstance(record, dict) or not isinstance(record.get("id"), str) or not record["id"]:
                 invalid("Release result must be an identified object", receipt)
-            if not isinstance(record.get("files"), list) or not isinstance(record.get("manifestDigest"), str):
+            has_manifest = isinstance(record.get("files"), list)
+            bounded_summary = summary and type(record.get("fileCount")) is int and 0 <= record["fileCount"] <= 2000
+            if not (has_manifest or bounded_summary) or not isinstance(record.get("manifestDigest"), str):
                 invalid("Release result must include its manifest and digest", receipt)
             if not isinstance(record.get("previewStatus"), str) or record["previewStatus"] not in {"none", "running", "stopped", "interrupted"} or "previewUrl" not in record:
                 invalid("Release result has invalid preview metadata", receipt)
@@ -416,7 +431,7 @@ class SSHClient:
                 release(row)
         elif method == "status":
             site(result)
-        elif method == "import":
+        elif method in {"import", "release"}:
             release(result)
         elif method == "build" and isinstance(result, dict) and "state" not in result:
             release(result)

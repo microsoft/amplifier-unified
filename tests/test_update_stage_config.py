@@ -210,6 +210,16 @@ async def test_a_stage_of_an_earlier_app_version_is_validated_and_selected_with_
     three: the stage as app home, its ``shared-config`` as shared home, and the
     empty generation name.
     """
+    await request_to_a_stage_of_an_earlier_app_version(app, repo, tmp_path, monkeypatch, asked, made)
+
+
+async def request_to_a_stage_of_an_earlier_app_version(app, repo, tmp_path, monkeypatch, asked, made, first=None):
+    """The case above; it gives the update owner and the stage.
+
+    ``first(manager, stage)`` runs when the stage is complete, directly before
+    the request (``tests/test_update_stage_config_removal.py``: the idle pass).
+    The request must leave what the stage holds of the copies at that moment.
+    """
     manager, _ = await prepare(app, repo)
     before = app_files(app.data_dir)
     fixtures = tmp_path / 'probe-fixtures'
@@ -275,6 +285,9 @@ async def test_a_stage_of_an_earlier_app_version_is_validated_and_selected_with_
         probes.append(result.facts['stage'])
 
     monkeypatch.setattr(updates, 'process', process)
+    if first is not None:
+        await first(manager, stage)
+        copies = held(stage)
     if asked == 'restore':
         await manager.rollback()
     else:
@@ -291,3 +304,4 @@ async def test_a_stage_of_an_earlier_app_version_is_validated_and_selected_with_
         assert not os.path.lexists(stage / 'config') and not os.path.lexists(stage / 'routing')
         assert holds_the_mark(stage) == []
     assert held(app.data_dir) == before
+    return manager, stage

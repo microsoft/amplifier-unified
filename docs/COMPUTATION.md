@@ -109,7 +109,7 @@ remain unavailable. The operation journal's loss/uncertainty contract also appli
 
 ## Validation
 
-The [standalone mechanism project](../components/kernels/README.md) exercises real
+The [standalone mechanism project](https://github.com/bkrabach/amplifier-platform-kernels) exercises real
 Python and Node subprocesses against its own installed wheel. It covers persistent variables, errors, reset,
 interruption, exact code approval, generation/session boundaries, dependency
 questions, bounded output and no replay. Host action tests also preserve the

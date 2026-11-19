@@ -566,15 +566,15 @@ def fork_session(home, source, target_id, *, turn=None, after_message_id=None, b
             data = json.loads(path.read_text())
             if name == "control-state.json":
                 data["goal"] = None
-                # Model choice is inherited, its source execution's transition
-                # admission is not. A later explicit target choice gets its own
-                # revision on the independent fork.
-                data["selectionRevision"] = None  # Explicit fork, not a legacy absent-key control.
-                data.pop("selectionBinding", None)
-                data.pop("selectionBindingPending", None)
                 if bundle:
                     from .bundle_selection import reset_controls
                     data = reset_controls(data, reset_model=reset_model)
+                # Model choice is inherited, its source execution's transition
+                # admission is not. A later explicit target choice gets its own
+                # revision on the independent fork, even after bundle reset.
+                data["selectionRevision"] = None  # Explicit fork, not a legacy absent-key control.
+                data.pop("selectionBinding", None)
+                data.pop("selectionBindingPending", None)
             copied[name] = json.dumps(data,indent=2)
     effective = source_dir / "effective-configuration.json"
     if effective.is_file() and not bundle:

@@ -14,34 +14,16 @@
 /tests/** source-context=tests
 /tests/web/** source-context=tests
 /amplifier_web/status_protocol/** source-context=generated linguist-vendored=true linguist-generated=true -text
-/components/status/*.py source-context=source
-/components/status/tests/** source-context=tests
-/components/status/README.md source-context=documentation
-/components/status/LICENSE source-context=documentation
-/components/status/MANIFEST.in source-context=configuration
-/components/status/pyproject.toml source-context=configuration
-/components/status/.gitignore source-context=configuration
 /components/status-emitter.source.json source-context=configuration
 /scripts/**/tests/** source-context=tests
 /components/recall.source.json source-context=configuration
 /components/recall-delivery/** source-context=generated linguist-vendored=true linguist-generated=true -text
 /components/scheduling.source.json source-context=configuration
 /components/scheduling-delivery/** source-context=generated linguist-vendored=true linguist-generated=true -text
-/components/publishing/amplifier_publishing/** source-context=source
-/components/publishing/tests/** source-context=tests
-/components/publishing/MANIFEST.in source-context=configuration
-/components/publishing/.gitignore source-context=configuration
-/components/publishing/LICENSE source-context=documentation
 /components/publishing.source.json source-context=configuration
 /components/publishing-delivery/** source-context=generated linguist-vendored=true linguist-generated=true -text
 /components/worktrees.source.json source-context=configuration
-/components/portability/worktrees-source.json source-context=configuration
 /components/worktrees-delivery/** source-context=generated linguist-vendored=true linguist-generated=true -text
-/components/portability/amplifier_portability/** source-context=source
-/components/portability/tests/** source-context=tests
-/components/portability/MANIFEST.in source-context=configuration
-/components/portability/.gitignore source-context=configuration
-/components/portability/LICENSE source-context=documentation
 /components/portability.source.json source-context=configuration
 /components/portability-delivery/** source-context=generated linguist-vendored=true linguist-generated=true -text
 /components/outputs.source.json source-context=configuration
@@ -130,12 +112,10 @@ package-lock.json source-context=locks
 # Preserve installed/isolated worker paths; selected snapshots are not authoring owners.
 /components/operations.source.json source-context=configuration
 /amplifier_operations/** source-context=generated linguist-vendored=true linguist-generated=true -text
-/components/kernels/*.py source-context=source
-/components/kernels/*.cjs source-context=source
-/components/kernels/tests/** source-context=tests
-/components/kernels/pyproject.toml source-context=configuration
-/components/kernels/MANIFEST.in source-context=configuration
-/components/kernels/.gitignore source-context=configuration
-/components/kernels/LICENSE source-context=documentation
 /components/kernels.source.json source-context=configuration
 /amplifier_kernels/** source-context=generated linguist-vendored=true linguist-generated=true -text
+
+# Public SDK artifact and authoring-example projection; edit in its public owner.
+/components/shell-sdk.source.json source-context=configuration
+/packages/shell-sdk/** source-context=generated linguist-vendored=true linguist-generated=true -text
+/examples/shell-controls/** source-context=generated linguist-vendored=true linguist-generated=true -text

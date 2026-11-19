@@ -185,6 +185,9 @@ originals through ordinary preparation. It is never transition provenance.
 Older saved explicit model selections without a revision acquire one stable
 revision only after verification of the mounted connection; restoring a default,
 an absent selection or an explicit null fork revision does not grant admission.
+Bundle conversion must retain that explicit null after resetting bundle controls,
+including when the fork keeps its inherited model pin; account-binding fields
+from the source execution are not copied as admission.
 Missing transition intent tells the person to choose an explicit connection/model
 and send a new ordinary message. A rejected foreign checkpoint instead needs a
 compatible validated source and preserved originals. Generic explicit recovery

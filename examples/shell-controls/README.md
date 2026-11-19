@@ -17,13 +17,8 @@ This creates `dist/module.mjs`, `dist/manifest.json`, and a build-input report.
 Commit the generated lockfile in your own component project. React comes from
 the host and must not be added to this bundle.
 
-Unified contributors can produce that tarball with `npm pack` in
-`packages/shell-sdk`. The Unified example-build entrypoint remains available
-for in-repository tests:
-
-```sh
-node scripts/examples/build-shell-controls-example.mjs
-```
+SDK contributors produce that tarball with `npm test` at the SDK repository root.
+The test builds this example from the installed package, outside the checkout.
 
 Stage `dist/manifest.json` and `dist/module.mjs` with `shell.packages.stage`, run
 host validation, then add an instance to one of its declared slots using the
