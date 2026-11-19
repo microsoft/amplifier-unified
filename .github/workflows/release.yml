@@ -193,9 +193,11 @@ jobs:
         if: hashFiles('amplifier_web/worker_startup_probe.py') != ''
         run: |
           app="$("$RUNNER_TEMP/release-smoke/bin/python" -I -c 'import amplifier_web; from pathlib import Path; print(Path(amplifier_web.__file__).resolve().parent)')"
+          # Normal app staging can be deeper than the POSIX control socket limit.
+          staging="$RUNNER_TEMP/application-staging/retained-runtime/qualified-application-generation/ordinary-conversations"
           for registration in retained native; do
             "$RUNNER_TEMP/surface-runtime/.venv/bin/python" -I -B "$RUNNER_TEMP/release-tools/worker_startup_probe.py" \
-              "$RUNNER_TEMP/startup-$registration" --installed-package "$app" --tool-registration "$registration"
+              "$staging/startup-$registration" --installed-package "$app" --tool-registration "$registration"
           done
       - name: Verify surface context and recipe children through Core and loop-live
         run: |

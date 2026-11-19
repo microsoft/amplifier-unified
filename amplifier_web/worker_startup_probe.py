@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import tempfile
 import traceback
 
 SOURCE = Path(__file__).resolve().parent.parent
@@ -30,6 +31,16 @@ async def main():
     parser.add_argument('--compare-startup', action='store_true',
                         help='Return a private failure fingerprint for comparison with the incumbent.')
     args = parser.parse_args()
+    if args.tool_registration and os.name == 'posix':
+        # Foundation creates a same-user AF_UNIX socket under the temp directory.
+        # Package staging and macOS user cache paths can exceed its length limit.
+        with tempfile.TemporaryDirectory(prefix='aw-', dir='/tmp') as socket_tmp:
+            await probe(args, socket_tmp)
+    else:
+        await probe(args)
+
+
+async def probe(args, socket_tmp=None):
     app_package = SOURCE / 'amplifier_web'
     if args.installed_package:
         app_package = args.installed_package.resolve(strict=True)
@@ -49,9 +60,11 @@ async def main():
         scratch_home.mkdir()
         os.environ.clear()
         os.environ.update(HOME=str(scratch_home), PATH=os.defpath,
-                          TMPDIR=str(scratch_home), UV_OFFLINE='1', GIT_ALLOW_PROTOCOL='file',
+                          TMPDIR=socket_tmp or str(scratch_home), UV_OFFLINE='1', GIT_ALLOW_PROTOCOL='file',
                           GIT_CONFIG_NOSYSTEM='1', AMPLIFIER_RUNTIME_IMMUTABLE='1',
                           PYTHONDONTWRITEBYTECODE='1')
+        if socket_tmp is not None:
+            tempfile.tempdir = socket_tmp
         def deny_network(event, arguments):
             if event in {'socket.connect', 'socket.getaddrinfo', 'socket.sendto'}:
                 raise RuntimeError("Network access is disabled during startup qualification")
