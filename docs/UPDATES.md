@@ -472,12 +472,7 @@ branches (`tests/test_standalone.py`). The list is also an input of the web
 client: the selected client records its hash, and the built client holds its
 text. A change of the list needs a client revision whose
 `build-inputs.lock.json` has the new hash, that selection in
-`components/web-client.source.json`, and the normal client build. One more file
-depends on the module's commit: `amplifier_web/host/media_sources.json` holds
-the hashes of the module files that the reviewed image route of ordinary Work
-accepts (`host/media_assembly.select_root`). While the list follows a branch,
-that route can be on only while the branch has exactly those files. On Windows
-it is off in every case (`host/media.bind_media`).
+`components/web-client.source.json`, and the normal client build.
 
 The worker's transitive Foundation override names the distribution without
 independently declaring a URL/ref. The effective `tool.uv.sources` choice owns

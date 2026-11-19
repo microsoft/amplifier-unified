@@ -160,6 +160,6 @@ def install_request_redaction(coordinator, *, directory=None):
         result['request_capture'] = {'redacted': True, 'truncated': truncated,
                                      'limit_chars': MAX_CAPTURE_CHARS}
         return HookResult(action='modify', data=result)
-    for event in ('llm:request', 'llm:response'):
+    for event in ('llm:request', 'llm:response', 'llm:error'):
         coordinator.hooks.register(event, observe,
             name='unified-provider-request-redaction', priority=-100)

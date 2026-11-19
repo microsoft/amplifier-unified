@@ -150,11 +150,28 @@ dev = [
     "amplifier-module-hook-context-intelligence @ git+https://github.com/microsoft/amplifier-bundle-context-intelligence@a80ce69d0e96e9a343501f238dcd867350dd9aa2#subdirectory=modules/hook-context-intelligence",
     # Installed skills checks exercise the real loader and companion-file tool.
     "amplifier-module-tool-skills @ git+https://github.com/microsoft/amplifier-bundle-skills@2f58408a879535df36da5c92d2b073f49271ade4#subdirectory=modules/tool-skills",
-    "amplifier-module-tool-filesystem @ git+https://github.com/microsoft/amplifier-module-tool-filesystem@663f26a878ae71e136f439fa73ded52b2eb24174",
+    # Published session image staging, including qualified static GIF/WebP.
+    "amplifier-module-tool-filesystem @ git+https://github.com/microsoft/amplifier-module-tool-filesystem@29ab75b32a5a7c066bb366f43d2c0353a87e814b",
     # File-policy checks must execute the real patch engines, not skip at import.
     "amplifier-module-tool-apply-patch @ git+https://github.com/microsoft/amplifier-bundle-filesystem@515599f0d0763a946aa96ed1d0110db723f5c386#subdirectory=modules/tool-apply-patch",
     "amplifier-module-tool-image @ git+https://github.com/microsoft/amplifier-bundle-imagegen@8acd3773102b77378c0d46da53a901f8297a38fc#subdirectory=modules/tool-image",
     "amplifier-module-hooks-candidate-guard @ git+https://github.com/microsoft/amplifier-bundle-converge@da7dd8878c9e7b672e86151b32d59c0cce68bcb6#subdirectory=modules/hooks-candidate-guard",
+]
+work-media = [
+    # Opt-in, offline ordinary-Work composition tests mount every declared
+    # module. Keep these out of the host's production dependency set.
+    "amplifier-module-tool-transcript @ git+https://github.com/microsoft/amplifier-bundle-context-managed@c18eb0c68d609d3471549f148f2e36f77d59a336#subdirectory=modules/tool-transcript",
+    "amplifier-module-tool-bash @ git+https://github.com/microsoft/amplifier-module-tool-bash@d5bb46d24dcae8e260211bf8fb5c22de3a67f406",
+    "amplifier-module-tool-web @ git+https://github.com/microsoft/amplifier-module-tool-web@2a58cf71f6f941f5b5ef28d59564f5d47af5f294",
+    "amplifier-module-tool-search @ git+https://github.com/microsoft/amplifier-module-tool-search@ccd11795f6bb47853cfd1761b126f3b40d95a517",
+    "amplifier-module-tool-computer-use @ git+https://github.com/microsoft/amplifier-bundle-computer-use@main#subdirectory=modules/tool-computer-use",
+    "amplifier-module-hook-computer-use @ git+https://github.com/microsoft/amplifier-bundle-computer-use@main#subdirectory=modules/hook-computer-use",
+    "amplifier-module-tool-context-intelligence-transcript @ git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/tool-context-intelligence-transcript",
+    "amplifier-module-tool-context-intelligence-set-filters @ git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/tool-context-intelligence-set-filters",
+    "amplifier-module-tool-mode @ git+https://github.com/microsoft/amplifier-bundle-modes@a29ebceb72f02f4340290346d5a4fe0cf486dfec#subdirectory=modules/tool-mode",
+    "amplifier-module-hooks-mode @ git+https://github.com/microsoft/amplifier-bundle-modes@a29ebceb72f02f4340290346d5a4fe0cf486dfec#subdirectory=modules/hooks-mode",
+    "amplifier-module-hooks-approval @ git+https://github.com/microsoft/amplifier-module-hooks-approval@c149f1e09757567d0dfc82a83bf21ac274a2061d",
+    "amplifier-module-hooks-routing @ git+https://github.com/microsoft/amplifier-bundle-routing-matrix@9d9d1cb17ac958a011c99b80096034663fd245b3#subdirectory=modules/hooks-routing",
 ]
 artifacts = ["python-docx>=1.1,<2", "python-pptx>=1,<2", "openpyxl>=3.1,<4", "reportlab>=4,<5", "pypdf>=6,<7", "Pillow>=13,<14"]
 

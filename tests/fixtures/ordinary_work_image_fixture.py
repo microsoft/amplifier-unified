@@ -8,11 +8,10 @@ hooks and agent declarations survive composition; no other tool is called.
 """
 import copy
 import hashlib
-import importlib
-import inspect
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -21,13 +20,29 @@ from amplifier_core import AmplifierSession
 from amplifier_core.loader import ModuleLoader
 from amplifier_foundation.paths.resolution import ResolvedSource
 from amplifier_foundation.sources import SimpleSourceResolver
+from amplifier_web.app_guidance import install_app_access
+from amplifier_web.host import media
 from amplifier_web.host.config import HostConfig
 from amplifier_web.host.session import load_root_bundle, live_plan
-from amplifier_web.host import media
-from amplifier_web.host.media_assembly import ReviewedRootRecipe, WORK_TOOLS, WORK_HOOKS, WORK_AGENTS
 from amplifier_web.host.storage import SessionStore
-from amplifier_web.app_guidance import install_app_access
 from test_tool_image_consumer_join import FiniteSourceHost
+
+# These expectations describe the offline Work fixture, not media admission.
+WORK_TOOLS = (
+    "tool-transcript", "tool-skills", "tool-bash", "tool-exec", "tool-web",
+    "tool-ui-use", "tool-filesystem", "tool-apply-patch", "tool-search",
+    "tool-delegate", "tool-image", "tool-computer-use",
+    "tool-context-intelligence-transcript", "tool-mode",
+    "tool-context-intelligence-set-filters",
+)
+WORK_HOOKS = (
+    "hook-computer-use", "hooks-mode", "hooks-approval",
+    "hook-context-intelligence", "hooks-routing",
+)
+WORK_AGENTS = {
+    "computer-use:computer-operator", "context-intelligence:graph-analyst",
+    "context-intelligence:session-navigator", "context-intelligence:server-data-ops",
+}
 
 REPOSITORIES = {
     "amplifier-bundle-work": "work", "amplifier-foundation": "foundation",
@@ -52,7 +67,8 @@ class WorkLoader(ModuleLoader):
         return await super().load(module_id, config=config, source_hint=source_hint, coordinator=coordinator)
 
 
-async def compose_work(tmp_path, monkeypatch, *, actual_provider=False):
+async def compose_work(tmp_path, monkeypatch, *, actual_provider=False,
+                       provider_module="provider-openai", model="gpt-6.1-sol"):
     receipt = os.environ.get("UNIFIED_WORK_MEDIA_SOURCES")
     if not receipt:
         pytest.skip("Requires explicit immutable Work source exports")
@@ -69,7 +85,15 @@ async def compose_work(tmp_path, monkeypatch, *, actual_provider=False):
     for key in tuple(os.environ):
         if key.startswith(("AMPLIFIER_CONTEXT_INTELLIGENCE_", "AMPLIFIER_COMPUTER_")) or key in {"DISPLAY", "WAYLAND_DISPLAY"}:
             monkeypatch.delenv(key, raising=False)
-    # No local desktop backend/SSH probes can invoke installed native binaries.
+    monkeypatch.setenv("AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH", str(tmp_path / "shared" / "projects"))
+    # An empty PATH does not disable Quartz on macOS. Replace only hardware
+    # discovery, never a mounted Work module or the file/media execution path.
+    import amplifier_module_tool_computer_use as computer
+    from amplifier_module_tool_computer_use.registry import NoBackendAvailable
+    def no_desktop(*args, **kwargs):
+        raise NoBackendAvailable([("offline-fixture", "No desktop target")])
+    monkeypatch.setattr(computer, "select_backend", no_desktop)
+    # No remaining local desktop/SSH probes can invoke installed native binaries.
     monkeypatch.setenv("PATH", str(tmp_path / "no-executables"))
     workspace = tmp_path / "workspace"
     workspace.mkdir(exist_ok=True)
@@ -95,10 +119,10 @@ async def compose_work(tmp_path, monkeypatch, *, actual_provider=False):
         return ResolvedSource(active_path=path, source_root=root)
     monkeypatch.setattr(SimpleSourceResolver, "resolve", resolve)
     config = HostConfig(tmp_path / "app", workspace, {"config": {"providers": [{
-        "module": "provider-openai", "config": {
+        "module": provider_module, "config": {
             **({"api_key": "offline-fixture", "use_streaming": False,
                 "max_retries": 0, "raw": True} if actual_provider else {}),
-            "default_model": "gpt-6.1-sol"}}]}},
+            "default_model": model}}]}},
         tmp_path / "registry", tmp_path / "shared")
     assert config.active_bundle == "work"
     _, bundle, _ = await load_root_bundle(config, config.active_bundle)
@@ -114,8 +138,10 @@ async def compose_work(tmp_path, monkeypatch, *, actual_provider=False):
 
 async def work_root(tmp_path, monkeypatch, provider, *, store=None, post=None, deny_work=False,
                     prepared_host=False, configuration_only=False, worker_observers=False,
-                    provider_setup=None):
-    bundle, plan, roots = await compose_work(tmp_path, monkeypatch, actual_provider=provider is None)
+                    provider_setup=None, live=False, provider_module="provider-openai",
+                    model="gpt-6.1-sol"):
+    bundle, plan, roots = await compose_work(tmp_path, monkeypatch, actual_provider=provider is None,
+                                           provider_module=provider_module, model=model)
     # Discovery sees the same selected public resources, mirrored offline. No
     # real home/project scans and no deferred Git source download at first turn.
     def local(value):
@@ -136,29 +162,10 @@ async def work_root(tmp_path, monkeypatch, provider, *, store=None, post=None, d
             for key in ("skills", "search_paths"):
                 if key in config:
                     config[key] = [local(v) for v in config[key]]
-    # Explicit package owner list, never inferred from the mounted graph.
-    names = ["amplifier_module_" + name.replace("-", "_") for name in
-             ("loop-live", "loop-streaming", "context-managed", "context-simple", *WORK_TOOLS, *WORK_HOOKS)]
-    files = [Path(__file__).resolve(), Path(__file__).parents[1] / "test_ordinary_work_tool_images.py",
-             Path(importlib.import_module("test_tool_image_consumer_join").__file__).resolve(),
-             Path(importlib.import_module("amplifier_core.loader").__file__).resolve()]
-    for name in names:
-        package = importlib.import_module(name)
-        files.extend(Path(package.__file__).parent.rglob("*.py"))
-    if provider is None:
-        package = importlib.import_module("amplifier_module_provider_openai")
-        files.extend(Path(package.__file__).parent.rglob("*.py"))
-    if provider_setup is not None:
-        files.append(Path(inspect.getsourcefile(provider_setup)).resolve())
-    files += [Path(importlib.import_module(name).__file__) for name in (
-        "amplifier_web.host.media", "amplifier_web.host.session", "amplifier_web.app_guidance",
-        "amplifier_web.runtime_worker", "amplifier_web.computer_episodes",
-        "amplifier_web.execution_events")]
     store = store or SessionStore(tmp_path / "sessions")
     def initialize_media(session):
         session.coordinator.loader = WorkLoader(provider)
-        selection = ReviewedRootRecipe(session.config, {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in files})
-        media.bind_media(session, store, selection=selection)
+        media.bind_media(session, store)
     if prepared_host:
         from amplifier_foundation.bundle import PreparedBundle
         # Source exports/entry points are already selected above. The real
@@ -176,13 +183,26 @@ async def work_root(tmp_path, monkeypatch, provider, *, store=None, post=None, d
         if not prepared_host:
             await session.initialize()
         coordinator = session.coordinator
+        # Same host diagnostic boundary as prepare_manager(), ahead of the
+        # real Context Intelligence capture hook; never alters SDK requests.
+        from amplifier_web.provider_recording import install_request_redaction
+        install_request_redaction(coordinator)
+        if live:
+            from amplifier_module_loop_live.runtime import Runtime
+            from amplifier_web.attachments import encode
+            runtime = Runtime(session.session_id)
+            coordinator.register_capability("live.runtime", runtime)
+            coordinator.register_capability("live.attachments.encode", encode)
+        else:
+            runtime = SimpleNamespace(session_id=session.session_id, generation={})
         cap = coordinator.get_capability(media.NAMESPACE)
         assert cap is not None
         if provider is None:
-            provider = coordinator.get("providers", "openai")
-            assert type(provider).__name__ == "OpenAIProvider"
+            provider = coordinator.get("providers", provider_module.removeprefix("provider-"))
+            assert type(provider).__name__ == (
+                "OpenAIProvider" if provider_module == "provider-openai" else "AnthropicProvider")
             provider_setup(provider)
-        bridge, graph, _ = coordinator.get_capability("web.media.construction")
+        graph = coordinator.get_capability("web.media.construction").graph
         evidence = graph.participants_evidence()
         assert len(evidence["loads"]) == 23 and all(row["mounted"] for row in evidence["loads"])
         assert evidence["ready"] and all(row["completed"] for row in evidence["ready"])
@@ -192,8 +212,6 @@ async def work_root(tmp_path, monkeypatch, provider, *, store=None, post=None, d
         if prepared_host:
             from amplifier_web.host.children import install_children
             from amplifier_foundation import SessionConfigurator
-            from types import SimpleNamespace
-            runtime = SimpleNamespace(session_id=session.session_id, generation={})
             delegate = coordinator.get("tools", "delegate")
             registry = await install_children(session, prepared, runtime, store, approvals=None)
             assert coordinator.get("tools", "delegate").original is delegate
@@ -213,11 +231,12 @@ async def work_root(tmp_path, monkeypatch, provider, *, store=None, post=None, d
             snapshots.append(copy.deepcopy(rows))
             return rows
         coordinator.register_capability("session.durable_checkpoint", checkpoint)
+        if live:
+            from amplifier_web.attachments import install_media_context
+            await install_media_context(coordinator)
         from amplifier_web.context_continuity import ContextContinuity
         ContextContinuity(coordinator, session.session_id, store.directory(session.session_id), checkpoint)
         from amplifier_web.host.session import install_checkpoint_hooks
-        from types import SimpleNamespace
-        runtime = SimpleNamespace(session_id=session.session_id, generation={})
         install_checkpoint_hooks(coordinator, runtime, checkpoint)
         provider.checkpoint_seen = lambda: bool(snapshots and any(
             media.NAMESPACE in (row.get("metadata") or {}) for row in snapshots[-1]))
@@ -237,7 +256,6 @@ async def work_root(tmp_path, monkeypatch, provider, *, store=None, post=None, d
             monkeypatch.setattr(runtime_worker, "publish", emitted.append)
             worker = runtime_worker.Worker()
             worker.session, worker.runtime = session, runtime
-            runtime.generation = {}
             worker.bridge = app_bridge
             worker.telemetry = ExecutionEvents(session.session_id, emitted.append)
             ui_tool = coordinator.get("tools", "ui_use")

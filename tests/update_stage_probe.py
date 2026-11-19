@@ -339,7 +339,10 @@ STAGE_AFTER_A_PROBE = sorted([
     'shared-config/projects/<project>/sessions/<session>/live-jobs/owner.lock',
     'shared-config/projects/<project>/sessions/<session>/metadata.json',
     'shared-config/projects/<project>/sessions/<session>/transcript.jsonl',
-] + ([] if os.name == 'nt' else [METADATA_LOCK]))
+] + ([] if os.name != 'posix' else [
+    'shared-config/projects/<project>/sessions/<session>/media/' + entry
+    for entry in ('', 'assets/', 'origins/', 'owner.json', 'records/', 'staging/', 'writer.lock')
+]) + ([] if os.name == 'nt' else [METADATA_LOCK]))
 CAPTURE_AFTER_A_PROBE = [
     '<project>/', '<project>/sessions/', '<project>/sessions/<session>/',
     '<project>/sessions/<session>/context-intelligence/',
