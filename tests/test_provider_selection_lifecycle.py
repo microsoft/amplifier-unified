@@ -344,6 +344,34 @@ async def test_h4_legacy_explicit_selection_migrates_once_only_with_verified_bin
         await invalid.restore()
     assert invalid.selection_revision is None
     await invalid.close()
+async def test_transferred_fork_absent_revision_is_not_legacy_explicit_choice(tmp_path, monkeypatch):
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    controls, _, providers = mounted_controls(SELECTION)
+    controls.state_path().parent.mkdir(parents=True, exist_ok=True)
+    # Old portable control schemas omit transition fields; canonical fork
+    # metadata still supplies the ordinary host capability on this mount.
+    controls.state_path().write_text(json.dumps({'selection': SELECTION}))
+    caps = {'web.provider_catalog': {'connectionKeys': {'terra': 'verified-current'}},
+            'web.context_transition.originals': True,
+            'web.context_transition.input': lambda: {
+                'inputId': 'fresh', 'selectionRevision': controls.selection_revision}}
+    controls.coordinator.get_capability = caps.get
+    try:
+        await controls.restore()
+        assert controls.selection_revision is None and controls.selection_binding is None
+        controls.runtime.accepted = {'fresh': SimpleNamespace(kind='user')}
+        controls.runtime.generation = {
+            'id': 'generation', 'initial_input_id': 'fresh', 'input_ids': ['fresh']}
+        assert controls.transition_foreground() is None
+        assert all(not provider.calls for provider in providers.values())
+        controls.runtime.generation = None
+        await controls.perform('provider.select', {
+            **SELECTION, 'expectedConnectionKey': 'verified-current'})
+        assert controls.selection_revision and controls.selection_binding == 'verified-current'
+    finally:
+        await controls.close()
+
+
 def test_selected_provider_info_reports_effort_without_mutating_bundle_defaults():
     provider = Provider('bundle-model', 'high')
     selected = SelectedProvider(provider, SELECTION)

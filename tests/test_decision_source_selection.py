@@ -38,13 +38,13 @@ def digest(value):
 
 def authored_catalog(value):
     sources = value['sources']
-    assert len(sources) == 311
+    assert len(sources) == 312
     assert REPLACED | ADDED <= sources.keys()
     unchanged = {key: row for key, row in sources.items() if key not in REPLACED | ADDED}
     # The combined catalog also retains the accepted Context transition
     # implementation and four explicitly selected transition semantic owners.
-    assert len(unchanged) == 305
-    assert digest(unchanged) == '3bafc3cca1c26a0660d43ee1bfe938046fcb76b083053ab44251ebb94893574f'
+    assert len(unchanged) == 306
+    assert digest(unchanged) == '925e6704c45f8498acd5aa6a73374ae0604fc36725eb7d9ce24fa08641a7e292'
     assert digest({key: row for key, row in value.items() if key != 'sources'}) == (
         'f83fb6147e8ffec31841b4cdb94fe4d621441a6db0edd6a2568bdcf27d45c6bb')
     for key in REPLACED | ADDED:

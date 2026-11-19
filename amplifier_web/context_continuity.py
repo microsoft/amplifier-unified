@@ -672,7 +672,9 @@ class ContextContinuity:
         # paid calls and install candidates still fence all identities.
         for row in self._journal["attempts"].values():
             if (row["state"] in {"pending", "running", "installing", "unknown"}
-                    or row["state"] != "committed" and row.get("candidateSha256")):
+                    or row["state"] != "committed" and (
+                        row.get("candidateSha256") or row.get("kind") != "model-transition"
+                        and (row.get("progress") or row.get("completedParts")))):
                 raise ContextRecoveryError("recovery_unreconciled")
         maximum = getattr(self.coordinator.get("context"), "config", {}).get("summary_max_calls", 16)
         if type(maximum) is not int or maximum < 1:
@@ -739,9 +741,8 @@ class ContextContinuity:
             if exc.code != "recovery_journal_unavailable":
                 raise
             return None  # Ordinary fitting uses canonical history, never this journal.
-        if (record is not None and record.get("kind") != "model-transition"
-                and record["state"] not in {"pending", "committed"}):
-            return None  # Historical explicit recovery is not a fresh command.
+        historical_recovery = (record is not None and record.get("kind") != "model-transition"
+                               and record["state"] not in {"pending", "committed"})
         policy = self.coordinator.get_capability("context.transition_policy")
         if ((record is None or record["state"] == "committed")
                 and (not callable(policy) or _sync(policy) != "host-managed")):
@@ -753,14 +754,17 @@ class ContextContinuity:
         if transition and record["state"] != "committed" and record.get("candidateSha256"):
             await self.refresh_identity()
             await self._reconcile_transition(record)
-        if record is None or record["state"] == "committed" or transition:
+        if record is None or record["state"] == "committed" or transition or historical_recovery:
             previous_identity = copy.deepcopy(self._identity)
             await self.refresh_identity()
+            if historical_recovery and not self._ordinary_restore_allowed():
+                return None  # No derived activation or spending; ordinary originals remain usable.
             checkpointless = (self._accepted_record is None and
                 self._prepared_identity != self._identity and
                 self.coordinator.get_capability("web.context_transition.originals") is True)
             if (self.loaded and previous_identity == self._identity and self._transition is None
-                    and not checkpointless and (record is None or record["state"] == "committed")):
+                    and not checkpointless
+                    and (record is None or record["state"] == "committed" or historical_recovery)):
                 if self._accepted_record is None or self._accepted_record.get("identity") == self._identity:
                     return None  # Ordinary preparation will preserve once, as before.
             messages = await self.coordinator.get_capability("context.history")()
@@ -784,7 +788,10 @@ class ContextContinuity:
                         return None
                     raise
                 transition = record is not None and record.get("kind") == "model-transition"
-        if record is None or record["state"] == "committed":
+        if (record is None or record["state"] == "committed"
+                or historical_recovery and record.get("kind") != "model-transition"):
+            # Historical explicit recovery is inert, but cannot bypass detecting
+            # a separate selected-model transition or its global paid/install fences.
             return None
         if self._recovery_busy or record["state"] != "pending":
             raise ContextRecoveryError("recovery_unreconciled")

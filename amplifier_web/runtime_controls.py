@@ -232,11 +232,14 @@ class RuntimeControls:
         if saved.get("mode"):
             await self.mode("mode.set", {"name":saved["mode"]})
         if ("selectionRevision" not in saved and saved.get("selection")
-                and self.selection == saved["selection"] and not self.selection_revision):
+                and self.selection == saved["selection"] and not self.selection_revision
+                and self.coordinator.get_capability("web.context_transition.originals") is not True):
             # Old explicit controls predate transition revisions. Migrate only
             # an actual saved choice and a currently verified mounted account;
             # absent selection/default drift and explicit null fork markers do
-            # not gain foreground admission by being restored.
+            # not gain foreground admission by being restored. A transferred
+            # fork may have lost that marker in an older portable control schema;
+            # its canonical fork metadata still proves an inherited choice.
             from .provider_catalog import require_mounted_binding
             instance = self.selection.get("instance")
             catalog = self.coordinator.get_capability("web.provider_catalog") or {}

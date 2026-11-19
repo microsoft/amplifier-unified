@@ -55,8 +55,11 @@ def defaults(home, workspace, app_bundle=None, *, global_only=False):
 
 def reset_controls(value, *, reset_model=False):
     """Keep the user's goal and model pin, not old bundle module toggles/budgets."""
-    return {key: copy.deepcopy(value[key]) for key in ('goal', 'selection')
-            if key in value and not (key == 'selection' and reset_model)}
+    result = {key: copy.deepcopy(value[key]) for key in ('goal', 'selection')
+              if key in value and not (key == 'selection' and reset_model)}
+    if 'selectionRevision' in value and value['selectionRevision'] is None:
+        result['selectionRevision'] = None  # A reset cannot promote an inherited pin.
+    return result
 
 
 async def preview(controls, workspace, bundle):

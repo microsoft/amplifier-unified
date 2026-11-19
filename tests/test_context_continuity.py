@@ -1463,6 +1463,118 @@ async def target_transition_fixture(directory, *, model='target-model', foregrou
         prepare=prepare_target)
 
 
+@pytest.mark.parametrize('state', ['failed', 'refused', 'running', 'installing', 'unknown'])
+async def test_historical_explicit_recovery_cannot_skip_model_transition_guards(tmp_path, state):
+    from amplifier_web.context_continuity import ContextRecoveryError
+    case = await target_transition_fixture(tmp_path)
+    await case.adapter.request_recovery('historical-explicit', 0)
+    record = case.adapter._journal['attempts']['historical-explicit']
+    record['state'] = state
+    if state == 'installing':
+        record['candidateSha256'] = 'a' * 64
+    case.adapter._write_recovery()
+    retained = case.adapter.recovery_path.read_bytes()
+    if state in {'failed', 'refused'}:
+        result = await case.prepare()
+        assert result['outcome'] == 'transitioned'
+        assert case.adapter._journal['attempts']['historical-explicit'] == record
+    elif state == 'installing':
+        # This unusable journal cannot support transition work, but neither
+        # model selection nor its failure turns canonical ordinary fitting off.
+        assert await case.adapter.run_pending(provider=case.selected, count_view=None) is None
+        assert case.adapter.recovery_path.read_bytes() == retained
+        assert case.adapter.path.read_bytes() == case.accepted
+        assert case.raw.compactions == []
+    else:
+        with pytest.raises(ContextRecoveryError, match='recovery_unreconciled'):
+            await case.prepare()
+        assert case.adapter.recovery_path.read_bytes() == retained
+        assert case.adapter.path.read_bytes() == case.accepted
+        assert case.raw.compactions == []
+    assert await case.coordinator.context.get_messages() == case.source
+
+
+@pytest.mark.parametrize('different_model', [False, True])
+async def test_live_plan_continuation_default_preserves_legacy_checkpoint_identity(tmp_path, different_model):
+    from amplifier_web.host.session import live_plan, SelectedProvider
+    config = {'durable_checkpoints': True, 'archive_recovery': True,
+              'max_tokens': 20000, 'summarize_trigger': .2, 'native_min_new_tokens': 0}
+    source = native_history()
+    first, _, _, prior, checkpoint, _, prepare = await native_fixture(
+        tmp_path, source, context_config=config)
+    assert 'foreground_continuation' not in first.context.config
+    await prepare()
+    await checkpoint()
+    saved = prior.path.read_bytes()
+    original = copy.deepcopy(first.context.config)
+    plan, _ = live_plan({'session': {
+        'context': {'module': 'context-managed', 'config': original},
+        'orchestrator': {'module': 'loop-streaming'}}})
+    next_config = plan['session']['context']['config']
+    assert next_config['foreground_continuation'] is True
+    second, raw, _, adapter, _, _, _ = await native_fixture(
+        tmp_path, source, context_config=next_config)
+    if different_model:
+        second.loop.root_provider = SelectedProvider(raw, {'model': 'target-model'})
+    await adapter.preserve(source)
+    if different_model:
+        assert adapter.status['status'] == 'transition_required'
+        assert adapter._transition and not adapter._foreign_rejected
+    else:
+        assert adapter.status['status'] == 'restored'
+        assert second.context.summary == first.context.summary
+    assert adapter.path.read_bytes() == saved
+    assert raw.compactions == [] and raw.counted == [] and raw.sent == []
+    assert await second.context.get_messages() == source
+
+
+async def test_unreadable_generic_journal_keeps_foreground_canonical_only(tmp_path):
+    case = await target_transition_fixture(tmp_path)
+    case.adapter.recovery_path.write_text('{')
+    case.adapter._journal = None
+    await case.adapter.refresh_identity()
+    assert case.adapter._foreground()['inputId'] == 'new-input'
+    # Not transition success: the unreadable ledger cannot be replaced or spend.
+    assert await case.adapter.run_pending(provider=case.selected, count_view=None) is None
+    await case.adapter.preserve(case.source)
+    case.adapter.save()
+    assert case.adapter.path.read_bytes() == case.accepted
+    assert case.adapter.recovery_path.read_text() == '{'
+    assert case.coordinator.context.summary is None
+    assert case.raw.compactions == [] and case.raw.sent == [] and case.raw.counted == []
+    assert await case.coordinator.context.get_messages() == case.source
+
+
+async def test_same_model_pinned_foreground_keeps_unconfirmed_generic_recovery_inert(tmp_path, monkeypatch):
+    from test_provider_selection_lifecycle import mounted_controls, SELECTION
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    case = await target_transition_fixture(tmp_path, model='selected-model')
+    await case.adapter.request_recovery('unconfirmed-explicit', 0)
+    record = case.adapter._journal['attempts']['unconfirmed-explicit']
+    record.update(state='unknown', candidateSha256='a' * 64)
+    case.adapter._write_recovery()
+    before = case.adapter.recovery_path.read_bytes()
+    controls, _, _ = mounted_controls(SELECTION)
+    caps = {'web.provider_catalog': {'connectionKeys': {'terra': 'verified'}},
+            'web.context_transition.input': lambda: {
+                'inputId': 'fresh', 'selectionRevision': controls.selection_revision}}
+    controls.coordinator.get_capability = caps.get
+    try:
+        await controls.perform('provider.select', {**SELECTION, 'expectedConnectionKey': 'verified'})
+        controls.runtime.accepted = {'fresh': SimpleNamespace(kind='user')}
+        controls.runtime.generation = {
+            'id': 'generation', 'initial_input_id': 'fresh', 'input_ids': ['fresh']}
+        assert controls.transition_foreground() is not None
+        case.coordinator.register_capability(
+            'web.context_transition.foreground', controls.transition_foreground)
+        assert await case.adapter.run_pending(provider=case.selected, count_view=None) is None
+        assert case.adapter.recovery_path.read_bytes() == before
+        assert case.adapter.path.read_bytes() == case.accepted
+        assert case.raw.compactions == case.raw.sent == case.raw.counted == []
+    finally:
+        await controls.close()
+
+
 async def test_foreground_target_transition_keeps_originals_tool_pairs_and_single_checkpoint(tmp_path):
     case = await target_transition_fixture(tmp_path)
     result = await case.prepare()

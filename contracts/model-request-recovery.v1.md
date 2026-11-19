@@ -186,8 +186,17 @@ Older saved explicit model selections without a revision acquire one stable
 revision only after verification of the mounted connection; restoring a default,
 an absent selection or an explicit null fork revision does not grant admission.
 Bundle conversion must retain that explicit null after resetting bundle controls,
-including when the fork keeps its inherited model pin; account-binding fields
-from the source execution are not copied as admission.
+including a later in-place bundle change that keeps the fork's inherited model
+pin; account-binding fields from the source execution are not copied as admission.
+If an older portable control schema omitted the revision, retained canonical fork
+metadata still prevents the inherited pin from being migrated as a legacy choice.
+Historical explicit-recovery dispositions are not fresh recovery commands, and
+must not skip a separate model-transition check. An effect-free failed or refused
+generic recovery may coexist with an eligible new transition; unresolved paid or
+installation ownership still fences that transition. An unreadable journal may
+allow ordinary fitting from canonical history, never derived-state activation,
+journal replacement or renewed transition spending. A selected model alone does
+not make that ordinary fallback an explicit recovery or a successful transition.
 Missing transition intent tells the person to choose an explicit connection/model
 and send a new ordinary message. A rejected foreign checkpoint instead needs a
 compatible validated source and preserved originals. Generic explicit recovery

@@ -17,10 +17,11 @@ MANIFEST = Path(assembly.__file__).with_name("media_sources.json")
 # Authored semantic owners, not learned from the loaded callback graph. The store
 # is included for cold/fork input semantics, not claimed as a mounted callback.
 TRANSITION_OWNERS = {
-    "amplifier_web/context_continuity.py": "d1c9ac06c2d58e70f88cddb4b000f674260bb8848d79e53de86dd4f9369a9e21",
+    "amplifier_web/bundle_selection.py": "133f94e83d71fc71bce4bbbabfcc645dda5be801d6cc6061c95a26376a1327db",
+    "amplifier_web/context_continuity.py": "af8421c48551e66c4ada360ee477ba666b79cfe8747210c683085ebfe8fe0670",
     "amplifier_web/host/session.py": "3c8cfa6965597af401be2b53f6c6aeb8603204eeb905c6e70319ca8690d7ddca",
     "amplifier_web/runtime_worker.py": "593840f8d769d86a9b79be2b6a739975ff5c76c6da6c37f70acf1e87dab7753f",
-    "amplifier_web/runtime_controls.py": "1399d8e5418a245d3593a8f978e386300f4f518a9abdc15a7712d2000fe77884",
+    "amplifier_web/runtime_controls.py": "d37509a526f7c10df31c72a42041cf425cf972740ccec6ffbb56a16bb2d8d9ab",
     "amplifier_web/session_store.py": "c1aaac31fbe7458b4c92f5b6529af3428421cd374f687b06d4420df67f31dd1d",
     "amplifier_module_context_managed/boundary.py": "c09150e7e1894ca7b80cf0d63cb732cabec4f431df63d76c481198ab00e258e3",
     "amplifier_module_context_managed/checkpoint.py": "3de7548aede6f5105c1d1af21190ea9428775c13e1fab09299345f3dc4457e43",
@@ -38,8 +39,8 @@ def assert_transition_closure(manifest):
     assert all(manifest["sources"].get(name) == digest for name, digest in TRANSITION_OWNERS.items())
     # The accepted decision namespace adds three explicit semantic owners while
     # this selection retains all transition owners and the combined session.
-    assert len(manifest["sources"]) == 311
-    assert catalog_digest(manifest["sources"]) == "b31ed1b8436ab93e4a40609fd5557c3ebc6b8d8a892fce98e56e192951f762db"
+    assert len(manifest["sources"]) == 312
+    assert catalog_digest(manifest["sources"]) == "faf9fd23350a6f08df936c58a7dfc5e41ffe59277b02745a1311459e4ff44c9c"
 
 
 def work_plan():
