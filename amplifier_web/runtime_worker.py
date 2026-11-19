@@ -883,8 +883,9 @@ class Worker:
                       if event in {'tool:pre', 'tool:post', 'tool:error'} and isinstance(stamped, dict)
                       else HookResult())
             from amplifier_web.execution_events import CALL_PURPOSE
-            if CALL_PURPOSE.get() or event.startswith("llm:"):
-                # Naming calls retain their measured usage, but do not own the
+            maintenance = event.startswith("context:compaction_") and data.get("context_work") == "settled_maintenance"
+            if CALL_PURPOSE.get() or event.startswith("llm:") or maintenance:
+                # Auxiliary work retains telemetry without taking over the
                 # conversation's busy indicator or a delegated worker's state.
                 return result
             phase = "model"
@@ -915,7 +916,9 @@ class Worker:
                 if outcome == "completed":
                     detail = "Conversation context prepared; continuing work."
                 elif isinstance(outcome, str) and outcome in {"failed", "cancelled", "superseded"}:
-                    detail = f"Context preparation {outcome}."
+                    # This event closes optional compaction. Foreground fitting
+                    # can still run before admission or a real terminal error.
+                    detail = "Preparing the current request."
             elif event == "provider:retry":
                 phase = "retrying"
                 attempt, maximum = data.get("attempt"), data.get("max_retries")

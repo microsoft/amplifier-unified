@@ -157,7 +157,7 @@ async def test_zero_pending_stays_preparing_until_finished(compaction_activity, 
     assert finished['phase'] == 'model'  # Presentation only; preserve event classification.
     assert finished['detail'] == (
         'Conversation context prepared; continuing work.' if outcome == 'completed'
-        else f'Context preparation {outcome}.')
+        else 'Preparing the current request.')
 
 
 @pytest.mark.parametrize('counts,detail', [
@@ -197,6 +197,7 @@ async def test_compaction_activity_preserves_identity_and_auxiliary_scope(compac
     from amplifier_web.execution_events import CALL_PURPOSE
 
     assert await compaction_activity(event, {'session_id': 'foreign', 'outcome': 'completed'}) is None
+    assert await compaction_activity(event, {'context_work': 'settled_maintenance', 'outcome': 'failed'}) is None
     token = CALL_PURPOSE.set({'label': 'Session naming'})
     try:
         assert await compaction_activity(event, {'outcome': 'completed'}) is None
@@ -232,13 +233,13 @@ async def test_admitted_ordinary_model_supersedes_optional_compaction_failure(
     data = {'session_id': identity, 'outcome': 'failed', 'failure': {'message': 'PRIVATE'}}
     await callbacks['context:compaction_finished']('context:compaction_finished', data)
     failure = deepcopy(observed[-1])
-    assert failure['detail'] == 'Context preparation failed.'
+    assert failure['detail'] == 'Preparing the current request.'
 
     class Provider:
         def get_info(self): return SimpleNamespace(id='fixture', defaults={'model': 'model'})
         async def complete(self, request):
             assert observed[-1]['detail'] == (
-                'Context preparation failed.' if auxiliary else 'Thinking...')
+                'Preparing the current request.' if auxiliary else 'Thinking...')
             return SimpleNamespace(usage={})
 
     telemetry = ExecutionEvents('root', lambda row: None)
@@ -253,7 +254,7 @@ async def test_admitted_ordinary_model_supersedes_optional_compaction_failure(
     finally:
         CALL_PURPOSE.reset(token)
     assert data['outcome'] == 'failed' and data['failure'] == {'message': 'PRIVATE'}
-    assert observed[0] == failure  # Historical failure remains diagnostic evidence.
+    assert observed[0] == failure  # Later admission leaves the earlier progress observation intact.
     if auxiliary:
         assert observed == [failure]
         return
