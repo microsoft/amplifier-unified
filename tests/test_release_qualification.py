@@ -1000,7 +1000,7 @@ def test_goal_peer_publisher_fixed_cases_environment_and_no_resolve(publisher_ch
     assert module.SELECTORS == {
         'native': ['tests/test_goal_peer_continuation.py', 'tests/test_task_goal_runtime.py'],
         'auto': ['tests/test_peer_auto_delivery.py']}
-    assert sum(map(len, module.EXPECTED.values())) == 43
+    assert sum(map(len, module.EXPECTED.values())) == 44
     # Expand only this file's literal single-axis parameterizations, without
     # importing the product or running collection to define our expected oracle.
     names = set()
