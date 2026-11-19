@@ -251,7 +251,26 @@ def complete_tool_exchanges(messages, *, positions=None):
     return result
 
 
-def _index_visible(messages, visible, display_offset=0, *, source=None, verify_anchors=False):
+def _legacy_text_alias(messages, row, boundary):
+    # Older web projection assigned an index by ordered text equality even
+    # when the native row belonged to a different submission. Only detach
+    # that weak association inside an independently verified saved prefix.
+    index = row.get('nativeIndex')
+    if (type(index) is not int or not 0 <= index < boundary or row.get('role') != 'user'
+            or row.get('source') == 'native' or row.get('via') != 'chat'
+            or row.get('nativeMessageId') or row.get('nativeInputId')
+            or row.get('attachments') or row.get('peerEnvelope') or row.get('voiceId')):
+        return False
+    identity = row.get('inputId')
+    native = messages[index]
+    return (isinstance(identity, str) and 0 < len(identity) <= 200
+            and _input_identity(native) not in (None, identity)
+            and text_content(native) == row.get('text')
+            and all(_input_identity(message) != identity for message in messages))
+
+
+def _index_visible(messages, visible, display_offset=0, *, source=None, verify_anchors=False,
+                   verified_boundary=None):
     """Retain exact anchors; only unindexed legacy web rows need alignment."""
     display_indexes = [index for index, row in enumerate(messages)
                        if row.get('role') in {'user', 'assistant'} and text_content(row)
@@ -260,6 +279,9 @@ def _index_visible(messages, visible, display_offset=0, *, source=None, verify_a
     for row in visible:
         if type(row.get('nativeIndex')) is not int and (row.get('voiceId') or row.get('via') == 'call'):
             continue
+        if verified_boundary is not None and _legacy_text_alias(messages, row, verified_boundary):
+            del row['nativeIndex']
+            continue
         anchor = _native_anchor(messages, row, source) if verify_anchors else row.get('nativeIndex')
         if type(anchor) is int:
             row['nativeIndex'] = anchor
@@ -267,7 +289,8 @@ def _index_visible(messages, visible, display_offset=0, *, source=None, verify_a
             continue
         if row.get('role') == 'user':
             match = next((index for index in range(cursor, len(messages))
-                          if matches_user(messages[index], row)), None)
+                          if matches_user(messages[index], row)
+                          and (not row.get('inputId') or _input_identity(messages[index]) in (None, row['inputId']))), None)
         else:
             match = next((index for index in range(cursor, len(messages))
                           if messages[index].get('role') == row.get('role')
@@ -485,8 +508,16 @@ def fork_session(home, source, target_id, *, turn=None, after_message_id=None, b
             cut = user_indexes[turn]
     # Later rows are irrelevant to an earlier cut. Validate only its retained
     # prefix and the requested boundary, including immutable attachment binds.
+    # Capture any proven target before text alignment can supply a legacy index.
+    verified_boundary = None
+    if revision_checked and cut < len(visible):
+        target = visible[cut]
+        bound_index = _native_anchor(messages, target, source)
+        if bound_index is not None and (target.get('nativeMessageId')
+                or target.get('inputId') and _input_identity(messages[bound_index]) == target['inputId']):
+            verified_boundary = bound_index
     _index_visible(messages, visible[:cut + 1], source.get('sharedHistoryOffset', 0),
-                   source=source, verify_anchors=cut < len(visible))
+                   source=source, verify_anchors=cut < len(visible), verified_boundary=verified_boundary)
     if cut < len(visible):
         target_anchor = _native_anchor(messages, visible[cut], source)
         anchored_input = (target_anchor is not None and visible[cut].get('inputId')

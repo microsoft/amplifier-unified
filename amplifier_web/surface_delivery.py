@@ -27,6 +27,15 @@ def retained_surface_receipt(value, expected):
             == {k: v for k, v in expected.items() if k != 'capturedAt'})
 
 
+def _accepts_exact_count(method):
+    try:
+        param = inspect.signature(method).parameters.get("require_measurement")
+    except (TypeError, ValueError):
+        return False
+    return param is not None and param.kind in (
+        inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+
+
 class SurfaceDelivery:
     def __init__(self, bridge):
         from .image_capabilities import ImageCapabilities
@@ -535,7 +544,7 @@ class SurfaceProvider:
                                            lambda: self._release_media(request))
             return stream
         if name == 'request_budget' and callable(method):
-            async def budget(request, *, request_options=None, **kwargs):
+            async def budget(request, *, request_options=None, require_measurement=False, **kwargs):
                 self._overflow_feedback.forget(request)
                 from . import provider_capture as capture
                 capture.observe(capture.invalidate, self, request)
@@ -549,6 +558,8 @@ class SurfaceProvider:
                     from .performance_diagnostics import time_preparation
                     actual = time_preparation(self.timing_coordinator, 'provider.budget', actual)
                 try:
+                    if require_measurement and _accepts_exact_count(method):
+                        kwargs['require_measurement'] = True
                     with capture.fitting(ticket, self.original, request):
                         decision = await actual(method, request, request_options=request_options, **kwargs)
                     capture.finish_fit(ticket, decision)

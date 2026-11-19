@@ -99,6 +99,7 @@ class ContextContinuity:
         self.loaded = False
         self.saved_digest = None
         self._identity = None
+        self._identity_provider = None
         self.writer_guard = writer_guard
         self.recovery_path = Path(directory) / "context-recovery.json"
         self._journal = None
@@ -113,7 +114,7 @@ class ContextContinuity:
         self._preserved_identity = None
         self._reconciling = None
         self.status = {"supported": bool(coordinator.get_capability("context.checkpoint.export")), "status": "pending"}
-        coordinator.register_capability("context.checkpoint_identity", lambda: copy.deepcopy(self._identity))
+        coordinator.register_capability("context.checkpoint_identity", self.current_identity)
         coordinator.register_capability("context.preserve_evidence", self.preserve)
         coordinator.register_capability("context.persist_checkpoint", self.save)
         coordinator.register_capability("web.continuity.status", self.public)
@@ -131,12 +132,32 @@ class ContextContinuity:
             return copy.deepcopy(self.status)
         return {**copy.deepcopy(self.status), **module_status}
 
-    async def refresh_identity(self):
+    def _provider(self):
         providers = self.coordinator.get("providers") or {}
         loop = self.coordinator.get("orchestrator")
-        provider = (getattr(loop, "root_provider", None) or loop._select_provider(providers)) if providers else None
+        return (getattr(loop, "root_provider", None) or loop._select_provider(providers)) if providers else None
+
+    def current_identity(self):
+        """Current selection, not the identity of the last preservation call.
+
+        Explicit host selections need no provider metadata or asynchronous work.
+        Automatic providers resolve lazily in preserve(); never return a former
+        provider's cached identity while a replacement is waiting to resolve.
+        """
+        provider = self._provider()
+        from .host.session import SelectedProvider
+        if isinstance(provider, SelectedProvider):
+            selection = provider.selection
+            if selection.get("instance") and selection.get("model"):
+                return {"provider": selection["instance"], "model": selection["model"]}
+        return copy.deepcopy(self._identity) if provider is self._identity_provider else None
+
+    async def refresh_identity(self):
+        providers = self.coordinator.get("providers") or {}
+        provider = self._provider()
         if provider is None:
             self._identity = None
+            self._identity_provider = None
             return
         info = provider.get_info()
         if inspect.isawaitable(info):
@@ -146,6 +167,7 @@ class ContextContinuity:
         original = getattr(provider, "original", provider)
         instance = next((key for key, value in providers.items() if value is original), name)
         self._identity = {"provider": instance or name, "model": (defaults or {}).get("model") or (defaults or {}).get("default_model")}
+        self._identity_provider = provider
 
     async def preserve(self, messages):
         restore_allowed = self._ordinary_restore_allowed()

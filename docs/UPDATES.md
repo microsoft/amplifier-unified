@@ -50,6 +50,13 @@ readiness ends that request; it does not install components from the superseded
 sequence. `updates.install` still requests the whole app → included → other
 sequence. A later ordinary policy check can start a new update cycle.
 
+An application check can discover a newer published app while a Smart Tool
+with a known staged target is waiting to activate. An explicit app request
+refreshes a missing selection. Install can prepare the newer app and still
+waits for an idle host before replacement. The tool keeps its staged target,
+its activation gate, and any existing failure receipts. An interrupted tool
+stage with no known target keeps its existing handoff protection.
+
 Normal app replacement does not require recovery of an idle configuration error
 or adoption of saved configuration by an absent worker. `configurationPending`
 and retained operation phases describe intent/evidence, not executing work.

@@ -26,28 +26,42 @@ class Provider:
     def __init__(self):
         self.counted, self.sent, self.compactions = [], [], 0
         self.tool_issued = False
+        self.calls = []
+        self.foreground_sizes = []
+        self.timeout_after_tool = False
+        self.post_tool_timeout_seen = False
     def get_info(self):
         return ProviderInfo(id=self.name, display_name="Offline continuation fixture",
                             capabilities=["request_budget:provider_count"],
                             defaults={"model": "fixture"})
     async def list_models(self): return []
     def parse_tool_calls(self, response): return response.tool_calls or []
-    async def request_budget(self, request, **kwargs):
+    async def request_budget(self, request, *, require_measurement=False, **kwargs):
         self.counted.append(request.model_copy(deep=True))
         count = len(request.model_dump_json().encode()) // 4
-        return {"estimated_input_tokens": count, "input_limit_tokens": 20000,
+        if require_measurement:
+            self.foreground_sizes.append(len(request.messages))
+            if (self.timeout_after_tool and not self.post_tool_timeout_seen and
+                    any(m.role == "tool" and m.tool_call_id == "once" for m in request.messages)):
+                self.post_tool_timeout_seen = True
+                error = TimeoutError("Synthetic input counter timed out after the tool settled")
+                error.context_count_unavailable = True
+                raise error
+        return {"input_limit_independent_of_output": True, "estimated_input_tokens": count, "input_limit_tokens": 20000,
                 "context_token_budget": 20000,
                 "measurement": {"kind": "provider_count",
                                 "source": "synthetic-serialized-request", "input_tokens": count}}
     async def complete(self, request, **kwargs):
         if (request.metadata or {}).get("purpose") == "context-compaction":
             self.compactions += 1
+            self.calls.append("summary")
             raise TimeoutError("Synthetic unconfirmed compaction: must not retry")
         if CALL_PURPOSE.get():
             return ChatResponse(content=[TextBlock(text="Offline fixture title")])
         assert request == self.counted[-1], "Dispatch changed after counting"
         assert len(request.model_dump_json().encode()) // 4 <= 20000
         self.sent.append(request.model_copy(deep=True))
+        self.calls.append("foreground")
         text = request.model_dump_json()
         if "RUN-ONE-SETTLED-TOOL" in text and not any(
                 m.role == "tool" and m.tool_call_id == "once" for m in request.messages):
@@ -72,7 +86,7 @@ async def until(predicate):
             await asyncio.sleep(.01)
 
 
-@pytest.mark.parametrize('shape', ['same-turn', 'recovery-references'])
+@pytest.mark.parametrize('shape', ['same-turn', 'recovery-references', 'tool-continuation', 'edited-input'])
 async def test_actual_worker_completes_two_ordinary_turns_after_omission(
         tmp_path, monkeypatch, shape):
     from amplifier_core import ToolResult
@@ -91,7 +105,7 @@ async def test_actual_worker_completes_two_ordinary_turns_after_omission(
         spec = importlib.util.find_spec(package)
         assert spec and spec.origin, f'Missing prepared dependency: {package}'
         modules[name] = str(Path(spec.origin).parent)
-    provider_name = 'continuationfixture' + ('same' if shape == 'same-turn' else 'refs')
+    provider_name = 'continuationfixture' + shape.replace('-', '')
     provider = root / 'provider' / ('amplifier_module_provider_' + provider_name)
     provider.mkdir(parents=True)
     (provider / '__init__.py').write_text(PROVIDER.replace('continuationfixture', provider_name))
@@ -156,6 +170,8 @@ async def test_actual_worker_completes_two_ordinary_turns_after_omission(
 
     monkeypatch.setattr(runtime_worker, 'publish', publish)
     effects = []
+    tool_case = shape in {'same-turn', 'tool-continuation'}
+    result_size = 1700 if shape == 'tool-continuation' else 160000
 
     class LargeResult:
         name = 'large_result'
@@ -165,7 +181,7 @@ async def test_actual_worker_completes_two_ordinary_turns_after_omission(
         async def execute(self, arguments):
             effects.append('once')
             return ToolResult(success=True, output={
-                'status': 'completed', 'receipt': 'completed-once', 'filler': 'x' * 160000})
+                'status': 'completed', 'receipt': 'completed-once', 'filler': 'x' * result_size})
 
     try:
         await worker.start({'id': 'ordinary-continuation', 'workspace': str(workspace),
@@ -174,6 +190,7 @@ async def test_actual_worker_completes_two_ordinary_turns_after_omission(
         coordinator = worker.session.coordinator
         context = coordinator.get('context')
         raw = coordinator.get_capability('fixture.provider')
+        raw.timeout_after_tool = shape == 'tool-continuation'
         await coordinator.mount('tools', LargeResult(), name='large_result')
         original = [
             {'role': 'user', 'content': 'Original objective: preserve Stop and originals.'},
@@ -181,6 +198,13 @@ async def test_actual_worker_completes_two_ordinary_turns_after_omission(
             {'role': 'user', 'content': 'Settled correction: never replay completed work.'},
             {'role': 'assistant', 'content': 'Accepted.'},
         ]
+        if shape in {'tool-continuation', 'edited-input'}:
+            # Large settled worker exchanges like the two Spark-1 failures.
+            for index in range(260):
+                original.extend([
+                    {'role': 'user', 'content': f'Readiness report {index}'},
+                    {'role': 'assistant', 'content': 'Settled report ' + 'z' * 2400},
+                ])
         if shape == 'recovery-references':
             for index in range(244):
                 original.append({'role': 'user', 'content': json.dumps({
@@ -193,10 +217,24 @@ async def test_actual_worker_completes_two_ordinary_turns_after_omission(
         await context.set_messages(copy.deepcopy(original))
         source = copy.deepcopy(await context.get_messages())
         for number in (1, 2):
-            text = ('RUN-ONE-SETTLED-TOOL' if shape == 'same-turn' and number == 1 else
+            text = ('RUN-ONE-SETTLED-TOOL' if tool_case and number == 1 else
                     f'CURRENT-INPUT-{number}: answer without replay.')
-            await worker.command({'op': 'send', 'id': f'send-{number}',
-                                  'input_id': f'input-{number}', 'text': text})
+            if shape == 'edited-input' and number == 2:
+                from amplifier_web.automatic_history import read_transcript
+                from amplifier_web.session_files import project_slug
+                edit_source = {'id': worker.session.session_id, 'workspace': str(workspace),
+                               'status': 'idle', 'nativeProject': project_slug(workspace),
+                               'nativeIdentity': worker.session.session_id, 'messages': []}
+                saved = read_transcript(edit_source)
+                target = next(row for row in saved['messages'] if row.get('inputId') == 'input-1'
+                              or row.get('text') == 'CURRENT-INPUT-1: answer without replay.')
+                edit_source.update(messages=saved['messages'], nativeRevision=saved['revision'])
+                await worker.command({'op': 'control', 'id': 'edit', 'operation': 'history.edit',
+                    'arguments': {'source': edit_source, 'operationId': 'input-2',
+                                  'messageId': target['id'], 'text': text, 'attachments': []}})
+            else:
+                await worker.command({'op': 'send', 'id': f'send-{number}',
+                                      'input_id': f'input-{number}', 'text': text})
             await until(lambda: (worker.idle() or worker.execution.done()) and any(
                 e.get('type') in {'generation.finished', 'generation.failed'}
                 and f'input-{number}' in e.get('input_ids', []) for e in events))
@@ -205,19 +243,27 @@ async def test_actual_worker_completes_two_ordinary_turns_after_omission(
         assert [event['text'] for event in events if event.get('type') == 'assistant.message'] == [
             'Ordinary answer completed.', 'Ordinary answer completed.']
         assert not any(e.get('type') in {'runtime.error', 'generation.failed'} for e in events)
-        assert raw.compactions == 1  # One failed optional request, never rebought.
-        assert effects == (['once'] if shape == 'same-turn' else []), [
+        assert raw.calls[0] == 'foreground'
+        assert raw.compactions <= 1  # An unconfirmed maintenance call cannot be rebought.
+        if shape in {'tool-continuation', 'edited-input'}:
+            assert raw.foreground_sizes  # Count contract survived the worker's provider wrappers.
+            assert all(len(request.messages) < 260 for request in raw.sent)
+        assert effects == (['once'] if tool_case else []), [
             [(m.role, str(m.content)[:160]) for m in request.messages] for request in raw.sent]
         canonical = await context.get_messages()
         assert canonical[:len(source)] == source
-        if shape == 'same-turn':
+        if tool_case:
             results = [row for row in canonical if row.get('role') == 'tool'
                        and row.get('tool_call_id') == 'once']
             assert len(results) == 1
             assert 'completed-once' in results[0]['content']
-            assert 'x' * 160000 in results[0]['content']
+            assert 'x' * result_size in results[0]['content']
             assert sum(any(call.get('id') == 'once' for call in row.get('tool_calls', []))
                        for row in canonical) == 1
+        if shape == 'tool-continuation':
+            assert raw.post_tool_timeout_seen
+            assert any(m.role == 'tool' and m.tool_call_id == 'once' and 'completed-once' in str(m.content)
+                       for m in raw.sent[1].messages)
         marks = [normalize_event(event, worker.session.session_id)[1] for event in events
                  if event.get('type') == 'execution.event'
                  and event['event'].get('incompleteHistoryDispatched')]

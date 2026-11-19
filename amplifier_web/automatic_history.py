@@ -281,9 +281,14 @@ def alias_input_originals(session, native, *, peer_only=False):
     return [replacements.get(row['id'], row) for row in native]
 
 
-def same_native_message(native, visible):
+def same_native_message(native, visible, *, infer_index=False):
     if native.get('role') != visible.get('role'):
         return False
+    # A refresh can still display an old text-aligned row. Enforce identity
+    # when inferring a new index; mutation separately verifies provenance.
+    if infer_index and visible.get('inputId') and native.get('nativeInputId'):
+        if visible['inputId'] != native['nativeInputId'] or native.get('nativeInputAmbiguous'):
+            return False
     if visible.get('nativeMessageId'):
         return visible['nativeMessageId'] == native['id']
     if native.get('voiceDelegation'):
@@ -339,7 +344,7 @@ def merge_web_history(session, incoming):
         if anchor and not same_native_message(anchor[1], message):
             raise ValueError('The saved conversation was rewritten; existing web messages were kept.')
         match = anchor[0] if anchor else next((number for number in range(begin, len(incoming))
-                      if same_native_message(incoming[number], message)), None)
+                      if same_native_message(incoming[number], message, infer_index=True)), None)
         if match is not None:
             matches[position] = match
             claimed.add(match)

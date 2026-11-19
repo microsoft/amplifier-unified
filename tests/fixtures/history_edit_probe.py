@@ -160,7 +160,14 @@ Reply with the fixture response.
     source = {**config, 'status':'idle', 'nativeProject':project_slug(workspace), 'nativeIdentity':config['id'], 'messages':[]}
     saved_view = read_transcript(source)
     source.update(messages=saved_view['messages'], nativeRevision=saved_view['revision'])
+    first = next(row for row in source['messages'] if row['role']=='user' and row['text']=='one')
     second = next(row for row in source['messages'] if row['role']=='user' and row['text']=='two')
+    # Historical web projection attached a different equal-text submission
+    # to the first saved turn. The second input still has its exact identity.
+    source['messages'][source['messages'].index(first)] = {
+        'id': 'older-web-submission', 'inputId': 'distinct-submission', 'role': 'user',
+        'text': first['text'], 'via': 'chat', 'nativeIndex': first['nativeIndex']}
+    second.update(inputId=second['nativeInputId'], nativeMessageId=second['id'])
     await worker.command({'op':'control', 'id':'edit-command', 'operation':'history.edit',
         'arguments':{'source':source, 'operationId':'edited-two', 'messageId':second['id'], 'text':'revised two', 'attachments':[]}})
     for _ in range(400):
