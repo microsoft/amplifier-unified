@@ -1325,6 +1325,14 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                 **initialization)
         decision_accounts.require_complete()
         coordinator = session.coordinator
+        # Native initialization has finished. Report the first configured
+        # failure before adapting delegate, applying settings, or mounting the
+        # attachment context, all of which rely on completed construction.
+        failures = getattr(coordinator.get("orchestrator"), "load_failures", [])
+        fatal_failures = [row for row in failures if not isolation or row.get("type") != "provider"]
+        if fatal_failures:
+            from ..module_failures import persist_failures
+            raise persist_failures(directory, fatal_failures)
         if ephemeral_mcp_servers is not None:
             ready = coordinator.get_capability("mcp.ephemeral_ready")
             if ready != sorted(ephemeral_mcp_servers):
@@ -1497,13 +1505,6 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         coordinator.register_capability("live.checkpoint", checkpoint)
         coordinator.register_capability("session.durable_checkpoint",
                                         partial(checkpoint, capture_messages=False))
-        # Report configured mount failures before attempting a media graph
-        # transition, which requires every participating mount to be complete.
-        failures = getattr(loop, "load_failures", [])
-        fatal_failures = [row for row in failures if not isolation or row.get("type") != "provider"]
-        if fatal_failures:
-            from ..module_failures import persist_failures
-            raise persist_failures(directory, fatal_failures)
         from ..attachments import install_media_context
         await install_media_context(coordinator)
         from ..context_continuity import install as install_continuity

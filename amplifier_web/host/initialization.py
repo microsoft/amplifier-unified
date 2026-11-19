@@ -13,13 +13,14 @@ def initialization_hooks(*, isolation, decision_accounts, routing, retain, ephem
         # create_session can fail after constructing a session. Give the caller
         # cleanup ownership before any of its initialization policies can fail.
         retain(constructing)
+        if state_files:
+            # Apply machine-local defaults inside the provider loader. The media
+            # registration observes the declared plan at the outer loader boundary.
+            install_state_files(constructing.coordinator)
         if media is not None:
             media(constructing)
         if ephemeral_servers is not None:
             constructing.coordinator.register_capability("mcp.ephemeral_servers", ephemeral_servers)
-        if state_files:
-            # The provider's own files belong in the shared home. The plan does not hold their paths.
-            install_state_files(constructing.coordinator)
         if isolation:
             await isolation.before_initialize(constructing)
         if decision_accounts.records:

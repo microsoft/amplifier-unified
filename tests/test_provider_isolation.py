@@ -184,6 +184,20 @@ async def test_unavailable_image_account_is_never_constructed_or_rewritten(monke
 
 
 @pytest.mark.asyncio
+async def test_failed_configured_tool_is_reported_before_delegate_is_wrapped(mounted_host, monkeypatch):
+    from amplifier_web.host import children as child_host
+    from amplifier_web.module_failures import ConfiguredModuleError
+    failure = {"module": "tool-fixture", "type": "tool", "reason_code": "invalid_module_metadata"}
+    mounted_host.session.coordinator.get("orchestrator").load_failures = [failure]
+    children = AsyncMock(side_effect=AssertionError("delegate adaptation needs a complete tool graph"))
+    monkeypatch.setattr(child_host, "install_children", children)
+    with pytest.raises(ConfiguredModuleError) as error:
+        await mounted_host.prepare()
+    assert error.value.failures[0]["module"] == "tool-fixture"
+    children.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_host_healthy_selection_reports_unrelated_failure_without_hiding_choices(mounted_host, monkeypatch):
     from amplifier_web import provider_isolation
     h = mounted_host
