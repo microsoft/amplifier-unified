@@ -42,10 +42,23 @@ def pending_tool_activations(state):
             if not row.get('runnerSource') and not row.get('failure')]
 
 
+def prepared_tool_activations(state):
+    """A completed forward stage may wait while the component sequence continues."""
+    if state.get('phase') not in {'staged', 'installed', 'checked', 'available'}:
+        return False
+    rows = pending_tool_activations(state)
+    return bool(rows) and all(
+        all(isinstance(row.get(key), str) and row[key] for key in ('previous', 'revision', 'target'))
+        and row['previous'] != row['target'] for row in rows
+    )
+
+
 def availability_check_blocked(manager, state, tier):
     if (manager.closed or manager.awaiting_restart() or state.get('pendingRelease')
             or (state.get('pendingApp') or {}).get('featureSelection')):
         return True
+    if prepared_tool_activations(state):
+        return False
     return any(tier != 'application' or not row.get('target')
                for row in pending_tool_activations(state))
 
@@ -1001,7 +1014,8 @@ class UpdateManager:
                 # Retained runner qualification and failed optional tools own
                 # their rows independently of the new sequence/install intent.
                 await self.publish(runnerAvailabilityCheck=True)
-            if state.get('pendingApp') or pending_tool_activations(state):
+            if state.get('pendingApp') or (pending_tool_activations(state) and (
+                    not prepared_tool_activations(state) or has_new_app_target(self, state))):
                 # A tool can be waiting for a saved configuration indefinitely.
                 # Refresh only the app row; the staged tool retains its own handoff.
                 from .app_updates import check_staged
@@ -1062,16 +1076,15 @@ class UpdateManager:
                     return
                 started = time.monotonic()
                 rows = await self.inventory_sources(indexed=True)
-                # Retained runner attempts already own these selections. Do not
-                # rediscover them as installable work or stage a duplicate while
-                # checking the app and its remaining component tiers.
+                # Prepared tools and retained attempts already own these selections.
+                # Check the remaining sources without restaging the same installation.
                 from .managed_runner_backend import skip_key
                 retained = {skip_key(row['runnerSource']) for row in state.get('pendingSmartTools', [])
                             if row.get('runnerSource')}
-                failed = {row['previous'] for row in state.get('pendingSmartTools', [])
-                          if row.get('failure') and not row.get('runnerSource')}
+                owned_tools = {row['previous'] for row in state.get('pendingSmartTools', [])
+                               if not row.get('runnerSource') and (row.get('failure') or row.get('target'))}
                 rows = [row for row in rows if not (row.get('runnerKind') and skip_key(row) in retained)
-                        and not (row.get('kind') == 'smart tool' and row.get('installationId') in failed)]
+                        and not (row.get('kind') == 'smart tool' and row.get('installationId') in owned_tools)]
                 await self.publish(inventoryTimingMs=round((time.monotonic()-started)*1000), inventoryEvidence=getattr(self, 'inventory_evidence', None))
                 remote_tasks = {}
                 from .update_checks import git_revision, ref_policy
@@ -1290,7 +1303,7 @@ class UpdateManager:
             # Saved once: an update that waits (for an AI connection, or for
             # changed inputs) reaches this line again at every minute tick.
             await self.publish(sequence={**state['sequence'], 'install': True})
-        if pending_tool_activations(state):
+        if pending_tool_activations(state) and not prepared_tool_activations(state):
             if not manual and not state.get('pendingRelease') and has_new_app_target(self, state):
                 await self.app()
             else:
@@ -1318,7 +1331,7 @@ class UpdateManager:
         if not self.inventory:
             path=self.directory/'inventory.json'
             self.inventory=json.loads(path.read_text()) if path.exists() else []
-        if self.independent_tool_results(state) and not any(
+        if (self.independent_tool_results(state) or prepared_tool_activations(state)) and not any(
                 row.get('status') == 'update' and row.get('eligible') for row in self.inventory):
             if any(not item.get('failure') for item in state['pendingSmartTools']):
                 await self.activateSmartTools()
@@ -2059,7 +2072,7 @@ class UpdateManager:
                 # of the superseded whole-install command or its stale inventory.
                 await self.check(fresh=due == 'start', automatic=True)
             return
-        if pending_tool_activations(state):
+        if pending_tool_activations(state) and not prepared_tool_activations(state):
             if due := self.check_due():
                 await self.check(fresh=due == 'start', automatic=True)
             from .windows_app_recovery import automatic_retry_held
@@ -2121,8 +2134,9 @@ class UpdateManager:
             await self.install_checked(admitted, automatic=True)
             return
         state=self.service.state['updates']
-        if self.independent_tool_results(state) and (state.get('phase') not in {'error', 'interrupted'} or any(
-                row.get('runnerUpdate') and not row.get('failure') for row in state['pendingSmartTools'])):
+        if prepared_tool_activations(state) or (self.independent_tool_results(state) and (
+                state.get('phase') not in {'error', 'interrupted'} or any(
+                    row.get('runnerUpdate') and not row.get('failure') for row in state['pendingSmartTools']))):
             await self.activateSmartTools()
 
     async def wait_for_work(self, delay):
