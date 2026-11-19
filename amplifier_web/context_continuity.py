@@ -637,6 +637,16 @@ class ContextContinuity:
             "session": self.session_id, "selectionRevision": foreground["selectionRevision"],
             "checkpoint": source_digest})
         existing = self._journal["attempts"].get(command)
+        # Check other ownership before either creating OR rebinding this row.
+        # Its own acknowledged progress has separate, stricter resume guards.
+        for row in self._journal["attempts"].values():
+            if row is existing:
+                continue
+            if (row["state"] in {"pending", "running", "installing", "unknown"}
+                    or row["state"] != "committed" and (
+                        row.get("candidateSha256") or row.get("kind") != "model-transition"
+                        and (row.get("progress") or row.get("completedParts")))):
+                raise ContextRecoveryError("recovery_unreconciled")
         if existing:
             if existing["state"] == "committed":
                 if existing["contract"] != contract:
@@ -668,14 +678,6 @@ class ContextContinuity:
                 raise ContextRecoveryError("recovery_source_changed")
             await self._rebind_transition(existing, foreground, contract, guard)
             return existing
-        # Foreign failed/refused preparations are not a global hold. Unsettled
-        # paid calls and install candidates still fence all identities.
-        for row in self._journal["attempts"].values():
-            if (row["state"] in {"pending", "running", "installing", "unknown"}
-                    or row["state"] != "committed" and (
-                        row.get("candidateSha256") or row.get("kind") != "model-transition"
-                        and (row.get("progress") or row.get("completedParts")))):
-                raise ContextRecoveryError("recovery_unreconciled")
         maximum = getattr(self.coordinator.get("context"), "config", {}).get("summary_max_calls", 16)
         if type(maximum) is not int or maximum < 1:
             raise ContextRecoveryError("transition_budget_unavailable")

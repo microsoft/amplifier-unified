@@ -188,8 +188,11 @@ an absent selection or an explicit null fork revision does not grant admission.
 Bundle conversion must retain that explicit null after resetting bundle controls,
 including a later in-place bundle change that keeps the fork's inherited model
 pin; account-binding fields from the source execution are not copied as admission.
-If an older portable control schema omitted the revision, retained canonical fork
-metadata still prevents the inherited pin from being migrated as a legacy choice.
+If an older fork or portable control schema omitted the revision, retained canonical
+fork metadata still prevents the inherited pin from being migrated as a legacy
+choice. Such an ambiguous historical fork needs a new explicit selection even if
+the person had previously selected a model under the old schema. This admission
+rule does not claim portable transfer of the recovery journal or its paid ledger.
 Historical explicit-recovery dispositions are not fresh recovery commands, and
 must not skip a separate model-transition check. An effect-free failed or refused
 generic recovery may coexist with an eligible new transition; unresolved paid or

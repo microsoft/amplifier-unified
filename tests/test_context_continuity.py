@@ -440,7 +440,9 @@ class RecoveryWire:
 
 @asynccontextmanager
 async def ordinary_recovery_case(directory, wire, messages=(), *, live=False,
-                                 continuation=False, budget=RECOVERY_BUDGET):
+                                 continuation=False, budget=RECOVERY_BUDGET,
+                                 context_config=None, selection=None, foundation_store=None,
+                                 provider_config=None):
     """Maintained native_case pattern: Core + PreparedBundle + the real loop.
 
     The fixture supplies host ownership/Stop observations and synthetic HTTP, not
@@ -458,6 +460,8 @@ async def ordinary_recovery_case(directory, wire, messages=(), *, live=False,
             'max_tokens': budget, 'summarize_trigger': RECOVERY_TRIGGER,
             'native_min_new_tokens': 0, 'compaction_notice_enabled': False,
             'foreground_continuation': continuation}}}}
+    if context_config is not None:
+        plan['session']['context']['config'] = copy.deepcopy(context_config)
     paths = {'loop-streaming': Path(amplifier_module_loop_streaming.__file__).parent,
              'context-managed': Path(amplifier_module_context_managed.__file__).parent}
     if live:
@@ -478,13 +482,15 @@ async def ordinary_recovery_case(directory, wire, messages=(), *, live=False,
     sdk = openai.AsyncOpenAI(api_key='synthetic-not-live', max_retries=0,
         http_client=httpx.AsyncClient(transport=httpx.MockTransport(wire.transport)))
     raw = provider_module.OpenAIProvider(client=sdk, config={
-        'default_model': RECOVERY_MODEL, 'use_streaming': False, 'max_retries': 0})
+        'default_model': RECOVERY_MODEL, 'use_streaming': False, 'max_retries': 0,
+        **(provider_config or {})})
     raw.coordinator = coordinator
-    selected = SelectedProvider(raw, {
+    selected = SelectedProvider(raw, selection or {
         'instance': 'openai', 'model': RECOVERY_MODEL, 'effort': 'high', 'max_output_tokens': 1000})
     # The base streaming loop selects its mounted mapping; only loop-live has
     # a root_provider override. Mount the actual selected wrapper on this path.
-    await coordinator.mount('providers', selected, name='openai')
+    await coordinator.mount('providers', raw if selection else selected,
+                            name=selected.selection['instance'])
     coordinator.get('orchestrator').root_provider = selected
     coordinator.register_capability('live.activation', gate)
     coordinator.register_capability('live.runtime', runtime)
@@ -546,7 +552,10 @@ async def ordinary_recovery_case(directory, wire, messages=(), *, live=False,
     async def checkpoint():
         gate.check_current()
         directory.mkdir(parents=True, exist_ok=True)
-        transcript.write_text(json.dumps(await context.get_messages()))
+        rows = await context.get_messages()
+        if foundation_store is not None:
+            foundation_store.save(session.session_id, rows, {}, preserve_system=True)
+        transcript.write_text(json.dumps(rows))
         if adapter:
             adapter.save()
 
@@ -635,6 +644,256 @@ async def test_ordinary_sdk_model_transition_counts_compacts_and_dispatches_sele
         first.gate.release(first.activation)
     async with ordinary_recovery_case(directory, wire, canonical) as second:
         await target_request(second)
+
+
+def frozen_foreground_writer():
+    """Unmodified Context a446 exports from the real historical module mount.
+
+    The packet includes the old module/boundary hashes, exact effective config
+    (including engine=boundary), generator scope and writer commit. Generation
+    was mocked; the writer/export was real. Do not rebuild these records with the
+    current reader, remove real configuration keys or recompute their self hashes.
+    """
+    import hashlib
+    data = (Path(__file__).parent / 'fixtures/context_foreground_mounted_baseline.json').read_bytes()
+    assert hashlib.sha256(data).hexdigest() == (
+        '7e47bee54d2e209a5d163e97750a7a8112d91040d4fc7ecc8e7cf47f3e29f506')
+    return json.loads(data)
+
+
+@pytest.mark.parametrize('warm,lost_ack', [(False, False), (True, False), (False, True)])
+async def test_frozen_writer_composed_transition_keeps_source_proof_and_install_readback(
+        tmp_path, monkeypatch, warm, lost_ack):
+    from amplifier_core import ChatRequest, Message
+    from amplifier_web.host.storage import SessionStore
+    packet = frozen_foreground_writer()
+    fixture = packet['fixtures']['portable-true']
+    record, config = copy.deepcopy(fixture['checkpoint']), copy.deepcopy(fixture['config'])
+    source = copy.deepcopy(packet['messages'])
+    source.extend([{'role': 'user', 'content': f'Accepted evidence {i}'}
+                   if i % 2 == 0 else {'role': 'assistant', 'content': RECOVERY_FILLER}
+                   for i in range(8)])
+    source.extend([row for i in range(4) for row in (
+        {'role': 'user', 'content': f'Latest correction {i}: keep canonical evidence.'},
+        {'role': 'assistant', 'content': 'Confirmed; no tools replayed.'})])
+    store = SessionStore.for_app(tmp_path / 'home', tmp_path)
+    store.save('ordinary-recovery', source, {}, preserve_system=True)
+    source = store.load('ordinary-recovery')[0]
+    assert source[:len(packet['messages'])] == packet['messages']
+    directory = tmp_path / 'session'
+    directory.mkdir()
+    path = directory / 'context-checkpoint.json'
+    path.write_text(json.dumps(record))
+    saved = path.read_bytes()
+    wire = RecoveryWire()
+    source_selection = {'instance': packet['identity']['provider'],
+                        'model': packet['identity']['model'], 'effort': 'high'}
+    async with ordinary_recovery_case(directory, wire, source, context_config=config,
+                                     selection=source_selection, foundation_store=store) as case:
+        if warm:
+            await case.adapter.preserve(source)
+            assert case.adapter.status['status'] == 'restored', case.adapter.status
+            assert case.context.export_checkpoint(packet['identity']) == record
+        target_model = 'gpt-6.1-astra'
+        await case.controls.perform('provider.select', {
+            'instance': 'fixture', 'model': target_model, 'effort': 'high'})
+        target = case.session.coordinator.get('orchestrator').root_provider
+        origin = {'generationId': 'frozen-target', 'inputId': 'target-input',
+                  'selectionRevision': case.controls.selection_revision,
+                  'selection': case.controls.selection, 'connection': 'fixture-connection'}
+        coordinator = case.session.coordinator
+        coordinator.register_capability('web.context_transition.foreground', lambda: copy.deepcopy(origin))
+        classify = coordinator.get_capability('context.checkpoint.transition')
+        classified = []
+        def observe_classification(checkpoint, identity):
+            result = classify(checkpoint, identity)
+            classified.append(copy.deepcopy(result))
+            return result
+        coordinator.register_capability('context.checkpoint.transition', observe_classification)
+        await case.adapter.preserve(source)
+        assert classified[-1]['status'] == 'transition_required', (
+            classified[-1], case.context.config, fixture['config'])
+        assert classified[-1]['configuration'] == record['configuration']
+        assert classified[-1]['sha256'] == record['sha256']
+        assert path.read_bytes() == saved
+        wire.reducing_models.add(target_model)
+        async def count_view(rows):
+            request = ChatRequest(model=target_model, max_output_tokens=1000,
+                                  messages=[Message(**row) for row in rows])
+            decision = target.request_budget(request, context_estimate=10000)
+            if inspect.isawaitable(decision):
+                decision = await decision
+            return {'dispatch': request, 'budget_decision': decision}
+        async def prepare():
+            return await case.measured(provider=target, retain_contents=(), count_view=count_view)
+        recover = coordinator.get_capability('context.recovery.recover')
+        installs = []
+        from amplifier_web import context_continuity
+        write_private = context_continuity.write_private
+        writes = []
+        def observe_write(destination, text):
+            if destination == path:
+                writes.append(text)
+            return write_private(destination, text)
+        monkeypatch.setattr(context_continuity, 'write_private', observe_write)
+        async def observed_recover(**kwargs):
+            install = kwargs['install']
+            async def observed_install(candidate, verification):
+                result = await install(candidate, verification)
+                installs.append(copy.deepcopy(candidate))
+                if lost_ack:
+                    raise OSError('synthetic lost frozen-source installation acknowledgement')
+                return result
+            return await recover(**{**kwargs, 'install': observed_install})
+        coordinator.register_capability('context.recovery.recover', observed_recover)
+        if lost_ack:
+            with pytest.raises(OSError, match='lost frozen-source'):
+                await prepare()
+            pending = case.adapter._recovery_record()
+            assert pending['state'] == 'unknown'
+            assert pending['sourceCheckpoint'] == record
+            assert pending['sourceCheckpointDigest'] == digest(record)
+            assert pending['sourceCheckpointSha256'] == record['sha256']
+            candidate_bytes = path.read_bytes()
+            before = len(wire.compactions)
+            with pytest.raises(RuntimeError, match='recovery_unreconciled'):
+                await prepare()
+            origin.update(inputId='new-target-input', generationId='new-frozen-generation')
+            coordinator.register_capability('context.recovery.recover', recover)
+            await prepare()
+            assert path.read_bytes() == candidate_bytes and len(wire.compactions) == before
+        else:
+            result = await prepare()
+            assert result['outcome'] == 'transitioned'
+        assert case.adapter.recovery_status()['state'] == 'committed'
+        assert len(installs) == len(writes) == 1 and wire.compactions
+        assert store.load('ordinary-recovery')[0] == source
+        assert await case.context.get_messages() == source
+        assert wire.effects == wire.unknown_invocations == 0
+
+
+async def test_frozen_paid_partial_explicit_refusal_retains_real_writer_and_ordinary_resume(tmp_path):
+    from amplifier_module_context_managed.errors import CompactionError
+    from amplifier_web.host.storage import SessionStore
+    packet = frozen_foreground_writer()
+    fixture = packet['fixtures']['partial-v5-true']
+    record = copy.deepcopy(fixture['checkpoint'])
+    store = SessionStore.for_app(tmp_path / 'home', tmp_path)
+    store.save('ordinary-recovery', packet['messages'], {}, preserve_system=True)
+    source = store.load('ordinary-recovery')[0]
+    directory = tmp_path / 'session'
+    directory.mkdir()
+    path = directory / 'context-checkpoint.json'
+    path.write_text(json.dumps(record))
+    saved = path.read_bytes()
+    wire = RecoveryWire()
+    selection = {'instance': packet['identity']['provider'],
+                 'model': packet['identity']['model'], 'effort': 'high'}
+    async with ordinary_recovery_case(directory, wire, source, context_config=fixture['config'],
+                                     selection=selection, foundation_store=store) as case:
+        await case.adapter.preserve(source)
+        assert case.adapter.status['status'] == 'resuming'
+        assert case.context.export_checkpoint(packet['identity']) == record
+        await case.controls.perform('context.recovery.request',
+                                    recovery_command(wire, 'explicit-over-paid-prefix'))
+        async def forbidden_count(rows):
+            raise AssertionError('Explicit native recovery counted before refusing a paid partial')
+        with pytest.raises(CompactionError, match='summary_progress_incompatible'):
+            await case.adapter.run_pending(provider=case.selected, count_view=forbidden_count)
+        assert case.context.export_checkpoint(packet['identity']) == record
+        assert path.read_bytes() == saved  # Refused recovery did not write a candidate.
+        await case.checkpoint()
+        assert json.loads(path.read_bytes()) == record
+        # Ordinary host persistence serializes its own JSON key order. It keeps
+        # the entire exact record/self hash, not the imported fixture whitespace.
+        saved = path.read_bytes()
+        assert wire.counts == wire.compactions == wire.completions == []
+        assert store.load('ordinary-recovery')[0] == source
+    async with ordinary_recovery_case(directory, wire, source, context_config=fixture['config'],
+                                     selection=selection, foundation_store=store) as cold:
+        await cold.adapter.preserve(source)
+        assert cold.adapter.status['status'] == 'resuming'
+        assert cold.context.export_checkpoint(packet['identity']) == record
+        # Generic refusal is inert; ordinary preparation still sees its paid
+        # prefix, not a discarded baseline or a renewed explicit-recovery call.
+        assert await cold.adapter.run_pending(provider=cold.selected, count_view=forbidden_count) is None
+        assert cold.context.export_checkpoint(packet['identity'])['progress'] == record['progress']
+        assert path.read_bytes() == saved
+        assert await cold.context.get_messages() == source
+        assert wire.counts == wire.compactions == wire.completions == []
+
+
+async def test_old_sdk_writer_paid_prefix_can_continue_after_explicit_refusal(tmp_path):
+    """Real old writer+SDK packet, current composed SDK reader, offline transport."""
+    import hashlib
+    from amplifier_web.host.storage import SessionStore
+    from amplifier_module_context_managed.errors import CompactionError
+    data = (Path(__file__).parent / 'fixtures/context_old_sdk_partial.json').read_bytes()
+    assert hashlib.sha256(data).hexdigest() == (
+        '74d4121f0d203b090885d96abb6c380d79ac559639aa27aa12cd594e00d4f280')
+    packet = json.loads(data)
+    assert packet['source_commit'] == 'a4464af2027f4e03fe7fc388d8d8e3e8ff436da2'
+    record = packet['checkpoint']
+    class PortableWire(RecoveryWire):
+        async def transport(self, request):
+            body = json.loads(request.content)
+            if (request.url.path.endswith('/responses')
+                    and 'continuation note' in str(body.get('input'))):
+                self.completions.append(copy.deepcopy(body))
+                return httpx.Response(200, json={
+                    'id': 'resume-summary', 'object': 'response', 'created_at': 1,
+                    'model': body['model'], 'status': 'completed', 'output': [{
+                        'type': 'message', 'id': 'resumed-note', 'role': 'assistant',
+                        'status': 'completed', 'content': [{'type': 'output_text',
+                            'text': 'Continued from PAID-SDK-PREFIX without repurchasing it.',
+                            'annotations': []}]}],
+                    'usage': {'input_tokens': 100, 'output_tokens': 20, 'total_tokens': 120}})
+            return await super().transport(request)
+    wire = PortableWire()
+    directory = tmp_path / 'session'
+    directory.mkdir()
+    path = directory / 'context-checkpoint.json'
+    path.write_text(json.dumps(record))
+    before = path.read_bytes()
+    selection = {'instance': 'fixture', 'model': packet['identity']['model'], 'effort': 'high'}
+    store = SessionStore.for_app(tmp_path / 'home', tmp_path)
+    store.save('ordinary-recovery', packet['messages'], {}, preserve_system=True)
+    async with ordinary_recovery_case(directory, wire, packet['messages'],
+            context_config=packet['config'], selection=selection, foundation_store=store) as case:
+        await case.adapter.preserve(packet['messages'])
+        assert case.context.export_checkpoint(packet['identity']) == record
+        await case.controls.perform('context.recovery.request',
+                                    recovery_command(wire, 'refuse-native-over-old-sdk-paid'))
+        async def forbidden_count(rows):
+            raise AssertionError('Native recovery counted before refusing old paid prefix')
+        with pytest.raises(CompactionError, match='summary_progress_incompatible'):
+            await case.adapter.run_pending(provider=case.selected, count_view=forbidden_count)
+        assert path.read_bytes() == before
+        assert wire.counts == wire.compactions == wire.completions == []
+    # The old writer used an explicit OpenAI-compatible endpoint (portable,
+    # not native). Reproduce that supported endpoint choice, never change the
+    # paid prefix's model, provider identity or summary generation options.
+    async with ordinary_recovery_case(directory, wire, packet['messages'],
+            context_config=packet['config'], selection=selection, foundation_store=store,
+            provider_config={'base_url': 'https://offline.invalid/v1'}) as cold:
+        cold.raw.client.base_url = 'https://offline.invalid/v1'
+        assert not cold.raw.supports_native_compaction()
+        await cold.adapter.preserve(packet['messages'])
+        assert cold.context.export_checkpoint(packet['identity']) == record
+        assert await cold.adapter.run_pending(provider=cold.selected, count_view=None) is None
+        with pytest.raises(CompactionError, match='summary_work_paused'):
+            await cold.context._prepare(cold.raw, None, [])
+        continued = cold.context.export_checkpoint(packet['identity'])
+        assert continued['progress']['completed'] > record['progress']['completed']
+        assert continued['progress']['fingerprint'] == record['progress']['fingerprint']
+        assert continued['progress']['generation_contract'] == record['progress']['generation_contract']
+        assert len(wire.completions) == 1  # Only the next fragment was purchased.
+        body = wire.completions[0]
+        assert record['progress']['text'] in str(body)
+        assert body['model'] == packet['identity']['model']
+        assert body['max_output_tokens'] == record['progress']['generation_contract']['max_output_tokens']
+        assert wire.compactions == [] and wire.effects == wire.unknown_invocations == 0
+        assert await cold.context.get_messages() == packet['messages']
 
 
 async def test_real_worker_controls_live_sdk_model_transition_admission(tmp_path, monkeypatch):
@@ -1494,6 +1753,30 @@ async def test_historical_explicit_recovery_cannot_skip_model_transition_guards(
     assert await case.coordinator.context.get_messages() == case.source
 
 
+@pytest.mark.parametrize('other_state', ['unknown', 'refused-progress'])
+async def test_existing_transition_cannot_rebind_past_another_unsettled_recovery(tmp_path, other_state):
+    from amplifier_web.context_continuity import ContextRecoveryError
+    case = await target_transition_fixture(tmp_path)
+    await case.adapter.preserve(case.source)
+    transition = await case.adapter._prepare_transition()
+    transition.update(state='refused', code='transition_intent_required')
+    case.adapter._write_recovery()
+    await case.adapter.request_recovery('later-explicit', 0)
+    other = case.adapter._journal['attempts']['later-explicit']
+    other['state'] = 'unknown' if other_state == 'unknown' else 'refused'
+    if other_state == 'refused-progress':
+        other.update(progress={'retained': 'paid-prefix'}, completedParts=1)
+    case.adapter._write_recovery()
+    retained = case.adapter.recovery_path.read_bytes()
+    case.origin.update(inputId='fresh-input', inputIds=['fresh-input'], generationId='fresh-generation')
+    with pytest.raises(ContextRecoveryError, match='recovery_unreconciled'):
+        await case.prepare()
+    assert case.adapter.recovery_path.read_bytes() == retained
+    assert case.adapter._journal['current'] == 'later-explicit'
+    assert case.adapter.path.read_bytes() == case.accepted
+    assert case.raw.compactions == [] and case.raw.sent == []
+
+
 @pytest.mark.parametrize('different_model', [False, True])
 async def test_live_plan_continuation_default_preserves_legacy_checkpoint_identity(tmp_path, different_model):
     from amplifier_web.host.session import live_plan, SelectedProvider
@@ -1565,8 +1848,11 @@ async def test_same_model_pinned_foreground_keeps_unconfirmed_generic_recovery_i
         controls.runtime.generation = {
             'id': 'generation', 'initial_input_id': 'fresh', 'input_ids': ['fresh']}
         assert controls.transition_foreground() is not None
+        matching = {**controls.transition_foreground(), 'selection': case.selected.selection}
         case.coordinator.register_capability(
-            'web.context_transition.foreground', controls.transition_foreground)
+            'web.context_transition.foreground', lambda: matching)
+        await case.adapter.refresh_identity()
+        assert case.adapter._foreground()['inputId'] == 'fresh'
         assert await case.adapter.run_pending(provider=case.selected, count_view=None) is None
         assert case.adapter.recovery_path.read_bytes() == before
         assert case.adapter.path.read_bytes() == case.accepted
