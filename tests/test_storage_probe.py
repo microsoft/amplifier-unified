@@ -16,8 +16,12 @@ async def test_completed_reference_probe_with_parent_loop_stall(tmp_path, monkey
     home = tmp_path / 'app'
     settings = home / 'config/settings.yaml'
     settings.parent.mkdir(parents=True)
-    expected = 'source: synthetic-retained-generation\n' + '#' * size
-    settings.write_text(expected)
+    # Keep pipe-pressure coverage using actual returnable storage references.
+    prefix = home / 'updates/releases'
+    expected = [str(prefix / f'{i:032x}') for i in range(size // (len(str(prefix)) + 33) + 1)]
+    for path in expected:
+        Path(path).mkdir(parents=True)
+    settings.write_text('sources:\n' + '\n'.join('  - ' + name for name in expected))
     parent = asyncio.get_running_loop()
     create = asyncio.create_subprocess_exec
     entered = tmp_path / 'parent-stalled'
