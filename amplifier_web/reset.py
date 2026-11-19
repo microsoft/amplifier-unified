@@ -737,7 +737,10 @@ def _repair(home, uv, tool_root, bin_root, source, env, service, no_start, opera
                 env=env, timeout=1800)
         progress("Fresh copy installed", done=True)
         progress("Checking installed components")
-        verify(prefix, env, extras)
+        probe_env = env
+        if "managed-browser" in extras:
+            probe_env = {**env, "PLAYWRIGHT_BROWSERS_PATH": str(home / "browsers")}
+        verify(prefix, probe_env, extras)
         progress("Installed components checked", done=True)
         prepare_saved_configurations(prefix, home, backup, env, moves)
         for name in REGENERABLE:

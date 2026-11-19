@@ -67,13 +67,20 @@ def fake_install(monkeypatch, *, fail=False, probe_fail=False):
     return calls
 
 
-@pytest.mark.parametrize("extras", [[], ["decisions-openai"]])
-def test_reset_preserves_installed_optional_features(repair_tree, monkeypatch, extras):
+@pytest.mark.parametrize("extras", [[], ["decisions-openai"], ["managed-browser"]])
+@pytest.mark.parametrize("malformed_metadata", [False, True])
+def test_reset_preserves_installed_optional_features(repair_tree, monkeypatch, extras, malformed_metadata):
     home, tool, bins = repair_tree
     monkeypatch.setenv("TEST_RESET_TOOLS", str(tool))
     sites = tool / "amplifier-unified/lib/python3.13/site-packages"
+    if malformed_metadata:
+        broken = sites / "unrelated-1.0.dist-info"
+        broken.mkdir(parents=True)
+        (broken / "METADATA").write_text("Metadata-Version: 2.1\nVersion: 1.0\n")
     if extras:
-        for name in ("amplifier-lib-decisions", "amplifier-module-provider-openai"):
+        names = ("playwright",) if extras == ["managed-browser"] else (
+            "amplifier-lib-decisions", "amplifier-module-provider-openai")
+        for name in names:
             info = sites / (name.replace("-", "_") + "-1.0.dist-info")
             info.mkdir(parents=True)
             (info / "METADATA").write_text(f"Metadata-Version: 2.1\nName: {name}\nVersion: 1.0\n")
@@ -81,11 +88,12 @@ def test_reset_preserves_installed_optional_features(repair_tree, monkeypatch, e
                 (info / "entry_points.txt").write_text("[amplifier.decision_backends]\nfixture = unused:backend\n")
     calls = fake_install(monkeypatch)
     probes = []
-    monkeypatch.setattr(reset, "verify", lambda prefix, env, selected=(): probes.append(list(selected)))
+    monkeypatch.setattr(reset, "verify", lambda prefix, env, selected=(): probes.append((list(selected), dict(env))))
     reset.repair(home, "uv", tool, bins, "trusted.whl", {}, None, True)
     install = next(call for call in calls if call[:3] == ("uv", "tool", "install"))
-    assert install[-1] == ("amplifier-unified[decisions-openai]" if extras else "amplifier-unified")
-    assert probes == [extras]
+    assert install[-1] == ("amplifier-unified[" + ",".join(extras) + "]" if extras else "amplifier-unified")
+    expected_env = {"PLAYWRIGHT_BROWSERS_PATH": str(home / "browsers")} if "managed-browser" in extras else {}
+    assert probes == [(extras, expected_env)]
 
 
 def test_verify_passes_preserved_extras_to_probe(monkeypatch, tmp_path):

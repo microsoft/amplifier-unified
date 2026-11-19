@@ -13,8 +13,14 @@ OPTIONAL_EXTRAS={
 
 def installed_extras(*, path=None):
     """Retain known optional features without loading clients or desktop backends."""
-    rows = None if path is None else {d.metadata["Name"].lower().replace("_", "-"): d
-                                      for d in metadata.distributions(path=path)}
+    rows = None
+    if path is not None:
+        rows = {}
+        for distribution in metadata.distributions(path=path):
+            name = distribution.metadata.get("Name")
+            # Emergency repair must tolerate unrelated damaged metadata.
+            if isinstance(name, str) and name.strip():
+                rows[name.strip().lower().replace("_", "-")] = distribution
     extras=[]
     present={}
     for extra,distributions in sorted(OPTIONAL_EXTRAS.items()):
