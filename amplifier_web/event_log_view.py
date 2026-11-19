@@ -201,7 +201,7 @@ def merge_model_observations(rows, *, aliases=()):
         if row['id'] in omitted or closest['id'] in matched:
             continue
         matched.add(closest['id']);omitted.add(row['id'])
-        for field in ('requestInfo', 'requestDetail', 'requestCapture', 'requestRecording', 'responseDetail', 'responseCapture', 'responseRecording', '_eventFields', 'error', 'errorDetail'):
+        for field in ('requestInfo', 'requestDetail', 'requestCapture', 'requestRecording', 'requestRecordingExpired', 'responseDetail', 'responseCapture', 'responseRecording', 'responseRecordingExpired', '_eventFields', 'error', 'errorDetail'):
             if field in row:closest[field] = row[field]
         for field in ('request', 'response'):
             if closest.get(field + 'Detail'):closest[field + 'Detail']['id'] = closest['id']
@@ -346,6 +346,17 @@ class EventIndex:
 
     def field(self, node, field, data, keys, reference, *, preview=True):
         key = next((key for key in keys if key in data), None)
+        if field in ('request', 'response'):
+            from .provider_payloads import expired_metadata
+            expired = data.get('provider_payloads_expired')
+            if isinstance(expired, dict):
+                expired_key = next((name for name in keys if expired_metadata(expired.get(name))), None)
+                if key is None and expired_key is not None:
+                    marker = expired_metadata(expired[expired_key])
+                    node[field] = '[Provider recording expired under the saved retention policy]'
+                    node[field + 'RecordingExpired'] = marker
+                    node.setdefault('_eventFields', {})[field] = {**reference, 'key': expired_key}
+                    return
         if key is None:
             return
         node.setdefault('_eventFields', {})[field] = {**reference, 'key': key}
@@ -509,7 +520,7 @@ class EventIndex:
             if isinstance(options.get('tools'), list):node['requestInfo']['tool_count'] = len(options['tools'])
             if isinstance(options.get('reasoning'), dict) and isinstance(options['reasoning'].get('effort'), str):
                 node['requestInfo']['reasoning_effort'] = options['reasoning']['effort'][:100]
-            if raw is not None:
+            if raw is not None or 'provider_payloads_expired' in data:
                 self.field(node, 'request', data, ('raw', 'raw_request'), reference, preview=False)
                 capture = data.get('request_capture', {})
                 if isinstance(capture, dict):
@@ -544,7 +555,8 @@ class EventIndex:
         node.update(provider=data.get('provider'), model=data.get('model'), endedAt=at,
                     phase='error' if name == 'llm:error' or data.get('status') == 'error' else 'completed',
                     usage=public_usage(data.get('usage')))
-        if name == 'llm:response' and data.get('raw', data.get('raw_response')) is not None:
+        if name == 'llm:response' and (data.get('raw', data.get('raw_response')) is not None
+                                     or 'provider_payloads_expired' in data):
             # Keep the provider's recorded response out of summaries and state.
             # The authenticated detail endpoint reads it only when requested.
             self.field(node, 'response', data, ('raw', 'raw_response'), reference, preview=False)

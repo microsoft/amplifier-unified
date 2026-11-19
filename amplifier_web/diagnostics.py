@@ -261,7 +261,8 @@ class Diagnostics:
                         db.execute("INSERT INTO counters VALUES('outboxDropped',1) ON CONFLICT(name) DO UPDATE SET value=value+1")
                         continue
                     db.execute('INSERT OR IGNORE INTO deliveries(record_id,destination,revision,payload,status,updated) VALUES(?,?,?,?,?,?)',(identity,dest,revision,json.dumps(payload),'pending',now))
-            from .capture_index import index_shared
+            from .capture_index import index_shared, maintenance_schema
+            maintenance_schema(db)
             # Navigation contains all CLI projects, including unresolved and
             # read-only workers. Discovery is not consent to scan their captures.
             sessions=[s for s in list(self.service.state.get('sessions', []))
@@ -295,7 +296,20 @@ class Diagnostics:
             cutoff=time.time()-cfg['retentionDays']*86400
             # The first row outside the retained count bounds all older seqs,
             # including gaps. Avoid materializing every retained ID each flush.
-            obsolete=[r[0] for r in db.execute('SELECT id FROM records WHERE at<? OR seq <= (SELECT seq FROM records WHERE ? >= 0 ORDER BY seq DESC LIMIT 1 OFFSET ?)',(cutoff,cfg['maxRecords'],cfg['maxRecords']))]
+            # Unresolved file replacement preserves exact indexed references and
+            # their outbox outcomes even under ordinary age/count pressure.
+            # Holds may exceed the normal limit; they are not cleanup authority.
+            obsolete=[r[0] for r in db.execute("""
+                WITH eligible AS (
+                    SELECT * FROM records WHERE NOT EXISTS (
+                        SELECT 1 FROM capture_maintenance
+                        WHERE path=json_extract(records.data,'$."$event"'))
+                    AND NOT EXISTS (
+                        SELECT 1 FROM capture_quarantine
+                        WHERE path=json_extract(records.data,'$."$event"')))
+                SELECT id FROM eligible WHERE at<? OR seq <= (
+                    SELECT seq FROM eligible WHERE ? >= 0 ORDER BY seq DESC LIMIT 1 OFFSET ?)
+                """,(cutoff,cfg['maxRecords'],cfg['maxRecords']))]
             for identity in obsolete:
                 count=db.execute("SELECT count(*) FROM deliveries WHERE record_id=? AND status IN ('pending','failed')",(identity,)).fetchone()[0]
                 if count: db.execute("INSERT INTO counters VALUES('expiredPending',?) ON CONFLICT(name) DO UPDATE SET value=value+excluded.value",(count,))

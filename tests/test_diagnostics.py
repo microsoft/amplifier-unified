@@ -40,6 +40,48 @@ async def test_default_local_capture_never_infers_remote_destination(service,mon
     with collector._db() as db:assert db.execute('SELECT count(*) FROM deliveries').fetchone()[0]==0
 
 
+@pytest.mark.parametrize('held', ['maintenance', 'inode'])
+async def test_held_capture_does_not_drop_unrelated_app_diagnostics(service, held):
+    from test_capture_index import write_capture
+    await service.dispatch('session.create', {})
+    session = service._session()
+    workspace, sid = session['workspace'], session['id']
+    path = write_capture(workspace, sid, 'existing') / 'events.jsonl'
+    collector = service.diagnostics
+    await collector.flush()
+    with collector._db() as db:
+        if held == 'maintenance':
+            db.execute('INSERT INTO capture_maintenance VALUES(?,?,?)', (str(path), 'unresolved', '{}'))
+        else:
+            replacement = path.with_name('unqualified-replacement')
+            replacement.write_bytes(path.read_bytes())
+            replacement.replace(path)
+        db.execute("UPDATE records SET at=0 WHERE json_extract(data,'$.\"$event\"')=?", (str(path),))
+        existing = db.execute('SELECT id,data FROM records').fetchall()
+        identity = existing[0][0]
+        db.execute('INSERT INTO deliveries(record_id,destination,revision,payload,status,updated) VALUES(?,?,?,?,?,?)',
+                   (identity, 'original-destination', 'original-revision', '{"exact":"payload"}', 'accepted', 0))
+        deliveries = [tuple(row) for row in db.execute('SELECT * FROM deliveries')]
+    collector.record('updates', {'event': 'update:survives-quarantine', 'data': {'phase': 'probe'}})
+    await collector.flush()
+    assert not collector.storage_error and not collector.dropped
+    with collector._db() as db:
+        assert db.execute('SELECT count(*) FROM records WHERE event=?',
+                          ('update:survives-quarantine',)).fetchone()[0] == 1
+        for identity, data in existing:
+            assert db.execute('SELECT data FROM records WHERE id=?', (identity,)).fetchone()[0] == data
+        assert [tuple(row) for row in db.execute('SELECT * FROM deliveries')] == deliveries
+    # Exercise the separate count boundary on the same unresolved source.
+    collector.config['maxRecords'] = 100
+    for number in range(105):
+        collector.record('updates', {'event': 'update:count-pressure', 'data': {'number': number}})
+    await collector.flush()
+    with collector._db() as db:
+        for identity, data in existing:
+            assert db.execute('SELECT data FROM records WHERE id=?', (identity,)).fetchone()[0] == data
+        assert [tuple(row) for row in db.execute('SELECT * FROM deliveries')] == deliveries
+
+
 async def test_provider_request_setting_is_optional_private_and_saved_without_enabling_forwarding(service):
     assert service.diagnostics.config['providerRequests'] is False
     await configure(service, providerRequests=True)
