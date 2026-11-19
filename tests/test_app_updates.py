@@ -281,7 +281,7 @@ async def test_candidate_isolated_validated_and_busy_host_not_replaced(tmp_path,
     await service.close()
 
 @pytest.mark.skipif(__import__('os').name != 'posix', reason='POSIX conversation compatibility')
-@pytest.mark.parametrize('case', ['ready', 'bad-marker', 'changed-generation', 'missing-runtime'])
+@pytest.mark.parametrize('case', ['ready', 'bad-marker', 'changed-generation', 'missing-runtime', 'other-profile', 'incumbent-also-broken', 'candidate-only-broken'])
 async def test_app_stage_only_selects_a_candidate_that_can_reopen_its_retained_worker(tmp_path, monkeypatch, case):
     from amplifier_web import app_worker_qualification as qualification
     from amplifier_web.runtime_environment import project_path, receipt_directory
@@ -293,7 +293,8 @@ async def test_app_stage_only_selects_a_candidate_that_can_reopen_its_retained_w
     receipt = receipt_directory(tmp_path, generation)
     receipt.mkdir(parents=True)
     (manager.directory / 'active.json').write_text(json.dumps({'current': generation}))
-    (receipt / 'runtime-installed.json').write_text('[]')
+    packages = ['amplifier-module-loop-live', 'amplifier-module-context-simple'] if case != 'other-profile' else ['custom-loop']
+    (receipt / 'runtime-installed.json').write_text(json.dumps([{'name': n} for n in packages]))
     project = project_path(tmp_path, generation)
     interpreter = project / '.venv/bin/python'
     interpreter.parent.mkdir(parents=True)
@@ -309,10 +310,14 @@ async def test_app_stage_only_selects_a_candidate_that_can_reopen_its_retained_w
             (site / 'amplifier_web').mkdir()
         return '99.0.0' if '-c' in args else ''
 
+    checks = []
     async def run_worker(*args, env, cwd, timeout):
+        checks.append(args)
         assert args[0] == interpreter
-        assert args[-2:] == ('--tool-registration', 'retained')
+        assert args[-3:] == ('--tool-registration', 'retained', '--compare-startup')
         assert set(env) == {'HOME', 'PATH', 'TMPDIR'} and Path(cwd).is_relative_to(manager.directory)
+        if case == 'incumbent-also-broken' or (case == 'candidate-only-broken' and len(checks) == 1):
+            return json.dumps({'startupFailed': '9' * 64, 'attempt': 1})
         if case == 'changed-generation':
             (manager.directory / 'active.json').write_text('{}')
         return json.dumps({'workerStarts': 2, 'resumed': case != 'bad-marker', 'toolCalls': 0,
@@ -322,11 +327,17 @@ async def test_app_stage_only_selects_a_candidate_that_can_reopen_its_retained_w
     monkeypatch.setattr(app_updates, 'process', install)
     monkeypatch.setattr(qualification, 'process', run_worker)
     try:
-        if case == 'ready':
+        if case in {'ready','other-profile','missing-runtime','incumbent-also-broken'}:
             await app_updates.stage(manager)
             assert service.state['updates']['pendingApp']['latest'] == 'v99.0.0'
             marker, = manager.directory.glob('applications/*/*/validated.json')
-            assert json.loads(marker.read_text())['retainedWorker'] == qualification.prepared(tmp_path)
+            validated = json.loads(marker.read_text())
+            assert validated['retainedWorker'] == qualification.prepared(tmp_path)
+            if case in {'other-profile','missing-runtime'}:
+                assert not checks and validated['retainedWorkerResult'] is None
+            else:
+                assert validated['retainedWorkerResult']['status'] == ('ready' if case == 'ready' else 'pre-existing-startup-failure')
+                assert len(checks) == (1 if case == 'ready' else 2)
         else:
             with pytest.raises(ValueError, match='conversation'):
                 await app_updates.stage(manager)
@@ -340,7 +351,7 @@ async def test_app_stage_only_selects_a_candidate_that_can_reopen_its_retained_w
 async def test_app_activation_rechecks_a_worker_generation_prepared_after_staging(tmp_path, monkeypatch):
     from amplifier_web import app_worker_qualification as qualification
     service, manager, _ = await prepared_activation(tmp_path, monkeypatch)
-    selection = {'generation': 'f' * 32, 'project': 'freshly-prepared', 'installedSha256': 'e' * 64}
+    selection = {'generation': 'f' * 32, 'project': 'freshly-prepared', 'installedSha256': 'e' * 64, 'readiness': 'prepared'}
     monkeypatch.setattr(qualification, 'prepared', lambda _: selection)
     check = AsyncMock(side_effect=ValueError('conversation compatibility'))
     monkeypatch.setattr(qualification, 'qualify', check)

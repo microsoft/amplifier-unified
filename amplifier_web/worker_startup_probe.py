@@ -7,7 +7,9 @@ module from the candidate interpreter's prepared sources instead.
 """
 import argparse
 import asyncio
+import hashlib
 import importlib.util
+import traceback
 import json
 import os
 from pathlib import Path
@@ -25,6 +27,8 @@ async def main():
                         help='Load only the application packages from this installed wheel.')
     parser.add_argument('--tool-registration', choices=('retained', 'native'),
                         help='Start and reopen with a tool using the earlier direct-registration contract.')
+    parser.add_argument('--compare-startup', action='store_true',
+                        help='Return a private failure fingerprint for comparison with the incumbent.')
     args = parser.parse_args()
     if args.installed_package:
         package = args.installed_package.resolve(strict=True)
@@ -147,7 +151,17 @@ providers:
     for _ in range(2):
         worker = module.Worker()
         try:
-            await worker.start(config, raise_errors=True)
+            try:
+                await worker.start(config, raise_errors=True)
+            except Exception as error:
+                if not args.compare_startup:
+                    raise
+                frame = traceback.extract_tb(error.__traceback__)[-1]
+                text = str(error).replace(str(root), '<trial>').replace(str(package), '<app>')
+                signature = [type(error).__name__, Path(frame.filename).name, frame.name, text]
+                print(json.dumps({'startupFailed': hashlib.sha256(json.dumps(signature).encode()).hexdigest(),
+                                  'attempt': len([e for e in events if e.get('type') == 'runtime.ready']) + 1}))
+                return
             await asyncio.sleep(0.1)
             assert worker.session is not None
             assert registry_path.read_bytes() == before

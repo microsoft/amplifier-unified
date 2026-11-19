@@ -47,7 +47,7 @@ jobs:
           SELECTED_RELEASE_REVISION: ${{ inputs.release_revision }}
         run: |
           mkdir -p "$RUNNER_TEMP/release-tools"
-          cp scripts/release.py scripts/release_qualification.py scripts/frontend_release_proof.py scripts/historical_web_layout.py "$RUNNER_TEMP/release-tools/"
+          cp scripts/release.py scripts/release_qualification.py scripts/frontend_release_proof.py scripts/historical_web_layout.py amplifier_web/worker_startup_probe.py "$RUNNER_TEMP/release-tools/"
           python "$RUNNER_TEMP/release-tools/release.py" plan --revision "$SELECTED_RELEASE_REVISION" --fetch-tag --output "$GITHUB_OUTPUT"
       - name: Pin the verified selected commit
         env:
@@ -189,10 +189,12 @@ jobs:
           path: ${{ runner.temp }}/runtime-build-cache
           key: ${{ steps.runtime-cache.outputs.key }}
       - name: Start and reopen ordinary workers against the installed candidate
+        # Earlier release targets predate this Worker compatibility contract.
+        if: hashFiles('amplifier_web/worker_startup_probe.py') != ''
         run: |
           app="$("$RUNNER_TEMP/release-smoke/bin/python" -I -c 'import amplifier_web; from pathlib import Path; print(Path(amplifier_web.__file__).resolve().parent)')"
           for registration in retained native; do
-            "$RUNNER_TEMP/surface-runtime/.venv/bin/python" -I -B amplifier_web/worker_startup_probe.py \
+            "$RUNNER_TEMP/surface-runtime/.venv/bin/python" -I -B "$RUNNER_TEMP/release-tools/worker_startup_probe.py" \
               "$RUNNER_TEMP/startup-$registration" --installed-package "$app" --tool-registration "$registration"
           done
       - name: Verify surface context and recipe children through Core and loop-live
