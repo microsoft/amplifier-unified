@@ -133,7 +133,7 @@ async def test_real_normalized_install_freezes_only_selected_moving_policy(tmp_p
 @pytest.mark.parametrize('kind,topology', [
     ('tag', 'tag-only'), ('rev', 'tag-only'), ('uri', 'tag-only'),
     ('rev', 'same-name'), ('uri', 'same-name'), ('branch', 'same-name'),
-    ('sha', 'tag-only'), ('rev', 'branch-only'),
+    ('sha', 'tag-only'), ('rev', 'branch-only'), ('uri', 'branch-only'),
     ('marker-pin', 'branch-only'), ('marker-branch', 'branch-only'),
 ])
 async def test_real_named_ref_resolution_preserves_tag_and_ambiguity(tmp_path, monkeypatch, kind, topology):
@@ -189,9 +189,12 @@ async def test_real_named_ref_resolution_preserves_tag_and_ambiguity(tmp_path, m
     receipt = environments.receipt_directory(home, generation)
     qualification.verify_recorded(final, receipt)
     saved = json.loads((receipt / 'runtime-sources.json').read_text())['fixture-component']
-    moving = kind == 'branch'
+    verified = kind in {'rev', 'uri'} and topology == 'branch-only'
+    moving = kind == 'branch' or verified
     assert saved['ref'] == ('stable' if moving else revision)
-    expected_kind = {'branch': 'prepared-manifest', 'tag': 'tag-reference', 'sha': 'resolution-reference'}.get(kind, 'unresolved-reference')
+    expected_kind = ('verified-app-declaration' if verified else
+                     {'branch': 'prepared-manifest', 'tag': 'tag-reference',
+                      'sha': 'resolution-reference'}.get(kind, 'unresolved-reference'))
     assert saved['policyOrigin']['kind'] == expected_kind
     if expected_kind in {'tag-reference', 'unresolved-reference'}:
         assert saved['policyOrigin']['originalRef'] == 'stable'

@@ -464,17 +464,24 @@ def augmented_manifest(content, rows):
                 sources[declared[name]] = {'git': row['url'], 'rev': row['ref'],
                                           **({'subdirectory': row['subdirectory']} if row.get('subdirectory') else {})}
                 changed = True
-            continue
+            effective = sources[declared[name]]
+            if (not pinned(row['ref']) or effective.get('git') != row['url']
+                    or effective.get('rev') != row['ref']
+                    or effective.get('subdirectory', '') != row.get('subdirectory', '')):
+                continue
         uri = 'git+' + row['url'] + '@' + row['ref']
         if row.get('subdirectory'):
             uri += '#subdirectory=' + row['subdirectory']
         reference = name + ' @ ' + uri
-        references.append(reference)
+        if name not in declared:
+            references.append(reference)
         if pinned(row['ref']):
             # A direct requirement alone cannot preserve a retained pin when a
             # module declares the same dependency at a moving Git ref. Apply
             # this existing choice transitively without changing authored policy.
             existing = [value for value in overrides if package_name(Requirement(value).name) == name]
+            if name in declared and len(existing) == 1 and Requirement(existing[0]) == Requirement(name):
+                continue  # An authored bare override already applies the effective source transitively.
             if existing and (len(existing) != 1 or Requirement(existing[0]) != Requirement(reference)):
                 raise ProtectedRuntimeSource(name)
             if not existing:
@@ -489,6 +496,7 @@ def augmented_manifest(content, rows):
         data['dependency-groups'] = {'unified-managed-runtime': sorted(set(references))}
         changed = True
     if generated:
+        changed = True
         owner = data.setdefault('tool', {}).setdefault('amplifier-unified', {})
         if 'generated-source-overrides' in owner:
             raise ValueError('The runtime manifest already owns generated source overrides.')
