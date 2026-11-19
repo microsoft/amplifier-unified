@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import importlib
 import json
 import threading
 from types import SimpleNamespace
@@ -326,18 +327,24 @@ def test_native_tool_definition_rejection_has_safe_actionable_failure():
     assert result['replayed'] is False
 
 
-def test_selected_live_loop_routes_openai_count_failure_to_context_preparation():
+@pytest.mark.parametrize('module,error_type,arguments,diagnostic', [
+    pytest.param('amplifier_module_provider_openai._token_count', 'TokenCountError',
+                 ({'category': 'timeout', 'retryable': True, 'attempts': 3, 'body': 'private payload'},),
+                 {'category': 'timeout', 'retryable': True, 'attempts': 3}, id='openai'),
+    pytest.param('amplifier_module_provider_anthropic', 'TokenCountError', ('service', 503),
+                 {'category': 'service', 'retryable': True, 'httpStatus': 503}, id='anthropic'),
+    pytest.param('amplifier_module_loop_streaming', 'RequestMeasurementUnavailable', (),
+                 {'category': 'invalid_response', 'retryable': False}, id='strict-streaming'),
+])
+def test_selected_live_loop_routes_count_failures_to_context_preparation(module, error_type, arguments, diagnostic):
     from amplifier_module_loop_live.failures import turn_failure
-    from amplifier_module_provider_openai._token_count import TokenCountError
     from amplifier_web.session_health import generation_failure
 
-    failure = turn_failure(TokenCountError({
-        'category': 'timeout', 'retryable': True, 'attempts': 3,
-        'body': 'private provider payload',
-    }))
+    error_class = getattr(importlib.import_module(module), error_type)
+    failure = turn_failure(error_class(*arguments))
     assert failure['error_category'] == 'context_measurement'
     assert failure['error_stage'] == 'context_preparation'
-    assert failure['count_failure'] == {'category': 'timeout', 'retryable': True, 'attempts': 3}
+    assert failure['count_failure'] == diagnostic
     assert failure['replayed'] is False
 
     _, payload = normalize_event({'type': 'generation.failed', **failure}, 'test', 'turn-id')
