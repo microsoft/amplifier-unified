@@ -448,12 +448,18 @@ async def _stage(manager, *, selected=None, extras):
         require_preserved_components(graph, host_graph)
         from .app_feature_probe import DEPENDENCY_PROBE
         await manager.diagnostics.run('candidate-dependencies',process,python,'-I','-c',DEPENDENCY_PROBE,*extras,timeout=30)
+    from . import app_worker_qualification
+    worker_selection = app_worker_qualification.prepared(manager.home)
+    worker_readiness = None
+    if worker_selection and worker_selection['readiness'] == 'prepared':
+        worker_readiness = await manager.diagnostics.run('candidate-worker-start', app_worker_qualification.qualify,
+            manager.home, python, folder, worker_selection)
     manager.diagnostics.sync('candidate-components-record',write_private,folder/'components.txt',components.requirements(graph))
     artifact_proof = {}
     if artifact is not None:
         from .application_generations import bootstrap_identity
         artifact_proof = {'artifact': artifact, 'installation': bootstrap_identity(python.parent.parent)}
-    manager.diagnostics.sync('candidate-record',write_private,folder/'validated.json',json.dumps({'revision':revision,'version':installed,'hostVersion':__version__,'attemptId':manager.diagnostics.state['attemptId'],'extras':extras,'generation':generation,'componentGraph':graph,'componentDigest':components.digest(graph),'hostGraph':host_graph,'hostDigest':components.digest(host_graph),**artifact_proof,**({'managedBrowser':browser_receipt} if browser_receipt else {}),**({'featureSelection':selected} if selected else {})}))
+    manager.diagnostics.sync('candidate-record',write_private,folder/'validated.json',json.dumps({'revision':revision,'version':installed,'hostVersion':__version__,'attemptId':manager.diagnostics.state['attemptId'],'extras':extras,'generation':generation,'componentGraph':graph,'componentDigest':components.digest(graph),'hostGraph':host_graph,'hostDigest':components.digest(host_graph),'retainedWorker':worker_selection,'retainedWorkerResult':worker_readiness,**artifact_proof,**({'managedBrowser':browser_receipt} if browser_receipt else {}),**({'featureSelection':selected} if selected else {})}))
     manager.diagnostics.clear_failure()
     manager.diagnostics.record('stage','succeeded',observedVersion=installed)
     intent = manager.service.state['updates'].get('applicationIntent')
@@ -740,6 +746,13 @@ async def _activate(manager, *, force=None, holds=None):
     if sys.platform == 'win32' and (not can_promote or artifact is None):
         raise ValueError('Windows updates require an official qualified immutable app generation; '
                          'the current installation was not replaced.')
+    from . import app_worker_qualification
+    worker_selection = app_worker_qualification.prepared(manager.home)
+    if worker_selection and worker_selection['readiness'] == 'prepared' and worker_selection != validated.get('retainedWorker'):
+        # This generation was prepared or switched after staging, or an older
+        # host staged this app. Recheck under the existing lifecycle owner.
+        await manager.diagnostics.run('candidate-worker-start', app_worker_qualification.qualify,
+            manager.home, helper_python, folder, worker_selection)
     if 'managed-browser' in extras:
         current_browser = await qualify_browser(manager, helper_python)
         if current_browser != validated.get('managedBrowser'):
