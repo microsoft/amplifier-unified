@@ -680,8 +680,16 @@ async def test_public_save_confirm_actual_writer_managed_native_scope(app, tmp_p
             await worker.command({'id': 'confirm-' + str(start), 'op': 'file_access.refresh',
                                   'settingsRevision': revision})
             assert len(replies) == start + 1
+            from amplifier_web.shared_state import configuration_path_digest, configuration_path_stamp
+            session_path = app.management.settings.path(
+                workspace, 'session', session_id=native_id(source))
             assert replies[-1].get('result') == {
-                'settingsRevision': revision, 'boundary': 'next-tool-call'}, replies[-1]
+                'settingsRevision': revision,
+                'boundary': 'next-tool-call',
+                'sessionSettingsStamp': [
+                    str(session_path), configuration_path_stamp(session_path)],
+                'sessionSettingsDigest': configuration_path_digest(session_path),
+            }, replies[-1]
             confirmations.append(revision)
             return True
         app.runtime.refresh_file_access = AsyncMock(side_effect=refresh)
