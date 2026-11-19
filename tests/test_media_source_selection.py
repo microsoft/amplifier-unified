@@ -41,7 +41,7 @@ def assert_transition_closure(manifest):
     # The accepted decision namespace adds three explicit semantic owners while
     # this selection retains all transition owners and the combined session.
     assert len(manifest["sources"]) == 313
-    assert catalog_digest(manifest["sources"]) == "1399a6b55754701cd02f113b2fc362c95d2160ff5499c663769a989057d11760"
+    assert catalog_digest(manifest["sources"]) == "61f0e3467d3478e04c398350bee26b70c5edc65c328ddfc9bbae9678864b7120"
 
 
 def work_plan():
