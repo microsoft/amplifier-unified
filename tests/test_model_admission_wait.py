@@ -111,6 +111,39 @@ async def test_uncapped_assignment_runs_more_than_eight_helpers_and_provider_cal
     assert all(item.control.capacity.last_denial is None for item in observed)
 
 
+@pytest.mark.parametrize('constraint', ['maxConcurrentCalls', 'reserveTokens'])
+async def test_more_than_four_child_calls_keep_current_assignment_allowance(app, providers, constraint):
+    source = app.state['sessions'][0]
+    sessions = [source]
+    for index in range(5):
+        helper, _ = await child(app, source, f'limited-{index}')
+        sessions.append(helper)
+    policy = ({'maxConcurrentCalls': 5} if constraint == 'maxConcurrentCalls' else
+              {'maxConcurrentCalls': None, 'maxTotalTokens': 110, 'reserveTokens': 20})
+    await limits(app, source, **policy)
+    observed = [providers(session) for session in sessions]
+    running = []
+    for index, item in enumerate(observed):
+        running.append(item.start(f'limited-{index}'))
+        if index < 5:
+            await until(lambda: item.called or running[-1].done())
+    await until(lambda: sessions[-1].get('activity', {}).get('phase') == 'capacity' or running[-1].done())
+    assert all(item.called for item in observed[:5])
+    assert not observed[-1].called and not running[-1].done()
+    usage = app.assignments.usage(app.assignments.current(source))
+    assert usage['calls'] == 5 and len(app._model_admission_waiters) == 1
+    if constraint == 'reserveTokens':
+        assert sum(row['assignmentReservation']['reserveTokens'] for row in usage['receipts']) == 100
+    observed[0].release.set()
+    await running[0]
+    await until(lambda: observed[-1].called)
+    for item in observed:
+        item.release.set()
+    await asyncio.gather(*running)
+    assert not app._model_admission_waiters
+    assert app.assignments.usage(app.assignments.current(source))['calls'] == 6
+
+
 async def waiting_pair(app, providers, **policy):
     source = app.state['sessions'][0]
     target, _ = await child(app, source)

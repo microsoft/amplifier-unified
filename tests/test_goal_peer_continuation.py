@@ -442,6 +442,10 @@ async def native_wait(tmp_path, monkeypatch):
     host.pump = asyncio.create_task(host.route_events())
     try:
         worker = await host.mount(source, parent, paths)
+        worker.controls.capacity.policy.update(enabled=True, maxTotalTokens=1000)
+        worker.controls.capacity.last_denial = {
+            "budgetRevision": worker.controls.capacity.policy["revision"], "reasons": ["Obsolete allowance"]}
+        worker.controls.persist(task_only=True)
         peer_worker = await host.mount(target, peer, paths)
         unavailable_request_boundary(worker)
         async def satisfied(*args):

@@ -83,6 +83,12 @@ async def task_app(cross_app, monkeypatch):
     source, target = service.state["sessions"]
     monkeypatch.setenv("AMPLIFIER_WEB_HOME", str(service.data_dir))
     owner = controls(target["id"])
+    # Every real entry-path negative in this suite runs with a stale refusal
+    # and an available current budget: only the actual task/Stop/owner binding
+    # may reject it, never the historical diagnostic.
+    owner.capacity.policy.update(enabled=True, maxTotalTokens=1000)
+    owner.capacity.last_denial = {
+        "budgetRevision": owner.capacity.policy["revision"], "reasons": ["Obsolete allowance"]}
     async def control(sid, operation, args):
         assert sid == target["id"]
         return await owner.perform(operation, args)
