@@ -201,8 +201,11 @@ allow ordinary fitting from canonical history, never derived-state activation,
 journal replacement or renewed transition spending. A selected model alone does
 not make that ordinary fallback an explicit recovery or a successful transition.
 Missing transition intent tells the person to choose an explicit connection/model
-and send a new ordinary message. A rejected foreign checkpoint instead needs a
-compatible validated source and preserved originals. Generic explicit recovery
+and send a new ordinary message. When the installed Context lacks transition
+support, ordinary sends and explicit recovery identify that capability gap. The
+user can reselect the previous connection and model or update Managed Context
+and send again. The host retains the original checkpoint. A rejected foreign
+checkpoint needs a compatible validated source and preserved originals. Generic explicit recovery
 is not a salvage path for that rejected foreign provenance, and known rejection
 cannot arm a new generic recovery command. Returning to the previous model works
 only if its source still validates; choosing a model does not repair corruption

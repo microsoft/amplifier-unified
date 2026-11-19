@@ -18,6 +18,41 @@ from amplifier_web.session_store import fork_session
 BAD_IMAGE = "Invalid 'input[86].output.image_url'. Expected a base64-encoded data URL, but got an invalid base64-encoded value."
 
 
+@pytest.mark.parametrize(('code', 'category'), [
+    ('transition_unsupported', 'provider_selection'),
+    ('transition_intent_required', 'provider_selection'),
+    ('recovery_checkpoint_rejected', 'persistence'),
+])
+def test_context_transition_failure_uses_bounded_immediate_cause(code, category):
+    from amplifier_web.context_continuity import ContextRecoveryError
+    from amplifier_web.support_diagnostics import (
+        exception_chain, public_exception_chain, terminal_context_recovery, terminal_exception_capture,
+    )
+    error = ContextRecoveryError(code)
+    error.args = ('PRIVATE path and transcript',)
+    frames = exception_chain(error)
+    assert terminal_context_recovery(public_exception_chain(frames)) == code
+    detail = exception_details(error)
+    assert (detail['category'], detail['code']) == (category, code)
+    assert 'PRIVATE' not in str(detail)
+    if category == 'persistence':
+        assert 'previous model' not in detail['guidance']
+    forged = type('ContextRecoveryError', (RuntimeError,), {'code': code})('PRIVATE')
+    invalid = ContextRecoveryError('PRIVATE')
+    wrapped = RuntimeError('unrelated terminal')
+    wrapped.__cause__ = error
+    for unrelated in [forged, invalid, wrapped]:
+        assert not terminal_context_recovery(exception_chain(unrelated))
+        assert 'code' not in exception_details(unrelated)
+    forged_wrapper = type('ManagerTurnError', (RuntimeError,), {})('unrelated terminal')
+    forged_wrapper.__cause__ = error
+    assert 'code' not in exception_details(forged_wrapper)
+    for row in ({'errorType': 'ContextRecoveryError'}, {'errorType': 'ContextRecoveryError', 'contextRecoveryCode': []},
+                {'errorType': 'Other', 'contextRecoveryCode': code}):
+        assert terminal_exception_capture({'generationId': 'g', 'inputIds': ['i'],
+            'errorType': 'RuntimeError', 'exceptionChain': [row]}) is None
+
+
 @pytest.mark.parametrize('code', ['native_input_oversized', 'native_checkpoint_invalid', 'native_no_reduction', 'secret payload'])
 def test_compaction_failure_has_actionable_safe_projection(code):
     from amplifier_web.session_health import generation_failure

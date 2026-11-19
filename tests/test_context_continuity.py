@@ -1915,7 +1915,7 @@ async def test_live_plan_continuation_default_preserves_legacy_checkpoint_identi
     await adapter.preserve(source)
     if different_model:
         assert adapter.status['status'] == 'transition_required'
-        assert adapter._transition and not adapter._foreign_rejected
+        assert adapter._transition and not adapter._foreign_rejection
     else:
         assert adapter.status['status'] == 'restored'
         assert second.context.summary == first.context.summary
@@ -2085,20 +2085,54 @@ async def test_prepared_originals_b_a_b_revalidates_active_source_instead_of_sta
 
 
 async def test_warm_foreign_checkpoint_without_classifier_is_unsupported_not_overwritten(tmp_path):
+    from amplifier_web.context_continuity import ContextRecoveryError
     from amplifier_web.host.session import SelectedProvider
     original = native_history()
     coordinator, raw, _, adapter, checkpoint, _, prepare = await native_fixture(tmp_path, original)
     await prepare()
     await checkpoint()
     saved = adapter.path.read_bytes()
+    source_provider = coordinator.loop.root_provider
     coordinator.register_capability('context.checkpoint.transition', None)
     coordinator.loop.root_provider = SelectedProvider(raw, {'instance': 'fixture', 'model': 'other-model'})
     await coordinator.context.add_message({'role': 'user', 'content': 'Fresh target request'})
     await adapter.preserve(await coordinator.context.get_messages())
     assert adapter.public()['status'] == 'rejected'
     assert adapter.public()['code'] == 'transition_unsupported'
+    coordinator.register_capability('web.context_transition.foreground', lambda: {})
+    before = (len(raw.counted), len(raw.compactions), len(raw.sent))
+    for _ in range(2):
+        with pytest.raises(ContextRecoveryError) as failure:
+            await prepare()
+        assert failure.value.code == 'transition_unsupported'
+        assert 'previous model and connection' in str(failure.value)
+    with pytest.raises(ContextRecoveryError) as recovery:
+        await adapter.request_recovery('explicit-recovery', 0)
+    assert recovery.value.code == 'transition_unsupported'
+    assert not adapter.recovery_path.exists()
+    assert (len(raw.counted), len(raw.compactions), len(raw.sent)) == before
     adapter.save()
     assert adapter.path.read_bytes() == saved
+    coordinator.loop.root_provider = source_provider
+    await adapter.preserve(await coordinator.context.get_messages())
+    assert adapter.public().get('code') != 'transition_unsupported'
+    assert adapter.path.read_bytes() == saved
+
+
+@pytest.mark.parametrize('identity', [None, {'provider': 'fixture', 'model': '  '}, 'unknown'])
+async def test_legacy_context_requires_identifiable_source_before_suggesting_model_change(tmp_path, identity):
+    from amplifier_web.context_continuity import ContextRecoveryError
+    coordinator, raw, _, adapter, _, _, prepare = await native_fixture(tmp_path, native_history())
+    coordinator.register_capability('web.context_transition.foreground', lambda: {})
+    coordinator.register_capability('context.checkpoint.transition', None)
+    adapter.path.write_text(json.dumps({'identity': identity}))
+    saved = adapter.path.read_bytes()
+    with pytest.raises(ContextRecoveryError) as failure:
+        await prepare()
+    assert failure.value.code == 'recovery_checkpoint_rejected'
+    assert adapter.public()['code'] == 'transition_source_invalid'
+    assert adapter.path.read_bytes() == saved
+    assert raw.counted == raw.sent == raw.compactions == []
 
 
 @pytest.mark.parametrize('change', ['source', 'config', 'selection', 'mounted-options', 'stop'])
@@ -2887,7 +2921,7 @@ async def test_known_rejected_foreign_checkpoint_cannot_arm_generic_explicit_rec
     if prior_unknown:
         case.adapter._accepted_record = record
     await case.adapter.preserve(await case.coordinator.context.get_messages())
-    assert case.adapter._foreign_rejected
+    assert case.adapter._foreign_rejection
     saved = case.adapter.path.read_bytes()
     with pytest.raises(RuntimeError, match='recovery_checkpoint_rejected'):
         await case.adapter.request_recovery('not-a-foreign-salvage-route', 0)
