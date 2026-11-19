@@ -105,6 +105,17 @@ class SelectedProvider:
         self._overflow_feedback = OverflowFeedback()
     def _execution_provider(self):
         return self.execution_adapter(self.original) if callable(self.execution_adapter) else self.original
+
+    def owns_budget_route(self, provider):
+        """Recognize the loop's exact pre-transport wrapper around this selection."""
+        if provider is self:
+            return True
+        try:
+            from amplifier_module_loop_streaming._request_refit import RefitProvider
+        except ImportError:
+            return False
+        return type(provider) is RefitProvider and provider.provider is self
+
     def __getattr__(self, name):
         if name == "default_model" and self.selection.get("model"):
             return self.selection["model"]

@@ -970,7 +970,7 @@ class ContextContinuity:
                 envelope = await _guarded(guard, count_view, rows)
                 from .host.session import SelectedProvider
                 selected = getattr(self.coordinator.get("orchestrator"), "root_provider", None)
-                if (provider is selected and isinstance(selected, SelectedProvider)
+                if (isinstance(selected, SelectedProvider) and selected.owns_budget_route(provider)
                         and selected.selection.get("instance") == self._identity["provider"]
                         and selected.selection.get("model") == self._identity["model"]):
                     # Bind the provider that assembled and measured this exact

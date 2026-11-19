@@ -2885,6 +2885,43 @@ async def test_transition_fitting_originals_has_no_paid_work_or_fake_install(tmp
         assert json.loads(case.adapter.path.read_text())['identity']['model'] == 'target-model'
 
 
+@pytest.mark.parametrize('route', ['selected', 'other-selection', 'lookalike'])
+async def test_transition_accepts_implicit_model_only_for_selected_refit_route(tmp_path, route):
+    from amplifier_core import ChatRequest, Message
+    from amplifier_module_context_managed.errors import CompactionError
+    from amplifier_module_loop_streaming._request_refit import RefitProvider
+    from amplifier_web.host.session import SelectedProvider
+
+    case = await target_transition_fixture(tmp_path)
+    case.raw.input_limit = 50000
+    owner = (SelectedProvider(case.raw, dict(case.selected.selection))
+             if route == 'other-selection' else case.selected)
+    wrapper = RefitProvider(owner, AsyncMock(side_effect=AssertionError('unexpected refit')))
+    if route == 'lookalike':
+        wrapper = SimpleNamespace(provider=owner, default_model=owner.default_model,
+                                  request_budget=owner.request_budget)
+    counted = []
+
+    async def count(rows):
+        request = ChatRequest(messages=[Message(**row) for row in rows])
+        counted.append(request)
+        return {'dispatch': request, 'budget_decision':
+                wrapper.request_budget(request, context_estimate=10000)}
+
+    prepare = case.coordinator.context.get_measured_request_view
+    if route == 'selected':
+        result = await prepare(provider=wrapper, count_view=count, retain_contents=())
+        assert result['outcome'] == 'transition_fitted'
+        assert result['final_attempt']['dispatch'] is counted[-1]
+        assert counted[-1].model is None
+    else:
+        with pytest.raises(CompactionError) as error:
+            await prepare(provider=wrapper, count_view=count, retain_contents=())
+        assert error.value.code == 'recovery_request_changed'
+    assert case.adapter.path.read_bytes() == case.accepted
+    assert case.adapter.recovery_status()['logicalCalls'] == 0
+
+
 @pytest.mark.parametrize('damage', ['digest', 'config', 'source'])
 async def test_transition_rejects_invalid_source_without_laundering_identity(tmp_path, damage):
     case = await target_transition_fixture(tmp_path)
