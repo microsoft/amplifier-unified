@@ -24,8 +24,8 @@ def test_exact_native_cases_pass(tmp_path):
     root, _ = report()
     path = tmp_path / "results.xml"
     ET.ElementTree(root).write(path)
-    assert [len(names) for names in checker.EXPECTED.values()] == [35, 8]
-    assert checker.check(path) == 43
+    assert [len(names) for names in checker.EXPECTED.values()] == [36, 8]
+    assert checker.check(path) == 44
 
 
 def test_release_workflow_requires_and_retains_native_evidence():
