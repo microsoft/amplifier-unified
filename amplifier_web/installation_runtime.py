@@ -55,15 +55,26 @@ class _Preparation:
             if hasattr(result, "__await__"):
                 result = await result
         except BaseException as error:
-            self.record(phase, "failed")
-            from .update_diagnostics import exception_facts
+            status = "interrupted" if isinstance(error, asyncio.CancelledError) else "failed"
+            self.record(phase, status)
+            from .update_diagnostics import PROBE_PREFIX, exception_facts, probe_record
             facts = exception_facts(error)
             detail = getattr(error, "diagnostic_facts", {})
-            for key in ("exitCode", "stdoutBytes", "stderrBytes", "durationMs"):
-                if type(detail.get(key)) is int:
-                    facts[key] = detail[key]
-            _write(self.home, self.stage / "install-failure.json",
-                   {"schema": 1, "attempt": self.stage.name, "phase": phase, **facts})
+            if isinstance(detail, dict):
+                for key in ("exitCode", "stdoutBytes", "stderrBytes", "durationMs"):
+                    if type(detail.get(key)) is int:
+                        facts[key] = detail[key]
+                if isinstance(detail.get("probe"), dict):
+                    probe = probe_record(PROBE_PREFIX + json.dumps(detail["probe"]))
+                    if probe:
+                        facts["probe"] = probe
+            # Concurrent profile cleanup must not replace the cause with a
+            # sibling's cancellation. A real failure supersedes interruption.
+            if self.state.get("lastFailure", {}).get("status") != "failed":
+                failure = {"schema": 1, "attempt": self.stage.name, "phase": phase,
+                           "status": status, **facts}
+                _write(self.home, self.stage / "install-failure.json", failure)
+                self.state["lastFailure"] = failure
             raise
         self.record(phase, "succeeded")
         return result
@@ -225,8 +236,8 @@ async def prepare(home):
                 "sources": 1, "createdAt": time.time(), "initialInstallation": True})
             _write(home, home / "updates/active.json",
                    {"current": generation, "previous": None, "at": time.time()})
-        except BaseException:
-            owner.record("initial-installation", "failed")
+        except BaseException as error:
+            owner.record("initial-installation", "interrupted" if isinstance(error, asyncio.CancelledError) else "failed")
             raise
         owner.record("initial-installation", "succeeded")
         return result
