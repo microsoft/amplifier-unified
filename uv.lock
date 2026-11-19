@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.13"
 resolution-markers = [
     "python_full_version >= '3.14'",
@@ -244,7 +244,7 @@ dependencies = [
 [[package]]
 name = "amplifier-module-context-managed"
 version = "0.1.0"
-source = { git = "https://github.com/microsoft/amplifier-bundle-context-managed?subdirectory=modules%2Fcontext-managed&rev=a4464af2027f4e03fe7fc388d8d8e3e8ff436da2#a4464af2027f4e03fe7fc388d8d8e3e8ff436da2" }
+source = { git = "https://github.com/microsoft/amplifier-bundle-context-managed?subdirectory=modules%2Fcontext-managed&rev=e926bb8e59391f1adf342c104a245f42d8e1ae4c#e926bb8e59391f1adf342c104a245f42d8e1ae4c" }
 dependencies = [
     { name = "amplifier-module-context-simple" },
 ]
@@ -362,7 +362,7 @@ dependencies = [
 [[package]]
 name = "amplifier-module-provider-openai"
 version = "1.0.0"
-source = { git = "https://github.com/microsoft/amplifier-module-provider-openai?rev=main#4c8624fda7965a183c0552207da125d6e67e3c32" }
+source = { git = "https://github.com/microsoft/amplifier-module-provider-openai?rev=main#2d30e5fd1dfa963bc75045eccfe0a4f54f10371f" }
 dependencies = [
     { name = "httpx" },
     { name = "openai" },
@@ -631,7 +631,7 @@ artifacts = [
     { name = "reportlab", specifier = ">=4,<5" },
 ]
 dev = [
-    { name = "amplifier-module-context-managed", git = "https://github.com/microsoft/amplifier-bundle-context-managed?subdirectory=modules%2Fcontext-managed&rev=a4464af2027f4e03fe7fc388d8d8e3e8ff436da2" },
+    { name = "amplifier-module-context-managed", git = "https://github.com/microsoft/amplifier-bundle-context-managed?subdirectory=modules%2Fcontext-managed&rev=e926bb8e59391f1adf342c104a245f42d8e1ae4c" },
     { name = "amplifier-module-context-simple", git = "https://github.com/microsoft/amplifier-module-context-simple?rev=main" },
     { name = "amplifier-module-hook-context-intelligence", git = "https://github.com/microsoft/amplifier-bundle-context-intelligence?subdirectory=modules%2Fhook-context-intelligence&rev=a80ce69d0e96e9a343501f238dcd867350dd9aa2" },
     { name = "amplifier-module-hooks-candidate-guard", git = "https://github.com/microsoft/amplifier-bundle-converge?subdirectory=modules%2Fhooks-candidate-guard&rev=da7dd8878c9e7b672e86151b32d59c0cce68bcb6" },

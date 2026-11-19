@@ -1175,6 +1175,7 @@ class Worker:
             self.session.coordinator.register_capability("web.activity.install", self.install_activity)
             self.session.coordinator.register_capability("live.activation", self.activation_gate)
             self.session.coordinator.register_capability("web.context_recovery.epoch", lambda: self.stop_revision)
+            self.session.coordinator.register_capability("web.context_transition.input", self.transition_input)
             from amplifier_web.host.naming import LiveSessionNaming
             completed=[identity for event in config.get('generations',[]) if event.get('event')=='generation.finished' for identity in event.get('input_ids',[]) if identity in {t['id'] for t in config.get('execution',{}).get('turns',[])}]
             self.naming=LiveSessionNaming(self.session.coordinator,self.home,publish,completed)
@@ -1719,13 +1720,26 @@ class Worker:
         future.add_done_callback(retired)
         return await asyncio.shield(task)
 
+    def transition_input(self):
+        """Read the original ordinary admission, not arbitrary user-shaped work."""
+        generation = self.runtime.generation or {}
+        identity = generation.get('initial_input_id')
+        binding = self.context_bindings.get(identity, {})
+        if (binding.get('operation') != 'send'
+                or binding.get('localStopRevision') != self.stop_revision):
+            return None
+        return {'inputId': identity, 'selectionRevision': binding.get('selectionRevision')}
+
     def bind_input_context(self, identity, data, binding=None):
         """Keep original host admission metadata beside the input's context."""
         if identity in self.runtime.accepted:
             return
         self.context_bindings[identity] = {
             **(binding or {'clientId': None, 'targets': []}),
-            'interruptionRevision': data.get('interruptionRevision', 0)}
+            'interruptionRevision': data.get('interruptionRevision', 0),
+            'localStopRevision': self.stop_revision,
+            'operation': data.get('op'),
+            'selectionRevision': getattr(self.controls, 'selection_revision', None)}
         self.context_bindings = dict(list(self.context_bindings.items())[-64:])
 
     @contextmanager

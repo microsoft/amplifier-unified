@@ -140,7 +140,7 @@ dev = [
     "amplifier-module-context-simple @ git+https://github.com/microsoft/amplifier-module-context-simple@main",
     # Accepted ordinary-turn continuation source; provider stays on the existing locked
     # source shared with the optional decisions extra.
-    "amplifier-module-context-managed @ git+https://github.com/microsoft/amplifier-bundle-context-managed@a4464af2027f4e03fe7fc388d8d8e3e8ff436da2#subdirectory=modules/context-managed",
+    "amplifier-module-context-managed @ git+https://github.com/microsoft/amplifier-bundle-context-managed@e926bb8e59391f1adf342c104a245f42d8e1ae4c#subdirectory=modules/context-managed",
     "amplifier-module-provider-openai[native] @ git+https://github.com/microsoft/amplifier-module-provider-openai@main",
     # Cold selected-model budget and private overflow feedback integration.
     "amplifier-module-provider-anthropic @ git+https://github.com/microsoft/amplifier-module-provider-anthropic@498d20d6caebb45d7493888b38c5358be02ac595",

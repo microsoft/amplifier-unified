@@ -118,6 +118,33 @@ def seal_hook_graph(coordinator):
         return False
 
 
+def finish_initial_media_mounts(coordinator):
+    """Keep ordinary host operation available when optional media cannot be certified."""
+    binding = coordinator.get_capability("web.media.construction")
+    if binding is None:
+        return None
+    from ..provider_isolation import UnavailableProvider
+    if any(isinstance(provider, UnavailableProvider) for provider in
+           (coordinator.get("providers") or {}).values()):
+        reason = "unavailable-provider"
+    else:
+        # Older tool modules may install a tool directly into Core's registry.
+        # The tool works normally, but its registration has no media witness.
+        loads = binding.graph.participants_evidence()["loads"]
+        if not any(row["mounted"] and row["occurrence"] and row["occurrence"][0] == "tools"
+                   and not any(kind == "tools" for kind, _ in row["slots"]) for row in loads):
+            return None
+        reason = "unobserved-tool-registration"
+    # This is only a decision during native construction, before a first seal
+    # or dispatch. Keep the disabled media capability, store policy, hook chain
+    # and ordinary host controls. Existing refs use WarningProjection.
+    if binding.capability.enabled or binding.bridge.graph_receipt is not None:
+        raise RuntimeError("Media eligibility must be determined before the first request")
+    coordinator.register_capability("web.media.registration", None)
+    coordinator.register_capability("web.media.construction", None)
+    return reason
+
+
 class _RequestOnlyIssuance:
     """One task's ephemeral preparation, consumable by one active bind.
 
@@ -337,6 +364,11 @@ def acknowledge_media(coordinator, store, session_id, canonical):
         return
     # No extra checkpoint scan for the ordinary unselected/text-only path.
     policy = coordinator.get_capability("web.media.source_policy")
+    if coordinator.get_capability("web.media.construction") is None:
+        # A text-only session can save historical refs without opening their
+        # files or accepting new media on behalf of an unverified tool chain.
+        policy.pending.clear()
+        return
     if any(NAMESPACE in (row.get("metadata") or {}) for row in canonical):
         store.acknowledge_media(session_id, canonical, media)
     policy.settle(canonical)

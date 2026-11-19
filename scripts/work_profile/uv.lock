@@ -1,9 +1,22 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.13"
 resolution-markers = [
     "python_full_version >= '3.14'",
     "python_full_version < '3.14'",
+]
+
+[[package]]
+name = "agent-client-protocol"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pydantic" },
+    { name = "pydantic-core" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/14/e2/085f4857cb864c3a423d76e205f75e1da1643862fd452e5cec47c3078d79/agent_client_protocol-1.0.0.tar.gz", hash = "sha256:24914d9996aaeeb08931191382d0ca1028b83743e2797cc05ded39b3bb754425", size = 187237, upload-time = "2026-11-09T00:34:01.706Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/30/a1/7e29d00f01fede44ffdc84099552720727f8bfda942fea79a4f7d5ef1294/agent_client_protocol-1.0.0-py3-none-any.whl", hash = "sha256:179c14266997841438ee15245a2668d31b2c695c13bff87d01c36e016185ddd0", size = 128090, upload-time = "2026-11-09T00:34:00.324Z" },
 ]
 
 [[package]]
@@ -191,7 +204,7 @@ wheels = [
 [[package]]
 name = "amplifier-foundation"
 version = "1.0.0"
-source = { git = "https://github.com/microsoft/amplifier-foundation?rev=main#a52ad1558419c828c86c0139b9b4bc351e3a618f" }
+source = { git = "https://github.com/microsoft/amplifier-foundation?rev=main#134abaee59bb1ab408834f0029949350d790ef99" }
 dependencies = [
     { name = "amplifier-core" },
     { name = "filelock" },
@@ -210,7 +223,7 @@ dependencies = [
 [[package]]
 name = "amplifier-module-context-managed"
 version = "0.1.0"
-source = { git = "https://github.com/microsoft/amplifier-bundle-context-managed?subdirectory=modules%2Fcontext-managed&rev=main#5cca3edb74ece0a78d7023f7734bfe1f0425a89c" }
+source = { git = "https://github.com/microsoft/amplifier-bundle-context-managed?subdirectory=modules%2Fcontext-managed&rev=main#e926bb8e59391f1adf342c104a245f42d8e1ae4c" }
 dependencies = [
     { name = "amplifier-module-context-simple" },
 ]
@@ -218,17 +231,17 @@ dependencies = [
 [[package]]
 name = "amplifier-module-context-simple"
 version = "1.0.0"
-source = { git = "https://github.com/microsoft/amplifier-module-context-simple?rev=2bc8b15770f4ecb49bd6216a8b5336e9c36adfc6#2bc8b15770f4ecb49bd6216a8b5336e9c36adfc6" }
+source = { git = "https://github.com/microsoft/amplifier-module-context-simple?rev=main#67b3170c47e63f490f5524a2a0ebd500cfd3a73c" }
 
 [[package]]
 name = "amplifier-module-hooks-session-naming"
 version = "0.2.0"
-source = { git = "https://github.com/microsoft/amplifier-foundation?subdirectory=modules%2Fhooks-session-naming&rev=main#a52ad1558419c828c86c0139b9b4bc351e3a618f" }
+source = { git = "https://github.com/microsoft/amplifier-foundation?subdirectory=modules%2Fhooks-session-naming&rev=main#134abaee59bb1ab408834f0029949350d790ef99" }
 
 [[package]]
 name = "amplifier-module-loop-live"
 version = "0.2.0"
-source = { git = "https://github.com/microsoft/amplifier-module-loop-live?rev=main#d2217dabb6a79fe63e3f001ac512e6fa8451008e" }
+source = { git = "https://github.com/microsoft/amplifier-module-loop-live?rev=main#ddc44d50352c5015c7e27617de5eb389168b3f32" }
 dependencies = [
     { name = "amplifier-module-loop-streaming" },
     { name = "jsonschema" },
@@ -237,12 +250,12 @@ dependencies = [
 [[package]]
 name = "amplifier-module-loop-streaming"
 version = "1.0.0"
-source = { git = "https://github.com/microsoft/amplifier-module-loop-streaming?rev=main#9e5d4ff07c7f57fbdf233b869d94e18c910d83b9" }
+source = { git = "https://github.com/microsoft/amplifier-module-loop-streaming?rev=main#1419062987b6b0a601f5cec60f9ce8d8afe7e470" }
 
 [[package]]
 name = "amplifier-module-provider-anthropic"
 version = "1.0.0"
-source = { git = "https://github.com/microsoft/amplifier-module-provider-anthropic?rev=main#7793791a504aea5531806abcd904b7757c2d5a58" }
+source = { git = "https://github.com/microsoft/amplifier-module-provider-anthropic?rev=main#498d20d6caebb45d7493888b38c5358be02ac595" }
 dependencies = [
     { name = "anthropic" },
 ]
@@ -250,7 +263,7 @@ dependencies = [
 [[package]]
 name = "amplifier-module-provider-openai"
 version = "1.0.0"
-source = { git = "https://github.com/microsoft/amplifier-module-provider-openai?rev=main#de94d275d62987441c5375957e7a0102d6736941" }
+source = { git = "https://github.com/microsoft/amplifier-module-provider-openai?rev=main#2d30e5fd1dfa963bc75045eccfe0a4f54f10371f" }
 dependencies = [
     { name = "httpx" },
     { name = "openai" },
@@ -260,13 +273,14 @@ dependencies = [
 [[package]]
 name = "amplifier-module-tool-transcript"
 version = "0.1.0"
-source = { git = "https://github.com/microsoft/amplifier-bundle-context-managed?subdirectory=modules%2Ftool-transcript&rev=main#5cca3edb74ece0a78d7023f7734bfe1f0425a89c" }
+source = { git = "https://github.com/microsoft/amplifier-bundle-context-managed?subdirectory=modules%2Ftool-transcript&rev=main#e926bb8e59391f1adf342c104a245f42d8e1ae4c" }
 
 [[package]]
 name = "amplifier-unified"
-version = "0.73.3"
+version = "0.112.0"
 source = { directory = "../../" }
 dependencies = [
+    { name = "agent-client-protocol" },
     { name = "aiohttp" },
     { name = "amplifier-bundle-context-intelligence", extra = ["client"] },
     { name = "amplifier-bundle-ui-use" },
@@ -274,22 +288,26 @@ dependencies = [
     { name = "amplifier-foundation" },
     { name = "amplifier-memory" },
     { name = "amplifier-module-hooks-session-naming" },
+    { name = "certifi" },
     { name = "cryptography" },
     { name = "filelock" },
     { name = "httpx" },
     { name = "jsonschema" },
     { name = "mcp" },
     { name = "packaging" },
+    { name = "pillow" },
     { name = "python-pam" },
     { name = "pyyaml" },
     { name = "qrcode" },
     { name = "six" },
     { name = "tinycss2" },
+    { name = "tzdata", marker = "sys_platform == 'win32'" },
     { name = "watchfiles" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "agent-client-protocol", specifier = "==1.0.0" },
     { name = "aiohttp", specifier = ">=3.12,<4" },
     { name = "amplifier-app-tui", marker = "extra == 'tui'", git = "https://github.com/microsoft/amplifier-app-tui?rev=main" },
     { name = "amplifier-bundle-context-intelligence", extras = ["client"], git = "https://github.com/microsoft/amplifier-bundle-context-intelligence?rev=main" },
@@ -304,19 +322,20 @@ requires-dist = [
     { name = "amplifier-module-provider-local-decisions", marker = "extra == 'decisions-local'", git = "https://github.com/microsoft/amplifier-module-provider-local-decisions?rev=main" },
     { name = "amplifier-module-provider-openai", extras = ["decisions"], marker = "extra == 'decisions-openai'", git = "https://github.com/microsoft/amplifier-module-provider-openai?rev=main" },
     { name = "amplifier-module-tool-computer-use", marker = "extra == 'native-desktop'", git = "https://github.com/microsoft/amplifier-bundle-computer-use?subdirectory=modules%2Ftool-computer-use&rev=main" },
+    { name = "certifi", specifier = ">=2025.1.31" },
     { name = "cryptography", specifier = ">=44,<51" },
     { name = "filelock", specifier = ">=4.2.1,<5" },
     { name = "httpx", specifier = ">=0.28,<1" },
     { name = "jsonschema", specifier = ">=4.23,<5" },
     { name = "mcp", specifier = ">=2.2,<3" },
     { name = "packaging", specifier = ">=24" },
-    { name = "pillow", marker = "extra == 'decisions-openai'", specifier = ">=13,<14" },
-    { name = "pillow", marker = "extra == 'native-desktop'", specifier = ">=13,<14" },
+    { name = "pillow", specifier = ">=13,<14" },
     { name = "python-pam", specifier = ">=2.0.2,<3" },
     { name = "pyyaml", specifier = ">=6.0.3,<7" },
     { name = "qrcode", specifier = ">=8.2,<9" },
     { name = "six", specifier = ">=1.16,<2" },
     { name = "tinycss2", specifier = ">=1.4,<2" },
+    { name = "tzdata", marker = "sys_platform == 'win32'" },
     { name = "watchfiles", specifier = ">=1.1,<2" },
 ]
 provides-extras = ["tui", "native-desktop", "managed-browser", "decisions-openai", "decisions-azure", "decisions-jev", "decisions-local"]
@@ -331,18 +350,37 @@ artifacts = [
     { name = "reportlab", specifier = ">=4,<5" },
 ]
 dev = [
-    { name = "amplifier-module-context-managed", git = "https://github.com/microsoft/amplifier-bundle-context-managed?subdirectory=modules%2Fcontext-managed&rev=12166f8effb5e26737bb5f9f7885cbb9bd4cdf43" },
+    { name = "amplifier-module-context-managed", git = "https://github.com/microsoft/amplifier-bundle-context-managed?subdirectory=modules%2Fcontext-managed&rev=e926bb8e59391f1adf342c104a245f42d8e1ae4c" },
     { name = "amplifier-module-context-simple", git = "https://github.com/microsoft/amplifier-module-context-simple?rev=main" },
     { name = "amplifier-module-hook-context-intelligence", git = "https://github.com/microsoft/amplifier-bundle-context-intelligence?subdirectory=modules%2Fhook-context-intelligence&rev=a80ce69d0e96e9a343501f238dcd867350dd9aa2" },
-    { name = "amplifier-module-loop-live", git = "https://github.com/microsoft/amplifier-module-loop-live?rev=d4b1e69e3222780ccebdfdb7c07915fdcd5d161f" },
+    { name = "amplifier-module-hooks-candidate-guard", git = "https://github.com/microsoft/amplifier-bundle-converge?subdirectory=modules%2Fhooks-candidate-guard&rev=da7dd8878c9e7b672e86151b32d59c0cce68bcb6" },
+    { name = "amplifier-module-loop-live", git = "https://github.com/microsoft/amplifier-module-loop-live?rev=ddc44d50352c5015c7e27617de5eb389168b3f32" },
+    { name = "amplifier-module-provider-anthropic", git = "https://github.com/microsoft/amplifier-module-provider-anthropic?rev=498d20d6caebb45d7493888b38c5358be02ac595" },
     { name = "amplifier-module-provider-openai", extras = ["native"], git = "https://github.com/microsoft/amplifier-module-provider-openai?rev=main" },
+    { name = "amplifier-module-tool-apply-patch", git = "https://github.com/microsoft/amplifier-bundle-filesystem?subdirectory=modules%2Ftool-apply-patch&rev=515599f0d0763a946aa96ed1d0110db723f5c386" },
+    { name = "amplifier-module-tool-delegate", git = "https://github.com/microsoft/amplifier-foundation?subdirectory=modules%2Ftool-delegate&rev=05082c89a171758f8d0fb9d8df630ea581e5bdb5" },
     { name = "amplifier-module-tool-exec", git = "https://github.com/microsoft/amplifier-module-tool-exec?rev=f267548ccd1b38a236a46afb96252bb6dd474dcd" },
-    { name = "amplifier-module-tool-filesystem", git = "https://github.com/microsoft/amplifier-module-tool-filesystem?rev=663f26a878ae71e136f439fa73ded52b2eb24174" },
+    { name = "amplifier-module-tool-filesystem", git = "https://github.com/microsoft/amplifier-module-tool-filesystem?rev=29ab75b32a5a7c066bb366f43d2c0353a87e814b" },
+    { name = "amplifier-module-tool-image", git = "https://github.com/microsoft/amplifier-bundle-imagegen?subdirectory=modules%2Ftool-image&rev=8acd3773102b77378c0d46da53a901f8297a38fc" },
     { name = "amplifier-module-tool-skills", git = "https://github.com/microsoft/amplifier-bundle-skills?subdirectory=modules%2Ftool-skills&rev=2f58408a879535df36da5c92d2b073f49271ade4" },
     { name = "hatchling", specifier = ">=1.27" },
     { name = "pytest", specifier = ">=8" },
     { name = "pytest-aiohttp", specifier = ">=1.1" },
     { name = "pytest-asyncio", specifier = ">=0.25" },
+]
+work-media = [
+    { name = "amplifier-module-hook-computer-use", git = "https://github.com/microsoft/amplifier-bundle-computer-use?subdirectory=modules%2Fhook-computer-use&rev=main" },
+    { name = "amplifier-module-hooks-approval", git = "https://github.com/microsoft/amplifier-module-hooks-approval?rev=c149f1e09757567d0dfc82a83bf21ac274a2061d" },
+    { name = "amplifier-module-hooks-mode", git = "https://github.com/microsoft/amplifier-bundle-modes?subdirectory=modules%2Fhooks-mode&rev=a29ebceb72f02f4340290346d5a4fe0cf486dfec" },
+    { name = "amplifier-module-hooks-routing", git = "https://github.com/microsoft/amplifier-bundle-routing-matrix?subdirectory=modules%2Fhooks-routing&rev=9d9d1cb17ac958a011c99b80096034663fd245b3" },
+    { name = "amplifier-module-tool-bash", git = "https://github.com/microsoft/amplifier-module-tool-bash?rev=d5bb46d24dcae8e260211bf8fb5c22de3a67f406" },
+    { name = "amplifier-module-tool-computer-use", git = "https://github.com/microsoft/amplifier-bundle-computer-use?subdirectory=modules%2Ftool-computer-use&rev=main" },
+    { name = "amplifier-module-tool-context-intelligence-set-filters", git = "https://github.com/microsoft/amplifier-bundle-context-intelligence?subdirectory=modules%2Ftool-context-intelligence-set-filters&rev=main" },
+    { name = "amplifier-module-tool-context-intelligence-transcript", git = "https://github.com/microsoft/amplifier-bundle-context-intelligence?subdirectory=modules%2Ftool-context-intelligence-transcript&rev=main" },
+    { name = "amplifier-module-tool-mode", git = "https://github.com/microsoft/amplifier-bundle-modes?subdirectory=modules%2Ftool-mode&rev=a29ebceb72f02f4340290346d5a4fe0cf486dfec" },
+    { name = "amplifier-module-tool-search", git = "https://github.com/microsoft/amplifier-module-tool-search?rev=ccd11795f6bb47853cfd1761b126f3b40d95a517" },
+    { name = "amplifier-module-tool-transcript", git = "https://github.com/microsoft/amplifier-bundle-context-managed?subdirectory=modules%2Ftool-transcript&rev=c18eb0c68d609d3471549f148f2e36f77d59a336" },
+    { name = "amplifier-module-tool-web", git = "https://github.com/microsoft/amplifier-module-tool-web?rev=2a58cf71f6f941f5b5ef28d59564f5d47af5f294" },
 ]
 
 [[package]]
@@ -1934,6 +1972,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/a3/26/b09b8010994eccc3c09092e6b34058f36a460eea2d4c3e8b910c695975a0/typing_inspection-0.4.4.tar.gz", hash = "sha256:547274fa6b0a561ccf549cc9524b999a578e737d015d8709d021f9d0d13bea47", size = 76928, upload-time = "2026-08-12T12:37:25.997Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/67/81/4add07e5172b7ac40d8ed5ff580409a7801a4fe26d529bdd915401dabfbe/typing_inspection-0.4.4-py3-none-any.whl", hash = "sha256:65b8397ba37ccbce054456aaccddfc91e6e3083c92824df348d96ca832f3f147", size = 14750, upload-time = "2026-08-12T12:37:24.648Z" },
+]
+
+[[package]]
+name = "tzdata"
+version = "2026.6"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/7a/29/6a1391d31cd00ff9e927215a224a880e1e84e826b64ba80a499e51c074d8/tzdata-2026.6.tar.gz", hash = "sha256:85d2cd9c09f81f0bb29db27759fc83af4f1e620efb814f8c5bf8b4cc4feece6d", size = 201017, upload-time = "2026-10-28T09:57:09.137Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0a/66/9a06c2227fedfd4919f0eaaa8b94377d9730882a7e4f95823c9a331ab5e1/tzdata-2026.6-py2.py3-none-any.whl", hash = "sha256:0a10eec6e13ef16b627fabed9a5f2ba61a62b1c67f327305f4e7e412a70b4aec", size = 348210, upload-time = "2026-10-28T09:57:07.276Z" },
 ]
 
 [[package]]

@@ -20,6 +20,70 @@ from amplifier_web.surface_delivery import SurfaceProvider
 from fixtures.narrow_tool_image_fixture import FixtureLoader, MediaOnlyDelivery, RecordingProvider
 
 
+@pytest.mark.parametrize("reason", ["unobserved-tool-registration", "unavailable-provider"])
+async def test_uncertified_startup_keeps_native_tools_and_withholds_saved_pixels(tmp_path, monkeypatch, reason):
+    from amplifier_web.attachments import install_media_context
+    from amplifier_web.provider_isolation import ProviderIsolation, ProviderUnavailable, require_available
+
+    provider = RecordingProvider()
+    legacy_tool = SimpleNamespace(name="legacy")
+    loader = FixtureLoader(provider)
+    load = loader.load
+
+    async def load_module(module_id, config, **options):
+        if module_id == "tool-legacy":
+            async def mount(coordinator):
+                coordinator.mount_points["tools"]["legacy"] = legacy_tool
+            return mount
+        return await load(module_id, config, **options)
+
+    loader.load = load_module
+    plan = {"session": {"orchestrator": "loop-live", "context": "context-simple"},
+            "providers": [{"module": "provider-openai", "config": {"default_model": provider.default_model}}]}
+    unavailable = {"module": "provider-unconfigured", "instance_id": "unconfigured", "config": {}}
+    if reason == "unavailable-provider":
+        plan["providers"].append(unavailable)
+    else:
+        plan["tools"] = [{"module": "tool-legacy"}]
+    session = AmplifierSession(plan, session_id="retained-profile")
+    coordinator = session.coordinator
+    coordinator.loader = loader
+    media.bind_media(session, SessionStore(tmp_path / "sessions"))
+    isolation = ProviderIsolation()
+    isolation.record(unavailable, "provider_configuration_failed")
+    await isolation.before_initialize(session)
+    try:
+        await session.initialize()
+        assert media.finish_initial_media_mounts(coordinator) == reason
+        assert coordinator.get("providers")["offline"] is provider
+        if reason == "unavailable-provider":
+            with pytest.raises(ProviderUnavailable):
+                require_available(coordinator, "unconfigured")
+        else:
+            assert coordinator.get("tools")["legacy"] is legacy_tool
+        await install_media_context(coordinator)
+        assert media.registration_coordinator(coordinator) is coordinator
+        assert media.seal_hook_graph(coordinator) is False
+        assert coordinator.get_capability(media.NAMESPACE).enabled is False
+        store = coordinator.get_capability("web.media.store")
+        monkeypatch.setattr(store, "resolve_ref", lambda *a, **k: pytest.fail("Opened unverified pixels"))
+        request = ChatRequest(messages=[Message(role="user", content="Remember this",
+                                      metadata={media.NAMESPACE: {"refs": []}})])
+        snapshot = request.model_dump_json()
+        view = await media.prepare_media(coordinator, provider, request)
+        assert "Image unavailable" in view.request.model_dump_json()
+        assert media.NAMESPACE not in view.request.messages[0].metadata
+        assert request.model_dump_json() == snapshot
+        policy = coordinator.get_capability("web.media.source_policy")
+        policy.pending["read-1"] = ("image.png", "source")
+        checkpoint = SimpleNamespace(acknowledge_media=lambda *args: pytest.fail("Opened retained media"))
+        media.acknowledge_media(coordinator, checkpoint, session.session_id,
+                                [message.model_dump() for message in request.messages])
+        assert not policy.pending
+    finally:
+        await session.cleanup()
+
+
 def picture(tmp_path, format="PNG"):
     # The nonce is only in decoded pixels: not filename, metadata, tool text or
     # provider prompt. JPEG checks the exact encoded original (no resize).

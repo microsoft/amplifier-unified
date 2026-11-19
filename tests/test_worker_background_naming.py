@@ -124,10 +124,8 @@ async def test_original_loop_exception_is_captured_before_flattening_with_no_pro
     assert not events  # Publication waits for the real execution done callback.
 
 
-@pytest.mark.parametrize('boundary', ['current', 'stop', 'runtime_replaced', 'mismatched_input'])
-async def test_worker_produces_certified_truncation_supplement_for_bound_terminal(worker, monkeypatch, boundary):
+async def observed_manager_failure(worker, monkeypatch, boundary, error):
     from amplifier_module_loop_live.failures import ManagerTurnError, turn_failure
-    from amplifier_module_provider_openai._response_handling import FunctionCallTruncationError
     from amplifier_web.runtime import normalize_event
     from amplifier_web.session_health import generation_failure, terminal_exception_failure
 
@@ -138,11 +136,8 @@ async def test_worker_produces_certified_truncation_supplement_for_bound_termina
     worker.naming = None
     runtime = worker.runtime
     runtime.stop_requested = False
-    generation = {'id': 'truncated-generation', 'input_ids': ['truncated-input']}
-    error = FunctionCallTruncationError('PRIVATE arguments /private/path', provider='fixture')
+    generation = {'id': 'failed-generation', 'input_ids': ['failed-input']}
     native = turn_failure(error)
-    assert (native['error_type'], native['error_category'], native['error_stage']) == (
-        'LLMError', 'unknown', 'provider_request')
     original = ManagerTurnError(native)
 
     class Loop:
@@ -150,7 +145,7 @@ async def test_worker_produces_certified_truncation_supplement_for_bound_termina
             runtime.generation = generation
             try:
                 raise error
-            except FunctionCallTruncationError as cause:
+            except Exception as cause:
                 # Use the real observer while the loop still owns this generation,
                 # then clear it as loop-live does before the wrapper escapes.
                 worker.observe({'type': 'generation.failed',
@@ -177,15 +172,11 @@ async def test_worker_produces_certified_truncation_supplement_for_bound_termina
     supplements = [event for event in events if 'terminalFailure' in event]
     if boundary != 'current':
         assert not supplements
-        return
+        return native, events, None
 
     assert len(supplements) == 1
     capture = supplements[0]['terminalFailure']
     assert capture['generationId'] == generation['id'] and capture['inputIds'] == generation['input_ids']
-    assert capture['errorType'] == 'LLMError'
-    assert [row['errorType'] for row in capture['exceptionChain']][:2] == [
-        'ManagerTurnError', 'FunctionCallTruncationError']
-    assert capture['exceptionChain'][1]['providerFailure'] == {'code': 'function_call_truncated'}
     kind, terminal = normalize_event(terminals[0], runtime.session_id)
     assert kind == 'runtime.generation'
     session = {'id': runtime.session_id, 'status': 'error', 'generations': [terminal],
@@ -194,6 +185,24 @@ async def test_worker_produces_certified_truncation_supplement_for_bound_termina
     kind, payload = normalize_event(supplements[0], runtime.session_id)
     assert kind == 'runtime.error'
     failure = terminal_exception_failure(session, payload['terminalFailure'])
+    return native, events, failure
+
+
+@pytest.mark.parametrize('boundary', ['current', 'stop', 'runtime_replaced', 'mismatched_input'])
+async def test_worker_produces_certified_truncation_supplement_for_bound_terminal(worker, monkeypatch, boundary):
+    from amplifier_module_provider_openai._response_handling import FunctionCallTruncationError
+    error = FunctionCallTruncationError('PRIVATE arguments /private/path', provider='fixture')
+    native, events, failure = await observed_manager_failure(worker, monkeypatch, boundary, error)
+    assert (native['error_type'], native['error_category'], native['error_stage']) == (
+        'LLMError', 'unknown', 'provider_request')
+    if boundary != 'current':
+        assert failure is None
+        return
+    capture = next(event['terminalFailure'] for event in events if 'terminalFailure' in event)
+    assert capture['errorType'] == 'LLMError'
+    assert [row['errorType'] for row in capture['exceptionChain']][:2] == [
+        'ManagerTurnError', 'FunctionCallTruncationError']
+    assert capture['exceptionChain'][1]['providerFailure'] == {'code': 'function_call_truncated'}
     assert (failure['category'], failure['code'], failure['errorType']) == (
         'invalid_request', 'function_call_truncated', 'LLMError')
     assert failure['nativeFailure'] == {'category': 'unknown', 'errorType': 'LLMError',
@@ -201,6 +210,25 @@ async def test_worker_produces_certified_truncation_supplement_for_bound_termina
     assert failure['retryable'] is False and failure['recordedAt'] == 2
     assert 'PRIVATE' not in str([events, failure]) and '/private/path' not in str([events, failure])
 
+
+
+@pytest.mark.parametrize('boundary', ['current', 'stop', 'runtime_replaced', 'mismatched_input'])
+async def test_worker_projects_bound_legacy_context_refusal(worker, monkeypatch, boundary):
+    from amplifier_web.context_continuity import ContextRecoveryError
+    error = ContextRecoveryError('transition_unsupported')
+    error.args = ('PRIVATE backend message /private/path',)
+    native, events, failure = await observed_manager_failure(worker, monkeypatch, boundary, error)
+    assert (native['error_type'], native['error_category'], native['error_stage']) == (
+        'RuntimeError', 'unknown', 'manager_turn')
+    assert 'PRIVATE' not in str(events)
+    if boundary != 'current':
+        assert failure is None
+        return
+    assert failure['category'] == 'provider_selection'
+    assert failure['code'] == 'transition_unsupported' and failure['stage'] == 'context_preparation'
+    assert 'previous model and connection' in failure['guidance'] and 'Settings' in failure['guidance']
+    assert failure['errorType'] == 'RuntimeError' and failure['nativeFailure']['stage'] == 'manager_turn'
+    assert failure['recordedAt'] == 2 and failure['retryable'] is False
 
 async def test_cleanup_invalidates_writer_even_from_a_different_task_context(worker, monkeypatch):
     from contextvars import Context

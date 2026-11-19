@@ -237,9 +237,31 @@ def _function_call_truncation_details():
             'effects': 'not_rolled_back', 'replayed': False, 'retryable': False}
 
 
+def _context_recovery_details(code):
+    messages = {
+        'transition_unsupported': (
+            'provider_selection', 'Managed Context needs an update to switch models in this chat.',
+            'Select the previous model and connection, or update Managed Context in Settings and send again.'),
+        'transition_intent_required': (
+            'provider_selection', 'Choose a model and connection for this chat.',
+            'Select the connection and model you want to use, then send a new message.'),
+        'recovery_checkpoint_rejected': (
+            'persistence', 'The saved checkpoint could not be validated for this model change.',
+            'Keep the original chat history and restore a compatible, validated checkpoint before continuing.'),
+    }
+    category, summary, guidance = messages[code]
+    return {'category': category, 'code': code, 'stage': 'context_preparation',
+            'summary': summary, 'guidance': guidance, 'retryable': False,
+            'effects': 'not_rolled_back', 'replayed': False}
+
+
 def exception_details(error):
     from .support_diagnostics import exception_chain, terminal_function_call_truncation
     chain = exception_chain(error)
+    # The Worker separately certifies and correlates native manager wrappers.
+    recovery = chain[0].get('contextRecoveryCode') if chain else None
+    if recovery:
+        return {**_context_recovery_details(recovery), 'errorType': 'ContextRecoveryError', 'exceptionChain': chain}
     if terminal_function_call_truncation(chain):
         return {**_function_call_truncation_details(), 'exceptionChain': chain}
     current, seen = error, set()
@@ -257,7 +279,9 @@ def exception_details(error):
 
 def terminal_exception_failure(session, value):
     """Enrich only an exact retained terminal; never replace or redate a cause."""
-    from .support_diagnostics import terminal_exception_capture, terminal_request_refusal, terminal_function_call_truncation
+    from .support_diagnostics import (
+        terminal_context_recovery, terminal_exception_capture, terminal_function_call_truncation, terminal_request_refusal,
+    )
     capture = terminal_exception_capture(value)
     existing = session.get('failure')
     if (not capture or not isinstance(existing, dict) or existing.get('exceptionChain')
@@ -276,6 +300,12 @@ def terminal_exception_failure(session, value):
         return None
     refusal = terminal_request_refusal(capture['exceptionChain'])
     detail = {}
+    recovery = terminal_context_recovery(capture['exceptionChain'])
+    if (recovery and existing.get('category') == 'unknown' and capture['errorType'] == 'RuntimeError'
+            and existing.get('stage') == 'manager_turn'):
+        detail = {**_context_recovery_details(recovery),
+            'nativeFailure': {key: existing[key] for key in
+                              ('category', 'errorType', 'stage', 'retryable') if key in existing}}
     if (existing.get('category') == 'unknown' and capture['errorType'] == 'LLMError'
             and existing.get('stage') == 'provider_request'
             and terminal_function_call_truncation(capture['exceptionChain'])):

@@ -4,6 +4,11 @@ from pathlib import Path
 import re
 
 
+_TRANSITION_FAILURE_CODES = (
+    'transition_unsupported', 'transition_intent_required', 'recovery_checkpoint_rejected',
+)
+
+
 def environment():
     from . import __version__
     return {'applicationVersion': __version__, 'pythonVersion': platform.python_version(),
@@ -52,6 +57,10 @@ def exception_chain(error):
             else:
                 if type(error) is FunctionCallTruncationError:
                     item['providerFailure'] = {'code': 'function_call_truncated'}
+        if type(error).__name__ == 'ContextRecoveryError':
+            from .context_continuity import ContextRecoveryError
+            if type(error) is ContextRecoveryError and type(error.code) is str and error.code in _TRANSITION_FAILURE_CODES:
+                item['contextRecoveryCode'] = error.code
         chain.append(item)
         error = error.__cause__ or error.__context__
     return chain
@@ -91,6 +100,9 @@ def public_exception_chain(value):
         if (kind == 'FunctionCallTruncationError'
                 and item.get('providerFailure') == {'code': 'function_call_truncated'}):
             row['providerFailure'] = {'code': 'function_call_truncated'}
+        code = item.get('contextRecoveryCode')
+        if kind == 'ContextRecoveryError' and type(code) is str and code in _TRANSITION_FAILURE_CODES:
+            row['contextRecoveryCode'] = code
         result.append(row)
     return result
 
@@ -112,10 +124,11 @@ def terminal_exception_capture(value):
     # Provider-local subtypes are likewise reduced to the native LLMError base.
     # A type name alone cannot explain that terminal.
     provider_truncation = kind == 'LLMError' and terminal_function_call_truncation(chain)
+    context_recovery = kind == 'RuntimeError' and terminal_context_recovery(chain)
     if (not identity(generation) or not isinstance(inputs, list) or not 1 <= len(inputs) <= 128
             or not all(identity(item) for item in inputs)
             or not isinstance(kind, str) or not re.fullmatch(r'[A-Za-z][A-Za-z0-9_.]{0,99}', kind)
-            or not chain or not (local_refit or provider_truncation
+            or not chain or not (local_refit or provider_truncation or context_recovery
                                  or any(item['errorType'] == kind for item in chain))):
         return None
     result = {'generationId': generation, 'inputIds': list(inputs),
@@ -146,6 +159,14 @@ def public_execution_failure(value):
     if isinstance(inputs, list) and len(inputs) <= 128 and all(identity(item) for item in inputs):
         result['inputIds'] = list(inputs)
     return result
+
+
+def terminal_context_recovery(chain):
+    """The native loop may wrap the actual refusal once in ManagerTurnError."""
+    index = 1 if chain and chain[0]['errorType'] == 'ManagerTurnError' else 0
+    if len(chain) > index and chain[index]['errorType'] == 'ContextRecoveryError':
+        return chain[index].get('contextRecoveryCode')
+    return None
 
 
 def terminal_request_refusal(chain):

@@ -70,6 +70,36 @@ def test_transition_recovers_all_original_files_after_interruption(tmp_path):
     assert not transaction.path.exists()
 
 
+@pytest.mark.parametrize('reset_model', [False, True])
+async def test_inplace_bundle_change_keeps_fork_non_admission(tmp_path, monkeypatch, reset_model):
+    from test_provider_selection_lifecycle import mounted_controls, SELECTION
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    store, _ = seed(tmp_path, tmp_path)
+    path = tmp_path / 'sessions/source/control-state.json'
+    path.write_text(json.dumps({
+        'goal': None, 'selection': SELECTION, 'selectionRevision': None,
+        'selectionBinding': 'old-binding', 'selectionBindingPending': True}))
+    transaction = BundleTransaction(tmp_path, tmp_path, 'source')
+    transaction.begin()
+    transaction.select('work', reset_model=reset_model)
+    transaction.commit()
+    saved = json.loads(path.read_text())
+    assert 'selectionRevision' in saved and saved['selectionRevision'] is None
+    assert 'selectionBinding' not in saved and 'selectionBindingPending' not in saved
+    controls, _, providers = mounted_controls(None)
+    controls.session.session_id = 'source'
+    controls.coordinator.get_capability = lambda name: (
+        {'connectionKeys': {'terra': 'verified-current'}} if name == 'web.provider_catalog' else None)
+    try:
+        await controls.restore()
+        assert controls.selection_revision is None
+        assert controls.transition_foreground() is None
+        assert controls.selection == (None if reset_model else SELECTION)
+        assert all(not provider.calls for provider in providers.values())
+    finally:
+        await controls.close()
+
+
 def test_fork_with_bundle_keeps_tools_voice_and_original_but_replaces_instructions(tmp_path):
     home=tmp_path/'app';store,messages=seed(home,tmp_path)
     before=(store.directory('source')/'transcript.jsonl').read_bytes()

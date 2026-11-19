@@ -146,6 +146,31 @@ def test_a_session_without_such_a_provider_gets_no_step():
     assert set(hooks([{'module': ANTHROPIC}])) == {'before_initialize'}
 
 
+async def test_media_observes_declared_options_before_provider_receives_local_paths(folders):
+    loader = Loader()
+    session = SimpleNamespace(coordinator=SimpleNamespace(loader=loader))
+    observed = []
+
+    def bind_media(constructing):
+        downstream = constructing.coordinator.loader
+
+        async def observe(module_id, config, **options):
+            observed.append((module_id, dict(config)))
+            return await downstream.load(module_id, config, **options)
+
+        constructing.coordinator.loader = SimpleNamespace(load=observe)
+
+    declared = {'priority': 2, 'fallback_state_path': ''}
+    providers = [{'module': ANTHROPIC, 'config': declared}]
+    step = initialization_hooks(isolation=None, decision_accounts=SimpleNamespace(records=[]),
+        routing=None, retain=lambda constructing: None, providers=providers, media=bind_media)
+    await step['before_initialize'](session)
+    await session.coordinator.loader.load(ANTHROPIC, declared, source_hint='selected')
+
+    assert observed == [(ANTHROPIC, {'priority': 2, 'fallback_state_path': ''})]
+    assert loader.calls == [(ANTHROPIC, {**paths(folders.shared), **declared}, {'source_hint': 'selected'})]
+
+
 async def test_a_root_chat_gets_the_step_and_its_plan_holds_no_path(credential_host, monkeypatch):  # noqa: F811
     from amplifier_web.host import session as host
     from amplifier_web.session_files import amplifier_home
