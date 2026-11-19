@@ -1434,6 +1434,9 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         continuity = None
         coordinator.register_capability("web.context_transition.originals",
                                         bool(saved and saved[1].get("fork")))
+        fork = saved[1].get("fork") if saved else None
+        if isinstance(fork, dict) and fork.get("source_session_id") and not saved[1].get("portabilityOrigin"):
+            coordinator.register_capability("web.context_transition.fork_parent", fork["source_session_id"])
         published_anchors = None
         def recovery_write_guard():
             # A recovery write uses the same native ownership checks, without

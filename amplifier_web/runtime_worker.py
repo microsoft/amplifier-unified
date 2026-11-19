@@ -1734,6 +1734,9 @@ class Worker:
         """Keep original host admission metadata beside the input's context."""
         if identity in self.runtime.accepted:
             return
+        if (data.get('op') == 'send' and data.get('applied_fork_choice')
+                and not self.runtime.generation and not self.runtime.queued_inputs):
+            self.controls.restore_applied_fork_choice(data['applied_fork_choice'])
         self.context_bindings[identity] = {
             **(binding or {'clientId': None, 'targets': []}),
             'interruptionRevision': data.get('interruptionRevision', 0),
