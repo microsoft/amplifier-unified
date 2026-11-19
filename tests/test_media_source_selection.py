@@ -17,6 +17,7 @@ MANIFEST = Path(assembly.__file__).with_name("media_sources.json")
 # Authored semantic owners, not learned from the loaded callback graph. The store
 # is included for cold/fork input semantics, not claimed as a mounted callback.
 TRANSITION_OWNERS = {
+    "amplifier_module_loop_live/failures.py": "14e8409af45b42a5f1b6741949348d4b72bc754d3b8ed3d1b5d02ed58a8d17b6",
     "amplifier_web/bundle_selection.py": "133f94e83d71fc71bce4bbbabfcc645dda5be801d6cc6061c95a26376a1327db",
     "amplifier_web/context_continuity.py": "7bc9e027659da6d22de60366ba8bd333ad671cfa9e1cef88c6e2a3af7688d6ac",
     "amplifier_web/host/session.py": "25613d9102f684b36f47ae11a9f57a39ddd18a3b4807cf2ee4a90ff49715604d",
@@ -70,6 +71,15 @@ def test_shipped_transition_closure_is_explicit_and_host_bytes_match():
             assert hashlib.sha256((root / name).read_bytes()).hexdigest() == expected
     assert assembly.MEDIA_MODEL == "gpt-6.1-sol"
     assert assembly.supported_plan(work_plan())
+
+
+def test_catalog_cannot_retain_pre_count_classification_live_failures():
+    """The declared ddc44 Live source adds bounded strict-count diagnostics."""
+    manifest = json.loads(MANIFEST.read_text())
+    manifest["sources"]["amplifier_module_loop_live/failures.py"] = (
+        "d765138bf6e565ffe6d1c0d72eaa03978ad5efa296385c6140bf2d96da80379c")
+    with pytest.raises(AssertionError):
+        assert_transition_closure(manifest)
 
 
 @pytest.mark.parametrize("missing", sorted(TRANSITION_OWNERS))
