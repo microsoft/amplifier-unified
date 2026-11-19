@@ -158,6 +158,7 @@ class RuntimeControls:
         self.catalog_revision=str(uuid.uuid4())
         self.coordinator.register_capability("web.controls.persist", self.persist)
         self.coordinator.register_capability("web.context_recovery.contract", self.recovery_contract)
+        self.coordinator.register_capability("web.context_transition.contract", self.transition_contract)
         self.coordinator.register_capability("web.context_transition.foreground", self.transition_foreground)
         self.coordinator.register_capability("web.context_transition.selection", lambda: copy.deepcopy({
             "selection": self.selection, "selectionRevision": self.selection_revision,
@@ -308,13 +309,17 @@ class RuntimeControls:
             # account, source, credentials and settings, not a redacted view.
             "plan": logical_plan(self.coordinator.config),
             "selection": self.selection,
-            "selectionRevision": self.selection_revision,
-            "selectionBinding": self.selection_binding,
             "maxOutputTokens": self.max_output_tokens,
             "context": getattr(context, "config", {}),
             "loop": getattr(loop, "config", {}),
             "mode": self.coordinator.session_state.get("active_mode"),
         })
+
+    def transition_contract(self):
+        """Bind model changes to their mounted connection and selection revision."""
+        return {**self.recovery_contract(),
+                "selectionRevision": self.selection_revision,
+                "selectionBinding": self.selection_binding}
 
     def transition_foreground(self):
         """A saved choice plus an actually delivered new ordinary input.

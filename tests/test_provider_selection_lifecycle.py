@@ -115,12 +115,12 @@ async def test_model_selection_revision_survives_restore_and_distinguishes_a_b_a
     monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
     controls, loop, providers = mounted_controls(SELECTION)
     await controls.perform('provider.select', SELECTION)
-    first = controls.recovery_contract()['selectionRevision']
+    first = controls.transition_contract()['selectionRevision']
     other = {**SELECTION, 'model': 'other-model'}
     await controls.perform('provider.select', other)
-    second = controls.recovery_contract()['selectionRevision']
+    second = controls.transition_contract()['selectionRevision']
     await controls.perform('provider.select', SELECTION)
-    third = controls.recovery_contract()['selectionRevision']
+    third = controls.transition_contract()['selectionRevision']
     assert len({first, second, third}) == 3
     assert all(not provider.calls for provider in providers.values())
     saved = json.loads(controls.state_path().read_text())
@@ -128,7 +128,7 @@ async def test_model_selection_revision_survives_restore_and_distinguishes_a_b_a
     await controls.close()
     resumed, loop, providers = mounted_controls(other)
     await resumed.restore()
-    assert resumed.recovery_contract()['selectionRevision'] == third
+    assert resumed.transition_contract()['selectionRevision'] == third
     assert resumed.selection == SELECTION
     assert all(not provider.calls for provider in providers.values())
     await resumed.close()
@@ -208,7 +208,7 @@ async def test_namespace_migration_cold_selection_retains_binding_without_mintin
     first, providers, caps = mount()
     binding = caps['web.provider_catalog']['connectionKeys']['terra']
     await first.perform('provider.select', {**SELECTION, 'expectedConnectionKey': binding})
-    contract = first.recovery_contract()
+    contract = first.transition_contract()
     saved = first.state_path().read_bytes()
     assert first.transition_foreground() is None
     await first.close()
@@ -236,7 +236,7 @@ async def test_namespace_migration_cold_selection_retains_binding_without_mintin
                 'instance': 'terra', 'expectedConnectionKey': binding})
         assert resumed.state_path().read_bytes() == saved
     else:
-        assert resumed.recovery_contract() == contract  # Ignores new projection UUID.
+        assert resumed.transition_contract() == contract  # Ignores new projection UUID.
         await resumed.perform('provider.verifyConnection', {
             'instance': 'terra', 'expectedConnectionKey': binding})
         runtime = resumed.runtime

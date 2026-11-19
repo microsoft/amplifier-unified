@@ -400,10 +400,11 @@ class ContextContinuity:
                                       if key in {"before", "after", "limit", "throughMessage"} and type(value) is int}
         return result
 
-    def _fresh_guard(self):
+    def _fresh_guard(self, *, transition=False):
+        contract_name = "web.context_transition.contract" if transition else "web.context_recovery.contract"
         cap = self.coordinator.get_capability
         names = ("live.activation", "live.runtime", "web.context_recovery.epoch",
-                 "web.context_recovery.contract", "context.recovery.recover", "context.history",
+                 contract_name, "context.recovery.recover", "context.history",
                  "web.app_access.bridge")
         bound = {name: cap(name) for name in names}
         gate, runtime = bound["live.activation"], bound["live.runtime"]
@@ -415,7 +416,7 @@ class ContextContinuity:
         token = gate.current()
         epoch = _sync(bound["web.context_recovery.epoch"])
         def contract():
-            value = _sync(bound["web.context_recovery.contract"])
+            value = _sync(bound[contract_name])
             if not isinstance(value, dict) or not value:
                 raise ContextRecoveryError("recovery_contract_unavailable")
             return json.loads(json.dumps(value, sort_keys=True, allow_nan=False))
@@ -554,7 +555,7 @@ class ContextContinuity:
         return False
 
     def _transition_guard(self, record):
-        check, contract = self._fresh_guard()
+        check, contract = self._fresh_guard(transition=True)
         foreground = self._foreground()
         loop = self.coordinator.get("orchestrator")
         selected = getattr(loop, "root_provider", None)
@@ -633,7 +634,7 @@ class ContextContinuity:
         """Inspect a possibly committed install, never replay its write or calls."""
         self._check_other_recovery_ownership(record)
         foreground = self._foreground()
-        guard, contract = self._fresh_guard()
+        guard, contract = self._fresh_guard(transition=True)
         if (contract != record["contract"] or record["identity"] != self._identity
                 or foreground["inputId"] == record["foreground"]["inputId"]
                 or any(call["state"] != "completed" for call in record["calls"])):
@@ -658,7 +659,7 @@ class ContextContinuity:
     async def _prepare_transition(self):
         """Create one bounded journal transaction, never a rejected-import escape."""
         foreground = self._foreground()
-        guard, contract = self._fresh_guard()
+        guard, contract = self._fresh_guard(transition=True)
         messages = await _guarded(guard, self.coordinator.get_capability("context.history"))
         if not isinstance(messages, list) or not messages:
             raise ContextRecoveryError("recovery_source_unavailable")
@@ -830,7 +831,7 @@ class ContextContinuity:
         try:
             record.update(state="running", code=None)
             self._write_recovery()  # Consume durably before any provider callback.
-            guard, configuration = self._fresh_guard()
+            guard, configuration = self._fresh_guard(transition=transition)
             if transition:
                 guard = self._transition_guard(record)
             self._recovery_guard = guard

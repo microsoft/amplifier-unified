@@ -44,7 +44,7 @@ def authored_catalog(value):
     # The combined catalog also retains the accepted Context transition
     # implementation and four explicitly selected transition semantic owners.
     assert len(unchanged) == 307
-    assert digest(unchanged) == '3b134186fe1fd2eaf177e1d079e8a0e41d097a446e748e8d0cc8668fb6cfc314'
+    assert digest(unchanged) == '8ed4c6589b894efbf9c10157e5c97d5b55d366b8f9a905d54d019d4b6c7aede7'
     assert digest({key: row for key, row in value.items() if key != 'sources'}) == (
         '9c7416a99a748a28dab0dda925b1c5e7fab4f2142cacdf181b53c0667f7e5339')
     for key in REPLACED | ADDED:

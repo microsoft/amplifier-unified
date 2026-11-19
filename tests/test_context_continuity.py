@@ -1630,7 +1630,16 @@ async def test_decision_account_remount_recovery_uses_exact_logical_choices(
     async with ordinary_recovery_case(directory, wire) as first:
         logical, projection = project_recovery_accounts(first, rows)
         first_plan = copy.deepcopy(first.session.coordinator.config)
-        contract = first.controls.recovery_contract()
+        # Existing v1 explicit recovery receipts contain this exact projection.
+        # A model-transition credential binding must not alter their digest.
+        def version1_contract():
+            value = first.controls.recovery_contract()
+            return {key: value[key] for key in (
+                'plan', 'selection', 'maxOutputTokens', 'context', 'loop', 'mode')}
+
+        contract = version1_contract()
+        first.session.coordinator.register_capability(
+            'web.context_recovery.contract', version1_contract)
         assert contract['plan'] == logical
         assert first.session.coordinator.config == first_plan  # Inspection is not a remount.
         bindings = {row['binding_id'] for row in projection.records}
@@ -1780,6 +1789,7 @@ def bind_continuity_recovery_guards(coordinator, adapter, contract):
     coordinator.register_capability('live.runtime', SimpleNamespace(stop_requested=False, closed=False))
     coordinator.register_capability('web.context_recovery.epoch', lambda: 0)
     coordinator.register_capability('web.context_recovery.contract', lambda: contract)
+    coordinator.register_capability('web.context_transition.contract', lambda: contract)
     coordinator.register_capability('web.app_access.bridge', AsyncMock(return_value={
         'result': {'items': [{'target': {'sessionId': 'session'},
                               'signal': {'interruptionRevision': 0}}]}}))
