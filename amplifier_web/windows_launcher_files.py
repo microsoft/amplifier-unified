@@ -19,6 +19,7 @@ FILES = ('amplifier_web/__init__.py',
  'amplifier_web/app_component_graph.py',
  'amplifier_web/app_features.py',
  'amplifier_web/app_installation_proof.py',
+ 'amplifier_web/app_optional_features.py',
  'amplifier_web/app_release_artifacts.py',
  'amplifier_web/app_updates.py',
  'amplifier_web/application_generations.py',
@@ -90,12 +91,14 @@ DYNAMIC = {
     'amplifier_web/cli.py::_parse::-m::command.add_argument("--model", "-m")': (),  # A command-line option, not a program.
     'amplifier_web/deployment_service.py::_generated_unit_matches::-m::elif re.fullmatch(r"python(?:\\d+(?:\\.\\d+)*)?", executable) and args[1:3] == ["-m", "amplifier_web"]:': (),  # Compares saved arguments.
     "amplifier_web/host/config.py::<module>::__file__::_KNOWN_PROVIDER_SOURCES = json.loads((Path(__file__).parents[1] / 'provider_sources.json').read_text())": ('amplifier_web/provider_sources.json',),  # Reads bundled provider names.
+    'amplifier_web/reset.py::<module>::__file__::_spec = importlib.util.spec_from_file_location("app_optional_features", Path(__file__).with_name("app_optional_features.': ('amplifier_web/app_optional_features.py',),  # Loads the standalone metadata-only feature helper.
     'amplifier_web/reset.py::<module>::__file__::_spec = importlib.util.spec_from_file_location("reset_retention", Path(__file__).with_name("reset_retention.py"))': ('amplifier_web/reset_retention.py',),  # Loads the standalone reset helper.
+    'amplifier_web/reset.py::<module>::spec_from_file_location::_spec = importlib.util.spec_from_file_location("app_optional_features", Path(__file__).with_name("app_optional_features.': ('amplifier_web/app_optional_features.py',),  # Loads the standalone metadata-only feature helper.
     'amplifier_web/reset.py::<module>::spec_from_file_location::_spec = importlib.util.spec_from_file_location("reset_retention", Path(__file__).with_name("reset_retention.py"))': ('amplifier_web/reset_retention.py',),  # Loads the standalone reset helper.
     'amplifier_web/reset.py::_repair::-m::command(prefix / "bin/python", "-I", "-m", "amplifier_web",': (),  # Runs the newly installed app.
     'amplifier_web/reset.py::post_checks::-m::result = command(prefix / "bin/python", "-I", "-m", "amplifier_web", "--data-dir", home,': (),  # Checks the newly installed app.
     'amplifier_web/reset.py::prepare_saved_configurations::-c::command(prefix / "bin/python", "-I", "-c",': (),  # Runs the newly installed app.
-    'amplifier_web/reset.py::verify::-c::command(python, "-I", "-c", "from amplifier_web.app_updates import PROBE; exec(PROBE)",': (),  # Probes the newly installed app.
+    'amplifier_web/reset.py::verify::-c::command(python, "-I", "-c", "from amplifier_web.app_updates import PROBE; exec(PROBE)", *extras,': (),  # Probes the newly installed app with the retained extras.
     'amplifier_web/reset_retention.py::Retention::__file__::spec = importlib.util.spec_from_file_location("reset", Path(__file__).with_name("reset.py"))': ('amplifier_web/reset.py',),  # Loads the standalone reset command.
     'amplifier_web/reset_retention.py::Retention::spec_from_file_location::spec = importlib.util.spec_from_file_location("reset", Path(__file__).with_name("reset.py"))': ('amplifier_web/reset.py',),  # Loads the standalone reset command.
     "amplifier_web/update_readiness.py::running_identity::__file__::if Path(distribution.locate_file('amplifier_web')).resolve() == Path(__file__).parent.resolve():": (),  # Compares the package path.
