@@ -115,7 +115,7 @@
     "amplifier_module_hooks_routing/role_pin.py": "35c157155ebddd33226a11c2e6cc1613545b69ac05e7768cfbb71c941404e2eb",
     "amplifier_module_loop_live/__init__.py": "8b2c563c5ec7fa8588e67871f15c09666a544070efa76ae531d6fd2948e07650",
     "amplifier_module_loop_live/dispatch.py": "bdf2f869b957b14374079e36177670f3c2180a96661fcc171c2b2ced262c2e2f",
-    "amplifier_module_loop_live/failures.py": "d765138bf6e565ffe6d1c0d72eaa03978ad5efa296385c6140bf2d96da80379c",
+    "amplifier_module_loop_live/failures.py": "14e8409af45b42a5f1b6741949348d4b72bc754d3b8ed3d1b5d02ed58a8d17b6",
     "amplifier_module_loop_live/host.py": "35131fa0be19e1728736f7c18f5b9f961e132467d12d0ed9138155af38d782ce",
     "amplifier_module_loop_live/instructions.py": "9736a8261727929d330596bb71b3d15aa570790da4a5941fe0b58aeccd0c2fa4",
     "amplifier_module_loop_live/job_store.py": "c11cf47c7ef821142ee6ecaf126de5ceab94c7e52b9136c0ff2a946495fd9700",
