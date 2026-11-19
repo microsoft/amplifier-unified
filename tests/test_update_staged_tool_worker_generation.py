@@ -1,5 +1,7 @@
 """A staged optional tool and saved settings must not strand an included worker update."""
 import copy
+import shutil
+import sqlite3
 import time
 from unittest.mock import AsyncMock
 
@@ -8,11 +10,13 @@ import pytest
 from amplifier_web import updates
 from amplifier_web.configuration_recovery import authorize, native_apply, prepare_attempt
 from amplifier_web.management import Management
+from amplifier_web.service import AppService
 from amplifier_web.smart_tools import SmartToolsManager
-from amplifier_web.updates import active_release, foundation_home
+from amplifier_web.updates import UpdateManager, active_release, foundation_home
+from amplifier_web.windows_launcher_follow import _idle as launcher_idle
 from test_queued_configuration_boundary import ControlsTransport, plan
 from test_runtime_retention import manager as native_workers
-from test_updates import app, git, prepare, repo
+from test_updates import Runtime, app, git, prepare, repo
 
 
 async def retain_saved_settings(app, number):
@@ -128,3 +132,50 @@ async def test_included_generation_with_staged_tool_and_saved_configuration(
     delivered = [data["inputId"] for kind, data in native_workers.events
                  if kind == "runtime.status" and data.get("event") == "input.delivered"]
     assert delivered == ["original-input"]
+
+
+@pytest.fixture
+def staged_update(app):
+    app.smart_tools = SmartToolsManager(app)
+    tool = {"previous": "old", "target": "new", "component": "digital-twin", "revision": "b" * 40}
+    app.state["updates"].update(phase="installed", pendingSmartTools=[tool],
+        lastCheck=time.time(), sequence={"stage": "complete", "install": False})
+    return app.update_manager
+
+
+async def test_included_check_preserves_ordinary_tool_switch_crash_boundary(staged_update, tmp_path, monkeypatch):
+    manager = staged_update
+    app = manager.service
+    monkeypatch.setattr(manager, "inventory_sources", AsyncMock(return_value=[]))
+    await manager.check(tier="included", fresh=True, automatic=True)
+
+    # Restart from the durable state at the moment the external switch begins.
+    # The live manager can finish independently after we capture this snapshot.
+    crash_home = tmp_path / "interrupted-switch"
+    async def capture(previous, target):
+        assert (previous, target) == ("old", "new")
+        shutil.copytree(manager.directory, crash_home / "updates")
+        shutil.copytree(app.data_dir / "artifacts", crash_home / "artifacts")
+        db_path = app.data_dir / "app.sqlite3"
+        with sqlite3.connect(db_path.as_uri() + "?mode=ro", uri=True) as source:
+            with sqlite3.connect(crash_home / "app.sqlite3") as destination:
+                source.backup(destination)
+
+    monkeypatch.setattr(app.smart_tools, "activate_update", capture)
+    await manager.activateSmartTools()
+    restored = AppService(crash_home, Runtime(), workspace=tmp_path)
+    try:
+        restored.update_manager = UpdateManager(restored)
+        restored.smart_tools = SmartToolsManager(restored)
+        retry = AsyncMock(return_value={})
+        monkeypatch.setattr(restored.smart_tools, "activate_update", retry)
+        await restored.update_manager.tick()
+        retry.assert_not_awaited()
+        assert restored.state["updates"]["pendingSmartTools"][0]["target"] == "new"
+    finally:
+        await restored.close()
+
+
+async def test_cold_windows_launcher_still_waits_for_targeted_tool(staged_update):
+    assert not staged_update.app_busy()
+    assert not launcher_idle(staged_update)
