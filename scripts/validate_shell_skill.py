@@ -74,6 +74,8 @@ async def run(root):
         # The installed reference stays reachable without joining ambient context.
         assert 'resetPreview' in (app_path.parent / 'canvas.md').read_text()
         assert 'resetPreview' not in str(app.output)
+        assert '--providers-json' in (app_path.parent / 'settings.md').read_text()
+        assert '--providers-json' not in str(app.output)
         results.append({'resolverTiming':timing,'catalogVisible':True,'skillLoads':True})
         await cleanup()
     print(json.dumps({'wheel':wheel.name,'packagedRelativeReferences':len(refs),'actualUpstreamBehavior':True,'checks':results},indent=2))

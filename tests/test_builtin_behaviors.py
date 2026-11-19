@@ -15,6 +15,7 @@ from amplifier_web.builtin_behaviors import (
     IMAGEGEN_BEHAVIOR_URI,
     ROUTING_BEHAVIOR_URI,
     SHELL_BEHAVIOR_URI,
+    SKILLS_BEHAVIOR_URI,
     app_behaviors,
     resolve_builtin_behavior,
     resource_root,
@@ -29,6 +30,7 @@ EXPECTED_DEFAULTS = (
     COMPUTER_USE_BEHAVIOR_URI,
     CONTEXT_INTELLIGENCE_BEHAVIOR_URI,
     ROUTING_BEHAVIOR_URI,
+    SKILLS_BEHAVIOR_URI,
 )
 EXPECTED_APPENDED_DEFAULTS = EXPECTED_DEFAULTS[1:]
 
@@ -42,7 +44,7 @@ def test_default_is_visible_without_writing_settings(tmp_path):
     assert [row["uri"] for row in rows] == list(EXPECTED_DEFAULTS)
     assert [row["name"] for row in rows] == [
         "Unified shell", "Image generation", "Computer use",
-        "Context intelligence", "Model routing",
+        "Context intelligence", "Model routing", "Microsoft curated skills",
     ]
     assert all(row["enabled"] for row in rows)
     assert not config.settings_file.exists()
@@ -50,7 +52,7 @@ def test_default_is_visible_without_writing_settings(tmp_path):
 
 
 @pytest.mark.parametrize("explicit", [[], ["chosen"], [SHELL_BEHAVIOR_URI, "chosen"]])
-def test_existing_lists_append_four_defaults_but_not_shell(explicit):
+def test_existing_lists_append_capability_defaults_but_not_shell(explicit):
     settings = {"bundle": {"app": explicit}}
     before = copy.deepcopy(settings)
     assert app_behaviors(settings) == [*explicit, *EXPECTED_APPENDED_DEFAULTS]

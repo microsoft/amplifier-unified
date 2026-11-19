@@ -17,6 +17,7 @@ from amplifier_web.host.storage import SessionStore
 
 @pytest.fixture
 def mounted_host(tmp_path, monkeypatch):
+    from amplifier_foundation import SimpleSourceResolver
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     home = tmp_path / "app"
@@ -45,12 +46,14 @@ def mounted_host(tmp_path, monkeypatch):
     session = SimpleNamespace(coordinator=coordinator, config=mounted_config, cleanup=AsyncMock(), execute=AsyncMock())
     prepared = SimpleNamespace(mount_plan={"session": {"orchestrator": {"module": "loop-live"}}},
                                create_session=AsyncMock(return_value=session))
-    loaded = SimpleNamespace(hooks=[], to_mount_plan=lambda: copy.deepcopy(prepared.mount_plan),
+    loaded = SimpleNamespace(hooks=[], instruction="", context={}, source_base_paths={}, name="fixture", base_path=None,
+                             to_mount_plan=lambda: copy.deepcopy(prepared.mount_plan),
                              prepare=AsyncMock(return_value=prepared))
     registry = SimpleNamespace(list_registered=lambda: {}, find=lambda _: None, register=Mock(), save=Mock(),
                                load=AsyncMock(return_value=loaded))
     configurator = SimpleNamespace(apply_saved_settings=AsyncMock(), take_snapshot=Mock())
     monkeypatch.setitem(sys.modules, "amplifier_foundation", SimpleNamespace(
+        SimpleSourceResolver=SimpleSourceResolver,
         BundleRegistry=lambda *, persist=True, read_persisted=True, **_: registry, SessionConfigurator=lambda *_: configurator))
     monkeypatch.setitem(sys.modules, "amplifier_module_loop_live.runtime", SimpleNamespace(Runtime=lambda: runtime))
     monkeypatch.setitem(sys.modules, "amplifier_module_loop_live.job_store", SimpleNamespace(

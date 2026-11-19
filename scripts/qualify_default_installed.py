@@ -39,7 +39,9 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST = Path('/opt/defaults')
 LABEL = 'org.amplifier.default-installed'
 SUITES = ('test_default_behaviors_integration.py', 'test_default_runtime_safety.py',
-          'test_default_mount_runtime.py', 'test_default_routing_runtime.py')
+          'test_default_mount_runtime.py', 'test_default_routing_runtime.py',
+          'test_curated_resolver_installed.py')
+EXPECTED_CASES = 53  # 18 composition/runtime cases plus 35 host-to-resolver cases.
 DESKTOP_CASES = {
     'preserved-22': {
         'test_expanded_desktop_restriction_survives_child_alias': 8,
@@ -1005,6 +1007,7 @@ def guest_test(desktop_safety=False, root_guest=False, installed_pwa=False):
     env = clean_env()
     env.update(UNIFIED_RUNTIME_PYTHON=str(GUEST / '.venv/bin/python'),
                UNIFIED_BEHAVIOR_REPOS=str(GUEST / 'repos'),
+               UNIFIED_CURATED_RESOLVER='1',
                WARM_FOUNDATION_PATH=str(GUEST / 'repos/amplifier-foundation'),
                WARM_ROUTING_PATH=str(GUEST / 'repos/amplifier-bundle-routing-matrix'))
     python = GUEST / '.venv/bin/python'
@@ -1043,7 +1046,8 @@ def guest_test(desktop_safety=False, root_guest=False, installed_pwa=False):
                  '--lane', 'default-installed', '--junit', junit], env=env)
         result['checkExit'] = 0
         import xml.etree.ElementTree as ET
-        require(len(list(ET.parse(junit).iter('testcase'))) == 12, 'Expected all 12 unchanged baseline cases')
+        require(len(list(ET.parse(junit).iter('testcase'))) == EXPECTED_CASES,
+                f'Expected all {EXPECTED_CASES} installed default cases')
         require(test.returncode == 0, 'pytest failed')
         result['passed'] = True
     except BaseException as error:

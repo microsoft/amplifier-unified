@@ -136,7 +136,10 @@ async def _read_exact(coordinator, path):
     expected = path.read_text(encoding="utf-8").splitlines()
     assert result["lines_read"] == result["total_lines"] == len(expected)
     assert result["offset"] == 1 and Path(result["file_path"]).resolve() == path.resolve()
-    assert result["content"] == "\n".join(f"{n:6d}\t{line}" for n, line in enumerate(expected, 1))
+    # The real filesystem tool bounds each rendered line, independently of the
+    # wheel/resource byte verification above. Long host guidance is not corruption.
+    rendered = [line[:2000] + "... [truncated]" if len(line) > 2000 else line for line in expected]
+    assert result["content"] == "\n".join(f"{n:6d}\t{line}" for n, line in enumerate(rendered, 1))
     return result
 
 
@@ -223,6 +226,7 @@ def test_installed_skills_root_child_and_companions(tmp_path, monkeypatch, caplo
         for relative in (
             "skills/amplifier-shell/SKILL.md", "skills/amplifier-shell/presentation.md",
             "skills/coordinate-work/SKILL.md", "skills/coordinate-work/references/protocol.md",
+            "skills/unified-app/SKILL.md", "skills/unified-app/settings.md",
         ):
             assert (packaged / relative).is_file(), f"Missing installed Unified resource: {relative}"
             assert "amplifier_web/bundle_data/" + relative in unified_records, relative
@@ -309,6 +313,13 @@ def test_installed_skills_root_child_and_companions(tmp_path, monkeypatch, caplo
             loaded = await _call(coordinator, "load_skill", skill_name="fixture-cached")
             assert loaded["loaded_from"] == remote and "CACHED-NOT-FETCHED" in loaded["content"]
             assert Path(loaded["skill_directory"]) == cached
+            loaded = await _call(coordinator, "load_skill", skill_name="unified-app")
+            assert "--providers-json" not in loaded["content"]
+            directory = Path(loaded["skill_directory"]).resolve()
+            assert directory == packaged / "skills/unified-app"
+            settings = await _read_exact(coordinator, directory / "settings.md")
+            assert "--providers-json" in settings["content"]
+            assert "configuration.providers" in settings["content"]
 
         async def request_boundary(coordinator, *, includes_unified):
             # Exercise real registered hooks, NOT a provider completion. Request
@@ -344,6 +355,31 @@ def test_installed_skills_root_child_and_companions(tmp_path, monkeypatch, caplo
 
         async def exercise():
             nonlocal allowed_command
+            # Host additive defaults preserve the real loader's implicit and
+            # legacy discovery; parity is checked with actual mounted sessions.
+            from amplifier_foundation.bundle import Bundle
+            from amplifier_module_tool_skills.discovery import get_default_skills_dirs
+            from amplifier_web.host.components import capability_defaults, compose_bundles
+
+            for shape in ({}, {"skills": []}, {"skills": None}, {"skills_dirs": [str(local)]}):
+                base = Bundle(name="chosen", tools=[{"module": "tool-skills", "config": {
+                    **base_config, **shape}}])
+                extra = Bundle(name="extra", tools=[{"module": "tool-skills",
+                    "config": {"skills": ["@unified:skills"]}}])
+                added = compose_bundles(*capability_defaults(base, extra, {}))
+                config = added.tools[0]["config"]
+                expected = ([local] if "skills_dirs" in shape else get_default_skills_dirs())
+                assert [Path(value).expanduser().resolve() for value in config["skills"][:-1]] == [
+                    Path(value).expanduser().resolve() for value in expected]
+                session = await prepared(config).create_session(session_cwd=workspace)
+                try:
+                    loaded = await _call(session.coordinator, "load_skill", skill_name="fixture-control")
+                    assert "WORKSPACE-FIRST" in loaded["content"]
+                    loaded = await _call(session.coordinator, "load_skill", skill_name="unified-app")
+                    assert Path(loaded["skill_directory"]).resolve() == packaged / "skills/unified-app"
+                    await _read_exact(session.coordinator, packaged / "skills/unified-app/settings.md")
+                finally:
+                    await session.cleanup()
             # Default discovery, not an explicit reconstruction of the defaults.
             default = prepared(copy.deepcopy(base_config))
             session = await default.create_session(session_cwd=workspace)

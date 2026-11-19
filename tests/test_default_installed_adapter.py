@@ -138,10 +138,19 @@ def test_unexpected_case_count_cannot_publish_success(monkeypatch, tmp_path):
         return subprocess.CompletedProcess(args[0], 0)
 
     monkeypatch.setattr(adapter.subprocess, 'run', run)
-    with pytest.raises(ValueError, match='all 12'):
+    with pytest.raises(ValueError, match='all 53'):
         adapter.guest_test()
     result = json.loads((tmp_path / 'evidence/result.json').read_text())
     assert result['passed'] is False and result['attestation'] is True
+
+
+def test_curated_resolver_is_in_the_installed_owner():
+    assert 'test_curated_resolver_installed.py' in adapter.SUITES
+    assert adapter.EXPECTED_CASES == 53
+    source = (ROOT / 'scripts/qualify_default_installed.py').read_text()
+    assert "UNIFIED_CURATED_RESOLVER='1'" in source
+    coverage = json.loads((ROOT / 'scripts/integration-coverage.json').read_text())
+    assert 'tests/test_curated_resolver_installed.py' in coverage['lanes']['default-installed']['selectors']
 
 
 def test_workflow_is_manual_and_bridge_does_not_change_normal_matrix():
@@ -609,7 +618,7 @@ def test_residual_helpers_keep_module_counts_separate_from_product(tmp_path, cha
     report = adapter.residual_helper_result(path, 1 if change == 'exit' else 0)
     assert report['passed'] is (change == 'none')
     assert report['expectedCounts'] == {
-        'tests.test_integration_clients': 15, 'tests.test_integration_checks': 64}
+        'tests.test_integration_clients': 16, 'tests.test_integration_checks': 115}
     assert report['exitCode'] == (1 if change == 'exit' else 0)
     assert not (tmp_path / 'junit.xml').exists()
     assert len(report['cases']) == len(list(root))

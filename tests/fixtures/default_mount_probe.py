@@ -147,7 +147,12 @@ def guarded_environment(request, monkeypatch, tmp_path):
             absent.append("installed distribution " + distribution)
     if absent:
         missing(absent)
-    attempts, git_reads, blocked_platform_probes = [], [], []
+    attempts, git_reads, metadata_reads, blocked_platform_probes = [], [], [], []
+    # The host discovers local decision declarations in a credential-free,
+    # isolated child which installs its own network audit before entry loading.
+    # Admit only that exact installed script, not arbitrary Python/CLI helpers.
+    catalog = Path(importlib.metadata.distribution("amplifier-unified").locate_file(
+        "amplifier_web/decision_account_catalog.py")).resolve(strict=True)
     active = True
     phase = "fixture/imports"
 
@@ -164,8 +169,18 @@ def guarded_environment(request, monkeypatch, tmp_path):
                 # no socket is bound and no application request is permitted.
                 blocked_platform_probes.append("urllib3 IPv6 availability bind")
                 raise OSError("IPv6 probe disabled in offline qualification")
-        if event == "subprocess.Popen":
+        if event in {"subprocess.Popen", "os.posix_spawn"}:
             argv = args[1]
+            child_env = args[3] if event == "subprocess.Popen" else args[2]
+            if (isinstance(argv, (list, tuple))
+                    and list(argv) == [sys.executable, "-I", str(catalog)]
+                    and str(args[0]) == sys.executable
+                    and isinstance(child_env, dict)
+                    and set(child_env) <= {"PATH", "SYSTEMROOT", "WINDIR", "LANG", "LC_ALL", "TZ",
+                                          "TMPDIR", "TEMP", "TMP"}):
+                metadata_reads.append({"event": event, "argv": list(argv), "sha256": hashlib.sha256(
+                    catalog.read_bytes()).hexdigest()})
+                return
             if (isinstance(argv, (list, tuple)) and len(argv) == 5
                     and str(args[0]) == argv[0] == "git" and argv[1] == "-C"
                     and argv[3] == "rev-parse" and argv[4] in {"HEAD", "--show-toplevel"}
@@ -216,7 +231,8 @@ def guarded_environment(request, monkeypatch, tmp_path):
         monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
         monkeypatch.setenv("GIT_TERMINAL_PROMPT", "0")
         yield SimpleNamespace(env=env, repositories=repositories, attempts=attempts,
-                              git_reads=git_reads, blocked_platform_probes=blocked_platform_probes,
+                              git_reads=git_reads, metadata_reads=metadata_reads,
+                              blocked_platform_probes=blocked_platform_probes,
                               phase=set_phase)
     finally:
         active = False
@@ -479,15 +495,16 @@ def observe_mount(monkeypatch, module, module_id, target, mounted, validation):
 
 
 @pytest_asyncio.fixture
-async def mounted(inputs, monkeypatch):
+async def mounted(inputs, monkeypatch, request):
     data = inputs
     from amplifier_core import HookResult
     from amplifier_core.events import MODULE_LOAD_FAILED, MODULE_ON_SESSION_READY_FAILED
     from amplifier_web.host.model_selection import prepare_default_routing
+    from amplifier_web.host.components import prepare_bundle
     from amplifier_web.runtime_controls import RuntimeControls
 
     data.state.phase("real preparation; installs disabled")
-    prepared = await asyncio.wait_for(data.loaded.prepare(
+    prepared = await asyncio.wait_for(prepare_bundle(data.loaded, source_home=data.config.home,
         strict=True, install_deps=False, cache_dir=data.config.registry_home / "cache",
         source_resolver=lambda module, source: data.module_source(
             data.config, False, module, source, data.components),
@@ -527,6 +544,7 @@ async def mounted(inputs, monkeypatch):
     monkeypatch.setattr(ci_api.HookConfigResolver, "__init__", observe_ci)
     controls = None
     report = {}
+    catalog_request = request.node.name == "test_skills"
 
     async def before_initialize(session):
         created.append(session)  # Cleanup remains owned if initialization raises.
@@ -540,7 +558,8 @@ async def mounted(inputs, monkeypatch):
 
         async def no_provider_request(event, value):
             provider_requests.append(event)
-            pytest.fail("The mount/export probe must not request a provider")
+            if not catalog_request:
+                pytest.fail("The mount/export probe must not request a provider")
 
         for event in (MODULE_LOAD_FAILED, MODULE_ON_SESSION_READY_FAILED):
             session.coordinator.hooks.register(event, failure, priority=-1000,
@@ -595,7 +614,8 @@ async def mounted(inputs, monkeypatch):
         finally:
             for session in reversed(created):
                 await asyncio.wait_for(session.cleanup(), timeout=10)
-        assert not failures and not provider_requests, (failures, provider_requests)
+        assert not failures, failures
+        assert provider_requests == (["provider:request"] if catalog_request else [])
         assert not data.state.attempts, data.state.attempts
         for module_id, row in data.packages.items():
             assert wheel_bytes(row["package"], row["distribution"], Path(row["source"])) == row
@@ -618,6 +638,7 @@ async def mounted(inputs, monkeypatch):
                   "skill_substitutions": data.substitutions,
                   "agents_retained": sorted(prepared.mount_plan.get("agents", {})),
                   "blocked_platform_probes": data.state.blocked_platform_probes,
+                  "metadata_reads": data.state.metadata_reads,
                   "git_reads": data.state.git_reads})
 
 
@@ -640,12 +661,157 @@ async def test_mount(mounted):
 
 
 @pytest.mark.asyncio
+async def test_skills(mounted):
+    """Real default composition/loader/request catalog; no provider completion."""
+    coordinator = mounted.session.coordinator
+    loader = coordinator.get("tools")["load_skill"]
+    curated = mounted.inputs.env.roots["skills"] / "skills"
+    info = await loader.execute({"info": "second-opinion"})
+    assert info.success, info.error
+    directory = Path(info.output["path"]).resolve().parent
+    assert directory == curated / "second-opinion"
+    assert (directory / "scripts/resolve_provider.py").is_file()
+    assert not loader.loaded_skills, "Default discovery must not load specialist bodies"
+
+    # Exercise the same visibility hook and context producer that build a request,
+    # without constructing a provider, asking for completion or executing a helper.
+    result = await coordinator.hooks.emit("provider:request", {"messages": []})
+    context = coordinator.get("context")
+    messages = await context.get_messages_for_request()
+    catalog = (result.context_injection or "") + json.dumps(messages, default=str)
+    assert "second-opinion" in catalog and "image-vision" in catalog
+    assert "coordinate-work" in catalog and "amplifier-shell" in catalog
+    assert not loader.loaded_skills
+
+    loaded = await loader.execute({"skill_name": "second-opinion"})
+    assert loaded.success and "--providers-json" in loaded.output["content"]
+    assert Path(loaded.output["skill_directory"]).resolve() == directory
+
+    # Use the existing public setup operation and real settings loader. Only
+    # synthetic guest connections are authored; no credentials/provider mounts.
+    # The outer management action additionally warms catalogs, deliberately not
+    # part of this offline metadata-to-helper case.
+    from amplifier_web.preferences import SettingsStore
+    from amplifier_web.setup import SetupManager
+    workspace = mounted.inputs.env.workspace
+    home = mounted.inputs.config.home
+    SettingsStore(home).update(workspace, "local", lambda values: values.update(config={"providers": [
+        {"id": "review-fixture", "module": "provider-openai",
+         "config": {"default_model": "fixture-review-model", "priority": 2}},
+    ]}))
+    public = await SetupManager(home).perform("providers.list", {"workspace": str(workspace)})
+    assert public["providersWorkspace"] == str(workspace)
+    roster = [{"id": row["id"], "provider_type": row["module"].removeprefix("provider-"),
+               "enabled": row["enabled"], "default_model": row["config"]["default_model"],
+               "priority": row["config"]["priority"]} for row in public["providers"]]
+    assert roster == [{"id": "review-fixture", "provider_type": "openai", "enabled": True,
+                       "default_model": "fixture-review-model", "priority": 2}]
+    scripts = directory / "scripts"
+    assert "provider_discovery" not in sys.modules
+    sys.path.insert(0, str(scripts))
+    try:
+        helper = importlib.import_module("provider_discovery")
+        assert Path(helper.__file__).resolve() == scripts / "provider_discovery.py"
+        unexpected = []
+
+        def no_cli(*args, **kwargs):
+            unexpected.append("cli")
+            raise AssertionError("Host roster must not query CLI")
+
+        resolved, status = helper.run_request(
+            config_id="review-fixture", model="fixture-review-model",
+            providers_json=json.dumps(roster), command_runner=no_cli)
+        assert status == 0 and resolved["ok"], resolved
+        assert resolved["provider_id"] == "review-fixture"
+        assert resolved["model"] == "fixture-review-model"
+        assert resolved["discovery_status"] == "unavailable"
+        assert resolved["inventory_unavailable_provider_ids"] == ["review-fixture"]
+        assert not unexpected
+    finally:
+        sys.path.remove(str(scripts))
+    mounted.report.update(case="skills", curated_source=str(curated),
+                          helper=str(directory / "scripts/resolve_provider.py"),
+                          catalog_observed=True, public_setup_roster=True,
+                          resolver_host_input=True, cli_calls=0, provider_completions=0)
+
+
+@pytest.mark.asyncio
 async def test_export(mounted):
     from amplifier_web.bundles import BundleManager
 
     expected = check_routing(mounted)
+    bundle = mounted.prepared.bundle
+    registry = mounted.session.coordinator.get_capability("web.registry")
+
+    def namespace_state():
+        return {
+            "source_base_paths": {key: str(value) for key, value in
+                                  (getattr(bundle, "source_base_paths", {}) or {}).items()},
+            "resource_bindings": copy.deepcopy(getattr(bundle, "_host_resource_namespaces", {})),
+            "registry": {name: {key: getattr(state, key, None) for key in
+                         ("uri", "local_path", "is_root", "root_name", "loaded_at")}
+                         for name, state in (registry.get_state() if registry else {}).items()},
+        }
+
+    before_collector = copy.deepcopy(namespace_state())
     resources = mounted.controls.export_resources()
+    assert namespace_state() == before_collector, "Collection must not resolve or repair namespaces"
     before = copy.deepcopy(resources)
+    if capture := os.environ.get("UNIFIED_EXPORT_CAPTURE"):
+        # Opt-in causal snapshot immediately before the unchanged serializer.
+        # Never embed complete instructions, context bodies or provider settings.
+        bundle = mounted.prepared.bundle
+        registry = mounted.session.coordinator.get_capability("web.registry")
+        states = registry.get_state() if registry else {}
+        roots = getattr(bundle, "source_base_paths", {}) or {}
+        foundation = mounted.inputs.env.roots["foundation"]
+        common = foundation / "context/shared/common-agent-base.md"
+        reference = re.compile(r"@foundation:([\w./-]+)")
+        instructions = []
+        for name, row in mounted.prepared.mount_plan.get("agents", {}).items():
+            refs = sorted(set(reference.findall(json.dumps(row, default=str))))
+            if refs:
+                instructions.append({
+                    "agent": name, "references": refs,
+                    "source_candidates": [str(path) for path in
+                        mounted.inputs.state.repositories.glob("*/agents/*.md")
+                        if path.stem == name.split(":")[-1]],
+                })
+        snapshot = {
+            "bundle": {"name": bundle.name, "base_path": str(getattr(bundle, "base_path", None)),
+                       "source_base_paths": {key: str(value) for key, value in roots.items()}},
+            "before_collector": before_collector,
+            "registry": {name: {key: getattr(state, key, None) for key in
+                         ("uri", "local_path", "is_root", "root_name", "loaded_at")}
+                         for name, state in states.items()},
+            "selected_bundle": mounted.inputs.config.active_bundle,
+            "configured_sources": mounted.inputs.config.settings.get("sources", {}).get("bundles", {}),
+            "collector": {
+                "namespaces": resources["namespaces"], "warnings": resources["warnings"],
+                "routingMatrix_present": "routingMatrix" in resources,
+                "context": [{key: row.get(key) for key in ("name", "uri", "relativePath")} |
+                            {"sha256": hashlib.sha256(row["text"].encode()).hexdigest()}
+                            for row in resources["context"]],
+            },
+            "foundation_common": {"path": str(common), "exists": common.is_file(),
+                                  "sha256": hashlib.sha256(common.read_bytes()).hexdigest()
+                                  if common.is_file() else None},
+            "foundation_mappings": [
+                {"namespace": name, "path": str(value), "resolved": str(Path(value).resolve()),
+                 "common_candidate": str(Path(value) / "context/shared/common-agent-base.md"),
+                 "inside_prepared_foundation": Path(value).resolve().is_relative_to(foundation.resolve())}
+                for name, value in roots.items() if name == "foundation"
+            ],
+            "agent_foundation_references": instructions,
+            "product": public_provenance(mounted.inputs.unified),
+            "foundation": public_provenance(mounted.inputs.foundation),
+            "fixture_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        }
+        with Path(capture).open("x") as stream:
+            json.dump(snapshot, stream, indent=2, sort_keys=True, default=str)
+        print("EXPORT_NAMESPACE_CAPTURE " + json.dumps({
+            "path": capture, "sha256": hashlib.sha256(Path(capture).read_bytes()).hexdigest()
+        }, sort_keys=True), flush=True)
     manager = BundleManager(mounted.inputs.config.home)
     exported = manager.export_document(
         mounted.inputs.config.settings, effective_plan=mounted.session.coordinator.config,
@@ -657,9 +823,22 @@ async def test_export(mounted):
     matrix = resources["routingMatrix"]
     assert matrix["roles"] and set(matrix["baseRoles"]) == set(expected)
     namespaces = {row["namespace"] for row in resources["namespaces"]}
-    assert {"unified", "imagegen", "computer-use", "context-intelligence", "routing-matrix"} <= namespaces
+    assert {"unified", "imagegen", "computer-use", "context-intelligence", "routing-matrix", "foundation"} <= namespaces
+    common_path = mounted.inputs.env.roots["foundation"] / "context/shared/common-agent-base.md"
+    common_text = common_path.read_text()
+    common_rows = [row for row in resources["context"]
+                   if row["name"] == "foundation:context/shared/common-agent-base.md"]
+    assert len(common_rows) == 1 and common_rows[0]["text"] == common_text
+    assert common_rows[0]["relativePath"] == "context/shared/common-agent-base.md"
+    foundation_head = subprocess.run(
+        ["git", "-C", str(mounted.inputs.env.roots["foundation"]), "rev-parse", "HEAD"],
+        capture_output=True, text=True, check=True, timeout=2).stdout.strip()
+    assert common_rows[0]["uri"].split("#", 1)[0].endswith("@" + foundation_head)
     assert set(mounted.prepared.bundle.context) <= {row["name"] for row in resources["context"]}, resources["warnings"]
-    document = yaml.safe_load(exported["content"].split("---", 2)[1])
+    # Instruction bodies may contain literal "---" text. Parse actual
+    # frontmatter delimiters rather than splitting inside a quoted YAML scalar.
+    from amplifier_foundation.io.frontmatter import parse_frontmatter
+    document, _ = parse_frontmatter(exported["content"])
     assert exported["includes"] == [] and "includes" not in document
     routing = _support._row(document["hooks"], "hooks-routing")["config"]
     assert routing["default_matrix"] == "balanced" and "custom_routing_dirs" not in routing
@@ -671,6 +850,25 @@ async def test_export(mounted):
         row["module"] for row in mounted.prepared.mount_plan["tools"]
     }
     assert set(document.get("agents", {})) == set(mounted.prepared.mount_plan.get("agents", {}))
+
+    def string_values(value):
+        if isinstance(value, str):
+            yield value
+        elif isinstance(value, dict):
+            for child in value.values():
+                yield from string_values(child)
+        elif isinstance(value, list):
+            for child in value:
+                yield from string_values(child)
+
+    expanded_agents = []
+    for name, row in mounted.prepared.mount_plan.get("agents", {}).items():
+        if "@foundation:context/shared/common-agent-base.md" in json.dumps(row):
+            assert any(common_text.strip() in text for text in string_values(document["agents"][name]))
+            expanded_agents.append(name)
+    assert set(expanded_agents) == {
+        "computer-use:computer-operator", "context-intelligence:graph-analyst",
+        "context-intelligence:session-navigator", "context-intelligence:server-data-ops"}
     incomplete = copy.deepcopy(resources)
     del incomplete["routingMatrix"]["baseRoles"]
     with pytest.raises(ValueError, match="shipped matrix"):
@@ -678,4 +876,7 @@ async def test_export(mounted):
                                 effective_plan=mounted.session.coordinator.config,
                                 resources=incomplete)
     mounted.report.update(case="export", routing="balanced", base_roles=sorted(expected),
+                          foundation_context_sha256=hashlib.sha256(common_text.encode()).hexdigest(),
+                          expanded_foundation_agents=sorted(expanded_agents),
+                          collector_namespace_state_unchanged=True,
                           export_sha256=hashlib.sha256(exported["content"].encode()).hexdigest())
