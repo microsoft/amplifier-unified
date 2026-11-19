@@ -619,8 +619,19 @@ class ContextContinuity:
         self._write_recovery()
         current_guard()
 
+    def _check_other_recovery_ownership(self, own):
+        for row in self._journal["attempts"].values():
+            if row is own:
+                continue
+            if (row["state"] in {"pending", "running", "installing", "unknown"}
+                    or row["state"] != "committed" and (
+                        row.get("candidateSha256") or row.get("kind") != "model-transition"
+                        and (row.get("progress") or row.get("completedParts")))):
+                raise ContextRecoveryError("recovery_unreconciled")
+
     async def _reconcile_transition(self, record):
         """Inspect a possibly committed install, never replay its write or calls."""
+        self._check_other_recovery_ownership(record)
         foreground = self._foreground()
         guard, contract = self._fresh_guard()
         if (contract != record["contract"] or record["identity"] != self._identity
@@ -661,14 +672,7 @@ class ContextContinuity:
         existing = self._journal["attempts"].get(command)
         # Check other ownership before either creating OR rebinding this row.
         # Its own acknowledged progress has separate, stricter resume guards.
-        for row in self._journal["attempts"].values():
-            if row is existing:
-                continue
-            if (row["state"] in {"pending", "running", "installing", "unknown"}
-                    or row["state"] != "committed" and (
-                        row.get("candidateSha256") or row.get("kind") != "model-transition"
-                        and (row.get("progress") or row.get("completedParts")))):
-                raise ContextRecoveryError("recovery_unreconciled")
+        self._check_other_recovery_ownership(existing)
         if existing:
             if existing["state"] == "committed":
                 if existing["contract"] != contract:

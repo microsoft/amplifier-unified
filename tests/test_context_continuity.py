@@ -738,9 +738,11 @@ def frozen_foreground_writer():
     return json.loads(data)
 
 
-@pytest.mark.parametrize('warm,lost_ack', [(False, False), (True, False), (False, True)])
+@pytest.mark.parametrize('warm,lost_ack,other_recovery', [
+    (False, False, None), (True, False, None), (False, True, None),
+    (False, True, 'unknown'), (False, True, 'refused-progress')])
 async def test_frozen_writer_composed_transition_keeps_source_proof_and_install_readback(
-        tmp_path, monkeypatch, warm, lost_ack):
+        tmp_path, monkeypatch, warm, lost_ack, other_recovery):
     from amplifier_core import ChatRequest, Message
     from amplifier_web.host.storage import SessionStore
     packet = frozen_foreground_writer()
@@ -833,6 +835,30 @@ async def test_frozen_writer_composed_transition_keeps_source_proof_and_install_
             assert pending['sourceCheckpointSha256'] == record['sha256']
             candidate_bytes = path.read_bytes()
             before = len(wire.compactions)
+            if other_recovery:
+                # A valid older journal may contain another unresolved owner.
+                # Candidate readback must not rebind past it on cold load.
+                other = {key: copy.deepcopy(pending[key]) for key in (
+                    'interruptionRevision', 'targetBytes', 'contract', 'identity',
+                    'sourceRevision', 'completedParts')}
+                other.update(commandId='other-generic',
+                    state='unknown' if other_recovery == 'unknown' else 'refused',
+                    progress={'retained': 'paid-prefix'} if other_recovery == 'refused-progress' else None)
+                if other_recovery == 'refused-progress':
+                    other['completedParts'] = 1
+                case.adapter._journal['attempts']['other-generic'] = other
+                case.adapter._write_recovery()
+                journal_bytes = case.adapter.recovery_path.read_bytes()
+                case.adapter._journal = None  # Actual parsed two-row cold journal.
+                origin.update(inputId='new-target-input', generationId='new-frozen-generation')
+                coordinator.register_capability('context.recovery.recover', recover)
+                with pytest.raises(RuntimeError, match='recovery_unreconciled'):
+                    await prepare()
+                assert case.adapter.recovery_path.read_bytes() == journal_bytes
+                assert path.read_bytes() == candidate_bytes
+                assert len(installs) == len(writes) == 1
+                assert len(wire.compactions) == before
+                return
             with pytest.raises(RuntimeError, match='recovery_unreconciled'):
                 await prepare()
             origin.update(inputId='new-target-input', generationId='new-frozen-generation')
