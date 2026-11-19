@@ -22,9 +22,21 @@ try{
  const url=await new Promise((resolve,reject)=>{let text='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),20000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});fixture.stdout.on('data',chunk=>{text+=chunk;for(const line of text.split('\n'))try{const value=JSON.parse(line);if(value.url){clearTimeout(timer);resolve(value.url)}}catch{}})});
  browser=await chromium.launch({headless:true});
  const context=await browser.newContext({viewport:{width:1440,height:1000},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'},reducedMotion:'no-preference',colorScheme:'light'});
- // Forward actual authenticated WebSocket frames, holding only delivery for
- // the reconnect proof. Never fabricate a baseline or mutate browser state.
- const sockets=[];let holdFrames=false;
+ // Hold genuine snapshots on both delivery paths. HTTP recovery can update
+ // raw state without making the current WebSocket baseline ready.
+ const sockets=[];let holdFrames=false,httpHold=null;
+ await context.route(url=>['/api/state','/api/actions'].includes(url.pathname),async route=>{
+  const response=await route.fetch(),body=await response.json();
+  const path=new URL(route.request().url()).pathname,snapshot=path==='/api/state'?body:body.state;
+  const hold=httpHold;
+  if(hold&&snapshot){
+   assert.ok(hold.responses.length<32,'Bounded held HTTP snapshots');
+   hold.responses.push({path,active:snapshot.appActivity?.active});
+   await hold.wait;
+  }
+  // Compact action acknowledgments must pass through to trigger real recovery.
+  await route.fulfill({response});
+ });
  await context.routeWebSocket('**/api/events/ws?*',socket=>{
   const server=socket.connectToServer(),entry={socket,server,frames:[],closed:false};sockets.push(entry);
   server.onMessage(message=>{
@@ -83,7 +95,8 @@ try{
   await expect.poll(async()=>(await state()).appActivity.active).toBe(prior==='working');
   report.reconnects.push({phase:'before-hold',prior,appActivity:(await state()).appActivity});
   const previousSocket=sockets.at(-1);assert.ok(previousSocket,'Real state WebSocket is used');
-  holdFrames=true;
+  const heldHttp={responses:[]};heldHttp.wait=new Promise(resolve=>{heldHttp.release=resolve});
+  holdFrames=true;httpHold=heldHttp;
   try{
    // Server state changes while the old browser snapshot is retained. The
    // replacement connection must not claim that old active OR idle is current.
@@ -96,18 +109,31 @@ try{
    const current=sockets.at(-1);
    await expect(app).toHaveAttribute('data-app-connection','connected');
    await expect.poll(()=>current.frames.some(message=>JSON.parse(String(message)).event==='state')).toBe(true);
+   // The ordinary draft action waits for its receipt revision. With stream
+   // delivery held, it recovers through HTTP; retain the actual server response.
+   const recovery=action('view.update',{sessionId:selected,patch:{draft:'Retained Night Drive draft'}})
+    .then(receipt=>({receipt}),error=>({error:String(error)}));
+   await expect.poll(()=>heldHttp.responses.some(response=>response.active===(next==='working'))).toBe(true);
    await expect(app).toHaveAttribute('data-app-activity','unknown');
-   assert.equal((await state()).appActivity.active,prior==='working','Old snapshot remains retained until baseline delivery');
+   assert.equal((await state()).appActivity.active,prior==='working','Old snapshot remains retained while HTTP and stream delivery are held');
    const unready=await measure('reconnect open after '+previousActivity);
    assert.equal(unready.animation,'none');assert.ok(!unready.image.includes('rgb(189, 119, 112)'),'Unknown has no active hotspot');
+   httpHold=null;heldHttp.release();
+   const recovered=await recovery;assert.equal(recovered.receipt?.accepted,true,recovered.error||'Recovery action accepted');
+   await expect.poll(async()=>(await state()).appActivity.active).toBe(next==='working');
+   await expect(app).toHaveAttribute('data-app-activity','unknown');
+   const httpOnly=await measure('HTTP recovery before stream baseline after '+previousActivity);
+   assert.equal(httpOnly.animation,'none');assert.ok(!httpOnly.image.includes('rgb(189, 119, 112)'),'HTTP recovery alone has no active hotspot');
    const held=current.frames.splice(0);holdFrames=false;
    for(const message of held)current.socket.send(message);
    const expected=next==='working'?'active':'idle';
    await expect(app).toHaveAttribute('data-app-activity',expected);
    assert.equal((await state()).appActivity.active,next==='working');
    report.reconnects.push({prior:previousActivity,transportOpen:true,baselineHeld:true,
-    during:'unknown',animation:unready.animation,heldFrames:held.length,after:expected});
-  }finally{holdFrames=false}
+    during:'unknown',animation:unready.animation,httpResponses:heldHttp.responses,
+    httpRecoveryBeforeStream:{active:(next==='working'),activity:'unknown',animation:httpOnly.animation},
+    heldFrames:held.length,after:expected});
+  }finally{httpHold=null;heldHttp.release();holdFrames=false}
  }
  // Local attention remains a native notice; decoration never acknowledges it.
  const created=await action('question.create',{sessionId:other,prompt:'Synthetic optional design check',required:false,dependency:'Synthetic appearance attention check'});
