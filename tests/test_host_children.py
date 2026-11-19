@@ -25,10 +25,13 @@ def test_real_foundation_child_lifecycle_and_delegate_contract():
     if not python:
         pytest.skip('Set UNIFIED_RUNTIME_PYTHON to a warmed standalone runtime for the real-core probe')
     probe=Path(__file__).parent/'fixtures/standalone_children_probe.py'
-    result=subprocess.run([python,str(probe)],text=True,capture_output=True,timeout=30)
+    result=subprocess.run([python,'-B',str(probe)],text=True,capture_output=True,timeout=30)
     assert result.returncode==0,result.stderr+result.stdout
     assert '"delegate_compatible": true' in result.stdout
     assert '"failed_resume_preserved": true' in result.stdout
+    assert '"five_concurrent_persistent": true' in result.stdout
+    assert '"parent_stop_cancelled_five": true' in result.stdout
+    assert '"delegate_context_cleanup": true' in result.stdout
     assert '"cli_imports": false' in result.stdout
 
 
@@ -37,7 +40,7 @@ def test_real_community_recipe_completes_its_report_step():
     if not python or not os.environ.get('WARM_RECIPES_PATH'):
         pytest.skip('Set UNIFIED_RUNTIME_PYTHON and WARM_RECIPES_PATH for the community recipe probe')
     probe = Path(__file__).parent / 'fixtures/recipe_children_probe.py'
-    result = subprocess.run([python, str(probe)], text=True, capture_output=True, timeout=30)
+    result = subprocess.run([python, '-B', str(probe)], text=True, capture_output=True, timeout=30)
     assert result.returncode == 0, result.stderr + result.stdout
     assert '"recipe_report_completed": true' in result.stdout
     assert '"approval_preserved": true' in result.stdout
