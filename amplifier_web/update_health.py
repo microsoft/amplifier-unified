@@ -399,6 +399,8 @@ def environment_repaired(manager, batch):
 
 def retry_decision(batch, key):
     retry = batch.get('retry') or {}
+    if retry.get('mode') == 'fresh-intent':
+        return None  # The old candidate was retired, not retried.
     if retry.get('mode') == 'inspect':
         return 'inspect'  # Changed inputs cannot prove an uncertain effect absent.
     if retry.get('inputKey') != key:
@@ -474,22 +476,44 @@ async def candidate_copy(proof, operation, *args):
         proof['copySettled'] = task.done() and not task.cancelled()
 
 
-def reconcile_preparation(manager):
-    """Permit fresh intent only after a proven inactive, settled copy attempt.
+def preparation_owner_stopped(manager, proof):
+    """Require a different host run AND passive proof its process has exited.
 
-    Called under the update lock. Never resumes the old candidate or infers
-    settlement for legacy/unknown fetch, validation, activation or rollback.
+    A different instance ID alone is not process-exit evidence (another host
+    may exist). Missing/legacy ownership, PID reuse and liveness uncertainty
+    retain the fence. Never signal a Windows process to test its liveness.
+    """
+    from .generation_leases import _process_exists
+    host = getattr(manager.service, 'instance_id', None)
+    owner, pid = proof.get('host'), proof.get('hostPid')
+    if (not isinstance(host, str) or not host or not isinstance(owner, str)
+            or not owner or owner == host or type(pid) is not int or not 0 < pid <= 0xFFFFFFFF):
+        return False
+    try:
+        return not _process_exists(pid)
+    except (OSError, OverflowError, ValueError):
+        return False
+
+
+def reconcile_preparation(manager):
+    """Retire inert preparation, never resume it or establish update success.
+
+    Called under the update lock. A settled snapshot can be retired by explicit
+    intent in its own host; later preparation requires a successor host. Neither
+    path permits a validated candidate, activation or rollback effects.
     """
     diagnostics = manager.diagnostics.state
     batch = diagnostics.get('componentPreparation') or {}
     proof = batch.get('preparation') or {}
     state = manager.service.state['updates']
     candidate = proof.get('candidate')
+    stopped = preparation_owner_stopped(manager, proof)
+    settled_copy = proof.get('boundary') == 'copy-only' and proof.get('copySettled') is True
     if (diagnostics.get('storageUnavailable') or batch.get('kind') != 'ecosystem'
             or not batch.get('attemptId')
             or not isinstance(candidate, str) or not re.fullmatch('[a-f0-9]{32}', candidate)
             or batch.get('revision') != candidate
-            or proof.get('boundary') != 'copy-only' or proof.get('copySettled') is not True
+            or not (settled_copy or stopped and proof.get('boundary') in {'copy-only', 'preparing'})
             or not proof.get('interruptedAt') or 'activeBefore' not in proof
             or any(state.get(key) for key in ('pendingApp', 'pendingRelease', 'pendingRollback',
                                               'pendingRestart', 'pendingReplacement', 'pendingSmartTools'))
@@ -500,7 +524,8 @@ def reconcile_preparation(manager):
         stage = manager.directory / 'releases' / candidate
         if (stage.is_symlink() or stage.resolve() != manager.directory.resolve() / 'releases' / candidate
                 or [stage.stat().st_dev, stage.stat().st_ino] != proof.get('directoryIdentity')
-                or any((stage / name).exists() for name in ('plan.json', 'validated.json'))
+                or any((stage / name).exists() or (stage / name).is_symlink()
+                       for name in (('validated.json',) if stopped else ('plan.json', 'validated.json')))
                 or candidate in (active_release(manager.home).get('current'), active_release(manager.home).get('previous'))
                 or pointer_witness(manager) != proof['activeBefore']):
             return False
@@ -622,7 +647,7 @@ def current(state, evidence=None, *, manual_verified=None, explicit_retry=False,
                       action='diagnostics' if state.get('error') else None)
     if pending_preparation(diagnostics):
         return result('action-required', 'Component preparation was interrupted',
-                      'Automatic component work is paused. A deliberate update can start a new candidate only after settled copy-only preparation is verified; other uncertain effects require diagnostic review.',
+                      'Component updates are paused. Restart Amplifier, then check for updates. A new host can retire an inactive candidate only when its recorded owner has stopped; unknown ownership or other uncertain outcomes need diagnostic review.',
                       action='diagnostics')
     outcomes = state.get('componentResults') or []
     retained = [row for row in outcomes if row.get('status') in {'failed', 'dependency-held'}]
