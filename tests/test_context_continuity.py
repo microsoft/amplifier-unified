@@ -1398,7 +1398,23 @@ async def test_lazy_restore_requires_committed_recovery_candidate(tmp_path, stat
 @pytest.mark.parametrize('explicit_engine', [False, True])
 async def test_live_plan_default_boundary_retains_native_checkpoint_across_reload(tmp_path, explicit_engine):
     from amplifier_web.host.session import live_plan
-    from amplifier_core import ChatRequest, Message
+    from amplifier_core import ChatRequest, Message, ToolSpec
+
+    async def settle_checkpoint(coordinator, selected):
+        # Same assembled request and counting seam as native_fixture.
+        async def count_view(rows):
+            request = ChatRequest(messages=[Message(**row) for row in rows],
+                tools=[ToolSpec(name='fixture_read', description='Read only', parameters={})])
+            return {'dispatch': request, 'budget_decision':
+                    await selected.request_budget(request, context_estimate=10000)}
+        schedule = coordinator.get_capability('context.schedule_settled_compaction')
+        assert callable(schedule)
+        assert schedule(provider=selected, count_view=count_view,
+                        retain_contents=['Accepted reminder: retain result identities.'])
+        task = coordinator.context._maintenance_task
+        assert task is not None
+        await task  # Scheduling is not successful settlement.
+
     requested = {'module': 'context-managed', 'config': {
         'max_tokens': 20000, 'summarize_trigger': .2,
         # This checks checkpoint continuity, not archive selection/omission.
@@ -1406,10 +1422,12 @@ async def test_live_plan_default_boundary_retains_native_checkpoint_across_reloa
         **({'engine': 'boundary'} if explicit_engine else {})}}
     plan, _ = live_plan({'session': {'orchestrator': 'loop-live', 'context': requested}})
     config = plan['session']['context']['config']
+    assert config['foreground_continuation'] is True
+    assert config['compaction_schedule'] == 'after_turn'
     original = native_history()
     original[1]['content'] = 'FILLER:' + 'research ' * 12000
 
-    c, raw, _, adapter, checkpoint, transcript, prepare = await native_fixture(
+    c, raw, selected, adapter, checkpoint, transcript, prepare = await native_fixture(
         tmp_path, original, context_config=config)
     raw_limit = raw.input_limit
     # Canonical history is larger than the continuation budget, not merely
@@ -1419,6 +1437,11 @@ async def test_live_plan_default_boundary_retains_native_checkpoint_across_reloa
     raw.input_limit = 50000
     result = await prepare()
     assert result['final_attempt']['budget_decision']['estimated_input_tokens'] < raw_limit
+    assert raw.compactions == raw.sent == []
+    assert c.context.summary is None and not adapter.path.exists()
+    # This direct fixture supplies the settled-turn boundary explicitly; fitting
+    # the foreground request must not start optional paid generation itself.
+    await settle_checkpoint(c, selected)
     await checkpoint()
     assert adapter.path.is_file(), 'Default Boundary must persist the accepted native checkpoint'
     first = json.loads(adapter.path.read_text())
@@ -1427,11 +1450,11 @@ async def test_live_plan_default_boundary_retains_native_checkpoint_across_reloa
     assert json.loads(transcript.read_text()) == original
     assert raw.sent == [] and len(raw.compactions) == 1
 
-    # A fresh context/host adapter receives the same originals but cannot
-    # compact this prefix again. Only restoring the accepted checkpoint works.
+    # A fresh adapter restores without another compaction; ordinary request
+    # counting is still required, not a zero-provider-call promise.
     next_raw = SyntheticNativeProvider()
     next_raw.nonreducing = True
-    newer, next_raw, _, restored, _, _, next_prepare = await native_fixture(
+    newer, next_raw, next_selected, restored, _, _, next_prepare = await native_fixture(
         tmp_path, original, provider=next_raw, context_config=config)
     restored.save()
     assert restored.path.read_bytes() == saved_bytes
@@ -1452,6 +1475,11 @@ async def test_live_plan_default_boundary_retains_native_checkpoint_across_reloa
     ]:
         await newer.context.add_message(row)
     next_raw.input_limit = 50000
+    foreground_second = await next_prepare()
+    assert foreground_second['final_attempt']['budget_decision']['estimated_input_tokens'] < raw_limit
+    assert next_raw.compactions == next_raw.sent == []
+    assert restored.path.read_bytes() == saved_bytes
+    await settle_checkpoint(newer, next_selected)
     second_view = await next_prepare()
     restored.save()
     second = json.loads(restored.path.read_text())
