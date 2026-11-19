@@ -29,6 +29,31 @@ def target(session):
             'executionRevision': 0 if session.get('executionRevision') is None else session['executionRevision']}
 
 
+def saved_fork_choice(session, message):
+    """Old local forks inherited model options, never the host's account binding.
+
+    All writers of that binding on an existing fork save the selected options as
+    part of the same choice. A verified digest upgrade requires an existing key.
+    A transferred session intentionally drops it. The worker still checks its
+    native fork metadata, current model options and the actual mounted account.
+    """
+    parent = session.get('parentId')
+    fork = session.get('forkTranscript')
+    if not parent or not isinstance(fork, dict) or fork.get('sourceSessionId') != parent:
+        return None
+    selection = session.get('selection')
+    revision = session.get('nextMessageRevision', 0)
+    if (parent == session['id']
+            or session.get('runtimeSessionId') != session['id'] or session.get('nativeIdentity') != session['id']
+            or not session.get('modelConnectionKey') or not isinstance(selection, dict)
+            or not selection.get('instance') or not selection.get('model') or type(revision) is not int or revision < 0
+            or session.get('pendingModelSelection') or session.get('pendingBundleSelection') or session.get('portabilityOrigin')
+            or message.get('inputOrigin') not in {'ui', 'user'} or message.get('role') != 'user'
+            or message.get('steering') or message.get('handoffOrigin')):
+        return None
+    return {'sessionId': session['id'], 'parentId': parent, 'revision': revision, 'selection': selection}
+
+
 def pending_input(service, session):
     """Use existing admission evidence, never load retired display payloads."""
     from .execution import LIVE_PHASES, voice_usage_turns

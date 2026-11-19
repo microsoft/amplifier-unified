@@ -321,6 +321,31 @@ class RuntimeControls:
                 "selectionRevision": self.selection_revision,
                 "selectionBinding": self.selection_binding}
 
+    def restore_applied_fork_choice(self, receipt):
+        """Bind a fork's own acknowledged choice, never its parent's controls."""
+        if (self.selection_revision or self.selection_cleared or self.preserve_configuration or self._selection_unbound_override
+                or not receipt.get("parentId")
+                or self.coordinator.get_capability("web.context_transition.fork_parent") != receipt["parentId"]
+                or receipt.get("sessionId") != self.session.session_id
+                or receipt.get("selection") != self.selection or not self.selection
+                or not receipt.get("connection") or type(receipt.get("revision")) is not int
+                or receipt["revision"] < 0 or self.selection_binding not in (None, receipt["connection"])):
+            return
+        from .provider_catalog import require_mounted_binding
+        require_mounted_binding(self.coordinator, self.selection["instance"], receipt["connection"])
+        previous_binding = self.selection_binding
+        self.selection_revision = str(uuid.uuid5(uuid.NAMESPACE_URL, "amplifier/fork-choice/" +
+            json.dumps(receipt, sort_keys=True, separators=(",", ":"))))
+        self.selection_binding = receipt["connection"]
+        try:
+            self.persist(task_only=True)
+        except BaseException:
+            # A failed write cannot grant in-memory admission. An exact retry
+            # derives the same revision even if the write reached disk.
+            self.selection_revision = None
+            self.selection_binding = previous_binding
+            raise
+
     def transition_foreground(self):
         """A saved choice plus an actually delivered new ordinary input.
 

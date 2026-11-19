@@ -190,8 +190,12 @@ including a later in-place bundle change that keeps the fork's inherited model
 pin; account-binding fields from the source execution are not copied as admission.
 If an older fork or portable control schema omitted the revision, retained canonical
 fork metadata still prevents the inherited pin from being migrated as a legacy
-choice. Such an ambiguous historical fork needs a new explicit selection even if
-the person had previously selected a model under the old schema. This admission
+choice. A new ordinary human Send can recover a choice explicitly applied on
+that fork when its host selection has a saved connection binding created by a
+local choice. Fork creation and transfer do not copy this binding. The idle worker verifies
+the selected options and mounted account again and restores one stable revision.
+A fork with only an inherited pin or missing account binding still needs a new
+explicit selection. This admission
 rule does not claim portable transfer of the recovery journal or its paid ledger.
 Historical explicit-recovery dispositions are not fresh recovery commands, and
 must not skip a separate model-transition check. An effect-free failed or refused

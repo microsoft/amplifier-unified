@@ -105,6 +105,17 @@ class SelectedProvider:
         self._overflow_feedback = OverflowFeedback()
     def _execution_provider(self):
         return self.execution_adapter(self.original) if callable(self.execution_adapter) else self.original
+
+    def owns_budget_route(self, provider):
+        """Recognize the loop's exact pre-transport wrapper around this selection."""
+        if provider is self:
+            return True
+        try:
+            from amplifier_module_loop_streaming._request_refit import RefitProvider
+        except ImportError:
+            return False
+        return type(provider) is RefitProvider and provider.provider is self
+
     def __getattr__(self, name):
         if name == "default_model" and self.selection.get("model"):
             return self.selection["model"]
@@ -1423,6 +1434,9 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         continuity = None
         coordinator.register_capability("web.context_transition.originals",
                                         bool(saved and saved[1].get("fork")))
+        fork = saved[1].get("fork") if saved else None
+        if isinstance(fork, dict) and fork.get("source_session_id") and not saved[1].get("portabilityOrigin"):
+            coordinator.register_capability("web.context_transition.fork_parent", fork["source_session_id"])
         published_anchors = None
         def recovery_write_guard():
             # A recovery write uses the same native ownership checks, without
