@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+from types import SimpleNamespace
 
 repo = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(repo))
@@ -14,7 +15,10 @@ foundation = Path(os.environ.get("WARM_FOUNDATION_PATH", repo.parent / "repos/am
 sys.path.insert(0, str(foundation / "modules/tool-delegate"))
 from amplifier_foundation.bundle import Bundle, PreparedBundle, BundleModuleResolver
 from amplifier_module_loop_live.runtime import Runtime
-from amplifier_web.host.children import install_children, child_plan, StandaloneHostAdapter
+from amplifier_web.host.children import (
+    install_children, child_plan, StandaloneHostAdapter, Children, PersistentDelegate,
+    _PERSISTENT, _PREFERENCES_SOURCE, _CALL_ROLE,
+)
 from amplifier_web.host.storage import SessionStore
 from amplifier_web.host.approvals import Approvals
 
@@ -54,6 +58,151 @@ class ProbePrepared(PreparedBundle):
         created.append({'id':session.session_id,'parent':kwargs.get('parent_id'), 'resumed':kwargs.get('is_resumed'), 'session':session})
         await session.coordinator.mount('orchestrator',FiniteOrchestrator())
         return session
+
+async def check_delegate_context_cleanup():
+    """Exercise the public wrapper with deterministic success/failure boundaries."""
+    from amplifier_core import ToolResult
+    pin = [{'provider': 'fixture', 'model': 'pinned-model'}]
+    coordinator = SimpleNamespace(
+        session_id='wrapper-parent', config={'agents': {'pinned': {'provider_preferences': pin}}},
+        get_capability=lambda name: name == 'web.default_routing_policy')
+    registry = Children(None, SimpleNamespace(load=lambda _: ([], {
+        'parent_id': coordinator.session_id, 'preferences_source': 'explicit',
+        'provider_preferences': pin})), None)
+    seen = []
+    class Delegate:
+        provider_selection_enabled = True
+        input_schema = {'properties': {}}
+        async def execute(self, supplied):
+            seen.append((supplied, _PERSISTENT.get(), _PREFERENCES_SOURCE.get(), _CALL_ROLE.get()))
+            # Force a suspension inside the wrapper's context.
+            await asyncio.sleep(0)
+            if supplied['instruction'] == 'cancel':
+                raise asyncio.CancelledError
+            if supplied['instruction'] == 'error':
+                raise RuntimeError('fixture delegate failure')
+            if supplied['instruction'] == 'resource':
+                raise OSError('fixture resource unavailable')
+            if supplied['instruction'] == 'failed-result':
+                return ToolResult(success=False, error={'message': 'fixture rejection'})
+            return ToolResult(success=True, output='returned')
+    wrapper = PersistentDelegate(Delegate(), registry, coordinator)
+    variables = (_PERSISTENT, _PREFERENCES_SOURCE, _CALL_ROLE)
+    outer = (True, 'outer-source', ('outer-coordinator', 'outer-role'))
+    tokens = [variable.set(value) for variable, value in zip(variables, outer)]
+    try:
+        for outcome, error in (('returned', None), ('cancel', asyncio.CancelledError),
+                               ('error', RuntimeError), ('resource', OSError),
+                               ('failed-result', None)):
+            arguments = {'agent': 'pinned', 'instruction': outcome, 'persistent': True, 'model_role': 'coding'}
+            try:
+                result = await wrapper.execute(arguments)
+            except BaseException as exc:
+                assert error is not None and isinstance(exc, error), exc
+            else:
+                assert error is None
+                assert result.success == (outcome != 'failed-result')
+            assert tuple(variable.get() for variable in variables) == outer
+            assert seen[-1][0] == {'agent': 'pinned', 'instruction': outcome,
+                                  'model_role': 'coding', 'provider_preferences': pin}
+            assert seen[-1][1:] == (True, 'explicit', (coordinator, 'coding'))
+            assert arguments['persistent'] is True and 'provider_preferences' not in arguments
+        # The default stays finite, and resume preserves the saved explicit pin.
+        await wrapper.execute({'session_id': 'saved-child', 'instruction': 'returned', 'model_role': 'coding'})
+        assert seen[-1][0]['provider_preferences'] == pin
+        assert seen[-1][1:] == (False, 'explicit', (coordinator, 'coding'))
+        await wrapper.execute({'agent': 'self', 'instruction': 'returned', 'model_role': 'fast', 'persistent': False})
+        assert seen[-1][1:] == (False, 'role', (coordinator, 'fast'))
+        before = len(seen)
+        invalid = await wrapper.execute({'persistent': 'true'})
+        assert not invalid.success and len(seen) == before
+        assert tuple(variable.get() for variable in variables) == outer
+    finally:
+        for variable, token in reversed(list(zip(variables, tokens))):
+            variable.reset(token)
+
+async def check_five_workers_and_parent_stop(parent, registry, wrapper):
+    """Real Core/Foundation children; real Live owner and Worker Stop, no inference."""
+    from amplifier_module_loop_live.host import HostAdapter
+    from amplifier_module_loop_live.orchestrator import BundleLiveOrchestrator
+    from amplifier_web.runtime_worker import Worker
+    root_runtime = Runtime(parent.session_id)
+    ready = asyncio.Event()
+    tasks = []
+    admission_errors = []
+    initial = set(registry.rows)
+    def active_rows():
+        return [row for identity, row in registry.rows.items() if identity not in initial]
+    async def wait_idle_count(count):
+        for _ in range(400):
+            rows = active_rows()
+            if len(rows) == count and all(row['status'] == 'idle' for row in rows):
+                return
+            if any(task.done() for task in tasks):
+                admission_errors.append(f'Only {len(rows)} persistent children admitted: '
+                                        f'{[task.result() for task in tasks if task.done()]}')
+                raise AssertionError(admission_errors[-1])
+            await asyncio.sleep(.005)
+        raise AssertionError(f'{count} concurrent persistent children did not become idle')
+    class OwnerHost(HostAdapter):
+        async def prepare_execution(self, loop, coordinator, providers):
+            return root_runtime, providers, None
+    class OwnerLoop(BundleLiveOrchestrator):
+        def _select_provider(self, providers):
+            return SimpleNamespace(native_bundle_live=False)
+        async def _execute_guarded_goal(self, *args, **kwargs):
+            for index in range(4):
+                tasks.append(asyncio.create_task(wrapper.execute({
+                    'agent': 'worker', 'instruction': f'overlapping-{index}', 'persistent': True})))
+            await wait_idle_count(4)
+            assert all(not task.done() for task in tasks)
+            tasks.append(asyncio.create_task(wrapper.execute({
+                'agent': 'worker', 'instruction': 'overlapping-4', 'persistent': True})))
+            await wait_idle_count(5)
+            assert all(not task.done() for task in tasks), 'All five execute calls must overlap'
+            assert all(row['sessionId'] in registry.sessions and row.get('runtime') for row in active_rows())
+            ready.set()
+            return await asyncio.gather(*tasks)
+    # Keep tool jobs out of this test: it targets concurrent execute admission,
+    # not Live's independently configurable background-job admission.
+    await parent.coordinator.mount('orchestrator', OwnerLoop({}))
+    parent.coordinator.register_capability('live.host', OwnerHost())
+    owner = asyncio.create_task(parent.execute('start five eligible persistent executes'))
+    worker = Worker()
+    worker.session, worker.runtime = parent, root_runtime
+    try:
+        ready_wait = asyncio.create_task(ready.wait())
+        try:
+            done, _ = await asyncio.wait({owner, ready_wait}, timeout=5, return_when=asyncio.FIRST_COMPLETED)
+            if owner in done:
+                try:
+                    await owner
+                except Exception:
+                    if admission_errors:
+                        raise AssertionError(admission_errors[-1])
+                    raise
+            assert ready_wait in done and ready.is_set(), f'Fifth admission failed; owner done={owner.done()}'
+        finally:
+            ready_wait.cancel()
+            await asyncio.gather(ready_wait, return_exceptions=True)
+        await worker.command({'op': 'stop'})
+        await asyncio.wait_for(owner, 5)
+        # Core's execute awaiter can settle before the cancelled Python child
+        # awaiters finish their checkpoint/cleanup. Observe that settlement too.
+        await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), 5)
+        assert worker.stop_revision == 1 and root_runtime.stop_requested and root_runtime.closed
+        assert len(active_rows()) == 5 and all(task.cancelled() for task in tasks)
+        for row in active_rows():
+            assert row['status'] == 'cancelled'
+            assert not any(key in row for key in ('task', 'runtime', '_owner'))
+            assert registry.store.load(row['sessionId'])[1]['status'] == 'cancelled'
+        assert set(registry.sessions) == {parent.session_id} and not registry.admissions
+        assert not _PERSISTENT.get() and _PREFERENCES_SOURCE.get() is None and _CALL_ROLE.get() is None
+    finally:
+        for task in [owner, *tasks]:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(owner, *tasks, return_exceptions=True)
 
 async def run():
     async def ask(prompt, choices):
@@ -199,9 +348,11 @@ async def run():
         assert 'REVISED-CHILD-CONTEXT' in mentioned_row['report']
         await registry.control(mentioned_row['sessionId'], 'finish')
         assert (await asyncio.wait_for(mentioned_task, 2)).success
+        await check_five_workers_and_parent_stop(parent, registry, wrapper)
+        await check_delegate_context_cleanup()
     await parent.cleanup()
     assert not any(name.startswith(('amplifier_app_cli','amplifier_loop_live_cli')) for name in sys.modules)
-    print(json.dumps({'real_child_lineage':True,'checkpoint_resume':True,'failed_resume_preserved':True,'approval_denied':True,'delegate_compatible':True,'persistent_steering':True,'provider_instances':True,'runtime_mentions':True,'cli_imports':False}))
+    print(json.dumps({'real_child_lineage':True,'checkpoint_resume':True,'failed_resume_preserved':True,'approval_denied':True,'delegate_compatible':True,'persistent_steering':True,'provider_instances':True,'runtime_mentions':True,'five_concurrent_persistent':True,'parent_stop_cancelled_five':True,'delegate_context_cleanup':True,'cli_imports':False}))
 
 if __name__=='__main__':
     asyncio.run(run())

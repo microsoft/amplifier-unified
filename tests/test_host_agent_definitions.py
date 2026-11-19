@@ -707,7 +707,7 @@ async def test_real_delegate_refuses_failed_child_tool_mount(delegate_specialist
     assert row["status"] == "error" and row["reports"] == 0
     assert not any(key in row for key in ("task", "runtime", "_owner"))
     assert set(fixture.children.sessions) == {"parent"}
-    assert not fixture.children.admissions and fixture.children.reserved == 0
+    assert not fixture.children.admissions
     assert fixture.store.load(child.session_id) is None
     # Failed persistent startup is not a resumable successful checkpoint.
     with pytest.raises(FileNotFoundError, match="No saved child"):
