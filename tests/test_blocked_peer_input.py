@@ -83,6 +83,12 @@ async def task_app(cross_app, monkeypatch):
     source, target = service.state["sessions"]
     monkeypatch.setenv("AMPLIFIER_WEB_HOME", str(service.data_dir))
     owner = controls(target["id"])
+    # Every real entry-path negative in this suite runs with a stale refusal
+    # and an available current budget: only the actual task/Stop/owner binding
+    # may reject it, never the historical diagnostic.
+    owner.capacity.policy.update(enabled=True, maxTotalTokens=1000)
+    owner.capacity.last_denial = {
+        "budgetRevision": owner.capacity.policy["revision"], "reasons": ["Obsolete allowance"]}
     async def control(sid, operation, args):
         assert sid == target["id"]
         return await owner.perform(operation, args)
@@ -341,7 +347,7 @@ async def test_owner_resumes_resolved_agent_block_without_resetting_limits(task_
     assert resumed["artifactRefs"] == ["urn:fixture:verified-dependency"]
     assert resumed["changes"][-1]["origin"] == "agent"
     assert ctx.owner.capacity.policy == policy and ctx.owner.capacity.last_denial == denial
-    assert await ctx.owner.tasks.continuation_allowed() is (not capacity_denied)
+    assert await ctx.owner.tasks.continuation_allowed()
     assert ctx.app.runtime.inputs == before_inputs, 'task.resume must not itself send or replay an input'
     assert ctx.app.state["selectedSessionId"] == selection and ctx.app.state["view"]["draft"] == draft
 
@@ -564,7 +570,7 @@ async def test_blocked_peer_eligibility_preserves_capacity_denial_and_goal_state
     assert not await ctx.owner.tasks.continuation_allowed()
     denial = {"budgetRevision": policy["revision"], "state": "paused"}
     ctx.owner.capacity.last_denial = copy.deepcopy(denial)
-    assert not await ctx.owner.tasks.peer_input_allowed()
+    assert await ctx.owner.tasks.peer_input_allowed()
     assert not await ctx.owner.tasks.continuation_allowed()
     assert ctx.owner.capacity.last_denial == denial and ctx.owner.capacity.policy == policy
     assert ctx.owner.tasks.record() == before and ctx.owner.coordinator.session_state["goal"] is None

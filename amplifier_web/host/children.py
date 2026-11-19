@@ -356,7 +356,6 @@ class Children:
         self.admission_gate = None
         self.prepared = {}
         self.sessions = {}
-        self.reserved = 0
         self.host_adapter = host_adapter or StandaloneHostAdapter(self)
         self.host_adapter.registry = self
 
@@ -983,10 +982,7 @@ class PersistentDelegate:
         persistent = input.get("persistent", False)
         if not isinstance(persistent, bool):
             return ToolResult(success=False, error={"message": "persistent must be a boolean"})
-        if persistent and self.registry.reserved >= 4:
-            return ToolResult(success=False, error={"message": "Four persistent workers are already active"})
         token = _PERSISTENT.set(persistent)
-        self.registry.reserved += int(persistent)
         origin_token = None
         role_token = None
         try:
@@ -1013,7 +1009,6 @@ class PersistentDelegate:
                 _PREFERENCES_SOURCE.reset(origin_token)
             if role_token is not None:
                 _CALL_ROLE.reset(role_token)
-            self.registry.reserved -= int(persistent)
             _PERSISTENT.reset(token)
 
 
