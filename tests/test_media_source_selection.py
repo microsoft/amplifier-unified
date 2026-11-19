@@ -18,16 +18,17 @@ MANIFEST = Path(assembly.__file__).with_name("media_sources.json")
 # is included for cold/fork input semantics, not claimed as a mounted callback.
 TRANSITION_OWNERS = {
     "amplifier_web/bundle_selection.py": "133f94e83d71fc71bce4bbbabfcc645dda5be801d6cc6061c95a26376a1327db",
-    "amplifier_web/context_continuity.py": "af8421c48551e66c4ada360ee477ba666b79cfe8747210c683085ebfe8fe0670",
-    "amplifier_web/host/session.py": "3c8cfa6965597af401be2b53f6c6aeb8603204eeb905c6e70319ca8690d7ddca",
-    "amplifier_web/runtime_worker.py": "593840f8d769d86a9b79be2b6a739975ff5c76c6da6c37f70acf1e87dab7753f",
+    "amplifier_web/context_continuity.py": "30f1c3bbe1e0552fadf810481039ae09e147f4410839d2254e30af8508f0b818",
+    "amplifier_web/host/session.py": "25613d9102f684b36f47ae11a9f57a39ddd18a3b4807cf2ee4a90ff49715604d",
+    "amplifier_web/runtime_worker.py": "c258cf016022e5ce70ab4ca4096b207cb04dc0a477a24cbf896f68001ca72ad7",
     "amplifier_web/runtime_controls.py": "d37509a526f7c10df31c72a42041cf425cf972740ccec6ffbb56a16bb2d8d9ab",
-    "amplifier_web/session_store.py": "c1aaac31fbe7458b4c92f5b6529af3428421cd374f687b06d4420df67f31dd1d",
-    "amplifier_module_context_managed/boundary.py": "c09150e7e1894ca7b80cf0d63cb732cabec4f431df63d76c481198ab00e258e3",
+    "amplifier_web/session_store.py": "358345b44538676c762b02f3fc40b0b01a5fe47c0af2725faee248947418c8c8",
+    "amplifier_module_context_managed/boundary.py": "3600e81c3b26e458cdbd65037b7f38838dac61eb7cc5a50d481c809cbfef1136",
     "amplifier_module_context_managed/checkpoint.py": "3de7548aede6f5105c1d1af21190ea9428775c13e1fab09299345f3dc4457e43",
     "amplifier_module_context_managed/recovery.py": "4d311e7de9e1428cd247ba05910c47d496b554c66b47cff352b9cbcc9435d99b",
     "amplifier_module_context_managed/ordinary_transition.py": "9e48247e43fc371ecece198eaabee45a5ffb716ad9f5db36deaf7c00ff889b23",
     "amplifier_module_context_managed/transition.py": "2f31cbd987adc8ac0584863dcede59c1aa8c98902f98b8bf0511f435ba5e8683",
+    "amplifier_module_context_managed/settled_maintenance.py": "86d876f143c0a89450b51c4d0c7dc656725667872857c99cd6e6aa71e330e5ef",
 }
 
 
@@ -39,8 +40,8 @@ def assert_transition_closure(manifest):
     assert all(manifest["sources"].get(name) == digest for name, digest in TRANSITION_OWNERS.items())
     # The accepted decision namespace adds three explicit semantic owners while
     # this selection retains all transition owners and the combined session.
-    assert len(manifest["sources"]) == 312
-    assert catalog_digest(manifest["sources"]) == "faf9fd23350a6f08df936c58a7dfc5e41ffe59277b02745a1311459e4ff44c9c"
+    assert len(manifest["sources"]) == 313
+    assert catalog_digest(manifest["sources"]) == "af119bbea96f72fd3ba667bcd2955aa7be562fdca842d78348d69c259f149052"
 
 
 def work_plan():
@@ -59,8 +60,8 @@ def test_shipped_transition_closure_is_explicit_and_host_bytes_match():
     assert manifest["status"] == "reviewed"
     assert manifest["accepted_sources"]["amplifier-module-context-managed"] == {
         "repository": "https://github.com/microsoft/amplifier-bundle-context-managed",
-        "commit": "694cf37c00f3f09fbc16c6120289298759c0c06a",
-        "tree": "3f1cf59873560586620f301db133c2f17567ec72",
+        "commit": "a4464af2027f4e03fe7fc388d8d8e3e8ff436da2",
+        "tree": "30c4c0a1bf92f872e646bcb4e70cda27c474f0e8",
     }
     assert_transition_closure(manifest)
     root = Path(__file__).resolve().parents[1]
