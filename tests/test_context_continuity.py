@@ -2306,6 +2306,129 @@ async def test_transition_completed_progress_does_not_reset_total_call_cap(tmp_p
     assert len(case.raw.compactions) == 1
 
 
+@pytest.mark.parametrize('change', ['authorized', 'cold', 'changed-stop', 'changed-model', 'changed-account',
+                                    'changed-tools', 'reserved', 'source-edited', 'old-context', 'wrong-offer'])
+async def test_exhausted_transition_additional_allowance_is_bound_to_one_new_send(tmp_path, change):
+    from amplifier_web.context_continuity import ContextRecoveryError
+    case = await target_transition_fixture(tmp_path)
+    case.coordinator.context.config['summary_max_calls'] = 1
+    with pytest.raises(RuntimeError, match='summary_work_paused'):
+        await case.prepare()
+    row = case.adapter._recovery_record()
+    original = copy.deepcopy(row['calls'])
+    assert len(original) == row['completedParts'] == 1
+    assert 'allowanceOffer' not in await case.adapter.recovery_control_status()
+    # This seam implements the opt-in component protocol and calls the actual
+    # selected component for its remaining one allowed paid step.
+    case.coordinator.register_capability('context.recovery.additional_call_allowance', lambda: 2)
+    case.coordinator.register_capability('web.provider_catalog', {'connectionKeys': {'fixture': 'fixture-connection'}})
+    recover = case.coordinator.get_capability('context.recovery.recover')
+    authorized = []
+    async def observe(**kwargs):
+        if grant := kwargs.pop('additional_call_allowance', None):
+            assert grant == {'version': 1, 'additionalCalls': 1, 'originalMaxCalls': 1,
+                             'confirmedCalls': 1, 'authorizationId': 'approved-send'}
+            assert kwargs['max_calls'] == 1
+            authorized.append(grant)
+        return await recover(**kwargs)
+    case.coordinator.register_capability('context.recovery.recover', observe)
+    if change == 'cold':
+        case.adapter._journal = None  # Read the original unextended 0.113.1 journal.
+    offer = (await case.adapter.recovery_control_status())['allowanceOffer']
+    assert offer['maxAdditionalCalls'] == 32 and offer['expectedInterruptionRevision'] == 0
+    claim = {'offerId': offer['offerId'], 'additionalCalls': 1}
+    case.origin.update(inputId='approved-send', generationId='new-gen', inputIds=['approved-send'],
+                       recoveryAllowance=claim, allowanceStopRevision=0)
+    if change == 'changed-stop':
+        case.origin['allowanceStopRevision'] = 1
+    elif change == 'changed-model':
+        case.origin['selection'] = {**case.origin['selection'], 'effort': 'high'}
+    elif change == 'changed-account':
+        case.coordinator.register_capability('web.provider_catalog', {'connectionKeys': {'fixture': 'different'}})
+    elif change == 'changed-tools':
+        case.contract['tools'] = ['different']
+    elif change == 'reserved':
+        row['calls'][0]['state'] = 'reserved'
+    elif change == 'old-context':
+        case.coordinator.register_capability('context.recovery.additional_call_allowance', lambda: 1)
+    elif change == 'wrong-offer':
+        claim['offerId'] = '0' * 64
+    elif change == 'source-edited':
+        case.adapter.path.write_text('{}')
+    if change not in {'authorized', 'cold'}:
+        with pytest.raises(ContextRecoveryError, match='transition_allowance_changed'):
+            await case.prepare()
+        assert not authorized and not case.adapter._recovery_record().get('additionalAllowance')
+        assert len(case.raw.compactions) == 1
+        return
+    try:
+        await case.prepare()
+    except RuntimeError as exc:
+        assert 'summary_work_paused' in str(exc), exc
+    row = case.adapter._recovery_record()
+    assert len(authorized) == 1 and len(case.raw.compactions) == len(row['calls']) == 2
+    assert row['calls'][:1] == original and row['maxCalls'] == 1
+    assert row['additionalAllowance']['authorizationId'] == 'approved-send'
+    assert not case.adapter.accepts_allowance(claim, 0)
+    case.adapter._journal = None
+    status = await case.adapter.recovery_control_status()
+    assert 'allowanceOffer' not in status
+    assert status['additionalAllowance'] == {'authorizedCalls': 1, 'usedCalls': 1}
+    if row['state'] != 'committed':
+        case.origin.pop('recoveryAllowance')
+        case.origin.update(inputId='later', inputIds=['later'], generationId='later-gen')
+        with pytest.raises(RuntimeError, match='summary_work_paused'):
+            await case.prepare()
+        assert len(case.raw.compactions) == 2
+
+
+async def test_qualified_component_finishes_one_authorized_partial_transition(tmp_path):
+    case = await target_transition_fixture(tmp_path)
+    version = case.coordinator.get_capability('context.recovery.additional_call_allowance')
+    if not callable(version) or version() != 2:
+        pytest.skip('Installed Managed Context does not support an additional transition allowance.')
+    case.coordinator.context.config['summary_max_calls'] = 1
+    case.coordinator.register_capability('web.provider_catalog', {'connectionKeys': {'fixture': 'fixture-connection'}})
+    with pytest.raises(RuntimeError, match='summary_work_paused'):
+        await case.prepare()
+    case.adapter._journal = None
+    row = case.adapter._recovery_record()
+    original = copy.deepcopy(row['calls'])
+    offer = (await case.adapter.recovery_control_status())['allowanceOffer']
+    case.origin.update(inputId='ordinary-approved', generationId='approved-generation', inputIds=['ordinary-approved'],
+        recoveryAllowance={'offerId': offer['offerId'], 'additionalCalls': 32},
+        allowanceStopRevision=offer['expectedInterruptionRevision'])
+    assert (await case.prepare())['outcome'] == 'transitioned'
+    final = await case.adapter.recovery_control_status()
+    assert final['state'] == 'committed' and final['maxCalls'] == 1
+    assert final['additionalAllowance']['authorizedCalls'] == 32
+    assert final['additionalAllowance']['usedCalls'] == len(case.raw.compactions) - 1
+    assert 0 <= final['additionalAllowance']['usedCalls'] <= 32 and row['calls'][:1] == original
+    assert case.coordinator.context.config['summary_max_calls'] == 1
+    assert not any(call['state'] != 'completed' for call in row['calls'])
+    print('Additional calls used for qualified transition:', final['additionalAllowance']['usedCalls'])
+
+
+@pytest.mark.parametrize('portable', ['reservation', 'checkpoint'])
+async def test_portable_progress_cannot_offer_a_native_extension(tmp_path, portable):
+    case = await target_transition_fixture(tmp_path)
+    case.coordinator.context.config['summary_max_calls'] = 1
+    case.coordinator.register_capability('web.provider_catalog', {'connectionKeys': {'fixture': 'fixture-connection'}})
+    case.coordinator.register_capability('context.recovery.additional_call_allowance', lambda: 2)
+    with pytest.raises(RuntimeError, match='summary_work_paused'):
+        await case.prepare()
+    assert 'allowanceOffer' in await case.adapter.recovery_control_status()
+    row = case.adapter._recovery_record()
+    if portable == 'reservation':
+        row['calls'][0]['report']['method'] = 'semantic'
+    else:
+        progress = row['progress']
+        progress['summary'] = {'text': 'Portable summary', 'throughMessage': progress['sourceRevision']['messages']}
+        progress['sha256'] = digest({k: v for k, v in progress.items() if k != 'sha256'})
+    assert 'allowanceOffer' not in await case.adapter.recovery_control_status()
+    assert len(case.raw.compactions) == 1
+
+
 async def test_transition_cancelled_paid_call_keeps_source_and_unknown_reservation(tmp_path):
     import asyncio
     case = await target_transition_fixture(tmp_path)
