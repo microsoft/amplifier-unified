@@ -67,6 +67,35 @@ def fake_install(monkeypatch, *, fail=False, probe_fail=False):
     return calls
 
 
+@pytest.mark.parametrize("extras", [[], ["decisions-openai"]])
+def test_reset_preserves_installed_optional_features(repair_tree, monkeypatch, extras):
+    home, tool, bins = repair_tree
+    monkeypatch.setenv("TEST_RESET_TOOLS", str(tool))
+    sites = tool / "amplifier-unified/lib/python3.13/site-packages"
+    if extras:
+        for name in ("amplifier-lib-decisions", "amplifier-module-provider-openai"):
+            info = sites / (name.replace("-", "_") + "-1.0.dist-info")
+            info.mkdir(parents=True)
+            (info / "METADATA").write_text(f"Metadata-Version: 2.1\nName: {name}\nVersion: 1.0\n")
+            if name.endswith("provider-openai"):
+                (info / "entry_points.txt").write_text("[amplifier.decision_backends]\nfixture = unused:backend\n")
+    calls = fake_install(monkeypatch)
+    probes = []
+    monkeypatch.setattr(reset, "verify", lambda prefix, env, selected=(): probes.append(list(selected)))
+    reset.repair(home, "uv", tool, bins, "trusted.whl", {}, None, True)
+    install = next(call for call in calls if call[:3] == ("uv", "tool", "install"))
+    assert install[-1] == ("amplifier-unified[decisions-openai]" if extras else "amplifier-unified")
+    assert probes == [extras]
+
+
+def test_verify_passes_preserved_extras_to_probe(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(reset, "command", lambda *args, **kwargs: calls.append(args))
+    reset.verify(tmp_path, {}, ["decisions-openai"])
+    assert calls[0][-1] == "decisions-openai"
+    assert calls[0][1:3] == ("-I", "-c")
+
+
 def test_success_retires_only_owned_caches_and_update_fences(repair_tree, monkeypatch):
     home, tool, bins = repair_tree
     monkeypatch.setenv("TEST_RESET_TOOLS", str(tool))
@@ -211,6 +240,7 @@ def test_real_uv_repairs_modified_packages_and_missing_dependencies(tmp_path):
         "amplifier_web/cli.py": (package / "cli.py").read_bytes(),
         "amplifier_web/reset.py": package.joinpath("reset.py").read_bytes(),
         "amplifier_web/reset_retention.py": package.joinpath("reset_retention.py").read_bytes(),
+        "amplifier_web/app_optional_features.py": package.joinpath("app_optional_features.py").read_bytes(),
         "amplifier_web/host_dependencies.py": package.joinpath("host_dependencies.py").read_bytes(),
         "amplifier_web/__main__.py": "from .cli import main; main()\n",
         "amplifier_web/application_generations.py": "def delegate(): pass\n",
