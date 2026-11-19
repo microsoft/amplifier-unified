@@ -241,9 +241,10 @@ requests. A failed start or reopen stops publication before a tag is created.
 
 On POSIX, ordinary application staging repeats the retained-registration check with an existing
 prepared conversation interpreter before selecting the update. If the selected component generation
-changes while the app waits, activation first qualifies the new pairing. First setup can stage the
-app before a conversation interpreter exists. The check uses a disposable local conversation and
-does not open a saved user chat or install components.
+changes while the app waits, activation first qualifies the new pairing. An identical startup
+failure on the current and candidate applications is recorded as an existing component problem so
+an app repair can proceed. First setup and custom runtimes without the tested loop and context
+continue with the ordinary application checks. The worker check uses a disposable local conversation.
 
 Settings also provides manual checks, installation, and ecosystem rollback. Scheduled checks run while the local host is open; this is not a separate OS daemon. The Settings icon shows an update indicator. These controls use the shared action registry; forced interruption requires an explicit user confirmation.
 

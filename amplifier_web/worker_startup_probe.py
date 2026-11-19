@@ -9,11 +9,11 @@ import argparse
 import asyncio
 import hashlib
 import importlib.util
-import traceback
 import json
 import os
 from pathlib import Path
 import sys
+import traceback
 
 SOURCE = Path(__file__).resolve().parent.parent
 
@@ -30,12 +30,13 @@ async def main():
     parser.add_argument('--compare-startup', action='store_true',
                         help='Return a private failure fingerprint for comparison with the incumbent.')
     args = parser.parse_args()
+    app_package = SOURCE / 'amplifier_web'
     if args.installed_package:
-        package = args.installed_package.resolve(strict=True)
-        spec = importlib.util.spec_from_file_location('installed_bootstrap', package / 'runtime_bootstrap.py')
+        app_package = args.installed_package.resolve(strict=True)
+        spec = importlib.util.spec_from_file_location('installed_bootstrap', app_package / 'runtime_bootstrap.py')
         loader = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(loader)
-        if Path(loader.bootstrap_app_package().__file__).resolve().parent != package:
+        if Path(loader.bootstrap_app_package().__file__).resolve().parent != app_package:
             raise RuntimeError('The selected application package was not loaded')
     else:
         sys.path.insert(0, str(SOURCE))
@@ -157,7 +158,7 @@ providers:
                 if not args.compare_startup:
                     raise
                 frame = traceback.extract_tb(error.__traceback__)[-1]
-                text = str(error).replace(str(root), '<trial>').replace(str(package), '<app>')
+                text = str(error).replace(str(root), '<trial>').replace(str(app_package), '<app>')
                 signature = [type(error).__name__, Path(frame.filename).name, frame.name, text]
                 print(json.dumps({'startupFailed': hashlib.sha256(json.dumps(signature).encode()).hexdigest(),
                                   'attempt': len([e for e in events if e.get('type') == 'runtime.ready']) + 1}))
