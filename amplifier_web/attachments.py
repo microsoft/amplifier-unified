@@ -180,7 +180,7 @@ class MediaAttachmentContext:
 async def install_media_context(coordinator):
     from .host.media import hook_configuration, registration_coordinator
     store = coordinator.get_capability('web.media.store')
-    if store is not None:
+    if store is not None and coordinator.get_capability("web.media.construction") is not None:
         context = coordinator.get('context')
         with hook_configuration(coordinator):
             await registration_coordinator(coordinator).mount_adapter(

@@ -1312,7 +1312,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         def retain_session(constructing):
             nonlocal session
             session = constructing
-        from .media import bind_media, hook_configuration
+        from .media import bind_media, finish_initial_media_mounts, hook_configuration
         def media(constructing):
             bind_media(constructing, store)
         initialization = initialization_hooks(isolation=isolation, decision_accounts=decision_accounts,
@@ -1333,6 +1333,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         if fatal_failures:
             from ..module_failures import persist_failures
             raise persist_failures(directory, fatal_failures)
+        media_unavailable = finish_initial_media_mounts(coordinator)
         if ephemeral_mcp_servers is not None:
             ready = coordinator.get_capability("mcp.ephemeral_ready")
             if ready != sorted(ephemeral_mcp_servers):
@@ -1545,6 +1546,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
             "provider_failures": isolation.outcomes(coordinator) if isolation else [],
             "decision_account_failures": decision_accounts.failures}
         report["config_inputs"] = config_inputs
+        if media_unavailable:
+            report["tool_image_unavailable"] = media_unavailable
         report["history_source"] = history_source
         report["execution_workspace"] = str(execution_workspace)
         with startup_timing.phase('manager.report'):
