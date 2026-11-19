@@ -250,6 +250,17 @@ def test_equal_text_from_different_inputs_keeps_separate_display_rows(tmp_path):
     assert canonical['nativeInputId'] == 'saved-input' and canonical['nativeIndex'] == 0
 
 
+def test_existing_weak_display_anchor_can_still_refresh(tmp_path):
+    _, rows, source = history(tmp_path)
+    rows[0]['metadata'] = {'amplifier_input': {'version': 1, 'kind': 'user', 'id': 'saved-input'}}
+    first = source['messages'][0]
+    first.update(inputId='older-submission', nativeIndex=0, via='chat')
+    source['messages'] = [first]
+    merge_web_history(source, [display_message(row, index, source) for index, row in enumerate(rows)])
+    assert source['messages'][0] == first
+    assert [row['text'] for row in source['messages']] == [row['content'] for row in rows]
+
+
 @pytest.mark.parametrize('conflict', [
     'legacy-prefix', 'edit-alias', 'unknown-target', 'displaced-target',
     'strong-binding', 'actual-rewrite', 'intervening-turn',
