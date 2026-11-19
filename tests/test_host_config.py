@@ -308,7 +308,7 @@ class HostSettingsTests(unittest.TestCase):
             adapted, _ = live_plan({'session': {'orchestrator': 'loop-live',
                 'context': {'module': 'context-managed', 'config': config}}})
             self.assertEqual(adapted['session']['context']['config'],
-                             {**config, 'foreground_continuation': True})
+                             {**config, 'foreground_continuation': True, 'compaction_schedule': 'after_turn'})
         for engine in (None, False, '', 'legacy', 'unknown'):
             original = {'session': {'orchestrator': 'loop-live',
                 'context': {'module': 'context-managed', 'config': {'engine': engine}}}}

@@ -1525,6 +1525,10 @@ class Worker:
         if op == "stop":
             self.stop_revision += 1
             self.computer_episodes.fence()
+            if self.session:
+                cancel = getattr(self.session.coordinator.get('context'), 'cancel_settled_compaction', None)
+                if callable(cancel):
+                    cancel()
         if op == "computer.stop":
             # Independent input path: do not await a selector, native worker,
             # serialized control or the next model/tool hook.
