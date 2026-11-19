@@ -1497,6 +1497,13 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         coordinator.register_capability("live.checkpoint", checkpoint)
         coordinator.register_capability("session.durable_checkpoint",
                                         partial(checkpoint, capture_messages=False))
+        # Report configured mount failures before attempting a media graph
+        # transition, which requires every participating mount to be complete.
+        failures = getattr(loop, "load_failures", [])
+        fatal_failures = [row for row in failures if not isolation or row.get("type") != "provider"]
+        if fatal_failures:
+            from ..module_failures import persist_failures
+            raise persist_failures(directory, fatal_failures)
         from ..attachments import install_media_context
         await install_media_context(coordinator)
         from ..context_continuity import install as install_continuity
@@ -1508,11 +1515,6 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         coordinator.register_cleanup(cleanup_jobs)
         with startup_timing.phase('manager.checkpoint'):
             await checkpoint(capture_messages=False)
-        failures = getattr(loop, "load_failures", [])
-        fatal_failures = [row for row in failures if not isolation or row.get("type") != "provider"]
-        if fatal_failures:
-            from ..module_failures import persist_failures
-            raise persist_failures(directory, fatal_failures)
         from ..module_failures import clear_failures
         clear_failures(directory)
         # Stamp only explicit, local bundle resources actually consumed by this

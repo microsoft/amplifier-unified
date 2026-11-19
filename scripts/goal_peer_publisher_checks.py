@@ -2,7 +2,7 @@
 
 Interface (no path, revision or command overrides): --initialize retains the
 candidate before setup; --inputs verifies the workflow's fixed GitHub downloads;
---run restores that lock and executes 43 native + 20 auto cases; --finalize records
+--run restores that lock and executes 44 native + 20 auto cases; --finalize records
 workflow status without executing work. --native/--auto are internal child modes.
 
 output/goal-peer-publisher0410/ contains report.json (phase/action status and limits),
@@ -204,7 +204,7 @@ def test_phase(name):
     expected = Counter((module.replace('.', '/') + '.py::' + case)
                        for module, names in (EXPECTED if name == 'native' else {'tests.test_peer_auto_delivery': AUTO_NAMES}).items()
                        for case in names)
-    assert sum(expected.values()) == (43 if name == 'native' else 20)
+    assert sum(expected.values()) == (44 if name == 'native' else 20)
     class Collection:
         def pytest_collection_finish(self, session):
             nodes = [item.nodeid for item in session.items]
@@ -230,7 +230,7 @@ def test_phase(name):
         assert all(after['origins'].get(key) == origin for key, origin in before['origins'].items())
     assert code == 0
     if name == 'native':
-        assert check_native(OUTPUT / 'native.xml') == 43
+        assert check_native(OUTPUT / 'native.xml') == 44
     else:
         root = ET.parse(OUTPUT / 'auto.xml').getroot()
         assert Counter((c.get('classname'), c.get('name')) for c in root.findall('.//testcase')) == Counter(

@@ -1000,7 +1000,7 @@ def test_goal_peer_publisher_fixed_cases_environment_and_no_resolve(publisher_ch
     assert module.SELECTORS == {
         'native': ['tests/test_goal_peer_continuation.py', 'tests/test_task_goal_runtime.py'],
         'auto': ['tests/test_peer_auto_delivery.py']}
-    assert sum(map(len, module.EXPECTED.values())) == 43
+    assert sum(map(len, module.EXPECTED.values())) == 44
     # Expand only this file's literal single-axis parameterizations, without
     # importing the product or running collection to define our expected oracle.
     names = set()
@@ -1025,7 +1025,7 @@ def test_goal_peer_publisher_fixed_cases_environment_and_no_resolve(publisher_ch
     assert all(value not in source for value in ("['uv', 'add'", "['uv', 'lock'", '--upgrade', '--refresh'))
     assert 'time.monotonic() + 900' in source and 'time.monotonic() + 300' in source
     assert 'run_scenarios(ROOT' in source and "row['cleanup'] == {'remaining': [], 'terminated': 0}" in source
-    assert "assert check_native(OUTPUT / 'native.xml') == 43" in source
+    assert "assert check_native(OUTPUT / 'native.xml') == 44" in source
     assert "restored-input-hashes.json" in source and 'candidate-source.tar' in source
     assert "for key in ('graph', 'files', 'coreWheel')" in source
     assert 'source(ROOT)' in source and "git(root, 'ls-files', '--stage', '-z')" in source
