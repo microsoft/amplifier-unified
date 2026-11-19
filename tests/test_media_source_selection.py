@@ -17,6 +17,7 @@ MANIFEST = Path(assembly.__file__).with_name("media_sources.json")
 # Authored semantic owners, not learned from the loaded callback graph. The store
 # is included for cold/fork input semantics, not claimed as a mounted callback.
 TRANSITION_OWNERS = {
+    "amplifier_module_loop_live/failures.py": "14e8409af45b42a5f1b6741949348d4b72bc754d3b8ed3d1b5d02ed58a8d17b6",
     "amplifier_web/bundle_selection.py": "133f94e83d71fc71bce4bbbabfcc645dda5be801d6cc6061c95a26376a1327db",
     "amplifier_web/context_continuity.py": "caf354f9f6a37ae8f61e4379ef3f2b3cc77543ca7470019295b22c2a201917a9",
     "amplifier_web/host/session.py": "25613d9102f684b36f47ae11a9f57a39ddd18a3b4807cf2ee4a90ff49715604d",
@@ -41,7 +42,7 @@ def assert_transition_closure(manifest):
     # The accepted decision namespace adds three explicit semantic owners while
     # this selection retains all transition owners and the combined session.
     assert len(manifest["sources"]) == 313
-    assert catalog_digest(manifest["sources"]) == "222b5f660ca88e0bf14ea9de3e5809a665cd11182478e5b7d115ab8ab937bb72"
+    assert catalog_digest(manifest["sources"]) == "1399a6b55754701cd02f113b2fc362c95d2160ff5499c663769a989057d11760"
 
 
 def work_plan():
@@ -70,6 +71,15 @@ def test_shipped_transition_closure_is_explicit_and_host_bytes_match():
             assert hashlib.sha256((root / name).read_bytes()).hexdigest() == expected
     assert assembly.MEDIA_MODEL == "gpt-6.1-sol"
     assert assembly.supported_plan(work_plan())
+
+
+def test_catalog_cannot_retain_pre_count_classification_live_failures():
+    """The declared ddc44 Live source adds bounded strict-count diagnostics."""
+    manifest = json.loads(MANIFEST.read_text())
+    manifest["sources"]["amplifier_module_loop_live/failures.py"] = (
+        "d765138bf6e565ffe6d1c0d72eaa03978ad5efa296385c6140bf2d96da80379c")
+    with pytest.raises(AssertionError):
+        assert_transition_closure(manifest)
 
 
 @pytest.mark.parametrize("missing", sorted(TRANSITION_OWNERS))
