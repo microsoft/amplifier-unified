@@ -1454,6 +1454,11 @@ async def test_live_plan_default_boundary_retains_native_checkpoint_across_reloa
     base_budget = raw.request_budget(ChatRequest(messages=[Message(**row) for row in original]))
     assert base_budget['estimated_input_tokens'] > raw_limit
     raw.input_limit = 50000
+    if not foreground_opt_out:
+        foreground = await prepare()
+        assert foreground['final_attempt']['budget_decision']['estimated_input_tokens'] < raw_limit
+        assert raw.compactions == raw.sent == []
+        assert c.context.summary is None and not adapter.path.exists()
     result = await prepare(finish_turn=True)
     settled = await c.context.get_messages()
     assert result['final_attempt']['budget_decision']['estimated_input_tokens'] < raw_limit
@@ -1490,6 +1495,11 @@ async def test_live_plan_default_boundary_retains_native_checkpoint_across_reloa
     ]:
         await newer.context.add_message(row)
     next_raw.input_limit = 50000
+    if not foreground_opt_out:
+        foreground = await next_prepare()
+        assert foreground['final_attempt']['budget_decision']['estimated_input_tokens'] < raw_limit
+        assert next_raw.compactions == next_raw.sent == []
+        assert restored.path.read_bytes() == saved_bytes
     await next_prepare(finish_turn=True)
     second_view = await next_prepare()
     second = json.loads(restored.path.read_text())

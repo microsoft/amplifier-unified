@@ -296,10 +296,9 @@ class PeerSender(ScriptedProvider):
             assert declaration["generationId"] == terminal["generation_id"]
             assert declaration["admittedInputIds"] == [REQUESTS[index]]
             self.results.append(copy.deepcopy(result))
-            if index == 1 and self.third_guard == "saved_capacity_denial":
-                # A pre-existing denial is fixture state, not a fabricated
-                # admission outcome. Keep the current policy revision and a
-                # spare task turn so this refusal cannot pass via exhaustion.
+            if index == 1 and self.third_guard == "turn_budget_with_saved_denial":
+                # A historical refusal is retained diagnostic fixture state.
+                # The actual consumed task allowance still owns this refusal.
                 capacity = self.recipient.worker.controls.capacity
                 self.saved_denial = {
                     "allowed": False, "state": "paused",
@@ -317,8 +316,7 @@ class PeerSender(ScriptedProvider):
             assert self.refusal["delivery"] == "suppressed", self.refusal
             admission = self.refusal["admission"]
             assert admission["accepted"] is False
-            expected = ("turn budget is exhausted" if self.third_guard == "turn_budget"
-                        else "saved task or current budget")
+            expected = "turn budget is exhausted"
             assert expected in admission["reason"], admission
             assert_task_retained(self.recipient.worker, self.recipient.before, 2, REQUESTS[1])
             return self.read_result(2)
@@ -337,7 +335,7 @@ class PeerSender(ScriptedProvider):
         return self.final("Two fresh native replies retained; third input refused without resuming the task.")
 
 
-@pytest.mark.parametrize("third_guard", ["turn_budget", "saved_capacity_denial"])
+@pytest.mark.parametrize("third_guard", ["turn_budget", "turn_budget_with_saved_denial"])
 async def test_blocked_independent_native_root_handles_two_fresh_inputs_without_resuming(
     tmp_path, monkeypatch, third_guard,
 ):
@@ -376,7 +374,7 @@ async def test_blocked_independent_native_root_handles_two_fresh_inputs_without_
                 "questionIds": ["unresolved-fixture-question"],
                 "operationIds": ["unresolved-fixture-operation"],
                 "artifactRefs": ["fixture:retained-original-evidence"],
-                "maxTurns": 2 if third_guard == "turn_budget" else 3,
+                "maxTurns": 2,
             })
             task = (await worker.controls.perform("task.block", {
                 "commandId": "blocked-task-dependency", "origin": "agent", "expectedRevision": 1,
@@ -429,7 +427,7 @@ async def test_blocked_independent_native_root_handles_two_fresh_inputs_without_
                 assert worker.controls.capacity.last_denial == sender.saved_denial
                 saved = json.loads(worker.controls.state_path().read_text())
                 assert saved["capacityLastDenial"] == sender.saved_denial
-                assert before["maxTurns"] > worker.controls.tasks.record()["goalState"]["turns_used"]
+                assert before["maxTurns"] == worker.controls.tasks.record()["goalState"]["turns_used"]
             for row, native, identity in zip((source, target), (source_worker, worker), identities):
                 assert root_identity(row, native) == identity
                 assert app.assignments.current(row) is None

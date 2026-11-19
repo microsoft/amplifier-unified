@@ -114,6 +114,19 @@ def test_policy_reports_estimates_pending_unknown_and_inflight_overshoot():
     assert empty['value'] is None and empty['status'] == 'empty'
 
 
+@pytest.mark.parametrize('revision', [1, 2])
+@pytest.mark.parametrize('limit,allowed', [(100, True), (10, False), (None, True)])
+def test_past_denial_is_not_current_policy_even_at_same_revision(revision, limit, allowed):
+    usage = usage_snapshot({'id': 'root', 'execution': {'nodes': [call()]}})
+    policy = {'revision': revision, 'enabled': True, 'maxTotalTokens': limit,
+              'lastDenial': {'budgetRevision': 1, 'reasons': ['Obsolete assignment denial']}}
+    before = copy.deepcopy((policy, usage))
+    result = evaluate(policy, usage)
+    assert result['allowed'] is allowed
+    assert 'Obsolete assignment denial' not in result['reasons']
+    assert (policy, usage) == before
+
+
 def test_voice_duration_uses_only_voice_receipts_and_retains_incomplete_numeric_updates():
     backend = call()
     voice = call('voice:call:session', provider='OpenAI voice', phase='running', endedAt=None,
@@ -209,10 +222,13 @@ async def test_actual_provider_guard_counts_children_blocks_future_calls_and_ret
         child = Provider(); telemetry.instrument_provider('child', child)
         with pytest.raises(ValueError, match='budget paused'):
             await child.complete(SimpleNamespace(model='test'))
-        assert child.calls == 0 and not await worker.tasks.continuation_allowed()
+        assert child.calls == 0 and await worker.tasks.continuation_allowed()
         assert worker.tasks.record()['corrections'][0]['text'] == 'Use the corrected source'
         restored = controls(sid); await restored.restore()
-        assert not await restored.tasks.continuation_allowed()
+        assert await restored.tasks.continuation_allowed()
+        with pytest.raises(ValueError, match='budget paused'):
+            await child.complete(SimpleNamespace(model='test'))
+        assert child.calls == 0  # Current host usage still refuses, not the cached denial.
         await app.dispatch('capacity.set', {'sessionId': sid, 'expectedRevision': 1, 'maxTotalTokens': 30}, command_id='increase')
         await child.complete(SimpleNamespace(model='test'))
         assert child.calls == 1
@@ -473,7 +489,7 @@ async def test_disabled_budget_admission_retains_receipts_without_building_usage
         await app.close()
 
 
-async def test_fresh_human_recovery_rechecks_current_host_budget_without_reset(tmp_path, monkeypatch):
+async def test_new_attempt_rechecks_current_host_budget_without_reset(tmp_path, monkeypatch):
     monkeypatch.setenv("AMPLIFIER_WEB_HOME", str(tmp_path))
     worker = controls("budget-recovery")
     policy = copy.deepcopy(worker.capacity.policy)
@@ -486,10 +502,10 @@ async def test_fresh_human_recovery_rechecks_current_host_budget_without_reset(t
     with pytest.raises(ValueError, match="budget paused"):
         await worker.capacity.guard({"id": "denied"})
     denial = copy.deepcopy(worker.capacity.last_denial)
-    assert not await worker.tasks.continuation_allowed()
+    assert await worker.tasks.continuation_allowed()
     assert await worker.tasks.continuation_allowed(resume=True)
     assert worker.capacity.last_denial == denial
-    # Admitting the human message cannot make a denied model call execute.
+    # Task eligibility cannot make a currently denied model call execute.
     with pytest.raises(ValueError, match="budget paused"):
         await worker.capacity.guard({"id": "still-denied"})
     state["allowed"] = True  # Host now confirms changed assignment capacity.
@@ -504,34 +520,24 @@ async def test_fresh_human_recovery_rechecks_current_host_budget_without_reset(t
     await worker.close()
 
 
-@pytest.mark.parametrize('case', ['fresh', 'native', 'unbound', 'wrong-origin', 'old', 'background', 'terminal', 'other-input', 'exhausted'])
-async def test_spoken_input_rechecks_derived_denial_only_with_exact_current_provenance(tmp_path, case):
+@pytest.mark.parametrize('origin', ['ui', 'user', 'voice', 'peer', 'system', 'goal', 'background'])
+@pytest.mark.parametrize('usage_state', ['available', 'exhausted', 'unknown'])
+async def test_capacity_uses_current_usage_for_every_input_origin(tmp_path, origin, usage_state):
+    # This is the private capacity owner, after caller/generation authentication.
+    # Historical denial recovery must not add another input-provenance policy.
     app = AppService(tmp_path, workspace=tmp_path)
     await app.dispatch('session.create', {})
     session = app._session()
-    sid, identity = session['id'], 'voice:call:request'
-    message = app._message(session, 'user', 'Continue the task', 'call',
-                           voiceId='call', voiceItemId='utterance', inputOrigin='voice', voiceInputId=identity)
-    message['createdAt'] = 20
+    sid, identity = session['id'], 'current-input'
+    app._message(session, 'user', 'Continue the task', inputOrigin=origin, inputId=identity)
     session['collaborationGeneration'] = {'id': 'current', 'inputIds': [identity], 'terminal': False}
     row = call('fresh-call', sid, rootSessionId=sid, turnId=identity,
                phase='running', endedAt=None, usage={})
-    if case == 'native':
-        message.update(source='native', nativeInputId=identity, voiceDelegation=True)
-    elif case == 'unbound':
-        message.pop('voiceInputId')
-    elif case == 'wrong-origin':
-        message['inputOrigin'] = 'peer'
-    elif case == 'old':
-        message['createdAt'] = 5
-    elif case == 'background':
+    if origin == 'background':
         row['lifecycle'] = 'background'
-    elif case == 'terminal':
-        session['collaborationGeneration']['terminal'] = True
-    elif case == 'other-input':
-        message['voiceInputId'] = 'voice:call:unrelated'
-    elif case == 'exhausted':
-        ingest(session, call('previous', sid, rootSessionId=sid, usage={'totalTokens': 100}))
+    if usage_state != 'available':
+        ingest(session, call('previous', sid, rootSessionId=sid,
+                             usage={'totalTokens': 100} if usage_state == 'exhausted' else {}))
     saved = {'capacity': {'revision': 1, 'enabled': True, 'maxTotalTokens': 100},
              'capacityLastDenial': {'budgetRevision': 1, 'at': 10, 'reasons': ['Old assignment allowance denied']}}
     path = app.data_dir / 'sessions' / sid / 'control-state.json'
@@ -539,11 +545,60 @@ async def test_spoken_input_rechecks_derived_denial_only_with_exact_current_prov
     path.write_text(json.dumps(saved))
     try:
         result = await admission(app, sid, {'call': row})
-        assert result['allowed'] is (case in {'fresh', 'native'})
-        if case == 'exhausted':
+        assert result['allowed'] is (usage_state == 'available')
+        assert 'Old assignment allowance denied' not in result['reasons']
+        if usage_state == 'exhausted':
             assert any('limit reached' in reason for reason in result['reasons'])
-        elif case not in {'fresh', 'native'}:
-            assert 'Old assignment allowance denied' in result['reasons']
+        elif usage_state == 'unknown':
+            assert any('unknown' in reason for reason in result['reasons'])
+        read = (await app.dispatch('capacity.read', {'sessionId': sid}))['result']
+        assert 'lastDenial' not in read['budget']
         assert json.loads(path.read_text()) == saved  # No budget or saved evidence reset.
     finally:
+        await app.close()
+
+
+@pytest.mark.parametrize('change', ['unchanged', 'raised', 'removed', 'unknown', 'stopped'])
+async def test_saved_assignment_denial_rechecks_current_assignment(tmp_path, monkeypatch, change):
+    app, worker, sid = await setup(tmp_path, monkeypatch)
+    try:
+        session = app._session(sid)
+        assignment = app.assignments.ensure(session, 'capacity-test')
+        assignment['limits'].update(maxTotalTokens=10)
+        app.assignments.save(assignment)
+        await app.dispatch('capacity.set', {'sessionId': sid, 'expectedRevision': 0,
+                           'enabled': True, 'maxTotalTokens': 100}, command_id='local')
+        worker.capacity.admit = lambda row: admission(app, sid, {'call': row})
+        first = call('spent', sid, rootSessionId=sid, phase='running', endedAt=None, usage={})
+        await worker.capacity.guard(first)
+        ingest(session, {**first, 'phase': 'completed', 'endedAt': 2, 'revision': 3,
+                         'usage': {'totalTokens': 10}})
+        with pytest.raises(ValueError, match='budget paused'):
+            await worker.capacity.guard({**first, 'id': 'denied'})
+        old_denial = copy.deepcopy(worker.capacity.last_denial)
+        assignment = app.assignments.current(session)
+        if change in {'raised', 'removed'}:
+            assignment['limits']['maxTotalTokens'] = 100 if change == 'raised' else None
+            assignment['revision'] += 1
+        elif change == 'unknown':
+            ingest(session, {**first, 'phase': 'outcome_unknown', 'revision': 4})
+        elif change == 'stopped':
+            assignment['status'] = 'stopped'
+        app.assignments.save(assignment)
+        before = copy.deepcopy(usage_snapshot(session)['receipts'])
+        row = {**first, 'id': 'new-attempt'}
+        if change in {'raised', 'removed'}:
+            await worker.capacity.guard(row)
+            assert worker.capacity.last_denial is None
+        else:
+            with pytest.raises(ValueError, match='budget paused'):
+                await worker.capacity.guard(row)
+            assert usage_snapshot(session)['receipts'] == before
+            assert worker.capacity.last_denial['reasons'] != []  # Current refusal, not a replay.
+        assert old_denial['budgetRevision'] == worker.capacity.policy['revision'] == 1
+        assert usage_snapshot(session)['metrics']['totalTokens']['value'] == (
+            None if change == 'unknown' else 10)
+        assert not (await admission(app, sid, {'call': first}))['allowed']  # No ID replay.
+    finally:
+        await worker.close()
         await app.close()

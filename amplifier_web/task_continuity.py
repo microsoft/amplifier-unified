@@ -386,12 +386,8 @@ class TaskController:
     async def continuation_allowed(self, *, resume=False):
         self.apply()
         task = self.record()
-        capacity = getattr(self.controls, "capacity", None)
-        # A saved denial blocks automatic continuation, not a fresh
-        # host-verified human recovery input. Every provider call still asks
-        # the host to evaluate current conversation AND assignment limits.
-        if not resume and capacity and capacity.last_denial and capacity.last_denial.get("budgetRevision") == capacity.policy["revision"]:
-            return False
+        # The host evaluates current budgets before every provider call.
+        # A historical refusal is diagnostic, not task lifecycle authority.
         # Explicit human-backed input can discuss a completed task too. This
         # never reactivates that objective or enables its automatic continuation.
         allowed = {"active", "paused", "blocked", "completed"} if resume else {"active"}
@@ -400,9 +396,6 @@ class TaskController:
     async def peer_input_allowed(self, *, completed=False):
         """Handle fresh input without reopening the saved inactive objective."""
         self.apply()
-        capacity = getattr(self.controls, "capacity", None)
-        if capacity and capacity.last_denial and capacity.last_denial.get("budgetRevision") == capacity.policy["revision"]:
-            return False
         return ((bool(self.record()) and self.record().get("status") == "completed" if completed
                  else dependency_blocked(self.record()))
                 and bool(self.coordinator.get_capability("live.continuation_guard_supported")))
@@ -465,17 +458,16 @@ class TaskController:
         task = self.record()
         capacity = self.controls.capacity
         if (task and (task["status"] != "active" or task.get("appliedRevision") != task["revision"])
-                or goal.get("cap") is not None and goal.get("turns_used", 0) >= goal["cap"]
-                or capacity.last_denial and capacity.last_denial.get("budgetRevision") == capacity.policy["revision"]):
+                or goal.get("cap") is not None and goal.get("turns_used", 0) >= goal["cap"]):
             return HookResult()
-        before = copy.deepcopy((goal, task, capacity.policy, capacity.last_denial))
+        before = copy.deepcopy((goal, task, capacity.policy))
         try:
             eligible = await ready()
         except Exception:
             logging.getLogger(__name__).warning("Peer continuation eligibility unavailable; goal unchanged", exc_info=True)
             return HookResult()
         if (eligible is not True or self.coordinator.session_state.get("goal") is not goal
-                or before != (goal, self.record(), capacity.policy, capacity.last_denial)):
+                or before != (goal, self.record(), capacity.policy)):
             return HookResult()
         # Streaming explicitly rechecks goal identity after this awaited hook.
         # Replacement returns the saved answer to live's real completion/idle

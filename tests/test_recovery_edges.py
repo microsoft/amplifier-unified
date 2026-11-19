@@ -220,9 +220,8 @@ async def test_fresh_recovery_rechecks_enabled_local_and_assignment_limits(app, 
         before = copy.deepcopy(saved_policy(app, target['id']))
         await limits(app, source, maxTotalTokens=200)
         # Changing the allowance alone does not restart automatic work.
-        assert not await worker.tasks.continuation_allowed()
-        with pytest.raises(ValueError, match='limit reached'):
-            await worker.capacity.guard(call(target, 'automatic-retry'))
+        assert not app.runtime.inputs
+        assert app.assignments.usage(app.assignments.current(source))['metrics']['grossTotalTokens']['value'] == 20
         human = app._message(source, 'user', 'Reconcile and resume the worker with its current limits.',
                              inputId='budget-human', inputOrigin='ui')
         await generation(app, source, 'budget-manager', ['budget-human'])
@@ -294,11 +293,8 @@ async def test_safety_halt_arriving_after_peer_preparation_blocks_admission(app)
     assert not app.runtime.inputs
 
 
-@pytest.mark.parametrize('case', [
-    'human', 'peer', 'missing_receipt', 'ordinary_peer', 'wrong_target',
-    'interrupted', 'terminal', 'not_delivered', 'newer_denial', 'background',
-])
-async def test_budget_recheck_uses_only_fresh_host_admitted_human_input(app, monkeypatch, case):
+@pytest.mark.parametrize('case', ['human', 'peer'])
+async def test_admitted_input_rechecks_current_budget_without_replaying_effects(app, monkeypatch, case):
     from amplifier_web.capacity import admission
     from amplifier_web.execution import ingest
     from test_task_continuity import controls
@@ -330,60 +326,27 @@ async def test_budget_recheck_uses_only_fresh_host_admitted_human_input(app, mon
             await submit(app, source, target, human, identity='fresh-input')
             await settled(app, 'fresh-input', 'accepted')
         await fresh_generation(app, target, 'recovery-generation', ['fresh-input'], epoch)
-        row = call(target, 'new-call', turnId='fresh-input')
-        if case in {'missing_receipt', 'ordinary_peer', 'wrong_target'}:
-            if case == 'missing_receipt':
-                app.db.execute("DELETE FROM commands WHERE id='fresh-input'")
-            else:
-                receipt = app.collaboration.receipt('fresh-input')
-                if case == 'ordinary_peer':
-                    receipt.pop('humanResume')
-                else:
-                    receipt['target']['sessionId'] = source['id']
-                app.collaboration.save('fresh-input', receipt)
-            app.db.commit()
-        elif case == 'interrupted':
-            await app.dispatch('conversation.stop', {'sessionId': target['id']}, command_id='new-stop')
-            await until(lambda: target['status'] == 'stopped')
-        elif case == 'terminal':
-            await app.on_runtime_event(*normalize_event({
-                'type': 'generation.finished', 'generation_id': 'recovery-generation',
-                'input_ids': ['fresh-input'],
-            }, target['id']))
-        elif case == 'not_delivered':
-            row['turnId'] = 'not-admitted'
-        elif case == 'newer_denial':
-            with pytest.raises(ValueError):
-                await worker.capacity.guard(call(target, 'later-automatic-denial'))
-        elif case == 'background':
-            row['lifecycle'] = 'background'
-        if case in {'human', 'peer'}:
-            # Exercise the production provider wrapper rather than supplying
-            # turnId to admission ourselves. Native input.delivered is the
-            # accounting identity for both human and host-authored peer input.
-            emitted = []
-            events = ExecutionEvents(target['id'], emitted.append)
-            events.lifecycle({'type': 'input.delivered', 'input_id': 'fresh-input', 'source': 'user'})
-            events.admission_guard = worker.capacity.guard
+        # Exercise the production provider wrapper rather than supplying turnId
+        # to admission. Native input.delivered is the accounting identity.
+        emitted = []
+        events = ExecutionEvents(target['id'], emitted.append)
+        events.lifecycle({'type': 'input.delivered', 'input_id': 'fresh-input', 'source': 'user'})
+        events.admission_guard = worker.capacity.guard
 
-            class Provider:
-                def get_info(self):
-                    return SimpleNamespace(id='fixture', defaults={'model': 'fixture'})
+        class Provider:
+            def get_info(self):
+                return SimpleNamespace(id='fixture', defaults={'model': 'fixture'})
 
-                async def complete(self, request):
-                    return SimpleNamespace(usage={'total_tokens': 7})
+            async def complete(self, request):
+                return SimpleNamespace(usage={'total_tokens': 7})
 
-            provider = events.instrument_provider(target['id'], Provider())
-            await provider.complete(SimpleNamespace(model='fixture'))
-            assert emitted and all(event['event']['turnId'] == 'fresh-input' for event in emitted)
-            for event in emitted:
-                await app.on_runtime_event(*normalize_event(event, target['id'], 'fresh-input'))
-            assert worker.capacity.last_denial is None
-        else:
-            with pytest.raises(ValueError):
-                await worker.capacity.guard(row)
-            assert worker.capacity.last_denial
-        assert app.assignments.usage(app.assignments.current(source))['metrics']['grossTotalTokens']['value'] == (27 if case in {'human', 'peer'} else 20)
+        provider = events.instrument_provider(target['id'], Provider())
+        await provider.complete(SimpleNamespace(model='fixture'))
+        assert emitted and all(event['event']['turnId'] == 'fresh-input' for event in emitted)
+        for event in emitted:
+            await app.on_runtime_event(*normalize_event(event, target['id'], 'fresh-input'))
+        assert worker.capacity.last_denial is None
+        assert app.assignments.usage(app.assignments.current(source))['metrics']['grossTotalTokens']['value'] == 27
     finally:
         await worker.close()
 
