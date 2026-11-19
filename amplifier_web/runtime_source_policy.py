@@ -164,15 +164,18 @@ def app_declarations(content):
     """
     data = tomllib.loads(content.decode())
     from .runtime_environment import package_name
-    direct = _declaration_evidence(content)[0]
-    restrictions = constraint_declarations(content)
+    direct, _, restrictions = _declaration_evidence(content)
+    mapped = {package_name(key) for key in data.get('tool', {}).get('uv', {}).get('sources', {})}
     result = {}
     for value in data.get('project', {}).get('dependencies', []):
         requirement = Requirement(value)
         name = package_name(requirement.name)
         declaration = direct.get(name)
-        if (not requirement.url or requirement.marker or requirement.extras or not declaration
-                or declaration.get('refKind') != 'rev'
+        # The shipped loops use a bare direct requirement with an explicit
+        # uv Git source. An optional/dependency-group URL cannot select it.
+        if ((not requirement.url and (name not in mapped or requirement.specifier))
+                or requirement.marker or requirement.extras or not declaration
+                or declaration.get('refKind') not in {'rev', 'branch'}
                 or re.fullmatch('[a-f0-9]{40}', declaration['ref'])
                 or any(item != declaration for item in restrictions.get(name, []))):
             continue

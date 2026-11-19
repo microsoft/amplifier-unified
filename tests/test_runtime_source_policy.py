@@ -136,12 +136,16 @@ async def test_freeze_recovers_new_authored_dependency_with_no_checked_row(norma
 
 
 @pytest.fixture
-def app_generated(prepared, monkeypatch):
+def app_generated(prepared, monkeypatch, request):
     """The old app-direct @main -> unresolved/fullSHA frozen receipt shape."""
     home, generation, project, graph = prepared
     requirement = 'fixture-component @ git+' + ROW['url'] + '@main#subdirectory=module'
     content = ('[project]\nname="worker"\nversion="1"\ndependencies=[' + json.dumps(requirement) +
                ']\n[tool.uv]\noverride-dependencies=[' + json.dumps(requirement) + ']\n').encode()
+    if getattr(request, 'param', None) == 'source-table':
+        content = ('[project]\nname="worker"\nversion="1"\ndependencies=["fixture-component"]\n'
+                   '[tool.uv.sources]\nfixture-component={git="' + ROW['url'] +
+                   '",rev="main",subdirectory="module"}\n').encode()
     manifest = home.parent / 'app.toml'
     manifest.write_bytes(content)
     monkeypatch.setattr(environments, 'manifest_path', lambda: manifest)
@@ -206,14 +210,17 @@ async def test_new_app_direct_policy_requires_exact_branch_kind(app_generated, m
     'unknown-origin', 'wrong-original-ref', 'wrong-policy', 'fork', 'local', 'dirty',
     'separate-config', 'external-override', 'during-proof',
 ])
+@pytest.mark.parametrize('app_generated', ['requirement-url', 'source-table'], indirect=True)
 async def test_old_app_direct_recovery_preserves_unexplained_pins_and_receipts(app_generated, monkeypatch, case):
     home, generation, project, graph, receipt, manifest, rows = app_generated
     if case == 'missing-proof': (receipt / 'runtime-installed.json').unlink()
     if case == 'changed-graph': graph[0]['version'] = 'changed'
     if case == 'changed-lock': (project / 'uv.lock').write_bytes(b'version=1\n')
     if case == 'changed-manifest': (project / 'pyproject.toml').write_bytes(b'[project]\n')
-    if case == 'changed-declaration': manifest.write_bytes(manifest.read_bytes().replace(b'@main', b'@other'))
-    if case == 'authored-pin': manifest.write_bytes(manifest.read_bytes().replace(b'@main', ('@' + REVISION).encode()))
+    if case in {'changed-declaration', 'authored-pin'}:
+        ref = ('other' if case == 'changed-declaration' else REVISION).encode()
+        manifest.write_bytes(manifest.read_bytes().replace(b'@main', b'@' + ref)
+                             .replace(b'rev="main"', b'rev="' + ref + b'"'))
     if case == 'unknown-origin': rows[0]['policyOrigin']['kind'] = 'unrecorded'
     if case == 'wrong-original-ref': rows[0]['policyOrigin']['originalRef'] = 'other'
     if case == 'wrong-policy': (receipt / 'runtime-sources.json').write_text('{}')
