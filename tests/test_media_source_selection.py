@@ -23,12 +23,12 @@ TRANSITION_OWNERS = {
     "amplifier_web/runtime_worker.py": "c258cf016022e5ce70ab4ca4096b207cb04dc0a477a24cbf896f68001ca72ad7",
     "amplifier_web/runtime_controls.py": "d37509a526f7c10df31c72a42041cf425cf972740ccec6ffbb56a16bb2d8d9ab",
     "amplifier_web/session_store.py": "358345b44538676c762b02f3fc40b0b01a5fe47c0af2725faee248947418c8c8",
-    "amplifier_module_context_managed/boundary.py": "3600e81c3b26e458cdbd65037b7f38838dac61eb7cc5a50d481c809cbfef1136",
-    "amplifier_module_context_managed/checkpoint.py": "3de7548aede6f5105c1d1af21190ea9428775c13e1fab09299345f3dc4457e43",
-    "amplifier_module_context_managed/recovery.py": "4d311e7de9e1428cd247ba05910c47d496b554c66b47cff352b9cbcc9435d99b",
-    "amplifier_module_context_managed/ordinary_transition.py": "9e48247e43fc371ecece198eaabee45a5ffb716ad9f5db36deaf7c00ff889b23",
-    "amplifier_module_context_managed/transition.py": "2f31cbd987adc8ac0584863dcede59c1aa8c98902f98b8bf0511f435ba5e8683",
-    "amplifier_module_context_managed/settled_maintenance.py": "86d876f143c0a89450b51c4d0c7dc656725667872857c99cd6e6aa71e330e5ef",
+    "amplifier_module_context_managed/boundary.py": "7e8f77eb80009707ff622a20bd4ea4f06529a2fc3dcc6d5a73ba99176a435cf5",
+    "amplifier_module_context_managed/checkpoint.py": "f968277943572d2823c7c734c104460f8591d86eee8e64c57e8017af76c63778",
+    "amplifier_module_context_managed/recovery.py": "f2228772030d21f6709c95801ae9657d387155e497e2dfa536866a18aab18f17",
+    "amplifier_module_context_managed/ordinary_transition.py": "85c4406f064b1c6544404156ed068f10fc509fed06b658b0810a076f97accda8",
+    "amplifier_module_context_managed/transition.py": "d473c66fdf076e5c250684f491fa9d820a1c083ec2b4a8d3b746cd90c57b0df6",
+    "amplifier_module_context_managed/settled_maintenance.py": "cc5d824c8b4b824793392737cd2f92a19670d6c1b4e6296b74e74e72b88e9ac7",
 }
 
 
@@ -41,7 +41,7 @@ def assert_transition_closure(manifest):
     # The accepted decision namespace adds three explicit semantic owners while
     # this selection retains all transition owners and the combined session.
     assert len(manifest["sources"]) == 313
-    assert catalog_digest(manifest["sources"]) == "61f0e3467d3478e04c398350bee26b70c5edc65c328ddfc9bbae9678864b7120"
+    assert catalog_digest(manifest["sources"]) == "9eaacd70b54d563dda5942ddb33572534c8fd6533f988912dab3187c748b81ac"
 
 
 def work_plan():
@@ -60,8 +60,8 @@ def test_shipped_transition_closure_is_explicit_and_host_bytes_match():
     assert manifest["status"] == "reviewed"
     assert manifest["accepted_sources"]["amplifier-module-context-managed"] == {
         "repository": "https://github.com/microsoft/amplifier-bundle-context-managed",
-        "commit": "a4464af2027f4e03fe7fc388d8d8e3e8ff436da2",
-        "tree": "30c4c0a1bf92f872e646bcb4e70cda27c474f0e8",
+        "commit": "7a401009f6735b550f3548dcba36219018f627eb",
+        "tree": "cb4093ef0095b6c73f3d9784f0942b0ff66c976c",
     }
     assert_transition_closure(manifest)
     root = Path(__file__).resolve().parents[1]

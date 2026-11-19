@@ -244,7 +244,7 @@ dependencies = [
 [[package]]
 name = "amplifier-module-context-managed"
 version = "0.1.0"
-source = { git = "https://github.com/microsoft/amplifier-bundle-context-managed?subdirectory=modules%2Fcontext-managed&rev=a4464af2027f4e03fe7fc388d8d8e3e8ff436da2#a4464af2027f4e03fe7fc388d8d8e3e8ff436da2" }
+source = { git = "https://github.com/microsoft/amplifier-bundle-context-managed?subdirectory=modules%2Fcontext-managed&rev=7a401009f6735b550f3548dcba36219018f627eb#7a401009f6735b550f3548dcba36219018f627eb" }
 dependencies = [
     { name = "amplifier-module-context-simple" },
 ]
@@ -538,7 +538,7 @@ artifacts = [
     { name = "reportlab", specifier = ">=4,<5" },
 ]
 dev = [
-    { name = "amplifier-module-context-managed", git = "https://github.com/microsoft/amplifier-bundle-context-managed?subdirectory=modules%2Fcontext-managed&rev=a4464af2027f4e03fe7fc388d8d8e3e8ff436da2" },
+    { name = "amplifier-module-context-managed", git = "https://github.com/microsoft/amplifier-bundle-context-managed?subdirectory=modules%2Fcontext-managed&rev=7a401009f6735b550f3548dcba36219018f627eb" },
     { name = "amplifier-module-context-simple", git = "https://github.com/microsoft/amplifier-module-context-simple?rev=main" },
     { name = "amplifier-module-hook-context-intelligence", git = "https://github.com/microsoft/amplifier-bundle-context-intelligence?subdirectory=modules%2Fhook-context-intelligence&rev=a80ce69d0e96e9a343501f238dcd867350dd9aa2" },
     { name = "amplifier-module-hooks-candidate-guard", git = "https://github.com/microsoft/amplifier-bundle-converge?subdirectory=modules%2Fhooks-candidate-guard&rev=da7dd8878c9e7b672e86151b32d59c0cce68bcb6" },

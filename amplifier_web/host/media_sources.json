@@ -14,8 +14,8 @@
     },
     "amplifier-module-context-managed": {
       "repository": "https://github.com/microsoft/amplifier-bundle-context-managed",
-      "commit": "a4464af2027f4e03fe7fc388d8d8e3e8ff436da2",
-      "tree": "30c4c0a1bf92f872e646bcb4e70cda27c474f0e8"
+      "commit": "7a401009f6735b550f3548dcba36219018f627eb",
+      "tree": "cb4093ef0095b6c73f3d9784f0942b0ff66c976c"
     }
   },
   "sources": {
@@ -74,18 +74,18 @@
     "amplifier_foundation/sources/shared.py": "86a29938c65eb766aa1d180a6dd9cd24416e0563c74089cc92d16201d022f017",
     "amplifier_foundation/spawn_utils.py": "8190ae0da4411f5b6bdeaf7bbf3529f5005d1ae43a36fa38ac474df291725f89",
     "amplifier_module_context_managed/__init__.py": "4453257774a76a618d738002120e9f62f0239587fc173d9517adc875d0a28112",
-    "amplifier_module_context_managed/boundary.py": "3600e81c3b26e458cdbd65037b7f38838dac61eb7cc5a50d481c809cbfef1136",
-    "amplifier_module_context_managed/checkpoint.py": "3de7548aede6f5105c1d1af21190ea9428775c13e1fab09299345f3dc4457e43",
+    "amplifier_module_context_managed/boundary.py": "7e8f77eb80009707ff622a20bd4ea4f06529a2fc3dcc6d5a73ba99176a435cf5",
+    "amplifier_module_context_managed/checkpoint.py": "f968277943572d2823c7c734c104460f8591d86eee8e64c57e8017af76c63778",
     "amplifier_module_context_managed/errors.py": "f42019ec1614a8ead6d7c687a94c57c108cd3a21a9cfe6285b74d3b4b424992c",
     "amplifier_module_context_managed/interrupted.py": "580aea3f25c32e11f7f60269a7602bfd4db7dcfceec9df8042168dc03e1dff2a",
     "amplifier_module_context_managed/measurement.py": "405c84c5d5cd0cf631a03e6b14130bc4621323dda97323fe53f400f673a14702",
-    "amplifier_module_context_managed/ordinary_transition.py": "9e48247e43fc371ecece198eaabee45a5ffb716ad9f5db36deaf7c00ff889b23",
+    "amplifier_module_context_managed/ordinary_transition.py": "85c4406f064b1c6544404156ed068f10fc509fed06b658b0810a076f97accda8",
     "amplifier_module_context_managed/prefix_digest.py": "2f8a821609edafe6dff494ed79c0e2390ea5799c95725ad784858879874139e8",
-    "amplifier_module_context_managed/recovery.py": "4d311e7de9e1428cd247ba05910c47d496b554c66b47cff352b9cbcc9435d99b",
+    "amplifier_module_context_managed/recovery.py": "f2228772030d21f6709c95801ae9657d387155e497e2dfa536866a18aab18f17",
     "amplifier_module_context_managed/request_context.py": "7e508f6b52aa50be7c065e703ed33dae8fc7f310f7731e6cc04912d062ecfe50",
-    "amplifier_module_context_managed/settled_maintenance.py": "86d876f143c0a89450b51c4d0c7dc656725667872857c99cd6e6aa71e330e5ef",
+    "amplifier_module_context_managed/settled_maintenance.py": "cc5d824c8b4b824793392737cd2f92a19670d6c1b4e6296b74e74e72b88e9ac7",
     "amplifier_module_context_managed/summary.py": "306fbe75dd6693c0ca055cfc56841297b5855ed024761796ae08162a2bd76d0e",
-    "amplifier_module_context_managed/transition.py": "2f31cbd987adc8ac0584863dcede59c1aa8c98902f98b8bf0511f435ba5e8683",
+    "amplifier_module_context_managed/transition.py": "d473c66fdf076e5c250684f491fa9d820a1c083ec2b4a8d3b746cd90c57b0df6",
     "amplifier_module_context_managed/working_history.py": "166985980d060b938c62458178123ded9297f13029cba0f569ddaee834277045",
     "amplifier_module_context_simple/__init__.py": "e395a063f4dce33b53bb2dac6fde14bd0f12ea36fec6f363a65d68a731bcad07",
     "amplifier_module_context_simple/_text_estimate.py": "24132b086ae78ddb911ceb3890672472c61b38fee49ab6916482a56a186439b4",
