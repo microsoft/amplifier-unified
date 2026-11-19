@@ -5110,6 +5110,11 @@ class AppService:
                 if payload.get('activityOnly') and session.get('status') not in {'working','starting'}:
                     return
                 status = payload.get("status", "idle")
+                if (payload.get('event') in {'session.ready', 'session.idle'}
+                        and session.get('status') in {'stopped', 'interrupted', 'error'}):
+                    # A new worker emits both events when it boots an old session.
+                    # Only an admitted input or generation can start another turn.
+                    return
                 # A worker can report its settled lifecycle after the manager has
                 # recorded a terminal error. That report is not evidence that the
                 # failed turn recovered, and must not relabel its execution as

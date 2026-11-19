@@ -18,6 +18,10 @@ for line in sys.stdin:
     if op=='start':
         if data['session']['id'].startswith('slow'): time.sleep(.1)
         print(json.dumps({'type':'runtime.ready','report':{'session_id':data['session']['id']}}),flush=True)
+        if sys.argv[2:] == ['defer-boot-events']:
+            while not Path(sys.argv[1]).is_file(): time.sleep(.01)
+            for event in ('session.ready', 'session.idle'):
+                print(json.dumps({'type':event}),flush=True)
         continue
     if op=='stop': break
     if op=='send':
@@ -73,6 +77,47 @@ async def test_count_evicts_oldest_settled_worker_and_input_restarts_without_rep
     assert result['accepted']
     assert manager.workers['a']['process'] is not first
     assert not [event for event in manager.events if event[0] == 'runtime.error']
+
+async def test_retiring_warmed_worker_preserves_legacy_stop_after_late_native_idle(tmp_path, monkeypatch):
+    from amplifier_web.service import AppService
+
+    gate = tmp_path / 'release-boot-events'
+    runtime = RuntimeManager(command=[sys.executable, '-c', SCRIPT, str(gate), 'defer-boot-events'])
+    app = AppService(tmp_path / 'app', runtime, workspace=tmp_path)
+    monkeypatch.setattr(runtime.retention, 'wake', lambda: None)
+    observed_idle = asyncio.Event()
+    original = app.on_runtime_event
+
+    async def observe(kind, payload):
+        await original(kind, payload)
+        if payload.get('event') == 'session.idle':
+            observed_idle.set()
+
+    monkeypatch.setattr(app, 'on_runtime_event', observe)
+    try:
+        created = await app.dispatch('session.create', {'title': 'Saved Stop'})
+        sid = created['result']['sessionId']
+        session = app._session(sid)
+        session['status'] = 'stopped'
+        assert (await app.dispatch('session.warm', {'id': sid}))['accepted']
+        await asyncio.gather(*list(app.tasks))
+        await asyncio.gather(*list(app.warmup.pending.values()))
+        process = runtime.workers[sid]['process']
+        assert session['status'] == 'stopped' and process.returncode is None
+        assert not observed_idle.is_set()
+        gate.touch()
+        await asyncio.wait_for(observed_idle.wait(), 3)
+        assert session['status'] == 'stopped'
+
+        runtime.retention.settings['max_warm_workers'] = 0
+        await runtime.retention.sweep()
+        assert process.returncode == 0 and sid not in runtime.workers
+        assert session['preparation'] == {'status': 'cold'}
+        assert session['status'] == 'stopped' and session['messages'] == []
+    finally:
+        gate.touch()
+        await app.close()
+
 
 @pytest.mark.parametrize('barrier', ['none', 'owner', 'guard', 'mcp', 'late-work'])
 async def test_explicit_idle_retirement_keeps_exact_owner_and_final_worker_refusal(manager, barrier):
