@@ -326,6 +326,26 @@ def test_native_tool_definition_rejection_has_safe_actionable_failure():
     assert result['replayed'] is False
 
 
+def test_selected_live_loop_routes_openai_count_failure_to_context_preparation():
+    from amplifier_module_loop_live.failures import turn_failure
+    from amplifier_module_provider_openai._token_count import TokenCountError
+    from amplifier_web.session_health import generation_failure
+
+    failure = turn_failure(TokenCountError({
+        'category': 'timeout', 'retryable': True, 'attempts': 3,
+        'body': 'private provider payload',
+    }))
+    assert failure['error_category'] == 'context_measurement'
+    assert failure['error_stage'] == 'context_preparation'
+    assert failure['count_failure'] == {'category': 'timeout', 'retryable': True, 'attempts': 3}
+    assert failure['replayed'] is False
+
+    _, payload = normalize_event({'type': 'generation.failed', **failure}, 'test', 'turn-id')
+    detail = generation_failure(payload)
+    assert detail['summary'] == 'Could not check conversation size.'
+    assert detail['countFailure'] == failure['count_failure']
+
+
 @pytest.mark.parametrize('reason,retryable', [('service', True), ('timeout', True), ('rate_limit', True), ('authentication', False), ('invalid_request', False)])
 def test_count_failure_survives_runtime_normalization_with_safe_details(reason, retryable):
     from amplifier_web.session_health import generation_failure

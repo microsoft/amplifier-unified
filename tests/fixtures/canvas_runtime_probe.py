@@ -16,7 +16,8 @@ from amplifier_module_loop_live.runtime import Input, Runtime
 from amplifier_web.attachments import save, encode
 from amplifier_web.app_guidance import install_app_access, CANVAS_GUIDANCE
 
-PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII='
+# A complete 1×1 RGB PNG, including valid chunk checksums.
+PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNgYPgPAAEDAQAIicLsAAAAAElFTkSuQmCC'
 
 
 async def run():

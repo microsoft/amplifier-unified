@@ -1,8 +1,8 @@
-"""Narrow root tool-image ownership and private provider projection.
+"""Root session image ownership and private provider projection.
 
 No transcript writer, migration, historical image conversion or child expansion.
 Foundation owns originals, final-hook witnessing and primary-checkpoint proof.
-The host selects a reviewed cooperative construction and current read policy.
+The host supplies current read policy and the existing checkpoint writer.
 """
 from __future__ import annotations
 
@@ -54,7 +54,7 @@ class HostRegistrationView:
             state = self.native.get_capability("web.media.construction")
             if (coordinator is not self or hooks is not self.participant.hooks
                     or self.native.get_capability("web.media.registration") is not self
-                    or not state or state[0] is not value
+                    or not state or state.bridge is not value
                     or self.native.get_capability(name) is not value
                     or value.participant("unified-host") is not self.participant):
                 raise ValueError("Unknown host tool-post route")
@@ -104,42 +104,18 @@ def hook_configuration(coordinator):
     if state is None:
         yield
         return
-    bridge, graph, selection = state
-    cap = coordinator.get_capability(NAMESPACE)
-    if bridge.graph_receipt is None:
-        cap.enabled = False
-        with graph.configure():
-            yield
-    else:
-        # transition admission can refuse while a counted candidate holds its
-        # lifetime. Such a refusal must not revoke that unchanged candidate.
-        with graph.transition() as successor:
-            cap.enabled = False
-            coordinator.register_capability("web.media.construction", (bridge, successor, selection))
-            yield
-        seal_hook_graph(coordinator)
+    with state.configure():
+        yield
 
 
 def seal_hook_graph(coordinator):
     state = coordinator.get_capability("web.media.construction")
     if state is None:
         return False
-    bridge, graph, selection = state
-    cap = coordinator.get_capability(NAMESPACE)
-    cap.enabled = False
-    if not (selection.accepts_plan(coordinator.config) and selection.accepts_construction(graph)):
-        return False
     try:
-        receipt = bridge.graph_receipt or graph.seal()
+        return state.seal()
     except ValueError:
         return False
-    report = cap.report("unified-host", event="readiness", outcome="inspect")
-    loop_ready = any(row.get("role") == "loop" and type(row.get("contract")) is int and row["contract"] == 1
-                     and row.get("ready") is True
-                     for row in report.get("consumers", {}).values())
-    cap.enabled = bool(bridge.validate_receipt(receipt) and loop_ready
-                       and callable(coordinator.get_capability("session.durable_checkpoint")))
-    return cap.enabled
 
 
 class _RequestOnlyIssuance:
@@ -299,6 +275,8 @@ class SourcePolicy:
         from amplifier_foundation.session.media import MediaRefusal
         from ..read_policy import media_read_source
         origin = ref["provenance"]
+        if origin["kind"] == "upload" and origin["session_id"] == self.coordinator.session_id:
+            return self.store.get_origin_classification(ref) == "composer-upload"
         path = self.paths.get(origin["id"])
         # Publication validates staged bytes before a canonical append exists.
         # This is only the actual observed call; hydration still requires the
@@ -315,25 +293,16 @@ class SourcePolicy:
         return True
 
 
-def bind_media(session, store, *, selection=None):
-    """Before initialize. Unknown graphs do not install or enable producers."""
-    from .media_assembly import ReviewedRootRecipe, root_participants
-    participants = root_participants(session.config)
-    if (type(selection) is not ReviewedRootRecipe or not participants
-            or not selection.accepts_plan(session.config) or os.name != "posix"):
+def bind_media(session, store):
+    """Before initialize. Foundation verifies the actual cooperative graph."""
+    if os.name != "posix":
         return
     try:
-        from amplifier_foundation.session.media import bind_session_media
-        from amplifier_foundation.session.media_hook_bridge import install_media_hook_bridge
+        from amplifier_foundation.session.media_host import SessionMediaBinding
+        from amplifier_foundation.session.media_hook_bridge import participating_module_ids
     except ImportError:
         return
     coordinator = session.coordinator
-    bridge = install_media_hook_bridge(coordinator)
-    graph = bridge.begin_participating_graph(session, owner="unified-host", participants=tuple(participants))
-    registration = HostRegistrationView(coordinator, graph.participant("unified-host"))
-    coordinator.register_capability("web.media.registration", registration)
-    coordinator.register_capability("web.media.construction", (bridge, graph, selection))
-    coordinator.register_capability("web.media.adapters", [])
     policy = SourcePolicy(coordinator)
     # This receipt is minted ONLY by the existing attachment encoder, not from
     # loaded inline images. It contains hashes/positions, never pixels or paths.
@@ -341,14 +310,22 @@ def bind_media(session, store, *, selection=None):
     media = store.media(session.session_id, policy_verifier=policy.validate,
                         request_only_verifier=registry.validate)
     policy.store = media
-    cap = bind_session_media(coordinator, store=media, enabled=False)
+    owner = "unified-host"
+    try:
+        binding = SessionMediaBinding(session, store=media, owner=owner,
+                                      participants=(owner, *participating_module_ids(session)))
+    except BaseException:
+        media.close()
+        raise
+    registration = HostRegistrationView(coordinator, binding.registration)
+    coordinator.register_capability("web.media.registration", registration)
+    coordinator.register_capability("web.media.construction", binding)
+    coordinator.register_capability("web.media.adapters", [])
     coordinator.register_capability("web.media.store", media)
     coordinator.register_capability("web.media.source_policy", policy)
     coordinator.register_capability("web.media.request_only", registry)
     registration.hooks.register("tool:pre", policy.observe, priority=-150, name="unified-media-source")
     async def close():
-        cap.enabled = False
-        media.close()
         registry.requests.clear()
         registry.uploads.clear()
     coordinator.register_cleanup(close)
@@ -404,7 +381,7 @@ def _support(provider, request, model, options):
             for source in sources:
                 source.clear()
             snapshot.messages = []
-    raise ValueError("Reviewed media requires request-indexed provider support")
+    raise ValueError("Media requires request-indexed provider support")
 
 
 def _support_owner(provider):
@@ -413,21 +390,22 @@ def _support_owner(provider):
     return (getattr(getter, "__self__", None), getattr(getter, "__func__", getter))
 
 
-def _supported_scope(coordinator, provider, request, options):
-    from .media_assembly import supported_request
-    state = coordinator.get_capability("web.media.construction")
-    return state is not None and supported_request(state[2].plan, provider, request, options)
+def _effective_model(provider, request, options):
+    from ..provider_capture import provider_chain
+    chain = provider_chain(provider)
+    actual = chain[-1]() if chain else provider
+    return options.get("model") or request.model or getattr(actual, "default_model", None)
 
 
 class HostMediaProjection:
     """One private counted candidate; no hydrated data in canonical messages."""
-    def __init__(self, coordinator, provider, source, options, prepared, lifetime, support):
+    def __init__(self, coordinator, provider, source, options, prepared, lifetime, support, model):
         self.coordinator, self.provider, self.source = coordinator, provider, source
         self.options, self.support = copy.deepcopy(options), copy.deepcopy(support)
         self.snapshot = source.model_copy(deep=True)
         self.capability = coordinator.get_capability(NAMESPACE)
         self.prepared, self.request, self.lifetime = prepared, prepared.request, lifetime
-        self.model = source.model  # Explicit qualified request, never a default/alias fallback.
+        self.model = model
         self.canonical = self.canonical_snapshot = None
         from ..provider_capture import provider_chain
         self.chain = provider_chain(provider)
@@ -439,8 +417,9 @@ class HostMediaProjection:
 
     def _binding(self):
         from ..provider_capture import normalized_options
-        return (normalized_options({"config": getattr(self.provider, "config", {}),
-                                    "default_model": getattr(self.provider, "default_model", None)}),
+        actual = self.chain[-1]()
+        return (normalized_options({name: getattr(actual, name, None) for name in
+                                    ("name", "config", "default_model", "extra_request_params")}),
                 self.coordinator.get_capability("web.worker_run"))
 
     def validate_binding(self):
@@ -450,7 +429,7 @@ class HostMediaProjection:
                 or not same_chain(self.chain, self.provider)
                 or self.coordinator.get_capability(NAMESPACE) is not self.capability
                 or self.capability.enabled is not True or self._binding() != self.binding
-                or not _supported_scope(self.coordinator, self.provider, self.source, self.options)
+                or self.model != _effective_model(self.provider, self.source, self.options)
                 or self.support_owner != _support_owner(self.provider)
                 or self.support != _support(self.provider, self.snapshot, self.model, self.options)
                 or self.lifetime[1]() is not True):
@@ -492,7 +471,7 @@ class WarningProjection:
         for message in self.request.messages:
             if NAMESPACE in (message.metadata or {}):
                 message.metadata = {key: value for key, value in message.metadata.items() if key != NAMESPACE}
-                warning = TextBlock(text="[Image unavailable: supported reviewed root/model configuration is not active; no pixels supplied from storage]")
+                warning = TextBlock(text="[Image unavailable: no pixels supplied by the active session or provider.]")
                 if isinstance(message.content, str):
                     message.content = [TextBlock(text=message.content), warning]
                 else:
@@ -518,14 +497,16 @@ async def prepare_media(coordinator, provider, request, *, request_options=None)
     cap = coordinator.get_capability(NAMESPACE)
     state = coordinator.get_capability("web.media.construction")
     if (cap is None or state is None or cap.enabled is not True
-            or not state[0].validate_receipt(state[0].graph_receipt)):
+            or not state.bridge.validate_receipt(state.bridge.graph_receipt)):
         if cap is not None:
             cap.enabled = False
         return WarningProjection(request, request_options, coordinator=coordinator)
     options = effective_options(request, request_options)
-    if not _supported_scope(coordinator, provider, request, options):
+    if (request.metadata or {}).get("purpose") == "context-compaction":
+        return WarningProjection(request, options, coordinator=coordinator)
+    if getattr(provider, "get_media_request_support_for_request", None) is None:
         return WarningProjection(request, request_options, coordinator=coordinator)
-    model = request.model  # _supported_scope requires the same explicit portable/wire model.
+    model = _effective_model(provider, request, options)
     support = _support(provider, request, model, options)
     if not support["positions"]:
         # Valid unsupported facts are an initial, unmarked text-only fit.
@@ -533,7 +514,7 @@ async def prepare_media(coordinator, provider, request, *, request_options=None)
         # refuses unsupported private carriers. A positive fitted candidate
         # changing support still fails validate_binding; it cannot downgrade.
         return WarningProjection(request, options, coordinator=coordinator)
-    context = state[0].request_scope()
+    context = state.bridge.request_scope()
     validate = context.__enter__()
     prepared = None
     try:
@@ -543,11 +524,9 @@ async def prepare_media(coordinator, provider, request, *, request_options=None)
             request, provider_identity={"provider": type(provider).__module__,
                 "account": str(id(provider)), "media_support": support,
                 "generation": str(coordinator.get_capability("web.worker_run") or id(coordinator))},
-            model=model, request_options=options, purpose="model",
-            execution_scope={"text_only": True} if
-                (request.metadata or {}).get("purpose") == "context-compaction" else None)
+                model=model, request_options=options, purpose="model", execution_scope=None)
         projection = HostMediaProjection(coordinator, provider, request, options, prepared,
-                                         (context, validate), support)
+                                         (context, validate), support, model)
         projection.validate()
         return projection
     except BaseException:

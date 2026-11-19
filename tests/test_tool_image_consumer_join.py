@@ -1,22 +1,17 @@
-"""Actual loop/Unified source join, not installed Worker or provider-wire proof.
-
-Dependencies are supplied by the caller's explicit immutable source selection.
-The test recipe pins predeclared source roles for this fixture only; it never
-alters the shipped pending manifest or reports consumer availability itself.
-"""
+"""Actual loop/Unified source join, not installed Worker or provider-wire proof."""
+import asyncio
 import base64
 from contextlib import contextmanager
 import copy
 import hashlib
-import importlib
 from pathlib import Path
+import sys
 
 import pytest
 from amplifier_core import AmplifierSession, HookResult, ProviderInfo
 from amplifier_core.message_models import ChatResponse, ToolCall, ToolCallBlock, TextBlock
 
 from amplifier_web.host import media
-from amplifier_web.host.media_assembly import ReviewedRootRecipe
 from amplifier_web.host.storage import SessionStore
 from amplifier_web.app_guidance import install_app_access
 from amplifier_web.read_policy import mounted_read_file
@@ -45,8 +40,8 @@ class ScriptedReadProvider:
 
     def get_media_request_support_for_request(self, *, request, **kwargs):
         return {"v": 2, "positions": [
-            {"message_index": i, "role": "tool"} for i, m in enumerate(request.messages)
-            if m.role == "tool"], "mime_types": ["image/png", "image/jpeg"]}
+            {"message_index": i, "role": m.role} for i, m in enumerate(request.messages)
+            if m.role in {"tool", "user"}], "mime_types": ["image/png", "image/jpeg"]}
 
     async def request_budget(self, request, *, request_options=None, **kwargs):
         self.counted = request
@@ -96,25 +91,9 @@ class FiniteSourceHost(HostAdapter):
     async def prepare_execution(self, loop, coordinator, providers):
         from amplifier_web.host.session import SelectedProvider
         transform = self.native.get_capability("web.provider_transform")
-        return None, {name: SelectedProvider(provider, {"model": "gpt-6.1-sol"}, transform)
+        return self.native.get_capability("live.runtime"), {
+                      name: SelectedProvider(provider, {"model": provider.default_model}, transform)
                       for name, provider in providers.items()}, None
-
-
-def recipe_sources():
-    # Authored semantic roles, NOT a callback-graph scan or production approval.
-    modules = (
-        "amplifier_module_loop_live.orchestrator",
-        "amplifier_module_loop_streaming",
-        "amplifier_module_loop_streaming.media",
-        "amplifier_module_context_simple",
-        "amplifier_module_tool_filesystem",
-        "amplifier_web.host.media",
-        "amplifier_web.app_guidance",
-    )
-    paths = [Path(importlib.import_module(name).__file__).resolve() for name in modules]
-    paths += [Path(__file__).resolve(), Path(importlib.import_module(
-        "fixtures.narrow_tool_image_fixture").__file__).resolve()]
-    return {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}
 
 
 async def actual_root(tmp_path, provider, *, post=None, store=None, deny_work=False):
@@ -129,8 +108,7 @@ async def actual_root(tmp_path, provider, *, post=None, store=None, deny_work=Fa
     coordinator = session.coordinator
     coordinator.loader = ActualConsumerLoader(provider)
     store = store or SessionStore(tmp_path / "sessions")
-    selection = ReviewedRootRecipe(session.config, recipe_sources())
-    media.bind_media(session, store, selection=selection)
+    media.bind_media(session, store)
     try:
         await session.initialize()
         loop = coordinator.get("orchestrator")
@@ -149,6 +127,8 @@ async def actual_root(tmp_path, provider, *, post=None, store=None, deny_work=Fa
             snapshots.append(copy.deepcopy(canonical))
             return canonical
         coordinator.register_capability("session.durable_checkpoint", checkpoint)
+        from amplifier_web.attachments import install_media_context
+        await install_media_context(coordinator)
         provider.checkpoint_seen = lambda: bool(snapshots and any(
             media.NAMESPACE in (row.get("metadata") or {}) for row in snapshots[-1]))
         checks = []
@@ -272,3 +252,101 @@ async def test_actual_loop_image_refusal_then_plaintext_recovery(tmp_path, monke
         assert checks[-1] == ("read_file", {"file_path": str(text)})
     finally:
         await session.cleanup()
+
+
+async def test_live_composer_checkpoints_inline_upload_before_transport(tmp_path, monkeypatch):
+    from amplifier_module_loop_live.runtime import Input, Runtime
+    from amplifier_web.attachments import encode, save
+
+    home = tmp_path / "app"
+    monkeypatch.setenv("AMPLIFIER_WEB_HOME", str(home))
+    path, original = picture(tmp_path)
+    encoded = base64.b64encode(original).decode()
+    upload = save(home, path.name, encoded)
+    class UploadProvider(ScriptedReadProvider):
+        async def complete(self, request, **kwargs):
+            assert any(((row.get("metadata") or {}).get("amplifier_input") or {}).get("id")
+                       == command.id for row in snapshots[-1])
+            return await super().complete(request, **kwargs)
+    provider = UploadProvider(path, read=False)
+    # A different selected model is not a host decision.
+    provider.default_model = "fixture-vision"
+    session, store, checkpoint, snapshots, _, host = await actual_root(tmp_path, provider)
+    runtime = Runtime(session.session_id)
+    session.coordinator.register_capability("live.runtime", runtime)
+    session.coordinator.register_capability("live.attachments.encode", encode)
+    command = Input("user", "Inspect my upload", attachments=({"id": upload["id"]},))
+    execution = asyncio.create_task(session.execute(""))
+    try:
+        await runtime.submit(command)
+        async with asyncio.timeout(5):
+            while not any(row["type"] == "generation.finished" for row in runtime.events):
+                if execution.done():
+                    await execution
+                    pytest.fail("Live loop ended without a generation")
+                await asyncio.sleep(0.01)
+        assert host.sealed
+        assert provider.observed == [[("user", None, original)]]
+        rows = await checkpoint()
+        user = next(row for row in rows if row["role"] == "user"
+                    and ((row.get("metadata") or {}).get("amplifier_input") or {}).get("id") == command.id)
+        assert user["metadata"]["amplifier_input"]["id"] == command.id
+        assert media.NAMESPACE not in user["metadata"]
+        assert encoded in (store.directory(session.session_id) / "transcript.jsonl").read_text()
+        assert not list((store.directory(session.session_id) / "media" / "assets").glob("*"))
+    finally:
+        if not execution.done():
+            await runtime.submit(Input("stop"))
+        try:
+            await asyncio.gather(asyncio.wait_for(execution, timeout=5), return_exceptions=True)
+        finally:
+            await session.cleanup()
+
+
+async def test_new_process_rehydrates_checkpoint_without_source_or_tool_replay(tmp_path, monkeypatch):
+    monkeypatch.setenv("AMPLIFIER_WEB_HOME", str(tmp_path / "app"))
+    path, original = picture(tmp_path)
+    provider = ScriptedReadProvider(path)
+    session, store, checkpoint, _, _, _ = await actual_root(tmp_path, provider)
+    try:
+        await session.execute("Read the image")
+        await checkpoint()
+    finally:
+        await session.cleanup()
+    path.unlink()
+    script = """
+import asyncio, hashlib, sys
+from pathlib import Path
+sys.path.insert(0, 'tests')
+from test_tool_image_consumer_join import actual_root, ScriptedReadProvider
+
+async def main():
+    root = Path(sys.argv[1])
+    provider = ScriptedReadProvider(Path(sys.argv[2]), read=False)
+    session, store, checkpoint, _, checks, host = await actual_root(root, provider)
+    try:
+        rows, _ = store.load(session.session_id)
+        await session.coordinator.get('context').set_messages(rows)
+        await checkpoint()
+        await session.execute('Use the saved image')
+        assert not checks and host.sealed
+        [[(role, call_id, pixels)]] = provider.observed
+        assert (role, call_id) == ('tool', 'call-first-image')
+        print(hashlib.sha256(pixels).hexdigest())
+    finally:
+        await session.cleanup()
+
+asyncio.run(main())
+"""
+    process = await asyncio.create_subprocess_exec(
+        sys.executable, "-c", script, str(tmp_path), str(path),
+        cwd=Path(__file__).resolve().parents[1],
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    try:
+        output, errors = await asyncio.wait_for(process.communicate(), timeout=15)
+    finally:
+        if process.returncode is None:
+            process.kill()
+            await process.wait()
+    assert process.returncode == 0, errors.decode()
+    assert output.strip().decode() == hashlib.sha256(original).hexdigest()
