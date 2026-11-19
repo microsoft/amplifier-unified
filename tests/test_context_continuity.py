@@ -2406,7 +2406,27 @@ async def test_qualified_component_finishes_one_authorized_partial_transition(tm
     assert 0 <= final['additionalAllowance']['usedCalls'] <= 32 and row['calls'][:1] == original
     assert case.coordinator.context.config['summary_max_calls'] == 1
     assert not any(call['state'] != 'completed' for call in row['calls'])
-    print('Qualified transition used', final['additionalAllowance']['usedCalls'], 'additional calls')
+    print('Additional calls used for qualified transition:', final['additionalAllowance']['usedCalls'])
+
+
+@pytest.mark.parametrize('portable', ['reservation', 'checkpoint'])
+async def test_portable_progress_cannot_offer_a_native_extension(tmp_path, portable):
+    case = await target_transition_fixture(tmp_path)
+    case.coordinator.context.config['summary_max_calls'] = 1
+    case.coordinator.register_capability('web.provider_catalog', {'connectionKeys': {'fixture': 'fixture-connection'}})
+    case.coordinator.register_capability('context.recovery.additional_call_allowance', lambda: 2)
+    with pytest.raises(RuntimeError, match='summary_work_paused'):
+        await case.prepare()
+    assert 'allowanceOffer' in await case.adapter.recovery_control_status()
+    row = case.adapter._recovery_record()
+    if portable == 'reservation':
+        row['calls'][0]['report']['method'] = 'semantic'
+    else:
+        progress = row['progress']
+        progress['summary'] = {'text': 'Portable summary', 'throughMessage': progress['sourceRevision']['messages']}
+        progress['sha256'] = digest({k: v for k, v in progress.items() if k != 'sha256'})
+    assert 'allowanceOffer' not in await case.adapter.recovery_control_status()
+    assert len(case.raw.compactions) == 1
 
 
 async def test_transition_cancelled_paid_call_keeps_source_and_unknown_reservation(tmp_path):

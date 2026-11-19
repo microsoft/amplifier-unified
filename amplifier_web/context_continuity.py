@@ -980,6 +980,8 @@ class ContextContinuity:
                     raise ContextRecoveryError("transition_call_invalid")
                 grant = record.get("additionalAllowance")
                 if grant and grant["authorizationId"] == record["foreground"]["inputId"]:
+                    if report["method"] != "native":
+                        raise ContextRecoveryError("transition_call_invalid")
                     from .provider_catalog import require_mounted_binding
                     selected = record["foreground"]
                     require_mounted_binding(self.coordinator, selected["selection"]["instance"], selected["connection"])

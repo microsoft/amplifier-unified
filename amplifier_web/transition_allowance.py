@@ -10,7 +10,14 @@ def offer_id(session_id, record):
             or record.get("additionalAllowance") or record.get("candidateSha256") or record.get("installedCandidate")
             or not record.get("progress") or not record.get("calls")
             or len(record["calls"]) != record.get("maxCalls") or record.get("completedParts") != len(record["calls"])
-            or any(call.get("state") != "completed" for call in record["calls"])):
+            or any(call.get("state") != "completed" or call.get("report", {}).get("method") != "native"
+                   for call in record["calls"])):
+        return None
+    progress = record["progress"]
+    summary = progress.get("summary") if isinstance(progress, dict) else None
+    if (not isinstance(summary, dict) or summary.get("kind") != "native" or not isinstance(summary.get("message"), dict)
+            or progress.get("progress") is not None or progress.get("identity") != record["identity"]
+            or progress.get("sha256") != digest({k: v for k, v in progress.items() if k != "sha256"})):
         return None
     # Source and target, confirmed reservations and checkpoint, current selection,
     # account, options, tools and prior Stop are already bound by this journal.

@@ -126,8 +126,9 @@ SDK retries retain their own bounded policy: a logical-call bound is not a claim
 about physical HTTP requests or exactly-once billing. Completed acknowledged
 progress survives; unknown paid calls never automatically replay.
 
-After every base reservation is confirmed and progress is saved, an exhausted
-model transition can offer one additional allowance for that exact transition.
+After every base reservation is confirmed as native compaction and its native
+checkpoint is saved, an exhausted model transition can offer one additional
+allowance for that exact transition.
 The existing `context.recovery.status` control returns `allowanceOffer` with an
 opaque `offerId`, `expectedInterruptionRevision` and `maxAdditionalCalls` (32).
 A fresh ordinary human `conversation.send` can include the original `sessionId`,
@@ -140,8 +141,9 @@ Duplicate delivery returns the original receipt. A retry, steering input, peer
 message, schedule or later Send cannot use the authorization.
 
 The original `maxCalls` stays in the journal. Status reports the additional calls
-authorized and used separately. Native and portable paths share one remaining
-amount for the approved input. An opted-in component advertises version 2 via
+authorized and used separately. The extension covers native compaction for
+that input. Portable summarization keeps its configured allowance.
+An opted-in component advertises version 2 via
 `context.recovery.additional_call_allowance` and validates the separate grant.
 The host keeps the previous confirmed calls and the last written partial result.
 Reading status, opening the chat, and restarting consume zero calls.
