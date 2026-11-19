@@ -239,6 +239,12 @@ conversation interpreter. It reopens a synthetic saved conversation using both c
 registration and the older direct-registration contract. A local provider refuses all model
 requests. A failed start or reopen stops publication before a tag is created.
 
+On POSIX, ordinary application staging repeats the retained-registration check with an existing
+prepared conversation interpreter before selecting the update. If the selected component generation
+changes while the app waits, activation first qualifies the new pairing. First setup can stage the
+app before a conversation interpreter exists. The check uses a disposable local conversation and
+does not open a saved user chat or install components.
+
 Settings also provides manual checks, installation, and ecosystem rollback. Scheduled checks run while the local host is open; this is not a separate OS daemon. The Settings icon shows an update indicator. These controls use the shared action registry; forced interruption requires an explicit user confirmation.
 
 Application updates download the selected release's prebuilt wheel and checksum
