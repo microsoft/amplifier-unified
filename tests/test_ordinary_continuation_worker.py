@@ -28,6 +28,8 @@ class Provider:
         self.tool_issued = False
         self.calls = []
         self.foreground_sizes = []
+        self.timeout_after_tool = False
+        self.post_tool_timeout_seen = False
     def get_info(self):
         return ProviderInfo(id=self.name, display_name="Offline continuation fixture",
                             capabilities=["request_budget:provider_count"],
@@ -39,6 +41,12 @@ class Provider:
         count = len(request.model_dump_json().encode()) // 4
         if require_measurement:
             self.foreground_sizes.append(len(request.messages))
+            if (self.timeout_after_tool and not self.post_tool_timeout_seen and
+                    any(m.role == "tool" and m.tool_call_id == "once" for m in request.messages)):
+                self.post_tool_timeout_seen = True
+                error = TimeoutError("Synthetic input counter timed out after the tool settled")
+                error.context_count_unavailable = True
+                raise error
         return {"input_limit_independent_of_output": True, "estimated_input_tokens": count, "input_limit_tokens": 20000,
                 "context_token_budget": 20000,
                 "measurement": {"kind": "provider_count",
@@ -182,6 +190,7 @@ async def test_actual_worker_completes_two_ordinary_turns_after_omission(
         coordinator = worker.session.coordinator
         context = coordinator.get('context')
         raw = coordinator.get_capability('fixture.provider')
+        raw.timeout_after_tool = shape == 'tool-continuation'
         await coordinator.mount('tools', LargeResult(), name='large_result')
         original = [
             {'role': 'user', 'content': 'Original objective: preserve Stop and originals.'},
@@ -252,6 +261,7 @@ async def test_actual_worker_completes_two_ordinary_turns_after_omission(
             assert sum(any(call.get('id') == 'once' for call in row.get('tool_calls', []))
                        for row in canonical) == 1
         if shape == 'tool-continuation':
+            assert raw.post_tool_timeout_seen
             assert any(m.role == 'tool' and m.tool_call_id == 'once' and 'completed-once' in str(m.content)
                        for m in raw.sent[1].messages)
         marks = [normalize_event(event, worker.session.session_id)[1] for event in events
