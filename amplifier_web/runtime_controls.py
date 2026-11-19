@@ -369,6 +369,8 @@ class RuntimeControls:
             "inputIds": generation["input_ids"],
             "selectionRevision": self.selection_revision, "selection": self.selection,
             "connection": self.selection_binding,
+            **({key: binding[key] for key in ("recoveryAllowance", "allowanceStopRevision")}
+               if "recoveryAllowance" in binding else {}),
             "originals": self.coordinator.get_capability("web.context_transition.originals") is True})
 
     def configuration(self):
@@ -504,7 +506,8 @@ class RuntimeControls:
             if continuity is None:
                 raise ValueError("Explicit context recovery is unavailable in this runtime")
             if operation == "context.recovery.status":
-                return continuity.recovery_status()
+                read = getattr(continuity, "recovery_control_status", None)
+                return await read() if callable(read) else continuity.recovery_status()
             self.require_idle()
             trusted = args.get("_recoveryCommand")
             if (not isinstance(trusted, dict) or not isinstance(trusted.get("id"), str)

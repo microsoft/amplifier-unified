@@ -125,6 +125,26 @@ logical paid call. Repeated preparation and restarts do not reset it. Provider
 SDK retries retain their own bounded policy: a logical-call bound is not a claim
 about physical HTTP requests or exactly-once billing. Completed acknowledged
 progress survives; unknown paid calls never automatically replay.
+
+After every base reservation is confirmed and progress is saved, an exhausted
+model transition can offer one additional allowance for that exact transition.
+The existing `context.recovery.status` control returns `allowanceOffer` with an
+opaque `offerId`, `expectedInterruptionRevision` and `maxAdditionalCalls` (32).
+A fresh ordinary human `conversation.send` can include the original `sessionId`,
+that Stop revision and `recoveryAllowance: {offerId, additionalCalls}`. The amount
+must be an integer from 1 to 32. The native owner verifies the offer, source
+checkpoint and original prefix, selected model and account, tool configuration,
+idle admission, and the new Send. It records the authorization with that input
+before reserving a paid call. A changed Stop or selection requires a current offer.
+Duplicate delivery returns the original receipt. A retry, steering input, peer
+message, schedule or later Send cannot use the authorization.
+
+The original `maxCalls` stays in the journal. Status reports the additional calls
+authorized and used separately. Native and portable paths share one remaining
+amount for the approved input. An opted-in component advertises version 2 via
+`context.recovery.additional_call_allowance` and validates the separate grant.
+The host keeps the previous confirmed calls and the last written partial result.
+Reading status, opening the chat, and restarting consume zero calls.
 An uncertain target call without an installation candidate does not prevent
 ordinary continuation under the fully revalidated source identity. Its journal
 and target-call fence remain intact. Source validation is passive after the

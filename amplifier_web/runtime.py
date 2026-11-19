@@ -1747,6 +1747,12 @@ class RuntimeManager:
             reply_context=message.get("replyTo"),
             context_binding=session.get('surfaceInputs', {}).get(input_id, {'clientId': None, 'targets': []}),
             attachments=message.get("attachments", []))
+        if message.get('recoveryAllowance') is not None:
+            if (message.get('inputOrigin') not in {'ui', 'user'} or message.get('role') != 'user'
+                    or message.get('handoffOrigin') or message.get('steering') or message.get('updateAdmission')
+                    or session.get('pendingModelSelection') or session.get('pendingBundleSelection')):
+                raise RuntimeStartupError('This recovery allowance requires a new ordinary message from this chat.')
+            arguments['recovery_allowance'] = message['recoveryAllowance']
         if session.get('pendingModelSelection') or session.get('pendingBundleSelection') or session.get('fileAccessPending'):
             # Future settings must not interrupt live guidance. Ask the actual
             # owner to admit with its mounted configuration, or prove no effect
