@@ -419,18 +419,24 @@ class ContextContinuity:
     def recovery_status(self):
         return self._recovery_public(self._recovery_record())
 
-    async def recovery_control_status(self):
+    async def recovery_control_status(self, *, cache_move_from=None):
         record = self._recovery_record()
         result = self._recovery_public(record)
-        token = self._allowance_offer(record)
-        if token:
+        offer = self._allowance_offer(record, cache_move_from)
+        if offer:
             epoch = await self._interruption_revision()
-            if record is self._recovery_record() and self._allowance_offer(record) == token:
-                result["allowanceOffer"] = {"offerId": digest([token, epoch]),
-                    "maxAdditionalCalls": transition_allowance.MAX_ADDITIONAL_CALLS, "expectedInterruptionRevision": epoch}
+            if record is self._recovery_record() and self._allowance_offer(record, cache_move_from) == offer:
+                token, move = offer
+                value = {"offerId": digest([token, epoch]),
+                         "maxAdditionalCalls": transition_allowance.MAX_ADDITIONAL_CALLS,
+                         "expectedInterruptionRevision": epoch}
+                if move:
+                    result["cacheMoveOffer"] = {**value, "cacheMove": move}
+                else:
+                    result["allowanceOffer"] = value
         return result
 
-    def _allowance_offer(self, record):
+    def _allowance_offer(self, record, cache_move_from=None):
         if not record or record.get("kind") != "model-transition" or record.get("state") != "refused":
             return None
         version = self.coordinator.get_capability("context.recovery.additional_call_allowance")
@@ -442,7 +448,6 @@ class ContextContinuity:
         previous = record["foreground"]
         if (not isinstance(actual, dict) or not actual.get("connection")
                 or any(actual.get(key) != previous.get(key) for key in ("selection", "selectionRevision", "connection"))
-                or record["contract"] != {"version": 1, "sha256": digest(_sync(contract))}
                 or getattr(self.coordinator.get("context"), "config", {}).get("summary_max_calls", 16) != record["maxCalls"]):
             return None
         from .provider_catalog import require_mounted_binding
@@ -451,18 +456,37 @@ class ContextContinuity:
         except ValueError:
             return None
         token = transition_allowance.offer_id(self.session_id, record)
-        if token:
-            try:
-                self._check_transition_file(record)
-            except ContextRecoveryError:
-                return None
-        return token
+        if not token:
+            return None
+        try:
+            self._check_transition_file(record)
+        except ContextRecoveryError:
+            return None
+        raw = _sync(contract)
+        if record["contract"] == {"version": 1, "sha256": digest(raw)}:
+            return token, None
+        prove = self.coordinator.get_capability("web.context_transition.skill_cache_move")
+        if cache_move_from is not None and callable(prove):
+            move = prove(raw, record["contract"]["sha256"], cache_move_from)
+            if move:
+                return digest([token, move]), move
+        return None
 
     def accepts_allowance(self, request, epoch):
         if not transition_allowance.valid_request(request) or type(epoch) is not int or epoch < 0:
             return False
-        token = self._allowance_offer(self._recovery_record())
-        return bool(token and digest([token, epoch]) == request["offerId"])
+        return self._accepted_offer(request, epoch) is not None
+
+    def _accepted_offer(self, request, epoch):
+        choice = request.get("cacheMove")
+        offer = self._allowance_offer(self._recovery_record(), choice["fromGeneration"] if choice else None)
+        if not offer:
+            return None
+        token, move = offer
+        if (bool(choice) != bool(move) or choice and any(move.get(k) != v for k, v in choice.items())
+                or digest([token, epoch]) != request["offerId"]):
+            return None
+        return offer
 
     def _recovery_public(self, record):
         result = {"supported": callable(self.coordinator.get_capability("context.recovery.recover")),
@@ -480,6 +504,9 @@ class ContextContinuity:
                 if grant := record.get("additionalAllowance"):
                     result["additionalAllowance"] = {"authorizedCalls": grant["additionalCalls"],
                         "usedCalls": max(0, len(record["calls"]) - record["maxCalls"])}
+                    if "cacheMove" in grant:
+                        result["additionalAllowance"]["cacheMove"] = {
+                            key: grant["cacheMove"][key] for key in ("fromGeneration", "toGeneration", "cacheMoveId")}
             result["verification"] = {key: value for key, value in record.get("verification", {}).items()
                                       if key in {"before", "after", "limit", "throughMessage"} and type(value) is int}
         return result
@@ -698,11 +725,16 @@ class ContextContinuity:
         self._check_transition_file(record)
         request = foreground.get("recoveryAllowance")
         if request is not None:
-            if (not self.accepts_allowance(request, epoch) or foreground.get("allowanceStopRevision") != epoch
-                    or record["identity"] != self._identity or record["contract"] != contract):
+            offer = self._accepted_offer(request, epoch) if transition_allowance.valid_request(request) else None
+            move = offer[1] if offer else None
+            approved_contract = {"version": 1, "sha256": move["newContractSha256"]} if move else record["contract"]
+            if (not offer or foreground.get("allowanceStopRevision") != epoch
+                    or record["identity"] != self._identity or approved_contract != contract):
                 raise ContextRecoveryError("transition_allowance_changed")
             record["additionalAllowance"] = {**request, "authorizationId": foreground["inputId"],
                 "interruptionRevision": epoch, "originalMaxCalls": record["maxCalls"]}
+            if move:
+                record["additionalAllowance"]["cacheMove"] = move
         record.setdefault("preparations", []).append({key: copy.deepcopy(record.get(key)) for key in (
             "state", "code", "foreground", "contract", "interruptionRevision", "completedParts")})
         record.update(state="pending", code=None, foreground=copy.deepcopy(foreground),
@@ -796,7 +828,8 @@ class ContextContinuity:
                     or any(call["state"] != "completed" for call in existing["calls"])
                     or existing.get("candidateSha256")
                     or existing["foreground"]["inputId"] == foreground["inputId"]
-                    or existing["contract"] != contract and not effect_free):
+                    or (existing["contract"] != contract and not effect_free and not
+                        (foreground.get("recoveryAllowance") or {}).get("cacheMove"))):
                 raise ContextRecoveryError("recovery_unreconciled")
             source = existing["sourceRevision"]
             if digest(messages[:source["messages"]]) != source["sha256"]:
