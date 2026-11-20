@@ -1990,15 +1990,16 @@ async def test_successor_recovery_refuses_uncertain_or_effectful_preparation(tmp
 
 
 @pytest.mark.parametrize('auto_check', [True, False])
-async def test_successor_tick_rechecks_fresh_before_any_automatic_install(tmp_path, monkeypatch, auto_check):
+@pytest.mark.parametrize('phase', ['interrupted', 'checked', 'available'])
+async def test_successor_tick_rechecks_fresh_before_any_automatic_install(tmp_path, monkeypatch, auto_check, phase):
     import time
     from amplifier_web.updates import UpdateManager
     m, calls, proof, _ = await stopped_preparation_fixture(tmp_path, monkeypatch)
     state = m.service.state['updates']
     m.service.state['settings'] = {'updates': {'autoCheck': auto_check, 'autoInstall': True}}
-    state.update(lastCheck=time.time(), adoption={'activeWorkers': 0, 'pendingWorkers': 0})
-    # A stale nextStage from an earlier app update cannot keep a recovered fence stuck.
-    state['sequence']['nextStage'] = 'included'
+    state.update(phase=phase, lastCheck=time.time(), adoption={'activeWorkers': 0, 'pendingWorkers': 0})
+    # An app check can leave a paused component sequence with stale install intent.
+    state['sequence'].update(nextStage='included', install=True)
     m.cleanup_task = None; m._storage_last_pass = time.time()
     m.service.runtime = SimpleNamespace(generation_usage=lambda: [])
     m.requires_idle = lambda state: False
@@ -2014,6 +2015,9 @@ async def test_successor_tick_rechecks_fresh_before_any_automatic_install(tmp_pa
         await UpdateManager.install(m, automatic=automatic)
     m.check = check; m.install_checked = install_checked
     await UpdateManager.tick(m)
+    if not auto_check:
+        await UpdateManager.tick(m)
+        assert 'nextStage' not in state['sequence'] and not state['sequence']['install']
     assert not health.pending_preparation(m.diagnostics.state)
     assert checked == ([{'fresh': True, 'automatic': True}] if auto_check else [])
     assert calls == {'validate': int(auto_check)}

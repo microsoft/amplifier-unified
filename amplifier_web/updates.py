@@ -2099,7 +2099,12 @@ class UpdateManager:
             async with self.lock:
                 reconciled = reconcile_preparation(self)
                 if reconciled:
-                    await self.publish()  # Persist retirement even with automatic checks off.
+                    # The retired attempt may have queued a later tier or an
+                    # install before it was interrupted. Only fresh discovery
+                    # or a new explicit request can authorize the next install.
+                    sequence = {**state.get('sequence', {}), 'install': False}
+                    sequence.pop('nextStage', None)
+                    await self.publish(sequence=sequence, phase='checked')
         if pending_preparation(self.diagnostics.state):
             # Health, drain, storage, worker adoption and independent app/tool
             # paths above still run. No component availability/install is replayed.
