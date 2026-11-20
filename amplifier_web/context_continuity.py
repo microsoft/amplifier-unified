@@ -53,10 +53,17 @@ _UNSUPPORTED_TRANSITION_GUIDANCE = (
 )
 
 
+TRANSITION_HOLD_REASONS = (
+    "attempt_not_terminal", "progress_missing", "call_unconfirmed",
+    "candidate_pending", "input_already_used", "contract_changed",
+)
+
+
 class ContextRecoveryError(RuntimeError):
     """Fixed, content-free failure at the host recovery boundary."""
-    def __init__(self, code):
+    def __init__(self, code, *, reason=None):
         self.code = code
+        self.reason = reason
         guidance = {
             "transition_intent_required": (
                 "Choose an explicit model connection, then send a new ordinary message. "
@@ -826,14 +833,23 @@ class ContextContinuity:
             # legitimate foreground input. Never repeat a reserved/unknown call.
             effect_free = (not existing["calls"] and existing.get("progress") is None
                            and not existing.get("candidateSha256") and not existing.get("installedCandidate"))
-            if (existing["state"] not in {"failed", "refused"}
-                    or existing["calls"] and not existing.get("progress")
-                    or any(call["state"] != "completed" for call in existing["calls"])
-                    or existing.get("candidateSha256")
-                    or existing["foreground"]["inputId"] == foreground["inputId"]
-                    or (existing["contract"] != contract and not effect_free and not
-                        (foreground.get("recoveryAllowance") or {}).get("cacheMove"))):
-                raise ContextRecoveryError("recovery_unreconciled")
+            if existing["state"] not in {"failed", "refused"}:
+                reason = "attempt_not_terminal"
+            elif existing["calls"] and not existing.get("progress"):
+                reason = "progress_missing"
+            elif any(call["state"] != "completed" for call in existing["calls"]):
+                reason = "call_unconfirmed"
+            elif existing.get("candidateSha256"):
+                reason = "candidate_pending"
+            elif existing["foreground"]["inputId"] == foreground["inputId"]:
+                reason = "input_already_used"
+            elif (existing["contract"] != contract and not effect_free
+                  and not (foreground.get("recoveryAllowance") or {}).get("cacheMove")):
+                reason = "contract_changed"
+            else:
+                reason = None
+            if reason:
+                raise ContextRecoveryError("recovery_unreconciled", reason=reason)
             source = existing["sourceRevision"]
             if digest(messages[:source["messages"]]) != source["sha256"]:
                 raise ContextRecoveryError("recovery_source_changed")
