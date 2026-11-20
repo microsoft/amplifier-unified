@@ -2202,6 +2202,75 @@ async def test_transition_unknown_paid_reservation_cannot_reset_on_fresh_input_o
     assert case.adapter.recovery_status()['logicalCalls'] == 1
 
 
+@pytest.mark.parametrize('completed', [5, 9])
+async def test_interrupted_native_transition_resumes_last_confirmed_progress(tmp_path, completed):
+    from amplifier_web.context_continuity import ContextRecoveryError
+
+    case = await target_transition_fixture(tmp_path, research_parts=completed + 8)
+    case.coordinator.register_capability('context.recovery.additional_call_allowance', lambda: 2)
+    case.coordinator.register_capability('web.provider_catalog', {'connectionKeys': {'fixture': 'fixture-connection'}})
+    original_compact = case.raw.compact_context
+    async def interrupt_after_progress(request):
+        if len(case.raw.compactions) == completed:
+            raise OSError('synthetic uncertain provider outcome')
+        return await original_compact(request)
+
+    case.raw.compact_context = interrupt_after_progress
+    with pytest.raises(OSError, match='uncertain provider outcome'):
+        await case.prepare()
+    case.adapter._journal = None
+    row = case.adapter._recovery_record()
+    calls = copy.deepcopy(row['calls'])
+    assert row['state'] == 'unknown' and len(calls) == completed + 1
+    assert row['completedParts'] == completed and calls[-1]['state'] == 'reserved'
+    progress = copy.deepcopy(row['progress'])
+    # Prior exhausted attempts coexist with the current interrupted transition.
+    prior = {**copy.deepcopy(row), 'commandId': 'earlier-attempt',
+             'state': 'refused', 'code': 'summary_work_paused'}
+    prior['calls'] = [copy.deepcopy(calls[0]) for _ in range(16)]
+    prior['completedParts'] = 16
+    case.adapter._journal['attempts'][prior['commandId']] = prior
+    case.adapter._write_recovery()
+    retained = case.adapter.recovery_path.read_bytes()
+    case.origin.update(inputId='fresh-send', generationId='fresh-generation', inputIds=['fresh-send'])
+    with pytest.raises(ContextRecoveryError, match='summary_work_paused'):
+        await case.prepare()
+    assert case.adapter.recovery_path.read_bytes() == retained
+    offered = await case.adapter.recovery_control_status()
+    offer = offered['allowanceOffer']
+    assert offered['unconfirmedCalls'] == 1
+    assert offer['maxAdditionalCalls'] == 16 - len(calls)
+    claim = {'offerId': offer['offerId'], 'additionalCalls': offer['maxAdditionalCalls']}
+    assert not case.adapter.accepts_allowance({**claim, 'additionalCalls': claim['additionalCalls'] + 1}, 0)
+    case.contract['tools'] = 'changed'
+    assert 'allowanceOffer' not in await case.adapter.recovery_control_status()
+    del case.contract['tools']
+    case.origin.update(inputId='approved-send', generationId='approved-generation', inputIds=['approved-send'],
+                       recoveryAllowance=claim, allowanceStopRevision=0)
+    case.raw.compact_context = original_compact
+    recover = case.coordinator.get_capability('context.recovery.recover')
+    async def observe_resume(**kwargs):
+        assert kwargs['progress'] == progress
+        assert kwargs['max_calls'] == offer['maxAdditionalCalls']
+        return await recover(**kwargs)
+
+    case.coordinator.register_capability('context.recovery.recover', observe_resume)
+    result = await case.prepare()
+    assert result['outcome'] == 'transitioned'
+    reply = await case.selected.complete(result['final_attempt']['dispatch'])
+    assert reply.content[0].text == 'Synthetic final answer.'
+    assert case.raw.sent[-1].model == 'target-model'
+    assert await case.coordinator.context.get_messages() == case.source
+    case.adapter._journal = None
+    row = case.adapter._recovery_record()
+    assert row['state'] == 'committed' and row['calls'][:len(calls)] == calls
+    assert row['additionalAllowance']['interruptedCall'] == completed
+    new_calls = len(case.raw.compactions) - completed
+    assert 0 < new_calls <= claim['additionalCalls']
+    assert (await case.adapter.recovery_control_status())['additionalAllowance']['usedCalls'] == new_calls
+    assert not case.adapter.accepts_allowance(claim, 0)
+
+
 @pytest.mark.parametrize('appended', [False, True], ids=['same-source', 'new-foreground-and-refs'])
 async def test_transition_lost_install_ack_reconciles_exact_digest_without_second_write(tmp_path, monkeypatch, appended):
     from amplifier_web import context_continuity
