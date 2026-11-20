@@ -6,7 +6,7 @@ import re
 
 _TRANSITION_FAILURE_CODES = (
     'transition_unsupported', 'transition_intent_required', 'recovery_checkpoint_rejected',
-    'recovery_unreconciled',
+    'recovery_unreconciled', 'summary_work_paused',
 )
 
 

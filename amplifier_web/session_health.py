@@ -251,6 +251,9 @@ def _context_recovery_details(code):
         'recovery_unreconciled': (
             'context_compaction', 'Earlier conversation preparation could not be resumed.',
             'This preparation step stopped before a model request. Copy the chat diagnostics from Details & reporting.'),
+        'summary_work_paused': (
+            'context_compaction', 'Conversation preparation can continue from saved progress.',
+            'Review preparation to approve calls for your next message. One earlier call remains unconfirmed and counts against the original allowance.'),
     }
     category, summary, guidance = messages[code]
     return {'category': category, 'code': code, 'stage': 'context_preparation',

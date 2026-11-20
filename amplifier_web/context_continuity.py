@@ -435,7 +435,7 @@ class ContextContinuity:
             if record is self._recovery_record() and self._allowance_offer(record, cache_move_from) == offer:
                 token, move = offer
                 value = {"offerId": digest([token, epoch]),
-                         "maxAdditionalCalls": transition_allowance.MAX_ADDITIONAL_CALLS,
+                         "maxAdditionalCalls": transition_allowance.offer_limit(record),
                          "expectedInterruptionRevision": epoch}
                 if move:
                     result["cacheMoveOffer"] = {**value, "cacheMove": move}
@@ -444,7 +444,7 @@ class ContextContinuity:
         return result
 
     def _allowance_offer(self, record, cache_move_from=None):
-        if not record or record.get("kind") != "model-transition" or record.get("state") != "refused":
+        if not record or record.get("kind") != "model-transition":
             return None
         version = self.coordinator.get_capability("context.recovery.additional_call_allowance")
         selection = self.coordinator.get_capability("web.context_transition.selection")
@@ -485,9 +485,10 @@ class ContextContinuity:
         return self._accepted_offer(request, epoch) is not None
 
     def _accepted_offer(self, request, epoch):
+        record = self._recovery_record()
         choice = request.get("cacheMove")
-        offer = self._allowance_offer(self._recovery_record(), choice["fromGeneration"] if choice else None)
-        if not offer:
+        offer = self._allowance_offer(record, choice["fromGeneration"] if choice else None)
+        if not offer or request["additionalCalls"] > transition_allowance.offer_limit(record):
             return None
         token, move = offer
         if (bool(choice) != bool(move) or choice and any(move.get(k) != v for k, v in choice.items())
@@ -508,12 +509,13 @@ class ContextContinuity:
             if record.get("kind") == "model-transition":
                 result.update(kind="model-transition", outcome=record.get("outcome"),
                               logicalCalls=len(record["calls"]), maxCalls=record["maxCalls"])
-                unconfirmed = sum(call["state"] != "completed" for call in record["calls"])
+                unconfirmed = transition_allowance.unconfirmed_calls(record)
                 if unconfirmed:
                     result["unconfirmedCalls"] = unconfirmed
                 if grant := record.get("additionalAllowance"):
+                    used_before = grant["interruptedCall"] + 1 if "interruptedCall" in grant else record["maxCalls"]
                     result["additionalAllowance"] = {"authorizedCalls": grant["additionalCalls"],
-                        "usedCalls": max(0, len(record["calls"]) - record["maxCalls"])}
+                        "usedCalls": max(0, len(record["calls"]) - used_before)}
                     if "cacheMove" in grant:
                         result["additionalAllowance"]["cacheMove"] = {
                             key: grant["cacheMove"][key] for key in ("fromGeneration", "toGeneration", "cacheMoveId")}
@@ -743,6 +745,9 @@ class ContextContinuity:
                 raise ContextRecoveryError("transition_allowance_changed")
             record["additionalAllowance"] = {**request, "authorizationId": foreground["inputId"],
                 "interruptionRevision": epoch, "originalMaxCalls": record["maxCalls"]}
+            interrupted = transition_allowance.interrupted_call(record)
+            if interrupted is not None:
+                record["additionalAllowance"]["interruptedCall"] = interrupted
             if move:
                 record["additionalAllowance"]["cacheMove"] = move
         record.setdefault("preparations", []).append({key: copy.deepcopy(record.get(key)) for key in (
@@ -777,7 +782,7 @@ class ContextContinuity:
         guard, contract = self._fresh_guard(transition=True)
         if (contract != record["contract"] or record["identity"] != self._identity
                 or foreground["inputId"] == record["foreground"]["inputId"]
-                or any(call["state"] != "completed" for call in record["calls"])):
+                or transition_allowance.unconfirmed_calls(record)):
             raise ContextRecoveryError("recovery_unreconciled")
         try:
             candidate = json.loads(self.path.read_text())
@@ -829,6 +834,14 @@ class ContextContinuity:
                     self._journal["current"] = command
                     self._write_recovery()
                     return existing
+            # The normal allowance admission verifies the current row, source,
+            # mounted contract and input before recording the skipped reservation.
+            if existing is self._recovery_record() and transition_allowance.interrupted_call(existing) is not None:
+                if foreground.get("recoveryAllowance"):
+                    await self._rebind_transition(existing, foreground, contract, guard)
+                    return existing
+                if self._allowance_offer(existing):
+                    raise ContextRecoveryError("summary_work_paused")
             # Only acknowledged completed progress can continue on another
             # legitimate foreground input. Never repeat a reserved/unknown call.
             effect_free = (not existing["calls"] and existing.get("progress") is None
@@ -837,7 +850,7 @@ class ContextContinuity:
                 reason = "attempt_not_terminal"
             elif existing["calls"] and not existing.get("progress"):
                 reason = "progress_missing"
-            elif any(call["state"] != "completed" for call in existing["calls"]):
+            elif transition_allowance.unconfirmed_calls(existing):
                 reason = "call_unconfirmed"
             elif existing.get("candidateSha256"):
                 reason = "candidate_pending"
@@ -1022,7 +1035,7 @@ class ContextContinuity:
                 self._check_transition_file(record)
                 calls = record["calls"]
                 if (transition_allowance.invocation(record)["max_calls"] <= 0
-                        or any(call["state"] != "completed" for call in calls)):
+                        or transition_allowance.unconfirmed_calls(record)):
                     raise ContextRecoveryError("transition_budget_exhausted")
                 if (not isinstance(report, dict) or report.get("targetIdentity") != record["identity"]
                         or report.get("sourceCheckpointSha256") != record["sourceCheckpointSha256"]
@@ -1170,7 +1183,7 @@ class ContextContinuity:
                     and exc.code in _REFUSAL_CODES):
                 state, code = "refused", exc.code
             if transition and not record.get("candidateSha256"):
-                uncertain = any(call["state"] == "reserved" for call in record["calls"])
+                uncertain = transition_allowance.unconfirmed_calls(record)
                 state = "unknown" if uncertain else "refused"
                 code = (exc.code if isinstance(exc, ContextRecoveryError) or isinstance(exc, compaction_error)
                         else "recovery_outcome_unknown" if uncertain else "recovery_preparation_failed")

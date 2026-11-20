@@ -140,7 +140,16 @@ before reserving a paid call. A changed Stop or selection requires a current off
 Duplicate delivery returns the original receipt. A retry, steering input, peer
 message, schedule or later Send cannot use the authorization.
 
-Status includes the number of unconfirmed logical calls in `unconfirmedCalls` when that number is positive. An unconfirmed call prevents an additional allowance.
+Status includes the number of unresolved logical calls in `unconfirmedCalls`
+when that number is positive. If a native transition stopped with one
+unconfirmed final reservation and an intact checkpoint for its previous
+completed parts, the same approval can resume from that checkpoint. Its
+`maxAdditionalCalls` is limited to the unused part of the original allowance.
+Unified keeps the uncertain reservation and counts it against that allowance.
+The new Send can reprocess the remaining source; the uncertain call's outcome
+stays unknown. The bound is single-use and the rest of the original allowance
+does not carry over to another Send. Missing progress, an ambiguous install, or
+additional unresolved reservations suppress the offer.
 
 The original `maxCalls` stays in the journal. Status reports the additional calls
 authorized and used separately. The extension covers native compaction for
