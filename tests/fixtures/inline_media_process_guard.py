@@ -48,16 +48,18 @@ def install(cache_home, forbidden, observed):
     async def guarded_shell(*args, **kwargs):
         return forbidden('subprocess')
 
-    def guarded_popen(args, *extra, **kwargs):
-        # asyncio's transport calls Popen within this task's context. Other
-        # tasks, direct Popen callers, and substituted commands remain denied.
-        if expected.get() is None or tuple(args) != expected.get():
-            return forbidden('subprocess')
-        return original_popen(args, *extra, **kwargs)
+    class GuardedPopen(original_popen):
+        # Keep Popen's class/typing contract: MCP imports Popen[bytes] while the
+        # guard is installed. Construction still requires this task's exact
+        # authorized asyncio spawn; a type annotation grants no permission.
+        def __init__(self, args, *extra, **kwargs):
+            if expected.get() is None or tuple(args) != expected.get():
+                return forbidden('subprocess')
+            super().__init__(args, *extra, **kwargs)
 
     asyncio.create_subprocess_exec = guarded_exec
     asyncio.create_subprocess_shell = guarded_shell
-    subprocess.Popen = guarded_popen
+    subprocess.Popen = GuardedPopen
 
     def restore():
         asyncio.create_subprocess_exec = original_exec

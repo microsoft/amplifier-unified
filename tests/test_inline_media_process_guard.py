@@ -74,7 +74,11 @@ async def test_authorized_spawn_does_not_grant_other_tasks_or_direct_popen(tmp_p
         return 'display-child'
 
     monkeypatch.setattr(asyncio, 'create_subprocess_exec', spawn)
-    monkeypatch.setattr(subprocess, 'Popen', lambda args: calls.append(args))
+    class RecordedPopen:
+        def __init__(self, args):
+            calls.append(args)
+
+    monkeypatch.setattr(subprocess, 'Popen', RecordedPopen)
     observed = []
     restore = guard.install(tmp_path, denied, lambda: observed.append(True))
     task = asyncio.create_task(asyncio.create_subprocess_exec(*args, **OPTIONS))
@@ -91,6 +95,41 @@ async def test_authorized_spawn_does_not_grant_other_tasks_or_direct_popen(tmp_p
         release.set()
         await task
         restore()
+
+
+def test_cold_mcp_import_preserves_process_denial(tmp_path):
+    # A fresh interpreter reaches MCP's evaluated Popen[bytes] annotation even
+    # when another test already imported MCP in this pytest process.
+    source = r'''
+import importlib.util
+from pathlib import Path
+import subprocess
+import sys
+
+spec = importlib.util.spec_from_file_location('media_process_guard', sys.argv[1])
+guard = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(guard)
+def denied(kind):
+    raise AssertionError('Unexpected ' + kind)
+original = subprocess.Popen
+restore = guard.install(Path(sys.argv[2]), denied, lambda: None)
+try:
+    from mcp.server import MCPServer
+    assert callable(MCPServer)
+    assert issubclass(subprocess.Popen, original)
+    try:
+        subprocess.Popen([sys.executable, '-c', 'raise SystemExit(23)'])
+    except AssertionError as error:
+        assert str(error) == 'Unexpected subprocess'
+    else:
+        raise AssertionError('A dependency import granted subprocess permission')
+finally:
+    restore()
+assert subprocess.Popen is original
+'''
+    result = subprocess.run([sys.executable, '-B', '-c', source, str(Path(guard.__file__)), str(tmp_path)],
+                            capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 @pytest.mark.parametrize('module', ['amplifier_web.history_projection_worker',
