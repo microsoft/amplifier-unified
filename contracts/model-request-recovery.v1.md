@@ -140,6 +140,8 @@ before reserving a paid call. A changed Stop or selection requires a current off
 Duplicate delivery returns the original receipt. A retry, steering input, peer
 message, schedule or later Send cannot use the authorization.
 
+Status includes the number of unconfirmed logical calls in `unconfirmedCalls` when that number is positive. An unconfirmed call prevents an additional allowance.
+
 The original `maxCalls` stays in the journal. Status reports the additional calls
 authorized and used separately. The extension covers native compaction for
 that input. Portable summarization keeps its configured allowance.
