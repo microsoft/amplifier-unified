@@ -2787,6 +2787,8 @@ async def test_epoch_rebind_does_not_admit_changed_scope_or_uncertain_paid_effec
 
 
 async def test_known_zero_effect_refusal_new_foreground_can_use_updated_tool_contract(tmp_path):
+    from amplifier_web.context_continuity import ContextRecoveryError
+
     case = await target_transition_fixture(tmp_path)
     recover = case.coordinator.get_capability('context.recovery.recover')
     async def refuse(**kwargs):
@@ -2798,8 +2800,9 @@ async def test_known_zero_effect_refusal_new_foreground_can_use_updated_tool_con
     assert old['calls'] == [] and old['progress'] is None
     case.contract['tools'] = 'fewer authorized tools'
     case.coordinator.register_capability('context.recovery.recover', recover)
-    with pytest.raises(RuntimeError, match='recovery_unreconciled'):
+    with pytest.raises(ContextRecoveryError, match='recovery_unreconciled') as held:
         await case.prepare()
+    assert held.value.reason == 'input_already_used'
     case.origin.update(inputId='new-input-with-fewer-tools', generationId='new-generation')
     assert (await case.prepare())['outcome'] == 'transitioned'
     row = case.adapter._recovery_record()

@@ -22,6 +22,7 @@ BAD_IMAGE = "Invalid 'input[86].output.image_url'. Expected a base64-encoded dat
     ('transition_unsupported', 'provider_selection'),
     ('transition_intent_required', 'provider_selection'),
     ('recovery_checkpoint_rejected', 'persistence'),
+    ('recovery_unreconciled', 'context_compaction'),
 ])
 def test_context_transition_failure_uses_bounded_immediate_cause(code, category):
     from amplifier_web.context_continuity import ContextRecoveryError
@@ -51,6 +52,35 @@ def test_context_transition_failure_uses_bounded_immediate_cause(code, category)
                 {'errorType': 'Other', 'contextRecoveryCode': code}):
         assert terminal_exception_capture({'generationId': 'g', 'inputIds': ['i'],
             'errorType': 'RuntimeError', 'exceptionChain': [row]}) is None
+
+
+def test_saved_transition_hold_reports_only_known_reasons():
+    from amplifier_module_loop_live.failures import ManagerTurnError, turn_failure
+    from amplifier_web.context_continuity import ContextRecoveryError
+    from amplifier_web.session_health import generation_failure, terminal_exception_failure
+    from amplifier_web.support_diagnostics import exception_chain, public_exception_chain
+
+    code = 'recovery_unreconciled'
+    error = ContextRecoveryError(code, reason='contract_changed')
+    row, = exception_chain(error)
+    assert public_exception_chain([row]) == [row]
+    assert row['contextRecoveryReason'] == 'contract_changed'
+    row['contextRecoveryReason'] = 'PRIVATE checkpoint metadata'
+    assert 'contextRecoveryReason' not in public_exception_chain([row])[0]
+    assert 'contextRecoveryReason' not in exception_chain(ContextRecoveryError(code, reason=row['contextRecoveryReason']))[0]
+
+    native = turn_failure(error)
+    wrapper = ManagerTurnError(native)
+    wrapper.__cause__ = error
+    capture = {'generationId': 'g', 'inputIds': ['i'], 'errorType': 'RuntimeError',
+               'exceptionChain': exception_chain(wrapper)}
+    session = {'id': 'root', 'status': 'error',
+               'generations': [{'event': 'generation.failed', 'generation_id': 'g', 'input_ids': ['i'], **native}],
+               'failure': {**generation_failure(native), 'generationId': 'g', 'inputIds': ['i'], 'recordedAt': 2}}
+    detail = terminal_exception_failure(session, capture)
+    assert (detail['stage'], detail['code']) == ('context_preparation', code)
+    assert detail['exceptionChain'][1]['contextRecoveryReason'] == 'contract_changed'
+    assert not detail['retryable']
 
 
 @pytest.mark.parametrize('code', ['native_input_oversized', 'native_checkpoint_invalid', 'native_no_reduction', 'secret payload'])

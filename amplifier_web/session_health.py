@@ -248,6 +248,9 @@ def _context_recovery_details(code):
         'recovery_checkpoint_rejected': (
             'persistence', 'The saved checkpoint could not be validated for this model change.',
             'Keep the original chat history and restore a compatible, validated checkpoint before continuing.'),
+        'recovery_unreconciled': (
+            'context_compaction', 'Earlier conversation preparation could not be resumed.',
+            'This preparation step stopped before a model request. Copy the chat diagnostics from Details & reporting.'),
     }
     category, summary, guidance = messages[code]
     return {'category': category, 'code': code, 'stage': 'context_preparation',
