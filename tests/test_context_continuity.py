@@ -1817,13 +1817,13 @@ def bind_continuity_recovery_guards(coordinator, adapter, contract):
     return gate
 
 
-async def target_transition_fixture(directory, *, model='target-model', foreground=True, raw=None):
+async def target_transition_fixture(directory, *, model='target-model', foreground=True, raw=None, research_parts=6):
     """Use actual Context checkpoint/target fitting; only host admission is synthetic."""
     from amplifier_core import ChatRequest, Message
     from amplifier_web.host.session import SelectedProvider
     source = native_history()
     source[1]['content'] = 'FILLER:' + 'research ' * 400
-    source[2:2] = [row for n in range(6) for row in (
+    source[2:2] = [row for n in range(research_parts) for row in (
         {'role': 'user', 'content': f'Accepted research part {n}.'},
         {'role': 'assistant', 'content': 'FILLER:' + 'research ' * 400})]
     first, _, _, prior, checkpoint, _, prepare = await native_fixture(directory, source)
@@ -2349,6 +2349,8 @@ async def test_exhausted_transition_additional_allowance_is_bound_to_one_new_sen
         case.contract['tools'] = ['different']
     elif change == 'reserved':
         row['calls'][0]['state'] = 'reserved'
+        status = await case.adapter.recovery_control_status()
+        assert status['unconfirmedCalls'] == 1 and 'allowanceOffer' not in status
     elif change == 'old-context':
         case.coordinator.register_capability('context.recovery.additional_call_allowance', lambda: 1)
     elif change == 'wrong-offer':
@@ -2382,8 +2384,10 @@ async def test_exhausted_transition_additional_allowance_is_bound_to_one_new_sen
         assert len(case.raw.compactions) == 2
 
 
-async def test_qualified_component_finishes_one_authorized_partial_transition(tmp_path):
-    case = await target_transition_fixture(tmp_path)
+@pytest.mark.parametrize('additional,input_limit,parts', [(32, 3000, 6), (1, 2700, 4)])
+async def test_qualified_component_finishes_one_authorized_partial_transition(tmp_path, additional, input_limit, parts):
+    case = await target_transition_fixture(tmp_path, research_parts=parts)
+    case.raw.input_limit = input_limit
     version = case.coordinator.get_capability('context.recovery.additional_call_allowance')
     if not callable(version) or version() != 2:
         pytest.skip('Installed Managed Context does not support an additional transition allowance.')
@@ -2396,16 +2400,23 @@ async def test_qualified_component_finishes_one_authorized_partial_transition(tm
     original = copy.deepcopy(row['calls'])
     offer = (await case.adapter.recovery_control_status())['allowanceOffer']
     case.origin.update(inputId='ordinary-approved', generationId='approved-generation', inputIds=['ordinary-approved'],
-        recoveryAllowance={'offerId': offer['offerId'], 'additionalCalls': 32},
+        recoveryAllowance={'offerId': offer['offerId'], 'additionalCalls': additional},
         allowanceStopRevision=offer['expectedInterruptionRevision'])
-    assert (await case.prepare())['outcome'] == 'transitioned'
+    if additional == 1:
+        await case.coordinator.context.add_message({'role': 'user', 'content': 'Continue the inventory.'})
+    prepared = await case.prepare()
+    assert prepared['outcome'] == 'transitioned'
+    response = await case.selected.complete(prepared['final_attempt']['dispatch'])
+    assert response.content[0].text == 'Synthetic final answer.' and case.raw.sent[-1].model == 'target-model'
     final = await case.adapter.recovery_control_status()
     assert final['state'] == 'committed' and final['maxCalls'] == 1
-    assert final['additionalAllowance']['authorizedCalls'] == 32
+    assert final['additionalAllowance']['authorizedCalls'] == additional
     assert final['additionalAllowance']['usedCalls'] == len(case.raw.compactions) - 1
-    assert 0 <= final['additionalAllowance']['usedCalls'] <= 32 and row['calls'][:1] == original
+    assert 0 <= final['additionalAllowance']['usedCalls'] <= additional and row['calls'][:1] == original
     assert case.coordinator.context.config['summary_max_calls'] == 1
     assert not any(call['state'] != 'completed' for call in row['calls'])
+    if additional == 1:
+        assert final['additionalAllowance']['usedCalls'] == 1
     print('Additional calls used for qualified transition:', final['additionalAllowance']['usedCalls'])
 
 

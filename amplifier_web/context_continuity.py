@@ -501,6 +501,9 @@ class ContextContinuity:
             if record.get("kind") == "model-transition":
                 result.update(kind="model-transition", outcome=record.get("outcome"),
                               logicalCalls=len(record["calls"]), maxCalls=record["maxCalls"])
+                unconfirmed = sum(call["state"] != "completed" for call in record["calls"])
+                if unconfirmed:
+                    result["unconfirmedCalls"] = unconfirmed
                 if grant := record.get("additionalAllowance"):
                     result["additionalAllowance"] = {"authorizedCalls": grant["additionalCalls"],
                         "usedCalls": max(0, len(record["calls"]) - record["maxCalls"])}
