@@ -159,6 +159,29 @@ on a new genuine foreground input under the same binding and cumulative budget.
 That effect-free retry may use a newly authorized tool/request contract, retaining
 the prior failed preparation's provenance in the existing journal. Paid progress
 and uncertain effects cannot use this exception.
+A human can request a separate one-Send comparison when a qualified worker
+generation moved the host-selected skill cache. Supply `cacheMoveFromGeneration`
+to `context.recovery.status`. The worker substitutes that qualified generation's
+canonical `foundation/cache/skills` path into only the tool-skills defaults
+injected on the current mount. The reconstructed full raw contract must hash to
+the saved legacy digest. Both qualified generations must select the same verified
+skill package and tracked source contents. The current POSIX verifier accepts
+empty cache directories or identical sets of at most 64 empty private lock
+files. Links, populated caches and ambiguous evidence suppress this option.
+
+The separate `cacheMoveOffer` supplies the previous and current generation
+IDs, both contract digests, the slot count, cache comparison and a
+`cacheMoveId`. A new ordinary Send acknowledges that particular change by
+including `cacheMove: {cacheMoveId, fromGeneration, toGeneration}` inside
+`recoveryAllowance`. The worker verifies the evidence again at admission and
+when binding the new input. It retains the complete prior contract digest and
+stores the verified move together with the existing one-use grant, before any
+additional reservation. The actual worker uses the current cache. Historical
+effective contracts record the former physical path without recording whether
+a user or the host originally supplied it. This separate choice authorizes the
+observed change in either case. A budget-only acknowledgment permits only the
+ordinary identical-contract continuation.
+
 An altered earlier canonical prefix still refuses, even when the failed
 preparation bought nothing. Request/tool changes do not authorize rewriting the
 source bound to a retained attempt; preserve the originals and establish a

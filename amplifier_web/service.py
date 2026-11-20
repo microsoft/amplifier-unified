@@ -393,7 +393,11 @@ ACTION_DEFINITIONS['conversation.send'][1]['properties']['expectedConfigurationR
 from .transition_allowance import MAX_ADDITIONAL_CALLS
 ACTION_DEFINITIONS['conversation.send'][1]['properties']['recoveryAllowance'] = schema({
     'offerId': {'type': 'string', 'pattern': '^[0-9a-f]{64}$'},
-    'additionalCalls': {'type': 'integer', 'minimum': 1, 'maximum': MAX_ADDITIONAL_CALLS}
+    'additionalCalls': {'type': 'integer', 'minimum': 1, 'maximum': MAX_ADDITIONAL_CALLS},
+    'cacheMove': schema({'cacheMoveId': {'type': 'string', 'pattern': '^[0-9a-f]{64}$'},
+                         'fromGeneration': {'type': 'string', 'pattern': '^[0-9a-f]{32}$'},
+                         'toGeneration': {'type': 'string', 'pattern': '^[0-9a-f]{32}$'}},
+                        ['cacheMoveId', 'fromGeneration', 'toGeneration'])
 }, ['offerId', 'additionalCalls'])
 
 
