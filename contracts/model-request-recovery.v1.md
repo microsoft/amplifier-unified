@@ -110,11 +110,16 @@ steering and automatic job/scheduled continuations do not create this admission.
 A derived checkpoint is reusable only under its exact identity and validated
 canonical prefix/configuration. A structured identity-only transition
 classification is not an import authorization: corrupt digests, changed source
-or configuration, and incompatible paid progress remain rejected. Historical
-source-provider envelope attestation may be unavailable; structural validation
-does not claim that attestation. Target preparation never sends the old model's
-opaque state to the new model, including for counting, and never falls back to
-the old model or a larger cost/context tier.
+or configuration, and incompatible paid progress remain rejected. Target
+preparation can reuse a completed native checkpoint on the same mounted
+connection when its provider qualifies the exact handoff. The OpenAI API
+adapter qualifies Astra and Sol in both directions for standalone Responses
+compaction on the same credential, organization and project. The adapter
+keeps the returned window intact. Managed Context validates the original
+history boundary and measures the target request before installing the
+candidate without reserving a compaction call. Other handoffs prepare from
+originals. Target preparation never falls back to the old model or a larger
+cost/context tier.
 
 The existing recovery journal binds the source checkpoint, canonical prefix,
 selection revision, target options, execution input and Stop/configuration
