@@ -1237,7 +1237,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         components = getattr(loaded, "_host_components", None) or required_components()
         components.apply(loaded)
         from .config import configure_skill_cache
-        configure_skill_cache(loaded, config.registry_home)
+        injected_skill_caches = configure_skill_cache(loaded, config.registry_home)
         adapted = components.normalize(adapted)
         write_private(directory / "baseline-mount-plan.json", json.dumps(redact(baseline), indent=2, default=str))
         write_private(directory / "live-mount-plan.json", json.dumps(redact(adapted), indent=2, default=str))
@@ -1336,6 +1336,10 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                 **initialization)
         decision_accounts.require_complete()
         coordinator = session.coordinator
+        from ..skill_cache_move import verified_move
+        coordinator.register_capability("web.context_transition.skill_cache_move",
+            lambda contract, old_sha, generation: verified_move(
+                config.home, config.registry_home, injected_skill_caches, contract, old_sha, generation))
         # Native initialization has finished. Report the first configured
         # failure before adapting delegate, applying settings, or mounting the
         # attachment context, all of which rely on completed construction.

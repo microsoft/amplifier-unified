@@ -507,6 +507,8 @@ class RuntimeControls:
                 raise ValueError("Explicit context recovery is unavailable in this runtime")
             if operation == "context.recovery.status":
                 read = getattr(continuity, "recovery_control_status", None)
+                if "cacheMoveFromGeneration" in args and callable(read):
+                    return await read(cache_move_from=args["cacheMoveFromGeneration"])
                 return await read() if callable(read) else continuity.recovery_status()
             self.require_idle()
             trusted = args.get("_recoveryCommand")

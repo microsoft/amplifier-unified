@@ -360,8 +360,9 @@ def prepare_registry(config):
 
 def configure_skill_cache(bundle, registry_home):
     """Keep remote clones private while local user/workspace skills stay shared."""
-    def apply(tools, agents):
-        for row in tools:
+    injected = []
+    def apply(tools, agents, path):
+        for index, row in enumerate(tools):
             if isinstance(row, dict) and row.get("module") == "tool-skills":
                 config = row.setdefault("config", {})
                 # Explicit user paths remain authoritative; only the default
@@ -369,11 +370,13 @@ def configure_skill_cache(bundle, registry_home):
                 # settings, instructions and native history share that root.
                 if config.get("cache_dir") is None:
                     config["cache_dir"] = str(Path(registry_home) / "cache/skills")
+                    injected.append((*path, "tools", index))
         from .components import agent_roster
-        for child in agent_roster(agents).values():
+        for name, child in agent_roster(agents).items():
             if isinstance(child, dict):
-                apply(child.get("tools", []), child.get("agents", {}))
-    apply(getattr(bundle, "tools", []), getattr(bundle, "agents", {}))
+                apply(child.get("tools", []), child.get("agents", {}), (*path, "agents", name))
+    apply(getattr(bundle, "tools", []), getattr(bundle, "agents", {}), ())
+    return tuple(injected)
 
 def declared_shared_home(legacy_home=None):
     """Preserve the declared Windows spelling until private IO validates it."""
