@@ -504,6 +504,9 @@ class ContextContinuity:
                 if grant := record.get("additionalAllowance"):
                     result["additionalAllowance"] = {"authorizedCalls": grant["additionalCalls"],
                         "usedCalls": max(0, len(record["calls"]) - record["maxCalls"])}
+                    if "cacheMove" in grant:
+                        result["additionalAllowance"]["cacheMove"] = {
+                            key: grant["cacheMove"][key] for key in ("fromGeneration", "toGeneration", "cacheMoveId")}
             result["verification"] = {key: value for key, value in record.get("verification", {}).items()
                                       if key in {"before", "after", "limit", "throughMessage"} and type(value) is int}
         return result
