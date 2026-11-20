@@ -222,6 +222,8 @@ async def test_unrelated_settings_and_new_session_decisions_do_not_poison_live_w
     assert policy.bundle is bundle  # No writer recomposition for unrelated changes.
     save(workspace, 'root', [extra])
     revision = fingerprint(read_settings(workspace, session_id='root'))
+    with pytest.raises(ValueError, match='Non-write settings changed'):
+        policy.confirm_mount(revision)
     assert policy.confirm(revision)['settingsRevision'] == revision
     assert (await tools[writer].execute(arguments(extra / 'granted'))).success
     assert not (await tools[writer].execute(arguments(tmp_path / 'still-denied'))).success
@@ -234,6 +236,22 @@ async def test_unrelated_settings_and_new_session_decisions_do_not_poison_live_w
     assert saved['sources'] == unrelated['sources']
     assert saved['overrides']['unrelated-named-tool'] == unrelated['overrides']['unrelated-named-tool']
     assert tools[writer].tool is raw and raw.config == mounted_config
+
+
+@pytest.mark.parametrize('mounted,saved', [(0, False), (1, True)])
+async def test_mount_confirmation_detects_type_changing_non_write_settings(
+        tmp_path, mounted, saved):
+    path = settings_paths(tmp_path, session_id='root')['session']
+    update_settings(path, lambda value: value.update(
+        overrides={'tool-bash': {'enabled': mounted}}))
+    coordinator, tools, policy = await root(tmp_path)
+    save(tmp_path, 'root', [tmp_path.parent])
+    update_settings(path, lambda value: value['overrides']['tool-bash'].update(
+        enabled=saved))
+    revision = fingerprint(read_settings(tmp_path, session_id='root'))
+    with pytest.raises(ValueError, match='Non-write settings changed'):
+        policy.confirm_mount(revision)
+    assert coordinator.get('tools') is tools
 
 
 @pytest.mark.parametrize('change', [
@@ -561,47 +579,106 @@ async def test_worker_refresh_binds_only_existing_activation_and_never_starts_in
     assert worker.runtime is None and worker.execution is None and not worker.start_task
     assert len(replies) == 1
     if state == 'active':
-        assert replies[0]['result'] == {'settingsRevision': revision, 'boundary': 'next-tool-call'}
+        from amplifier_web.shared_state import configuration_path_digest, configuration_path_stamp
+        session_path = settings_paths(tmp_path, session_id='root')['session']
+        assert replies[0]['result'] == {
+            'settingsRevision': revision,
+            'boundary': 'next-tool-call',
+            'sessionSettingsStamp': [str(session_path), configuration_path_stamp(session_path)],
+            'sessionSettingsDigest': configuration_path_digest(session_path),
+        }
     else:
         assert 'error' in replies[0]
 
 
-async def test_runtime_refresh_uses_existing_process_only_and_rejects_changed_identity(tmp_path):
+async def test_runtime_refresh_reconciles_only_session_settings_and_reuses_active_process(
+        tmp_path, monkeypatch):
     import sys
     from amplifier_web.runtime import RuntimeManager
+    from amplifier_web.shared_state import mounted_configuration_stamp
+    shared_home = tmp_path / 'shared'
+    monkeypatch.setenv('AMPLIFIER_HOME', str(shared_home))
+    workspace = tmp_path / 'workspace'
+    workspace.mkdir()
+    host = tmp_path / 'host'
+    session_path = settings_paths(workspace, session_id='root')['session']
     fixture = r'''
 import json,sys
+from pathlib import Path
+from amplifier_web.shared_state import configuration_path_digest,configuration_path_stamp,mounted_configuration_stamp
+workspace,home,session_path=map(Path,sys.argv[1:4])
 for line in sys.stdin:
     data=json.loads(line)
     if data['op']=='start':
-        print(json.dumps({'type':'runtime.ready','report':{}}),flush=True)
+        print(json.dumps({'type':'runtime.ready','report':{},'configurationInputs':[],
+            'configurationStamp':mounted_configuration_stamp(workspace,'root',home),
+            'sessionSettingsPath':str(session_path)}),flush=True)
     elif data['op']=='file_access.refresh':
         print(json.dumps({'op':'reply','id':data['id'],'result':{
-            'settingsRevision':data['settingsRevision'],'boundary':'next-tool-call'}}),flush=True)
+            'settingsRevision':data['settingsRevision'],'boundary':'next-tool-call',
+            'sessionSettingsStamp':[str(session_path),configuration_path_stamp(session_path)],
+            'sessionSettingsDigest':configuration_path_digest(session_path)}}),flush=True)
+    elif data['op']=='send':
+        print(json.dumps({'op':'reply','id':data['id'],'result':{
+            'accepted':True,'delivery':'accepted'}}),flush=True)
     elif data['op']=='stop':
         break
 '''
-    manager = RuntimeManager(command=[sys.executable, '-u', '-c', fixture],
+    manager = RuntimeManager(command=[
+        sys.executable, '-u', '-c', fixture, str(workspace), str(host), str(session_path)],
                              startup_timeout=3, retention={'prewarm_on_select': False})
-    manager.home = tmp_path / 'host'
+    manager.home = host
     async def emit(kind, payload):
         pass
-    session = {'id': 'root', 'workspace': str(tmp_path), 'bundle': 'fixture'}
+    session = {'id': 'root', 'workspace': str(workspace), 'bundle': 'fixture'}
     try:
         assert not await manager.refresh_file_access('root', 'revision')
         await manager.start(session, emit)
         row = manager.workers['root']
+        baseline = row['configurationStamp']
+        assert baseline == mounted_configuration_stamp(workspace, 'root', host)
+        update_settings(session_path, lambda value: value.update(
+            overrides={'tool-filesystem': {'config': {
+                'allowed_write_paths': [str(tmp_path / 'approved')]}}}))
+        revision = fingerprint(read_settings(workspace, session_id='root'))
+        row['idle'] = False
         assert await manager.refresh_file_access('root', 'revision')
         assert manager.workers['root'] is row
-        original = manager._request
+        assert row['configurationStamp'] == mounted_configuration_stamp(
+            workspace, 'root', host)
+        writes = []
+        original_write = manager._write
+        async def write(owner, data):
+            writes.append(data['op'])
+            await original_write(owner, data)
+        manager._write = write
+        assert (await manager.send(session, 'answer', 'question:q:answer', emit))['accepted']
+        assert manager.workers['root'] is row and writes.count('send') == 1
+        assert 'retire' not in writes
+
+        update_settings(session_path, lambda value: value['overrides']['tool-filesystem'][
+            'config'].update(denied_write_paths=[str(tmp_path / 'denied')]))
+        revision = fingerprint(read_settings(workspace, session_id='root'))
+        original_reply = manager._reply
         async def replaced(*args, **kwargs):
-            result = await original(*args, **kwargs)
+            result = await original_reply(*args, **kwargs)
             manager.workers['root'] = dict(row)
             return result
-        manager._request = replaced
+        manager._reply = replaced
         assert not await manager.refresh_file_access('root', 'revision')
         manager.workers['root'] = row
-        manager._request = original
+        manager._reply = original_reply
+        assert await manager.refresh_file_access('root', revision)
+
+        keys = shared_home / 'keys.env'
+        keys.parent.mkdir(parents=True, exist_ok=True)
+        keys.write_text('UNRELATED=changed\n')
+        update_settings(session_path, lambda value: value['overrides']['tool-filesystem'][
+            'config'].update(allowed_write_paths=[str(tmp_path / 'other')]))
+        revision = fingerprint(read_settings(workspace, session_id='root'))
+        retained = row['configurationStamp']
+        assert not await manager.refresh_file_access('root', revision)
+        assert row['configurationStamp'] is retained
         await manager.stop('root')
         assert not await manager.refresh_file_access('root', 'revision')
         assert 'root' not in manager.workers

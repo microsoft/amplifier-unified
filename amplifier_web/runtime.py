@@ -21,6 +21,8 @@ import uuid
 from typing import Any, Awaitable, Callable
 
 from .runtime_protocol import INPUT_CONTROLS, MAX_MESSAGE_BYTES, encode_message
+
+FILE_ACCESS_REFRESH_TIMEOUT = 10
 from .performance_diagnostics import measure, measured
 
 _CURRENT_GENERATION = object()
@@ -1324,6 +1326,12 @@ class RuntimeManager:
                     if isinstance(data.get("configurationInputs"), list) and isinstance(data.get("configurationStamp"), list):
                         row["configurationInputs"] = data["configurationInputs"]
                         row["configurationStamp"] = data["configurationStamp"]
+                        path = data.get("sessionSettingsPath")
+                        matches = [entry for entry in data["configurationStamp"]
+                                   if isinstance(entry, list) and len(entry) == 2
+                                   and entry[0] == path]
+                        if isinstance(path, str) and len(matches) == 1:
+                            row["sessionSettingsPath"] = path
                     row["idle"] = True
                     row["idle_at"] = self.retention.clock()
                     self.retention.wake()
@@ -2276,15 +2284,59 @@ class RuntimeManager:
 
     async def refresh_file_access(self, session_id, revision):
         """Refresh only an existing worker; never revive a retired runtime."""
-        row = self.workers.get(session_id)
-        if (not row or row['process'].returncode is not None or not row['ready'].done()
-                or row['ready'].cancelled() or row['ready'].exception() is not None):
-            return False
         try:
-            async with asyncio.timeout(10):
-                result = await self._request(session_id, 'file_access.refresh', settingsRevision=revision)
-            return (self.workers.get(session_id) is row and row['process'].returncode is None
-                    and result == {'settingsRevision': revision, 'boundary': 'next-tool-call'})
+            async with asyncio.timeout(FILE_ACCESS_REFRESH_TIMEOUT):
+                async with self._admission(session_id):
+                    row = self.workers.get(session_id)
+                    if (not row or row['process'].returncode is not None or not row['ready'].done()
+                            or row['ready'].cancelled() or row['ready'].exception() is not None):
+                        return False
+                    baseline = row.get('configurationStamp')
+                    expected_path = row.get('sessionSettingsPath')
+                    if not isinstance(baseline, list) or not isinstance(expected_path, str):
+                        return False
+                    pending = await self._admit(session_id, 'file_access.refresh',
+                                                {'settingsRevision': revision})
+                result = await self._reply(*pending, op='file_access.refresh',
+                                           args={'settingsRevision': revision})
+                if not isinstance(result, dict):
+                    return False
+                candidate = result.get('sessionSettingsStamp')
+                digest = result.get('sessionSettingsDigest')
+                if ({key: result.get(key) for key in ('settingsRevision', 'boundary')} !=
+                        {'settingsRevision': revision, 'boundary': 'next-tool-call'}):
+                    return False
+                if (not isinstance(candidate, list) or len(candidate) != 2
+                        or candidate[0] != expected_path
+                        or (candidate[1] is not None and
+                            (not isinstance(candidate[1], list) or len(candidate[1]) != 5
+                             or any(type(value) is not int for value in candidate[1])))
+                        or (digest is None) != (candidate[1] is None)
+                        or (digest is not None and
+                            (not isinstance(digest, str) or len(digest) != 64
+                             or any(value not in '0123456789abcdef' for value in digest)))):
+                    return False
+                async with self._admission(session_id):
+                    if (self.workers.get(session_id) is not row or row['process'].returncode is not None
+                            or row.get('configurationStamp') is not baseline):
+                        return False
+                    matches = [index for index, entry in enumerate(baseline)
+                               if isinstance(entry, list) and len(entry) == 2
+                               and entry[0] == expected_path]
+                    if len(matches) != 1:
+                        return False
+                    proposed = [list(entry) for entry in baseline]
+                    proposed[matches[0]] = candidate
+                    from .shared_state import configuration_path_digest, mounted_configuration_stamp
+                    if (configuration_path_digest(expected_path) != digest
+                            or mounted_configuration_stamp(
+                                row['start_session']['workspace'], row['runtime_id'],
+                                self.home or os.environ.get(
+                                    "AMPLIFIER_WEB_HOME", Path.home() / ".amplifier-unified"),
+                                extra_paths=row.get('configurationInputs', ())) != proposed):
+                        return False
+                    row['configurationStamp'] = proposed
+                    return True
         except (RuntimeError, TimeoutError):
             return False
 
