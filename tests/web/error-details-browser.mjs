@@ -21,11 +21,18 @@ try{
  await page.goto(vite.resolvedUrls.local[0]);await showFixtureConversation(page);
  await control({op:'patch',sessions:{[alpha]:{status:'error',error:'Saved worker message',errorAt:1791582278,failure:{category:'unknown',errorType:'str',summary:'Legacy summary',guidance:'A recovery copy can help',recordedAt:1791582278}}}});
  await page.reload();
- await page.getByRole('button',{name:'View error details',exact:true}).click();
+ const openErrorDetails=async()=>{
+  const disclosure=page.locator('[data-part=conversation-trouble] details').filter({hasText:'Details & reporting'});
+  await expect(disclosure).toBeVisible();
+  if(!await disclosure.evaluate(node=>node.open))await disclosure.locator('summary').click();
+  await disclosure.getByRole('button',{name:'Technical details',exact:true}).click();
+ };
+ await openErrorDetails();
  const panel=page.getByRole('dialog',{name:'Error details',exact:true});
  await expect(panel.getByRole('heading',{name:'Error details',exact:true})).toBeVisible();
- await expect(panel).toContainText('Something interrupted this chat.');
- await expect(panel).not.toContainText('Recorded error: str');
+ await expect(panel.getByText('Recorded problem',{exact:true})).toBeVisible();
+ await expect(panel).toContainText('The cause is not available in the saved details. Nothing is automatically sent again.');
+ await expect(panel).not.toContainText('Error type: str');
  await expect(panel).not.toContainText('Conversation usage');
  await expect(panel).not.toContainText('recovery copy');
  await expect(panel.getByText(alpha,{exact:true})).toBeVisible();
@@ -62,7 +69,7 @@ try{
  await control({op:'patch',sessions:{[alpha]:{status:'error',error:'A newer saved worker failure',errorAt:1791582300,failure:{category:'unknown',summary:'New synthetic failure',recordedAt:1791582300}}}});
  await expect(page.getByRole('button',{name:'Dismiss conversation error',exact:true})).toBeVisible();
  await expect(page.getByRole('button',{name:'Continue conversation',exact:true})).toHaveCount(0);
- await page.getByRole('button',{name:'View error details',exact:true}).click();
+ await openErrorDetails();
  await expect(panel).toBeVisible();
  await panel.getByRole('button',{name:'Close panel',exact:true}).click();
  const afterNewFailure=await control({op:'inspect'});
