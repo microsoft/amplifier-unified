@@ -38,7 +38,7 @@ async def _probe(operation, values, *, timeout):
     Qualification invokes Git and hashes installed sources. Cancelling a
     to_thread await does not stop that work (or its subprocesses). Removal
     operates only on a detached retirement payload, outside admission.
-    Private reference text is returned only to this caller, never diagnostics.
+    Reference inspection returns only identities of protected storage.
     """
     from .probe_process import isolated
 
@@ -143,8 +143,8 @@ def process_references(home):
     )
     if result.returncode:
         raise ValueError("Process references could not be checked")
-    root = str(Path(home).resolve())
-    return "\n".join(line for line in result.stdout.splitlines() if root in line)
+    root = os.path.normcase(str(Path(home).resolve()))
+    return "\n".join(line for line in result.stdout.splitlines() if root in os.path.normcase(line))
 
 
 def configuration_paths(manager):
@@ -166,11 +166,124 @@ def configuration_paths(manager):
 
 
 def configuration_references(manager):
-    text = []
-    for path in configuration_paths(manager):
-        if path.exists():
-            text.append(path.read_text())
-    return "\n".join(text)
+    return "\n".join(path.read_text() for path in configuration_paths(manager) if path.exists())
+
+
+def saved_configuration_references(manager):
+    from .host.components import declarations
+    from .runtime_environment_retention import stat_witness
+
+    sessions = Path(manager.home) / 'sessions'
+    if stat_witness(sessions) is None:
+        return
+    workspaces = workspace_paths(manager)
+    inspected = set()  # A later admission gets a fresh probe and resolves links again.
+    # Resume reads the saved plan. A same-bundle fork may inherit the last
+    # effective plan, including explicit module directories in an old release.
+    plans = (session / name for session in sessions.iterdir()
+             if stat_witness(session) is not None and session.is_dir()
+             for name in ('configuration.json', 'effective-configuration.json'))
+    for path in plans:
+        if stat_witness(path) is None:
+            continue
+        # Decode JSON escapes before comparing paths. An unreadable or partial
+        # plan must fail inspection before any storage can be detached.
+        plan = json.loads(path.read_text())
+        if not isinstance(plan, dict):
+            raise ValueError('Saved session configuration could not be verified')
+        pending = [plan]
+        while pending:
+            value = pending.pop()
+            if isinstance(value, list):
+                pending.extend(value)
+            elif isinstance(value, dict):
+                pending.extend(value.values())
+            elif isinstance(value, str):
+                yield value
+        # The loader follows local module sources through symlinks. Only
+        # declarations may cause filesystem lookups; other settings are data.
+        for row in declarations(plan):
+            source = row.get('source') if isinstance(row, dict) else None
+            if isinstance(source, str) and source not in inspected:
+                inspected.add(source)
+                yield from local_source_paths(source, workspaces)
+
+
+def local_source_paths(source, workspaces):
+    from urllib.parse import unquote
+
+    paths = [source]
+    if source.startswith('file://'):
+        path, _, fragment = source[7:].partition('#')
+        if os.name == 'nt' and re.match(r'^/[a-z]:/', path, re.I):
+            path = path[1:]
+        subdir = next((part.removeprefix('subdirectory=') for part in fragment.split('&')
+                       if part.startswith('subdirectory=')), '')
+        path = os.path.join(path, subdir) if subdir else path
+        # Local loaders can retain the literal spelling of a file URI.
+        paths = dict.fromkeys((path, unquote(path)))
+    for value in paths:
+        folded = os.path.normcase(value)
+        if folded.startswith(('.' + os.sep, '..' + os.sep)):
+            if not workspaces:
+                raise ValueError('The base of a relative module source could not be verified')
+            candidates = (Path(base) / value for base in workspaces)
+        elif os.path.isabs(value) or folded.startswith('~' + os.sep):
+            candidates = (Path(value).expanduser(),)
+        else:
+            continue
+        for candidate in candidates:
+            yield os.path.normpath(candidate)
+            # strict=True distinguishes an unavailable old path from ambiguous
+            # resolution (redirect loops or permissions). The latter keeps
+            # storage; a missing leaf can still have a redirected parent.
+            try:
+                physical = candidate.resolve(strict=True)
+            except FileNotFoundError:
+                physical = candidate.resolve(strict=False)
+            yield str(physical)
+
+
+def storage_references(manager):
+    """Return only storage paths that the existing removal guards can query."""
+    from itertools import chain
+    from .runtime_environment import project_path
+
+    home = Path(manager.home)
+    candidates = set()
+    for root in (home / 'updates/releases', home / 'runtime', home / 'smart-tools/installs'):
+        try:
+            entries = list(root.iterdir())
+        except FileNotFoundError:
+            continue
+        candidates.update(entries)
+        if root == home / 'updates/releases':
+            for folder in entries:
+                if re.fullmatch('[a-f0-9]{32}', folder.name) and (folder / 'validated.json').is_file():
+                    # A declared project is also checked before removal, even
+                    # if its directory is absent. Invalid generations cannot
+                    # pass the owner's independent project qualification.
+                    try:
+                        candidates.add(project_path(home, folder.name))
+                    except (TypeError, ValueError):
+                        continue
+    by_root = {}
+    for path in candidates:
+        root = os.path.normcase(str(path.parent) + os.sep)
+        by_root.setdefault(root, {})[os.path.normcase(path.name)] = str(path)
+    found = set()
+    for text in chain((process_references(home), configuration_references(manager)),
+                      saved_configuration_references(manager)):
+        text = os.path.normcase(text)
+        for root, names in by_root.items():
+            start = text.find(root)
+            while start >= 0:
+                leaf = start + len(root)
+                # Preserve the original substring guard, including a legacy
+                # project name that is a prefix of a qualified replacement.
+                found.update(path for name, path in names.items() if text.startswith(name, leaf))
+                start = text.find(root, leaf)
+    return sorted(found)
 
 
 def protected_generations(manager):
@@ -738,7 +851,7 @@ if __name__ == '__main__':
         from types import SimpleNamespace
         manager = SimpleNamespace(home=values['home'], service=SimpleNamespace(state={
             'sessions': [{'workspace': value} for value in values['workspaces']]}))
-        print(json.dumps(process_references(manager.home) + configuration_references(manager)))
+        print(json.dumps(storage_references(manager)))
     elif sys.argv[1] == 'runtime-references':
         from .runtime_environment_retention import reference_snapshot
         print(json.dumps(reference_snapshot(values['home'], values['workspaces'])))

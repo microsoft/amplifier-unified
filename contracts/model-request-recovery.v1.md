@@ -125,6 +125,28 @@ logical paid call. Repeated preparation and restarts do not reset it. Provider
 SDK retries retain their own bounded policy: a logical-call bound is not a claim
 about physical HTTP requests or exactly-once billing. Completed acknowledged
 progress survives; unknown paid calls never automatically replay.
+
+After every base reservation is confirmed as native compaction and its native
+checkpoint is saved, an exhausted model transition can offer one additional
+allowance for that exact transition.
+The existing `context.recovery.status` control returns `allowanceOffer` with an
+opaque `offerId`, `expectedInterruptionRevision` and `maxAdditionalCalls` (32).
+A fresh ordinary human `conversation.send` can include the original `sessionId`,
+that Stop revision and `recoveryAllowance: {offerId, additionalCalls}`. The amount
+must be an integer from 1 to 32. The native owner verifies the offer, source
+checkpoint and original prefix, selected model and account, tool configuration,
+idle admission, and the new Send. It records the authorization with that input
+before reserving a paid call. A changed Stop or selection requires a current offer.
+Duplicate delivery returns the original receipt. A retry, steering input, peer
+message, schedule or later Send cannot use the authorization.
+
+The original `maxCalls` stays in the journal. Status reports the additional calls
+authorized and used separately. The extension covers native compaction for
+that input. Portable summarization keeps its configured allowance.
+An opted-in component advertises version 2 via
+`context.recovery.additional_call_allowance` and validates the separate grant.
+The host keeps the previous confirmed calls and the last written partial result.
+Reading status, opening the chat, and restarting consume zero calls.
 An uncertain target call without an installation candidate does not prevent
 ordinary continuation under the fully revalidated source identity. Its journal
 and target-call fence remain intact. Source validation is passive after the
@@ -137,6 +159,29 @@ on a new genuine foreground input under the same binding and cumulative budget.
 That effect-free retry may use a newly authorized tool/request contract, retaining
 the prior failed preparation's provenance in the existing journal. Paid progress
 and uncertain effects cannot use this exception.
+A human can request a separate one-Send comparison when a qualified worker
+generation moved the host-selected skill cache. Supply `cacheMoveFromGeneration`
+to `context.recovery.status`. The worker substitutes that qualified generation's
+canonical `foundation/cache/skills` path into only the tool-skills defaults
+injected on the current mount. The reconstructed full raw contract must hash to
+the saved legacy digest. Both qualified generations must select the same verified
+skill package and tracked source contents. The current POSIX verifier accepts
+empty cache directories or identical sets of at most 64 empty private lock
+files. Links, populated caches and ambiguous evidence suppress this option.
+
+The separate `cacheMoveOffer` supplies the previous and current generation
+IDs, both contract digests, the slot count, cache comparison and a
+`cacheMoveId`. A new ordinary Send acknowledges that particular change by
+including `cacheMove: {cacheMoveId, fromGeneration, toGeneration}` inside
+`recoveryAllowance`. The worker verifies the evidence again at admission and
+when binding the new input. It retains the complete prior contract digest and
+stores the verified move together with the existing one-use grant, before any
+additional reservation. The actual worker uses the current cache. Historical
+effective contracts record the former physical path without recording whether
+a user or the host originally supplied it. This separate choice authorizes the
+observed change in either case. A budget-only acknowledgment permits only the
+ordinary identical-contract continuation.
+
 An altered earlier canonical prefix still refuses, even when the failed
 preparation bought nothing. Request/tool changes do not authorize rewriting the
 source bound to a retained attempt; preserve the originals and establish a
@@ -190,8 +235,12 @@ including a later in-place bundle change that keeps the fork's inherited model
 pin; account-binding fields from the source execution are not copied as admission.
 If an older fork or portable control schema omitted the revision, retained canonical
 fork metadata still prevents the inherited pin from being migrated as a legacy
-choice. Such an ambiguous historical fork needs a new explicit selection even if
-the person had previously selected a model under the old schema. This admission
+choice. A new ordinary human Send can recover a choice explicitly applied on
+that fork when its host selection has a saved connection binding created by a
+local choice. Fork creation and transfer do not copy this binding. The idle worker verifies
+the selected options and mounted account again and restores one stable revision.
+A fork with only an inherited pin or missing account binding still needs a new
+explicit selection. This admission
 rule does not claim portable transfer of the recovery journal or its paid ledger.
 Historical explicit-recovery dispositions are not fresh recovery commands, and
 must not skip a separate model-transition check. An effect-free failed or refused

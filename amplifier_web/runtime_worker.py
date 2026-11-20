@@ -1728,14 +1728,28 @@ class Worker:
         if (binding.get('operation') != 'send'
                 or binding.get('localStopRevision') != self.stop_revision):
             return None
-        return {'inputId': identity, 'selectionRevision': binding.get('selectionRevision')}
+        return {'inputId': identity, 'selectionRevision': binding.get('selectionRevision'),
+                **({'recoveryAllowance': binding['recoveryAllowance'],
+                    'allowanceStopRevision': binding['interruptionRevision']} if 'recoveryAllowance' in binding else {})}
 
     def bind_input_context(self, identity, data, binding=None):
         """Keep original host admission metadata beside the input's context."""
         if identity in self.runtime.accepted:
             return
+        if (data.get('op') == 'send' and data.get('applied_fork_choice')
+                and not self.runtime.generation and not self.runtime.queued_inputs):
+            self.controls.restore_applied_fork_choice(data['applied_fork_choice'])
+        captured = dict(binding or {'clientId': None, 'targets': []})
+        captured.pop('recoveryAllowance', None)  # Surface metadata has no spending authority.
+        allowance = data.get('recovery_allowance')
+        if allowance is not None:
+            continuity = self.session.coordinator.get_capability('web.continuity.recovery')
+            if (data.get('op') != 'send' or self.runtime.generation or self.runtime.queued_inputs
+                    or continuity is None or not continuity.accepts_allowance(allowance, data.get('interruptionRevision'))):
+                raise ValueError('The recovery allowance is no longer available for this chat. Review its current status.')
+            captured['recoveryAllowance'] = allowance
         self.context_bindings[identity] = {
-            **(binding or {'clientId': None, 'targets': []}),
+            **captured,
             'interruptionRevision': data.get('interruptionRevision', 0),
             'localStopRevision': self.stop_revision,
             'operation': data.get('op'),

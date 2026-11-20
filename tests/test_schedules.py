@@ -231,6 +231,7 @@ async def test_manual_result_in_mixed_monitor_generation_still_notifies(tmp_path
 
 
 async def test_monitor_delegated_followup_can_report_before_idle_and_stays_quiet(tmp_path, monkeypatch):
+    from amplifier_web.runtime import normalize_event
     app, runtime, now, sid = await fixture(tmp_path, monkeypatch)
     try:
         await schedule(app, sid, now[0])
@@ -244,7 +245,7 @@ async def test_monitor_delegated_followup_can_report_before_idle_and_stays_quiet
         await app.app_bridge('dispatch', {'action': 'schedule.report', 'id': 'followup-report', 'args': {'runId': run['id'], 'expectedRevision': run['revision'], 'outcome': 'unchanged', 'detail': 'Worker reports no change.'}}, sid)
         await app.on_runtime_event('assistant.message', {**scope, 'inputId': 'worker-report', 'text': 'No change from delegated report.'})
         await app.on_runtime_event('runtime.generation', {**scope, 'event': 'generation.finished', 'input_ids': ['worker-report'], 'active_job_ids': []})
-        await app.on_runtime_event('runtime.status', {'sessionId': sid, 'status': 'idle'})
+        await app.on_runtime_event(*normalize_event({'type': 'session.idle'}, sid))
         final = app.schedules.store.run(sid, run['id'])
         assert final['phase'] == 'completed' and not final['notificationDecision']['notify']
         assert final['notificationDecision']['source'] == 'agent_report'

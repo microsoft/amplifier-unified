@@ -1742,10 +1742,17 @@ class RuntimeManager:
             getattr(self, 'update_message_guard', lambda sid, message: None)(session['id'], message)
             if configuration_guard:
                 configuration_guard()
+        message = next((m for m in session.get("messages", []) if m.get("inputId") == input_id), {})
         arguments = dict(text=text, input_id=input_id,
-            reply_context=next((m.get("replyTo") for m in session.get("messages",[]) if m.get("inputId")==input_id),None),
+            reply_context=message.get("replyTo"),
             context_binding=session.get('surfaceInputs', {}).get(input_id, {'clientId': None, 'targets': []}),
-            attachments=next((m.get("attachments",[]) for m in session.get("messages",[]) if m.get("inputId")==input_id),[]))
+            attachments=message.get("attachments", []))
+        if message.get('recoveryAllowance') is not None:
+            if (message.get('inputOrigin') not in {'ui', 'user'} or message.get('role') != 'user'
+                    or message.get('handoffOrigin') or message.get('steering') or message.get('updateAdmission')
+                    or session.get('pendingModelSelection') or session.get('pendingBundleSelection')):
+                raise RuntimeStartupError('This recovery allowance requires a new ordinary message from this chat.')
+            arguments['recovery_allowance'] = message['recoveryAllowance']
         if session.get('pendingModelSelection') or session.get('pendingBundleSelection') or session.get('fileAccessPending'):
             # Future settings must not interrupt live guidance. Ask the actual
             # owner to admit with its mounted configuration, or prove no effect
@@ -1765,7 +1772,12 @@ class RuntimeManager:
                     return result  # Accepted/unknown/failed input is never resubmitted.
         if session.get('fileAccessPending'):
             raise RuntimeStartupError('File permissions are awaiting application. No input was sent.')
-        configuration_guard = await self._start_for_input(session, emit, admission_check=current_input)
+        from .next_message_configuration import saved_fork_choice
+        fork_choice = saved_fork_choice(session, message)
+        configuration_guard = await self._start_for_input(session, emit, admission_check=current_input,
+            **({'fork_choice': fork_choice} if fork_choice else {}))
+        if fork_choice and fork_choice.get('connection'):
+            arguments['applied_fork_choice'] = fork_choice
         return await self._request(session["id"], "send", guard=guard, **arguments)
 
     async def steer(self, session, text, input_id, emit):
@@ -1848,7 +1860,7 @@ class RuntimeManager:
             **({"approval_id": approval_id} if approval_id else {}))
 
     @measured('input.runtime.prepare', session=True)
-    async def _start_for_input(self, session, emit, *, admission_check=None):
+    async def _start_for_input(self, session, emit, *, admission_check=None, fork_choice=None):
         try:
             guard = None
             captured_revision = session.get('nextMessageRevision', 0)
@@ -1905,6 +1917,11 @@ class RuntimeManager:
                         'instance':(requested or session['selection'])['instance'],
                         'expectedConnectionKey':session['modelConnectionKey']
                     }, **guarded)
+                    if (fork_choice and configuration_guard and not requested
+                            and fork_choice['selection'] == session.get('selection')):
+                        # Bind the resolved key, including a verified historical key migration.
+                        # The worker compares its native controls again on actual Send admission.
+                        fork_choice['connection'] = session['modelConnectionKey']
                 except (SessionInUseError, RuntimeStartupError, RuntimeHostClosingError):
                     raise
                 except Exception as exc:

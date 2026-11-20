@@ -390,6 +390,16 @@ ACTION_DEFINITIONS.update(patch_placement_definitions(schema, string))
 from .next_message_configuration import definitions as next_message_definitions
 ACTION_DEFINITIONS.update(next_message_definitions(schema, string))
 ACTION_DEFINITIONS['conversation.send'][1]['properties']['expectedConfigurationRevision'] = {'type': 'integer', 'minimum': 0}
+from .transition_allowance import MAX_ADDITIONAL_CALLS
+ACTION_DEFINITIONS['conversation.send'][1]['properties']['recoveryAllowance'] = schema({
+    'offerId': {'type': 'string', 'pattern': '^[0-9a-f]{64}$'},
+    'additionalCalls': {'type': 'integer', 'minimum': 1, 'maximum': MAX_ADDITIONAL_CALLS},
+    'cacheMove': schema({'cacheMoveId': {'type': 'string', 'pattern': '^[0-9a-f]{64}$'},
+                         'fromGeneration': {'type': 'string', 'pattern': '^[0-9a-f]{32}$'},
+                         'toGeneration': {'type': 'string', 'pattern': '^[0-9a-f]{32}$'}},
+                        ['cacheMoveId', 'fromGeneration', 'toGeneration'])
+}, ['offerId', 'additionalCalls'])
+
 
 from .settings_actions import definitions as settings_definitions, ACTIONS as SETTINGS_ACTIONS, NAVIGATION_ACTIONS as SETTINGS_NAVIGATION
 ACTION_DEFINITIONS.update(settings_definitions(schema, string))
@@ -1919,6 +1929,13 @@ class AppService:
 
     async def _dispatch(self, action, args=None, origin="ui", command_id=None, expected_revision=None, *, include_state=True, caller_session_id=None, admission_check=None):
         args = dict(args or {})
+        if action == 'conversation.send' and 'recoveryAllowance' in args:
+            from .transition_allowance import valid_request
+            if (not valid_request(args['recoveryAllowance']) or origin not in {'ui', 'user'} or caller_session_id
+                    or not command_id or not args.get('sessionId') or 'expectedInterruptionRevision' not in args
+                    or {'expectedGenerationId', 'grantId', 'mode', 'recipientAgentId'} & args.keys()
+                    or args.get('via', 'chat') != 'chat'):
+                raise AppError('A recovery allowance requires a fresh ordinary Send in the original chat with its current settings.', 409)
         if action == 'session.selection':
             validate(args, ACTION_DEFINITIONS[action][1])
             from .client_navigation import read_selection
@@ -3513,6 +3530,11 @@ class AppService:
                 if ('expectedConfigurationRevision' in args
                         and args['expectedConfigurationRevision'] != session.get('nextMessageRevision', 0)):
                     raise AppError('Next message settings changed. Review them before sending.', 409)
+                allowance = args.get('recoveryAllowance')
+                if allowance is not None:
+                    if (args['sessionId'] != session['id'] or session.get('externalAgent') or update_message
+                            or session.get('pendingModelSelection') or session.get('pendingBundleSelection')):
+                        raise AppError('A recovery allowance requires a fresh ordinary Send in the original chat with its current settings.', 409)
                 from .conversation_steering import target as steering_target, recover_failed_generation
                 # Whitespace can carry Markdown meaning; validate blank input
                 # separately without changing the saved or delivered message.
@@ -3556,6 +3578,8 @@ class AppService:
                 session['surfaceInputs'] = dict(list(session['surfaceInputs'].items())[-16:])
                 message = self._message(session, "user", text, args.get("via", self.state["view"]["mode"]), human_post=post_previous is not None,inputId=input_id,inputOrigin=origin,attachments=attachments,**({'steering': {'generationId': target_generation, 'disposition': 'sending'}} if target_generation else {}),**({"replyTo":quote} if quote else {}),delivery={'status':'sending'})
                 message['interruptionRevision'] = session.get('interruptionRevision', 0)
+                if allowance is not None:
+                    message['recoveryAllowance'] = copy.deepcopy(allowance)
                 if session.get('externalAgent'):
                     self.external_conversations.capture_recipient(session, message, args.get('recipientAgentId'))
                 handoff = self.handoffs.execution(action, args, origin, command_id, caller_session_id)
@@ -5110,6 +5134,11 @@ class AppService:
                 if payload.get('activityOnly') and session.get('status') not in {'working','starting'}:
                     return
                 status = payload.get("status", "idle")
+                if (payload.get('event') in {'session.ready', 'session.idle'}
+                        and session.get('status') in {'stopped', 'interrupted', 'error'}):
+                    # A new worker emits both events when it boots an old session.
+                    # Only an admitted input or generation can start another turn.
+                    return
                 # A worker can report its settled lifecycle after the manager has
                 # recorded a terminal error. That report is not evidence that the
                 # failed turn recovered, and must not relabel its execution as

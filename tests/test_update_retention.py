@@ -427,9 +427,15 @@ async def test_real_probe_checks_receipts_and_private_configuration(tmp_path, mo
     monkeypatch.setenv('AMPLIFIER_HOME', str(shared))
     settings = home / 'config' / 'settings.yaml'
     settings.parent.mkdir(parents=True)
-    settings.write_text('reference: synthetic-retained-generation')
+    paths = [home / 'updates/releases' / ('b' * 32), home / 'runtime' / ('q-' + 'c' * 32),
+             home / 'smart-tools/installs' / ('d' * 24)]
+    paths.append(home / 'runtime' / 'legacy.project-name')
+    for path in paths:
+        path.mkdir(parents=True)
+    settings.write_text(json.dumps({'paths': [str(path / 'subdir') for path in paths],
+                                    'private': 'unrelated-private-setting'}))
     result = await retention._probe('references', {'home': str(home), 'workspaces': []}, timeout=3)
-    assert 'synthetic-retained-generation' in result
+    assert result == sorted(map(str, paths))
     folder = tmp_path / 'receipt'
     folder.mkdir()
     (folder / 'runtime-installed.json').write_text('[]')
@@ -437,3 +443,121 @@ async def test_real_probe_checks_receipts_and_private_configuration(tmp_path, mo
     (folder / 'runtime-installed.json').write_text('[{"name": "missing"}]')
     with pytest.raises(ValueError, match='could not be verified'):
         await retention._probe('generation', {'project': str(tmp_path / 'empty'), 'folder': str(folder)}, timeout=3)
+
+
+@pytest.mark.parametrize('plan_name', ['configuration.json', 'effective-configuration.json'])
+async def test_saved_session_module_source_protects_generation_from_retirement(tmp_path, monkeypatch, plan_name):
+    manager, names, project = manager_fixture(tmp_path, monkeypatch)
+    folder = manager.directory / 'releases' / names[3]
+    tools = folder / 'foundation/cache' / 'example' / 'modules/read-only'
+    tools.mkdir(parents=True)
+    override = manager.home / 'sessions' / 'saved-original' / plan_name
+    override.parent.mkdir(parents=True)
+    override.write_text(json.dumps({'tools': [{'module': 'read-only', 'source': str(tools),
+                                              'config': {'private': 'not-probe-output'}}]}))
+    monkeypatch.setenv('AMPLIFIER_HOME', str(tmp_path / 'shared'))
+    async def actual(manager, *, timeout):
+        return await retention._probe('references', {'home': str(manager.home), 'workspaces': []}, timeout=timeout)
+    monkeypatch.setattr(retention, 'inspect_references', actual)
+    result = await retention.reclaim(manager, selected={names[3]})
+    assert result['removed'] == 0 and tools.is_dir()
+    references = await actual(manager, timeout=3)
+    assert str(folder) in references
+    assert 'not-probe-output' not in str(references) and str(tools) not in str(references)
+    # Moving the saved reference frees the old generation independently.
+    override.write_text(json.dumps({'tools': [{'module': 'read-only', 'source': 'git+https://example.invalid/read-only'}]}))
+    assert (await retention.reclaim(manager, selected={names[3]}))['removed'] == 1
+    assert not folder.exists() and project.is_dir()
+
+
+@pytest.mark.parametrize('malformed', [False, True])
+async def test_release_retirement_rechecks_new_session_plan_before_removal(tmp_path, monkeypatch, malformed):
+    manager, names, _ = manager_fixture(tmp_path, monkeypatch)
+    folder = manager.directory / 'releases' / names[3]
+    monkeypatch.setenv('AMPLIFIER_HOME', str(tmp_path / 'shared'))
+
+    async def actual(manager, *, timeout):
+        return await retention._probe('references', {'home': str(manager.home), 'workspaces': []}, timeout=timeout)
+
+    async def add_plan(project, candidate, *, timeout):
+        assert candidate == folder
+        plan = manager.home / 'sessions' / 'new-fork' / 'configuration.json'
+        plan.parent.mkdir(parents=True)
+        plan.write_text('private-incomplete-plan' if malformed else json.dumps({
+            'hooks': [{'module': 'local-hook', 'source': (folder / 'local-hook').as_uri()}]}))
+
+    monkeypatch.setattr(retention, 'inspect_references', actual)
+    monkeypatch.setattr(retention, 'verify_generation', add_plan)
+    result = await retention.reclaim(manager, selected={names[3]})
+    assert result['removed'] == 0 and folder.is_dir()
+    assert 'private-incomplete-plan' not in str(result)
+
+
+@pytest.mark.parametrize('spelling', ['file-uri', 'file-subdirectory', 'dot-segment', 'home', 'workspace'])
+async def test_plan_aliases_protect_the_exact_candidate(tmp_path, monkeypatch, spelling):
+    home = tmp_path / 'app with spaces'
+    workspace = tmp_path / 'workspace'
+    folder = home / 'updates/releases' / ('a' * 32)
+    folder.mkdir(parents=True)
+    workspace.mkdir()
+    monkeypatch.setenv('HOME', str(tmp_path))
+    monkeypatch.setenv('USERPROFILE', str(tmp_path))
+    monkeypatch.setenv('AMPLIFIER_HOME', str(tmp_path / 'shared'))
+    source = {
+        'file-uri': (folder / 'module').as_uri(),
+        'file-subdirectory': home.as_uri() + '#subdirectory=updates/releases/' + folder.name + '/module',
+        'dot-segment': str(tmp_path / 'workspace' / '..' / folder.relative_to(tmp_path)),
+        'home': str(Path('~') / folder.relative_to(tmp_path)),
+        'workspace': os.path.relpath(folder, workspace),
+    }[spelling]
+    saved = home / 'sessions/original/configuration.json'
+    saved.parent.mkdir(parents=True)
+    saved.write_text(json.dumps({'tools': [{'module': 'old-tool', 'source': source}]}))
+    assert await retention._probe('references', {'home': str(home), 'workspaces': [str(workspace)]},
+                                  timeout=3) == [str(folder)]
+
+
+def test_case_insensitive_probe_returns_the_storage_owners_spelling(tmp_path, monkeypatch):
+    import ntpath
+    folder = tmp_path / 'runtime' / 'Legacy.PreQualified'
+    folder.mkdir(parents=True)
+    short = folder.with_name('Legacy')
+    short.mkdir()
+    # Test the Windows comparison policy in the POSIX qualification guest.
+    monkeypatch.setattr(os.path, 'normcase', ntpath.normcase)
+    monkeypatch.setattr(retention, 'process_references', lambda home: '')
+    monkeypatch.setattr(retention, 'configuration_references', lambda manager: str(folder).upper() + '/source')
+    assert retention.storage_references(SimpleNamespace(home=tmp_path)) == sorted(map(str, (short, folder)))
+
+
+@pytest.mark.parametrize('link_target', ['old-module', 'loop'])
+async def test_saved_module_link_keeps_generation_until_repointed(tmp_path, monkeypatch, link_target):
+    manager, names, _ = manager_fixture(tmp_path, monkeypatch)
+    old = manager.directory / 'releases' / names[3]
+    module = old / 'tool'
+    module.mkdir()
+    link = tmp_path / 'workspace' / 'pinned-tool'
+    link.parent.mkdir()
+    link.symlink_to(module if link_target == 'old-module' else link, target_is_directory=True)
+    plan = manager.home / 'sessions/chat/configuration.json'
+    plan.parent.mkdir(parents=True)
+    plan.write_text(json.dumps({'tools': [{'module': 'pinned', 'source': str(link)}]}))
+    monkeypatch.setenv('AMPLIFIER_HOME', str(tmp_path / 'shared'))
+
+    async def actual(manager, *, timeout):
+        return await retention._probe('references', {'home': str(manager.home), 'workspaces': []}, timeout=timeout)
+    monkeypatch.setattr(retention, 'inspect_references', actual)
+    assert (await retention.reclaim(manager, selected={old.name}))['removed'] == 0
+    assert module.is_dir()
+    replacement = tmp_path / 'replacement'
+    replacement.mkdir()
+    link.unlink()
+    link.symlink_to(replacement, target_is_directory=True)
+    # Unrelated data may contain an invalid link; only declared module
+    # sources are resolved against the filesystem.
+    unrelated = tmp_path / 'unrelated'
+    unrelated.symlink_to(unrelated, target_is_directory=True)
+    plan.write_text(json.dumps({'tools': [{'module': 'pinned', 'source': str(link),
+                                          'config': {'path': str(unrelated)}}]}))
+    assert (await retention.reclaim(manager, selected={old.name}))['removed'] == 1
+    assert link.resolve() == replacement and not old.exists()

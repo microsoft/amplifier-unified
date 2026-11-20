@@ -252,7 +252,8 @@ async def test_worker_routes_correction_under_existing_ownership(monkeypatch):
         assert args['targetGenerationId'] == 'generation'
         assert runtime.generation is generation and runtime.generation['id'] == args['targetGenerationId']
         assert worker.context_bindings['correction'] == {
-            'clientId': 'browser', 'targets': [], 'interruptionRevision': 7}
+            'clientId': 'browser', 'targets': [], 'interruptionRevision': 7,
+            'localStopRevision': 0, 'operation': 'control', 'selectionRevision': None}
         assert stop_epoch() == 0
         return {'accepted': True, 'disposition': 'queued'}
     monkeypatch.setattr('amplifier_web.conversation_steering.submit', adapter)

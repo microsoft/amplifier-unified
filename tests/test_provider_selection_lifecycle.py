@@ -372,6 +372,120 @@ async def test_transferred_fork_absent_revision_is_not_legacy_explicit_choice(tm
         await controls.close()
 
 
+@pytest.mark.parametrize('case', [
+    'confirmed', 'queued-selection', 'direct-control', 'inherited', 'wrong-parent', 'transferred', 'different-effort',
+    'changed-mount', 'agent-send', 'retry', 'active', 'pending-input', 'duplicate',
+])
+async def test_original_send_recovers_only_an_applied_local_fork_choice(tmp_path, monkeypatch, case):
+    from unittest.mock import AsyncMock
+    from amplifier_web.runtime import RuntimeManager
+    from amplifier_web.runtime_worker import Worker
+    from amplifier_web.service import AppError, AppService
+    from amplifier_web.management import Management
+    from amplifier_web.host.storage import SessionStore
+    from amplifier_web import provider_catalog
+
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    app = AppService(tmp_path / 'app', workspace=tmp_path)
+    app.management = Management(app)
+    await app.dispatch('session.create', {'bundle': 'anchors'})
+    parent = app._session()
+    parent.update(selection=SELECTION, modelConnectionKey='parent-account')
+    parent_id = parent['id']
+    store = SessionStore.for_app(app.data_dir, parent['workspace'])
+    store.save(parent_id, [{'role': 'user', 'content': 'Original'}], {}, preserve_system=True)
+    app._message(parent, 'user', 'Original')
+    await app.dispatch('session.fork', {'id': parent_id})
+    session = app._session()
+    assert session.get('modelConnectionKey') is None
+    assert session['selection'] == SELECTION
+    sid = session['id']
+    controls, _, providers = mounted_controls(SELECTION)
+    controls.session.session_id = sid
+    runtime = controls.runtime
+    runtime.accepted = {'new': SimpleNamespace(kind='user')} if case == 'duplicate' else {}
+    worker = SimpleNamespace(runtime=runtime, controls=controls, context_bindings={}, stop_revision=0)
+    mounted_key = 'other-account' if case == 'changed-mount' else 'current-account'
+    fork = store.load(sid)[1]['fork']
+    caps = {'web.context_transition.originals': True,
+            'web.context_transition.fork_parent': 'other' if case == 'wrong-parent' else fork['source_session_id'],
+            'web.provider_catalog': {'connectionKeys': {'terra': mounted_key}},
+            'web.context_transition.input': lambda: Worker.transition_input(worker)}
+    controls.coordinator.get_capability = caps.get
+    controls.state_path().parent.mkdir(parents=True)
+    controls.state_path().write_text(json.dumps({'selection': SELECTION, 'selectionRevision': None}))
+    await controls.restore()
+    runtime.generation = {'id': 'running'} if case == 'active' else None
+    runtime.queued_inputs = int(case == 'pending-input')
+    if case not in {'inherited', 'direct-control'}:
+        selected = {**SELECTION, 'effort': 'low'} if case == 'different-effort' else SELECTION
+        monkeypatch.setattr(provider_catalog, 'configured_binding', lambda *a, **kw: 'old-account-digest')
+        if case == 'queued-selection':
+            await app.management.perform('runtime.control', {'sessionId': sid,
+                'operation': 'provider.queueSelection', 'args': selected})
+        else:
+            await app.dispatch('conversation.configure', {'sessionId': sid, 'selection': selected,
+                'expectedRevision': 0}, command_id='save-on-fork')
+        await app.on_runtime_event('runtime.nextMessageApplied', {'sessionId': sid,
+            'revision': 1, 'selection': selected, 'bundle': 'anchors'})
+        assert not session.get('pendingModelSelection')
+    elif case == 'direct-control':
+        # Use the legacy worker's normal host select and catalog readback.
+        async def original_worker(sid, operation, arguments):
+            if operation == 'provider.select':
+                return {'selection': arguments}
+            assert operation == 'configuration.providers'
+            return {'providers': [{'id': 'terra', 'connectionKey': 'old-account-digest'}]}
+        monkeypatch.setattr(app.management, 'ensure_runtime', AsyncMock())
+        app.runtime = SimpleNamespace(control=original_worker)
+        await app.management.perform('runtime.control', {'sessionId': sid,
+            'operation': 'provider.select', 'args': SELECTION})
+        assert session['modelConnectionKey'] == 'old-account-digest'
+        assert not session.get('nextMessageRevision')
+    if case == 'transferred':
+        session['portabilityOrigin'] = {'host': 'other-host'}
+    app._message(session, 'user', 'fresh', inputId='new', inputOrigin='agent' if case == 'agent-send' else 'ui',
+                 delivery={'status': 'sending'})
+    manager = RuntimeManager()
+    async def prepare(captured):
+        return {**captured, 'modelConnectionKey': 'current-account'}, lambda: None
+    manager.bind_input_configuration(prepare)
+    manager.start = AsyncMock()
+    async def control(identity, operation, args, **kwargs):
+        kwargs['guard']()
+        assert operation == 'provider.verifyConnection'
+        return await controls.perform(operation, args)
+    manager.control = control
+    async def request(identity, operation, **args):
+        args['guard']()
+        Worker.bind_input_context(worker, args['input_id'], {'op': operation, **args})
+        return {'accepted': True}
+    manager._request = request
+    app.runtime = manager
+    try:
+        if case == 'changed-mount':
+            with pytest.raises(AppError, match='verify the saved connection'):
+                await app._send(copy.deepcopy(session), 'fresh', 'new')
+            assert not worker.context_bindings
+        else:
+            assert (await app._send(copy.deepcopy(session), 'fresh', 'new', retry=case == 'retry'))['accepted']
+        confirmed = case in {'confirmed', 'direct-control', 'queued-selection'}
+        assert bool(controls.selection_revision) == confirmed
+        runtime.accepted['new'] = SimpleNamespace(kind='user')
+        runtime.generation = {'id': 'gen', 'initial_input_id': 'new', 'input_ids': ['new']}
+        if confirmed:
+            assert controls.transition_foreground()['connection'] == 'current-account'
+            saved = json.loads(controls.state_path().read_text())
+            assert saved['selectionRevision'] == controls.selection_revision
+            assert saved['selection'] == SELECTION
+        else:
+            assert controls.transition_foreground() is None
+        assert all(not provider.calls for provider in providers.values())
+    finally:
+        await app.close()
+        await controls.close()
+
+
 def test_selected_provider_info_reports_effort_without_mutating_bundle_defaults():
     provider = Provider('bundle-model', 'high')
     selected = SelectedProvider(provider, SELECTION)
