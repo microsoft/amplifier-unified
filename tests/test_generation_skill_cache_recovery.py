@@ -10,7 +10,7 @@ from amplifier_web.runtime_controls import RuntimeControls
 from test_context_continuity import target_transition_fixture
 
 
-def skill_plan(registry, explicit=None):
+def skill_plan(registry, explicit=None, *, include_injected=False):
     skills = {"module": "tool-skills", "config": {"skills": ["retained-skill"]}}
     if explicit is not None:
         skills["config"]["cache_dir"] = str(explicit)
@@ -18,8 +18,9 @@ def skill_plan(registry, explicit=None):
         tools=[copy.deepcopy(skills), {"module": "tool-fixture", "config": {"mode": "original"}}],
         agents={"research": {"tools": [copy.deepcopy(skills)]}},
     )
-    configure_skill_cache(bundle, registry)
-    return {"tools": bundle.tools, "agents": bundle.agents}
+    injected = configure_skill_cache(bundle, registry)
+    plan = {"tools": bundle.tools, "agents": bundle.agents}
+    return (plan, injected) if include_injected else plan
 
 
 def mount_controls(case, plan):
