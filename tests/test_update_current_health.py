@@ -289,6 +289,7 @@ async def test_automatic_unchanged_conflict_does_zero_duplicate_stage_work(tmp_p
     from amplifier_web.host import config as host_config
     m,_,_,_=mounted_fixture(tmp_path,monkeypatch)
     m.lock=asyncio.Lock();m.closed=False;m.awaiting_restart=lambda:False
+    m.service.instance_id = 'preparing-host'
     m.independent_tool_results=lambda s:False
     m.inventory=[{'id':'fixture','kind':'runtime environment','status':'update','eligible':True,'latest':'A'}]
     m.service.lock=asyncio.Lock();u=m.service.state['updates'];u['sequence']={'stage':'included'}
@@ -1075,13 +1076,14 @@ async def test_inspection_fence_quietly_waits_through_ten_actual_automatic_ticks
     assert m.service.state==before
 
 
-async def interrupted_copy_fixture(tmp_path,monkeypatch):
+async def interrupted_copy_fixture(tmp_path,monkeypatch, *, boundary='copy-only'):
     """Cancel a real copy thread in the actual install orchestration."""
     import threading
     from amplifier_web import updates, update_storage, update_plan, session_files
     from amplifier_web.update_sequence import app_selection
     from amplifier_web.host import config as host_config
     m,_,_,_=mounted_fixture(tmp_path,monkeypatch)
+    m.service.instance_id = 'preparing-host'
     m.lock=asyncio.Lock();m.closed=False;m.awaiting_restart=lambda:False
     m.independent_tool_results=lambda s:False
     m.service.lock=asyncio.Lock()
@@ -1106,22 +1108,36 @@ async def interrupted_copy_fixture(tmp_path,monkeypatch):
     started=threading.Event();release=threading.Event();finished=threading.Event()
     copy_snapshot=update_storage.copy_snapshot
     def copy_with_gate(source,target):
-        started.set()
-        assert release.wait(3), 'test did not release its owned copy'
+        if boundary == 'copy-only':
+            started.set()
+            assert release.wait(3), 'test did not release its owned copy'
         result=copy_snapshot(source,target);finished.set()
         return result
     monkeypatch.setattr(update_storage,'copy_snapshot',copy_with_gate)
+    if boundary == 'preparing':
+        from amplifier_web import update_partial
+        original_stage_sources = update_partial.stage_sources
+        async def source_policy(manager, stage, candidates):
+            # An unvalidated plan is inert; it must never be resumed or promoted.
+            (stage/'plan.json').write_text('{"inert": true}')
+            started.set()
+            await asyncio.Event().wait()
+        monkeypatch.setattr(update_partial, 'stage_sources', source_policy)
     task=asyncio.create_task(updates.UpdateManager.install(m))
     assert await asyncio.to_thread(started.wait,3)
     task.cancel()
     await asyncio.sleep(0)  # Give cancellation the blocked owned copy to settle.
-    assert not task.done()
+    if boundary == 'copy-only': assert not task.done()
     release.set()
     with pytest.raises(asyncio.CancelledError):await task
+    if boundary == 'preparing':
+        monkeypatch.setattr(update_partial, 'stage_sources', original_stage_sources)
     assert finished.is_set()
     assert calls=={'validate':0}
     proof=m.diagnostics.state['batch']['preparation']
-    assert proof['boundary']=='copy-only' and proof['copySettled']
+    assert proof['boundary']==boundary and proof['copySettled']
+    assert proof['host'] == m.service.instance_id
+    assert proof['hostPid'] == __import__('os').getpid()
     assert set(releases.iterdir())-existing=={releases/proof['candidate']}
     assert (source/'keep').read_text()=='unchanged'
     return m,calls,copy.deepcopy(proof),copy.deepcopy(m.diagnostics.state['lastFailure'])
@@ -1890,3 +1906,139 @@ async def test_no_launcher_request_begins_at_the_pass_without_a_wait_or_at_once_
         assert rig.records['request']['status'] == 'open' and rig.records['request']['id'] != 'c' * 32
         assert manager._update_health_initial is False and health.cached_evidence(manager).get('setupRecord')
         assert c.state['currentStatus']['title'] != 'Component verification is incomplete'
+
+
+async def stopped_preparation_fixture(tmp_path, monkeypatch):
+    """Actual later-phase cancellation, then a successor with exited PID evidence."""
+    import subprocess
+    import sys
+    m, calls, proof, failure = await interrupted_copy_fixture(tmp_path, monkeypatch, boundary='preparing')
+    # Real passive process-exit observation (not a liveness stub).
+    owner = subprocess.Popen([sys.executable, '-c', 'pass'])
+    owner.wait(timeout=5)
+    pending = health.pending_preparation(m.diagnostics.state)
+    pending['preparation']['hostPid'] = owner.pid
+    m.service.instance_id = 'successor-host'
+    return m, calls, proof, failure
+
+
+async def test_successor_retires_stopped_preparation_and_installs_only_a_new_candidate(tmp_path, monkeypatch):
+    from amplifier_web.updates import UpdateManager
+    m, calls, proof, failure = await stopped_preparation_fixture(tmp_path, monkeypatch)
+    stage = m.directory/'releases'/proof['candidate']
+    before = {str(p.relative_to(stage)): p.read_bytes() for p in stage.rglob('*') if p.is_file()}
+    pointer = health.pointer_witness(m)
+    await UpdateManager.install(m)
+    assert calls == {'validate': 1}
+    assert m.diagnostics.state['revision'] != proof['candidate']
+    assert health.pointer_witness(m) == pointer
+    assert not health.pending_preparation(m.diagnostics.state)
+    assert {str(p.relative_to(stage)): p.read_bytes() for p in stage.rglob('*') if p.is_file()} == before
+    assert any(group.get('latest') == failure for group in m.diagnostics.state['activeFailures'].values())
+
+
+@pytest.mark.parametrize('case', [
+    'same-host', 'live-pid', 'unknown-host', 'empty-host', 'unknown-current',
+    'unknown-pid', 'invalid-pid', 'boolean-pid', 'liveness-error', 'legacy',
+    'validated', 'dangling-validated', 'pointer-drift', 'previous', 'stage-replaced',
+    'activation-event', 'rollback-event', 'pendingRelease', 'pendingRollback',
+    'pendingRestart', 'pendingReplacement', 'pendingApp', 'pendingSmartTools',
+    'unknown-boundary', 'terminal', 'revision', 'storage',
+])
+async def test_successor_recovery_refuses_uncertain_or_effectful_preparation(tmp_path, monkeypatch, case):
+    from amplifier_web import generation_leases
+    m, calls, proof, _ = await stopped_preparation_fixture(tmp_path, monkeypatch)
+    pending = health.pending_preparation(m.diagnostics.state)
+    witness = pending['preparation']
+    state = m.service.state['updates']
+    stage = m.directory/'releases'/proof['candidate']
+    if case == 'same-host': m.service.instance_id = witness['host']
+    elif case == 'live-pid': witness['hostPid'] = __import__('os').getpid()
+    elif case == 'unknown-host': witness.pop('host')
+    elif case == 'empty-host': witness['host'] = ''
+    elif case == 'unknown-current': del m.service.instance_id
+    elif case == 'unknown-pid': witness.pop('hostPid')
+    elif case == 'invalid-pid': witness['hostPid'] = -1
+    elif case == 'boolean-pid': witness['hostPid'] = True
+    elif case == 'liveness-error':
+        def unavailable(pid): raise PermissionError('uncertain')
+        monkeypatch.setattr(generation_leases, '_process_exists', unavailable)
+    elif case == 'legacy':
+        witness.pop('host'); witness.pop('hostPid'); witness['interruptedAt'] = 1
+        m._host_started = 1000000  # Age alone never proves an owner has exited.
+    elif case == 'validated': (stage/'validated.json').write_text('{}')
+    elif case == 'dangling-validated': (stage/'validated.json').symlink_to(stage/'missing')
+    elif case in {'pointer-drift', 'previous'}:
+        (m.directory/'active.json').write_text(json.dumps({'previous': proof['candidate']}))
+        if case == 'previous': witness['activeBefore'] = health.pointer_witness(m)
+    elif case == 'stage-replaced': witness['directoryIdentity'] = [0, 0]
+    elif case in {'activation-event', 'rollback-event'}:
+        m.diagnostics.state['events'].append({'attemptId': pending['attemptId'],
+            'phase': 'ecosystem-' + case.removesuffix('-event')})
+    elif case.startswith('pending'): state[case] = 'c'*32
+    elif case == 'unknown-boundary': witness['boundary'] = 'unknown'
+    elif case == 'terminal': pending['terminal']['status'] = 'failed'
+    elif case == 'revision': pending['revision'] = 'c'*32
+    elif case == 'storage': m.diagnostics.state['storageUnavailable'] = True
+    before = copy.deepcopy(m.diagnostics.state)
+    releases = set((m.directory/'releases').iterdir())
+    async with m.lock:
+        assert not health.reconcile_preparation(m)
+    assert m.diagnostics.state == before
+    assert set((m.directory/'releases').iterdir()) == releases
+    assert calls == {'validate': 0}
+
+
+@pytest.mark.parametrize('auto_check', [True, False])
+@pytest.mark.parametrize('phase', ['interrupted', 'checked', 'available'])
+async def test_successor_tick_rechecks_fresh_before_any_automatic_install(tmp_path, monkeypatch, auto_check, phase):
+    import time
+    from amplifier_web.updates import UpdateManager
+    m, calls, proof, _ = await stopped_preparation_fixture(tmp_path, monkeypatch)
+    state = m.service.state['updates']
+    m.service.state['settings'] = {'updates': {'autoCheck': auto_check, 'autoInstall': True}}
+    state.update(phase=phase, lastCheck=time.time(), adoption={'activeWorkers': 0, 'pendingWorkers': 0})
+    # An app check can leave a paused component sequence with stale install intent.
+    state['sequence'].update(nextStage='included', install=True)
+    m.cleanup_task = None; m._storage_last_pass = time.time()
+    m.service.runtime = SimpleNamespace(generation_usage=lambda: [])
+    m.requires_idle = lambda state: False
+    m.check_due = lambda: UpdateManager.check_due(m)
+    checked = []
+    async def check(**kw):
+        assert not health.pending_preparation(m.diagnostics.state)
+        checked.append(kw)
+        # Fresh discovery, not retirement itself, admits an available update.
+        state.update(phase='available', available=1, error=None)
+    async def install_checked(admitted, automatic):
+        assert checked and admitted() and automatic
+        await UpdateManager.install(m, automatic=automatic)
+    m.check = check; m.install_checked = install_checked
+    await UpdateManager.tick(m)
+    if not auto_check:
+        await UpdateManager.tick(m)
+        assert 'nextStage' not in state['sequence'] and not state['sequence']['install']
+    assert not health.pending_preparation(m.diagnostics.state)
+    assert checked == ([{'fresh': True, 'automatic': True}] if auto_check else [])
+    assert calls == {'validate': int(auto_check)}
+    if auto_check: assert m.diagnostics.state['revision'] != proof['candidate']
+
+
+@pytest.mark.parametrize('successor', [True, False])
+async def test_deliberate_check_retires_only_stopped_owner_with_automatic_checks_off(tmp_path, monkeypatch, successor):
+    from amplifier_web.updates import UpdateManager
+    m, calls, proof, _ = await stopped_preparation_fixture(tmp_path, monkeypatch)
+    if not successor: m.service.instance_id = proof['host']
+    m.service.state['settings'] = {'updates': {'autoCheck': False, 'autoInstall': False}}
+    discoveries = []
+    async def inventory_sources(**kw):
+        assert not health.pending_preparation(m.diagnostics.state)
+        discoveries.append(kw)
+        return []
+    m.inventory_sources = inventory_sources
+    await UpdateManager._check(m, tier='included')
+    state = m.service.state['updates']
+    assert discoveries == ([{'indexed': True}] if successor else [])
+    assert bool(health.pending_preparation(m.diagnostics.state)) is not successor
+    assert state['phase'] == 'checked'
+    assert calls == {'validate': 0}  # Check never implies Install.

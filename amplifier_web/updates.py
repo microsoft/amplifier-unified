@@ -1000,7 +1000,7 @@ class UpdateManager:
 
     async def _check(self, *, tier='application', install=False, fresh=True, automatic=False):
         from .update_sequence import summary
-        from .update_health import pending_preparation
+        from .update_health import pending_preparation, preparation_owner_stopped, reconcile_preparation
         async with self.lock:
             state = self.service.state['updates']
             # A capacity observation can own this lock when a refresh arrives.
@@ -1070,6 +1070,9 @@ class UpdateManager:
                             detail='App update available. Included components will be checked after the new app restarts.' if app_available else 'Component checks are waiting for the application check.')
                         return
                     tier = 'included'
+                pending = pending_preparation(self.diagnostics.state)
+                if pending and preparation_owner_stopped(self, pending.get('preparation') or {}):
+                    reconcile_preparation(self)
                 if pending_preparation(self.diagnostics.state):
                     await self.publish(phase='checked', application=application,
                         detail='Component checks are paused until the interrupted preparation is reconciled.')
@@ -1291,7 +1294,7 @@ class UpdateManager:
                     return
                 async with self.lock:
                     if not reconcile_preparation(self):
-                        raise ValueError('The interrupted update has no proof of settled candidate-only preparation. Inspect its diagnostics before another installation; its outcome is not replayed.')
+                        raise ValueError('The interrupted update has no proof of inactive candidate-only preparation. Inspect its diagnostics before another installation; its outcome is not replayed.')
         from .update_partial import availability
         if (state.get('sequence', {}).get('stage') == 'included'
                 and state['sequence'].get('included', {}).get('issues')
@@ -1393,7 +1396,8 @@ class UpdateManager:
             stage=self.directory/'releases'/release
             stage.mkdir(parents=True,mode=0o700)
             from .update_health import pointer_witness, candidate_copy
-            proof = {'candidate': release, 'activeBefore': pointer_witness(self),
+            proof = {'candidate': release, 'host': self.service.instance_id, 'hostPid': os.getpid(),
+                     'activeBefore': pointer_witness(self),
                      'directoryIdentity': [stage.stat().st_dev, stage.stat().st_ino],
                      'boundary': 'copy-only', 'copySettled': True}
             self.diagnostics.state['batch']['preparation'] = proof
@@ -2100,7 +2104,20 @@ class UpdateManager:
         if state.get('initialPreparation') and state.get('sequence', {}).get('stage') == 'complete':
             await self.publish(initialPreparation=False)
         sequence = state.get('sequence', {})
-        from .update_health import pending_preparation
+        from .update_health import pending_preparation, preparation_owner_stopped, reconcile_preparation
+        pending = pending_preparation(self.diagnostics.state)
+        reconciled = False
+        if (pending and preparation_owner_stopped(self, pending.get('preparation') or {})
+                and not self.lock.locked()):
+            async with self.lock:
+                reconciled = reconcile_preparation(self)
+                if reconciled:
+                    # The retired attempt may have queued a later tier or an
+                    # install before it was interrupted. Only fresh discovery
+                    # or a new explicit request can authorize the next install.
+                    sequence = {**state.get('sequence', {}), 'install': False}
+                    sequence.pop('nextStage', None)
+                    await self.publish(sequence=sequence, phase='checked')
         if pending_preparation(self.diagnostics.state):
             # Health, drain, storage, worker adoption and independent app/tool
             # paths above still run. No component availability/install is replayed.
@@ -2110,7 +2127,11 @@ class UpdateManager:
             if state.get('appAvailable') and settings.get('autoInstall', True) and not automatic_retry_held(state):
                 await self.app()
             return
-        if sequence.get('nextStage') and state.get('phase') not in {'error','interrupted'}:
+        if reconciled and settings.get('autoCheck', True):
+            # Retiring a fence is not permission to install stale inventory.
+            # Fresh discovery still obeys the ordinary install/admission policy.
+            await self.check(fresh=True, automatic=True)
+        elif sequence.get('nextStage') and state.get('phase') not in {'error','interrupted'}:
             # App-first checking deliberately skips component discovery. After
             # the new app starts, refresh those refs rather than inheriting a
             # cached result from before its required components were published.

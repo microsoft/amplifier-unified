@@ -189,7 +189,8 @@ retained outcomes survive later unrelated tier promotions through the existing
 generation receipt and reverified source identities. A fresh unknown failure
 cannot borrow an older settled outcome. Cancellation during later preparation
 retains the inspection fence even if the visible diagnostic still names the
-earlier fetch failure. Changes to source identity, desired revision or relevant
+earlier fetch failure. The successor-host retirement rule below can release
+that fence only with proof that the owning process has stopped. Changes to source identity, desired revision or relevant
 configuration can make new work eligible; a retention-only status projection
 does not.
 
@@ -913,12 +914,38 @@ loads keys into the host process.
 The dependency graph key alone omits values that can repair a failed profile.
 It excludes the unrelated settings publication counter. Reading, ordinary rechecks and non-runtime preferences do not
 authorize another identical preparation. Explicit retry still runs every guard.
-A fresh install request can reconcile only a recorded, settled candidate-only
-snapshot copy with the same durable active pointer and no activation/rollback
-handoff. It creates a new candidate, never resumes the interrupted copy. Unknown
-or legacy operations, unsettled threads, fetch/installer/native initialization
-and activation effects remain fenced; cancellation alone proves none of them
-safe to replay.
+A deliberate Install can still reconcile a recorded, settled candidate-only
+snapshot copy in its owning host, with the same durable active pointer and no
+activation/rollback handoff. Later preparation has a stricter host boundary:
+new preparation proofs record the owning host instance and process ID. A
+successor host can retire an interrupted `copy-only` or `preparing` candidate
+only when the instance differs **and** a passive OS liveness check proves that
+the recorded process has exited. A different instance ID, cancellation, an old
+timestamp or a restart request alone is not proof. Permission errors, unknown
+liveness and reused live PIDs keep the fence. On Windows this uses a passive
+process handle, never `os.kill(pid, 0)`.
+
+Both paths require the original candidate directory identity, byte-identical
+active pointer, an exact interrupted preparation receipt, no active/previous
+selection of that candidate, and no pending handoff or activation/rollback
+events. Successor retirement may leave an unvalidated `plan.json`, but never
+accepts `validated.json` (including a dangling link). Unknown boundaries and
+older proofs without process ownership remain fenced for diagnostic review;
+this is deliberately not an age-based migration or an instruction to edit
+saved diagnostics. Same-host later preparation remains refused even if it was
+cancelled, because its threads or helpers may still be settling.
+
+Restart Amplifier normally, then choose **Check for updates**, and **Install**
+after a fresh check offers an update. With automatic checks enabled, a successor
+that verifies retirement runs a fresh check itself; automatic installation still
+obeys the normal settings, desired-selection and admission guards. With automatic
+checks off, Check remains the deliberate path; retiring the fence does not turn
+those settings on. No old candidate is reused, resumed, activated or declared
+successful. It stays inert for ordinary storage maintenance, and earlier failure
+receipts remain history. Shared source reuse still passes its existing integrity
+checks; retirement never rolls back or certifies earlier shared-store effects.
+If ownership or another guard cannot be verified, retain the diagnostics for
+review rather than resetting the installation or removing the fence by hand.
 The unresolved component operation is retained separately from the current
 diagnostic display batch; starting an app, tool or rollback batch cannot erase
 its fence. Its exact interrupted receipt, not an unrelated latest event, anchors
