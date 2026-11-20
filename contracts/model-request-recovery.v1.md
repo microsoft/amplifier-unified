@@ -281,3 +281,5 @@ its own explicit saved target choice and new foreground input for bounded
 canonical-originals preparation; it cannot invent a valid old checkpoint.
 These are offline-qualified mechanisms, not a claim of live device recovery,
 complete archive migration, or model summary quality.
+
+The host publishes the read command ID as `readCommandId` on the `runtime.control` projection of `context.recovery.status`. A client can use it with the command receipt to identify the result when other activity reads the same control.
