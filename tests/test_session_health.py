@@ -403,7 +403,7 @@ def test_count_failure_survives_runtime_normalization_with_safe_details(reason, 
     assert detail['countFailure']['requestId'] == 'req_123'
     assert detail['countFailure']['attempts'] == 3
     assert 'SECRET' not in json.dumps(detail)
-    assert 'Continue conversation' in detail['guidance'] if retryable else 'Continue conversation' not in detail['guidance']
+    assert ('send a new message in this chat' in detail['guidance']) is retryable
 
 
 def test_legacy_missing_count_has_accurate_message_without_invented_cause():
