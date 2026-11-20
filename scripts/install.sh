@@ -86,7 +86,7 @@ if [ "$version" = latest ]; then
   [[ "$resolved" = "$release_base/tag/v$version" && "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Could not determine the latest stable release.' >&2; exit 1; }
 fi
 wheel="amplifier_unified-${version}-py3-none-any.whl"
-echo "Installing Amplifier $version…"
+echo "Installing Amplifier $version..."
 run curl --proto '=https' --tlsv1.2 -fsSL "$release_base/download/v$version/$wheel" -o "$install_work/$wheel"
 run curl --proto '=https' --tlsv1.2 -fsSL "$release_base/download/v$version/SHA256SUMS" -o "$install_work/SHA256SUMS"
 # Python and Unified live in uv-managed environments; system Python is unchanged.
