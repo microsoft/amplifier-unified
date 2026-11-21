@@ -5,6 +5,7 @@ app_control bridge and command store. No native events or receipts are invented.
 """
 import hashlib
 import importlib
+import asyncio
 import json
 import os
 from pathlib import Path
@@ -46,9 +47,17 @@ class Provider:
         usage = Usage(input_tokens=1, output_tokens=1, total_tokens=2)
         if CALL_PURPOSE.get():
             return ChatResponse(content=[TextBlock(text="Offline native ACP fixture")], usage=usage)
+        if not request.tools:
+            # Native goal assessment is a distinct tool-less request. Script its
+            # verdict without consuming the foreground tool/reply state machine.
+            self.record(kind="utility")
+            return ChatResponse(content=[TextBlock(text="YES\nThe finite fixture effects completed.")], usage=usage)
         if self.pending:
             message = next((row for row in reversed(request.messages)
                             if row.role == "tool" and row.tool_call_id == self.pending), None)
+            if message is None:
+                self.record(kind="missing-tool", pending=self.pending,
+                            messages=[row.model_dump(mode="json") for row in request.messages[-4:]])
             assert message is not None, [(row.role, row.tool_call_id, self.text(row)[:1000])
                                          for row in request.messages[-4:]]
             receipt = json.loads(self.text(message))
@@ -92,4 +101,33 @@ class Provider:
 
 
 async def mount(coordinator, config=None):
-    await coordinator.mount("providers", Provider(config or {}), name=Provider.name)
+    selected = config or {}
+    provider = SharedProvider(selected) if selected.get("shared") else Provider(selected)
+    await coordinator.mount("providers", provider, name=Provider.name)
+
+
+class SharedProvider(Provider):
+    """Deterministic room response while the real native owner keeps context."""
+    async def complete(self, request, **kwargs):
+        from amplifier_core.message_models import ChatResponse, TextBlock, Usage
+        marker = "Participate in this shared conversation as "
+        text = next((self.text(row) for row in reversed(request.messages)
+                     if marker in self.text(row)), "")
+        start = text.rfind(marker)
+        if start < 0:
+            self.record(kind="missing-room", messages=[row.model_dump(mode="json") for row in request.messages[-3:]])
+        assert start >= 0, text[-200:]
+        context = json.loads(text[start:].split("\n", 1)[1])
+        trigger = next(row for row in context["messages"] if row["id"] == context["trigger_id"])
+        agent = next((row.get("is_agent") for row in context["participants"]
+                      if row["id"] == trigger["sender"]), None)
+        self.record(kind="room-input", context=context)
+        if agent is not True:
+            marker_path = self.audit.parent / ("entered-" + context["conversation_id"])
+            marker_path.touch()
+            async with asyncio.timeout(45):
+                while not (self.audit.parent / "release").exists():
+                    await asyncio.sleep(.02)
+        output = "[[PASS]]" if agent is True else "U public reply: " + trigger["text"]
+        return ChatResponse(content=[TextBlock(text=output)],
+                            usage=Usage(input_tokens=1, output_tokens=1, total_tokens=2))

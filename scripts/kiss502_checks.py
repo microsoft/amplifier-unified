@@ -180,8 +180,23 @@ def run(output):
                       "-m", "build", "--wheel", "--no-isolation", "--outdir",
                       str(output / "dist"), str(ROOT)])
     wheel, = (output / "dist").glob("*.whl")
+    # The maintained prepared runtime is read-only. Keep its locked dependencies
+    # read-only and install the candidate into a fresh task-owned environment.
+    prepared_python = python
+    command("installed-venv", ["uv", "venv", "--python", prepared_python, str(output / "venv")])
+    python = str(output / "venv/bin/python")
+    dependency_site = subprocess.check_output(
+        [prepared_python, "-I", "-B", "-c", "import sysconfig;print(sysconfig.get_path('purelib'))"],
+        text=True).strip()
+    own_site = subprocess.check_output(
+        [python, "-I", "-B", "-c", "import sysconfig;print(sysconfig.get_path('purelib'))"],
+        text=True).strip()
+    (Path(own_site) / "prepared-dependencies.pth").write_text(dependency_site + "\n")
+    write(output / "prepared-dependencies.json", {"readOnlySite": dependency_site,
+          "preparedPython": prepared_python, "candidatePython": python,
+          "method": "Explicit read-only dependency site; candidate distribution precedes it"})
     command("install", ["uv", "pip", "install", "--python", python,
-                        "--no-deps", "--reinstall", str(wheel)])
+                        "--target", own_site, "--no-deps", str(wheel)])
     harness = output / "harness"
     harness.mkdir()
     for name in inputs:
