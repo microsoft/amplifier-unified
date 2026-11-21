@@ -162,7 +162,8 @@ async def test_demand_is_client_scoped_and_full_reads_keep_evidence(live):
 
 
 @pytest.mark.parametrize('surface', ['modal', 'canvas'])
-async def test_selected_chat_privacy_settings_demands_exact_global_model_catalog(live, monkeypatch, surface):
+@pytest.mark.parametrize('page', ['chat-input', 'suggestion-advanced'])
+async def test_selected_chat_suggestion_settings_demands_exact_global_model_catalog(live, monkeypatch, surface, page):
     from amplifier_web.management import Management
     from amplifier_web.provider_catalog import model_key
     from amplifier_web.setup import SetupManager
@@ -199,6 +200,10 @@ async def test_selected_chat_privacy_settings_demands_exact_global_model_catalog
     service._session(first)['runtimeReport'] = {'provider_choices': [
         {'id': 'saved', 'sharedCatalogKey': key}]}
     service._publish_changes(sessions={first})
+    saved_settings = deepcopy(manager.store.read(workspace, 'global'))
+    model_selection = deepcopy(service._session(first).get('selection'))
+    config_revision = service._state.get('configurationRevision', 0)
+    paid_claims = list(service.db.execute('SELECT * FROM suggestion_requests'))
 
     def assert_deferred(client):
         closed = snapshot(service, client)
@@ -210,10 +215,10 @@ async def test_selected_chat_privacy_settings_demands_exact_global_model_catalog
 
     assert_deferred('browser-a')
     patch = {'panel': 'settings' if surface == 'modal' else None,
-             'settingsExpanded': ['privacy']}
+             'settingsExpanded': [page]}
     if surface == 'canvas':
         service.clients.records['browser-a']['canvas'] = {
-            'id': 'privacy-settings', 'kind': 'settings', 'open': True}
+            'id': 'suggestion-settings', 'kind': 'settings', 'open': True}
     await command(service, 'browser-a', 'view.update', {'patch': patch})
     opened = snapshot(service, 'browser-a')
     assert opened['selectedSessionId'] == first
@@ -223,15 +228,19 @@ async def test_selected_chat_privacy_settings_demands_exact_global_model_catalog
     assert opened['modelCatalogs'][key]['metadata'] == metadata
     assert 'modelsDeferred' not in opened['modelCatalogs'][key]
     assert_deferred('browser-b')
-    # Advanced has prompt instructions, not model controls. Other previously
-    # deferred pages must not gain the catalog just because Privacy needs it.
-    for page in ('advanced', 'appearance', 'updates'):
-        await command(service, 'browser-a', 'view.update', {'patch': {'settingsExpanded': [page]}})
+    # These overview destinations link to controls but mount no model picker.
+    # In particular the superseded Privacy form must not keep demand alive.
+    for other_page in ('privacy', 'advanced', 'appearance', 'updates'):
+        await command(service, 'browser-a', 'view.update', {'patch': {'settingsExpanded': [other_page]}})
         assert_deferred('browser-a')
     service.clients.records['browser-a']['canvas'] = {}
     await command(service, 'browser-a', 'view.update', {'patch': {'panel': None}})
     assert_deferred('browser-a')
     assert service._state['modelCatalogs'][key]['models'] == models
+    assert manager.store.read(workspace, 'global') == saved_settings
+    assert service._session(first).get('selection') == model_selection
+    assert service._state.get('configurationRevision', 0) == config_revision
+    assert list(service.db.execute('SELECT * FROM suggestion_requests')) == paid_claims
     assert not service.runtime.started and not service.runtime.sent
 
 
