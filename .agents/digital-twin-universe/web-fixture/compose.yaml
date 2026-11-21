@@ -1,0 +1,31 @@
+# Amplifier Unified's web UI on the synthetic message-interactions fixture, built from the local working tree,
+# for browser checks by a person or an agent (for example Reality Check) without a model or an account.
+#
+#   digital-twin-universe launch --profile web-fixture
+#   DTU_WEB_FIXTURE_PORT=8781 digital-twin-universe launch --profile web-fixture   # a second universe at once
+name: web-fixture
+
+x-dtu:
+  description: Amplifier Unified's web UI on the synthetic message-interactions fixture (no model, no external service), built from the local working tree
+  twin_machine: twin
+  urls:
+    # `port` is the container port: the proxy in front of the fixture. The host port comes from `ports` at launch.
+    - {port: 8780, host: 127.0.0.1, path: /, label: Amplifier Unified (web fixture)}
+  repositories:
+    # The working tree is served as it is, uncommitted changes included; nothing is mounted.
+    - path: ../../..
+      url: https://github.com/microsoft/amplifier-unified
+
+services:
+  twin:
+    build: .
+    command: [/usr/local/bin/start-web-fixture]
+    ports:
+      - "127.0.0.1:${DTU_WEB_FIXTURE_PORT:-8780}:8780"
+    healthcheck:
+      # Through the proxy, as a browser would reach it.
+      test: [CMD, curl, -sf, -o, /dev/null, "http://127.0.0.1:8780/"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 120s
