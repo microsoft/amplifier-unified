@@ -7,6 +7,7 @@ receipts, task records and access policy keep their original owners.
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 from pathlib import Path
 import uuid
@@ -74,16 +75,22 @@ class InstanceProfile:
             source(row)
         return copy.deepcopy(value)
 
+    def applies(self):
+        """An offered optional profile need not apply to every ACP launcher."""
+        return (self.selected is not None and self.selected['bundle'] == self.owner.bundle
+                and Path(self.selected['workspace']).resolve(strict=True) == self.owner.workspace)
+
     def current(self, source_ref=None):
         self.owner.require_connection()
-        current = self.config()
-        if (not self.selected or not current or any(
+        # Configuration was validated at negotiation. Recheck relevant current
+        # owner fields without copying/validating every unrelated source on each
+        # streamed chunk. No cache or second authority is introduced.
+        current = getattr(self.owner.service, 'server_config', {}).get('agentInstance')
+        if (not self.selected or not isinstance(current, dict) or any(
                 current.get(key) != self.selected.get(key) for key in ('id', 'workspace', 'bundle'))):
             raise ValueError('The public agent profile changed or was revoked; inspect before reconnecting.')
-        if (Path(current['workspace']).resolve(strict=True) != self.owner.workspace
-                or current['bundle'] != self.owner.bundle):
-            raise ValueError('The launcher does not match the configured agent workspace and bundle.')
-        if source_ref is not None and 'sources' in current and source_ref not in current['sources']:
+        if source_ref is not None and 'sources' in current and (
+                not isinstance(current['sources'], list) or source_ref not in current['sources']):
             raise ValueError('This source conversation is not authorized for the public agent.')
         return current
 
@@ -101,10 +108,11 @@ class InstanceProfile:
                        'stop': 'native-Stop-and-task-pause-not-effect-rollback'}}
 
     def request(self, value):
-        if not isinstance(value, dict) or value.get('agentId') != self.current()['id']:
+        if not isinstance(value, dict):
             raise ValueError('The exact negotiated public agent identity is required.')
         ref = source(value.get('source'))
-        self.current(ref)
+        if value.get('agentId') != self.current(ref)['id']:
+            raise ValueError('The exact negotiated public agent identity is required.')
         return {'agentId': value['agentId'], 'source': ref}
 
     async def connect(self, cwd, value, servers, identity=None):
@@ -153,8 +161,13 @@ class InstanceProfile:
 
     @staticmethod
     def execution_source(session):
-        return {key: session.get(key) for key in
-                ('workspace', 'workingDirectory', 'runtimeSessionId', 'nativeIdentity')}
+        from .session_identity import native_id
+        # Directory/history refresh fills aliases with the same native identity.
+        # That is not a writer/source replacement; a genuinely different native
+        # identity or effective execution location still changes the witness.
+        return {'workspace': session.get('workspace'),
+                'workingDirectory': session.get('workingDirectory') or session.get('workspace'),
+                'nativeIdentity': native_id(session)}
 
     def bound(self, identity, value):
         binding = self.request(value)
@@ -307,13 +320,28 @@ class InstanceProfile:
                     raise ValueError('New input or another interruption superseded this Stop intent.')
         result = None
         if params['taskId'] is not None:
-            result = await self.owner.service.dispatch('task.' + ('pause' if operation == 'stop' else operation), {
+            arguments = {
                 'sessionId': identity, 'expectedTaskId': params['taskId'],
                 'expectedRevision': params['expectedRevision'], **changes,
-                **({'expectedExecution': params['expectedExecution']} if operation == 'stop' else {}),
-            }, origin='acp-instance-stop' if operation == 'stop' else 'acp',
-                command_id=_identity('control', self.bindings[identity], params['commandId']),
-                caller_session_id=identity, include_state=False, admission_check=guard)
+                **({'expectedExecution': params['expectedExecution']} if operation == 'stop' else {})}
+            command = _identity('control', self.bindings[identity], params['commandId'])
+            if operation == 'stop':
+                retained = await self.owner.service.dispatch('task.receipt', {
+                    'sessionId': identity, 'commandId': command},
+                    origin='acp', caller_session_id=identity, include_state=False)
+                self.bound(identity, binding)
+                saved = retained['result'].get('receipt')
+                if saved is not None:
+                    forwarded = {key: item for key, item in arguments.items() if key != 'sessionId'}
+                    forwarded.update(commandId=command, origin='acp-instance-stop')
+                    digest = hashlib.sha256(json.dumps(['task.pause', forwarded], sort_keys=True).encode()).hexdigest()
+                    if saved.get('fingerprint') != digest:
+                        raise ValueError('This task command ID already has different contents.')
+                    result = {'accepted': True, 'result': {**retained['result'], 'duplicate': True}}
+            if result is None:
+                result = await self.owner.service.dispatch('task.' + ('pause' if operation == 'stop' else operation),
+                    arguments, origin='acp-instance-stop' if operation == 'stop' else 'acp',
+                    command_id=command, caller_session_id=identity, include_state=False, admission_check=guard)
         self.bound(identity, binding)
         if operation == 'stop':
             # Pause settles in the existing task owner before native Stop. If
