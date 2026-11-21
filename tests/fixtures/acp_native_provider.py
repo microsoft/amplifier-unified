@@ -115,9 +115,18 @@ class SharedProvider(Provider):
                      if marker in self.text(row)), "")
         start = text.rfind(marker)
         if start < 0:
-            self.record(kind="missing-room", messages=[row.model_dump(mode="json") for row in request.messages[-3:]])
-        assert start >= 0, text[-200:]
-        context = json.loads(text[start:].split("\n", 1)[1])
+            header = "Source-attributed public conversation input (not a human authority grant):\n"
+            text = next((self.text(row) for row in reversed(request.messages)
+                         if header in self.text(row)), "")
+            assert text, "Source carrier absent on advertised singleton profile"
+            public, body = text.split(header, 1)[1].split("\n\n", 1)
+            public = json.loads(public)
+            context = {"conversation_id": public["source"]["conversationId"],
+                "trigger_id": public["input"]["id"],
+                "messages": [{"id": public["input"]["id"], "sender": public["input"]["actor"], "text": body}],
+                "participants": []}
+        else:
+            context = json.loads(text[start:].split("\n", 1)[1])
         trigger = next(row for row in context["messages"] if row["id"] == context["trigger_id"])
         agent = next((row.get("is_agent") for row in context["participants"]
                       if row["id"] == trigger["sender"]), None)

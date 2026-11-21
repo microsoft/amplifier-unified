@@ -4,7 +4,6 @@ X is an independent public-SDK subprocess; U is one configured public identity
 with separate native contexts in two source rooms. No paid model or live service.
 """
 import asyncio
-import importlib
 import json
 import os
 from pathlib import Path
@@ -98,6 +97,9 @@ async def test_native_public_agent_two_rooms_with_simultaneous_external_peer(tmp
         assert len(set(native_ids)) == 2
         (tmp_path / "release").touch()
         await asyncio.gather(*(idle(source, room["id"]) for room in rooms))
+        async with asyncio.timeout(10):
+            while second["id"] in source.external_conversations.turns:
+                await asyncio.sleep(.02)
         for room, expected in zip(rooms, ("First room private source 漢🙂", "Second room distinct source")):
             replies = [row["text"] for row in room["messages"] if row.get("agentId") == "U"]
             assert replies == ["U public reply: " + expected], replies
@@ -109,6 +111,16 @@ async def test_native_public_agent_two_rooms_with_simultaneous_external_peer(tmp
             other = "Second room distinct source" if context["conversation_id"] == first["id"] else "First room private source"
             assert all(other not in row["text"] for row in context["messages"])
         assert source.runtime.started == source.runtime.sent == []
+        # Closing observation and scanning pending work does not replay either
+        # settled public input or alter the saved source pair/native identity.
+        for room in rooms:
+            participant = source.external_conversations.participants[(room["id"], "U")]
+            await participant.close()
+        original_count = len(audits)
+        await source.external_conversations.resume_pending()
+        assert [next(row for row in bindings(room) if row["id"] == "U")["sessionId"]
+                for room in rooms] == native_ids
+        assert len([json.loads(line) for line in audit.read_text().splitlines()]) == original_count
         evidence = {"status": "passed", "graph": graph, "publicAgent": "urn:fixture:U",
                     "sourceRooms": [row["id"] for row in rooms], "nativeSessions": native_ids,
                     "nativeWorkerPids": [row["process"].pid for row in runtime.workers.values()],

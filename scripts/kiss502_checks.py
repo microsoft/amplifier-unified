@@ -28,6 +28,7 @@ TARGETS = (
     "test_coordination_superseded_returns", "test_coordination_wait_transport",
     "test_peer_return_workflow",
     "test_agent_instance",
+    "test_agent_instance_composition",
 )
 FIXTURES = (
     "acp_native_provider.py", "external_acp_agent.py", "external_acp_participation.py",
@@ -208,6 +209,7 @@ def run(output):
     (harness / "tests/web/node_modules").symlink_to(ROOT / "tests/web/node_modules", target_is_directory=True)
     command("installed-before", [python, "-I", "-B", "-c", PROBE, str(wheel), str(ROOT)], cwd=harness)
     command("pytest", [python, "-I", "-B", "-m", "pytest", "-c", "/dev/null",
+                      "--rootdir", str(harness),
                       "-o", "asyncio_mode=auto", "-p", "no:cacheprovider", "-q", "--basetemp", str(output / "pytest-tmp"),
                       "--junitxml=" + str(output / "junit.xml"),
                       *["tests/" + name + ".py" for name in TARGETS]], cwd=harness,
@@ -221,8 +223,14 @@ def run(output):
     cases = [{"classname": row.get("classname"), "name": row.get("name"),
               "status": next((kind for kind in ("failure", "error", "skipped") if row.find(kind) is not None), "passed")}
              for row in ET.parse(output / "junit.xml").getroot().iter("testcase")]
-    passed = all(row["returncode"] == 0 for row in stages)
+    missing = [name for name in TARGETS if not any(
+        row["classname"].endswith(name) for row in cases)]
+    passed = (all(row["returncode"] == 0 for row in stages)
+              and not missing and cases and all(row["status"] == "passed" for row in cases))
     write(output / "summary.json", {"status": "passed" if passed else "failed", "stages": stages, "cases": cases,
+                                   "missingRequiredModules": missing,
+                                   "counts": {status: sum(row["status"] == status for row in cases)
+                                              for status in ("passed", "failure", "error", "skipped")},
                                    "inputs": len(inputs), "wheelSha256": digest(wheel),
                                    "scope": "Finite installed host/SDK/native Core/browser cases; no live services or paid API"})
     if not passed:
