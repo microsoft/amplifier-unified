@@ -124,8 +124,12 @@ update owner's admission boundary. An independent participant's failure does not
 transfer or repeat its work through another agent.
 
 When a peer negotiates `com.microsoft.amplifier.agent-instance` version 1, the
-connector also binds its advertised public agent ID to the exact room source
-(`urn:amplifier:conversation:<room-id>`, conversation ID). Original input identity,
+connector also binds its advertised public agent ID to the exact room source:
+the existing primary configured public origin and conversation ID. Without a
+configured origin, `urn:amplifier:conversation:<room-id>` provides only local UUID
+scope, not cross-installation copy/import disambiguation or authentication.
+The selected source is saved with the binding and reused even if the configured
+origin later changes; reconnect never silently rebinds it. Original input identity,
 immutable revision 0, attributed actor, conversation audience and reply target
 travel as prompt metadata, not as a new grant or JSON-RPC request identity.
 Reconnect fences a changed or missing public identity and resumes the saved

@@ -288,7 +288,11 @@ class SharedConversations:
             context_source = getattr(self.service, 'room_context', None)
             options = ({'room_context': lambda: context_source.descriptor(sid, turn.agent_id)}
                        if context_source is not None else {})
-            options['source'] = {'sourceId': 'urn:amplifier:conversation:' + sid, 'conversationId': sid}
+            binding = self.participant(session, turn.agent_id)
+            origins = getattr(self.service, 'server_config', {}).get('public_origins', [])
+            options['source'] = copy.deepcopy(binding.get('instanceSource') or {
+                'sourceId': origins[0] if origins else 'urn:amplifier:conversation:' + sid,
+                'conversationId': sid})
             await asyncio.wait_for(turn.participant.connect(
                 dict(self.participant(session, turn.agent_id)),
                 lambda value: self.owner._binding(sid, turn.agent_id, value), **options), 30)

@@ -417,16 +417,19 @@ async def test_mention_is_context_not_exclusive_routing_and_other_rooms_stay_pri
         assert addressed['messages'][0]['recipients'] == ['alpha']
 
 
-async def test_negotiated_public_instance_preserves_original_input_source_and_exact_resume(app_factory, tmp_path):
+@pytest.mark.parametrize('origin', [None, 'https://source.example'])
+async def test_negotiated_public_instance_preserves_original_input_source_and_exact_resume(app_factory, tmp_path, origin):
     app = app_factory()
     session = await room(app, tmp_path, 'instance')
+    if origin:
+        app.server_config['public_origins'] = [origin]
     sid = session['id']
     await send(app, sid, 'original source', 'original-input')
     await idle(app, sid)
     saved = copy.deepcopy(bindings(session))
     for binding in saved:
         assert binding['publicAgentId'] == 'public:' + binding['id']
-        assert binding['instanceSource'] == {'sourceId': 'urn:amplifier:conversation:' + sid, 'conversationId': sid}
+        assert binding['instanceSource'] == {'sourceId': origin or 'urn:amplifier:conversation:' + sid, 'conversationId': sid}
         assert binding['instanceInterruptionRevision'] == 7
         inputs = [row['metadata']['input'] for row in operations(tmp_path / binding['id']) if row['kind'] == 'instance-input']
         assert inputs[0]['id'] == 'original-input'
@@ -437,11 +440,13 @@ async def test_negotiated_public_instance_preserves_original_input_source_and_ex
     await app.close()
     restored = app_factory()
     configure(restored, tmp_path, 'instance')
+    restored.server_config['public_origins'] = ['https://changed-source.example']
     await send(restored, sid, 'later source', 'later-input')
     await idle(restored, sid)
     for previous, current in zip(saved, bindings(restored._session(sid))):
         assert previous['sessionId'] == current['sessionId']
         assert previous['publicAgentId'] == current['publicAgentId']
+        assert previous['instanceSource'] == current['instanceSource']
         assert len([row for row in operations(tmp_path / current['id']) if row['kind'] == 'resume']) == 1
 
 
