@@ -342,7 +342,8 @@ async def test_actual_task_owner_cas_consumption_stop_and_lost_receipt(tmp_path,
         await owner.close()
 
 
-async def test_taskless_stop_command_cannot_pause_a_later_task_before_conflict(host, monkeypatch):
+@pytest.mark.parametrize('reused_operation', ['stop', 'pause', 'update'])
+async def test_taskless_stop_command_cannot_pause_a_later_task_before_conflict(host, monkeypatch, reused_operation):
     """Both old receipt legs must reconcile before a new pause can take effect."""
     from test_task_continuity import controls, create
     configure(host)
@@ -382,9 +383,14 @@ async def test_taskless_stop_command_cannot_pause_a_later_task_before_conflict(h
         monkeypatch.setattr(runtime, 'control', control, raising=False)
         monkeypatch.setattr(service.management, 'ensure_runtime', AsyncMock())
         current = (await peer.call('_amplifier/instance', sessionId=sid, binding=binding, operation='read'))['result']
-        changed = await peer.call('_amplifier/instance', **{
-            **original, 'taskId': task['id'], 'expectedRevision': task['revision'],
-            'expectedExecution': current['expectedExecution']})
+        reused = {**original, 'operation': reused_operation,
+                  'taskId': task['id'], 'expectedRevision': task['revision'],
+                  'expectedExecution': current['expectedExecution']}
+        if reused_operation != 'stop':
+            reused.pop('expectedExecution')
+        if reused_operation == 'update':
+            reused['changes'] = {'correction': 'Must not amend a successor with the old Stop identity'}
+        changed = await peer.call('_amplifier/instance', **reused)
         assert 'error' in changed and 'different contents' in changed['error']['message'], changed
         assert not calls, 'A fresh pause must not precede the existing Stop conflict.'
         assert worker.tasks.record()['status'] == 'active'
@@ -396,6 +402,68 @@ async def test_taskless_stop_command_cannot_pause_a_later_task_before_conflict(h
         again = await peer.call('_amplifier/instance', **original)
         assert again['result']['stop']['duplicate'] is True
         assert not calls and runtime.stopped == [sid]
+        service.server_config['agentInstance']['sources'] = []
+        assert 'error' in await peer.call('_amplifier/instance', **original)
+    finally:
+        await worker.close()
+        await peer.socket.close()
+
+
+async def test_unavailable_task_receipt_does_not_prove_a_saved_stop_was_taskless(host, monkeypatch):
+    """Unreadable receipt authority cannot validate a changed taskless retry."""
+    from test_task_continuity import controls, create
+    configure(host)
+    app, _, runtime, path = host
+    service = app['service']
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(service.data_dir))
+    peer, _ = await connect_profile(host)
+    sid = (await new(peer, path, 'R'))['result']['sessionId']
+    source_plan(service, service._session(sid))
+    binding = session_metadata('urn:example:agent:U', room_source('R'))[NAMESPACE]
+    worker = controls(sid)
+    try:
+        await create(worker, objective='Original taskful responsibility')
+        control_path = service.data_dir / 'sessions' / sid / 'control-state.json'
+        calls = []
+
+        async def control(target, operation, args, *, guard=None):
+            if guard:
+                guard()
+            calls.append(operation)
+            return await worker.perform(operation, args)
+
+        monkeypatch.setattr(runtime, 'control', control, raising=False)
+        monkeypatch.setattr(service.management, 'ensure_runtime', AsyncMock())
+        read = (await peer.call('_amplifier/instance', sessionId=sid, binding=binding, operation='read'))['result']
+        original = {'sessionId': sid, 'binding': binding, 'operation': 'stop',
+                    'commandId': 'original-taskful-stop', 'taskId': worker.tasks.record()['id'],
+                    'expectedRevision': 1, 'changes': {}, 'expectedExecution': read['expectedExecution']}
+        stopped = await peer.call('_amplifier/instance', **original)
+        assert 'result' in stopped, stopped
+        await until(lambda: service._session(sid)['status'] == 'stopped')
+        assert calls == ['task.pause'] and runtime.stopped == [sid]
+        saved_bytes = control_path.read_bytes()
+        control_path.write_text('{unreadable-native-task-receipts')
+        for retry in ({**original, 'taskId': None, 'expectedRevision': 0}, original):
+            unknown = await peer.call('_amplifier/instance', **retry)
+            assert 'result' in unknown, unknown
+            result = unknown['result']
+            assert result['settlement'] == 'unresolved-task-receipt', result
+            assert result['task']['result']['status'] == 'unavailable'
+            assert result['stop']['accepted'] is True  # Known host leg, not exact pair proof.
+            assert 'duplicate' not in result['stop']
+            assert result.get('exactMatch') is None
+        assert calls == ['task.pause'] and runtime.stopped == [sid]
+        assert control_path.read_text() == '{unreadable-native-task-receipts'
+        control_path.write_bytes(saved_bytes)
+        # Once original authority is readable, the real original exact retry
+        # recovers and the changed taskless tuple conflicts without new effects.
+        exact = await peer.call('_amplifier/instance', **original)
+        assert exact['result']['stop']['duplicate'] is True
+        changed = await peer.call('_amplifier/instance', **{
+            **original, 'taskId': None, 'expectedRevision': 0})
+        assert 'different contents' in changed['error']['message']
+        assert calls == ['task.pause'] and runtime.stopped == [sid]
         service.server_config['agentInstance']['sources'] = []
         assert 'error' in await peer.call('_amplifier/instance', **original)
     finally:

@@ -323,12 +323,17 @@ class InstanceProfile:
                 from .message_delivery import execution_boundary
                 if params['expectedExecution'] != execution_boundary(session):
                     raise ValueError('New input or another interruption superseded this Stop intent.')
+            elif self.owner.service.db.execute('SELECT 1 FROM commands WHERE id=?',
+                    (_identity('stop', self.bindings[identity], params['commandId']),)).fetchone():
+                raise ValueError('This command ID already names a Stop with different contents.')
         result = None
         arguments = {
             'sessionId': identity, 'expectedTaskId': params['taskId'],
             'expectedRevision': params['expectedRevision'], **changes,
             **({'expectedExecution': params['expectedExecution']} if operation == 'stop' else {})}
         command = _identity('control', self.bindings[identity], params['commandId'])
+        if operation != 'stop':
+            guard()  # Also reused at the existing task admission boundary.
         if operation == 'stop':
             # Reconcile BOTH owners before either fresh leg. In particular an
             # earlier taskless Stop must not pause a newly supplied task before
@@ -339,14 +344,25 @@ class InstanceProfile:
             async with self.owner.service.lock:
                 self.bound(identity, binding)
                 saved = retained['result'].get('receipt')
+                task_receipt_status = retained['result'].get('status')
                 stop_row = self.owner.service.db.execute('SELECT fingerprint,receipt FROM commands WHERE id=?',
                     (_identity('stop', self.bindings[identity], params['commandId']),)).fetchone()
                 if stop_row:
                     from .service import command_fingerprint as host_fingerprint
                     if (stop_row[0] != host_fingerprint('conversation.stop', {
-                            'sessionId': identity, 'expectedExecution': params['expectedExecution']}, 'acp', None)
-                            or saved is None and params['taskId'] is not None):
+                            'sessionId': identity, 'expectedExecution': params['expectedExecution']}, 'acp', None)):
                         raise ValueError('This Stop command ID already has different contents.')
+                if task_receipt_status not in {'recorded', 'not_recorded'} or (
+                        task_receipt_status == 'recorded' and saved is None):
+                    # Unavailable authority is not a positively absent pause.
+                    # Preserve the known host leg without claiming this changed
+                    # tuple is an exact taskless retry or dispatching fresh work.
+                    if stop_row:
+                        return {'task': retained, 'stop': json.loads(stop_row[1]),
+                                'settlement': 'unresolved-task-receipt', 'exactMatch': None}
+                    raise ValueError('Inspect the current saved task: its original receipt is unavailable; no work was repeated.')
+                if stop_row and saved is None and params['taskId'] is not None:
+                    raise ValueError('This Stop command ID already has different contents.')
                 if saved is not None:
                     if params['taskId'] is None:
                         raise ValueError('This Stop command ID already has different contents.')
