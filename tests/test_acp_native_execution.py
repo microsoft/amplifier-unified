@@ -35,8 +35,9 @@ class NativePeer(StdioPeer):
                 self.updates.append(row)
 
 
-@pytest.mark.parametrize("wrapper", ["direct", "published-instance", "unified-profile"])
+@pytest.mark.parametrize("wrapper", ["direct", "published-instance", "unified-profile", "profile-history"])
 async def test_stdio_acp_executes_real_core_tool_and_same_native_resume(tmp_path, monkeypatch, aiohttp_client, wrapper):
+    profile = wrapper in {"unified-profile", "profile-history"}
     binary = os.environ.get("KISS502_INSTANCE_BINARY") if wrapper == "published-instance" else None
     if wrapper == "published-instance":
         if not binary:
@@ -81,7 +82,7 @@ async def test_stdio_acp_executes_real_core_tool_and_same_native_resume(tmp_path
         "providers:\n  - module: provider-acp-native-fixture\n"
         f"    source: {json.dumps(str(provider.parent))}\n"
         f"    config:\n      audit: {json.dumps(str(audit))}\n"
-        f"      create_task: {'true' if wrapper == 'unified-profile' else 'false'}\n")
+        f"      create_task: {'true' if profile else 'false'}\n")
     runtime = RuntimeManager(command=[sys.executable, "-I", "-B", "-m", "amplifier_web.runtime_worker"],
                              startup_timeout=45)
     app = await create_app(tmp_path / "app", workspace=workspace, runtime=runtime,
@@ -91,7 +92,7 @@ async def test_stdio_acp_executes_real_core_tool_and_same_native_resume(tmp_path
     runtime.app_bridge, runtime.home = service.app_bridge, tmp_path / "app"
     from amplifier_web.agent_instance import NAMESPACE, room_source, session_metadata, prompt_metadata
     source = room_source("native-profile-room", "https://fixture.example")
-    if wrapper == "unified-profile":
+    if profile:
         service.server_config["agentInstance"] = {
             "id": "urn:fixture:U", "label": "Fixture U", "workspace": str(workspace),
             "bundle": str(bundle), "sources": [source]}
@@ -177,7 +178,7 @@ async def test_stdio_acp_executes_real_core_tool_and_same_native_resume(tmp_path
             stderr=asyncio.subprocess.PIPE)
         processes.append(process)
         peer = NativePeer(process)
-        options = {"_meta": {NAMESPACE: {"version": 1}}} if wrapper == "unified-profile" else {}
+        options = {"_meta": {NAMESPACE: {"version": 1}}} if profile else {}
         initialized = await peer.call("initialize", protocolVersion=1, **options)
         assert initialized["result"]["protocolVersion"] == 1
         if options:
@@ -188,19 +189,22 @@ async def test_stdio_acp_executes_real_core_tool_and_same_native_resume(tmp_path
         if binary:
             await prepare_instance()
         first = await launch()
-        session_options = {"_meta": session_metadata("urn:fixture:U", source)} if wrapper == "unified-profile" else {}
+        session_options = {"_meta": session_metadata("urn:fixture:U", source)} if profile else {}
         sid = (await first.call("session/new", cwd=str(workspace), mcpServers=[], **session_options))["result"]["sessionId"]
         source_inputs = []
         observed_worker = None
         for turn in (1, 2):
-            peer = first if turn == 1 else await launch()
-            if turn == 2:
+            peer = first if turn == 1 or wrapper == "profile-history" else await launch()
+            if turn == 2 and wrapper == "profile-history":
+                await service.history.refresh()
+                await service.history.load(sid, canonical=True)
+            elif turn == 2:
                 assert (await peer.call("session/resume", sessionId=sid, cwd=str(workspace),
                                        mcpServers=[], **session_options)).get("error") is None
             binding = prompt_metadata("urn:fixture:U", source, f"source-input-{turn}",
                 actor="fixture-person", audience=["conversation"], reply_to=source["conversationId"],
                 interruption_revision=0)
-            options = {"_meta": binding} if wrapper == "unified-profile" else {}
+            options = {"_meta": binding} if profile else {}
             response = await peer.call("session/prompt", sessionId=sid,
                                       prompt=[{"type": "text", "text": f"Native input {turn}: 漢🙂"}], **options)
             assert response.get("result", {}).get("stopReason") == "end_turn", response
@@ -238,7 +242,8 @@ async def test_stdio_acp_executes_real_core_tool_and_same_native_resume(tmp_path
                     old = await peer.call("_amplifier/instance", sessionId=sid,
                         operation="inspectInput", binding=binding[NAMESPACE])
                     assert old["result"]["commandId"] == inspected["result"]["commandId"]
-            await peer.eof()
+            if turn == 2 or wrapper != "profile-history":
+                await peer.eof()
         rows = [json.loads(line) for line in audit.read_text().splitlines()]
         provider_rows = [row for row in rows if row["kind"] == "provider"]
         assert [row["round"] for row in provider_rows] == [1, 2]

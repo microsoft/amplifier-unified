@@ -37,6 +37,9 @@ FIXTURES = (
     "external_multiparty_ui_server.py",
 )
 BROWSERS = ("external-multiparty-browser.mjs", "external-approval-browser.mjs")
+CHANGED_TARGETS = ("test_acp_native_execution", "test_agent_instance",
+                   "test_agent_instance_composition", "test_external_conversation",
+                   "test_shared_conversation", "test_acp_participant")
 
 
 def digest(path):
@@ -148,7 +151,7 @@ print(json.dumps({'wheelSha256':hashlib.sha256(wheel.read_bytes()).hexdigest(),
 """
 
 
-def run(output):
+def run(output, targets=TARGETS):
     if ROOT != Path("/workspace") or not os.environ.get("AMPLIFIER_TEST_CONTRACT"):
         raise ValueError("Run only in the task-owned prepared guest, never a serving installation")
     output.mkdir(parents=True, exist_ok=False)
@@ -212,7 +215,7 @@ def run(output):
                       "--rootdir", str(harness),
                       "-o", "asyncio_mode=auto", "-p", "no:cacheprovider", "-q", "--basetemp", str(output / "pytest-tmp"),
                       "--junitxml=" + str(output / "junit.xml"),
-                      *["tests/" + name + ".py" for name in TARGETS]], cwd=harness,
+                      *["tests/" + name + ".py" for name in targets]], cwd=harness,
             env={**clean, "AMPLIFIER_TEST_ARTIFACTS": str(output / "native")}, required=False)
     for name in BROWSERS:
         command(name, ["node", "tests/web/" + name], cwd=harness, env={
@@ -223,7 +226,7 @@ def run(output):
     cases = [{"classname": row.get("classname"), "name": row.get("name"),
               "status": next((kind for kind in ("failure", "error", "skipped") if row.find(kind) is not None), "passed")}
              for row in ET.parse(output / "junit.xml").getroot().iter("testcase")]
-    missing = [name for name in TARGETS if not any(
+    missing = [name for name in targets if not any(
         row["classname"].endswith(name) for row in cases)]
     passed = (all(row["returncode"] == 0 for row in stages)
               and not missing and cases and all(row["status"] == "passed" for row in cases))
@@ -239,10 +242,10 @@ def run(output):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=("preflight", "run"))
+    parser.add_argument("operation", choices=("preflight", "run", "changed"))
     parser.add_argument("--output", type=Path, default=Path("/artifacts/kiss502"))
     args = parser.parse_args()
     if args.operation == "preflight":
         print(json.dumps({"files": selection(), "targets": TARGETS, "browsers": BROWSERS}, indent=2))
     else:
-        run(args.output)
+        run(args.output, CHANGED_TARGETS if args.operation == "changed" else TARGETS)
