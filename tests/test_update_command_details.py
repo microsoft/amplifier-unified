@@ -182,6 +182,12 @@ async def test_anonymous_retry_keeps_first_attempt_with_shared_deadline(monkeypa
         assert facts['commandAttempts'][1]['timedOut'] is True
 
 
+class _CacheDiagnostics:
+    async def run(self, phase, operation, *args, **kwargs):
+        assert phase == 'ecosystem-uv-cache-clean'
+        return await operation(*args, **kwargs)
+
+
 @pytest.mark.parametrize('retry_succeeds', [True, False])
 async def test_candidate_recovers_missing_git_blob_once_and_keeps_the_cache_through_sync(
         monkeypatch, tmp_path, retry_succeeds):
@@ -204,7 +210,7 @@ async def test_candidate_recovers_missing_git_blob_once_and_keeps_the_cache_thro
             code = 'import sys;sys.stderr.write("https://github.com/example/public authentication failed");raise SystemExit(9)'
         return await create(sys.executable, '-c', code, **kwargs)
     monkeypatch.setattr(updates.asyncio, 'create_subprocess_exec', synthetic)
-    async with updates.update_uv_cache.candidate_cache():
+    with updates.update_uv_cache.candidate_cache(tmp_path, _CacheDiagnostics()):
         if retry_succeeds:
             result = await updates.process('uv', 'lock', env=env)
         else:
@@ -219,30 +225,108 @@ async def test_candidate_recovers_missing_git_blob_once_and_keeps_the_cache_thro
         assert [row['exitCode'] for row in result.diagnostic_facts['commandAttempts']] == [1, 0 if retry_succeeds else 9]
         assert event(result.diagnostic_facts)['gitCacheRetry'] is True
         if retry_succeeds:
-            async with updates.update_uv_cache.candidate_cache():
+            with updates.update_uv_cache.candidate_cache(tmp_path, _CacheDiagnostics()):
                 await updates.process('uv', 'lock', env=env)
                 assert calls[-1]['UV_CACHE_DIR'] == str(existing)
             await updates.process('uv', 'sync', '--locked', env=env)
             assert calls[-1]['UV_CACHE_DIR'] == str(recovery)
-    assert existing.is_dir() and not recovery.exists()
+    assert existing.is_dir() and recovery.is_dir()
+    assert (recovery.parent / 'qualified').is_dir() == retry_succeeds
     assert env['UV_LINK_MODE'] == 'symlink'
+    if retry_succeeds:
+        with updates.update_uv_cache.candidate_cache(tmp_path, _CacheDiagnostics()):
+            second = await updates.process('uv', 'lock', env=env)
+            assert calls[-1]['UV_CACHE_DIR'] == str(recovery)
+            assert len(second.diagnostic_facts['commandAttempts']) == 1
+            different = {**env, 'UV_CACHE_DIR': str(tmp_path / 'other-cache')}
+            await updates.process('uv', 'lock', env=different)
+            assert calls[-1]['UV_CACHE_DIR'] == different['UV_CACHE_DIR']
+            for option in ('--offline', '--no-cache', '--cache-dir=override'):
+                await updates.process('uv', 'sync', option, env=env)
+                assert calls[-1]['UV_CACHE_DIR'] == str(existing)
 
 
-@pytest.mark.parametrize('args,env,missing,reset', [
-    (('git', 'reset'), {}, True, True),
-    (('uv', 'run'), {}, True, True),
-    (('uv', 'sync', '--offline'), {}, True, True),
-    (('uv', 'sync'), {'UV_OFFLINE': 'true'}, True, True),
-    (('uv', 'lock', '--cache-dir=explicit'), {}, True, True),
-    (('uv', 'lock'), {}, False, True),
-    (('uv', 'lock'), {}, True, False),
+@pytest.mark.parametrize('args,env', [
+    (('git', 'reset'), {}),
+    (('uv', 'sync', '--offline'), {}),
+    (('uv', 'sync'), {'UV_OFFLINE': 'true'}),
+    (('uv', 'sync', '--cache-dir=explicit'), {}),
+    (('uv', 'run', '-n'), {}),
+    (('uv', 'lock'), {'UV_NO_CACHE': 'true'}),
 ])
-async def test_read_failure_recovery_is_limited_to_candidate_uv_checkout(args, env, missing, reset):
-    evidence = SimpleNamespace(missing_git_blob=missing, failed_git_reset=reset)
-    async with updates.update_uv_cache.candidate_cache():
-        assert not updates.update_uv_cache.recover_checkout(args, env, evidence)
-        assert updates.update_uv_cache.child_environment(args, env) is env
-    assert not updates.update_uv_cache.recover_checkout(('uv', 'lock'), {}, evidence)
+def test_cache_selection_respects_uv_policy(tmp_path, args, env):
+    with updates.update_uv_cache.candidate_cache(tmp_path, _CacheDiagnostics()):
+        assert updates.update_uv_cache.for_command(args, env) is None
+    assert updates.update_uv_cache.for_command(('uv', 'lock'), {}) is None
+
+
+async def test_cancelled_qualification_is_unpublished_and_private_cache_can_recover(tmp_path, monkeypatch):
+    env = {'UV_CACHE_DIR': str(tmp_path / 'shared')}
+    calls = []
+    create = asyncio.create_subprocess_exec
+    damage = True
+
+    async def synthetic(*args, **kwargs):
+        nonlocal damage
+        calls.append((args, kwargs['env']['UV_CACHE_DIR']))
+        if args[1] == 'cache':
+            assert args[2:4] == ('clean', '--cache-dir')
+            assert Path(args[4]).is_relative_to(tmp_path / 'updates')
+            damage = False
+        failed = args[1] == 'lock' and (calls[-1][1] == env['UV_CACHE_DIR'] or damage)
+        error = 'import sys;sys.stderr.write("error: unable to read sha1 file of test\\nfatal: Could not reset index file to revision");sys.exit(1)'
+        return await create(sys.executable, '-c', error if failed else 'pass', **kwargs)
+
+    monkeypatch.setattr(updates.asyncio, 'create_subprocess_exec', synthetic)
+    damage = False
+    with pytest.raises(asyncio.CancelledError):
+        with updates.update_uv_cache.candidate_cache(tmp_path, _CacheDiagnostics()):
+            await updates.process('uv', 'lock', env=env)
+            raise asyncio.CancelledError
+    private = calls[-1][1]
+    assert not (Path(private).parent / 'qualified').exists()
+    damage = True
+    for initial_cache in (env['UV_CACHE_DIR'], private):
+        calls.clear()
+        with updates.update_uv_cache.candidate_cache(tmp_path, _CacheDiagnostics()):
+            result = await updates.process('uv', 'lock', env=env)
+        assert [c[0][1] for c in calls] == ['lock', 'cache', 'lock']
+        assert calls[0][1] == initial_cache and calls[-1][1] == private
+        assert result.diagnostic_facts['gitCacheRetry']
+        damage = True
+
+
+@pytest.mark.parametrize('command,error', [
+    ('run', 'error: unable to read sha1 file of x\nfatal: Could not reset index file to revision'),
+    ('lock', 'error: unable to read sha1 file of x'),
+    ('sync', 'fatal: Could not reset index file to revision'),
+])
+async def test_other_uv_failures_keep_original_receipt(tmp_path, monkeypatch, command, error):
+    create = asyncio.create_subprocess_exec
+    calls = []
+
+    async def synthetic(*args, **kwargs):
+        calls.append(args)
+        return await create(sys.executable, '-c', f'import sys;sys.stderr.write({error!r});sys.exit(1)', **kwargs)
+
+    monkeypatch.setattr(updates.asyncio, 'create_subprocess_exec', synthetic)
+    with updates.update_uv_cache.candidate_cache(tmp_path, _CacheDiagnostics()):
+        with pytest.raises(CommandFailure) as caught:
+            await updates.process('uv', command, env={'UV_CACHE_DIR': str(tmp_path / 'shared')})
+    assert calls == [('uv', command)]
+    assert not caught.value.diagnostic_facts.get('gitCacheRetry')
+
+
+def test_cache_marker_write_failure_keeps_successful_candidate(tmp_path, monkeypatch):
+    cache = updates.update_uv_cache
+    env = {'UV_CACHE_DIR': str(tmp_path / 'shared')}
+    with cache.candidate_cache(tmp_path, _CacheDiagnostics()):
+        context = cache.for_command(('uv', 'sync'), env)
+        context.recovered.add(tmp_path / 'updates' / 'unpublished' / 'cache')
+        def refuse(path, home):
+            raise PermissionError('marker unavailable')
+        monkeypatch.setattr(cache, '_directory', refuse)
+    assert not (tmp_path / 'updates' / 'unpublished' / 'qualified').exists()
 
 
 async def test_private_sidecar_is_separate_from_state_journal_collector_and_export(tmp_path):

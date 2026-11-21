@@ -285,7 +285,14 @@ def configured_sources(service):
 async def process(*args, cwd=None, env=None, timeout=90, raw=False, _redaction_env=None):
     from .update_command_details import Capture, STDOUT_LIMIT, STDERR_LIMIT, local_excerpt
     from .update_diagnostics import CommandFailure, CommandTimeout, CommandOutput, CommandBytes, command_facts
-    env = update_uv_cache.child_environment(args, env)
+    started = time.monotonic()
+    caller_env = env
+    candidate = update_uv_cache.for_command(args, env) if _redaction_env is None else None
+    cache = None
+    if candidate and candidate.root.is_dir():
+        cache = await candidate.location(args, env, cwd, process, timeout)
+        if candidate.selected(cache):
+            env = update_uv_cache.environment(env, cache)
     redaction_env = dict(_redaction_env or {})
     redaction_env.update(env if env is not None else os.environ)
     if (env if env is not None else os.environ).get('AMPLIFIER_GITHUB_ACCESS') == 'anonymous':
@@ -296,7 +303,6 @@ async def process(*args, cwd=None, env=None, timeout=90, raw=False, _redaction_e
         # anonymous reads, without changing credential helpers, EOL or includes.
         from .reset import git_filesystem_environment
         env = git_filesystem_environment(env)
-    started=time.monotonic()
     # All commands here use captured pipes, never an interactive console. A
     # pythonw consumer entry must not create a console for its CLI children.
     native = {'creationflags': subprocess.CREATE_NO_WINDOW} if os.name == 'nt' else {}
@@ -306,6 +312,8 @@ async def process(*args, cwd=None, env=None, timeout=90, raw=False, _redaction_e
         # Keep the host's own limit and the original argv for diagnostics/retry.
         launcher = Path(__file__).with_name('mac_uv_exec.py')
         command = (sys.executable, '-I', '-S', str(launcher), *args)
+    if time.monotonic() - started >= timeout:
+        raise CommandTimeout(time.monotonic() - started)
     proc = await asyncio.create_subprocess_exec(*map(str,command), cwd=cwd, env=env,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         start_new_session=os.name != 'nt', **native)
@@ -319,7 +327,7 @@ async def process(*args, cwd=None, env=None, timeout=90, raw=False, _redaction_e
     def detail(facts):
         return {**facts, **local_excerpt(err, redaction_env)}
     try:
-        await asyncio.wait_for(asyncio.shield(readers), timeout)
+        await asyncio.wait_for(asyncio.shield(readers), max(0, timeout - (time.monotonic() - started)))
     except BaseException as error:
         def terminate(force=False):
             # The parent may already have exited while descendants hold pipes.
@@ -379,9 +387,20 @@ async def process(*args, cwd=None, env=None, timeout=90, raw=False, _redaction_e
         retry = None
         retry_fact = 'anonymousRetry'
         if _redaction_env is None and remaining > 0:
-            if update_uv_cache.recover_checkout(args, env, err):
-                retry = update_uv_cache.child_environment(args, env)
-                retry_fact = 'gitCacheRetry'
+            if (candidate and len(args) > 1 and args[1] in {'lock', 'sync'}
+                    and err.missing_git_blob and err.failed_git_reset):
+                cache = cache or await candidate.location(args, caller_env, cwd, process, remaining)
+                remaining = timeout - (time.monotonic() - started)
+                if cache is not None and remaining > 0:
+                    try:
+                        await candidate.prepare_retry(cache, args, env, cwd, process, remaining, redaction_env)
+                    except (OSError, RuntimeError, TimeoutError, ValueError):
+                        pass  # Cleanup has its own receipt. Preserve the original checkout failure.
+                    else:
+                        remaining = timeout - (time.monotonic() - started)
+                        if remaining > 0:
+                            retry = update_uv_cache.environment(env, cache)
+                            retry_fact = 'gitCacheRetry'
             else:
                 retry = anonymous_retry_environment(args, env, stdout, stderr + evidence)
         if retry is not None:
@@ -404,6 +423,8 @@ async def process(*args, cwd=None, env=None, timeout=90, raw=False, _redaction_e
                     failure.diagnostic_facts = exception_facts(failure)
                 combine(failure)
                 raise
+            if retry_fact == 'gitCacheRetry':
+                candidate.recovered.add(cache)
             combine(result)
             return result
         failure = CommandFailure(facts)
@@ -1568,8 +1589,11 @@ class UpdateManager:
             await asyncio.gather(*tasks, return_exceptions=True)
             raise
 
-    @update_uv_cache.candidate_cache()
     async def validate(self,stage,release):
+        with update_uv_cache.candidate_cache(self.home, self.diagnostics):
+            return await UpdateManager._validate(self,stage,release)
+
+    async def _validate(self,stage,release):
         from .runtime_environment import stage as stage_runtime, receipt_directory
         from .runtime_qualification import freeze, prepare_overrides, verify_recorded
         receipt=receipt_directory(self.home,release)
