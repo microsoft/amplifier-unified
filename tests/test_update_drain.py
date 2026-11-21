@@ -59,6 +59,18 @@ async def test_voice_request_during_an_update_is_refused_in_plain_words_and_chan
     assert app.state['updates']['drain']['messages'] == []
 
 
+async def test_repeated_accepted_voice_command_during_an_update_returns_its_saved_receipt(app):
+    sid = app._session()['id']
+    held = app.state['updates'].pop('drain')
+    first = await app.voice_delegate('Voice request', 'voice:call:item', session_id=sid)
+    await asyncio.gather(*app.tasks)
+    assert first['accepted'] and [row[2] for row in app.runtime.sent] == ['voice:call:item']
+    app.state['updates']['drain'] = held
+    again = await app.voice_delegate('Voice request', 'voice:call:item', session_id=sid)
+    assert again['duplicate'] is True and again['delivery'] == 'accepted'
+    assert [row[2] for row in app.runtime.sent] == ['voice:call:item']
+
+
 async def test_crash_leaves_only_claimed_input_uncertain_and_rest_queued(app):
     await send(app, 'claimed')
     await send(app, 'unattempted')

@@ -6231,12 +6231,6 @@ class AppService:
         async with self.lock:
             if work_paused(self.state):
                 raise AppError("An ecosystem update is activating. Please retry in a moment.",409)
-            from .update_drain import held
-            if held(self):
-                # A typed message is saved and sent after the update. A voice
-                # request has no saved bubble to hold, so refuse it here in
-                # plain words instead of failing later inside the deferral.
-                raise AppError("An update is being installed. Nothing was sent; ask again in a moment.", 409)
             session = self._session(session_id)
             self._check_voice_owner(session['id'], transfer_id)
             if self.assignments.blocked(session):
@@ -6252,6 +6246,13 @@ class AppService:
                 if previous[0] != fingerprint:
                     raise AppError("This voice command ID was already used with different contents.", 409)
                 return {**json.loads(previous[1]), "duplicate": True}
+            from .update_drain import held
+            if held(self):
+                # A typed message is saved and sent after the update. A NEW voice
+                # request has no saved bubble to hold, so refuse it here in plain
+                # words instead of failing later inside the deferral. A repeated
+                # command has returned its saved receipt above.
+                raise AppError("An update is being installed. Nothing was sent; ask again in a moment.", 409)
             receipt = {"accepted": True, "inputId": command_id, "sessionId": session["id"], "delivery": "sending"}
             self.db.execute("INSERT INTO commands VALUES (?,?,?)", (command_id, fingerprint, json.dumps(receipt)))
             # The voice owner supplies the captured utterance ID. Text alone

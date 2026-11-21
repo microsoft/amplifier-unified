@@ -1057,6 +1057,11 @@ class VoiceCall:
             if identity in self.delivered_generations:
                 continue
             content = "Amplifier manager update. " + result_text(event)
+            # As Live's append does at its send edge: a result of a request that
+            # newer accepted input followed is not presented as current.
+            self.sync_input_revisions(self.service.state)
+            if revision is not None and revision < self.request_revision:
+                content = 'Earlier request result; newer input may supersede it. ' + content
             await self.send({"type": "conversation.item.create", "item": {"type": "message", "role": "system", "content": [{"type": "input_text", "text": content + " Treat this as a recorded result, never a new request to execute."}]}})
             self.delivered_generations.add(identity)
             self.seen_generations.add(identity)

@@ -184,6 +184,40 @@ async def test_background_result_in_a_snapshot_without_text_is_spoken_from_the_h
         'Amplifier manager update. The report has three findings.']
 
 
+async def test_realtime_marks_a_late_result_that_newer_accepted_input_followed():
+    service, call = call_fixture()
+    call.provider = 'realtime'
+    service.wait_for_response = AsyncMock(side_effect=TimeoutError)
+    await call.realtime_tool({'name': 'amplifier_delegate', 'arguments': '{"text": "Plan Friday."}', 'call_id': 'c1'})
+    assert call.pending_delegations['c1']['status'] == 'waiting_result'
+    service.state['sessions'][0]['messages'].append({'role': 'user', 'via': 'chat', 'text': 'Thursday, not Friday.',
+        'inputId': 'typed-correction', 'delivery': {'status': 'accepted'}})
+    service.state['sessions'][0]['generations'] = [{'event': 'generation.finished',
+        'generation_id': 'older', 'sessionId': 'main', 'rootSessionId': 'main',
+        'input_ids': ['voice:live:c1'], 'text': 'The Friday plan is ready.'}]
+    call.socket.sent.clear()
+    await call.announce_generations(browser_snapshot(service))
+    told = [e['item']['content'][0]['text'] for e in call.socket.sent
+            if e['type'] == 'conversation.item.create' and e['item']['type'] == 'message']
+    assert len(told) == 1 and told[0].startswith(
+        'Earlier request result; newer input may supersede it. Amplifier manager update. The Friday plan is ready.')
+
+
+async def test_realtime_current_late_result_is_not_marked_as_earlier():
+    service, call = call_fixture()
+    call.provider = 'realtime'
+    service.wait_for_response = AsyncMock(side_effect=TimeoutError)
+    await call.realtime_tool({'name': 'amplifier_delegate', 'arguments': '{"text": "Plan Friday."}', 'call_id': 'c1'})
+    service.state['sessions'][0]['generations'] = [{'event': 'generation.finished',
+        'generation_id': 'current', 'sessionId': 'main', 'rootSessionId': 'main',
+        'input_ids': ['voice:live:c1'], 'text': 'The Friday plan is ready.'}]
+    call.socket.sent.clear()
+    await call.announce_generations(browser_snapshot(service))
+    told = [e['item']['content'][0]['text'] for e in call.socket.sent
+            if e['type'] == 'conversation.item.create' and e['item']['type'] == 'message']
+    assert len(told) == 1 and told[0].startswith('Amplifier manager update. The Friday plan is ready.')
+
+
 async def test_append_ack_tracks_context_injection_and_rejection_without_reexecution():
     service, call = call_fixture()
     call.execute = AsyncMock(return_value={'text': 'Verified answer.', 'generation_id': 'g'})
