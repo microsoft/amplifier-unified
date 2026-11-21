@@ -4818,7 +4818,7 @@ class AppService:
             return await self.external_conversations.send(session, text, input_id, preserve_draft)
         if not self.runtime:
             raise AppError("The Amplifier runtime is unavailable.")
-        from .message_delivery import find_message
+        from .message_delivery import find_message, receipt_delivery
         from .update_drain import UpdateDeferred, held, defer_send
         original = find_message(session, input_id) or {}
         if not retry and held(self) and not original.get('steering'):
@@ -4962,11 +4962,19 @@ class AppService:
                     send_result = {**(send_result if isinstance(send_result, dict) else {}), 'delivery': observed['delivery']['status'],
                                    'steering': copy.deepcopy(observed['steering'])}
                 else:
-                    self._delivery(current, input_id,
-                        'failed' if isinstance(send_result, dict) and send_result.get('accepted') is False
-                            and send_result.get('effect') == 'none' else 'accepted')
-                    send_result = {**(send_result if isinstance(send_result, dict) else {}),
-                                   'delivery': (find_message(current, input_id) or {})['delivery']['status']}
+                    delivery = ('failed' if isinstance(send_result, dict) and send_result.get('accepted') is False
+                                and send_result.get('effect') == 'none' else 'accepted')
+                    self._delivery(current, input_id, delivery)
+                    message = find_message(current, input_id) or {}
+                    if 'delivery' in message:
+                        delivery = message['delivery']['status']
+                    else:
+                        # A voice delegation or a worker spawn has no bubble with a
+                        # delivery. _delivery saved the status in the exact command
+                        # receipt; read it from there.
+                        row = self.db.execute('SELECT receipt FROM commands WHERE id=?', (input_id,)).fetchone()
+                        delivery = (receipt_delivery(row[0], current['id'], input_id) if row else None) or delivery
+                    send_result = {**(send_result if isinstance(send_result, dict) else {}), 'delivery': delivery}
                 sent = next((row for row in session["messages"] if row.get("inputId") == input_id), {})
                 self._clear_sent_draft(current, sent, text, preserve_draft)
                 current.pop("lockOwner", None)
@@ -6345,6 +6353,13 @@ class AppService:
                 if previous[0] != fingerprint:
                     raise AppError("This voice command ID was already used with different contents.", 409)
                 return {**json.loads(previous[1]), "duplicate": True}
+            from .update_drain import held
+            if held(self):
+                # A typed message is saved and sent after the update. A NEW voice
+                # request has no saved bubble to hold, so refuse it here in plain
+                # words instead of failing later inside the deferral. A repeated
+                # command has returned its saved receipt above.
+                raise AppError("An update is being installed. Nothing was sent; ask again in a moment.", 409)
             receipt = {"accepted": True, "inputId": command_id, "sessionId": session["id"], "delivery": "sending"}
             self.db.execute("INSERT INTO commands VALUES (?,?,?)", (command_id, fingerprint, json.dumps(receipt)))
             # The voice owner supplies the captured utterance ID. Text alone
