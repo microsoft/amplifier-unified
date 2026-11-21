@@ -902,6 +902,7 @@ class Management:
             # Drafts have no session to refresh. Re-resolve their defaults and
             # prevent an in-flight probe from restoring the old configuration.
             self.service.state['configurationRevision'] = self.service.state.get('configurationRevision', 0) + 1
+            self.service.prompt_suggestions.invalidate()
             self.service.state['draftDefaults'] = {}
             self.service.state.setdefault('setup', {}).pop('providersRequestedWorkspace', None)
             for session in self.service.state['sessions']:

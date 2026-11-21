@@ -382,6 +382,9 @@ def refresh_sessions(app, streams=()) -> bool:
         # after the second of this record, so no stream needs to end.
         return False
     state.epoch = value
+    suggestions = getattr(app["service"], 'prompt_suggestions', None)
+    if suggestions is not None:
+        suggestions.invalidate()
     for task in list(streams):
         task.cancel()
     return True
