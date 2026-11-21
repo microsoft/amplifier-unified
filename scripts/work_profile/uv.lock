@@ -277,7 +277,7 @@ source = { git = "https://github.com/microsoft/amplifier-bundle-context-managed?
 
 [[package]]
 name = "amplifier-unified"
-version = "0.114.5"
+version = "0.114.6"
 source = { directory = "../../" }
 dependencies = [
     { name = "agent-client-protocol" },
