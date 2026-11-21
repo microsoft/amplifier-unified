@@ -1007,6 +1007,8 @@ class AppService:
         session = copy.deepcopy(row)
         session.pop('_externalAgentSource', None)
         session.pop('_externalRoom', None)
+        from .shared_conversation import public_output
+        session = public_output(session)
         from .input_status import annotate as input_annotation, PREFIX as input_status_prefix
         session['messages'] = [input_annotation(row, message) for message in session.get('messages', [])]
         session['messageAnnotations'] = {key: value for key, value in session.get('messageAnnotations', {}).items()

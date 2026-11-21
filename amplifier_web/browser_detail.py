@@ -342,6 +342,8 @@ def project(session, *, resolver=None, message_overlay=None, work_overlay=None):
         session['execution'] = {'nodes': [], 'turns': []}
     result={key: value for key, value in session.items()
             if key not in {'_externalAgentSource', '_externalRoom'}}
+    from .shared_conversation import public_output
+    result = public_output(result)
     from .peer_attribution import display_annotations
     if message_overlay is not None:
         result.update(message_overlay)
