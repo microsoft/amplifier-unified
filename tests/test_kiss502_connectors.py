@@ -16,19 +16,20 @@ SPEC.loader.exec_module(recipe)
 
 class ConnectorRecipe(unittest.TestCase):
     def test_fake_fixture_env_drops_live_credentials_and_host_overrides(self):
+        output = Path("/artifacts/example")
         with patch.dict(os.environ, {
             "SLACK_BOT_TOKEN": "must-not-leak", "OPENAI_API_KEY": "must-not-leak",
             "ACP_SLACK_TEST_BINARY": "/wrong", "PYTHONPATH": "/host",
             "AMPLIFIER_HOME": "/host-settings", "HOME": "/real-user",
         }):
-            env = recipe.fixture_env(Path("/artifacts/example"))
+            env = recipe.fixture_env(output)
         self.assertNotIn("SLACK_BOT_TOKEN", env)
         self.assertNotIn("OPENAI_API_KEY", env)
         self.assertNotIn("PYTHONPATH", env)
         self.assertNotIn("AMPLIFIER_HOME", env)
         self.assertNotIn("ACP_SLACK_TEST_BINARY", env)
-        self.assertEqual(env["HOME"], "/artifacts/example/home")
-        self.assertEqual(env["TMPDIR"], "/artifacts/example/tmp")
+        self.assertEqual(env["HOME"], str(output / "home"))
+        self.assertEqual(env["TMPDIR"], str(output / "tmp"))
 
     def test_selected_maintained_commands_do_not_run_a_game_or_live_account_tool(self):
         self.assertEqual(recipe.MC_TESTS, ("test_sdk_boundary", "test_session_resume", "test_reconnect"))
