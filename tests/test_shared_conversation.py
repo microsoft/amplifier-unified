@@ -360,6 +360,7 @@ async def test_failed_awareness_stays_unknown_without_a_second_offer(app_factory
     await send(app, session['id'], 'busy exchange', 'aware-source')
     await until(lambda: any(row['agentId'] == 'beta' and row['sequence'] == 2 and row['state'] == 'unknown'
                            for row in session['_externalRoom']['deliveries']))
+    await until(lambda: any(row['source'] == 'busy exchange' for row in work(tmp_path, 'beta')))
     (tmp_path / 'beta/peer/release').touch()
     await idle(app, session['id'])
     assert [row['source'] for row in work(tmp_path, 'beta')] == ['busy exchange']
