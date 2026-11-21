@@ -122,7 +122,7 @@ def resolve(collaboration, sid, request_id, reference, response_revision=None, *
             AND json_extract(receipt,'$.result.requestId')=?
             AND json_extract(receipt,'$.result.responseRevision')=? LIMIT 1""",
             (request_id, response_revision)).fetchone()
-        response = json.loads(row[0]).get('result') if row else None
+        response = collaboration.resolve_reply(json.loads(row[0])).get('result') if row else None
         if not response or response.get('recipientSessionId') != request.get('target', {}).get('sessionId'):
             collaboration.error('This exact response revision is unavailable.', 404)
     if reference not in response.get('references', []):

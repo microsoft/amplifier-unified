@@ -24,7 +24,7 @@ BUSY = {"working", "starting", "running", "busy", "stopping", "ready"}
 PROTOCOL = 2
 RETIRED_HOP_LIMIT = 'The causal peer-input chain reached 16 hops; its report remains inspectable.'
 RETIRED_NOTIFICATION_LIMIT = 'Automatic outcome notification limit reached; inspect the retained result.'
-DEFAULT_QUEUE_SECONDS = 86400
+HUMAN_RESUME_SECONDS = 86400
 REPORT_OUTCOMES = {'failed', 'deferred', 'declined', 'question', 'conflict', 'cancelled'}
 
 
@@ -114,7 +114,8 @@ def definitions(schema, string):
                "returnNotification": {"type": "boolean", "default": False,
                    "description": "Auto or queue: atomically register a guarded return before the recipient can run. Omitted/false keeps one-way send behavior; exact retries never rearm a saved wait."},
                "replyToRequestId": string(200), "references": references,
-               "expiresInSeconds": {"type": "integer", "minimum": 1, "maximum": 86400},
+               "expiresInSeconds": {"type": "integer", "minimum": 1, "maximum": 86400,
+                   "description": "Optional queued-input deadline. Ordinary messages have none by default; human resume inputs and handoffs retain their one-day default."},
                "resume": {**schema({"sourceMessageId": string(200),
                    "sourceRequestId": {**string(200), "description":
                        "Alternative to direct sourceMessageId: exact host-issued resumeHandoff inputId positively "
@@ -302,7 +303,6 @@ class Collaboration:
                 detail="Host restarted before terminal proof; declaration retained, no replay.")
             value['response'].pop('outcomeRevision', None)
             self.record_outcome(value, value['response'])
-            self.save_response(value)
             if value.get("subscription") and value['subscription'].get('notificationVersion') != 2:
                 value["subscription"].update(status="needs_attention", detail=value["response"]["detail"])
             self.save(identity, value)
@@ -438,7 +438,28 @@ class Collaboration:
         row = self.service.db.execute("SELECT receipt FROM commands WHERE id=?", (identity,)).fetchone()
         if not row:
             self.error("Request receipt not found.", 404)
-        return json.loads(row[0])
+        return self.resolve_reply(json.loads(row[0]))
+
+    def resolve_reply(self, receipt, *, request=None):
+        """Expose the current request-owned response, or an archived declaration.
+
+        New reply commands hold only its identity until superseded. Historical
+        full copies remain readable without a bulk rewrite; when they name the
+        current declaration, the request was already the terminal-event owner.
+        """
+        if receipt.get('commandAction') == 'coordination.reply':
+            reference = receipt.pop('responseRef', None)
+            result = receipt.get('result') or {}
+            if request is None:
+                row = self.service.db.execute('SELECT receipt FROM commands WHERE id=?',
+                    (result.get('requestId'),)).fetchone()
+                request = json.loads(row[0]) if row else {}
+            response = request.get('response') or {}
+            if response.get('operationId') and response.get('operationId') == result.get('operationId'):
+                receipt['result'] = response
+            elif reference:
+                self.error('The current reply declaration is unavailable; no historical copy was substituted.', 409)
+        return receipt
 
     def save(self, identity, receipt):
         self.service.db.execute("UPDATE commands SET receipt=? WHERE id=?", (json.dumps(receipt), identity))
@@ -449,7 +470,7 @@ class Collaboration:
         if row:
             if row[0] != digest:
                 self.error("This command ID was already used with different contents.", 409)
-            return {**json.loads(row[1]), "duplicate": True}
+            return {**self.resolve_reply(json.loads(row[1])), "duplicate": True}
 
     def insert(self, identity, digest, receipt):
         receipt.setdefault('acceptedAt', time.time())
@@ -829,13 +850,15 @@ class Collaboration:
             outcome['outcomeRevision'] = request['outcomeRevision']
         return outcome['outcomeRevision']
 
-    def save_response(self, request):
+    def archive_response(self, request):
+        """Freeze the previous revision before replacing the request's response."""
         response = request.get('response') or {}
         operation = response.get('operationId')
         if operation:
             row = self.service.db.execute('SELECT receipt FROM commands WHERE id=?', (operation,)).fetchone()
             if row:
                 receipt = json.loads(row[0])
+                receipt.pop('responseRef', None)
                 receipt['result'] = copy.deepcopy(response)
                 self.save(operation, receipt)
 
@@ -1559,7 +1582,6 @@ class Collaboration:
                 response.pop('outcomeRevision', None)
             if response_ready(response) and payload.get('event') != 'generation.failed':
                 self.record_outcome(receipt, response)
-            self.save_response(receipt)
             self.save(identity, receipt)
             changed.update({receipt["senderSessionId"], session["id"]})
             if response_ready(response) and payload.get('event') != 'generation.failed' and receipt.get("subscription"):
@@ -1775,7 +1797,7 @@ class Collaboration:
                           if 'taskContinuationEpoch' in wait else {}),
                        "dependencySatisfied": response.get("qualified") is True, "continuationReason": response.get('notificationOutcome') or response["outcome"],
                        'dependencyOutcomeRevision': revision, 'outcomeSnapshot': {key: copy.deepcopy(response[key]) for key in ('outcomeRevision', 'responseRevision', 'operationId', 'status', 'outcome', 'qualified', 'text') if key in response},
-                       'expiresAt': time.time()+DEFAULT_QUEUE_SECONDS, 'causalDepth': depth,
+                       'causalDepth': depth,
                        "origin": "system", "displayBinding": fingerprint([envelope, text])}
             receipt['assignmentId'] = request.get('assignmentId')
             wait.update(status='claimed', lastClaimedRevision=revision,
@@ -2004,7 +2026,7 @@ class Collaboration:
                     initial = candidate
             results = []
             report = initial or receipt
-            revisions = [json.loads(row[0])['result'] for row in self.service.db.execute("""SELECT receipt FROM commands
+            revisions = [self.resolve_reply(json.loads(row[0]), request=report)['result'] for row in self.service.db.execute("""SELECT receipt FROM commands
                 WHERE json_extract(receipt,'$.commandAction')='coordination.reply'
                 AND json_extract(receipt,'$.result.requestId')=? ORDER BY rowid DESC LIMIT 32""", (report['requestId'],)).fetchall()]
             response = report.get("response") or {}
@@ -2106,19 +2128,21 @@ class Collaboration:
                 original = copy.deepcopy(request)
                 try:
                     await store(self, source, request, response, prepared_artifacts, identity)
-                    if original.get('response', {}).get('status') == 'staged':
-                        # Corrections are new receipts, not edits to saved evidence.
-                        # Only the latest declaration can be sealed at this turn's end.
-                        prior = copy.deepcopy(original)
+                    prior = copy.deepcopy(original)
+                    if prior.get('response', {}).get('status') == 'staged':
+                        # Only the latest declaration can seal at this turn's end.
                         prior['response'].update(status='superseded', qualified=False,
                                                  supersededBy=identity)
-                        self.save_response(prior)
+                    self.archive_response(prior)
                     request['responseRevision'] = revision+1
                     request['response'] = response
                     if response_ready(response):
                         self.record_outcome(request, response)
                     self.save(args['requestId'], request)
-                    receipt = {'accepted': True, 'commandAction': action, 'result': response}
+                    receipt = {'accepted': True, 'commandAction': action,
+                        'responseRef': args['requestId'],
+                        'result': {key: response[key] for key in
+                                   ('requestId', 'operationId', 'responseRevision')}}
                     self.insert(identity, digest, receipt)
                     self.publish_receipt(receipt)
                 except BaseException:
@@ -2128,7 +2152,7 @@ class Collaboration:
                     raise
                 if continuation_outcome(request) is not None and request.get('subscription'):
                     self.enqueue_continuation(request)
-                return receipt
+                return self.resolve_reply(receipt)
             elif action == "coordination.create":
                 if source.get('fileAccessPending'):
                     self.error('Finish applying the source chat’s file settings before creating another task.', 409)
@@ -2284,7 +2308,8 @@ class Collaboration:
                     'replyTaskContinuationEpoch': continuation_epoch(task),
                     # Dispatcher provenance is host-owned. Never copy actor
                     # claims from args, message prose, or the peer envelope.
-                    **({'expiresAt': time.time()+args.get('expiresInSeconds', DEFAULT_QUEUE_SECONDS)} if mode != 'notify' else {}),
+                    **({'expiresAt': time.time()+args['expiresInSeconds']}
+                       if mode != 'notify' and 'expiresInSeconds' in args else {}),
                     "origin": origin if origin in {"agent", "ui", "user"} else None,
                     "displayBinding": fingerprint([envelope, args["text"]])}
                 receipt['assignmentId'] = (self.service.assignments.current(source) or {}).get('id')
@@ -2296,11 +2321,13 @@ class Collaboration:
                     receipt['scheduleRepair'] = repair
                 if resume:
                     receipt['humanResume'] = resume
+                    receipt.setdefault('expiresAt', time.time()+HUMAN_RESUME_SECONDS)
                     if resume.get('handoffRequestId'):
-                        receipt['expiresAt'] = min(receipt['expiresAt'],
+                        receipt['expiresAt'] = min(receipt.get('expiresAt', float('inf')),
                             self.receipt(resume['handoffRequestId'])['expiresAt'])
                 if handoff:
                     receipt['resumeHandoff'] = handoff
+                    receipt.setdefault('expiresAt', time.time()+HUMAN_RESUME_SECONDS)
                 if mode == "steer":
                     receipt.update(delivery="pending_steer", targetGenerationId=active["id"])
                 if creation and identity == creation[4]['requestId'] + ':brief':
