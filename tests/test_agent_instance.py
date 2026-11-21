@@ -469,7 +469,8 @@ async def test_many_task_source_inputs_use_bounded_lookup_and_existing_detail(tm
         await worker.close()
 
 
-async def test_profile_source_change_during_approval_commit_does_not_decide(host, monkeypatch):
+@pytest.mark.parametrize('native', [False, True])
+async def test_profile_source_change_during_approval_commit_does_not_decide(host, monkeypatch, native):
     configure(host)
     app, _, runtime, path = host
     service = app['service']
@@ -489,13 +490,80 @@ async def test_profile_source_change_during_approval_commit_does_not_decide(host
         return await original(action, *args, **kwargs)
 
     monkeypatch.setattr(service, 'dispatch', delayed)
-    await service.on_runtime_event('approval.requested', {
-        'sessionId': sid, 'id': 'approval', 'prompt': 'An exact current tool request',
-        'options': ['allow', 'deny']})
+    if native:
+        from test_acp_approval_policy import request
+        service._session(sid)['collaborationGeneration'] = {
+            'id': 'generation', 'inputIds': [runtime.sent[-1][2]], 'terminal': False}
+        grant = await request(service, service._session(sid), 'native')
+        event = {'sessionId': sid, 'id': grant['id']}
+    else:
+        event = {'sessionId': sid, 'id': 'approval', 'prompt': 'An exact current tool request',
+                 'options': ['allow', 'deny']}
+    await service.on_runtime_event('approval.requested', event)
     result = await pending
     assert 'error' in result and not decisions
     assert service._session(sid)['approvals'][0]['status'] == 'pending'
     await peer.socket.close()
+
+
+async def test_execution_location_change_during_attachment_is_not_adopted(host, monkeypatch):
+    configure(host)
+    app, _, runtime, path = host
+    peer, _ = await connect_profile(host)
+    original = runtime.bind_ephemeral_mcp
+    async def moved(sid, *args):
+        app['service']._session(sid)['workingDirectory'] = str(path / 'moved')
+        return await original(sid, *args)
+    monkeypatch.setattr(runtime, 'bind_ephemeral_mcp', moved)
+    row = await new(peer, path, 'R')
+    assert 'location changed during attachment' in row['error']['message']
+    assert not runtime.bindings and not runtime.sent
+    await peer.socket.close()
+
+
+async def test_null_task_stop_rechecks_authority_at_final_admission(host, monkeypatch):
+    configure(host)
+    app, _, runtime, path = host
+    service = app['service']
+    peer, _ = await connect_profile(host)
+    sid = (await new(peer, path, 'R'))['result']['sessionId']
+    source_plan(service, service._session(sid))
+    control_path = service.data_dir / 'sessions' / sid / 'control-state.json'
+    saved = json.loads(control_path.read_text())
+    control_path.write_text(json.dumps({**saved, 'task': None}))
+    binding = session_metadata('urn:example:agent:U', room_source('R'))[NAMESPACE]
+    state = (await peer.call('_amplifier/instance', sessionId=sid, binding=binding, operation='read'))['result']
+    original = service.dispatch
+    async def changed(action, *args, **kwargs):
+        if action == 'conversation.stop':
+            # Actual native task owner writes new authority under the same input
+            # and Stop epoch; a cached display row still says task=None.
+            from test_task_continuity import controls, create
+            from amplifier_web.host.config import app_home
+            monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(service.data_dir))
+            worker = controls(sid)
+            try:
+                await create(worker)
+            finally:
+                await worker.close()
+        return await original(action, *args, **kwargs)
+    monkeypatch.setattr(service, 'dispatch', changed)
+    row = await peer.call('_amplifier/instance', sessionId=sid, binding=binding,
+        operation='stop', commandId='original-stop', taskId=None, expectedRevision=0,
+        changes={}, expectedExecution=state['expectedExecution'])
+    assert 'saved task changed before Stop' in row['error']['message']
+    assert not runtime.stopped
+    await peer.socket.close()
+
+
+def test_task_get_keeps_legacy_required_target_and_optional_association():
+    from amplifier_web.action_schema import schema, string
+    from amplifier_web.task_continuity import definitions
+    original = schema({'sessionId': string(200)})
+    current = definitions(schema, string)['task.get'][1]
+    assert current['required'] == original['required'] == ['sessionId']
+    assert current['properties']['sessionId'] == original['properties']['sessionId']
+    assert 'sourceInputId' in current['properties'] and 'sourceInputId' not in current['required']
 
 
 async def test_changed_execution_location_is_not_the_original_source_binding(host):
