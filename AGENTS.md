@@ -57,6 +57,8 @@ Amplifier Agent is separate from Unified's Core/Foundation runtime.
   vision, and the relevant contracts. Identify the canonical owner and evidence.
 - For direction or contract changes, use [vision and contract guidance](docs/vision-and-contracts.md):
   keep observable promises separate from design notes and implementation evidence.
+- When a Unified feature suggests a shared Constellation need, check
+  [candidate ideas from Unified](docs/design/constellation-candidates.md) for earlier examples.
 - Confirmed defects in promised behavior normally warrant straightforward fixes.
 - New features and behavior or architecture changes require judgment about whether
   they are desirable, their general client needs, and the right design; do not
