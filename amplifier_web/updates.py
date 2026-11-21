@@ -757,8 +757,7 @@ class UpdateManager:
         return bool(self.app_blockers())
 
     def app_blockers(self):
-        from .update_blockers import blockers
-        return blockers(self.service, application=True)
+        return self.blockers()
 
     async def inventory_sources(self, *, indexed=False):
         """Checks use the app index; an explicit audit also inspects saved scopes."""
@@ -1016,8 +1015,8 @@ class UpdateManager:
                 await self.publish(runnerAvailabilityCheck=True)
             if state.get('pendingApp') or (pending_tool_activations(state) and (
                     not prepared_tool_activations(state) or has_new_app_target(self, state))):
-                # A tool can be waiting for a saved configuration indefinitely.
-                # Refresh only the app row; the staged tool retains its own handoff.
+                # Refresh only the app row while a tool awaits activation;
+                # the staged tool retains its own handoff.
                 from .app_updates import check_staged
                 await check_staged(self)
                 return

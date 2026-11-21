@@ -50,7 +50,7 @@ async def test_exact_app_observation_is_not_lost_after_report_cap(terminal):
               'pendingConfiguration': {'phase': 'error'}} for number in range(101)]
     f.app.state['sessions'][:0] = prior
     try:
-        gate = update_blockers.assess(f.app, application=True)['observation']
+        gate = update_blockers.assess(f.app)['observation']
         assert len(gate['configurationHolds']) == 100 and gate['omittedConfigurationHolds'] >= 2
         view = await read(f)
         assert view['diagnostic']['appUpdateQuiescence'] == {

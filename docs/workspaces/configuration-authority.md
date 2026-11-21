@@ -477,8 +477,9 @@ after its worker is gone. Once the host proves no worker, preparation, unsettled
 configuration task, refresh or runtime activity remains, it retires only that
 obsolete mount freshness. The operation's busy/input fence, original request,
 native evidence and unknown or saved-but-unverified outcome remain unchanged.
-This permits the existing recovery and app-update checks to assess their own
-evidence; it neither authorizes recovery nor makes component activation safe.
+This permits the existing recovery checks to assess their own evidence; it does
+not authorize recovery. Unrelated updates observe actual activity independently
+of these retained markers, as specified by the [update contract](../UPDATES.md#explicit-app-only-requests-and-idle-configuration-holds).
 For UI, user or internal originals, a current Full agent, qualified child or
 trusted system can reconcile and resume through the same recovery owner. Ask
 cannot substitute a new grant for that operator-origin authority. Resume retains

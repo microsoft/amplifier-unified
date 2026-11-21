@@ -210,6 +210,14 @@
       }
     },
     {
+      "id": "update-configuration-hold",
+      "command": ["node", "tests/web/update-configuration-hold-browser.mjs"],
+      "env": {
+        "AMPLIFIER_TEST_PYTHON": "{root}/.venv/bin/python",
+        "AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/update-configuration-hold"
+      }
+    },
+    {
       "id": "update-restart",
       "command": [
         "node",
@@ -1234,6 +1242,7 @@
     "standard-ux-voice-settings",
     "smart-tool-updates",
     "update-restart",
+    "update-configuration-hold",
     "update-effects",
     "active-client-performance",
     "state-transport",

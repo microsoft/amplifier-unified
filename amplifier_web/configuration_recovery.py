@@ -737,7 +737,7 @@ def command(management, action, args, origin, caller, *, operator=None):
                 diagnostics=detail)
             if diagnostic:
                 from .update_blockers import assess
-                held = assess(service, application=True, session_id=session['id'])['selectedHold']
+                held = assess(service, session_id=session['id'])['selectedHold']
                 update_detail = {'availability': 'observed' if held else 'unavailable',
                     'firstFailure': held['reasonCode'] if held and not held['quiescent'] else None,
                     'savedComparison': 'not_observed'}
