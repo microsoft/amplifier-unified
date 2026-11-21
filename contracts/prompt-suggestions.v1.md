@@ -219,6 +219,20 @@ The client additionally fences draft/outbox/voice changes and navigation, valida
 invalidates/rereads settings when existing global `configurationRevision` changes.
 No candidate is inserted or sent without an explicit user acceptance.
 
+An already-ready suggestion is an uncommitted placeholder/Tab-completion preview,
+visually distinct from the person's draft and outside the editable document.
+Ordinary typing or pasting hides it without dismissing that exact candidate.
+When the composer becomes genuinely empty again, including after clearing an
+accepted draft or Undo, the client may restore the same still-valid candidate
+after an exact status-only check. Leaving and returning to the chat does not
+consume a ready candidate hidden by an ordinary draft. Restoration never starts
+inference, renews expiry, writes draft text, or retargets a candidate to another
+chat. Escape or an explicit dismissal keeps that candidate dismissed.
+Existing source, configuration, authentication, Stop, archive, expiry and
+eligibility checks still apply; a delayed acceptance cannot insert after the
+composer changes. Pending work cancelled while composing or leaving is not
+restarted when the box becomes empty.
+
 Content-free durable request/source hashes are claimed before inference, preventing
 same-request/source replay after reconnect or restart. Each claim retains two
 fixed-size SHA-256 hashes in indexed SQLite columns, not an in-memory journal.
