@@ -209,6 +209,19 @@ class InstanceProfile:
                 raise ValueError('This original input revision already has different contents.')
         if previous:
             return {'outcome': 'retained', 'receipt': await self.inspect_input(identity, value)}
+        # A missing host command is not evidence that native work never ran.
+        # Reuse the existing delivery owner before accepting this source key;
+        # positive native-only evidence must not create a replacement host row.
+        delivery = await self.owner.service.dispatch('conversation.delivery',
+            {'sessionId': identity, 'inputId': command}, origin='acp',
+            caller_session_id=identity, include_state=False,
+            admission_check=lambda: self.bound(identity, value))
+        self.bound(identity, value)
+        if delivery['result']['delivery'] != 'not_saved':
+            return {'outcome': 'retained', 'receipt': await self.inspect_input(identity, value)}
+        # No retained observation allows a first submission, not an automatic
+        # retry or a claim of proven non-delivery. Caller/source freshness and
+        # the canonical command admission still govern this explicit input.
         return await self.owner.prompt(identity, command, body, observe,
             expected_interruption_revision=value['expectedInterruptionRevision'],
             admission_check=lambda: self.bound(identity, value), origin='acp')
@@ -232,6 +245,7 @@ class InstanceProfile:
                 'input': {key: value['input'][key] for key in ('id', 'revision')},
                 'attribution': 'lookup-key-only-original-attribution-owned-by-source',
                 'commandId': command,
+                'fingerprintAvailable': row is not None,
                 'delivery': ('unknown' if delivery['result']['delivery'] == 'not_saved'
                              else delivery['result']['delivery']), 'status': status,
                 'replayed': False}
@@ -256,7 +270,6 @@ class InstanceProfile:
         if operation == 'read' and set(params) == {'sessionId', 'binding', 'operation'}:
             result = await self.owner.service.dispatch('task.get', {'sessionId': identity},
                 origin='acp', caller_session_id=identity, include_state=False)
-            self.bound(identity, binding)
             session, _ = self.bound(identity, binding)
             from .message_delivery import execution_boundary
             return {'agentId': self.selected['id'], 'source': copy.deepcopy(binding['source']),
