@@ -787,10 +787,12 @@ async def test_same_native_alias_initialization_keeps_binding_but_foreign_identi
     assert len(runtime.sent) == 2, second.result() if second.done() else 'missing input'
     await finish(service, sid, runtime.sent[-1][2])
     assert 'result' in await second
-    session['runtimeSessionId'] = session['nativeIdentity'] = 'another-native-owner'
-    denied = await inspect_input(peer, sid)
-    assert 'source or location changed' in denied['error']['message']
-    assert len(runtime.sent) == 2
+    for field in ('runtimeSessionId', 'nativeIdentity'):
+        session['runtimeSessionId'] = session['nativeIdentity'] = sid
+        session[field] = 'another-native-owner'
+        denied = await inspect_input(peer, sid)
+        assert 'source or location changed' in denied['error']['message']
+        assert len(runtime.sent) == 2
     await peer.socket.close()
 
 

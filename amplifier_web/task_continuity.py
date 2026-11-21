@@ -22,6 +22,11 @@ def _json(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+def command_fingerprint(operation, args):
+    """Existing native task receipt identity, shared with passive reconciliation."""
+    return hashlib.sha256(json.dumps([operation, args], sort_keys=True).encode()).hexdigest()
+
+
 def _size(value):
     # Include ordinary JSON whitespace too; callers need not use our serializer.
     return len(json.dumps(value, ensure_ascii=False).encode("utf-8"))
@@ -517,7 +522,7 @@ class TaskController:
         identity = args.get("commandId")
         if not isinstance(identity, str) or not identity or len(identity) > 200:
             raise ValueError("Task mutations require a stable commandId")
-        fingerprint = hashlib.sha256(json.dumps([operation, args], sort_keys=True).encode()).hexdigest()
+        fingerprint = command_fingerprint(operation, args)
         if identity in self.receipts:
             receipt = self.receipts[identity]
             if receipt["fingerprint"] != fingerprint:

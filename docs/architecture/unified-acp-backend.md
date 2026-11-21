@@ -346,7 +346,8 @@ Ordinary ACP needs none of this configuration. A client opts in at initialize
 with `_meta["com.microsoft.amplifier.agent-instance"] = {"version": 1}`.
 If configured, the response advertises `agentId`, `label`, `_amplifier/instance`,
 supported interactions/controls and reconciliation limits. An absent profile
-leaves plain ACP unchanged. A client must retain the advertised ID and refuse an
+or a launcher for another configured workspace/bundle leaves plain ACP unchanged.
+A client must retain the advertised ID and refuse an
 unexpected replacement or disappeared profile rather than silently create work.
 
 For negotiated `session/new` and exact `session/resume`, that metadata contains
@@ -384,8 +385,9 @@ The optional `_amplifier/instance` request contains exact `sessionId`, `binding`
   a current task whose native creation generation proves that original input.
   `work:null` does not prove no historical or later-amended work exists.
 - `read`: returns the source execution's existing bounded `task.get` result,
-  native status and `expectedExecution` (latest admitted input ID and Stop
-  revision). Task detail/history references retain their existing owners.
+  native status and `expectedExecution` (latest saved input ID and Stop
+  revision). This conservative fence includes unsettled delivery, not proof of
+  native incorporation. Task detail/history references retain their existing owners.
 - `update` / `pause`: additionally require stable `commandId`, exact `taskId`,
   `expectedRevision`, and `changes`. Update supports the existing objective,
   correction, constraints and turn-limit fields. Native task CAS and persistence
@@ -398,6 +400,8 @@ The optional `_amplifier/instance` request contains exact `sessionId`, `binding`
   `taskId:null` is supported only when saved task authority proves no task or a
   completed task. Newer input/interruption supersedes delayed Stop. Its receipt
   is admission, not proof of settled execution, descendant revocation or rollback.
+  An exact retry validates existing task/Stop fingerprints and returns their
+  receipts without repeating Stop; changed contents still conflict.
 - `workReceipt`: stable original `commandId` recovers existing native task and
   host Stop receipts without redispatch. Partial/unknown legs remain explicit.
 
@@ -408,13 +412,23 @@ after awaits, before publication and at write/approval admission. Optional
 setup. Label edits and unrelated source additions do not revoke other bindings.
 Removing a source restriction entry, changing identity/pins or removing the
 profile refuses future operations; accepted work is not retroactively undone.
+History refresh can fill the same native identity's previously absent aliases
+without replacing this binding. A conflicting native ID or changed effective
+execution location is still refused, including across attachment waits.
 
 **Trust and limits:** the authenticated launcher still possesses the existing
 host-owner credential. These checks scope the profile context, not that owner's
 administrative authority; they are not hostile multi-tenant isolation, actor
 authentication, credential attenuation or an independent permission cache.
 Ordinary ACP cancel remains current-turn cancellation, not accepted-work
-revocation. Inspection recovers disposition, not an unbounded transcript or a
+revocation. Missing/unreadable saved task authority refuses accepted-work Stop
+rather than guessing no task; standard cancellation of this attachment's current
+turn remains available and does not claim to revoke that unknown responsibility.
+After reconnect, standard cancel has no current connection-local turn to cancel.
+An explicit new profile input uses its actual ACP origin, not a forged UI/human
+origin. UI-only failed-generation recovery is not automatically extended to it;
+native failure/recovery qualification is separate from successful ordinary input.
+Inspection recovers disposition, not an unbounded transcript or a
 lost final-answer stream. Source/actor/audience strings have wire-validation
 bounds, not work quotas. No browser participant-control UI is added here.
 
