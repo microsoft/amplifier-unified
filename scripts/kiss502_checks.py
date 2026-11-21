@@ -30,9 +30,14 @@ TARGETS = (
     "test_agent_instance",
     "test_agent_instance_composition",
     "test_owner_update_wait",
+    "test_agent_instance_native_lifecycle",
+    "test_app_guidance", "test_collaborative_workspaces", "test_interrupted_peer_recovery",
+    "test_peer_resume", "test_question_peer_resume", "test_result_artifact_save",
+    "test_result_artifacts", "test_resume_handoff", "test_external_multiparty",
+    "test_acp_server",
 )
 FIXTURES = (
-    "acp_native_provider.py", "external_acp_agent.py", "external_acp_participation.py",
+    "acp_native_provider.py", "acp_lifecycle_provider.py", "external_acp_agent.py", "external_acp_participation.py",
     "shared_acp_agent.py", "room_context_acp_agent.py", "retiring_acp_agent.py",
     "peer_return_worker_probe.py", "collaboration_native_probe.py",
     "external_multiparty_ui_server.py",
