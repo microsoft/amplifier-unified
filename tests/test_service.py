@@ -398,7 +398,7 @@ class DeliveredFirstRuntime(Runtime):
 
 
 async def test_voice_delegation_delivered_before_its_turn_ends_is_not_a_runtime_error(tmp_path):
-    # A voice delegation has no user bubble: its delivery lives in the command receipt.
+    # A voice delegation has no user bubble with a delivery: that lives in the command receipt.
     # Reading it from a missing bubble raised KeyError('delivery'), which became a
     # runtime.error; the waiting call then told the caller that the request had failed.
     runtime = DeliveredFirstRuntime()

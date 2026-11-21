@@ -4862,8 +4862,9 @@ class AppService:
                     if 'delivery' in message:
                         delivery = message['delivery']['status']
                     else:
-                        # Voice delegation has no user bubble. _delivery saved its
-                        # status in the exact command receipt; read it from there.
+                        # A voice delegation or a worker spawn has no bubble with a
+                        # delivery. _delivery saved the status in the exact command
+                        # receipt; read it from there.
                         row = self.db.execute('SELECT receipt FROM commands WHERE id=?', (input_id,)).fetchone()
                         delivery = (receipt_delivery(row[0], current['id'], input_id) if row else None) or delivery
                     send_result = {**(send_result if isinstance(send_result, dict) else {}), 'delivery': delivery}
