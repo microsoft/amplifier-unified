@@ -945,6 +945,10 @@ class RuntimeManager:
                     "This attempt did not send your message."
                 ) from exc
             await asyncio.wait_for(asyncio.shield(row["ready"]), self.startup_timeout)
+        except UpdateDeferred:
+            # Replacement overtook spawn. Retiring this unused child is maintenance, not a user Stop.
+            await self.stop(sid, reason='update')
+            raise
         except TimeoutError as exc:
             await self.stop(sid, reason='startup')
             raise RuntimeError(f"Amplifier preparation exceeded {self.startup_timeout:g} seconds and was stopped before accepting your message. Check the configured bundle, then retry.") from exc
@@ -1583,7 +1587,7 @@ class RuntimeManager:
                                     -(2**31) <= reader_exit < 2**32 else None,
                                 'closing': row.get('closing') is True,
                                 'stopReason': (row['stop_reason'] if type(row.get('stop_reason')) is str
-                                    and row['stop_reason'] in {'stopped', 'configuration', 'shutdown', 'retention', 'startup'}
+                                    and row['stop_reason'] in {'stopped', 'configuration', 'shutdown', 'retention', 'startup', 'update'}
                                     else 'none' if row.get('stop_reason') is None else 'other'),
                                 'cleanup': reader_cleanup}}
                         future.set_exception(error)
@@ -2485,7 +2489,7 @@ class RuntimeManager:
                 task.cancel()
         await asyncio.gather(row["reader"], row["stderr_task"], row["heartbeat"], *row["bridge_tasks"], return_exceptions=True)
         await self._execution_ended(session_id, row, "stopped")
-        cold = row.get('stop_reason') in {'configuration', 'shutdown', 'retention'}
+        cold = row.get('stop_reason') in {'configuration', 'shutdown', 'retention', 'update'}
         await row["emit"]("runtime.warmth" if cold else "runtime.status",
                           {"sessionId": session_id, "status": "cold" if cold else "stopped",
                            **({'phase': 'worker_startup'} if row.get('stop_reason') == 'startup' else {})})

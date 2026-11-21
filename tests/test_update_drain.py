@@ -313,8 +313,9 @@ async def test_fresh_saved_input_before_native_event_suppresses_update_continuat
     assert json.loads(saved[0])['delivery'] == 'suppressed'
 
 
+@pytest.mark.parametrize('after_spawn', [False, True])
 @pytest.mark.parametrize(('prior', 'late_receipt'), [('unknown', False), ('failed', False), ('unknown', True)])
-async def test_update_reaches_retry_before_transport(tmp_path, monkeypatch, prior, late_receipt):
+async def test_update_reaches_retry_before_transport(tmp_path, monkeypatch, prior, late_receipt, after_spawn):
     from amplifier_web.execution import ensure_turn
     from amplifier_web.runtime import RuntimeManager
 
@@ -342,7 +343,17 @@ async def test_update_reaches_retry_before_transport(tmp_path, monkeypatch, prio
             app.update_manager.diagnostics.state['attemptId'] = 'a' * 32
             drain.begin_replacement(app.update_manager, {'revision': 'b' * 40})
 
-        monkeypatch.setattr('amplifier_web.runtime_profiles.ensure', qualify)
+        if after_spawn:
+            from test_runtime import FIXTURE
+            runtime.command = [sys.executable, '-u', '-c', FIXTURE]
+            spawn = asyncio.create_subprocess_exec
+            async def spawn_then_replace(*command, **kwargs):
+                proc = await spawn(*command, **kwargs)
+                await qualify()
+                return proc
+            monkeypatch.setattr(asyncio, 'create_subprocess_exec', spawn_then_replace)
+        else:
+            monkeypatch.setattr('amplifier_web.runtime_profiles.ensure', qualify)
         admit = AsyncMock(wraps=runtime._admit)
         monkeypatch.setattr(runtime, '_admit', admit)
         if late_receipt:

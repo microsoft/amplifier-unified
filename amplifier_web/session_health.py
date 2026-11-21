@@ -382,8 +382,11 @@ def has_open_generation(session):
     turn = execution_record(session, 'turns', {'id': identity}) if identity else None
     if turn is None:
         return saw_start
-    return (turn.get('phase') in LIVE_PHASES and not turn.get('endedAt')
-            and (turn.get('generationId') == active['id'] or saw_start and not turn.get('generationId')))
+    if turn.get('phase') not in LIVE_PHASES or turn.get('endedAt'):
+        return False
+    if turn.get('generationId'):
+        return turn['generationId'] == active['id']
+    return saw_start or turn.get('inputId', identity) in active.get('inputIds', [])
 
 
 def startup_fault(payload):
