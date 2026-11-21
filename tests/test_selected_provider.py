@@ -179,6 +179,47 @@ async def test_selected_budget_and_dispatch_share_one_surface_observation(stream
     assert len(lookups) == len(commits) == len(revalidations) == 2
 
 
+@pytest.mark.parametrize('selected_model', [False, True])
+@pytest.mark.parametrize('has_template', [False, True])
+async def test_native_compaction_budget_skips_foreground_surfaces(selected_model, has_template):
+    from amplifier_core.message_models import ChatRequest, Message
+    from amplifier_web.surface_delivery import SurfaceProvider
+
+    class NativeProvider:
+        async def request_budget(self, request, *, context_estimate, request_options=None, require_measurement=False):
+            assert require_measurement and context_estimate == 20
+            return request
+
+        async def compact_context(self, request):
+            return request
+
+    class Delivery:
+        async def prepare(self, request, provider):
+            notice = Message(role='system', content='Current host overlay')
+            return request.model_copy(update={'messages': [notice, *request.messages]})
+
+    raw = NativeProvider()
+    surface = SurfaceProvider(raw, Delivery())
+    provider = (SelectedProvider(raw, {'model': 'pinned-model', 'max_output_tokens': 9999}, lambda _: surface)
+                if selected_model else surface)
+    request = ChatRequest(messages=[Message(role='user', content='Settled input')], model='bundle-model',
+        max_output_tokens=4096, metadata={'purpose': 'context-compaction',
+                                        'native_compaction_request_context': has_template})
+    before = request.model_dump()
+    counted = await provider.request_budget(request, context_estimate=20, require_measurement=True)
+    compacted = await provider.compact_context(request)
+    assert counted == compacted
+    assert counted.messages == request.messages and counted.max_output_tokens == 4096
+    assert counted.model == ('pinned-model' if selected_model else 'bundle-model')
+    assert request.model_dump() == before
+
+    for metadata in ({'purpose': 'context-compaction'}, {'purpose': 'provider-fit'},
+                     {'purpose': 'provider-fit', 'native_compaction_request_context': True}):
+        other = request.model_copy(update={'metadata': metadata})
+        ordinary = await provider.request_budget(other, context_estimate=20, require_measurement=True)
+        assert [row.content for row in ordinary.messages] == ['Current host overlay', 'Settled input']
+
+
 @pytest.mark.parametrize('changed', ['model', 'effort', 'max_output_tokens', 'message', 'tools', 'new_request'])
 async def test_selected_preparation_invalidates_changed_inputs_or_selection(changed):
     from amplifier_core.message_models import ToolSpec
