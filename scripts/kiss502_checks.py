@@ -61,6 +61,7 @@ def selection():
     pending = [ROOT / "tests" / (name + ".py") for name in (*TARGETS, *OWNER_TARGETS)]
     pending += [ROOT / "tests" / "fixtures" / name for name in FIXTURES]
     pending += [ROOT / "tests/conftest.py"]
+    pending += [ROOT / "scripts/kiss502_connector_checks.py"]
     selected = set()
     while pending:
         path = pending.pop()
