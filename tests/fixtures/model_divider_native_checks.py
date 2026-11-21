@@ -104,6 +104,8 @@ async def reopen(root):
                            background_updates=False, preload_providers=False)
     runtime.app_bridge, runtime.home = app["service"].app_bridge, home
     async with TestClient(TestServer(app, host="127.0.0.1")) as client:
+        url = str(client.make_url("/")).rstrip("/")
+        app["allowed_origins"] = app["allowed_origins"] | {url}
         cookie = new_session(app["session_secret"])
         response = await client.get("/api/state", params={"sessionId": sid},
                                     headers={"Cookie": SESSION_COOKIE + "=" + cookie})
@@ -118,7 +120,7 @@ async def reopen(root):
         stop = asyncio.Event()
         asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, stop.set)
         # The browser launcher reads this private pipe and disposes of its local cookie.
-        print(json.dumps({"url": str(client.make_url("/")), "sessionId": sid,
+        print(json.dumps({"url": url, "sessionId": sid,
                           "cookieName": SESSION_COOKIE, "cookieValue": cookie}), flush=True)
         await stop.wait()
         assert calls.read_bytes() == before

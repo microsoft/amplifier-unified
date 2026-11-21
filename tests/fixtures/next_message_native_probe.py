@@ -61,6 +61,39 @@ def use_isolated_state(root):
             os.environ.pop(key, None)
 
 
+def offline_discovery(root, binding):
+    from amplifier_web import draft_defaults
+    from amplifier_web.draft_defaults_probe import query
+    from amplifier_web.setup import SetupManager
+    package = root / "provider" / "amplifier_module_provider_openai"
+    # Real composition/metadata query in this isolated process. No host runtime
+    # downloader is needed: the fixture's explicit modules are already installed.
+    async def resolver(home, workspace, bundle=None, app_bundle=None, **kwargs):
+        if binding and kwargs.get('catalog'):
+            manager = SetupManager(home)
+            # Replace only dependency/probe transport with a local metadata
+            # fixture; host discovery, cache and binding producers stay real.
+            async def offline_probe(action, args, workspace):
+                import amplifier_module_provider_openai as offline
+                from amplifier_web.provider_probe import public
+                assert Path(offline.__file__).resolve() == package/'__init__.py'
+                provider = offline.FixtureProvider()
+                return {'info': public(provider.get_info()),
+                    'configSchema': provider.get_config_schema(), 'models': await provider.list_models(),
+                    'modelsSupported': True, 'modelsProvenance': 'provider-api'}
+            manager.probe = offline_probe
+            try:
+                return await manager.discover_catalog(workspace, instance=kwargs.get('instance'),
+                    selected_only=kwargs.get('selected_only', False))
+            finally:
+                await manager.catalog.close()
+        return await query({'home': str(home), 'workspace': workspace, 'bundle': bundle,
+            'sessionId': kwargs.get('session_id'), 'catalog': kwargs.get('catalog', False),
+            'refresh': kwargs.get('refresh', False), 'replacement': kwargs.get('replacement'),
+            'desiredBundle': kwargs.get('desired_bundle', False)})
+    draft_defaults.resolve_defaults = resolver
+
+
 async def run(root, regression=False, binding=False, lifecycle=False, model_divider=False):
     root.mkdir(parents=True, exist_ok=False)
     home, shared, workspace = (root/name for name in ('app', 'shared', 'workspace'))
@@ -72,14 +105,11 @@ async def run(root, regression=False, binding=False, lifecycle=False, model_divi
     from amplifier_web.server import create_app
     from amplifier_web.bundles import SNAPSHOT_VERSION
     from amplifier_web.builtin_behaviors import APPENDED_DEFAULTS
-    from amplifier_web import draft_defaults
-    from amplifier_web.draft_defaults_probe import query
     from amplifier_foundation.session.history import SessionHistoryStore
     from amplifier_web.session_files import sessions_dir
     from aiohttp.test_utils import TestClient, TestServer
     from aiohttp import ServerDisconnectedError
     from amplifier_web.auth import SESSION_COOKIE, new_session
-    from amplifier_web.setup import SetupManager
     import yaml
 
     provider = root/'provider'/'amplifier_module_provider_fixture'
@@ -142,32 +172,7 @@ async def run(root, regression=False, binding=False, lifecycle=False, model_divi
         'sources': {'modules': {'loop-live': loop, 'context-simple': context,
             ('provider-openai' if binding else 'provider-fixture'): str(provider.parent),
             **({'provider-anthropic': str(provider.parent)} if model_divider else {})}}}))
-    # Real composition/metadata query in this isolated process. No host runtime
-    # downloader is needed: the fixture's explicit modules are already installed.
-    async def resolver(home, workspace, bundle=None, app_bundle=None, **kwargs):
-        if binding and kwargs.get('catalog'):
-            manager = SetupManager(home)
-            # Replace only dependency/probe transport with a local metadata
-            # fixture; host discovery, cache and binding producers stay real.
-            async def offline_probe(action, args, workspace):
-                import amplifier_module_provider_openai as offline
-                from amplifier_web.provider_probe import public
-                assert Path(offline.__file__).resolve() == package/'__init__.py'
-                provider = offline.FixtureProvider()
-                return {'info': public(provider.get_info()),
-                    'configSchema': provider.get_config_schema(), 'models': await provider.list_models(),
-                    'modelsSupported': True, 'modelsProvenance': 'provider-api'}
-            manager.probe = offline_probe
-            try:
-                return await manager.discover_catalog(workspace, instance=kwargs.get('instance'),
-                    selected_only=kwargs.get('selected_only', False))
-            finally:
-                await manager.catalog.close()
-        return await query({'home': str(home), 'workspace': workspace, 'bundle': bundle,
-            'sessionId': kwargs.get('session_id'), 'catalog': kwargs.get('catalog', False),
-            'refresh': kwargs.get('refresh', False), 'replacement': kwargs.get('replacement'),
-            'desiredBundle': kwargs.get('desired_bundle', False)})
-    draft_defaults.resolve_defaults = resolver
+    offline_discovery(root, binding)
     runtime = RuntimeManager(command=[sys.executable, '-u', str(Path(__file__).resolve()), '--worker'],
         startup_timeout=45, retention={'prewarm_on_select': False})
     verified = []
@@ -376,6 +381,9 @@ async def main():
         from model_divider_native_checks import reopen
         root = Path(sys.argv[1]).resolve()
         use_isolated_state(root)
+        sys.path.insert(0, str(root / "provider"))
+        os.environ['PYTHONPATH'] = str(SOURCE) + os.pathsep + str(root / "provider")
+        offline_discovery(root, binding=True)
         await reopen(root)
     else:
         lifecycle = '--lifecycle' in sys.argv
