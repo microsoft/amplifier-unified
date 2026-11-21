@@ -179,7 +179,7 @@ def interrupt_unfinished(session):
 
 USAGE_KEYS=('inputTokens','outputTokens','cacheReadTokens','cacheWriteTokens','totalTokens','grossInputTokens','grossTotalTokens','reasoningTokens')
 
-def ensure_turn(session,identity,label=''):
+def ensure_turn(session,identity,label='', *, started_at=None):
     from .execution_working_set import working
     owner = working(session)
     tree = owner.current if owner is not None else session.setdefault('execution', {'nodes': [], 'turns': [], 'currentTurnId': None})
@@ -190,7 +190,10 @@ def ensure_turn(session,identity,label=''):
         request_shape = shape(session, identity, label)
         from .execution_working_set import recent_turns
         hint = estimate(recent_turns(session), request_shape) if request_shape is not None else None
-        started = time.time()
+        from .input_status import timestamp
+        started = timestamp(started_at)
+        if started is None:
+            started = time.time()
         tree['turns'].append({'id':identity,'inputId':identity,'label':label[:100],'startedAt':started,'phase':'running','aggregateUsage':rollup([]),
                              **({'durationShape': request_shape} if request_shape else {})})
         session['turnDurationHint'] = {**hint, 'inputId': identity, 'startedAt': started} if hint else None

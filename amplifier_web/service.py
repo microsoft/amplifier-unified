@@ -5543,7 +5543,9 @@ class AppService:
                     if admitted_start:
                         initial = payload.get('initial_input_id')
                         message = next((m for m in session['messages'] if m.get('inputId') == initial), {})
-                        ensure_turn(session, initial, message.get('text', ''))
+                        # The native start precedes transport. Timestamp newly discovered
+                        # turns at that start so their exact process owner can bind.
+                        ensure_turn(session, initial, message.get('text', ''), started_at=payload.get('observedAt'))
                     from .input_status import generation as observe_input_generation, PREFIX, record_failure
                     input_annotation = PREFIX + str(payload.get('initial_input_id', ''))
                     before_input = session.get('messageAnnotations', {}).get(input_annotation)
