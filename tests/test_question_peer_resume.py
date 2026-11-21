@@ -15,6 +15,14 @@ async def answered_member(app, *, next_bundle=False, no_op_bundle=False):
     if next_bundle:
         from amplifier_web.management import Management
         app.management = Management(app)
+        if no_op_bundle:
+            # A genuinely idle no-op needs the scripted worker's terminal
+            # observation; changing its display status alone is not settlement.
+            active = target['collaborationGeneration']
+            await app.on_runtime_event('runtime.generation', {
+                'sessionId': target['id'], 'rootSessionId': target['id'],
+                'event': 'generation.detached', 'generation_id': active['id'],
+                'input_ids': active.get('inputIds', [])})
         target.update(status='idle', bundle='anchors',
                       task={'id': 'paused-report', 'revision': 2, 'status': 'paused',
                             'maxTurns': 5, 'goalState': {'turns_used': 1}})

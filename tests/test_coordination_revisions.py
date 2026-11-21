@@ -83,6 +83,58 @@ async def test_revision_page_reuses_one_request_read_for_current_and_historical_
     assert statements.count("SELECT receipt FROM commands WHERE id='result-request'") == 1
 
 
+async def test_missing_canonical_request_is_unavailable_but_archived_reply_still_reads(app):
+    _, target = app.state['sessions']
+    await declared_result(app)
+    request = stored(app, 'result-request')
+    app.db.execute('DELETE FROM commands WHERE id=?', ('result-request',))
+    with pytest.raises(AppError, match='declaration is unavailable'):
+        app.collaboration.receipt('declare-result-request')
+    app.collaboration.insert('result-request', 'fixture-restoration', request)
+    await revised(app, 'result-request', 1)
+    archived = app.collaboration.receipt('declare-result-request')
+    assert archived['result']['status'] == 'superseded'
+    app.db.execute('DELETE FROM commands WHERE id=?', ('result-request',))
+    assert app.collaboration.receipt('declare-result-request') == archived
+    with pytest.raises(AppError, match='declaration is unavailable'):
+        app.collaboration.receipt('later-reply')
+
+
+@pytest.mark.parametrize('participant', [0, 1])
+async def test_reply_pointer_retains_participant_ownership_for_existing_deletion_cleanup(app, participant):
+    from amplifier_web.managed_deletion import _cleanup_db
+    await declared_result(app)
+    app.collaboration.insert('unrelated-reply', 'unrelated', {
+        'commandAction': 'coordination.reply', 'responseRef': 'unrelated-request',
+        'result': {'requestId': 'unrelated-request', 'operationId': 'unrelated-reply', 'responseRevision': 1}})
+    unrelated = stored(app, 'unrelated-reply')
+    _cleanup_db(app.db, {'ids': [app.state['sessions'][participant]['id']],
+                        'rows': [], 'resourceIds': [], 'artifactIds': []})
+    assert stored(app, 'result-request')['deleted']
+    assert stored(app, 'declare-result-request')['deleted']
+    assert stored(app, 'unrelated-reply') == unrelated
+
+
+async def test_private_backup_keeps_canonical_request_and_reply_pointer_together(app, tmp_path):
+    import sqlite3
+    import tarfile
+    from amplifier_web.recovery import backup
+    await declared_result(app)
+    expected = {identity: stored(app, identity)
+                for identity in ('result-request', 'declare-result-request')}
+    result = await backup(app)
+    with tarfile.open(result['backup']) as archive:
+        database = archive.extractfile('app.sqlite3').read()
+    path = tmp_path / 'saved-backup.sqlite3'
+    path.write_bytes(database)
+    with sqlite3.connect(path) as db:
+        saved = {identity: json.loads(db.execute('SELECT receipt FROM commands WHERE id=?',
+                                                (identity,)).fetchone()[0]) for identity in expected}
+    assert saved == expected
+    pointer = saved['declare-result-request']
+    assert saved[pointer['responseRef']]['response']['operationId'] == pointer['result']['operationId']
+
+
 @pytest.mark.parametrize('mode', ['queue', 'auto'])
 async def test_ordinary_queue_has_no_implicit_deadline_or_timer_even_after_restart(app, mode):
     source, target = app.state['sessions']
