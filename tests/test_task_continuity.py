@@ -28,6 +28,27 @@ async def create(controller, **changes):
     return await controller.perform('task.create', {'commandId': 'create', 'expectedRevision': 0, 'objective': 'Ship the verified report', 'constraints': ['Preserve originals'], 'operationIds': ['unknown-operation'], 'artifactRefs': ['report.md'], **changes})
 
 
+async def test_activity_marker_allows_new_task_after_completion_without_input_provenance(tmp_path, monkeypatch):
+    monkeypatch.setenv("AMPLIFIER_WEB_HOME", str(tmp_path))
+    control = controls()
+    control.runtime.generation = "running"
+    try:
+        await create(control)
+        task = control.tasks.record()
+        assert "sourceInputIds" not in task
+        await control.perform("task.complete", {
+            "commandId": "finish", "expectedRevision": 1,
+            "condition": task["objective"], "evidence": ["Verified report"],
+        })
+        await create(control, commandId="next", expectedRevision=2, objective="Verify another report")
+        successor = control.tasks.record()
+        assert successor["id"] != task["id"]
+        assert "sourceInputIds" not in successor
+        assert "followupOf" not in successor
+    finally:
+        await control.close()
+
+
 async def test_explicit_resume_input_does_not_rewrite_task_or_clear_capacity_denial(tmp_path, monkeypatch):
     monkeypatch.setenv("AMPLIFIER_WEB_HOME", str(tmp_path))
     control = controls()

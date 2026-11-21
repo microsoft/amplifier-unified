@@ -6,6 +6,7 @@ import json
 import logging
 import time
 import uuid
+from collections.abc import Mapping
 
 from .task_binding import continuation_epoch, dependency_blocked
 
@@ -334,6 +335,11 @@ class TaskController:
     def record(self):
         return self.coordinator.session_state.get("task")
 
+    def _generation_record(self):
+        # Some runtimes expose only an activity marker, without input provenance.
+        generation = getattr(self.controls.runtime, "generation", None)
+        return generation if isinstance(generation, Mapping) else {}
+
     def continuity(self):
         getter = self.coordinator.get_capability("web.continuity.status")
         try:
@@ -450,7 +456,7 @@ class TaskController:
         proof = task.get("followupOf")
         if not proof:
             return False
-        generation = getattr(self.controls.runtime, "generation", None) or {}
+        generation = self._generation_record()
         if (task.get("status") != "active" or goal is not self.coordinator.session_state.get("goal")
                 or goal.get("task_id") != task.get("id") or goal.get("task_revision") != task.get("revision")
                 or generation.get("id") != proof["generationId"]
@@ -553,7 +559,7 @@ class TaskController:
                     "originalObjective": args["objective"], "changes": [], "changesRecordedFromRevision": revision + 1}
             # Native generation provenance, not a caller-supplied work link.
             # Legacy/offline tasks without an active generation stay unlinked.
-            generation = getattr(self.controls.runtime, "generation", None) or {}
+            generation = self._generation_record()
             inputs = generation.get("input_ids")
             if isinstance(inputs, list) and inputs and all(
                     isinstance(value, str) and 0 < len(value) <= 200 for value in inputs):
@@ -568,7 +574,7 @@ class TaskController:
         if task["status"] == "completed" and operation != "task.create" and not manager_limit:
             raise ValueError("This task is complete; create a new objective explicitly")
         if operation == "task.create" and previous:
-            generation = getattr(self.controls.runtime, "generation", None) or {}
+            generation = self._generation_record()
             identity_input = previous.get("lastCompletedInputId")
             origin = previous.get("followupOf") or {}
             fresh = identity_input and identity_input in generation.get("input_ids", [])
