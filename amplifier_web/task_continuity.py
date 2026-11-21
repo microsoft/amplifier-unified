@@ -266,7 +266,8 @@ def _read(operation, args, *, task, history, receipts, sid, goal=None,
 
 def definitions(schema, string):
     sid = {"sessionId": string(200)}
-    revision = {"expectedRevision": {"type": "integer", "minimum": 0}}
+    revision = {"expectedRevision": {"type": "integer", "minimum": 0},
+                "expectedTaskId": {**string(200), "minLength": 1}}
     strings = {"type": "array", "maxItems": 100, "items": {**string(4000), "minLength": 1}}
     fields = {"objective": {**string(16000), "minLength": 1}, "constraints": strings,
               "correction": {**string(8000), "minLength": 1}, "questionIds": strings,

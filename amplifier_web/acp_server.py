@@ -24,7 +24,7 @@ from aiohttp import WSMsgType, web
 from .execution_owner import ExecutionOwner, ensure_observers
 from .errors import AppError
 from .runtime_protocol import MAX_MESSAGE_BYTES
-from . import approval_policy
+from . import approval_policy, agent_instance
 
 RETIREMENT = 'com.microsoft.amplifier.retirement'
 # Implementation-specific failure; ACP reserves -32000 for authentication.
@@ -128,6 +128,7 @@ class HostAgent:
         self.owner = owner
         self.initialized = False
         self.creation = asyncio.Lock()
+        self.instance = None
 
     def on_connect(self, connection):
         self.client = connection
@@ -160,22 +161,46 @@ class HostAgent:
         self.initialized = True
         policy = approval_policy.negotiate(kwargs.get(approval_policy.NAMESPACE))
         self.owner.approval_policy = policy is not None
+        instance = None
+        if kwargs.get(agent_instance.NAMESPACE) == {'version': 1}:
+            try:
+                profile = agent_instance.InstanceProfile(self.owner)
+                if profile.selected is not None:
+                    instance = profile.describe()
+                    self.instance = profile
+            except (ValueError, OSError) as error:
+                raise RequestError(_REQUEST_FAILED, str(error)) from None
         return InitializeResponse(protocol_version=1, agent_capabilities=AgentCapabilities(
             load_session=False, mcp_capabilities=McpCapabilities(http=True, sse=False),
             session_capabilities=SessionCapabilities(resume=SessionResumeCapabilities())),
             field_meta={RETIREMENT: {'version': 1, 'method': '_amplifier/retire',
                 'notification': '_amplifier/retirementRequested'},
-                **({approval_policy.NAMESPACE: policy} if policy else {})})
+                **({approval_policy.NAMESPACE: policy} if policy else {}),
+                **({agent_instance.NAMESPACE: instance} if instance else {})})
+
+    def instance_metadata(self, kwargs):
+        value = kwargs.get(agent_instance.NAMESPACE)
+        if value is not None and self.instance is None:
+            raise ValueError('The public agent profile was not negotiated.')
+        if self.instance is not None and value is None:
+            raise ValueError('The negotiated public agent requires source metadata.')
+        return value
 
     async def new_session(self, cwd, mcp_servers=None, **kwargs):
         self.require_initialized()
         async with self.creation:
             try:
-                identity = await self.owner.create(cwd, mcp_servers=_http_servers([
-                    row.model_dump(mode='json', by_alias=True) for row in (mcp_servers or [])]))
+                metadata = self.instance_metadata(kwargs)
+                servers = _http_servers([row.model_dump(mode='json', by_alias=True)
+                                         for row in (mcp_servers or [])])
+                if metadata is not None:
+                    identity, info = await self.instance.connect(cwd, metadata, servers)
+                else:
+                    identity = await self.owner.create(cwd, mcp_servers=servers)
             except (AppError, ValueError, OSError) as error:
                 raise RequestError(_REQUEST_FAILED, str(error)) from None
-        return NewSessionResponse(session_id=identity)
+        return NewSessionResponse(session_id=identity, field_meta=(
+            {agent_instance.NAMESPACE: info} if metadata is not None else None))
 
     async def resume_session(self, session_id, cwd, mcp_servers=None, **kwargs):
         self.require_initialized()
@@ -183,17 +208,29 @@ class HostAgent:
             if session_id in self.owner.attached:
                 raise RequestError.invalid_params({'details': 'Session already attached.'})
             try:
-                identity = await self.owner.attach(session_id, cwd, mcp_servers=_http_servers([
-                    row.model_dump(mode='json', by_alias=True) for row in (mcp_servers or [])]))
+                metadata = self.instance_metadata(kwargs)
+                servers = _http_servers([row.model_dump(mode='json', by_alias=True)
+                                         for row in (mcp_servers or [])])
+                if metadata is not None:
+                    identity, info = await self.instance.connect(cwd, metadata, servers, session_id)
+                else:
+                    identity = await self.owner.attach(session_id, cwd, mcp_servers=servers)
             except (AppError, ValueError, OSError) as error:
                 raise RequestError(_REQUEST_FAILED, str(error)) from None
             if identity != session_id:
                 raise RequestError.internal_error({'details': 'Owner did not attach the exact saved identity.'})
-        return ResumeSessionResponse()
+        return ResumeSessionResponse(field_meta=(
+            {agent_instance.NAMESPACE: info} if metadata is not None else None))
 
     async def prompt(self, session_id, prompt, **kwargs):
         self.require_initialized()
         input_id = str(uuid.uuid4())
+        try:
+            metadata = self.instance_metadata(kwargs)
+            if metadata is not None:
+                _, input_id = self.instance.input(session_id, metadata)
+        except (ValueError, AppError) as error:
+            raise RequestError(_REQUEST_FAILED, str(error)) from None
         streamed = had_deltas = False
         last_model = None
         tools = set()
@@ -242,14 +279,29 @@ class HostAgent:
                 await self.client.session_update(session_id=session_id, update=update)
 
         try:
-            result = await self.owner.prompt(session_id, input_id, '\n'.join(block.text for block in prompt), observe)
+            content = '\n'.join(block.text for block in prompt)
+            if metadata is not None:
+                result = await self.instance.prompt(session_id, metadata, content, observe)
+            else:
+                result = await self.owner.prompt(session_id, input_id, content, observe)
         except (AppError, ValueError, RuntimeError) as error:
-            raise RequestError(_REQUEST_FAILED, str(error)) from None
+            data = None
+            if metadata is not None:
+                try:
+                    data = {'inputReceipt': await self.instance.inspect_input(session_id, metadata)}
+                except (AppError, ValueError):
+                    pass
+            raise RequestError(_REQUEST_FAILED, str(error), data) from None
+        if result.get('outcome') == 'retained':
+            raise RequestError(_REQUEST_FAILED, 'Original input retained; no input was sent again.',
+                               {'inputReceipt': result['receipt']})
         if result.get('outcome') not in {'completed', 'cancelled'}:
             raise RequestError(_REQUEST_FAILED, 'Outcome unresolved; inspect retained owner state before retrying.')
         if result.get('text') and not streamed:
             await text(result['text'])
-        return PromptResponse(stop_reason='end_turn' if result['outcome'] == 'completed' else 'cancelled')
+        return PromptResponse(stop_reason='end_turn' if result['outcome'] == 'completed' else 'cancelled',
+            field_meta=({agent_instance.NAMESPACE: await self.instance.inspect_input(session_id, metadata)}
+                        if metadata is not None else None))
 
     async def cancel(self, session_id, **kwargs):
         self.require_initialized()
@@ -257,6 +309,13 @@ class HostAgent:
 
     async def ext_method(self, method, params):
         self.require_initialized()
+        if method == agent_instance.METHOD:
+            if self.instance is None:
+                raise RequestError(-32601, 'The public agent profile was not negotiated.')
+            try:
+                return await self.instance.control(params)
+            except (AppError, ValueError, OSError, RuntimeError) as error:
+                raise RequestError(_REQUEST_FAILED, str(error)) from None
         if method != 'amplifier/retire':
             raise RequestError(-32601, 'Unsupported ACP extension.')
         if (not isinstance(params, dict) or set(params) != {'sessionId'}

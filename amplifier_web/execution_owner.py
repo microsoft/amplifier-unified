@@ -190,7 +190,8 @@ class ExecutionOwner:
         if identity not in self.attached:
             raise ValueError("Execution is not attached to this connection")
 
-    async def prompt(self, identity, input_id, text, on_event):
+    async def prompt(self, identity, input_id, text, on_event, *,
+                     expected_interruption_revision=None, admission_check=None, origin=None):
         self.require_attachment(identity)
         if identity in self.pending:
             raise ValueError("This execution already has an unsettled input")
@@ -203,9 +204,12 @@ class ExecutionOwner:
         try:
             # The owner may already be executing while its admission ACK waits.
             # Detaching this observer must not cancel that dispatch or its work.
-            admission = self.service._task(self.service.dispatch("conversation.send", {
-                "sessionId": identity, "text": text,
-            }, origin=self.origin, command_id=input_id, include_state=False))
+            args = {"sessionId": identity, "text": text}
+            if expected_interruption_revision is not None:
+                args["expectedInterruptionRevision"] = expected_interruption_revision
+            admission = self.service._task(self.service.dispatch("conversation.send", args,
+                origin=origin or self.origin, command_id=input_id, include_state=False,
+                **({"admission_check": admission_check} if admission_check is not None else {})))
             admission.add_done_callback(lambda task: None if task.cancelled() else task.exception())
             done, _ = await asyncio.wait({admission, delivery.failed}, return_when=asyncio.FIRST_COMPLETED)
             if delivery.failed in done:
