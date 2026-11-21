@@ -199,6 +199,33 @@ class Requests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(list(self.app.db.execute('SELECT * FROM suggestion_requests')), claims)
         self.assertIsNone(self.app.db.execute('SELECT 1 FROM suggestion_success_cache').fetchone())
 
+    async def test_annotation_only_unsettled_tail_survives_partial_and_observation_filtering(self):
+        from amplifier_web.suggestion_source import display_inputs
+        pending = {'id': 'saved-input', 'inputId': 'exact-input', 'role': 'user',
+                   'inputOrigin': 'ui', 'text': 'Saved but not settled',
+                   'delivery': {'status': 'accepted'}}
+        partial = {'id': 'partial', 'role': 'assistant', 'text': 'Not finished', 'partial': True}
+        observation = {'id': 'observation', 'role': 'assistant', 'text': 'Internal update',
+                       'observation': {'source': 'system', 'id': 'status'}}
+        before = copy.deepcopy(self.app.session['messages'])
+        for phase in ('queued', 'working', 'waiting', 'failed', 'unknown'):
+            with self.subTest(phase=phase):
+                self.app.session['messageAnnotations'] = {'input-status:exact-input': {
+                    'inputStatus': {'version': 1, 'inputId': 'exact-input', 'phase': phase,
+                                    'basis': 'execution_observed'}}}
+                rows = before + [pending, partial, observation]
+                self.app.session['messages'] = rows
+                self.assertNotIn('inputStatus', pending)
+                with self.assertRaisesRegex(Unavailable, 'input_not_settled'):
+                    witness(self.app, 'chat', self.config)
+                self.assertNotIn('inputStatus', pending)  # Annotation remains a projection.
+                completed = {'id': 'completed-later', 'role': 'assistant', 'text': 'Later settled reply'}
+                rows.append(completed)
+                witness(self.app, 'chat', self.config)  # Old failed input is not a permanent hold.
+                projected = public_rows(display_inputs(self.app, self.app.session, rows))
+                self.assertEqual(projected[-1]['id'], 'completed-later')
+                self.assertFalse({'saved-input', 'partial', 'observation'} & {row['id'] for row in projected})
+
     async def test_ready_retains_source_after_clock_expiry_and_reuses_new_audience_without_provider(self):
         async def reported(*args):
             self.calls.append('completion')
@@ -2663,6 +2690,112 @@ class Integration(unittest.IsolatedAsyncioTestCase):
         finally:
             BROWSER.reset(token)
 
+    async def test_migrated_decision_only_account_is_not_a_suggestion_choice_or_saved_readiness(self):
+        from amplifier_web.decision_namespace import translate
+        from amplifier_web.suggestion_settings import selected
+        manager = self.app.prompt_suggestions.manager
+        migrated = translate({'config': {'providers': [
+            {'id': 'specialist', 'module': 'provider-specialist', 'config': {'chat_enabled': False}},
+            {'id': 'chat', 'module': 'provider-openai', 'config': {'api_key': 'synthetic-chat-key'}}]},
+            'prompt_suggestions': {'enabled': True, 'provider': 'specialist', 'model': 'saved-stale-model'}},
+            {'provider-specialist': ({'decision_only': True}, lambda value: value)})
+        self.assertNotIn('specialist', [row.get('id') for row in migrated['config']['providers']])
+        self.assertIn('specialist', migrated['decision_models']['connections'])
+        manager.store.update(self.root, 'global', lambda value: value.update(migrated))
+        before = copy.deepcopy(manager.store.read(self.root, 'global'))
+        config_revision = self.app.state.get('configurationRevision', 0)
+        with patch.object(manager, 'probe', AsyncMock(side_effect=AssertionError('no probe'))) as probe, \
+                patch.object(manager, 'discover_catalog', AsyncMock(side_effect=AssertionError('no discovery'))) as discover, \
+                patch.object(manager, 'catalog_key', wraps=manager.catalog_key) as key:
+            result = (await self.app.dispatch('providers.suggestionModels', {}, include_state=False))['result']
+            self.assertEqual([row['id'] for row in result['providers']], ['chat'])
+            self.assertEqual(result['providers'][0]['sharedCatalogKey'],
+                             manager.catalog_key({'id': 'chat'}, str(self.app.data_dir)))
+            config, row, _ = selected(manager, str(self.app.data_dir))
+            self.assertEqual(config['provider'], 'specialist')  # No silent setting rewrite.
+            self.assertIsNone(row)
+            self.assertTrue(all(call.args[0].get('id') != 'specialist' for call in key.call_args_list))
+            with self.assertRaisesRegex(Exception, 'saved chat connection'):
+                await self.app.dispatch('providers.configureSuggestions', {
+                    'enabled': True, 'provider': 'specialist', 'model': 'cannot-execute',
+                    'scope': 'global', 'configurationTarget': {'kind': 'global'}}, include_state=False)
+            self.assertEqual(manager.store.read(self.root, 'global'), before)
+            self.assertEqual(self.app.state.get('configurationRevision', 0), config_revision)
+            self.assertEqual({row['id'] for row in manager.provider_rows(self.root)}, {'specialist', 'chat'})
+            await self.app.dispatch('session.create', {}, include_state=False)
+            session = self.app._session()
+            session.update(status='idle', historyManaged=False, messages=[
+                {'id': 'human', 'role': 'user', 'inputOrigin': 'ui', 'text': 'What next?'},
+                {'id': 'assistant', 'role': 'assistant', 'text': 'Ready.'}])
+            sid = session['id']
+            self.app.clients.attach('suggestion-browser', kind='web')
+            self.app.clients.records['suggestion-browser']['selectedSessionId'] = sid
+            token = BROWSER.set({'principal': 'cookie', 'valid': lambda: True})
+            host = self.app.prompt_suggestions
+            host.complete = AsyncMock(side_effect=AssertionError('no utility call'))
+            claims = list(self.app.db.execute('SELECT * FROM suggestion_requests'))
+            try:
+                with self.app.clients.bind('suggestion-browser'):
+                    unavailable = await host.dispatch('session.suggestion.request', {
+                        'sessionId': sid, 'requestId': 'stale-decision-choice',
+                        'expectedLastMessageId': 'assistant'}, 'ui')
+                self.assertEqual(unavailable['status'], 'missing_selection')
+                self.assertIsNone(unavailable['suggestion'])
+                self.assertFalse(host.jobs)
+                self.assertEqual(list(self.app.db.execute('SELECT * FROM suggestion_requests')), claims)
+                host.complete.assert_not_called()
+            finally:
+                BROWSER.reset(token)
+            saved = await self.app.dispatch('providers.configureSuggestions', {
+                'enabled': True, 'provider': 'chat', 'model': 'ordinary-model',
+                'scope': 'global', 'configurationTarget': {'kind': 'global'}}, include_state=False)
+            self.assertEqual(saved['result']['suggestionModels']['provider'], 'chat')
+            snapshot = manager.probe_snapshot('suggestion.complete', {'id': 'chat'}, str(self.app.data_dir))
+            self.assertEqual(snapshot['module'], 'provider-openai')
+            self.assertEqual(snapshot['raw'], {'api_key': 'synthetic-chat-key'})
+            self.assertEqual(manager.store.read(self.root, 'global')['decision_models'], before['decision_models'])
+            probe.assert_not_called()
+            discover.assert_not_called()
+
+    async def test_suggestion_roster_projects_ordinary_rows_before_same_alias_decision_accounts(self):
+        from amplifier_web.decision_namespace import translate
+        from amplifier_web.suggestion_settings import selected
+        manager = self.app.prompt_suggestions.manager
+        definitions = {'provider-only': ({'decision_only': True}, lambda value: value)}
+        for fields, alias in (({}, 'only'), ({'instance_id': 'same-alias'}, 'same-alias')):
+            with self.subTest(fields=fields):
+                migrated = translate({'config': {'providers': [
+                    {'module': 'provider-only', **fields, 'config': {'priority': 1, 'chat_enabled': False}},
+                    {'id': alias, 'module': 'provider-openai',
+                     'config': {'priority': 2, 'api_key': 'synthetic-chat-key'}}]}}, definitions)
+                def replace(value):
+                    value.clear()
+                    value.update(migrated)
+                manager.store.update(self.root, 'global', replace)
+                all_rows = manager.provider_rows(self.root)
+                self.assertEqual([row['id'] for row in all_rows], [alias, alias])
+                self.assertEqual([row['module'] for row in all_rows], ['provider-only', 'provider-openai'])
+                before = copy.deepcopy(manager.store.read(self.root, 'global'))
+                result = await manager.perform('providers.suggestionModels', {'workspace': str(self.root)})
+                ordinary, = result['providers']
+                self.assertEqual((ordinary['id'], ordinary['module']), (alias, 'provider-openai'))
+                self.assertEqual(ordinary['sharedCatalogKey'], manager.catalog_key({'id': alias}, str(self.root)))
+                configure(manager, {'enabled': True, 'provider': alias, 'model': 'chat-model'}, self.root, 'global')
+                _, selected_row, _ = selected(manager, self.root)
+                self.assertEqual(selected_row['module'], 'provider-openai')
+                self.assertEqual(manager.probe_snapshot('suggestion.complete', {'id': alias}, self.root)['module'],
+                                 'provider-openai')
+                self.assertEqual(manager.store.read(self.root, 'global')['decision_models'], before['decision_models'])
+                # A disabled ordinary account cannot borrow the enabled decision
+                # account's identical public alias to pass validation/readiness.
+                manager.store.update(self.root, 'global', lambda value:
+                                     value['config']['providers'][0].update(enabled=False))
+                self.assertIsNone(selected(manager, self.root)[1])
+                with self.assertRaisesRegex(ValueError, 'saved chat connection'):
+                    configure(manager, {'enabled': True, 'provider': alias, 'model': 'chat-model'}, self.root, 'global')
+                self.assertTrue(manager.provider_rows(self.root)[0]['enabled'])
+                self.assertFalse(manager.provider_rows(self.root, ordinary_only=True)[0]['enabled'])
+
     async def test_settings_authority_projection_and_no_model_runtime_call(self):
         current = self.app.state.get('configurationRevision', 0)
         before = await self.app.dispatch('providers.suggestionModels', {}, include_state=False)
@@ -3191,6 +3324,7 @@ class Integration(unittest.IsolatedAsyncioTestCase):
     async def test_owned_probe_handshake_revokes_after_subprocess_creation(self):
         """Real process/pipes/cleanup; synthetic provider and zero network."""
         from amplifier_web.setup import SetupManager
+        from amplifier_web.update_drain import held
         # The script represents a prepared provider waiting at final admission.
         script = (
             "import json,sys\n"
@@ -3207,7 +3341,14 @@ class Integration(unittest.IsolatedAsyncioTestCase):
         def admit():
             nonlocal count
             count += 1
-            return count == 1
+            allowed = not held(self.app)
+            if count == 1:
+                # Input was valid at preparation, but actual update release
+                # begins before the subprocess asks for its final grant.
+                self.app.state.setdefault('updates', {})['drain'] = {
+                    'phase': 'releasing', 'attemptId': 'synthetic-update',
+                    'releasingInput': ['other-chat', 'earlier-input']}
+            return allowed
         try:
             result = await manager.probe('suggestion.complete', {
                 'id': 'fixture', 'model': 'explicit', 'transcript': [], '_admit': admit}, str(self.root))
@@ -3215,6 +3356,7 @@ class Integration(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(result['suggestion'])
             self.assertEqual(count, 2)
         finally:
+            self.app.state.get('updates', {}).pop('drain', None)
             await manager.close()
 
     async def test_real_probe_protocol_preserves_safe_reason_with_malicious_sdk_error(self):

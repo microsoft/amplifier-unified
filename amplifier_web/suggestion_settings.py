@@ -25,7 +25,7 @@ def _values(manager, workspace):
 
 def selected(manager, workspace):
     value = _values(manager, workspace)
-    rows = manager.provider_rows(workspace)
+    rows = manager.provider_rows(workspace, ordinary_only=True)
     row = next((row for row in rows if row['id'] == value['provider'] and row['enabled']), None)
     # Include the actual connection implementation/config/credential witness.
     revision = digest([value['revision'], manager.catalog_key({'id': row['id']}, workspace)
@@ -50,8 +50,9 @@ def configure(manager, args, workspace, scope):
     if value['transcriptMode'] not in {'full', 'last_n'} or type(value['humanTurns']) is not int or not 1 <= value['humanTurns'] <= 20:
         raise ValueError('Choose full transcript or 1 to 20 recent human turns.')
     if value['enabled']:
-        if not any(row['id'] == value['provider'] and row['enabled'] for row in manager.provider_rows(workspace)):
-            raise ValueError('Choose an enabled saved connection for prompt suggestions.')
+        if not any(row['id'] == value['provider'] and row['enabled']
+                   for row in manager.provider_rows(workspace, ordinary_only=True)):
+            raise ValueError('Choose an enabled saved chat connection for prompt suggestions.')
         if not isinstance(value['model'], str) or not value['model'].strip() or len(value['model']) > 200:
             raise ValueError('Choose an explicit suggestion model.')
         if value['effort'] is not None:

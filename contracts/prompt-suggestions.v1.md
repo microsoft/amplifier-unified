@@ -42,6 +42,12 @@ from every conversation participant and execution runtime.
   request field and ordinary provider call option, not a host model-name map.
   No selection, ambient credential, chat model, routing role or provider failure
   authorizes a fallback. Saving does not start a conversation or make a model call.
+  Suggestion choices, validation and readiness use the ordinary configured
+  chat-provider inventory, not the broader Settings account roster. Dedicated
+  decision-only accounts stay with their decision owner, even when their public
+  alias matches a chat account. An obsolete saved suggestion selection with no
+  eligible ordinary provider remains unavailable (`missing_selection`) without
+  changing the saved account, enabling chat or routing through a decision backend.
 - An interested browser may request after a new completed assistant display tail
   becomes idle, or when visiting/refocusing an eligible displayed chat with an
   empty composer, including external and shared multi-agent conversations.

@@ -250,10 +250,13 @@ class SetupManager:
         try:yield
         finally:self._config_snapshot=previous
 
-    def provider_rows(self,workspace):
+    def provider_rows(self,workspace,*,ordinary_only=False):
         config=self.config(workspace)
         rows=[]
-        for value in config.saved_connections:
+        # Settings lists every account; inference utilities must use the same
+        # ordinary inventory as catalog_key/probe_snapshot, before projection.
+        # Filtering public aliases afterwards can conflate distinct namespaces.
+        for value in config.configured_connections if ordinary_only else config.saved_connections:
             identity=value.get('id') or value.get('instance_id') or value['module'].removeprefix('provider-')
             raw=value.get('config',{})
             refs=[]
@@ -857,7 +860,7 @@ class SetupManager:
         if action=='providers.suggestionModels':
             from .suggestion_settings import describe
             with self.read_snapshot(workspace):
-                rows = self.provider_rows(workspace)
+                rows = self.provider_rows(workspace, ordinary_only=True)
                 for row in rows:
                     row['sharedCatalogKey'] = self.catalog_key({'id': row['id']}, workspace)
                 return {'suggestionModels': describe(self, workspace), 'providers': rows}
