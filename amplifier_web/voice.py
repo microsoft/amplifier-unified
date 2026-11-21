@@ -238,8 +238,9 @@ def failure_notice(exc: BaseException, accepted: bool) -> str:
     """What the voice is told about a failed delegation.
 
     Only the text of the product's own errors is passed on: a sentence written
-    for a person, or the error that the chat itself shows. Any other exception
-    text is internal and is never spoken. Say whether Amplifier has the
+    for a person. Any other exception text is internal and is never spoken
+    (execute() replaces a failed chat's saved error, which can be raw worker
+    text, with the summary that the chat shows). Say whether Amplifier has the
     request, so the voice neither repeats work nor promises work that never
     started.
     """
@@ -957,6 +958,16 @@ class VoiceCall:
                 if did in self.pending_delegations:
                     self.pending_delegations[did]['status'] = 'waiting_result'
                 return {'status': 'pending', 'input_ids': [result.get('inputId')], 'text': 'Amplifier is still working.'}
+            except Exception as exc:
+                # The wait raises the chat's saved error, which can be raw worker
+                # or exception text. Tell the voice what the chat shows instead.
+                current = next((row for row in self.service.state.get('sessions', []) if row.get('id') == self.session_id), {})
+                if current.get('status') == 'error':
+                    summary = (current.get('failure') or {}).get('summary')
+                    raise VoiceError(summary if isinstance(summary, str) and summary else 'Something interrupted this chat.') from exc
+                if current.get('status') in {'stopped', 'interrupted'}:
+                    raise VoiceError('Execution ended before the response completed.') from exc
+                raise
             return response if isinstance(response, dict) else {"response": response}
         return result
 
@@ -1144,7 +1155,14 @@ class VoiceCall:
             else:
                 raise VoiceError("Unknown voice tool.")
         except Exception as exc:
-            result = {"error": failure_notice(exc, self.pending_delegations.get(did, {}).get('status') == 'accepted')}
+            pending = self.pending_delegations.get(did, {})
+            accepted = pending.get('status') == 'accepted'
+            result = {"error": failure_notice(exc, accepted)}
+            if accepted:
+                # Amplifier has the request. If its turn still finishes, that
+                # result is announced after this function output, as it is
+                # after a wait that timed out.
+                pending['status'] = 'waiting_result'
         if not self.closed and not self.closing:
             identity = result.get("generation_id") if isinstance(result, dict) else None
             duplicate = bool(identity and identity in self.delivered_generations)

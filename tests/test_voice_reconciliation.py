@@ -139,6 +139,36 @@ async def test_realtime_tool_failure_output_has_no_internal_error_text():
     assert output == {'error': 'Amplifier could not complete this request, and no work was started: An internal error stopped it.'}
 
 
+def failed_chat(service, raw):
+    """As the host saves a failed turn: raw text in `error`, the product's words in `failure`."""
+    from amplifier_web.errors import AppError
+    service.state['sessions'][0].update(status='error', error=raw,
+        failure={'category': 'unknown', 'summary': 'Something interrupted this chat.'})
+    service.wait_for_response = AsyncMock(side_effect=AppError(raw))
+
+
+@pytest.mark.parametrize('raw', ['no_active_job', "'NoneType' object is not subscriptable"])
+async def test_the_voice_is_told_the_summary_that_the_chat_shows_not_its_raw_saved_error(raw):
+    service, call = call_fixture()
+    failed_chat(service, raw)
+    await call.record('user', 'Check the code.', 'spoken')
+    await call.delegate_live('d')
+    assert call.socket.sent[-1]['content'] == (
+        'Amplifier received this request but could not complete it: Something interrupted this chat.'
+        ' Check the shared chat before asking again.')
+
+
+async def test_a_stopped_chat_does_not_pass_an_older_saved_error_to_the_voice():
+    from amplifier_web.errors import AppError
+    service, call = call_fixture()
+    service.state['sessions'][0].update(status='stopped', error='raw text of an earlier failure')
+    service.wait_for_response = AsyncMock(side_effect=AppError('raw text of an earlier failure'))
+    await call.record('user', 'Check the code.', 'spoken')
+    await call.delegate_live('d')
+    assert 'could not complete it: Execution ended before the response completed.' in call.socket.sent[-1]['content']
+    assert 'raw text' not in call.socket.sent[-1]['content']
+
+
 def browser_snapshot(service):
     """As the observer receives it: a browser projection, which omits each generation's text."""
     return {'sessions': [{**row, 'generations': [{key: value for key, value in event.items() if key != 'text'}
@@ -216,6 +246,36 @@ async def test_realtime_current_late_result_is_not_marked_as_earlier():
     told = [e['item']['content'][0]['text'] for e in call.socket.sent
             if e['type'] == 'conversation.item.create' and e['item']['type'] == 'message']
     assert len(told) == 1 and told[0].startswith('Amplifier manager update. The Friday plan is ready.')
+
+
+async def test_realtime_answer_follows_a_reported_failure_when_the_turn_finishes_after_it():
+    import json
+    service, call = call_fixture()
+    call.provider = 'realtime'
+    failed_chat(service, 'no_active_job')
+    await call.realtime_tool({'name': 'amplifier_delegate', 'arguments': '{"text": "Check the code."}', 'call_id': 'c1'})
+    output = json.loads(next(e for e in call.socket.sent if e['type'] == 'conversation.item.create'
+                             and e['item']['type'] == 'function_call_output')['item']['output'])
+    assert output == {'error': 'Amplifier received this request but could not complete it: Something interrupted this chat.'
+                               ' Check the shared chat before asking again.'}
+    service.state['sessions'][0]['generations'] = [{'event': 'generation.finished',
+        'generation_id': 'after', 'sessionId': 'main', 'rootSessionId': 'main',
+        'input_ids': ['voice:live:c1'], 'text': 'The code is correct.'}]
+    call.socket.sent.clear()
+    await call.announce_generations(browser_snapshot(service))
+    await call.announce_generations(browser_snapshot(service))
+    told = [e['item']['content'][0]['text'] for e in call.socket.sent
+            if e['type'] == 'conversation.item.create' and e['item']['type'] == 'message']
+    assert len(told) == 1 and told[0].startswith('Amplifier manager update. The code is correct.')
+    assert len(service.calls) == 1
+
+
+async def test_realtime_failure_before_acceptance_does_not_wait_for_a_result():
+    service, call = call_fixture()
+    call.provider = 'realtime'
+    service.voice_delegate = AsyncMock(side_effect=ValueError('admission unavailable'))
+    await call.realtime_tool({'name': 'amplifier_delegate', 'arguments': '{"text": "Check the code."}', 'call_id': 'c1'})
+    assert call.pending_delegations['c1']['status'] == 'submitting'
 
 
 async def test_append_ack_tracks_context_injection_and_rejection_without_reexecution():
