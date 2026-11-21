@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 from dataclasses import dataclass
 import hashlib
 import json
@@ -295,18 +296,32 @@ class ExternalConversations:
             if retirement is not None:
                 await asyncio.shield(retirement)
             session = self.service._session(sid)
+            binding = addressed(session, turn.agent_id)
+            from .agent_instance import room_source
+            origins = getattr(self.service, 'server_config', {}).get('public_origins', [])
+            source_ref = copy.deepcopy(binding.get('instanceSource') or room_source(sid, origins[0] if origins else None))
+            original = next(row for row in reversed(session['messages'])
+                            if row.get('inputId') == turn.input_id and row['role'] == 'user')
+            source_proof = copy.deepcopy(original)
             await asyncio.wait_for(turn.participant.connect(
-                dict(addressed(session, turn.agent_id)), lambda value: self._binding(sid, turn.agent_id, value)), 30)
+                dict(binding), lambda value: self._binding(sid, turn.agent_id, value),
+                source=source_ref), 30)
             async with self.service.lock:
                 session = self.service._session(sid)
                 if turn.stop or session.get('interruptionRevision', 0) != turn.revision:
                     raise asyncio.CancelledError()
+                self.selected(session, turn.agent_id)
+                current_source = next(row for row in reversed(session['messages'])
+                                      if row.get('inputId') == turn.input_id and row['role'] == 'user')
+                if current_source != source_proof:
+                    raise ValueError('The original source changed before external dispatch.')
                 session['externalAgent']['status'] = 'working'
                 addressed(session, turn.agent_id)['status'] = 'working'
                 self.service._publish_changes(sessions={sid})
                 turn.dispatched = True
             context = shared_context(session, turn.input_id)
-            response = await turn.participant.prompt(text, context=context)
+            response = await turn.participant.prompt(text, context=context,
+                metadata=turn.participant.source_metadata(turn.input_id, self.shared._actor(source_proof)[0], sid))
             await self._settle(sid, turn, 'accepted',
                                'stopped' if response.stop_reason == 'cancelled' else 'idle',
                                stop_reason=response.stop_reason)

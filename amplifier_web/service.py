@@ -154,7 +154,9 @@ ACTION_DEFINITIONS = {
     "attachment.remove": ("Remove an attachment from a conversation draft", schema({"sessionId":{"type":["string","null"],"maxLength":200},"id":string(32)},["id"])),
     "conversation.delivery": ("Check a saved input's delivery without sending or starting work. Missing evidence remains uncertain.", schema({"sessionId": string(200), "inputId": string(200)}, ["sessionId", "inputId"])),
     "conversation.retry": ("Explicitly resend an unconfirmed latest message, preserving its input identity and attachments. Unknown delivery requires confirmUncertain after the user accepts that prior effects might repeat. Never call as a passive check.", schema({"sessionId": string(200), "inputId": string(200), "confirmUncertain": {"type": "boolean"}}, ["sessionId", "inputId"])),
-    "conversation.stop": ("Stop session execution", schema({"sessionId": string(200)}, [])),
+    "conversation.stop": ("Stop session execution. Optional expectedExecution fences the original Stop intent against newer input or another interruption.", schema({"sessionId": string(200), "expectedExecution": schema({
+        "interruptionRevision": {"type": "integer", "minimum": 0},
+        "inputId": {"type": ["string", "null"], "maxLength": 200}}, ["interruptionRevision", "inputId"])}, [])),
     "worker.spawn": ("Start a worker lane for heavier work", schema({"sessionId": string(200), "instruction": string(100000), "bundle": string(2000)}, ["instruction"])),
     "worker.stop": ("Stop one worker lane", schema({"sessionId": string(200), "id": string(100)}, ["id"])),
     "worker.message": ("Send a follow-up to an active persistent worker", schema({"sessionId": string(200), "id": string(100), "text": string(100000)}, ["sessionId", "id", "text"])),
@@ -1008,6 +1010,8 @@ class AppService:
         from .browser_detail import PRIVATE_SESSION_FIELDS
         for field in PRIVATE_SESSION_FIELDS:
             session.pop(field, None)
+        from .shared_conversation import public_output
+        session = public_output(session)
         from .input_status import annotate as input_annotation, PREFIX as input_status_prefix
         session['messages'] = [input_annotation(row, message) for message in session.get('messages', [])]
         session['messageAnnotations'] = {key: value for key, value in session.get('messageAnnotations', {}).items()
@@ -2085,7 +2089,8 @@ class AppService:
                 origin != 'ui' or client_id is None or self.clients.record().get('kind') != 'web'):
             raise AppError('A chat reference opens only from its originating browser.', 403)
         if action == "approval.respond" and args["id"].startswith("capability:"):
-            return await self.configuration_authority.decide(args, origin, command_id)
+            return await self.configuration_authority.decide(args, origin, command_id,
+                                                            admission_check=admission_check)
         guard_history_action(self, action, args, origin, caller_session_id)
         if passive_task and origin not in {'ui', 'user'}:
             if not caller_session_id:
@@ -3656,14 +3661,19 @@ class AppService:
                     turn.pop('generationId', None)
                     pending.append((self._retry_message, (copy.deepcopy(session), message['text'], args['inputId'], before)))
             elif action == "conversation.stop":
+                from .message_delivery import execution_boundary
                 session = self._session(args.get("sessionId"), hydrate=False)
+                boundary = execution_boundary(session)
+                if "expectedExecution" in args and args["expectedExecution"] != boundary:
+                    raise AppError('New input or another interruption superseded this Stop intent. Nothing was stopped.', 409)
                 session["interruptionRevision"] = session.get("interruptionRevision", 0) + 1
+                boundary['interruptionRevision'] = session['interruptionRevision']
                 session["lastInterruption"] = {"commandId": command_id, "at": time.time(), "origin": origin}
                 if session.get('externalAgent', {}).get('status') not in {'unknown', 'error'}:
                     session["status"] = "stopping"
                 from .input_status import interrupt as interrupt_input_status
                 interrupt_input_status(session)
-                pending.append((self._stop, (session["id"],)))
+                pending.append((self._stop, (session["id"], boundary)))
             elif action == "worker.spawn":
                 session = self._session(args.get("sessionId"), hydrate=False)
                 text = args["instruction"].strip()
@@ -4410,6 +4420,12 @@ class AppService:
             if isinstance(exc, RuntimeHostClosingError):
                 return  # Expected host retirement is not a failed conversation.
             sid = args[0].get("id") if args and isinstance(args[0], dict) else args[0] if args else None
+            if fn == self._stop:
+                from .worker_diagnostics import diagnostic_reference
+                await self.on_runtime_event('runtime.error', {'sessionId': sid, 'event': 'stop.failed',
+                    'stopBoundary': args[1], 'errorType': type(exc).__name__, 'error': str(exc),
+                    **diagnostic_reference(exc)})
+                return
             if isinstance(exc, AppError) and exc.code == 'session_busy':
                 return  # The rejected admission already published its ownership state.
             from .runtime import SessionInUseError
@@ -4882,7 +4898,7 @@ class AppService:
             if getattr(self.voice_service, 'call', None) is call:
                 await self.set_voice_status({"status": "error", "id": call.id, "error": str(exc)})
 
-    async def _stop(self, sid):
+    async def _stop(self, sid, boundary=None):
         if self._session(sid, hydrate=False).get('externalAgent'):
             return await self.external_conversations.stop(sid)
         # The Stop revision is already durable. Release invalidated inbox slots
@@ -4890,7 +4906,8 @@ class AppService:
         await self.collaboration.drain(sid)
         if self.runtime:
             await self.runtime.stop(sid)
-        await self.on_runtime_event("runtime.status", {"sessionId": sid, "status": "stopped"})
+        await self.on_runtime_event("runtime.status", {"sessionId": sid, "status": "stopped",
+            **({'stopBoundary': boundary} if boundary is not None else {})})
 
     async def record_voice_usage(self,session_id,call_id,response_id,model,usage,phase='completed', *, transfer_id=None):
         from .voice_usage import normalize_voice_usage
@@ -5175,6 +5192,10 @@ class AppService:
             elif kind == "runtime.warmth":
                 session['preparation'] = {'status': payload['status']}
             elif kind == "runtime.status":
+                if 'stopBoundary' in payload:
+                    from .message_delivery import execution_boundary
+                    if payload['stopBoundary'] != execution_boundary(session):
+                        return
                 if payload.get('event') == 'input.delivered' and payload.get('inputId'):
                     self._delivery(session, payload['inputId'], 'accepted')
                 # Provider requests/retries describe current work; only lifecycle
@@ -5262,6 +5283,21 @@ class AppService:
                          **({'exceptionChain': capture['exceptionChain']} if capture else {})}
                 session.setdefault('runtimeEvents', []).append(event)
                 session['runtimeEvents'] = session['runtimeEvents'][-100:]
+                if payload.get('event') == 'stop.failed':
+                    # This is the outcome of an admitted interruption. A worker
+                    # may still return the original reply; keep its input and
+                    # generation records independent of the Stop failure.
+                    event['scope'] = 'runtime'
+                    from .message_delivery import execution_boundary
+                    if (session.get('status') == 'stopping' and session.get('lastInterruption')
+                            and payload.get('stopBoundary') == execution_boundary(session)):
+                        session['lastInterruption']['outcome'] = 'unconfirmed'
+                        session['status'] = 'error'
+                        session['error'] = 'Stop could not be confirmed. Inspect the runtime details before continuing.'
+                        session.pop('health', None)
+                        self._activity(session, 'error', session['error'])
+                    self._publish(session_ids={session['id']}, record_only=True)
+                    return
                 if not runtime_fault_is_current(session, payload):
                     event['scope'] = 'runtime'
                     from .session_health import latest_root_event

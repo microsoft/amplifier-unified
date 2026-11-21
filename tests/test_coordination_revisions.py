@@ -23,6 +23,201 @@ async def subscribe(app, request='result-request'):
         {'sessionId': source['id'], 'requestId': request}, 'wait-'+request)
 
 
+def stored(app, identity):
+    return json.loads(app.db.execute('SELECT receipt FROM commands WHERE id=?', (identity,)).fetchone()[0])
+
+
+async def test_reply_command_points_to_one_mutable_response_and_snapshots_only_on_revision(app):
+    _, target = app.state['sessions']
+    await declared_result(app, kind='question', outcome='question')
+    reply_id = 'declare-result-request'
+    raw = stored(app, reply_id)
+    assert raw['responseRef'] == 'result-request'
+    assert set(raw['result']) == {'requestId', 'operationId', 'responseRevision'}
+    # Sealing changes just the canonical request response, not a synchronized copy.
+    await finish(app, target, 'result-request')
+    assert stored(app, reply_id) == raw
+    sealed = app.collaboration.receipt(reply_id)['result']
+    assert sealed['status'] == 'sealed'
+    await generation(app, target, 'later', ['later-input'])
+    await revised(app, 'result-request', 1)
+    prior = stored(app, reply_id)
+    assert 'responseRef' not in prior and prior['result'] == sealed
+    assert stored(app, 'later-reply')['responseRef'] == 'result-request'
+    assert app.collaboration.receipt(reply_id)['result'] == sealed
+
+
+async def test_legacy_reply_copies_read_without_rewriting_and_archive_on_correction(app):
+    _, target = app.state['sessions']
+    await declared_result(app, kind='question', outcome='question')
+    request = app.collaboration.receipt('result-request')
+    legacy = stored(app, 'declare-result-request')
+    legacy.pop('responseRef', None)
+    legacy['result'] = copy.deepcopy(request['response'])
+    app.db.execute('UPDATE commands SET receipt=? WHERE id=?',
+        (json.dumps(legacy), 'declare-result-request'))
+    app.db.commit()
+    before = app.db.execute('SELECT receipt FROM commands WHERE id=?', ('declare-result-request',)).fetchone()[0]
+    await finish(app, target, 'result-request')
+    assert app.db.execute('SELECT receipt FROM commands WHERE id=?', ('declare-result-request',)).fetchone()[0] == before
+    assert app.collaboration.receipt('declare-result-request')['result']['status'] == 'sealed'
+    await generation(app, target, 'later', ['later-input'])
+    await revised(app, 'result-request', 1)
+    assert stored(app, 'declare-result-request')['result']['status'] == 'sealed'
+    assert stored(app, 'later-reply')['responseRef'] == 'result-request'
+
+
+async def test_revision_page_reuses_one_request_read_for_current_and_historical_replies(app):
+    _, target = app.state['sessions']
+    await declared_result(app, kind='question', outcome='question')
+    await finish(app, target, 'result-request')
+    await generation(app, target, 'later', ['later-input'])
+    await revised(app, 'result-request', 1)
+    statements = []
+    app.db.set_trace_callback(statements.append)
+    try:
+        result = (await app.dispatch('coordination.result', {'requestId': 'result-request'}))['result']
+    finally:
+        app.db.set_trace_callback(None)
+    assert [row['status'] for row in result['revisions']] == ['staged', 'sealed']
+    assert statements.count("SELECT receipt FROM commands WHERE id='result-request'") == 1
+
+
+async def test_missing_canonical_request_is_unavailable_but_archived_reply_still_reads(app):
+    _, target = app.state['sessions']
+    await declared_result(app)
+    request = stored(app, 'result-request')
+    app.db.execute('DELETE FROM commands WHERE id=?', ('result-request',))
+    with pytest.raises(AppError, match='declaration is unavailable'):
+        app.collaboration.receipt('declare-result-request')
+    app.collaboration.insert('result-request', 'fixture-restoration', request)
+    await revised(app, 'result-request', 1)
+    archived = app.collaboration.receipt('declare-result-request')
+    assert archived['result']['status'] == 'superseded'
+    app.db.execute('DELETE FROM commands WHERE id=?', ('result-request',))
+    assert app.collaboration.receipt('declare-result-request') == archived
+    with pytest.raises(AppError, match='declaration is unavailable'):
+        app.collaboration.receipt('later-reply')
+
+
+@pytest.mark.parametrize('participant', [0, 1])
+async def test_reply_pointer_retains_participant_ownership_for_existing_deletion_cleanup(app, participant):
+    from amplifier_web.managed_deletion import _cleanup_db
+    await declared_result(app)
+    app.collaboration.insert('unrelated-reply', 'unrelated', {
+        'commandAction': 'coordination.reply', 'responseRef': 'unrelated-request',
+        'result': {'requestId': 'unrelated-request', 'operationId': 'unrelated-reply', 'responseRevision': 1}})
+    unrelated = stored(app, 'unrelated-reply')
+    _cleanup_db(app.db, {'ids': [app.state['sessions'][participant]['id']],
+                        'rows': [], 'resourceIds': [], 'artifactIds': []})
+    assert stored(app, 'result-request')['deleted']
+    assert stored(app, 'declare-result-request')['deleted']
+    assert stored(app, 'unrelated-reply') == unrelated
+
+
+async def test_private_backup_keeps_canonical_request_and_reply_pointer_together(app, tmp_path):
+    import sqlite3
+    import tarfile
+    from amplifier_web.recovery import backup
+    await declared_result(app)
+    expected = {identity: stored(app, identity)
+                for identity in ('result-request', 'declare-result-request')}
+    result = await backup(app)
+    with tarfile.open(result['backup']) as archive:
+        database = archive.extractfile('app.sqlite3').read()
+    path = tmp_path / 'saved-backup.sqlite3'
+    path.write_bytes(database)
+    with sqlite3.connect(path) as db:
+        saved = {identity: json.loads(db.execute('SELECT receipt FROM commands WHERE id=?',
+                                                (identity,)).fetchone()[0]) for identity in expected}
+    assert saved == expected
+    pointer = saved['declare-result-request']
+    assert saved[pointer['responseRef']]['response']['operationId'] == pointer['result']['operationId']
+
+
+@pytest.mark.parametrize('mode', ['queue', 'auto'])
+async def test_ordinary_queue_has_no_implicit_deadline_or_timer_even_after_restart(app, mode):
+    source, target = app.state['sessions']
+    target['status'] = 'working'
+    app.runtime.unavailable_boundaries.add(target['id'])
+    await send(app, 'indefinite-input', mode=mode)
+    queued = await settled(app, 'indefinite-input', 'queued')
+    assert 'expiresAt' not in queued
+    assert 'indefinite-input' not in app.collaboration.expiry_handles
+    await app.close()
+    other = AppService(app.data_dir, Runtime(), workspace=app.default_workspace)
+    other.runtime.app = other
+    try:
+        peer = other._session(target['id'])
+        peer['status'] = 'working'
+        other.runtime.unavailable_boundaries.add(peer['id'])
+        other.collaboration.start()
+        await other.collaboration.expire('indefinite-input')
+        assert other.collaboration.receipt('indefinite-input')['delivery'] == 'queued'
+        assert 'indefinite-input' not in other.collaboration.expiry_handles
+        peer['status'] = 'idle'
+        await other.collaboration.drain(peer['id'])
+        await settled(other, 'indefinite-input', 'accepted')
+        assert [row[1] for row in other.runtime.inputs] == ['indefinite-input']
+    finally:
+        await other.close()
+
+
+async def test_automatic_result_return_has_no_unsolicited_deadline(app):
+    source, target = app.state['sessions']
+    app.runtime.unavailable_boundaries.add(source['id'])
+    await declared_result(app)
+    await subscribe(app)
+    await finish(app, target, 'result-request')
+    request = app.collaboration.receipt('result-request')
+    identity = request['subscription']['continuationId']
+    notice = app.collaboration.receipt(identity)
+    assert notice['delivery'] == 'queued' and 'expiresAt' not in notice
+    assert identity not in app.collaboration.expiry_handles
+    assert notice['dependencySatisfied'] and notice['outcomeSnapshot']['qualified']
+
+
+async def test_reply_pointer_restart_exposes_unknown_without_rewriting_command_or_replaying(app):
+    await declared_result(app)
+    raw = stored(app, 'declare-result-request')
+    await app.close()
+    other = AppService(app.data_dir, Runtime(), workspace=app.default_workspace)
+    other.runtime.app = other
+    try:
+        assert stored(other, 'declare-result-request') == raw
+        response = other.collaboration.receipt('declare-result-request')['result']
+        assert response['status'] == 'unknown' and not response['qualified']
+        result = (await other.dispatch('coordination.result', {'requestId': 'result-request'}))['result']
+        assert result['revisions'] == [response] and not result['qualified']
+        other.collaboration.start()
+        assert not other.runtime.inputs
+    finally:
+        await other.close()
+
+
+async def test_historical_queue_deadline_is_not_removed_or_renewed_at_restart(app):
+    _, target = app.state['sessions']
+    target['status'] = 'working'
+    await send(app, 'old-deadline')
+    historical = stored(app, 'old-deadline')
+    historical['expiresAt'] = time.time() - 1
+    app.collaboration.save('old-deadline', historical)
+    app.db.commit()
+    await app.close()
+    other = AppService(app.data_dir, Runtime(), workspace=app.default_workspace)
+    other.runtime.app = other
+    try:
+        assert stored(other, 'old-deadline') == historical
+        other.collaboration.start()
+        await settled(other, 'old-deadline', 'expired')
+        expired = other.collaboration.receipt('old-deadline')
+        assert expired['expiresAt'] == historical['expiresAt']
+        assert expired['terminalOutcome']['outcome'] == 'failed'
+        assert not other.runtime.inputs
+    finally:
+        await other.close()
+
+
 async def test_question_later_generation_result_distinct_revision_once_and_old_receipts_retained(app):
     source, target = app.state['sessions']
     await declared_result(app, kind='question', outcome='question')

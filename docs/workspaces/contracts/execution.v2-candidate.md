@@ -691,6 +691,18 @@ request and operation identities. Each payload and result view remains bounded;
 `coordination.result` returns the latest 32 declarations without discarding older
 command receipts. This does not relax queue pressure, Stop or task budgets.
 
+The request's existing response is the canonical mutable declaration. A new reply
+command points to that response by request and operation identity; public reads
+derive its full result. Replacing the response freezes its previous revision in
+the previous reply command in the same transaction. Terminal sealing and restart
+rejection update only the current request response, not a second mutable copy.
+Notification snapshots and distinct host terminal outcomes remain separate facts.
+Existing full reply copies remain readable without startup migration; a current
+copy is read through its request's response and archived when replaced. This
+does not delete historical rows or retained artifacts. Older readers do not resolve
+new reply pointers: downgrading requires a matching-reader backup, not an assumption
+that an older app can interpret newly written command results.
+
 Existing current-protocol version-two waits stopped solely by the former automatic
 notification ceiling may recover through ordinary admission. Recovery requires the
 exact legacy diagnostic and a saved outcome revision greater than 32; it preserves
@@ -791,9 +803,13 @@ recently admitted pending sender the next turn using durable admission order,
 with oldest pending input breaking ties. Sender selection considers the complete
 pending set; only a bounded FIFO batch of that sender’s receipts is loaded.
 Raising a limit resumes saved backpressured returns through the same guarded
-inbox without replaying accepted or unknown operations. New queued instructions
-expire after a caller-selected duration (default and maximum one day);
+inbox without replaying accepted or unknown operations. New ordinary queued
+instructions and automatic returns have no implicit expiry. An explicit
+`expiresInSeconds` chooses a deadline of up to one day;
 expiration remains an inspectable failed dependency without executing the input.
+Historical deadlines stay effective without renewal or removal. Human resume
+inputs and handoffs retain their one-day default (or a shorter explicit deadline), and
+member resume input cannot outlive the originating handoff.
 Accepted substantive inputs are never silently coalesced or dropped. Informational
 notices still do not start execution; unsupported safe-boundary delivery remains
 an adapter limitation rather than cancellation and resend. Host-retained causal

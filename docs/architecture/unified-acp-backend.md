@@ -316,6 +316,131 @@ idle resources for later startup, rather than promising a performance gain.
 
 ## Scope and qualification
 
+### Optional Unified public Agent Instance profile (candidate)
+
+This candidate maps the continuing Agent Instance role onto existing Unified
+owners. It is not deployed conformance or a second agent service. An operator
+can set `agentInstance` in the existing private server configuration:
+
+```json
+{
+  "agentInstance": {
+    "id": "urn:example:agent:researcher",
+    "label": "Researcher",
+    "workspace": "/srv/research",
+    "bundle": "/srv/profiles/research.md"
+  }
+}
+```
+
+The explicit ID names the continuing public agent, not a process, label, native
+child or ACP session. Preserve it across restarts and implementation/model
+changes. The first slice exposes one profile and defaults to one native root per
+exact source/conversation pair; this is not a universal one-agent-per-installation
+or one-memory-per-room rule. Separate roots retain their own private context,
+model/provider bindings and native writers. The configured workspace and bundle
+must match the launcher; exact resume keeps saved root configuration and custom
+source pins. Changing a profile does not migrate history or credentials.
+
+Ordinary ACP needs none of this configuration. A client opts in at initialize
+with `_meta["com.microsoft.amplifier.agent-instance"] = {"version": 1}`.
+If configured, the response advertises `agentId`, `label`, `_amplifier/instance`,
+supported interactions/controls and reconciliation limits. An absent profile
+or a launcher for another configured workspace/bundle leaves plain ACP unchanged.
+A client must retain the advertised ID and refuse an
+unexpected replacement or disappeared profile rather than silently create work.
+
+For negotiated `session/new` and exact `session/resume`, that metadata contains
+`{"agentId":"…","source":{"sourceId":"…","conversationId":"…"}}`.
+Use the conversation owner's configured public origin for `sourceId` where
+available and retain the exact pair. Local UUID-qualified room references are
+correlation only; they cannot distinguish copies/imports on different hosts.
+The response repeats the binding and current `expectedInterruptionRevision`.
+The existing host creation receipt recovers the same root after a lost reply;
+no private child is promoted into a public instance.
+
+Prompt metadata adds `input` with immutable original `id`, integer `revision`,
+`actor`, `audience` (string array) and `replyTo`, plus the observed
+`expectedInterruptionRevision`. These are source-attributed facts, **not human
+grants**. Deduplication uses original source/input/revision, not text or JSON-RPC
+call ID. Different payload or attribution for the same revision conflicts;
+another call ID does not authorize replay. A duplicate returns an explicit
+retained-input error with `data.inputReceipt`, not a false completed turn.
+When the host command/fingerprint is missing, canonical native delivery evidence
+still prevents resubmission. The receipt reports `fingerprintAvailable:false`;
+it proves no content match. No retained observation is not proof of non-delivery
+or permission to retry an uncertain submission under a fresh key.
+Revision identifies a source snapshot, not a promise of automatic revision
+ordering, retraction or reversal of earlier effects. The source adapter owns
+freshness before dispatch. Stop fences stale new intent; inspecting an old input
+remains possible after Stop and never resumes its work.
+
+The optional `_amplifier/instance` request contains exact `sessionId`, `binding`
+(the negotiated agent/source metadata) and `operation`:
+
+- `inspectInput`: `binding` also contains the original input metadata. Reuses
+  `conversation.delivery` for retained/native evidence and exact input-status
+  annotations. Returns the lookup ID/revision, not invented actor attribution.
+  Missing evidence stays unknown, never proof of non-delivery. `work` links only
+  a current task whose native creation generation proves that original input.
+  `work:null` does not prove no historical or later-amended work exists.
+- `read`: returns the source execution's existing bounded `task.get` result,
+  native status and `expectedExecution` (latest saved input ID and Stop
+  revision). This conservative fence includes unsettled delivery, not proof of
+  native incorporation. Task detail/history references retain their existing owners.
+- `update` / `pause`: additionally require stable `commandId`, exact `taskId`,
+  `expectedRevision`, and `changes`. Update supports the existing objective,
+  correction, constraints and turn-limit fields. Native task CAS and persistence
+  retain used turns, effects and unknowns. Neither operation creates or resumes
+  an objective. Ordinary public task mutations do not accept an execution
+  condition that they cannot enforce; the Stop profile's receipt-bound
+  `expectedExecution` is restricted to its internally guarded pause path.
+- `stop`: the same fields, empty `changes` and the caller's observed
+  `expectedExecution`. Pauses that exact mutable task before native Stop;
+  `taskId:null` is supported only when saved task authority proves no task or a
+  completed task. Newer input/interruption supersedes delayed Stop. Its receipt
+  is admission, not proof of settled execution, descendant revocation or rollback.
+  An exact retry validates existing task/Stop fingerprints and returns their
+  receipts without repeating Stop; changed contents still conflict.
+  A saved Stop command ID cannot be reused for an ordinary pause or update.
+  If the task receipt owner is unavailable, a known host Stop receipt remains
+  inspectable as an unresolved pair, not an exact taskless match; no fresh leg
+  is dispatched while that evidence is unavailable.
+- `workReceipt`: stable original `commandId` recovers existing native task and
+  host Stop receipts without redispatch. Partial/unknown legs remain explicit.
+
+All operations require this connection's server-held exact source binding.
+Current profile/source restrictions and native source/location are rechecked
+after awaits, before publication and at write/approval admission. Optional
+`sources` in the profile restricts exact source pairs; it is not required per-room
+setup. Label edits and unrelated source additions do not revoke other bindings.
+Removing a source restriction entry, changing identity/pins or removing the
+profile refuses future operations; accepted work is not retroactively undone.
+History refresh can fill the same native identity's previously absent aliases
+without replacing this binding. A conflicting native ID or changed effective
+execution location is still refused, including across attachment waits.
+
+**Trust and limits:** the authenticated launcher still possesses the existing
+host-owner credential. These checks scope the profile context, not that owner's
+administrative authority; they are not hostile multi-tenant isolation, actor
+authentication, credential attenuation or an independent permission cache.
+Ordinary ACP cancel remains current-turn cancellation, not accepted-work
+revocation. Missing/unreadable saved task authority refuses accepted-work Stop
+rather than guessing no task; standard cancellation of this attachment's current
+turn remains available and does not claim to revoke that unknown responsibility.
+After reconnect, standard cancel has no current connection-local turn to cancel.
+An explicit new profile input uses its actual ACP origin, not a forged UI/human
+origin. UI-only failed-generation recovery is not automatically extended to it;
+native failure/recovery qualification is separate from successful ordinary input.
+Inspection recovers disposition, not an unbounded transcript or a
+lost final-answer stream. Source/actor/audience strings have wire-validation
+bounds, not work quotas. No browser participant-control UI is added here.
+
+Maintained `tests/test_agent_instance.py` exercises controlled-runtime SDK and
+real task-owner persistence/CAS boundaries. Native worker, full Work composition,
+actual external Instance and rendered multi-browser qualification belong to the
+separately owned combined campaign; these local checks do not claim those passed.
+
 Advertised capabilities are text, resume and transient HTTP MCP. Legacy-history
 loading, images/audio, client-side files/terminals and a new permission UI are not
 advertised. Companion's voice layer can use this text backend. Separate chats can

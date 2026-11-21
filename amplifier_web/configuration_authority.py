@@ -730,7 +730,7 @@ class ConfigurationAuthority:
         self.service._message(session, 'user', f'Permission {decision}:\n\n{comment}', 'permission',
                               approvalId=grant['id'], inputOrigin='approval')
 
-    async def decide(self, args, origin, command_id):
+    async def decide(self, args, origin, command_id, *, admission_check=None):
         if origin not in {'ui', 'user'}:
             self.error('Only the user can answer a configuration approval.')
         sid = args.get('sessionId') or self.service.state.get('selectedSessionId')
@@ -746,6 +746,8 @@ class ConfigurationAuthority:
                 if grant['status'] != 'expired':
                     self.service._task(self.notify_waiter(grant))
                 return {**receipt, 'duplicate': True}
+            if admission_check is not None:
+                admission_check()
             grant = self.record(args['id'])
             if grant['sessionId'] != sid:
                 self.error('The approval belongs to another conversation.')

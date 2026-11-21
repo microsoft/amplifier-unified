@@ -164,15 +164,41 @@ async def test_next_provider_boundary_receives_current_cancellation_without_a_ne
 
 async def test_failed_cancellation_commit_preserves_queued_owner_and_expiry(app, monkeypatch):
     app.state['sessions'][1]['status'] = 'working'
-    await send(app)
+    await send(app, expiresInSeconds=60)
     original = copy.deepcopy(app.collaboration.receipt('request-1'))
+    retained = app.db.execute('SELECT receipt FROM commands WHERE id=?', ('request-1',)).fetchone()[0]
+    handle = app.collaboration.expiry_handles['request-1']
+    deadline = handle.when()
+    assert original['delivery'] == 'queued' and original['expiresAt']
+    assert deadline > asyncio.get_running_loop().time() and not handle.cancelled()
     def fail(*args):
         raise RuntimeError('Cannot retain operation receipt')
     monkeypatch.setattr(app.collaboration, 'insert', fail)
     with pytest.raises(RuntimeError, match='Cannot retain'):
         await cancel(app)
     assert app.collaboration.receipt('request-1') == original
+    assert app.db.execute('SELECT receipt FROM commands WHERE id=?', ('request-1',)).fetchone()[0] == retained
     assert 'request-1' in app.collaboration.expiry_handles
+    assert app.collaboration.expiry_handles['request-1'] is handle
+    assert handle.when() == deadline and not handle.cancelled()
+    assert not app.state['sessions'][1]['coordinationReference']['cancellations']['items']
+
+
+async def test_failed_cancellation_commit_preserves_ordinary_queue_without_expiry(app, monkeypatch):
+    app.state['sessions'][1]['status'] = 'working'
+    await send(app)
+    original = copy.deepcopy(app.collaboration.receipt('request-1'))
+    retained = app.db.execute('SELECT receipt FROM commands WHERE id=?', ('request-1',)).fetchone()[0]
+    assert original['delivery'] == 'queued' and 'expiresAt' not in original
+    assert 'request-1' not in app.collaboration.expiry_handles
+    def fail(*args):
+        raise RuntimeError('Cannot retain operation receipt')
+    monkeypatch.setattr(app.collaboration, 'insert', fail)
+    with pytest.raises(RuntimeError, match='Cannot retain'):
+        await cancel(app)
+    assert app.collaboration.receipt('request-1') == original
+    assert app.db.execute('SELECT receipt FROM commands WHERE id=?', ('request-1',)).fetchone()[0] == retained
+    assert 'request-1' not in app.collaboration.expiry_handles
     assert not app.state['sessions'][1]['coordinationReference']['cancellations']['items']
 
 

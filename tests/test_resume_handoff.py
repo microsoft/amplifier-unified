@@ -85,6 +85,20 @@ async def test_handoff_preserves_ownership_task_and_nonhuman_input(app, interrup
     assert len(app.runtime.inputs) == 1
 
 
+@pytest.mark.parametrize('seconds', [None, 60])
+async def test_handoff_keeps_deadline_and_member_inherits_it_without_ordinary_default(app, seconds):
+    origin, owner, member, human = await roots(app)
+    before = time.time()
+    await issue(app, origin, owner, member, human,
+        **({'expiresInSeconds': seconds} if seconds is not None else {}))
+    handoff = app.collaboration.receipt('handoff')
+    assert before + (seconds or 86400) <= handoff['expiresAt'] <= time.time() + (seconds or 86400)
+    await receive(app, owner)
+    await consume(app, owner, member)
+    resumed = await settled(app, 'member-resume', 'accepted')
+    assert resumed['expiresAt'] == handoff['expiresAt']
+
+
 async def test_cross_workspace_human_origin_cannot_issue_member_resume_scope(app):
     origin, owner, member, human = await roots(app, cross_workspace=True)
     with pytest.raises(AppError, match='same workspace'):

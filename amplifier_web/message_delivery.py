@@ -2,6 +2,17 @@
 import json
 
 
+def execution_boundary(session):
+    """Conservative latest saved input and Stop epoch; no new execution identity.
+
+    A saved input with unsettled delivery also fences an older Stop intent.
+    This is not a claim that the native owner incorporated that input.
+    """
+    latest = next((row.get('inputId') for row in reversed(session.get('messages', []))
+                   if row.get('role') == 'user' and row.get('inputId')), None)
+    return {'interruptionRevision': session.get('interruptionRevision', 0), 'inputId': latest}
+
+
 def sending_input(session):
     """Observe resident admission, never hydrate old conversation history."""
     return any(row.get('inputId') and row.get('delivery', {}).get('status') == 'sending'

@@ -192,10 +192,10 @@ async def test_durable_stop_revokes_full_permission_before_async_cancellation(ap
     entered, release = asyncio.Event(), asyncio.Event()
     original = app._stop
 
-    async def held(sid):
+    async def held(sid, boundary):
         entered.set()
         await release.wait()
-        await original(sid)
+        await original(sid, boundary)
 
     monkeypatch.setattr(app, '_stop', held)
     stopping = asyncio.create_task(app.dispatch('conversation.stop', {'sessionId': session['id']}))

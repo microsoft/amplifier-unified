@@ -125,6 +125,15 @@ async def test_admitted_stop_observes_canonical_terminal_state(attached, outcome
         # Hold admission so the response waiter sees both retained observations.
         await finish(app, sid)
     elif outcome == 'stale-error':
+        earlier = {'interruptionRevision': app._session(sid)['interruptionRevision'] - 1, 'inputId': 'input'}
+        await app.on_runtime_event('runtime.error', {
+            'sessionId': sid, 'event': 'stop.failed', 'stopBoundary': earlier,
+            'error': 'An older Stop could not be confirmed',
+        })
+        await app.on_runtime_event('runtime.status', {
+            'sessionId': sid, 'status': 'stopped', 'stopBoundary': {
+                'interruptionRevision': app._session(sid)['interruptionRevision'], 'inputId': 'older-input'},
+        })
         await app.on_runtime_event('runtime.error', {
             'sessionId': sid, 'error': 'Stale failure must be ignored',
             'terminalFailure': {'generationId': 'not-current'},
@@ -144,6 +153,9 @@ async def test_admitted_stop_observes_canonical_terminal_state(attached, outcome
     assert runtime.stops == [sid]  # No retry of an admitted Stop.
     assert not runtime.send_cancelled
     assert receipt(app, 'input')['delivery'] == 'accepted'
+    if runtime.stop_error:
+        assert app._session(sid)['lastInterruption']['outcome'] == 'unconfirmed'
+        assert 'failure' not in receipt(app, 'input')
 
 
 @pytest.mark.parametrize('detach', ['ask', 'release', 'release-then-error',

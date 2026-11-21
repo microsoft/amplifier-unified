@@ -37,6 +37,8 @@ Use coordination.subscribe only for an exact earlier request sent without a
 return. Exact retries never change that policy or rearm old work. A saved report,
 terminal qualification, queued/admitted notification, explicit acknowledgement
 and independent acceptance are different facts. Do not say a peer consumed the
-result merely because coordination.reply accepted it. Retain exact evidence
-through the existing file-reference mechanism; a commit URL is a citation, not
-transferred test evidence.
+result merely because coordination.reply accepted it. Ordinary peer speech needs
+no prior result acknowledgement or qualified artifact report. Use ordinary sends
+for discussion and review decisions; verify evidence needed for actual work.
+When returning file evidence, retain it through the existing file-reference
+mechanism; a commit URL is a citation, not transferred test evidence.
