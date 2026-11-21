@@ -7,7 +7,7 @@ from collections.abc import Callable
 from typing import Any
 from copy import deepcopy
 from collections import OrderedDict
-from .browser_detail import project
+from .browser_detail import PRIVATE_SESSION_FIELDS, project
 from .chat_navigation import ChatPage, snapshot as chat_snapshot, _matches, recent_activity
 from .session_navigation import is_top_level
 from .session_activity import navigation_busy
@@ -254,7 +254,7 @@ def snapshot(state, derived, *, session_id=None, index=None, copies=None, client
     # Report history is read through bounded coordination cursors, never copied
     # into every browser progress snapshot. The worker's latest report remains.
     from .shared_conversation import public_output
-    result['sessions'] = [{**{key: value for key, value in row.items() if key not in {'_externalAgentSource', '_externalRoom'}}, 'workers': [{key: value for key, value in worker.items() if key != 'reportReceipts'}
+    result['sessions'] = [{**{key: value for key, value in row.items() if key not in PRIVATE_SESSION_FIELDS}, 'workers': [{key: value for key, value in worker.items() if key != 'reportReceipts'}
                            for worker in row.get('workers', [])]} for row in map(public_output, result['sessions'])]
     # Only the selected owner's current, indexed waits; no transcript or peer
     # configuration loads, and this read never consumes a return notification.

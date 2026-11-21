@@ -146,6 +146,22 @@ class ContextContinuity:
             return copy.deepcopy(self.status)
         return {**copy.deepcopy(self.status), **module_status}
 
+    def native_history_input(self, instance, model):
+        """Last measured originals behind the installed native checkpoint, if known."""
+        checkpoint = self._accepted_record
+        if not checkpoint or not self._journal or checkpoint.get("identity") != {"provider": instance, "model": model}:
+            return None
+        summary = checkpoint.get("summary") or {}
+        if summary.get("kind") != "native":
+            return None
+        if ((summary.get("message") or {}).get("metadata") or {}).get("context-managed:portable-summary") is True:
+            return None
+        record = self._journal["attempts"].get(self._journal["current"]) or {}
+        if (record.get("state") != "committed" or not record.get("installedCandidate")
+                or record["installedCandidate"] != checkpoint.get("sha256")):
+            return None
+        return (record.get("verification") or {}).get("before")
+
     def _provider(self):
         providers = self.coordinator.get("providers") or {}
         loop = self.coordinator.get("orchestrator")

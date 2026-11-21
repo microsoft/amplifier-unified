@@ -54,6 +54,21 @@ def find_message(session, input_id):
                  if m.get('role') == 'user' and m.get('inputId') == input_id), None)
 
 
+def latest_user_input(session):
+    for row in reversed(session['messages']):
+        if row.get('role') != 'user':
+            continue
+        # Native service observations also have role=user. Keep genuine inputs
+        # as ordering barriers, including legacy inputs without an ID and web
+        # inputs that acquired observation metadata during history alignment.
+        if row.get('inputId') or row.get('nativeInputId') or 'delivery' in row:
+            return row
+        observation = row.get('observation')
+        if not (isinstance(observation, dict) and observation.get('source') and observation.get('id')):
+            return row
+    return None
+
+
 def contains_input(messages, input_id):
     for message in messages:
         if not isinstance(message, dict) or message.get('role') != 'user':

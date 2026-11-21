@@ -834,6 +834,8 @@ async def test_unsupported_model_listing_stays_unsupported_after_cached_browse(a
     monkeypatch.setattr(SetupManager, 'probe', resolver)
     app._session()['selection']={'instance':'one','model':'chosen'}
     await browse(app.management, deepcopy(app._session()))
+    resolver.assert_not_awaited()
+    await browse(app.management, deepcopy(app._session()), refresh=True, instance='one')
     await browse(app.management, deepcopy(app._session()))
     assert resolver.await_count == 1
     result=app.state['runtimeControl'][app._session()['id']]['configuration.catalog']

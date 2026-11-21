@@ -1463,6 +1463,10 @@ class Management:
                 async with self.service.lock:
                     self.service.state.setdefault('runtimeControl',{}).setdefault(session['id'],{}).update(refreshed)
                     self.service.state.setdefault('runtimeControl',{}).setdefault(session['id'],{})[args['operation']]=result
+                    if args['operation'] == 'context.clear' and result.get('cleared'):
+                        current = self.service._session(session['id'])
+                        current['_lastPromptUsage'] = {'startedAt': time.time()}
+                        current.pop('nextMessageImpact', None)
                     if args['operation'] in {'provider.select', 'provider.reset'}:
                         current=self.service._session(session['id'])
                         current['selection'] = copy.deepcopy(result['selection'])

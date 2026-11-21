@@ -309,7 +309,7 @@ async def test_legacy_visibility_edit_preserves_saved_exact_choice_and_only_refe
     coordinator = SimpleNamespace(config={'providers': mounted}, get_capability=lambda _: {
         'home': service.data_dir, 'workspace': chat['workspace'], 'sources': sources,
         'connectionKeys': mounted_catalog_keys(service.data_dir, chat['workspace'], mounted, sources, binding=True)})
-    await browse(service.management, chat)
+    await browse(service.management, chat, refresh=True)
     before = service.state['runtimeControl'][chat['id']]['configuration.catalog']
     old_key = before['providers'][0]['sharedCatalogKey']
     assert calls == {'one': 1, 'two': 1, 'broken': 1}
@@ -321,6 +321,8 @@ async def test_legacy_visibility_edit_preserves_saved_exact_choice_and_only_refe
     assert after['providers'][0]['sharedCatalogKey'] != old_key
     assert after['providers'][0]['connectionKey'] == binding
     assert after['connectionBindings'] == {}
+    assert calls == {'one': 1, 'two': 1, 'broken': 1}
+    await browse(service.management, chat, refresh=True, instance='one')
     assert calls == {'one': 2, 'two': 1, 'broken': 1}
     for _ in range(3):
         await browse(service.management, chat)
