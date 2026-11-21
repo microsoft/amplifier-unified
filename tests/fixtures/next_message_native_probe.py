@@ -15,14 +15,17 @@ PROVIDER = '''
 import asyncio, json, os
 from pathlib import Path
 from amplifier_core import ProviderInfo
-from amplifier_core.message_models import ChatResponse, TextBlock
+from amplifier_core.message_models import ChatResponse, TextBlock, Usage
 __amplifier_module_type__ = "provider"
 class FixtureProvider:
     name = "fixture"
+    info_id = "fixture"
+    reported_tokens = 0
     def __init__(self, config=None, coordinator=None):
         self.config, self.coordinator = config or {}, coordinator
     def get_info(self):
-        return ProviderInfo(id="fixture", display_name="Offline fixture", defaults={"model":"first"})
+        return ProviderInfo(id=self.info_id, display_name="Offline fixture", defaults={"model":"first"},
+                            capabilities=["prompt-cache:model-scoped"] if self.reported_tokens else [])
     def get_config_schema(self):
         return {"fields":[{"id":"reasoning_effort","field_type":"choice","required":False,"choices":["low","high"]}]}
     async def list_models(self):
@@ -34,7 +37,8 @@ class FixtureProvider:
                 "implementation":__file__,
                 "model":request.model,"effort":request.reasoning_effort,
                 "kwargsModel":kwargs.get("model"),"kwargsEffort":kwargs.get("reasoning_effort")})+"\\n")
-        return ChatResponse(content=[TextBlock(text="native-next-message-"+self.config["root"])])
+        usage = Usage(input_tokens=self.reported_tokens, output_tokens=1, total_tokens=self.reported_tokens+1) if self.reported_tokens else None
+        return ChatResponse(content=[TextBlock(text="native-next-message-"+self.config["root"])], usage=usage)
 async def mount(coordinator, config=None):
     if (config or {}).get("fail"):
         raise ValueError("Synthetic unavailable module")
@@ -43,6 +47,13 @@ async def mount(coordinator, config=None):
         await asyncio.Event().wait()
     await coordinator.mount("providers", FixtureProvider(config, coordinator), name="fixture")
 '''
+
+
+# Fixed provider telemetry exercises measured-price hints without building a large transcript.
+MEASURED_USAGE = """
+FixtureProvider.info_id = __name__.removeprefix("amplifier_module_provider_")
+FixtureProvider.reported_tokens = 64_000
+"""
 
 
 async def until(predicate):
@@ -65,7 +76,6 @@ def offline_discovery(root, binding):
     from amplifier_web import draft_defaults
     from amplifier_web.draft_defaults_probe import query
     from amplifier_web.setup import SetupManager
-    package = root / "provider" / "amplifier_module_provider_openai"
     # Real composition/metadata query in this isolated process. No host runtime
     # downloader is needed: the fixture's explicit modules are already installed.
     async def resolver(home, workspace, bundle=None, app_bundle=None, **kwargs):
@@ -74,12 +84,16 @@ def offline_discovery(root, binding):
             # Replace only dependency/probe transport with a local metadata
             # fixture; host discovery, cache and binding producers stay real.
             async def offline_probe(action, args, workspace):
-                import amplifier_module_provider_openai as offline
+                from importlib import import_module
                 from amplifier_web.provider_probe import public
-                assert Path(offline.__file__).resolve() == package/'__init__.py'
+                family = 'anthropic' if args.get('id') == 'alternate' else 'openai'
+                name = 'amplifier_module_provider_' + family
+                offline = import_module(name)
+                assert Path(offline.__file__).resolve() == root / 'provider' / name / '__init__.py'
                 provider = offline.FixtureProvider()
-                return {'info': public(provider.get_info()),
-                    'configSchema': provider.get_config_schema(), 'models': await provider.list_models(),
+                return {'providerMetadata': {'module': 'provider-' + family,
+                    'info': public(provider.get_info()), 'configSchema': provider.get_config_schema()},
+                    'models': await provider.list_models(), 'modelsProviderId': args['id'],
                     'modelsSupported': True, 'modelsProvenance': 'provider-api'}
             manager.probe = offline_probe
             try:
@@ -147,7 +161,8 @@ async def run(root, regression=False, binding=False, lifecycle=False, model_divi
         package = root/'provider'/'amplifier_module_provider_openai'
         package.mkdir()
         (package/'__init__.py').write_text(
-            PROVIDER.replace('name="fixture")', 'name="openai")') + '\nOpenAIProvider = FixtureProvider\n')
+            PROVIDER.replace('name="fixture")', 'name="openai")') + (MEASURED_USAGE if model_divider else '')
+            + '\nOpenAIProvider = FixtureProvider\n')
         (home/'diagnostics').mkdir(parents=True)
         (home/'diagnostics/config.json').write_text('{"providerRequests":true}')
     configured = [{'id': 'fixture', 'module': 'provider-openai',
@@ -158,7 +173,8 @@ async def run(root, regression=False, binding=False, lifecycle=False, model_divi
         alternate = root/'provider'/'amplifier_module_provider_anthropic'
         alternate.mkdir()
         (alternate/'__init__.py').write_text(
-            PROVIDER.replace('name="fixture")', 'name="anthropic")') + '\nAnthropicProvider = FixtureProvider\n')
+            PROVIDER.replace('name="fixture")', 'name="anthropic")') + MEASURED_USAGE
+            + '\nAnthropicProvider = FixtureProvider\n')
         other = {'module': 'provider-anthropic', 'source': str(provider.parent),
                  'config': {**connection, 'root': 'alternate', 'priority': 200}}
         path = Path(bundles[0])

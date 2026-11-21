@@ -49,7 +49,7 @@ async function verifyReopenedChat(seed) {
     ];
     async function openBrowser(width) {
       browser = await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined});
-      const page = await browser.newPage({viewport:{width,height:900}});
+      const page = await browser.newPage({locale:'en-US',viewport:{width,height:900}});
       await page.context().addCookies([{name:handshake.cookieName,value:handshake.cookieValue,url:handshake.url}]);
       await page.goto(handshake.url);
       await openChat(page);
@@ -90,20 +90,36 @@ async function verifyReopenedChat(seed) {
     await expect(panel.locator('#chat-provider')).toBeVisible();
     await expect(panel.locator('details.a-picker-advanced')).not.toHaveAttribute('open','');
     await expect(panel.getByRole('button',{name:'Refresh this connection'})).toBeHidden();
-    // Save an actual model change through the picker, close the page, and restore from a fresh browser.
-    await panel.locator('select#chat-model').selectOption('first');
-    await expect(restore(page)).toBeVisible();
-    await expect(panel.locator('[data-next-message-impact]')).toBeVisible();
-    await checkDividers(page,'pending choice');
-    if (evidence) {
-      await page.screenshot({path:evidence+'/picker-pending.png'});
+    const hint = p => p.locator('[data-next-message-impact="selection"]:visible');
+    async function checkMeasured(phase, p) {
+      const estimate = hint(p);
+      await expect(estimate).toHaveCount(1);
+      await expect(estimate).toContainText('64,000 input tokens');
+      await expect(estimate).toContainText('time and cost');
+      receipts.push({phase, estimate:await estimate.innerText()});
+      if (evidence) await p.screenshot({path:evidence+'/'+phase+'.png'});
     }
+    const revision = () => page.evaluate(id => window.amplifier.getState().sessions.find(s=>s.id===id).nextMessageRevision,result.sessionId);
+    const beforePick = await revision();
+    const modelSelect = panel.locator('select#chat-model');
+    await expect(panel.locator('#chat-provider option[value="fixture"]')).toContainText('May cost more');
+    await expect(modelSelect.locator('option[value="first"]')).toContainText('May cost more');
+    await panel.locator('#chat-provider').selectOption('fixture');
+    await checkMeasured('picker-draft',page);
+    assert.equal(await revision(),beforePick,'Choosing a connection before a model stays local');
+    await modelSelect.selectOption('first');
+    await expect(restore(page)).toBeVisible();
+    await checkMeasured('picker-pending',page);
+    await checkDividers(page,'pending choice');
+    await panel.getByRole('button',{name:'Close chat options'}).click();
+    await checkMeasured('picker-closed',page);
     await browser.close();
     page = await openBrowser(390);
     await checkDividers(page,'new browser');
+    await checkMeasured('reopened-pending',page);
     if (!await dialog(page).isVisible()) await options(page).click();
     await expect(restore(page)).toBeVisible();
-    await expect(dialog(page).locator('[data-next-message-impact]')).toBeVisible();
+    await checkMeasured('reopened-picker',page);
     await restore(page).focus();
     await page.keyboard.press('Enter');
     await expect(restore(page)).toHaveCount(0);
@@ -119,7 +135,12 @@ async function verifyReopenedChat(seed) {
     await checkDividers(page,'after restore and reload');
     const calls = (await readFile(seed+'/calls.jsonl','utf8')).trim().split('\n').length;
     assert.equal(calls, result.calls.length, 'Picking, reopening, and restoring should make zero model calls');
-    if (evidence) await writeFile(evidence+'/browser-result.json',JSON.stringify({sessionId:result.sessionId,receipts,extraModelCalls:calls-result.calls.length},null,2));
+    if (evidence) {
+      const client = await page.evaluate(async () => (await (await fetch('/client-component.json')).json()).source);
+      await writeFile(evidence+'/browser-result.json',JSON.stringify({
+        sessionId:result.sessionId, client, receipts, extraModelCalls:calls-result.calls.length,
+      },null,2));
+    }
     console.log('Model changes persisted at the three expected inputs. Pending settings restored from a new browser.');
   } catch (error) {
     originalError = error;

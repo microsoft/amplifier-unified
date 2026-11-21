@@ -78,6 +78,10 @@ async def exercise(root, sid, session, runtime, action, workers, report):
     assert observed_markers.keys() == expected.keys(), observed_markers
     for identity, (old, new) in expected.items():
         assert (observed_markers[identity]["previous"], observed_markers[identity]["current"]) == (old, new)
+    assert observed_markers["changed-model"].get("impact") == "cold-request"
+    assert observed_markers["changed-connection"].get("impact") == "cold-request"
+    assert "impact" not in observed_markers["changed-effort"]
+    assert session["nextMessageImpact"]["inputTokens"] == 64_000
     assert len(read_calls()) == len(turns()) == 6
     report.update(passed=True, sessionId=sid, turns=[t["inputId"] for t in turns()],
                   modelChanges=observed_markers, calls=read_calls(),
