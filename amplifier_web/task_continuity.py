@@ -273,11 +273,12 @@ def _read(operation, args, *, task, history, receipts, sid, goal=None,
 def definitions(schema, string):
     sid = {"sessionId": string(200)}
     revision = {"expectedRevision": {"type": "integer", "minimum": 0},
-                "expectedTaskId": {**string(200), "minLength": 1},
-                "expectedExecution": schema({
-                    "interruptionRevision": {"type": "integer", "minimum": 0},
-                    "inputId": {"type": ["string", "null"], "maxLength": 200}},
-                    ["interruptionRevision", "inputId"])}
+                "expectedTaskId": {**string(200), "minLength": 1}}
+    profile_stop = {"expectedExecution": {
+        **schema({"interruptionRevision": {"type": "integer", "minimum": 0},
+                  "inputId": {"type": ["string", "null"], "maxLength": 200}},
+                 ["interruptionRevision", "inputId"]),
+        "description": "Internal Agent Instance Stop receipt binding; accepted only by its source-guarded task.pause dispatch, not ordinary task controls."}}
     strings = {"type": "array", "maxItems": 100, "items": {**string(4000), "minLength": 1}}
     fields = {"objective": {**string(16000), "minLength": 1}, "constraints": strings,
               "correction": {**string(8000), "minLength": 1}, "questionIds": strings,
@@ -299,7 +300,7 @@ def definitions(schema, string):
             **sid, "commandId": string(200)}, ["sessionId", "commandId"])),
         "task.create": ("Set an authorized durable objective with dependencies and constraints, reusing this session's goal controller. An authorized follow-up preserves the completed objective in history. Does not send a message or schedule work.", schema({**sid, **revision, **fields}, ["sessionId", "expectedRevision", "objective"])),
         "task.update": ("Revise the task at its exact revision within existing authority. Managers may revise their own plans; preserve explicit user and owner limits. Corrections and used turns are retained; running work applies changes at the next request boundary.", schema({**sid, **revision, **fields}, ["sessionId", "expectedRevision"])),
-        "task.pause": ("Pause future goal continuation at the exact task revision when the user asks. Current work may finish; no side effect is rolled back.", schema({**sid, **revision}, ["sessionId", "expectedRevision"])),
+        "task.pause": ("Pause future goal continuation at the exact task revision when the user asks. Current work may finish; no side effect is rolled back.", schema({**sid, **revision, **profile_stop}, ["sessionId", "expectedRevision"])),
         "task.resume": ("Deliberately re-enable a paused or blocked task. Never infer resume from elapsed time or an unanswered question. Does not automatically send input.", schema({**sid, **revision}, ["sessionId", "expectedRevision"])),
         "task.waitForUpdate": ("Yield only this active task at its saved native checkpoint for the exact staged app update. Finish this turn; do not block or pause the task. One guarded continuation follows verified adoption, preserving its objective and used budget. Stop, changed task/settings, new input or a different update suppress it. Does not install, restart or interrupt other work. Read updates.drain for settlement; never replay an unknown request.", schema({
             **sid, **revision, "target": schema({
@@ -823,6 +824,9 @@ async def dispatch(service, operation, args, origin, command_id, include_state, 
     """Shared UI/agent path. Worker owns CAS and persists before acknowledging."""
     from .errors import AppError
     sid = args["sessionId"]
+    if "expectedExecution" in args and not (
+            operation == "task.pause" and origin == "acp-instance-stop" and guard is not None):
+        raise AppError("expectedExecution belongs only to the source-guarded Agent Instance Stop pause.", 400)
     if operation == "task.waitForUpdate":
         from .update_drain import wait_for_update
         return await wait_for_update(service, args, command_id, origin=origin, guard=guard)

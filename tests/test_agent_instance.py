@@ -366,6 +366,121 @@ async def test_native_only_delivery_reconciliation_and_lookup_not_invented_attri
     await peer.socket.close()
 
 
+async def test_native_only_accepted_input_cannot_be_resubmitted_without_host_fingerprint(host, monkeypatch):
+    configure(host)
+    app, _, runtime, path = host
+    service = app['service']
+    peer, _ = await connect_profile(host)
+    sid = (await new(peer, path, 'R'))['result']['sessionId']
+    source_plan(service, service._session(sid))
+    first = asyncio.create_task(prompt(peer, sid))
+    await until(lambda: len(runtime.sent) == 1)
+    original_command = runtime.sent[0][2]
+    await finish(service, sid, original_command)
+    assert 'result' in await first
+    native_inputs = {original_command}
+    probes = []
+
+    async def native_delivery(session, identity):
+        probes.append(identity)
+        return 'accepted' if identity in native_inputs else 'unknown'
+
+    monkeypatch.setattr(runtime, 'delivery', native_delivery, raising=False)
+    # Keep native input/effect evidence, but lose the host command and user view.
+    # The profile must reconcile this original identity, not recreate its row.
+    async with service.lock:
+        session = service._session(sid)
+        session['messages'] = [row for row in session['messages'] if row.get('inputId') != original_command]
+        session['messageAnnotations'].pop('input-status:' + original_command, None)
+        service.db.execute('DELETE FROM commands WHERE id=?', (original_command,))
+        service._publish_changes(sessions={sid})
+    inspected = (await inspect_input(peer, sid))['result']
+    assert inspected['delivery'] == 'accepted' and inspected['commandId'] == original_command
+    for text in ('Explicit source input', 'Different content for the same original revision'):
+        retried = await prompt(peer, sid, text=text)
+        assert 'error' in retried, retried
+        receipt = retried['error']['data']['inputReceipt']
+        assert receipt['delivery'] == 'accepted' and receipt['commandId'] == original_command
+        assert receipt['fingerprintAvailable'] is False  # No assertion of content equivalence.
+    assert len(runtime.sent) == len(native_inputs) == 1
+    assert not any(row.get('inputId') == original_command for row in service._session(sid)['messages'])
+    assert service.db.execute('SELECT 1 FROM commands WHERE id=?', (original_command,)).fetchone() is None
+    assert original_command in probes
+    # A genuinely fresh original key remains eligible; missing old content is
+    # not authority to freeze unrelated work or evidence that a retry is safe.
+    fresh = asyncio.create_task(prompt(peer, sid, identity='independent-fresh-input'))
+    await until(lambda: len(runtime.sent) == 2 or fresh.done())
+    assert len(runtime.sent) == 2, fresh.result() if fresh.done() else 'no input'
+    assert runtime.sent[-1][2] != original_command
+    await finish(service, sid, runtime.sent[-1][2])
+    assert 'result' in await fresh
+    await peer.socket.close()
+
+
+@pytest.mark.parametrize('operation', [
+    'task.create', 'task.update', 'task.pause', 'task.resume',
+    'task.block', 'task.complete', 'task.waitForUpdate',
+])
+async def test_public_task_mutation_does_not_ignore_profile_only_execution_condition(host, monkeypatch, operation):
+    from test_task_continuity import controls, create
+    app, client, runtime, path = host
+    service = app['service']
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(service.data_dir))
+    sid = (await service.dispatch('session.create', {
+        'workspace': str(path), 'bundle': 'foundation', 'select': False},
+        origin='ui', include_state=False))['result']['sessionId']
+    source_plan(service, service._session(sid))
+    worker = controls(sid)
+    try:
+        await create(worker)
+        original = json.dumps(worker.tasks.record(), sort_keys=True)
+        control_path = service.data_dir / 'sessions' / sid / 'control-state.json'
+        before = control_path.read_bytes()
+        forwarded = []
+
+        async def control(target, action, arguments, *, guard=None):
+            if guard:
+                guard()
+            forwarded.append(action)
+            return await worker.perform(action, arguments)
+
+        monkeypatch.setattr(runtime, 'control', control, raising=False)
+        monkeypatch.setattr(service.management, 'ensure_runtime', AsyncMock())
+        # Deliberately stale condition must be refused, not silently ignored by
+        # any public task mutation. Only the profile's guarded pause uses it.
+        args = {'sessionId': sid, 'expectedRevision': 1,
+                'expectedExecution': {'interruptionRevision': 99, 'inputId': 'stale'}}
+        if operation == 'task.create':
+            args['objective'] = 'Should not create new responsibility'
+        elif operation == 'task.block':
+            args['reason'] = 'Should not block'
+        elif operation == 'task.complete':
+            args.update(condition=worker.tasks.record()['objective'], evidence=['not-applied'])
+        elif operation == 'task.waitForUpdate':
+            args['target'] = {'hostInstanceId': 'old-host', 'attemptId': 'old-attempt',
+                              'revision': '0' * 40, 'generation': '0' * 32}
+        response = await client.post('/api/actions',
+            headers={'Authorization': 'Bearer ' + app['control_token']},
+            json={'action': operation, 'args': args, 'id': 'public-stale-' + operation})
+        payload = await response.json()
+        assert response.status in {400, 409}, payload
+        assert 'expectedExecution' in payload['error'], payload
+        assert not forwarded
+        assert json.dumps(worker.tasks.record(), sort_keys=True) == original
+        assert control_path.read_bytes() == before
+        # The legacy unconditional public pause remains a real persisted change.
+        positive = await client.post('/api/actions',
+            headers={'Authorization': 'Bearer ' + app['control_token']},
+            json={'action': 'task.pause', 'args': {'sessionId': sid, 'expectedRevision': 1},
+                  'id': 'legacy-unconditional-pause'})
+        assert positive.status == 200, await positive.text()
+        assert worker.tasks.record()['status'] == 'paused'
+        assert worker.tasks.record()['revision'] == 2
+        assert forwarded == ['task.pause']
+    finally:
+        await worker.close()
+
+
 async def test_taskless_reconnect_stop_and_delayed_stop_refuses_newer_input(host):
     configure(host)
     app, _, runtime, path = host

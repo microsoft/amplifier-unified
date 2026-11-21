@@ -365,6 +365,10 @@ grants**. Deduplication uses original source/input/revision, not text or JSON-RP
 call ID. Different payload or attribution for the same revision conflicts;
 another call ID does not authorize replay. A duplicate returns an explicit
 retained-input error with `data.inputReceipt`, not a false completed turn.
+When the host command/fingerprint is missing, canonical native delivery evidence
+still prevents resubmission. The receipt reports `fingerprintAvailable:false`;
+it proves no content match. No retained observation is not proof of non-delivery
+or permission to retry an uncertain submission under a fresh key.
 Revision identifies a source snapshot, not a promise of automatic revision
 ordering, retraction or reversal of earlier effects. The source adapter owns
 freshness before dispatch. Stop fences stale new intent; inspecting an old input
@@ -386,7 +390,9 @@ The optional `_amplifier/instance` request contains exact `sessionId`, `binding`
   `expectedRevision`, and `changes`. Update supports the existing objective,
   correction, constraints and turn-limit fields. Native task CAS and persistence
   retain used turns, effects and unknowns. Neither operation creates or resumes
-  an objective.
+  an objective. Ordinary public task mutations do not accept an execution
+  condition that they cannot enforce; the Stop profile's receipt-bound
+  `expectedExecution` is restricted to its internally guarded pause path.
 - `stop`: the same fields, empty `changes` and the caller's observed
   `expectedExecution`. Pauses that exact mutable task before native Stop;
   `taskId:null` is supported only when saved task authority proves no task or a
