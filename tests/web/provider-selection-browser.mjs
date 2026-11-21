@@ -111,7 +111,7 @@ try{
  const composer=page.getByRole('textbox',{name:'Message Amplifier'});
  const dialog=page.getByRole('dialog',{name:'Model for this chat',exact:true});
  const connectionLabel=instance=>`Synthetic provider (${instance})`;
- const labelFor=expected=>expected.effort?`${expected.model} (${expected.effort})`:expected.model;
+ const labelFor=(expected,selection)=>selection?.effort ? `${expected.model} (${expected.effort})` : expected.model;
  const beforeSends=[],displayObservations=[];
  const activate=locator=>page.viewportSize().width<600?locator.tap():locator.click();
  async function closeOptions(){
@@ -158,7 +158,7 @@ try{
   assert.equal(observed.effort,expected.effort);
   await save('display-observations.json',displayObservations);
   await closeOptions();
-  await expect(model.locator(':scope > span')).toHaveText(labelFor(expected),options);
+  await expect(model.locator(':scope > span')).toHaveText(labelFor(expected,(await state()).view.newSessionDraft?.selection),options);
   observed.chip=await model.locator(':scope > span').innerText();
   observed.dismissed=true;
   await save('display-observations.json',displayObservations);
@@ -187,7 +187,7 @@ try{
  async function send(expected,options={}){
   const text='Synthetic first request '+count;
   await composer.fill(text);
-  // Inspect the rendered destination immediately before Enter, independently
+  // Inspect the rendered destination immediately before Send, independently
   // of the provider's later complete-call recording.
   const before={expected,display:await assertDisplayed(expected,options),callsBefore:(await requests()).length};
   await expect(composer).toHaveText(text);
@@ -195,14 +195,14 @@ try{
   beforeSends.push(before);
   await save('before-sends.json',beforeSends);
   await save(`send-${count+1}-before.json`,before);
-  await composer.press('Enter');
+  await page.getByRole('button',{name:'Send message',exact:true}).click();
   await expect.poll(async()=>(await requests()).length).toBe(++count);
   const dispatched=await requests(),last=dispatched.at(-1);
   await save('dispatch.json',dispatched);
   await save(`send-${count}-dispatch.json`,last);
   assert.deepEqual(last.dispatch,expected);assert.deepEqual(last.effective,expected);
   await expect.poll(async()=>{const current=await state();return current.sessions.find(row=>row.id===last.sessionId)?.status}).toBe('idle');
-  await expect(model.locator(':scope > span')).toHaveText(labelFor(expected));
+  await expect(model.locator(':scope > span')).toHaveText(labelFor(expected,last.selection));
   return last;
  }
  await page.goto(url);
@@ -223,7 +223,7 @@ try{
  // Synthetic tier metadata traverses the production probe/catalog/DTO and the
  // bundled model picker. Native disclosure remains keyboard usable at narrow
  // width; prices are descriptive and do not change the selected request.
- await activate(model);await showComposerOption(page,'model');
+ await activate(model);await showComposerOption(page,'advanced');
  const tierPrice=dialog.getByRole('region',{name:'Pricing for cli-model',exact:true});
  const revealPricing=async target=>{
   // Center the requested evidence below the sticky dialog heading. Scrolling
@@ -288,7 +288,7 @@ try{
   error.matcherResult?.name==='toHaveValue'&&error.matcherResult.expected==='cli'&&error.matcherResult.actual==='unified');
  // The expected rejection leaves the provider page open. Dismiss normally.
  await closeOptions();
- await expect(model.locator(':scope > span')).toHaveText(labelFor(wrong));
+ await expect(model.locator(':scope > span')).toHaveText(labelFor(wrong,wrong));
  const negative={expected:inherited,observed:wrongDisplay,rejected:true,calls:(await requests()).length};
  await save('wrong-connection-negative.json',negative);
  assert.equal(negative.calls,0);
@@ -343,7 +343,7 @@ try{
  assert.equal((await requests()).length,count);
  await page.request.post(url+'/fixture/provider-resolution/release');
  await assertDisplayed({instance:'unified',model:'unified-model',effort:'high'});
- await activate(model);await showComposerOption(page,'model');
+ await activate(model);await showComposerOption(page,'advanced');
  const fixedPrice=dialog.getByRole('region',{name:'Pricing for unified-model',exact:true});
  await expect(fixedPrice).toContainText('$8');
  await expect(fixedPrice).toContainText('$40');
@@ -382,6 +382,7 @@ try{
  assert.deepEqual((await state()).view.newSessionDraft.selection,wrong,'Changing the local connection field does not silently save a default model');
   // Successful recommendations are not an entitlement gate. The uncommon exact
   // ID path stays explicit and does not add a made-up row to the API inventory.
+  await showComposerOption(page,'advanced');
   const announcement=dialog.locator('[data-part="model-pricing-announcement"]');
   await expect(announcement).toHaveAttribute('aria-live','polite');
   await expect(announcement).toHaveAttribute('aria-atomic','true');
@@ -421,8 +422,11 @@ try{
  await dialog.evaluate(node=>{node.scrollTop=0});
  await page.screenshot({path:`${evidence}/narrow-manual.png`});
  await closeOptions();
- await send({instance:'unified',model:'manual-deployment',effort:wrong.effort}, {manual:true});
- await activate(model);
+ // Changing the exact model clears its old explicit effort. This connection
+ // supplies high by default and the compact chip omits that inherited value.
+ assert.deepEqual((await state()).view.newSessionDraft.selection,{instance:'unified',model:'manual-deployment'});
+ await send({instance:'unified',model:'manual-deployment',effort:'high'}, {manual:true});
+ await activate(model);await showComposerOption(page,'advanced');
  await fault('empty');
  await dialog.getByRole('button',{name:'Refresh this connection',exact:true}).click();
  await expect(dialog.getByText('This connection returned no models.',{exact:true})).toBeVisible();
@@ -443,7 +447,7 @@ try{
  ]){
   const response=await page.request.post(url+'/fixture/provider-resolution/fault',{data:{id:'unified',mode:'ready',origin}});
   assert.equal(response.status(),200);
-  await activate(model);
+  await activate(model);await showComposerOption(page,'advanced');
   await dialog.getByRole('button',{name:'Refresh this connection',exact:true}).click();
   await expect(dialog.getByText(label,{exact:true})).toBeVisible();
   await expect(dialog.locator('option[value="unified-model"]')).toHaveCount(1);
