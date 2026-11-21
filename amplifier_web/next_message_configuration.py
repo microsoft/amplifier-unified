@@ -8,8 +8,15 @@ def definitions(schema, string):
     from .new_chat import SELECTION
     value = schema({'sessionId': string(200), 'expectedRevision': {'type': 'integer', 'minimum': 0},
         'bundle': {**string(2000), 'minLength': 1}, 'selection': SELECTION,
-        'resetModel': {'type': 'boolean'}}, ['sessionId', 'expectedRevision'])
-    value['anyOf'] = [{'required': ['bundle']}, {'required': ['selection']}]
+        'resetModel': {'type': 'boolean'}, 'restorePreviousInputId': {**string(200), 'minLength': 1},
+        'restorePreviousGenerationId': {**string(200), 'minLength': 1}}, ['sessionId', 'expectedRevision'])
+    restore_fields = ['restorePreviousInputId', 'restorePreviousGenerationId']
+    value['oneOf'] = [
+        {'required': restore_fields,
+         'not': {'anyOf': [{'required': [key]} for key in ('bundle', 'selection', 'resetModel')]}},
+        {'not': {'anyOf': [{'required': [key]} for key in restore_fields]},
+         'anyOf': [{'required': ['bundle']}, {'required': ['selection']}]},
+    ]
     return {
         'conversation.configure': ('Save an explicitly targeted conversation’s Next message bundle/model choices without preparing a worker. '
             'Current authenticated Full root operators may target other registered own chats. '
@@ -110,6 +117,9 @@ def save(service, args, authority=None):
         raise AppError(session['historyReadOnlyReason'], 409)
     if session.get('sessionKind', 'root') != 'root':
         raise AppError('Worker and internal sessions retain their original configuration.', 409)
+    if 'restorePreviousInputId' in args:
+        from .turn_model_settings import restore
+        return restore(service, session, args['restorePreviousInputId'], args['restorePreviousGenerationId'], authority)
     selected = selection(args['selection']) if 'selection' in args else None
     if 'selection' in args and not selected:
         raise AppError('Choose a provider and model.', 400)
@@ -118,6 +128,8 @@ def save(service, args, authority=None):
     bundle = args.get('bundle', '').strip()
     if 'bundle' in args and not bundle:
         raise AppError('Choose a bundle.', 400)
+    if 'previousTurnSettings' in session:
+        session['previousTurnSettings'].pop('restorePending', None)
     if 'bundle' in args:
         if (bundle == session.get('bundle') and not args.get('resetModel')
                 and not pending_input(service, session)
