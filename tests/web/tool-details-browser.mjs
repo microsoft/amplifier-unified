@@ -18,7 +18,8 @@ const before=await control({op:'inspect-work-source'});
 const browser=await chromium.launch({headless:true,args:process.env.DTU_CHROMIUM_SINGLE_PROCESS?['--no-zygote','--single-process','--disable-gpu']:[]});
 const legacyReads=[],legacyResponses=[];
 try{
- const page=await browser.newPage({viewport:{width:1300,height:1050},extraHTTPHeaders:headers}),errors=[],reads=[];
+ const context=await browser.newContext({viewport:{width:1300,height:1050},extraHTTPHeaders:headers});
+ const page=await context.newPage(),errors=[],reads=[];
  page.on('pageerror',error=>{errors.push(error.message);console.error(error.message)});
  page.on('request',request=>{const url=new URL(request.url());if(url.pathname==='/api/conversation/detail'&&['tool','field'].includes(url.searchParams.get('part')))reads.push(url)});
  page.on('response',response=>{
@@ -34,7 +35,8 @@ try{
  const turnButton=turn.locator(':scope > button.a-execution-turn-line');await turnButton.waitFor();
  if(await turnButton.getAttribute('aria-expanded')==='false')await turnButton.click();
  const row=id=>turn.locator(`[data-node-id$=":${id}"]`);
- const open=async id=>{const node=row(id),button=node.locator(':scope > button.a-execution-action-line');await button.waitFor();if(await button.getAttribute('aria-expanded')==='false')await button.click();return node};
+ const inspector=page.locator('#work-step-inspector');
+ const open=async id=>{const node=row(id),button=node.locator(':scope > button.a-execution-action-line');await button.waitFor();if(await button.getAttribute('aria-expanded')==='false')await button.click();await expect(inspector).toBeVisible();return inspector};
  await expect(row('older-exact').locator(':scope > button')).toContainText('older-exact-command');
  const source=before.sessions.find(session=>session.execution?.turns?.some(turn=>turn.id==='tool-details'));
  const delegateId=source.execution.nodes.find(node=>node.toolCallId==='older-delegate').id;
@@ -52,14 +54,14 @@ try{
  await page.route('**/api/conversation/detail?**',async route=>{if(new URL(route.request().url()).searchParams.get('part')==='tool'&&new URL(route.request().url()).searchParams.get('id')===olderId&&failNext){failNext=false;return route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Saved details temporarily unavailable'})})}return route.continue()});
  const older=await open('older-exact');
  await expect(older.getByRole('button',{name:'Retry saved details'})).toBeVisible();
- await expect(older.locator(':scope > button')).toContainText('older-exact-command');
+ await expect(row('older-exact').locator(':scope > button')).toContainText('older-exact-command');
  await older.getByRole('button',{name:'Retry saved details'}).click();
  await expect(older.getByRole('button',{name:'Search older saved details'})).toBeVisible();
  await older.getByRole('button',{name:'Search older saved details'}).click();
  await expect(older).toContainText('OLDER-EXACT-RESULT-END');
  await older.getByRole('button',{name:/Show all .* lines/}).first().click();
  await expect(older).toContainText('OLDER-EXACT-INPUT-END');
- assert.equal(await older.locator('.a-related-saved-records').count(),0,'Exact observation has directly associated fields');
+ assert.equal(await older.getByLabel('Related saved records').count(),0,'Exact observation has directly associated fields');
  await expect.poll(async()=>await delegateRequest.getByRole('button',{name:'Search older saved details'}).count()>0||(await delegateRequest.innerText()).includes('Review retained request')).toBe(true);
  assert.ok(!(await delegateReply.innerText()).includes('Response not recorded'),'Unavailable loaded page is not proof of an absent recording');
  if(await delegateRequest.getByRole('button',{name:'Search older saved details'}).count())await delegateRequest.getByRole('button',{name:'Search older saved details'}).click();
@@ -69,8 +71,8 @@ try{
  // Child operations are now directly interleaved with the exchange.
  await expect(turn.getByRole('button',{name:/^Worker activity/})).toHaveCount(0);
  const child=await open('child-exact');
- await expect(child.locator(':scope > button')).toContainText('Child validation failed');
- await expect(child.locator(':scope > button')).toContainText('Exit 2');
+ await expect(row('child-exact').locator(':scope > button')).toContainText('Child validation failed');
+ await expect(row('child-exact').locator(':scope > button')).toContainText('Exit 2');
  await expect(child.getByRole('button',{name:/Show all .* lines/}).first()).toBeVisible();
  await child.getByRole('button',{name:/Show all .* lines/}).first().click();
  await expect(child).toContainText('CHILD-CODE-END');await expect(child).toContainText('CHILD-OUTPUT-END');
@@ -78,13 +80,13 @@ try{
  await expect(legacy.getByRole('button',{name:'Search older saved details'})).toBeVisible();
  if(await legacy.getByRole('button',{name:'Search older saved details'}).count())await legacy.getByRole('button',{name:'Search older saved details'}).click();
  await expect(legacy).toContainText('The app cannot confirm which attempt they belong to.');
- await expect(legacy.locator('.a-related-saved-records > .a-execution-node')).toHaveCount(3);
- for(const button of await legacy.locator('.a-related-saved-records .a-execution-node > button.a-execution-action-line').all())await button.click();
+ await expect(legacy.locator('[aria-label="Related saved records"] > [data-observation-id]')).toHaveCount(3);
+ for(const button of await legacy.locator('[aria-label="Related saved records"] > [data-observation-id] > button').all())await button.click();
  await expect(legacy).toContainText('LEGACY-INPUT-END');await expect(legacy).toContainText('LEGACY-OUTPUT-END');
  const after=await control({op:'inspect-work-source'});
  assert.deepEqual(after,before,'Inspecting saved actions does not start work or mutate source records');
  assert.deepEqual(errors,[]);
- await older.scrollIntoViewIfNeeded();await page.screenshot({path:join(outputDir,'older-tool-details.png')});
+ await open('older-exact');await older.scrollIntoViewIfNeeded();await page.screenshot({path:join(outputDir,'older-tool-details.png')});
  await page.setViewportSize({width:390,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
  await page.screenshot({path:join(outputDir,'older-tool-details-mobile.png')});
  // Keep exact open fields while newer events cross the latest-100 cutoff
@@ -94,14 +96,25 @@ try{
  await page.reload();await showFixtureConversation(page);
  const retainedTurn=page.locator('[data-group-id="recordings@recording-question"]');
  await retainedTurn.locator(':scope > button.a-execution-turn-line').click();
- const retainedTool=retainedTurn.locator('[data-node-id$=":retained-tool"]');
- await retainedTool.locator(':scope > button.a-execution-action-line').click();
+ // Each client has one selected step. Keep the tool open in this client and
+ // the model in a second client through the same retention rollover.
+ const modelPage=await context.newPage();
+ await modelPage.goto(base);await showFixtureConversation(modelPage);
+ modelPage.on('pageerror',error=>errors.push(error.message));
+ modelPage.on('request',request=>{const url=new URL(request.url());if(url.pathname==='/api/conversation/detail'&&['tool','field'].includes(url.searchParams.get('part')))reads.push(url)});
+ const modelTurn=modelPage.locator('[data-group-id="recordings@recording-question"]');
+ const modelTurnButton=modelTurn.locator(':scope > button.a-execution-turn-line');
+ if(await modelTurnButton.getAttribute('aria-expanded')==='false')await modelTurnButton.click();
+ const retainedToolRow=retainedTurn.locator('[data-node-id$=":retained-tool"]');
+ await retainedToolRow.locator(':scope > button.a-execution-action-line').click();
+ const retainedTool=inspector;
  await expect(retainedTool.getByRole('button',{name:/Show all .* lines/})).toHaveCount(2);
  for(let index=0;index<2;index++)await retainedTool.getByRole('button',{name:/Show all .* lines/}).first().click();
  await expect(retainedTool).toContainText('TOOL-INPUT-END');
  await expect(retainedTool).toContainText('TOOL-OUTPUT-END');
- const retainedModel=retainedTurn.locator('[data-kind="llm"]').filter({hasText:'bounded-recording'});
- await retainedModel.locator(':scope > button.a-execution-action-line').click();
+ const retainedModelRow=modelTurn.locator('[data-kind="llm"]').filter({hasText:'bounded-recording'});
+ await retainedModelRow.locator(':scope > button.a-execution-action-line').click();
+ const retainedModel=modelPage.locator('#work-step-inspector');
  for(const field of ['request','response']){
   await retainedModel.getByRole('button',{name:new RegExp('^View '+field)}).click();
   await retainedModel.getByRole('button',{name:new RegExp('^'+field[0].toUpperCase()+field.slice(1)+' Object')}).click();
@@ -127,6 +140,7 @@ try{
  assert.equal(reads.length,fieldReadsBefore,'Rollover must not discard and re-fetch already loaded fields');
  assert.deepEqual(await control({op:'inspect-work-source'}),retainedBefore,'Inspection and rollover do not replay work');
  await page.screenshot({path:join(outputDir,'open-fields-after-rollover.png')});
+ assert.deepEqual(errors,[]);
  console.log('Bounded older exact, delegate and child fields render; legacy observations remain separate; inspection preserves runtime and source state.');
 }catch(error){
  console.error(log);
@@ -136,9 +150,9 @@ try{
  try{
   await Promise.allSettled(legacyResponses);
   const page=browser.contexts()[0]?.pages()[0];
-  diagnostic.dom=page?await page.locator('[data-node-id$=":older-legacy"]').evaluateAll(rows=>rows.map(row=>({
+  diagnostic.dom=page?await page.locator('#work-step-inspector').evaluateAll(rows=>rows.map(row=>({
    expanded:row.querySelector(':scope > button')?.getAttribute('aria-expanded'),
-   observations:[...row.querySelectorAll('.a-related-saved-records > .a-execution-node')].map(node=>node.dataset.nodeId),
+   observations:[...row.querySelectorAll('[aria-label="Related saved records"] > [data-observation-id]')].map(node=>node.dataset.observationId),
    controls:[...row.querySelectorAll('button')].map(button=>({label:button.getAttribute('aria-label')||button.textContent,disabled:button.disabled})),
    alerts:[...row.querySelectorAll('[role=alert]')].map(alert=>alert.textContent)}))):[];
   await writeFile(join(outputDir,'legacy-tool-lookup-failure.json'),JSON.stringify(diagnostic,null,2));

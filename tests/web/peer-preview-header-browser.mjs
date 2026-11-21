@@ -49,8 +49,13 @@ try{
  await page.evaluate(()=>{window.peerHeaderDocument=crypto.randomUUID()});const before=await readState();
  for(const width of [320,390]){
   await page.setViewportSize({width,height:900});await source.scrollIntoViewIfNeeded();
-  const top=await pane.evaluate(n=>n.scrollTop);
-  await source.click();const panel=page.getByRole('dialog',{name:'Read-only source chat preview',exact:true});
+  // Browser actionability can scroll the source into view immediately before
+  // dispatch. Preserve the reading position at actual activation.
+  await source.evaluate(button=>button.addEventListener('click',()=>{
+   window.peerPreviewScrollAtClick=button.closest('[role="log"]').scrollTop;
+  },{once:true,capture:true}));
+  await source.click();
+  const top=await page.evaluate(()=>window.peerPreviewScrollAtClick);const panel=page.getByRole('dialog',{name:'Read-only source chat preview',exact:true});
   await expect(panel).toBeVisible();await expect(panel.locator('.a-canvas-head strong')).toHaveText('Accessibility review — keyboard, touch and narrow screen behavior');
   await expect(panel.getByRole('button',{name:'Open chat',exact:true})).toBeEnabled();
   await expect(panel.locator('[data-preview-message-id]')).toHaveCount(1);

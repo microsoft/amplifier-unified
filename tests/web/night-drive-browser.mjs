@@ -22,9 +22,16 @@ try{
  const url=await new Promise((resolve,reject)=>{let text='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),20000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});fixture.stdout.on('data',chunk=>{text+=chunk;for(const line of text.split('\n'))try{const value=JSON.parse(line);if(value.url){clearTimeout(timer);resolve(value.url)}}catch{}})});
  browser=await chromium.launch({headless:true});
  const context=await browser.newContext({viewport:{width:1440,height:1000},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'},reducedMotion:'no-preference',colorScheme:'light'});
- // Forward actual authenticated WebSocket frames, holding only delivery for
- // the reconnect proof. Never fabricate a baseline or mutate browser state.
- const sockets=[];let holdFrames=false;
+ // A pending action can recover via /api/state as well as the socket. Retain
+ // real HTTP snapshots until the held socket baseline has reached the UI.
+ const sockets=[];let holdFrames=false,releaseSnapshots=null;
+ await context.route(url=>url.pathname==='/api/state',async route=>{
+  const response=await route.fetch();
+  try{
+   if(releaseSnapshots)await releaseSnapshots;
+   await route.fulfill({response});
+  }finally{await response.dispose()}
+ });
  await context.routeWebSocket('**/api/events/ws?*',socket=>{
   const server=socket.connectToServer(),entry={socket,server,frames:[],closed:false};sockets.push(entry);
   server.onMessage(message=>{
@@ -83,7 +90,7 @@ try{
   await expect.poll(async()=>(await state()).appActivity.active).toBe(prior==='working');
   report.reconnects.push({phase:'before-hold',prior,appActivity:(await state()).appActivity});
   const previousSocket=sockets.at(-1);assert.ok(previousSocket,'Real state WebSocket is used');
-  holdFrames=true;
+  const gate=Promise.withResolvers();holdFrames=true;releaseSnapshots=gate.promise;
   try{
    // Server state changes while the old browser snapshot is retained. The
    // replacement connection must not claim that old active OR idle is current.
@@ -95,7 +102,8 @@ try{
    await expect.poll(()=>sockets.length).toBeGreaterThan(count);
    const current=sockets.at(-1);
    await expect(app).toHaveAttribute('data-app-connection','connected');
-   await expect.poll(()=>current.frames.some(message=>JSON.parse(String(message)).event==='state')).toBe(true);
+   const baseline=()=>current.frames.map(message=>JSON.parse(String(message))).find(frame=>frame.event==='state');
+   await expect.poll(()=>baseline()?.data?.appActivity?.active).toBe(next==='working');
    await expect(app).toHaveAttribute('data-app-activity','unknown');
    assert.equal((await state()).appActivity.active,prior==='working','Old snapshot remains retained until baseline delivery');
    const unready=await measure('reconnect open after '+previousActivity);
@@ -107,7 +115,7 @@ try{
    assert.equal((await state()).appActivity.active,next==='working');
    report.reconnects.push({prior:previousActivity,transportOpen:true,baselineHeld:true,
     during:'unknown',animation:unready.animation,heldFrames:held.length,after:expected});
-  }finally{holdFrames=false}
+  }finally{holdFrames=false;releaseSnapshots=null;gate.resolve()}
  }
  // Local attention remains a native notice; decoration never acknowledges it.
  const created=await action('question.create',{sessionId:other,prompt:'Synthetic optional design check',required:false,dependency:'Synthetic appearance attention check'});

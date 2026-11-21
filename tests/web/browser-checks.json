@@ -683,6 +683,14 @@
       }
     },
     {
+      "id": "grouped-work-inspector",
+      "command": ["node", "tests/web/grouped-work-inspector-browser.mjs"],
+      "env": {
+        "AMPLIFIER_TEST_PYTHON": "{root}/.venv/bin/python",
+        "AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/grouped-work-inspector"
+      }
+    },
+    {
       "id": "canonical-work",
       "command": [
         "node",
@@ -1313,6 +1321,7 @@
     "delegate-work-stream",
     "tool-details",
     "tool-previews",
+    "grouped-work-inspector",
     "canonical-work",
     "interim-replies",
     "tool-outcomes",
@@ -1401,6 +1410,8 @@
     "shared-room",
     "work-hierarchy",
     "external-approval",
-    "attachment-preview"
+    "attachment-preview",
+    "transcript-suggestion-mounted",
+    "transcript-suggestion-boot"
   ]
 }

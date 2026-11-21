@@ -34,7 +34,12 @@ try{
   if(await group.getAttribute('aria-expanded')==='false')await group.click();
   await expect(group).toHaveAttribute('aria-expanded','true');
  }
- const action=id=>turn.locator(`[data-node-id$=":${id}"]`),open=async id=>{const row=action(id);await row.waitFor();const button=row.locator(':scope > button.a-execution-action-line');if(await button.getAttribute('aria-expanded')==='false')await button.click();return row};
+ const action=id=>turn.locator(`[data-node-id$=":${id}"]`);
+ const inspector=page.locator('#work-step-inspector');
+ const open=async id=>{
+  await action(id).locator(':scope > button.a-execution-action-line').click();
+  await expect(inspector).toBeVisible();return inspector;
+ };
  await expect(action('command').locator(':scope > button')).toContainText('bash');
  await expect(action('command').locator(':scope > button')).toContainText('python -m pytest');
  await expect(action('app').locator(':scope > button')).toContainText('session.rename');
@@ -58,7 +63,7 @@ try{
  const tasks=await open('tasks');assert.equal(await tasks.locator('.a-execution-checklist li').count(),2);assert.match(await tasks.innerText(),/Review the patch/);
  const app=await open('app');assert.match(await app.innerText(),/session.rename/);assert.match(await app.innerText(),/Retry operation ID check/);
  const empty=await open('empty');assert.match(await empty.innerText(),/No output/);
- const failed=await open('failed');assert.match(await failed.innerText(),/AssertionError: expected committed/);assert.match(await failed.innerText(),/Exit 1/);assert.equal(await failed.locator('.a-execution-warning').count(),1);
+ const failed=await open('failed');assert.match(await failed.innerText(),/AssertionError: expected committed/);assert.match(await failed.innerText(),/Exit 1/);assert.equal(await action('failed').locator('.a-execution-warning').count(),1);
  const malformed=await open('malformed');assert.match(await malformed.innerText(),/unknown/);assert.match(await malformed.innerText(),/Invalid task input/);
  const delegated=turn.getByRole('region',{name:'Request',exact:true});
  await expect(delegated).toContainText('Review the retry test');
@@ -67,18 +72,18 @@ try{
  await expect(action('nested').locator(':scope > button')).toHaveAttribute('aria-expanded','false');
  const nested=await open('nested');assert.match(await nested.innerText(),/git diff --check/);assert.match(await nested.innerText(),/No output/);
  await page.locator('[data-node-id="legacy"] > button').click();
- assert.match(await page.locator('[data-node-id="legacy"]').innerText(),/Action content is not (?:available|in the loaded saved work)/);assert.ok(!(await turn.innerText()).includes('Tool completed'));
- // Agent-facing view update uses exactly the same expansion path as buttons.
+ assert.match(await inspector.innerText(),/Action content is not (?:available|in the loaded saved work)/);assert.ok(!(await turn.innerText()).includes('Tool completed'));
+ // Disclosure choices belong to the chat view. The inspector follows the
+ // user's current selection, and opens a freshly selected step after reload.
  const expanded=await page.evaluate(()=>window.amplifier.getState().view.executionExpanded);
+ await inspector.getByRole('button',{name:'Close step details'}).click();
  await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{executionExpanded:[]}}));
- await page.waitForFunction(()=>!document.querySelector('[data-group-id="inspect@long-answer"] .a-execution-body'));
+ await expect(action('patch')).toHaveCount(0);
  await page.evaluate(expanded=>window.amplifier.dispatch('view.update',{patch:{executionExpanded:expanded}}),expanded);
- await patch.locator('.a-execution-diff').waitFor();
- await page.reload();await patch.locator('.a-execution-diff').waitFor();assert.match(await command.innerText(),/12 passed/);
- // Capture the two primary action views together at a reviewable size.
- const ids=[await patch.getAttribute('data-node-id'),await command.getAttribute('data-node-id')];
- await page.evaluate(ids=>window.amplifier.dispatch('view.update',{patch:{executionExpanded:['turn:inspect@long-answer',...ids],navPinned:false,navExpanded:false}}),ids);
- await patch.locator('.a-execution-diff').waitFor();await patch.scrollIntoViewIfNeeded();await page.mouse.move(1250,20);
+ await page.reload();await showFixtureConversation(page);
+ await expect(inspector).toHaveCount(0);
+ await open('command');await expect(inspector).toContainText('12 passed');
+ await open('patch');await expect(inspector.locator('.a-execution-diff')).toBeVisible();
  await page.screenshot({path:join(outputDir,'actions-desktop.png')});
  await page.emulateMedia({colorScheme:'dark'});await page.screenshot({path:join(outputDir,'actions-dark.png')});
  await page.setViewportSize({width:390,height:844});await patch.scrollIntoViewIfNeeded();await page.mouse.move(380,830);

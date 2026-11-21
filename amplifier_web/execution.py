@@ -280,6 +280,9 @@ def ingest(session,event):
     if not identity:return
     allowed={'id','revision','producerId','budgetRevision','admittedAt','parentId','turnId','admissionInputId','generationId','runtimeOwnerId','purpose','sessionId','rootSessionId','kind','phase','label','toolCallId','provider','model','routing','runId','parentProvider','startedAt','endedAt','usage','summary','input','output','error','lifecycle','failure','liveObservation'}
     safe={k:v for k,v in event.items() if k in allowed}
+    if safe.get('kind') == 'llm' and 'modelOutcome' in event:
+        from .model_outcome import public_outcome
+        safe.update(public_outcome(event['modelOutcome']))
     from .tool_observations import metadata as tool_metadata
     safe.update(tool_metadata(event))
     for key in ('assignmentId', 'assignmentRevision', 'assignmentReservation'):
