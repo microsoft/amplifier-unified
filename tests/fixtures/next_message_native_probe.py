@@ -51,13 +51,21 @@ async def until(predicate):
             await asyncio.sleep(.02)
 
 
-async def run(root, regression=False, binding=False, lifecycle=False):
-    root.mkdir(parents=True, exist_ok=False)
-    home, shared, workspace = (root/name for name in ('app', 'shared', 'workspace'))
-    shared.mkdir(); workspace.mkdir()
+def use_isolated_state(root):
+    home, shared = root / "app", root / "shared"
     os.environ.update(AMPLIFIER_WEB_HOME=str(home), AMPLIFIER_HOME=str(shared),
         AMPLIFIER_UNIFIED_IMPORT_HOME=str(root/'legacy'), AMPLIFIER_SESSION_STATE_HOME=str(root/'ownership'),
         AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH=str(root/'capture'), AMPLIFIER_RUNTIME_IMMUTABLE='1')
+    for key in list(os.environ):
+        if key.endswith(('_API_KEY', '_ACCESS_TOKEN')):
+            os.environ.pop(key, None)
+
+
+async def run(root, regression=False, binding=False, lifecycle=False, model_divider=False):
+    root.mkdir(parents=True, exist_ok=False)
+    home, shared, workspace = (root/name for name in ('app', 'shared', 'workspace'))
+    shared.mkdir(); workspace.mkdir()
+    use_isolated_state(root)
     import amplifier_module_context_simple
     import amplifier_module_loop_live
     from amplifier_web.runtime import RuntimeManager
@@ -74,9 +82,6 @@ async def run(root, regression=False, binding=False, lifecycle=False):
     from amplifier_web.setup import SetupManager
     import yaml
 
-    for key in list(os.environ):
-        if key.endswith(('_API_KEY', '_ACCESS_TOKEN')):
-            os.environ.pop(key, None)
     provider = root/'provider'/'amplifier_module_provider_fixture'
     provider.mkdir(parents=True)
     (provider/'__init__.py').write_text(PROVIDER)
@@ -115,12 +120,28 @@ async def run(root, regression=False, binding=False, lifecycle=False):
             PROVIDER.replace('name="fixture")', 'name="openai")') + '\nOpenAIProvider = FixtureProvider\n')
         (home/'diagnostics').mkdir(parents=True)
         (home/'diagnostics/config.json').write_text('{"providerRequests":true}')
+    configured = [{'id': 'fixture', 'module': 'provider-openai',
+                   'source': str(provider.parent), 'config': connection}]
+    if model_divider:
+        # A second module and connection, advertising the same model IDs, proves
+        # provider-only changes independently of a model-name change.
+        alternate = root/'provider'/'amplifier_module_provider_anthropic'
+        alternate.mkdir()
+        (alternate/'__init__.py').write_text(
+            PROVIDER.replace('name="fixture")', 'name="anthropic")') + '\nAnthropicProvider = FixtureProvider\n')
+        other = {'module': 'provider-anthropic', 'source': str(provider.parent),
+                 'config': {**connection, 'root': 'alternate', 'priority': 200}}
+        path = Path(bundles[0])
+        value = yaml.safe_load(path.read_text())
+        value['providers'].append({**other, 'instance_id': 'alternate'})
+        path.write_text(yaml.safe_dump(value))
+        configured.append({**other, 'id': 'alternate'})
     (shared/'settings.yaml').write_text(yaml.safe_dump({'bundle': {'active': bundles[0], 'app': []},
         'web_bundles': {'excluded': list(APPENDED_DEFAULTS)},
-        **({'config': {'providers': [{'id': 'fixture', 'module': 'provider-openai',
-            'source': str(provider.parent), 'config': connection}]}} if binding else {}),
+        **({'config': {'providers': configured}} if binding else {}),
         'sources': {'modules': {'loop-live': loop, 'context-simple': context,
-            ('provider-openai' if binding else 'provider-fixture'): str(provider.parent)}}}))
+            ('provider-openai' if binding else 'provider-fixture'): str(provider.parent),
+            **({'provider-anthropic': str(provider.parent)} if model_divider else {})}}}))
     # Real composition/metadata query in this isolated process. No host runtime
     # downloader is needed: the fixture's explicit modules are already installed.
     async def resolver(home, workspace, bundle=None, app_bundle=None, **kwargs):
@@ -192,9 +213,14 @@ async def run(root, regression=False, binding=False, lifecycle=False):
             value = await response.json()
             assert response.status == 200 and value.get('accepted'), value
             return value
-        await action('session.create', {'bundle': bundles[0], 'title': 'Native next message'}, 'create')
+        title = 'Native model-change history' if model_divider else 'Native next message'
+        await action('session.create', {'bundle': bundles[0], 'title': title}, 'create')
         current = service._session(); sid = current['id']
         await action('session.naming', {'id': sid, 'automatic': False}, 'no-name-model')
+        if model_divider:
+            from model_divider_native_checks import exercise
+            await exercise(root, sid, current, runtime, action, worker_processes, report)
+            return
         if binding:
             # Real ordinary startup before the pending bundle+model replacement.
             await action('conversation.send', {'sessionId': sid, 'text': 'BASELINE_INPUT'}, 'baseline-input')
@@ -346,10 +372,16 @@ async def main():
         from amplifier_web.runtime_worker import Worker, configure_protocol
         configure_protocol()
         await Worker().run()
+    elif '--serve-model-divider' in sys.argv:
+        from model_divider_native_checks import reopen
+        root = Path(sys.argv[1]).resolve()
+        use_isolated_state(root)
+        await reopen(root)
     else:
         lifecycle = '--lifecycle' in sys.argv
+        model_divider = '--model-divider' in sys.argv
         await run(Path(sys.argv[1]), '--stale-regression' in sys.argv,
-                  '--connection-binding' in sys.argv or lifecycle, lifecycle)
+                  '--connection-binding' in sys.argv or lifecycle or model_divider, lifecycle, model_divider)
 
 
 if __name__ == '__main__':
