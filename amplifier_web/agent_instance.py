@@ -7,7 +7,6 @@ receipts, task records and access policy keep their original owners.
 from __future__ import annotations
 
 import copy
-import hashlib
 import json
 from pathlib import Path
 import uuid
@@ -167,7 +166,9 @@ class InstanceProfile:
         # identity or effective execution location still changes the witness.
         return {'workspace': session.get('workspace'),
                 'workingDirectory': session.get('workingDirectory') or session.get('workspace'),
-                'nativeIdentity': native_id(session)}
+                'nativeIdentity': native_id(session),
+                'conflictingRuntimeIdentity': (session.get('runtimeSessionId')
+                    if session.get('runtimeSessionId') not in (None, native_id(session)) else None)}
 
     def bound(self, identity, value):
         binding = self.request(value)
@@ -334,7 +335,8 @@ class InstanceProfile:
                 if saved is not None:
                     forwarded = {key: item for key, item in arguments.items() if key != 'sessionId'}
                     forwarded.update(commandId=command, origin='acp-instance-stop')
-                    digest = hashlib.sha256(json.dumps(['task.pause', forwarded], sort_keys=True).encode()).hexdigest()
+                    from .task_continuity import command_fingerprint
+                    digest = command_fingerprint('task.pause', forwarded)
                     if saved.get('fingerprint') != digest:
                         raise ValueError('This task command ID already has different contents.')
                     result = {'accepted': True, 'result': {**retained['result'], 'duplicate': True}}
