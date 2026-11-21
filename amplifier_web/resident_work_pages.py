@@ -41,11 +41,8 @@ class ResidentWorkPages:
 
     def _source(self, session, start, end, *, tree=None):
         tree = self.windows.resident_tree(session) if tree is None else tree
-        source = self.windows.live_view(session, include_nodes=False, tree=tree)
+        source = self.windows.live_view(session, tree=tree, node_range=slice(start, end))
         nodes = tree.get('nodes', [])
-        selected = nodes[start:end]
-        source['execution']['nodes'] = [self.windows.live_node(session, row) for row in selected
-            if row.get('liveObservation') or not row.get('canonicalHistory') and not row.get('nativeHistory')]
         from .execution_windows import ExecutionWindow
         self._selected_turns(session, source, indexed=nodes if isinstance(nodes, ExecutionWindow) else None)
         return source
