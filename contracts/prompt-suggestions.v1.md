@@ -223,7 +223,7 @@ An already-ready suggestion is an uncommitted placeholder/Tab-completion preview
 visually distinct from the person's draft and outside the editable document.
 Ordinary typing or pasting hides it without dismissing that exact candidate.
 When the composer becomes genuinely empty again, including after clearing an
-accepted draft or Undo, the client may restore the same still-valid candidate
+accepted draft or Undo, an eligible view restores the same still-valid candidate
 after an exact status-only check. Leaving and returning to the chat does not
 consume a ready candidate hidden by an ordinary draft. Restoration never starts
 inference, renews expiry, writes draft text, or retargets a candidate to another
