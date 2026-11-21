@@ -41,6 +41,7 @@ FIXTURES = (
     "shared_acp_agent.py", "room_context_acp_agent.py", "retiring_acp_agent.py",
     "peer_return_worker_probe.py", "collaboration_native_probe.py",
     "external_multiparty_ui_server.py",
+    "canvas_runtime_probe.py", "surface_context_probe.py", "workspace_awareness_runtime_probe.py",
 )
 BROWSERS = ("external-multiparty-browser.mjs", "external-approval-browser.mjs")
 CHANGED_TARGETS = ("test_acp_native_execution", "test_agent_instance",
@@ -217,12 +218,19 @@ def run(output, targets=TARGETS):
     assert not (harness / "amplifier_web").exists()
     (harness / "tests/web/node_modules").symlink_to(ROOT / "tests/web/node_modules", target_is_directory=True)
     command("installed-before", [python, "-I", "-B", "-c", PROBE, str(wheel), str(ROOT)], cwd=harness)
+    if "test_app_guidance" in targets:
+        command("source-census", [python, "-I", "-B", "-m", "pytest", "-c", "/dev/null",
+                "-p", "no:cacheprovider", "-q",
+                str(ROOT / "tests/test_app_guidance.py") + "::test_all_installers_supply_an_explicit_execution_role"],
+                cwd=ROOT)
     command("pytest", [python, "-I", "-B", "-m", "pytest", "-c", "/dev/null",
                       "--rootdir", str(harness),
                       "-o", "asyncio_mode=auto", "-p", "no:cacheprovider", "-q", "--basetemp", str(output / "pytest-tmp"),
                       "--junitxml=" + str(output / "junit.xml"),
+                      "--deselect=tests/test_app_guidance.py::test_all_installers_supply_an_explicit_execution_role",
                       *["tests/" + name + ".py" for name in targets]], cwd=harness,
-            env={**clean, "AMPLIFIER_TEST_ARTIFACTS": str(output / "native")}, required=False)
+            env={**clean, "UNIFIED_RUNTIME_PYTHON": python,
+                 "AMPLIFIER_TEST_ARTIFACTS": str(output / "native")}, required=False)
     for name in BROWSERS:
         command(name, ["node", "tests/web/" + name], cwd=harness, env={
             **clean, "AMPLIFIER_TEST_ROOT": str(harness), "AMPLIFIER_TEST_PYTHON": python,

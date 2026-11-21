@@ -224,10 +224,12 @@ async def test_native_profile_lifecycle(tmp_path, monkeypatch, aiohttp_client, s
         service, runtime, client = await host()
         if scenario.startswith("stream-"):
             evidence.update(await stream_source(tmp_path, workspace, bundle, service, runtime, client, scenario, events))
+            evidence["status"] = "failed"
             workers.extend(runtime.workers.values())
             rows = [row for row in audit_rows() if row["kind"] == "provider-stream"]
             assert len(rows) == 1, rows
             verify_modules(rows, fixture)
+            evidence["status"] = "passed"
             return
         first = await launch(client)
         created = await first.call("session/new", cwd=str(workspace), mcpServers=[], _meta=session_binding)
