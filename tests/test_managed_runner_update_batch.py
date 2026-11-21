@@ -35,7 +35,7 @@ async def test_waiting_runner_tick_still_checks_availability(app, monkeypatch):
     monkeypatch.setattr(runner, 'advance', AsyncMock(return_value={'complete': False, 'waiting': 'waiting'}))
     monkeypatch.setattr(manager, 'check', AsyncMock())
     await manager.tick()
-    manager.check.assert_awaited_once_with(fresh=False)
+    manager.check.assert_awaited_once_with(fresh=True, automatic=True)
 
 
 @pytest.mark.parametrize('automatic', [False, True])
@@ -92,7 +92,7 @@ async def test_runner_wait_preserves_continuation_after_manager_reload(app, monk
         observed.append(kwargs)
     monkeypatch.setattr(manager, '_check', check)
     await manager.tick()
-    assert observed == [{'tier': tier, 'install': True}]
+    assert observed == [{'tier': tier, 'install': True, 'fresh': True, 'automatic': True}]
     assert app.state['updates']['sequence']['stage'] == 'complete'
     assert app.state['updates']['pendingSmartTools'][0]['runnerUpdate'] == pending[0]['runnerUpdate']
 

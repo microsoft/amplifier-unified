@@ -34,13 +34,17 @@ def requirements(values):
 def test_host_worker_and_retained_locks_exclude_vulnerable_versions():
     host = tomllib.loads((ROOT / "pyproject.toml").read_text())
     worker = tomllib.loads(environments.manifest_path().read_text())
-    host_requirements = requirements(host["project"]["dependencies"] + host["dependency-groups"]["artifacts"])
+    host_requirements = requirements(host["project"]["dependencies"])
     worker_requirements = requirements(worker["project"]["dependencies"])
-    # Artifact authoring belongs in the worker. The two host support extras
-    # whose packages consume Pillow need wheel Requires-Dist floors too, without
-    # making Pillow a new mandatory host dependency.
-    for extra in ("native-desktop", "decisions-openai"):
-        assert requirements(host["project"]["optional-dependencies"][extra])["pillow"].specifier == worker_requirements["pillow"].specifier
+    # Host extras inherit the mandatory Pillow requirement. Direct requirements
+    # in an extra or the artifact group further constrain the same installation.
+    pillow = host_requirements["pillow"]
+    assert pillow.marker is None
+    extras = host["project"]["optional-dependencies"]
+    for group in (extras["native-desktop"], extras["decisions-openai"], host["dependency-groups"]["artifacts"]):
+        additional = requirements(group).get("pillow")
+        effective = pillow.specifier & additional.specifier if additional else pillow.specifier
+        assert effective == worker_requirements["pillow"].specifier
     for name, (old, fixed, next_major) in FLOORS.items():
         for selected in (host_requirements, worker_requirements):
             spec = selected[name].specifier
