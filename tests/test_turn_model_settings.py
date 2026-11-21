@@ -74,8 +74,13 @@ def test_unknown_bindings_historical_usage_and_unrelated_worker_receipts():
     assert public['turnModelSettings'] == event['turnModelSettings']
     assert 'turnModelSettings' not in normalize_event(wire_kind, 'other')[1]
     record(session, {**event, 'turnModelSettings': {'selection': B, 'pinned': False}})
-    assert turn['modelChange']['previous'] == {'instance': 'work', 'model': 'one'}
-    assert 'previousTurnSettings' not in session
+    # The legacy usage may predate an intervening failed call on another model.
+    assert 'modelChange' not in turn
+    assert session['previousTurnSettings'] == {'selection': B}
+    turn, event = setup_turn(session, 'b', A)
+    record(session, event)
+    assert turn['modelChange'] == {'previous': B, 'current': A}
+    assert session['previousTurnSettings']['inputId'] == 'b'
 
 
 async def test_public_restore_revisions_bindings_and_scope(app, monkeypatch):

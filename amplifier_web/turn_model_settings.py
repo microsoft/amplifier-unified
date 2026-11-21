@@ -73,12 +73,9 @@ def record(session, receipt):
     if not captured:
         return
     selection = captured['selection']
+    # Older usage observations lack a turn/attempt anchor. A later failed
+    # dispatch can have changed models since the last *completed* usage sample.
     prior = previous and previous['selection']
-    if prior is None:
-        # Old hosts retained measured model and connection but no effort evidence.
-        used = session.get('_lastPromptUsage') or {}
-        if used.get('instance') and used.get('model') and (used['instance'], used['model']) != (selection['instance'], selection['model']):
-            prior = {k: used[k] for k in ('instance', 'model')}
     if prior and selection != prior:
         change = {'previous': prior, 'current': selection}
         hint = session.get('nextMessageImpact') or {}
@@ -88,10 +85,10 @@ def record(session, receipt):
             elif hint.get('coldModels') and selection['instance'] == prior['instance'] and selection['model'] != prior['model']:
                 change['impact'] = 'cold-request'
         turn['modelChange'] = change
+    latest = session['previousTurnSettings'] = {'selection': selection}
     witness = captured.get('bindingProof')
-    if isinstance(witness, str) and len(witness) == 64 and type(captured.get('pinned')) is bool and session.get('bundle'):
-        session['previousTurnSettings'] = {'inputId': input_id, 'generationId': generation,
-                                           'selection': selection, 'bundle': session['bundle']}
+    if witness and session.get('bundle'):
+        latest.update(inputId=input_id, generationId=generation, bundle=session['bundle'])
         session['_previousTurnBinding'] = {'proof': witness, 'pinned': captured['pinned'],
             'sessionId': session['id'], 'target': target(session),
             'appliedRevision': session.get('appliedConfigurationRevision', 0)}
