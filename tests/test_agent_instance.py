@@ -840,17 +840,21 @@ async def test_unavailable_task_authority_keeps_standard_current_turn_cancel_usa
     await peer.socket.close()
 
 
-async def test_execution_location_change_during_attachment_is_not_adopted(host, monkeypatch):
+@pytest.mark.parametrize(('change', 'error'), [
+    ({'workingDirectory': '/moved'}, 'location changed during attachment'),
+    ({'_deleting': True}, 'chat is being deleted'),
+])
+async def test_changed_session_releases_attachment(host, monkeypatch, change, error):
     configure(host)
     app, _, runtime, path = host
     peer, _ = await connect_profile(host)
     original = runtime.bind_ephemeral_mcp
-    async def moved(sid, *args):
-        app['service']._session(sid)['workingDirectory'] = str(path / 'moved')
+    async def changed(sid, *args):
+        app['service']._session(sid).update(change)
         return await original(sid, *args)
-    monkeypatch.setattr(runtime, 'bind_ephemeral_mcp', moved)
+    monkeypatch.setattr(runtime, 'bind_ephemeral_mcp', changed)
     row = await new(peer, path, 'R')
-    assert 'location changed during attachment' in row['error']['message']
+    assert error in row['error']['message']
     assert not runtime.bindings and not runtime.sent
     await peer.socket.close()
 

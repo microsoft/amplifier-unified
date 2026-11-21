@@ -11,6 +11,8 @@ import json
 from pathlib import Path
 import uuid
 
+from .errors import AppError
+
 NAMESPACE = 'com.microsoft.amplifier.agent-instance'
 METHOD = 'amplifier/instance'
 BINDING = 'agent-instance'
@@ -151,7 +153,7 @@ class InstanceProfile:
             current = self.owner.service._session(expected, hydrate=False)
             if self.execution_source(current) != execution_source:
                 raise ValueError('The execution source or location changed during attachment.')
-        except ValueError:
+        except (ValueError, AppError):
             await self.owner.release(expected)
             raise
         self.bindings[expected] = binding
