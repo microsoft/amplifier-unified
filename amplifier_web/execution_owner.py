@@ -120,7 +120,7 @@ class ExecutionOwner:
         self.retirement_hint = None
         self.request_permission = None
         self.approval_policy = False
-        self.approval_guard = None
+        self.attachment_guard = None
         self._retirement_hint_task = None
         self._observers = ensure_observers(service)
         self._observers.attachments.add(self)
@@ -261,7 +261,9 @@ class ExecutionOwner:
         row["stop"] = command
         try:
             await self.service.dispatch("conversation.stop", {"sessionId": identity},
-                                        origin=self.origin, command_id=command, include_state=False)
+                origin=self.origin, command_id=command, include_state=False,
+                **({'admission_check': lambda: self.attachment_guard(identity)}
+                   if self.attachment_guard is not None else {}))
         except BaseException:
             if row["stop"] == command:
                 row["stop"] = None
@@ -339,8 +341,8 @@ class ExecutionOwner:
                         'decision': choice, 'expectedRequestHash': captured,
                         **({'expectedApprovalScope': scope['key']} if scope else {})},
                         origin=self.origin, command_id=str(uuid.uuid4()), include_state=False,
-                        **({'admission_check': lambda: self.approval_guard(identity)}
-                           if self.approval_guard is not None else {}))
+                        **({'admission_check': lambda: self.attachment_guard(identity)}
+                           if self.attachment_guard is not None else {}))
         except Exception:
             row["delivery"].fail("Approval settlement is unresolved; inspect retained owner state before retrying.")
         finally:
