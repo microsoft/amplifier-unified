@@ -13,6 +13,9 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tarfile
+import urllib.request
+import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
 TARGETS = (
@@ -70,6 +73,34 @@ def write(path, value):
     path.write_text(json.dumps(value, indent=2) + "\n")
 
 
+def published_instance(output):
+    """Fetch one inspected public artifact, with its immutable release hash."""
+    url = ("https://github.com/microsoft/amplifier-constellation-instance/releases/"
+           "download/v0.22.15/agent-instance-aarch64-unknown-linux-gnu.tar.gz")
+    archive = output / "instance.tar.gz"
+    with urllib.request.urlopen(url, timeout=60) as incoming, archive.open("xb") as target:
+        count = 0
+        for chunk in iter(lambda: incoming.read(1024 * 1024), b""):
+            count += len(chunk)
+            if count > 10 * 1024 * 1024:
+                raise ValueError("Instance artifact exceeds the selected size")
+            target.write(chunk)
+    assert digest(archive) == "ddc6304b2610eb89ff0067532e9d83c44fc0ae2a8692003fe06af4c5a65bdd34"
+    folder = output / "instance"
+    folder.mkdir()
+    with tarfile.open(archive) as source:
+        assert set(source.getnames()) == {"agent-instance", "build-info.json", "LICENSE", "THIRD-PARTY-NOTICES.txt"}
+        assert all(row.isfile() for row in source.getmembers())
+        source.extractall(folder, filter="data")
+    binary = folder / "agent-instance"
+    assert digest(binary) == "8772fc97435eb9922bed694b9e0d4ef43d5312c0ee036ff0173b9a27a18afbfa"
+    build = json.loads((folder / "build-info.json").read_text())
+    assert build["commit"] == "c2ca117029a02bc6c22cdb382b29d49a73e99f95"
+    write(output / "instance-artifact.json", {"url": url, "archiveSha256": digest(archive),
+                                           "binarySha256": digest(binary), "build": build})
+    return binary
+
+
 PROBE = r"""
 import base64,hashlib,importlib,importlib.metadata as md,json,pathlib,sys,zipfile
 wheel,source=map(pathlib.Path,sys.argv[1:])
@@ -118,15 +149,16 @@ def run(output):
     Path(clean["TMPDIR"]).mkdir()
     stages = []
 
-    def command(name, argv, cwd=ROOT, env=clean):
+    def command(name, argv, cwd=ROOT, env=clean, required=True):
         with (output / (name + ".log")).open("w") as log:
             result = subprocess.run(argv, cwd=cwd, env=env, stdout=log,
                                     stderr=subprocess.STDOUT)
         stages.append({"name": name, "argv": argv, "cwd": str(cwd), "returncode": result.returncode})
         write(output / "stages.json", stages)
-        if result.returncode:
+        if result.returncode and required:
             raise RuntimeError(f"{name} failed; retained log and stages.json")
 
+    clean["KISS502_INSTANCE_BINARY"] = str(published_instance(output))
     command("build", ["/opt/unified-prepared/build-venv/bin/python", "-I", "-B",
                       "-m", "build", "--wheel", "--no-isolation", "--outdir",
                       str(output / "dist"), str(ROOT)])
@@ -147,16 +179,22 @@ def run(output):
                       "-o", "asyncio_mode=auto", "-q", "--basetemp", str(output / "pytest-tmp"),
                       "--junitxml=" + str(output / "junit.xml"),
                       *["tests/" + name + ".py" for name in TARGETS]], cwd=harness,
-            env={**clean, "AMPLIFIER_TEST_ARTIFACTS": str(output / "native")})
+            env={**clean, "AMPLIFIER_TEST_ARTIFACTS": str(output / "native")}, required=False)
     for name in BROWSERS:
         command(name, ["node", "tests/web/" + name], cwd=harness, env={
             **clean, "AMPLIFIER_TEST_ROOT": str(harness), "AMPLIFIER_TEST_PYTHON": python,
-            "AMPLIFIER_TEST_ARTIFACTS": str(output / name.removesuffix(".mjs"))})
+            "AMPLIFIER_TEST_ARTIFACTS": str(output / name.removesuffix(".mjs"))}, required=False)
     command("installed-after", [python, "-I", "-B", "-c", PROBE, str(wheel), str(ROOT)], cwd=harness)
     assert (output / "installed-before.log").read_bytes() == (output / "installed-after.log").read_bytes()
-    write(output / "summary.json", {"status": "passed", "stages": stages,
+    cases = [{"classname": row.get("classname"), "name": row.get("name"),
+              "status": next((kind for kind in ("failure", "error", "skipped") if row.find(kind) is not None), "passed")}
+             for row in ET.parse(output / "junit.xml").getroot().iter("testcase")]
+    passed = all(row["returncode"] == 0 for row in stages)
+    write(output / "summary.json", {"status": "passed" if passed else "failed", "stages": stages, "cases": cases,
                                    "inputs": len(inputs), "wheelSha256": digest(wheel),
                                    "scope": "Finite installed host/SDK/native Core/browser cases; no live services or paid API"})
+    if not passed:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

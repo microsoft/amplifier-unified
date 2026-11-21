@@ -10,7 +10,12 @@ from collections import Counter
 import json
 import os
 from pathlib import Path
+import socket
+import ssl
 import sys
+
+import aiohttp
+import pytest
 
 from test_acp_cli import StdioPeer
 from fixtures.peer_return_worker_probe import qualification_runtime
@@ -28,7 +33,15 @@ class NativePeer(StdioPeer):
                 self.updates.append(row)
 
 
-async def test_stdio_acp_executes_real_core_tool_and_same_native_resume(tmp_path, monkeypatch, aiohttp_client):
+@pytest.mark.parametrize("wrapper", ["direct", "published-instance"])
+async def test_stdio_acp_executes_real_core_tool_and_same_native_resume(tmp_path, monkeypatch, aiohttp_client, wrapper):
+    binary = os.environ.get("KISS502_INSTANCE_BINARY") if wrapper == "published-instance" else None
+    if wrapper == "published-instance":
+        if not binary:
+            pytest.skip("Select verified published Instance 0.22.15 ARM64 binary for wrapper qualification")
+        import hashlib
+        assert hashlib.sha256(Path(binary).read_bytes()).hexdigest() == (
+            "8772fc97435eb9922bed694b9e0d4ef43d5312c0ee036ff0173b9a27a18afbfa")
     graph, paths = qualification_runtime()
     from amplifier_web.bundles import SNAPSHOT_VERSION
     from amplifier_web.runtime import RuntimeManager
@@ -94,13 +107,63 @@ async def test_stdio_acp_executes_real_core_tool_and_same_native_resume(tmp_path
     # Preserve the sink and its batch interface; observe native facts, not replace
     # transport/admission/terminal production with scripted events.
     service._execution_observers.original = type(original)(observe, observe_batch)
+    relay = [sys.executable, "-I", "-B", "-m", "amplifier_web",
+             "--data-dir", str(tmp_path / "relay"), "--workspace", str(workspace),
+             "acp", "--bundle", str(bundle), "--server", str(client.make_url("")).rstrip("/"),
+             "--token-file", str(credential)]
+    instance_process = None
+    instance_log = None
+    endpoint_command = relay
+
+    async def prepare_instance():
+        nonlocal instance_process, instance_log, endpoint_command
+        home = tmp_path / "instance"
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        instance_log = (tmp_path / "instance.log").open("wb")
+        init = await asyncio.create_subprocess_exec(
+            binary, "init", "--home", str(home), "--name", "Native ACP fixture",
+            "--bind", "127.0.0.1", "--port", str(port),
+            stdout=instance_log, stderr=instance_log)
+        assert await asyncio.wait_for(init.wait(), 10) == 0
+        config_path = home / "config.json"
+        configured = json.loads(config_path.read_text())
+        value = configured["config"]
+        value.update(enabled=True, setup_complete=True, purpose="Offline native ACP fixture")
+        value["server"].update(welcome_port=None, public_url=f"https://127.0.0.1:{port}")
+        value["backend"] = {
+            "command": relay[0], "args": relay[1:],
+            "env": {"PYTHONDONTWRITEBYTECODE": "1"}, "secret_env": {},
+            "working_directory": str(workspace), "allowed_working_roots": [str(workspace)]}
+        config_path.write_text(json.dumps(configured))
+        instance_process = await asyncio.create_subprocess_exec(
+            binary, "serve", "--home", str(home), stdout=instance_log, stderr=instance_log)
+        trust = ssl.create_default_context(cafile=str(home / "tls/root-ca.crt"))
+        control = (home / "secrets/control-token").read_text().strip()
+        async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=trust),
+                headers={"Authorization": "Bearer " + control}) as api:
+            async with asyncio.timeout(15):
+                while True:
+                    assert instance_process.returncode is None
+                    try:
+                        async with api.get(f"https://127.0.0.1:{port}/api/v1/config") as response:
+                            assert response.status == 200
+                            break
+                    except aiohttp.ClientConnectorError:
+                        await asyncio.sleep(.02)
+            async with api.post(f"https://127.0.0.1:{port}/api/v1/tokens", json={
+                "name": "native-acp-fixture", "scopes": ["acp"], "expires_in_seconds": 600}) as response:
+                assert response.status == 200
+                token = (await response.json())["token"]
+        attach = tmp_path / "instance-token"
+        attach.write_text(token)
+        attach.chmod(0o600)
+        endpoint_command = [binary, "acp", "--home", str(home), "--token-file", str(attach)]
 
     async def launch():
         process = await asyncio.create_subprocess_exec(
-            sys.executable, "-I", "-B", "-m", "amplifier_web",
-            "--data-dir", str(tmp_path / "relay"), "--workspace", str(workspace),
-            "acp", "--bundle", str(bundle), "--server", str(client.make_url("")).rstrip("/"),
-            "--token-file", str(credential),
+            *endpoint_command,
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE)
         processes.append(process)
@@ -109,6 +172,8 @@ async def test_stdio_acp_executes_real_core_tool_and_same_native_resume(tmp_path
         return peer
 
     try:
+        if binary:
+            await prepare_instance()
         first = await launch()
         sid = (await first.call("session/new", cwd=str(workspace), mcpServers=[]))["result"]["sessionId"]
         for turn in (1, 2):
@@ -143,7 +208,7 @@ async def test_stdio_acp_executes_real_core_tool_and_same_native_resume(tmp_path
         assert len(delivered) == 2 and set(delivered.values()) == {1}
         assert terminal == delivered
         assert len([m for m in row["messages"] if m["role"] == "user"]) == 2
-        evidence = {"status": "passed", "runtime": graph, "nativeSession": sid,
+        evidence = {"status": "passed", "runtime": graph, "nativeSession": sid, "wrapper": wrapper,
                     "project": project_slug(workspace), "workerPid": worker_pid,
                     "nativeInputs": dict(delivered), "nativeTerminals": dict(terminal),
                     "provider": provider_rows, "effects": commands,
@@ -153,7 +218,7 @@ async def test_stdio_acp_executes_real_core_tool_and_same_native_resume(tmp_path
         (tmp_path / "evidence.json").write_text(json.dumps(evidence, indent=2) + "\n")
         output = os.environ.get("AMPLIFIER_TEST_ARTIFACTS")
         if output:
-            target = Path(output) / "native-acp"
+            target = Path(output) / ("native-acp-" + wrapper)
             target.mkdir(parents=True, exist_ok=True)
             (target / "evidence.json").write_text(json.dumps(evidence, indent=2) + "\n")
             (target / "events.json").write_text(json.dumps(events, indent=2) + "\n")
@@ -162,4 +227,13 @@ async def test_stdio_acp_executes_real_core_tool_and_same_native_resume(tmp_path
             if process.returncode is None:
                 process.kill()
         await asyncio.gather(*(process.wait() for process in processes))
+        if instance_process and instance_process.returncode is None:
+            instance_process.terminate()
+            try:
+                await asyncio.wait_for(instance_process.wait(), 10)
+            except TimeoutError:
+                instance_process.kill()
+                await instance_process.wait()
+        if instance_log:
+            instance_log.close()
         await client.close()
