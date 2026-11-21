@@ -55,9 +55,10 @@ def coverage_plan():
     activity_ids = retained_activity_browser_addition(plan['scenarios'])
     context_ids = context_degradation_browser_addition(plan['scenarios'])
     update_hold_ids = update_configuration_hold_browser_addition(plan['scenarios'])
+    suggestion_ids = transcript_suggestion_browser_addition(plan['scenarios'])
     rows = []
     for row in plan['scenarios']:
-        if row['id'] in retained_ids | appearance_ids | responsive_ids | notices_ids | preview_ids | approval_ids | multiparty_ids | shared_room_ids | repair_ids | layout_ids | pass2_ids | changelog_ids | activity_ids | context_ids | update_hold_ids:
+        if row['id'] in retained_ids | appearance_ids | responsive_ids | notices_ids | preview_ids | approval_ids | multiparty_ids | shared_room_ids | repair_ids | layout_ids | pass2_ids | changelog_ids | activity_ids | context_ids | update_hold_ids | suggestion_ids:
             continue
         row = {**row, 'command': [coverage_paths(part) for part in row['command']]}
         row.pop('cwd', None)
@@ -1156,11 +1157,12 @@ def test_update_configuration_hold_has_one_host_owner_and_preserves_prior_order(
     assert host['scenarioOrder'][index - 1:index + 2] == [
         'update-restart', 'update-configuration-hold', 'update-effects']
     # Exact order from 474dc80, before this sole new host scenario was added.
-    previous = [name for name in host['scenarioOrder'] if name not in identities]
+    suggestion_ids = transcript_suggestion_browser_addition(plan['scenarios'])
+    previous = [name for name in host['scenarioOrder'] if name not in identities | suggestion_ids]
     assert len(previous) == len(set(previous)) == 173
     assert hashlib.sha256(json.dumps(previous).encode()).hexdigest() == (
         '17d7f2322aa99c4b6bd51f78bd2a49f88c388ffd09e921278a75aec279acc602')
-    assert len(plan['scenarios']) == 173 + len(identities)
+    assert len(plan['scenarios']) == 173 + len(identities) + len(suggestion_ids)
     assert (ROOT / 'tests/web/update-configuration-hold-browser.mjs').is_file()
     assert not identities & {row['id'] for row in coverage_plan()['scenarios']}
 
@@ -1210,8 +1212,9 @@ def test_context_degradation_has_one_client_owner_and_preserves_prior_order():
     assert host['scenarioOrder'][index - 1:index + 2] == [
         'shared-notices-motion', 'context-degradation', 'input-status']
     update_hold_ids = update_configuration_hold_browser_addition(plan['scenarios'])
+    suggestion_ids = transcript_suggestion_browser_addition(plan['scenarios'])
     previous = [name for name in host['scenarioOrder']
-                if name not in {'context-degradation'} | update_hold_ids]
+                if name not in {'context-degradation'} | update_hold_ids | suggestion_ids]
     assert len(previous) == len(set(previous)) == 172
     assert hashlib.sha256(json.dumps(previous).encode()).hexdigest() == (
         'fb68878eafdfb0410141ac5237253e6510be1f261d831db154106ee1eda378d1')
@@ -1272,13 +1275,14 @@ def test_retained_activity_is_composed_once_and_preserves_all_prior_scenario_ord
     # drop any of the 171 existing IDs, including the original changelog placement.
     assert context_degradation_browser_addition(plan['scenarios']) == {'context-degradation'}
     update_hold_ids = update_configuration_hold_browser_addition(plan['scenarios'])
+    suggestion_ids = transcript_suggestion_browser_addition(plan['scenarios'])
     preceding_order = [name for name in host['scenarioOrder']
-                       if name not in {'retained-activity', 'context-degradation'} | update_hold_ids]
+                       if name not in {'retained-activity', 'context-degradation'} | update_hold_ids | suggestion_ids]
     assert len(preceding_order) == len(set(preceding_order)) == 171
     assert hashlib.sha256(json.dumps(preceding_order).encode()).hexdigest() == 'a7038948908313656b5a9017c5677406b912c89ec911c7cb5e3b704edb80177e'
     assert len([row for row in plan['scenarios']
-                if row['id'] not in {'context-degradation'} | update_hold_ids]) == 172
-    assert len(plan['scenarios']) == len({row['id'] for row in plan['scenarios']}) == 173 + len(update_hold_ids)
+                if row['id'] not in {'context-degradation'} | update_hold_ids | suggestion_ids]) == 172
+    assert len(plan['scenarios']) == len({row['id'] for row in plan['scenarios']}) == 173 + len(update_hold_ids) + len(suggestion_ids)
     assert proof['registrySha256'] == {'unified': runner.digest(host_path), 'client': runner.digest(client_path)}
     assert proof['clientSelectionSha256'] == runner.digest(ROOT / 'components/web-client.source.json')
     assert (client_path.parent / 'retained-activity-browser.mjs').is_file()
@@ -1422,6 +1426,66 @@ def test_changelog_days_assembly_order_cannot_drop_or_repeat_owner(tmp_path, fau
         runner.load_plan(tmp_path, host)
 
 
+TRANSCRIPT_SUGGESTION_BROWSER_IDS = ('transcript-suggestion-mounted', 'transcript-suggestion-boot')
+
+
+def transcript_suggestion_browser_addition(rows, readiness_scripts=()):
+    identities = set()
+    for name in TRANSCRIPT_SUGGESTION_BROWSER_IDS:
+        identities.update(selected_client_browser_addition(rows, readiness_scripts, name, current=True))
+    return identities
+
+
+def test_transcript_suggestion_is_composed_once_without_reordering_prior_owners():
+    host = json.loads((ROOT / 'tests/web/browser-checks.json').read_text())
+    plan, proof = runner.load_plan(ROOT, ROOT / 'tests/web/browser-checks.json')
+    names = TRANSCRIPT_SUGGESTION_BROWSER_IDS
+    assert transcript_suggestion_browser_addition(plan['scenarios']) == set(names)
+    assert host['scenarioOrder'][-2:] == list(names)
+    # Accepted e8eef order is preserved, not the older feature branch's order.
+    previous = [name for name in host['scenarioOrder'] if name not in names]
+    assert len(previous) == len(set(previous)) == 174
+    assert hashlib.sha256(json.dumps(previous).encode()).hexdigest() == (
+        'd13288abe674367039104b0815da37ad8ce10a556c150d80e3c269eaba9a0c4a')
+    client_path = source_test('tests/transcript-suggestion-boot-browser.mjs').with_name('browser-checks.json')
+    client = json.loads(client_path.read_text())
+    for name in names:
+        script = f'tests/{name}-browser.mjs'
+        expected = {'id': name, 'command': ['node', script],
+                    'env': {'AMPLIFIER_TEST_ARTIFACTS': f'{{root}}/output/browser-checks/{name}'}}
+        def owns(row):
+            return row['id'] == name or script in row['command']
+        assert host['scenarioOrder'].count(name) == 1
+        assert not any(owns(row) for row in host['scenarios'])
+        assert [row for row in client['scenarios'] if owns(row)] == [expected]
+        assert [row for row in plan['scenarios'] if owns(row)] == [{**expected, 'cwd': '.build/web-client'}]
+        assert (client_path.parent / Path(script).name).is_file()
+    assert not set(names) & {row['id'] for row in coverage_plan()['scenarios']}
+    assert proof['registrySha256'] == {
+        'unified': runner.digest(ROOT / 'tests/web/browser-checks.json'), 'client': runner.digest(client_path)}
+
+
+@pytest.mark.parametrize('fault', ['missing', 'duplicate', 'renamed', 'command', 'environment', 'cwd', 'readiness'])
+@pytest.mark.parametrize('name', TRANSCRIPT_SUGGESTION_BROWSER_IDS)
+def test_transcript_suggestion_owner_is_validated_before_historical_exclusion(monkeypatch, fault, name):
+    plan = current_plan()
+    owner = next(row for row in plan['scenarios'] if row['id'] == name)
+    readiness = set()
+    if fault == 'missing': plan['scenarios'].remove(owner)
+    elif fault == 'duplicate': plan['scenarios'].append(dict(owner))
+    elif fault == 'renamed': owner['id'] += '-renamed'
+    elif fault == 'command': owner['command'] = [*owner['command'], '--skip']
+    elif fault == 'environment': owner['env'] = {}
+    elif fault == 'cwd': owner['cwd'] = 'tests/web'
+    else: readiness.add(owner['command'][1])
+    with pytest.raises(AssertionError, match=name):
+        transcript_suggestion_browser_addition(plan['scenarios'], readiness)
+    if fault != 'readiness':
+        monkeypatch.setattr(sys.modules[__name__], 'current_plan', lambda: plan)
+        with pytest.raises(AssertionError, match=name):
+            coverage_plan()
+
+
 def test_shared_room_is_composed_once_from_selected_client_owner():
     name = 'shared-room'
     expected = {'id': name, 'command': ['node', 'tests/shared-room-browser.mjs'],
@@ -1439,7 +1503,8 @@ def test_shared_room_is_composed_once_from_selected_client_owner():
     pass2_ids = layout_pass2_browser_additions(plan['scenarios'])
     changelog_ids = changelog_days_browser_addition(plan['scenarios'])
     activity_ids = retained_activity_browser_addition(plan['scenarios'])
-    preceding_order = [identity for identity in host['scenarioOrder'] if identity not in pass2_ids | changelog_ids | activity_ids | {'external-approval', 'attachment-preview'}]
+    suggestion_ids = transcript_suggestion_browser_addition(plan['scenarios'])
+    preceding_order = [identity for identity in host['scenarioOrder'] if identity not in pass2_ids | changelog_ids | activity_ids | {'external-approval', 'attachment-preview'} | suggestion_ids]
     assert preceding_order[-2:] == ['external-multiparty', name]
     assert shared_room_browser_addition(plan['scenarios']) == {name}
     assert [row['id'] for row in plan['scenarios']] == host['scenarioOrder']
@@ -4269,6 +4334,7 @@ def test_current_composed_registry_owns_every_executable_and_both_mixed_suites()
     activity_ids = retained_activity_browser_addition(plan['scenarios'])
     context_ids = context_degradation_browser_addition(plan['scenarios'])
     update_hold_ids = update_configuration_hold_browser_addition(plan['scenarios'])
+    suggestion_ids = transcript_suggestion_browser_addition(plan['scenarios'])
     lifecycle_additions = [
         {'id': 'session-health-request-failure',
          'command': ['node', 'tests/web/session-health-browser.mjs', '--request-failure']},
@@ -4277,12 +4343,12 @@ def test_current_composed_registry_owns_every_executable_and_both_mixed_suites()
     ]
     lifecycle_ids = {row['id'] for row in lifecycle_additions}
     assert [row for row in plan['scenarios'] if row['id'] in lifecycle_ids] == lifecycle_additions
-    preceding = [row for row in plan['scenarios'] if row['id'] not in navigation_ids | client_addition_ids | retained_ids | appearance_ids | responsive_ids | notices_ids | lifecycle_ids | preview_ids | approval_ids | multiparty_ids | shared_room_ids | repair_ids | layout_ids | pass2_ids | changelog_ids | activity_ids | context_ids | update_hold_ids]
+    preceding = [row for row in plan['scenarios'] if row['id'] not in navigation_ids | client_addition_ids | retained_ids | appearance_ids | responsive_ids | notices_ids | lifecycle_ids | preview_ids | approval_ids | multiparty_ids | shared_room_ids | repair_ids | layout_ids | pass2_ids | changelog_ids | activity_ids | context_ids | update_hold_ids | suggestion_ids]
     assert len(preceding) == len({row['id'] for row in preceding}) == 147
-    assert len(plan['scenarios']) == len({row['id'] for row in plan['scenarios']}) == 152 + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(preview_ids) + len(approval_ids) + len(multiparty_ids) + len(shared_room_ids) + len(lifecycle_ids) + len(repair_ids) + len(layout_ids) + len(pass2_ids) + len(changelog_ids) + len(activity_ids) + len(context_ids) + len(update_hold_ids)
-    assert len(plan['scenarios']) == 147 + len(navigation_ids) + len(client_addition_ids) + len(retained_ids) + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(preview_ids) + len(approval_ids) + len(multiparty_ids) + len(shared_room_ids) + len(lifecycle_ids) + len(repair_ids) + len(layout_ids) + len(pass2_ids) + len(changelog_ids) + len(activity_ids) + len(context_ids) + len(update_hold_ids)
+    assert len(plan['scenarios']) == len({row['id'] for row in plan['scenarios']}) == 152 + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(preview_ids) + len(approval_ids) + len(multiparty_ids) + len(shared_room_ids) + len(lifecycle_ids) + len(repair_ids) + len(layout_ids) + len(pass2_ids) + len(changelog_ids) + len(activity_ids) + len(context_ids) + len(update_hold_ids) + len(suggestion_ids)
+    assert len(plan['scenarios']) == 147 + len(navigation_ids) + len(client_addition_ids) + len(retained_ids) + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(preview_ids) + len(approval_ids) + len(multiparty_ids) + len(shared_room_ids) + len(lifecycle_ids) + len(repair_ids) + len(layout_ids) + len(pass2_ids) + len(changelog_ids) + len(activity_ids) + len(context_ids) + len(update_hold_ids) + len(suggestion_ids)
     assert sum(row.get('cwd') == '.build/web-client' for row in preceding) == 14
-    assert sum(row.get('cwd') == '.build/web-client' for row in plan['scenarios']) == 17 + len(preview_ids) + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(shared_room_ids) + len(repair_ids) + len(layout_ids) + len(pass2_ids) + len(changelog_ids) + len(activity_ids) + len(context_ids)
+    assert sum(row.get('cwd') == '.build/web-client' for row in plan['scenarios']) == 17 + len(preview_ids) + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(shared_room_ids) + len(repair_ids) + len(layout_ids) + len(pass2_ids) + len(changelog_ids) + len(activity_ids) + len(context_ids) + len(suggestion_ids)
     client_path = source_test('tests/input-status-browser.mjs').with_name('browser-checks.json')
     assert proof['registrySha256'] == {'unified': runner.digest(host_path), 'client': runner.digest(client_path)}
     assert proof['clientSelectionSha256'] == runner.digest(ROOT / 'components/web-client.source.json')
@@ -4516,7 +4582,8 @@ def test_layout_pass2_assembly_retains_prior_order_and_binds_all_four_selected_o
         assert (client_path.parent / Path(script).name).is_file()
     assert (ROOT / 'tests/fixtures/appearance-cases.json').is_file()
     # Keep the 25 preceding canonical registry rows in their original order.
-    preceding_client_ids = [row['id'] for row in client['scenarios'] if row['id'] not in identities | changelog_ids | activity_ids | context_ids | {'attachment-preview'}]
+    suggestion_ids = transcript_suggestion_browser_addition(plan['scenarios'])
+    preceding_client_ids = [row['id'] for row in client['scenarios'] if row['id'] not in identities | changelog_ids | activity_ids | context_ids | {'attachment-preview'} | suggestion_ids]
     assert preceding_client_ids == [
         'shared-controls', 'composer-return-mounted', 'composer-return', 'conversation-error',
         'installation-repair', 'shared-room', 'shared-notices-motion', 'input-status',
@@ -4527,7 +4594,7 @@ def test_layout_pass2_assembly_retains_prior_order_and_binds_all_four_selected_o
         'history-refresh', 'appearance-lifecycle',
     ]
     assert len(preceding_client_ids) == 25
-    assert len(client['scenarios']) == 26 + len(identities) + len(changelog_ids) + len(activity_ids) + len(context_ids)
+    assert len(client['scenarios']) == 26 + len(identities) + len(changelog_ids) + len(activity_ids) + len(context_ids) + len(suggestion_ids)
     # Accepted f544781 host order includes worktree-move after assignment-adoption.
     # The other three guarded owners are additive to these exact 165 identities.
     new_ids = identities - {'worktree-move'}
@@ -4571,15 +4638,15 @@ def test_layout_pass2_assembly_retains_prior_order_and_binds_all_four_selected_o
         voice-work-message external-multiparty shared-room
     '''.split()
     assert len(preceding_order) == len(set(preceding_order)) == 165
-    assert [name for name in host['scenarioOrder'] if name not in new_ids | changelog_ids | activity_ids | context_ids | update_hold_ids | {'external-approval', 'attachment-preview'}] == preceding_order
+    assert [name for name in host['scenarioOrder'] if name not in new_ids | changelog_ids | activity_ids | context_ids | update_hold_ids | {'external-approval', 'attachment-preview'} | suggestion_ids] == preceding_order
     # Preserve the prior spacing/hierarchy placements independently of where the
     # newly validated draft-focus journey is inserted into the host order.
-    before_focus = [name for name in host['scenarioOrder'] if name not in changelog_ids | activity_ids | context_ids | update_hold_ids | {'settings-draft-focus', 'external-approval', 'attachment-preview'}]
+    before_focus = [name for name in host['scenarioOrder'] if name not in changelog_ids | activity_ids | context_ids | update_hold_ids | {'settings-draft-focus', 'external-approval', 'attachment-preview'} | suggestion_ids]
     assert before_focus[before_focus.index('shared-controls') + 1:
                         before_focus.index('delivery-warning')] == ['settings-action-spacing']
     assert before_focus[-2:] == ['shared-room', 'work-hierarchy']
     assert [row['id'] for row in plan['scenarios']] == host['scenarioOrder']
-    assert len(plan['scenarios']) == len(host['scenarioOrder']) == 165 + len(new_ids) + 2 + len(changelog_ids) + len(activity_ids) + len(context_ids) + len(update_hold_ids) == 170 + len(changelog_ids) + len(activity_ids) + len(context_ids) + len(update_hold_ids)
+    assert len(plan['scenarios']) == len(host['scenarioOrder']) == 165 + len(new_ids) + 2 + len(changelog_ids) + len(activity_ids) + len(context_ids) + len(update_hold_ids) + len(suggestion_ids) == 170 + len(changelog_ids) + len(activity_ids) + len(context_ids) + len(update_hold_ids) + len(suggestion_ids)
     assert proof['registrySha256'] == {'unified': runner.digest(host_path), 'client': runner.digest(client_path)}
     assert proof['clientSelectionSha256'] == runner.digest(ROOT / 'components/web-client.source.json')
     assert not identities & {row['id'] for row in coverage_plan()['scenarios']}

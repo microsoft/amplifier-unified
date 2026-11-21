@@ -126,7 +126,7 @@ def project(result):
     if page not in {'smart-tools', 'tool-connections'}:
         result['smartTools'] = {'servers': [pick(row, ('id', 'name', 'status', 'capabilities'))
                                          for row in smart.get('servers', [])]}
-    catalog_settings = page in {'ai-connections', 'overview', 'providers', 'routing', 'voice', 'defaults', 'desktop'}
+    catalog_settings = page in {'ai-connections', 'overview', 'providers', 'routing', 'voice', 'defaults', 'desktop', 'chat-input', 'suggestion-advanced'}
     from .model_catalogs import project as project_models
     project_models(result, settings=catalog_settings, runtime=runtime)
     # Setup operation receipts, matrices and diagnostic metadata are page resources.
