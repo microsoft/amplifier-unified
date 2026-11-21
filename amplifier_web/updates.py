@@ -21,6 +21,7 @@ from types import SimpleNamespace
 from urllib.parse import urlsplit
 import uuid
 from .host.config import write_private
+from . import update_uv_cache
 
 DEFAULT_CHECK_INTERVAL_HOURS = 4
 CHECK_INTERVAL_HOURS = (1, 4, 8, 24)
@@ -284,6 +285,7 @@ def configured_sources(service):
 async def process(*args, cwd=None, env=None, timeout=90, raw=False, _redaction_env=None):
     from .update_command_details import Capture, STDOUT_LIMIT, STDERR_LIMIT, local_excerpt
     from .update_diagnostics import CommandFailure, CommandTimeout, CommandOutput, CommandBytes, command_facts
+    env = update_uv_cache.child_environment(args, env)
     redaction_env = dict(_redaction_env or {})
     redaction_env.update(env if env is not None else os.environ)
     if (env if env is not None else os.environ).get('AMPLIFIER_GITHUB_ACCESS') == 'anonymous':
@@ -372,14 +374,22 @@ async def process(*args, cwd=None, env=None, timeout=90, raw=False, _redaction_e
                     (b'Authentication failed' if out.auth_failure or err.auth_failure else b'') +
                     (b'\nAMPLIFIER_UPDATE_PROBE={"ok":false,"repositoryAccessFailure":true}\n'
                      if out.access_probe or err.access_probe else b''))
-        retry = anonymous_retry_environment(args, env, stdout, stderr + evidence)
         remaining = timeout - (time.monotonic() - started)
-        if retry is not None and remaining > 0:
+        # Both recovery paths share the same deadline and two-attempt receipt.
+        retry = None
+        retry_fact = 'anonymousRetry'
+        if _redaction_env is None and remaining > 0:
+            if update_uv_cache.recover_checkout(args, env, err):
+                retry = update_uv_cache.child_environment(args, env)
+                retry_fact = 'gitCacheRetry'
+            else:
+                retry = anonymous_retry_environment(args, env, stdout, stderr + evidence)
+        if retry is not None:
             def combine(value):
                 later = value.diagnostic_facts
                 local_later = getattr(value, 'local_command_details', None) or [
                     {**{key: val for key, val in later.items() if key != 'commandAttempts'}, 'stderr': ''}]
-                later['anonymousRetry'] = True
+                later[retry_fact] = True
                 later['commandAttempts'] = facts['commandAttempts'] + later.get('commandAttempts', [
                     {key: val for key, val in later.items() if key != 'commandAttempts'}])
                 value.local_command_details = [detail(facts['commandAttempts'][0])] + local_later
@@ -1558,6 +1568,7 @@ class UpdateManager:
             await asyncio.gather(*tasks, return_exceptions=True)
             raise
 
+    @update_uv_cache.candidate_cache()
     async def validate(self,stage,release):
         from .runtime_environment import stage as stage_runtime, receipt_directory
         from .runtime_qualification import freeze, prepare_overrides, verify_recorded

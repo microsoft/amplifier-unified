@@ -83,7 +83,7 @@ def event(row):
     attempts = command_attempts(row.get('commandAttempts'))
     if attempts:
         result['commandAttempts'] = attempts
-    for key in ('anonymousRetry', 'stdoutTruncated', 'stderrTruncated', 'outputLimitExceeded'):
+    for key in ('anonymousRetry', 'gitCacheRetry', 'stdoutTruncated', 'stderrTruncated', 'outputLimitExceeded'):
         if type(row.get(key)) is bool:
             result[key] = row[key]
     if row.get('localDetailStatus') in ('saved', 'unavailable'):
