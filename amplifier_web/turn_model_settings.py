@@ -113,6 +113,9 @@ def restore(service, session, input_id, generation, authority):
                                  global_only=session.get('location', {}).get('kind') == 'managed')
     if binding_proof(input_id, binding) != private['proof']:
         raise AppError('The previous connection changed or is unavailable. Choose its current settings explicitly.', 409)
+    if previous.get('restorePending'):
+        return {'revision': session['nextMessageRevision'], 'status': session['nextMessageStatus'],
+                'applies': 'next-message', 'mounted': False}
     # Saving a picker choice alone never mounted it. A frozen input can still mount
     # its captured choice later, so give the next input an explicit corrective plan.
     queued = (session.get('appliedConfigurationRevision', 0) != private['appliedRevision']
@@ -134,6 +137,8 @@ def restore(service, session, input_id, generation, authority):
     if queued and (bundle_pending or not private['pinned'] or previous['bundle'] != session.get('bundle')):
         session['pendingBundleSelection'] = {'bundle': previous['bundle'], 'resetModel': not private['pinned'],
                                             'authority': authority, 'target': target(session)}
+    if queued:
+        previous['restorePending'] = True
     session['nextMessageRevision'] = session.get('nextMessageRevision', 0) + 1
     session['nextMessageStatus'] = 'saved' if queued else 'applied'
     session.pop('nextMessageError', None)

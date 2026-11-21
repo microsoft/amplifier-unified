@@ -122,7 +122,13 @@ async def test_restore_in_flight_preserves_frozen_inputs_and_previous_default_or
     assert session['nextMessageStatus'] == 'saved'
     assert session['pendingBundleSelection']['bundle'] == 'anchors'
     assert session['pendingBundleSelection']['resetModel'] is (not pinned)
+    assert session['previousTurnSettings']['restorePending'] is True
+    duplicate = save(app, {**args, 'expectedRevision': 2, 'restorePreviousInputId': 'a',
+                           'restorePreviousGenerationId': 'a-generation'})
+    assert duplicate['revision'] == 2
     if pinned:
         assert session['pendingModelSelection'] == B
     else:
         assert 'pendingModelSelection' not in session and session['selection'] is None
+    save(app, {**args, 'expectedRevision': 2, 'selection': A})
+    assert 'restorePending' not in session['previousTurnSettings']

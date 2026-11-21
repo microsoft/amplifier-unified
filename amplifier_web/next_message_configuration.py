@@ -10,9 +10,12 @@ def definitions(schema, string):
         'bundle': {**string(2000), 'minLength': 1}, 'selection': SELECTION,
         'resetModel': {'type': 'boolean'}, 'restorePreviousInputId': {**string(200), 'minLength': 1},
         'restorePreviousGenerationId': {**string(200), 'minLength': 1}}, ['sessionId', 'expectedRevision'])
+    restore_fields = ['restorePreviousInputId', 'restorePreviousGenerationId']
     value['oneOf'] = [
-        {'required': ['restorePreviousInputId','restorePreviousGenerationId'], 'not': {'anyOf': [{'required': [k]} for k in ('bundle','selection','resetModel')]}},
-        {'not': {'anyOf': [{'required': [key]} for key in ('restorePreviousInputId','restorePreviousGenerationId')]}, 'anyOf': [{'required': ['bundle']}, {'required': ['selection']}]},
+        {'required': restore_fields,
+         'not': {'anyOf': [{'required': [key]} for key in ('bundle', 'selection', 'resetModel')]}},
+        {'not': {'anyOf': [{'required': [key]} for key in restore_fields]},
+         'anyOf': [{'required': ['bundle']}, {'required': ['selection']}]},
     ]
     return {
         'conversation.configure': ('Save an explicitly targeted conversation’s Next message bundle/model choices without preparing a worker. '
@@ -125,6 +128,8 @@ def save(service, args, authority=None):
     bundle = args.get('bundle', '').strip()
     if 'bundle' in args and not bundle:
         raise AppError('Choose a bundle.', 400)
+    if 'previousTurnSettings' in session:
+        session['previousTurnSettings'].pop('restorePending', None)
     if 'bundle' in args:
         if (bundle == session.get('bundle') and not args.get('resetModel')
                 and not pending_input(service, session)
