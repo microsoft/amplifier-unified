@@ -2088,7 +2088,8 @@ class AppService:
                 origin != 'ui' or client_id is None or self.clients.record().get('kind') != 'web'):
             raise AppError('A chat reference opens only from its originating browser.', 403)
         if action == "approval.respond" and args["id"].startswith("capability:"):
-            return await self.configuration_authority.decide(args, origin, command_id)
+            return await self.configuration_authority.decide(args, origin, command_id,
+                                                            admission_check=admission_check)
         guard_history_action(self, action, args, origin, caller_session_id)
         if passive_task and origin not in {'ui', 'user'}:
             if not caller_session_id:

@@ -137,14 +137,18 @@ class InstanceProfile:
                     raise ValueError('The original source creation receipt is unavailable.')
                 session['messageAnnotations'][BINDING] = copy.deepcopy(binding)
                 self.owner.service._save_changes(sessions={expected})
+            execution_source = self.execution_source(session)
         await self.owner.attach(expected, cwd, mcp_servers=servers)
         try:
             self.current(binding['source'])  # Recheck authorization after MCP binding.
+            current = self.owner.service._session(expected, hydrate=False)
+            if self.execution_source(current) != execution_source:
+                raise ValueError('The execution source or location changed during attachment.')
         except ValueError:
             await self.owner.release(expected)
             raise
         self.bindings[expected] = binding
-        self.execution_sources[expected] = self.execution_source(session)
+        self.execution_sources[expected] = execution_source
         return expected, self.session_info(expected)
 
     @staticmethod
@@ -302,20 +306,28 @@ class InstanceProfile:
             # Pause settles in the existing task owner before native Stop. If
             # either acknowledgement is lost, exact command receipts reconcile;
             # cancellation of one prompt is never advertised as work revocation.
+            task_witness = None
             if params['taskId'] is None:
                 current = await self.owner.service.dispatch('task.get', {'sessionId': identity},
                     origin='acp', caller_session_id=identity, include_state=False)
                 task = current['result'].get('task')
                 if current['result'].get('status') != 'available' or task and task.get('status') != 'completed':
                     raise ValueError('Inspect the current saved task before stopping this execution.')
+                task_witness = {key: (task or {}).get(key) for key in ('id', 'revision', 'status')}
             def stop_guard():
                 guard()
+                # Read the canonical saved authority, not a potentially older
+                # display projection, at the final conditional Stop admission.
+                from .task_continuity import _load_control
+                session = self.owner.service._session(identity, hydrate=False)
+                task = _load_control(self.owner.service, session, current_only=True)['task'] or {}
                 if params['taskId'] is not None:
-                    task = self.owner.service._session(identity, hydrate=False).get('task') or {}
                     if (task.get('id') != params['taskId']
                             or task.get('revision') != params['expectedRevision'] + 1
                             or task.get('status') != 'paused'):
                         raise ValueError('The saved task changed after pause; no successor work was stopped.')
+                elif {key: task.get(key) for key in ('id', 'revision', 'status')} != task_witness:
+                    raise ValueError('The saved task changed before Stop; inspect its current responsibility.')
             stopped = await self.owner.service.dispatch('conversation.stop',
                 {'sessionId': identity, 'expectedExecution': params['expectedExecution']},
                 origin='acp', command_id=_identity('stop', self.bindings[identity], params['commandId']),

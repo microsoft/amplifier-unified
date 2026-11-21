@@ -174,7 +174,7 @@ class HostAgent:
                 if profile.selected is not None:
                     instance = profile.describe()
                     self.instance = profile
-                    self.owner.approval_guard = lambda identity: profile.bound(identity, profile.bindings.get(identity))
+                    self.owner.attachment_guard = lambda identity: profile.bound(identity, profile.bindings.get(identity))
             except (ValueError, OSError) as error:
                 raise RequestError(_REQUEST_FAILED, str(error)) from None
         return InitializeResponse(protocol_version=1, agent_capabilities=AgentCapabilities(
@@ -316,6 +316,8 @@ class HostAgent:
 
     async def cancel(self, session_id, **kwargs):
         self.require_initialized()
+        if self.instance is not None:
+            self.instance.bound(session_id, self.instance.bindings.get(session_id))
         await self.owner.cancel(session_id)
 
     async def ext_method(self, method, params):
