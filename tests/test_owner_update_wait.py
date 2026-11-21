@@ -1500,7 +1500,7 @@ async def test_idle_configuration_refresh_preserves_update_checkpoint_and_contin
         return
     from amplifier_web.update_blockers import assess
     assert await drain.prepare(h.manager, h.release), (h.row['waitingFor'], h.row.get('ready'),
-                                                      assess(h.app, application=True))
+                                                      assess(h.app))
     assert h.row['ready'] and not h.row.get('suppressed')
     assert h.sid not in h.runtime.workers
     assert session['configurationPending']  # Retirement is not configuration adoption.

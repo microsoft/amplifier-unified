@@ -130,13 +130,15 @@ def installed_identity():
 
 async def serve():
     pair = os.environ.get('AMPLIFIER_TEST_UPDATE_RESTART_PAIR') == '1'
+    update_kind = os.environ.get('AMPLIFIER_TEST_UPDATE_HOLDS')
+    held = pair or update_kind in {'component', 'tool'}
     if bool(os.environ.get('AMPLIFIER_TEST_INSTALLED_PACKAGE')) != pair:
         raise ValueError('Installed package mode requires the explicit update-restart pair opt-in')
     provenance = installed_identity() if pair else None
     from aiohttp import web
     import settings_ui_server as fixture
     import amplifier_web
-    if pair:
+    if held:
         class ObservedRuntime(fixture.Runtime):
             """Synthetic absence/work observations; AppService/gate remain real."""
             def __init__(self):
@@ -173,7 +175,7 @@ async def serve():
         manager = service.update_manager
         session = service._session()
         historical = []
-        if pair:
+        if held:
             from amplifier_web.update_blockers import assess
             from amplifier_web.host.storage import SessionStore
             from amplifier_web.session_projection import hydrate, view_path
@@ -247,6 +249,10 @@ async def serve():
         await manager.publish(phase='app-staged', initialPreparation=False,
             pendingApp={'revision': 'a'*40, 'generation': 'b'*32, 'attemptId': 'qualified-one', 'latest': 'v99.0.0'},
             application={'status': 'update', 'canInstall': True, 'latest': 'v99.0.1'})
+        if update_kind:
+            await manager.publish(phase='staged', pendingApp=None, application={'status': 'current'},
+                pendingRelease='b' * 32 if update_kind == 'component' else None,
+                pendingSmartTools=[{'previous': 'a' * 24, 'target': 'b' * 24}] if update_kind == 'tool' else [])
         # Exercise real action admission and asynchronous rejection without any
         # installation, runtime interruption, pointer promotion or host restart.
         await manager.lock.acquire()
@@ -264,13 +270,13 @@ async def serve():
                      'result': service.state['updates'].get('forceRestartResult'),
                      'blockers': service.state['updates']['blockers'],
                      'currentStatus': service.state['updates']['currentStatus']}
-            if pair:
+            if held:
                 current = {row['id']: row for row in service.state['sessions']}
                 assert [current[row['id']] for row in historical] == originals
                 assert historical == originals and saved_files() == original_files
                 assert committed_owners() == original_committed
                 assert service.runtime.calls == [] and not service.runtime.workers and not service.runtime._preparations
-                gate = assess(service, application=True)
+                gate = assess(service)
                 value['pair'] = {'mode': mode, 'historicalIds': [row['id'] for row in historical],
                     'historicalStates': [{key: row[key] for key in ('status', 'configurationBusy',
                         'configurationPending', 'configurationPendingRevision', 'pendingConfiguration')}
@@ -285,7 +291,7 @@ async def serve():
                     'appBusy': manager.app_busy(), 'componentBusy': manager.busy(),
                     'activationGate': gate['observation'], 'blockers': gate['blockers'],
                     'runtimeCalls': service.runtime.calls, 'activeId': active['id'],
-                    'provenance': installed_identity()}
+                    'provenance': installed_identity() if pair else None}
             return value
 
         async def control(request):
@@ -297,14 +303,17 @@ async def serve():
                 if not isinstance(payload, dict) or set(payload) - {'mode'}:
                     raise web.HTTPBadRequest()
                 if payload:
-                    if not pair:
+                    if not held:
                         raise web.HTTPBadRequest()
                     next_mode = payload.get('mode')
-                    if (mode, next_mode) not in {('historical', 'active'), ('active', 'unknown')}:
+                    if (mode, next_mode) not in {('historical', 'active'), ('active', 'unknown'),
+                                                ('active', 'settled')}:
                         raise web.HTTPConflict(text='Probe transitions are ordered and non-replayable')
                     active.update(status='working', configurationBusy=True)
                     if next_mode == 'unknown':
                         active['worktreeHandoffs'] = [{'id': 'retained-unknown', 'phase': 'unknown'}]
+                    elif next_mode == 'settled':
+                        active.update(status='idle', configurationBusy=False)
                     mode = next_mode
                     await manager.publish()
                     return web.json_response(observation())

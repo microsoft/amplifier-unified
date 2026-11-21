@@ -362,7 +362,7 @@ dependencies = [
 [[package]]
 name = "amplifier-module-provider-openai"
 version = "1.0.0"
-source = { git = "https://github.com/microsoft/amplifier-module-provider-openai?rev=main#2d30e5fd1dfa963bc75045eccfe0a4f54f10371f" }
+source = { git = "https://github.com/microsoft/amplifier-module-provider-openai?rev=main#69b40dde3b4bdfd98843c3da1d53e975ca6c8c4d" }
 dependencies = [
     { name = "httpx" },
     { name = "openai" },
@@ -492,7 +492,7 @@ dependencies = [
 
 [[package]]
 name = "amplifier-unified"
-version = "0.114.5"
+version = "0.114.7"
 source = { editable = "." }
 dependencies = [
     { name = "agent-client-protocol" },

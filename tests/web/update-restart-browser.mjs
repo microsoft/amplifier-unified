@@ -141,7 +141,7 @@ try{
    assert.ok(Object.values(value.savedFilesPerOwner).every(count=>count>0));
    assert.match(value.committedOwnerSha256,/^[a-f0-9]{64}$/);
    assert.equal(value.committedOwnerSha256,initialOwnerHash);
-   assert.deepEqual(value.runtimeCalls,[]);assert.equal(value.componentBusy,true);
+   assert.deepEqual(value.runtimeCalls,[]);assert.equal(value.componentBusy,value.appBusy);
    assert.equal(observed.calls.length,0);assert.equal(value.provenance.wheelIdentitySha256,boot.pair.wheelIdentitySha256);
    checkProvenance(value.provenance);
    checkpoints.push(value);

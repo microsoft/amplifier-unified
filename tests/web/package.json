@@ -23,6 +23,7 @@
     "test:execution-actions-browser": "node execution-actions-browser.mjs && node canonical-work-browser.mjs",
     "test:babylon-browser": "node babylon-browser.mjs",
     "test:smart-tools-browser": "node smart-tools-browser.mjs",
+    "test:update-configuration-hold-browser": "node update-configuration-hold-browser.mjs",
     "test:mcp-recovery-browser": "node mcp-recovery-browser.mjs",
     "test:panel-browser": "node panel-layout-browser.mjs",
     "test:pwa-browser": "node pwa-browser.mjs",
