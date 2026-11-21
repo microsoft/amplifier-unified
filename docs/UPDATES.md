@@ -57,11 +57,11 @@ waits for an idle host before replacement. The tool keeps its staged target,
 its activation gate, and any existing failure receipts. An interrupted tool
 stage with no known target keeps its existing handoff protection.
 
-Normal app replacement does not require recovery of an idle configuration error
-or adoption of saved configuration by an absent worker. `configurationPending`
-and retained operation phases describe intent/evidence, not executing work.
+Normal app, component and Smart Tool updates do not require recovery of an idle
+configuration error or adoption of saved configuration by an absent worker.
+`configurationPending` and retained operation phases describe intent/evidence, not executing work.
 For example, a lost native receipt can leave settings unresolved without keeping
-the host on an old application release. The target must have no mounted worker,
+the host on old software. The held conversation must have no mounted worker,
 preparation, running turn or child work, executing refresh, unsettled management task or
 runtime operation. Cancellation requested is not settled work. The app owner
 rechecks held-owner, execution/native target and Stop bindings across validation
@@ -74,10 +74,13 @@ native seal and input fence remain unchanged. It never resumes, reconciles,
 mounts, cancels or rewrites that operation, and does not enqueue target model
 input. Missing, contradictory, partial or unknown historical evidence stays
 unresolved; replacement does not upgrade it to a known outcome. Status reads do
-not rescan native receipts or saved configuration to decide app quiescence.
-Component activation retains its existing stronger configuration gate; explicit
-user-only force-restart semantics are unchanged. Real active work can still
-require waiting or deliberate interruption; an idle recovery hold alone cannot.
+not rescan native receipts or saved configuration to decide update quiescence.
+All update paths use the same activity assessment, without classifying old
+operations as legacy or modern. Component and tool activation retain their
+runtime-lifecycle and admission locks; generation promotion keeps active workers
+on their leased generation. Explicit user-only force-restart semantics are
+unchanged. Real active work can still require waiting or deliberate interruption;
+an idle recovery hold alone cannot.
 
 At ordinary error settlement and startup, the configuration owner can observe
 an authenticated terminal no-effect receipt for the exact native attempt without
@@ -86,7 +89,8 @@ the original request, attempts and history, and persists an old-input cutoff bef
 releasing that operation's local fence. It neither warms the old chat nor drains
 its queued input. Missing, conflicting, partial and saved-but-unloaded outcomes
 remain local fences; no consumer recovery action is required for an unrelated
-application replacement. This bookkeeping is not a second recovery service.
+update. This bookkeeping is not a prerequisite for updates or a second recovery
+service.
 
 ### Partial failure does not abort independent progress
 

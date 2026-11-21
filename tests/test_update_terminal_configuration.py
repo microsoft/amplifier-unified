@@ -74,9 +74,9 @@ def originals(fixture):
 async def test_terminal_saved_hold_allows_normal_app_only_activation_without_recovery(terminal):
     f = terminal
     before = originals(f)
-    assert f.manager.busy()  # Component activation did not acquire this exception.
+    assert not f.manager.busy()  # All updates observe activity, not historical effects.
     assert not f.manager.app_busy()
-    assert update_blockers.assess(f.app, application=True)['observation']['configurationReasonCounts'] == {
+    assert update_blockers.assess(f.app)['observation']['configurationReasonCounts'] == {
         'idle-configuration-hold': 1}
     f.app.state['updates']['pendingAppCheckAt'] = time.time()
     await f.manager.app()
@@ -96,7 +96,7 @@ async def test_idle_unresolved_hold_automatically_activates_app_without_recovery
     before = originals(f)
     boundary = AsyncMock(side_effect=AssertionError('Idle held work needs no cooperative wait'))
     monkeypatch.setattr(f.app.runtime, 'handoff_boundary', boundary)
-    assert f.manager.busy()  # Component adoption still has its stronger gate.
+    assert not f.manager.busy()
     for _ in range(3):
         f.manager.wakeup.clear()
         f.manager.notify_idle()
@@ -116,7 +116,7 @@ async def test_idle_unresolved_hold_automatically_activates_app_without_recovery
 async def test_terminal_native_no_effect_is_quiescent_without_consuming_original(terminal):
     f = terminal
     before = originals(f)
-    assert not f.manager.app_busy() and f.manager.busy()
+    assert not f.manager.app_busy() and not f.manager.busy()
     await app_updates.activate(f.manager)
     f.restart.assert_awaited_once()
     assert originals(f) == before
@@ -154,7 +154,7 @@ async def test_absent_held_owner_clears_only_obsolete_freshness_before_targeted_
     assert not f.manager.app_busy()
     result = (await invoke(f, source, 'read', includeRecovery=True))['result']
     assert result['nativeEffect'] == ('unknown' if unknown else 'saved_not_mounted')
-    assert originals(f) == before and f.manager.busy()
+    assert originals(f) == before and not f.manager.busy()
     await f.app.refresh_configuration(f.session['id'])
     assert originals(f) == before
     stop.assert_not_awaited()
@@ -235,7 +235,7 @@ async def test_restart_retires_stale_mount_freshness_not_held_configuration(term
         assert session['configurationBusy'] and session['configurationPending'] is False
         assert not session.get('fileAccessPending') and 'configurationRefresh' not in session
         assert originals(SimpleNamespace(app=app, session=session)) == before
-        assert app.update_manager.busy() and not app.update_manager.app_busy()
+        assert not app.update_manager.busy() and not app.update_manager.app_busy()
         runtime.start.assert_not_awaited()
         runtime.stop.assert_not_awaited()
         runtime.send.assert_not_awaited()
@@ -257,7 +257,7 @@ async def test_app_gate_presentation_and_idle_notification_use_same_assessment(t
     f.app.state['updates']['phase'] = 'app-staged'
     f.manager.wakeup.clear()
     f.manager.notify_idle()
-    assert f.manager.wakeup.is_set() and f.manager.busy() and not f.manager.app_busy()
+    assert f.manager.wakeup.is_set() and not f.manager.busy() and not f.manager.app_busy()
 
 
 @pytest.mark.parametrize('outcome', ['pass', 'failure', 'cancel'])
@@ -409,7 +409,7 @@ async def test_repeated_app_readiness_keeps_persisted_configuration_hold_and_no_
         app.state['updates'].update(phase='app-staged', applicationIntent=next_intent,
             pendingApp={'revision': revision, 'latest': 'v100.0.0', 'attemptId': 'next-attempt'})
         f.process.return_value = '100.0.0'
-        assert not manager.app_busy() and manager.busy()
+        assert not manager.app_busy() and not manager.busy()
         app.state['updates']['pendingAppCheckAt'] = time.time()
         await manager.app()
         assert app.state['updates']['pendingRestart']['revision'] == revision
@@ -574,10 +574,10 @@ async def test_four_stopped_configuration_records_do_not_block_unrelated_app_rep
     drain = AsyncMock(side_effect=AssertionError('Update cannot drain stopped inputs'))
     monkeypatch.setattr(f.app.runtime, 'start', start)
     monkeypatch.setattr(f.app.collaboration, 'drain', drain)
-    observed = update_blockers.assess(f.app, application=True)
+    observed = update_blockers.assess(f.app)
     assert not observed['blockers']
     assert observed['observation']['configurationReasonCounts'] == {'idle-configuration-hold': 4}
-    assert f.manager.busy()  # Stronger component adoption is unchanged.
+    assert not f.manager.busy()
     await app_updates.activate(f.manager)
     f.restart.assert_awaited_once()
     assert sessions == before

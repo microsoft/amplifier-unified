@@ -62,8 +62,8 @@ def pending_input(service, session):
         return True
     # Ordinary input is not a new execution turn until the native owner says so.
     # Its existing message still protects preparation without a command receipt.
-    if any(row.get('inputId') and row.get('delivery', {}).get('status') == 'sending'
-           for row in dict.get(session, 'messages', [])):
+    from .message_delivery import sending_input
+    if sending_input(session):
         return True
     # Voice, question and scheduled input retain their execution-turn evidence.
     # ColdDisplay retains the same pending-work fact with its exact body ref.
