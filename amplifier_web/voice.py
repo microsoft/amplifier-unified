@@ -234,6 +234,24 @@ def result_fact_parts(result: Any) -> list[str] | None:
     return parts if 0 < len(parts) <= 64 else None
 
 
+def failure_notice(exc: BaseException, accepted: bool) -> str:
+    """What the voice is told about a failed delegation.
+
+    Only the text of the product's own errors is passed on: a sentence written
+    for a person, or the error that the chat itself shows. Any other exception
+    text is internal and is never spoken. Say whether Amplifier has the
+    request, so the voice neither repeats work nor promises work that never
+    started.
+    """
+    from .errors import AppError
+    reason = ' '.join(str(exc).split())[:250] if isinstance(exc, (AppError, VoiceError)) else ''
+    reason = reason or 'An internal error stopped it.'
+    if accepted:
+        return ('Amplifier received this request but could not complete it: ' + reason
+                + ' Check the shared chat before asking again.')
+    return 'Amplifier could not complete this request, and no work was started: ' + reason
+
+
 def should_fallback(error: ProviderError) -> bool:
     """Change protocol only for model/access availability, never hide bad auth."""
     if error.status in {401, 429}:
@@ -864,13 +882,14 @@ class VoiceCall:
                         'status': 'error', 'controlStatus': 'error',
                         'error': 'Voice result delivery could not be confirmed. Amplifier work and results remain in the shared chat.'})
                 return
-            if pending['status'] not in {'accepted', 'waiting_result', 'completed'}:
+            accepted = pending['status'] == 'accepted'
+            if not accepted:
                 pending['status'] = 'admission_failed'
                 for row in self.transcript_fragments:
                     if row['reserved_by'] == did and not row['consumed']:
                         row['reserved_by'] = None
             if not self.closed:
-                await self.append("commentary", "Amplifier could not complete this request: " + str(exc)[:250], provider_id)
+                await self.append("commentary", failure_notice(exc, accepted), provider_id)
 
     def accept_delegation(self, did: str) -> None:
         pending = self.pending_delegations.get(did)
@@ -997,6 +1016,13 @@ class VoiceCall:
             await self.send({'type': 'conversation.item.create', 'item': {'type': 'message', 'role': 'user',
                 'content': [{'type': 'input_text', 'text': latest[1]}]}})
 
+    def recorded_generation(self, event: dict) -> dict:
+        """The host's own finished record of this generation, which has its text."""
+        session = next((row for row in self.service.state.get('sessions', []) if row.get('id') == self.session_id), {})
+        return next((row for row in session.get('generations', [])
+                     if row.get('event') == 'generation.finished' and isinstance(row.get('text'), str)
+                     and row.get('generation_id') == event.get('generation_id')), event)
+
     async def announce_generations(self, snapshot: dict) -> None:
         if self.closed or self.closing:
             return
@@ -1007,6 +1033,11 @@ class VoiceCall:
             if (event.get("event") != "generation.finished" or not identity or identity in self.seen_generations
                     or not root_generation(event, self.session_id)):
                 continue
+            if not isinstance(event.get('text'), str):
+                # The observer's snapshots are browser projections, which omit
+                # a generation's text. Without the host's own record the caller
+                # hears only that an update exists, never the answer.
+                event = self.recorded_generation(event)
             prefix = 'voice:' + self.id + ':'
             own_inputs = [value for value in event.get('input_ids', []) if value.startswith(prefix)]
             pending = [self.pending_delegations.get(value[len(prefix):]) for value in own_inputs]
@@ -1097,18 +1128,18 @@ class VoiceCall:
         try:
             args = json.loads(event.get("arguments") or "{}")
             if not isinstance(args, dict):
-                raise ValueError("Tool arguments must be an object.")
+                raise VoiceError("Tool arguments must be an object.")
             name = event.get("name")
             if name == "amplifier_delegate":
                 text = args.get("text", "")
                 if not isinstance(text, str) or not text.strip():
-                    raise ValueError("A request is required.")
+                    raise VoiceError("A request is required.")
                 self.pending_delegations.setdefault(did, {'id': did, 'provider_id': did, 'status': 'submitting'})
                 result = await self.execute(text, did)
             else:
-                raise ValueError("Unknown voice tool.")
+                raise VoiceError("Unknown voice tool.")
         except Exception as exc:
-            result = {"error": str(exc)[:500]}
+            result = {"error": failure_notice(exc, self.pending_delegations.get(did, {}).get('status') == 'accepted')}
         if not self.closed and not self.closing:
             identity = result.get("generation_id") if isinstance(result, dict) else None
             duplicate = bool(identity and identity in self.delivered_generations)

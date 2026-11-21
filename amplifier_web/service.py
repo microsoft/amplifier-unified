@@ -6231,6 +6231,12 @@ class AppService:
         async with self.lock:
             if work_paused(self.state):
                 raise AppError("An ecosystem update is activating. Please retry in a moment.",409)
+            from .update_drain import held
+            if held(self):
+                # A typed message is saved and sent after the update. A voice
+                # request has no saved bubble to hold, so refuse it here in
+                # plain words instead of failing later inside the deferral.
+                raise AppError("An update is being installed. Nothing was sent; ask again in a moment.", 409)
             session = self._session(session_id)
             self._check_voice_owner(session['id'], transfer_id)
             if self.assignments.blocked(session):

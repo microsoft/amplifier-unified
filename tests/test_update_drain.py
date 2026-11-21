@@ -50,6 +50,15 @@ async def test_many_saved_messages_are_acknowledged_and_released_once_in_order(a
     assert app.state['updates']['drain']['phase'] == 'released'
 
 
+async def test_voice_request_during_an_update_is_refused_in_plain_words_and_changes_nothing(app):
+    sid = app._session()['id']
+    with pytest.raises(AppError, match='An update is being installed. Nothing was sent'):
+        await app.voice_delegate('Voice request', 'voice:call:item', session_id=sid)
+    assert app.runtime.sent == [] and app._session()['status'] != 'error'
+    assert app.db.execute('SELECT 1 FROM commands WHERE id=?', ('voice:call:item',)).fetchone() is None
+    assert app.state['updates']['drain']['messages'] == []
+
+
 async def test_crash_leaves_only_claimed_input_uncertain_and_rest_queued(app):
     await send(app, 'claimed')
     await send(app, 'unattempted')
