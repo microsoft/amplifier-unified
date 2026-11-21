@@ -38,6 +38,12 @@ owns the continuing participant's outward promises. AP governs Unified's ACP
 adapter and host boundary; the [composition mapping](../docs/architecture/VISION.md#constellation-boundaries)
 identifies the other owners without requiring this adapter to implement every role.
 
+The [optional Unified public-agent profile](../docs/architecture/unified-acp-backend.md#optional-unified-public-agent-instance-profile-candidate)
+maps continuing identity, original-input inspection and existing task controls
+without redefining ACP sessions or cancel. It is a candidate serving profile:
+plain ACP is unchanged, source attribution grants no authority, and its scoped
+evidence does not imply every Agent Instance or multi-tenant promise is qualified.
+
 ## The promises
 
 1. **AP1 — Use one execution boundary.** New host execution reaches every agent,

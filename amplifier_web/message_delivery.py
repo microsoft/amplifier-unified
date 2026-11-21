@@ -2,6 +2,13 @@
 import json
 
 
+def execution_boundary(session):
+    """Existing latest admitted input and Stop epoch; no new execution identity."""
+    latest = next((row.get('inputId') for row in reversed(session.get('messages', []))
+                   if row.get('role') == 'user' and row.get('inputId')), None)
+    return {'interruptionRevision': session.get('interruptionRevision', 0), 'inputId': latest}
+
+
 def receipt_mapping(raw):
     """Read a receipt without manufacturing a replacement for malformed bytes."""
     try:
