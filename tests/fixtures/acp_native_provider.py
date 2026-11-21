@@ -18,6 +18,7 @@ class Provider:
         self.pending = None
         self.sid = None
         self.round = 0
+        self.create_task = config.get("create_task", False)
 
     def get_info(self):
         from amplifier_core import ProviderInfo
@@ -41,10 +42,15 @@ class Provider:
 
     async def complete(self, request, **kwargs):
         from amplifier_core.message_models import ChatResponse, TextBlock, ToolCall, Usage
+        from amplifier_web.execution_events import CALL_PURPOSE
         usage = Usage(input_tokens=1, output_tokens=1, total_tokens=2)
+        if CALL_PURPOSE.get():
+            return ChatResponse(content=[TextBlock(text="Offline native ACP fixture")], usage=usage)
         if self.pending:
-            message = next(row for row in reversed(request.messages)
-                           if row.role == "tool" and row.tool_call_id == self.pending)
+            message = next((row for row in reversed(request.messages)
+                            if row.role == "tool" and row.tool_call_id == self.pending), None)
+            assert message is not None, [(row.role, row.tool_call_id, self.text(row)[:1000])
+                                         for row in request.messages[-4:]]
             receipt = json.loads(self.text(message))
             if "success" in receipt and "output" in receipt:
                 assert receipt["success"], receipt
@@ -57,6 +63,14 @@ class Provider:
                     "action": "session.rename", "args": {
                         "id": self.sid, "title": f"Native ACP effect {self.round}"},
                     "id": self.pending}}
+            elif self.create_task and self.round == 1 and self.pending.startswith("native-acp-title-"):
+                assert receipt["accepted"], receipt
+                self.pending = "native-acp-work"
+                arguments = {"operation": "dispatch", "args": {
+                    "action": "task.create", "args": {
+                        "sessionId": self.sid, "expectedRevision": 0,
+                        "objective": "Verify the explicitly accepted native ACP fixture",
+                        "maxTurns": 10}, "id": self.pending}}
             else:
                 assert receipt["accepted"], receipt
                 self.pending = None

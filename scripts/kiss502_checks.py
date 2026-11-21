@@ -27,6 +27,7 @@ TARGETS = (
     "test_coordination_delivery", "test_coordination_return_policy",
     "test_coordination_superseded_returns", "test_coordination_wait_transport",
     "test_peer_return_workflow",
+    "test_agent_instance",
 )
 FIXTURES = (
     "acp_native_provider.py", "external_acp_agent.py", "external_acp_participation.py",

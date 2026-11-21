@@ -35,7 +35,7 @@ class NativePeer(StdioPeer):
                 self.updates.append(row)
 
 
-@pytest.mark.parametrize("wrapper", ["direct", "published-instance"])
+@pytest.mark.parametrize("wrapper", ["direct", "published-instance", "unified-profile"])
 async def test_stdio_acp_executes_real_core_tool_and_same_native_resume(tmp_path, monkeypatch, aiohttp_client, wrapper):
     binary = os.environ.get("KISS502_INSTANCE_BINARY") if wrapper == "published-instance" else None
     if wrapper == "published-instance":
@@ -80,7 +80,8 @@ async def test_stdio_acp_executes_real_core_tool_and_same_native_resume(tmp_path
         f"    source: {json.dumps(str(paths['amplifier_module_context_simple']))}\n"
         "providers:\n  - module: provider-acp-native-fixture\n"
         f"    source: {json.dumps(str(provider.parent))}\n"
-        f"    config:\n      audit: {json.dumps(str(audit))}\n")
+        f"    config:\n      audit: {json.dumps(str(audit))}\n"
+        f"      create_task: {'true' if wrapper == 'unified-profile' else 'false'}\n")
     runtime = RuntimeManager(command=[sys.executable, "-I", "-B", "-m", "amplifier_web.runtime_worker"],
                              startup_timeout=45)
     app = await create_app(tmp_path / "app", workspace=workspace, runtime=runtime,
@@ -88,6 +89,12 @@ async def test_stdio_acp_executes_real_core_tool_and_same_native_resume(tmp_path
                            background_updates=False, background_work=False)
     service = app["service"]
     runtime.app_bridge, runtime.home = service.app_bridge, tmp_path / "app"
+    from amplifier_web.agent_instance import NAMESPACE, room_source, session_metadata, prompt_metadata
+    source = room_source("native-profile-room", "https://fixture.example")
+    if wrapper == "unified-profile":
+        service.server_config["agentInstance"] = {
+            "id": "urn:fixture:U", "label": "Fixture U", "workspace": str(workspace),
+            "bundle": str(bundle), "sources": [source]}
     client = await aiohttp_client(app)
     credential = tmp_path / "owner-token"
     credential.write_text(app["control_token"])
@@ -170,26 +177,43 @@ async def test_stdio_acp_executes_real_core_tool_and_same_native_resume(tmp_path
             stderr=asyncio.subprocess.PIPE)
         processes.append(process)
         peer = NativePeer(process)
-        assert (await peer.call("initialize", protocolVersion=1))["result"]["protocolVersion"] == 1
+        options = {"_meta": {NAMESPACE: {"version": 1}}} if wrapper == "unified-profile" else {}
+        initialized = await peer.call("initialize", protocolVersion=1, **options)
+        assert initialized["result"]["protocolVersion"] == 1
+        if options:
+            assert initialized["result"]["_meta"][NAMESPACE]["agentId"] == "urn:fixture:U"
         return peer
 
     try:
         if binary:
             await prepare_instance()
         first = await launch()
-        sid = (await first.call("session/new", cwd=str(workspace), mcpServers=[]))["result"]["sessionId"]
+        session_options = {"_meta": session_metadata("urn:fixture:U", source)} if wrapper == "unified-profile" else {}
+        sid = (await first.call("session/new", cwd=str(workspace), mcpServers=[], **session_options))["result"]["sessionId"]
+        source_inputs = []
         for turn in (1, 2):
             peer = first if turn == 1 else await launch()
             if turn == 2:
                 assert (await peer.call("session/resume", sessionId=sid, cwd=str(workspace),
-                                       mcpServers=[]))["result"] == {}
+                                       mcpServers=[], **session_options)).get("error") is None
+            binding = prompt_metadata("urn:fixture:U", source, f"source-input-{turn}",
+                actor="fixture-person", audience=["conversation"], reply_to=source["conversationId"],
+                interruption_revision=0)
+            options = {"_meta": binding} if wrapper == "unified-profile" else {}
             response = await peer.call("session/prompt", sessionId=sid,
-                                      prompt=[{"type": "text", "text": f"Native input {turn}: 漢🙂"}])
+                                      prompt=[{"type": "text", "text": f"Native input {turn}: 漢🙂"}], **options)
             assert response.get("result", {}).get("stopReason") == "end_turn", response
             text = "".join(row["params"]["update"].get("content", {}).get("text", "")
                            for row in peer.updates if row.get("method") == "session/update")
             assert f"Native reply {turn}: 漢🙂" in text, peer.updates
             assert service._session(sid)["title"] == f"Native ACP effect {turn}"
+            if options:
+                inspected = await peer.call("_amplifier/instance", sessionId=sid,
+                    operation="inspectInput", binding=binding[NAMESPACE])
+                assert "result" in inspected, inspected
+                source_inputs.append(inspected["result"])
+                assert inspected["result"]["delivery"] == "accepted"
+                assert bool(inspected["result"]["work"]) is (turn == 1), inspected
             await peer.eof()
         rows = [json.loads(line) for line in audit.read_text().splitlines()]
         provider_rows = [row for row in rows if row["kind"] == "provider"]
@@ -217,7 +241,7 @@ async def test_stdio_acp_executes_real_core_tool_and_same_native_resume(tmp_path
         evidence = {"status": "passed", "runtime": graph, "nativeSession": sid, "wrapper": wrapper,
                     "project": project_slug(workspace), "workerPid": worker_pid,
                     "nativeInputs": dict(delivered), "nativeTerminals": dict(terminal),
-                    "provider": provider_rows, "effects": commands,
+                    "provider": provider_rows, "effects": commands, "sourceInputs": source_inputs,
                     "limits": ["Scripted provider; no paid API", "loop-live/context-simple composition, not full Work bundle",
                                "Native worker remains resident across ACP reconnect; no host restart/compaction",
                                "Text Unicode final output, not token-streaming/media qualification"]}
