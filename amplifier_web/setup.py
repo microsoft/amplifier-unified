@@ -278,7 +278,7 @@ class SetupManager:
                 'authenticationRequired':needs_auth,'account':account,'accountConnected':connected,'credentialsConfigured':configured,'keySource':'environment' if (not refs and credential['available']) or any(isinstance(v,str) and v.startswith('${') for v in refs) else ('configuration' if refs else 'provider-managed'), 'enabled':value.get('enabled',True) and identity not in config.settings.get('configurator',{}).get('disabled',{}).get('providers',[])})
         return rows
 
-    async def discover_catalog(self, workspace, *, refresh=False, instance=None, selected_only=False):
+    async def discover_catalog(self, workspace, *, refresh=False, instance=None, selected_only=False, cache_only=False):
         """Configured connections only; all consumers share the host cache.
 
         A session's mounted/default/saved selection is not an inventory source.
@@ -303,6 +303,8 @@ class SetupManager:
                 return row['sharedCatalogKey'], {'sharedCatalogKey':key[1], 'models':[],
                     'phase':'invalidated','supported':False,
                     'error':'This connection needs sign-in. Cached models are not available until it is reconnected.'}
+            if cache_only and not (refresh and (instance is None or instance == row['id'])):
+                return row['sharedCatalogKey'], self.catalog.entry(key)
             try:
                 await self.cached_probe('providers.models', {
                     'id': row['id'], 'refresh': refresh and (instance is None or instance == row['id'])

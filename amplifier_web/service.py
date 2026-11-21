@@ -1005,8 +1005,9 @@ class AppService:
             return {'revision': self.state['revision'], 'sessions': []}
         index = self.projections.sessions(self.state)
         session = copy.deepcopy(row)
-        session.pop('_externalAgentSource', None)
-        session.pop('_externalRoom', None)
+        from .browser_detail import PRIVATE_SESSION_FIELDS
+        for field in PRIVATE_SESSION_FIELDS:
+            session.pop(field, None)
         from .input_status import annotate as input_annotation, PREFIX as input_status_prefix
         session['messages'] = [input_annotation(row, message) for message in session.get('messages', [])]
         session['messageAnnotations'] = {key: value for key, value in session.get('messageAnnotations', {}).items()
@@ -4939,6 +4940,17 @@ class AppService:
     def _ingest_runtime_execution(self, session, payload):
         with self.performance_diagnostics.measure('execution.ingest', synchronous=True, session_id=session['id']):
             ingest_execution(session,payload)
+        if (payload.get('kind') == 'llm' and payload.get('phase') == 'completed' and not payload.get('purpose')
+                and payload.get('lifecycle') != 'background'
+                and payload.get('sessionId') == payload.get('rootSessionId') == session['id']):
+            from .next_message_impact import impact, observation
+            previous = session.get('_lastPromptUsage') or {}
+            started = payload.get('startedAt', 0)
+            if isinstance(started, (int, float)) and started >= previous.get('startedAt', 0):
+                usage = observation(payload)
+                session['_lastPromptUsage'] = {**usage, 'startedAt': started}
+                choices = (session.get('runtimeReport') or {}).get('provider_choices', ())
+                session['nextMessageImpact'] = impact(usage, choices)
         if (payload.get('incompleteHistoryDispatched') is True and payload.get('kind') == 'llm'
                 and payload.get('phase') == 'running' and not payload.get('purpose')
                 and payload.get('sessionId') == payload.get('rootSessionId') == session['id']):

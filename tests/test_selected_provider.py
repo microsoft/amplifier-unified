@@ -40,6 +40,9 @@ async def test_native_compaction_and_validation_use_selected_model_without_mutat
             self.request = request
             return {'model': request.model or self.default_model}
 
+        def supports_native_compaction(self, *, model=None):
+            return model == "pinned-model"
+
         def validate_compacted_context(self, message, *, model=None):
             return message['model'] == (model or self.default_model)
 
@@ -48,6 +51,7 @@ async def test_native_compaction_and_validation_use_selected_model_without_mutat
     request = Request(max_output_tokens=4096)
     request.metadata = {'purpose': 'context-compaction'}
     assert await selected.request_budget(request) == {'model': 'pinned-model', 'reserve': 4096}
+    assert selected.supports_native_compaction()
     result = await selected.compact_context(request)
     assert result == {'model': 'pinned-model'}
     assert selected.default_model == 'pinned-model'

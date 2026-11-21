@@ -10,6 +10,7 @@ NATIVE_MESSAGE_LIMIT=100
 NODE_LIMIT=100
 TEXT_LIMIT=4096
 SUMMARY_LIMIT=512
+PRIVATE_SESSION_FIELDS = frozenset({'_externalAgentSource', '_externalRoom', '_lastPromptUsage'})
 
 
 def digest(text):return sha256(text.encode()).hexdigest()
@@ -340,8 +341,7 @@ def project(session, *, resolver=None, message_overlay=None, work_overlay=None):
                    if not key.startswith('_cold') and key not in {'execution', 'historyActivity'}}
         session['messages'] = (message_overlay or {}).get('messages', resident.get('messages', [])[-100:])
         session['execution'] = {'nodes': [], 'turns': []}
-    result={key: value for key, value in session.items()
-            if key not in {'_externalAgentSource', '_externalRoom'}}
+    result={key: value for key, value in session.items() if key not in PRIVATE_SESSION_FIELDS}
     from .peer_attribution import display_annotations
     if message_overlay is not None:
         result.update(message_overlay)
