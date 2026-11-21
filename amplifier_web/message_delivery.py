@@ -2,6 +2,12 @@
 import json
 
 
+def sending_input(session):
+    """Observe resident admission, never hydrate old conversation history."""
+    return any(row.get('inputId') and row.get('delivery', {}).get('status') == 'sending'
+               for row in dict.get(session, 'messages', []))
+
+
 def receipt_mapping(raw):
     """Read a receipt without manufacturing a replacement for malformed bytes."""
     try:

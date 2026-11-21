@@ -18,6 +18,7 @@ from amplifier_web.smart_tools import SmartToolsManager
 from amplifier_web.update_blockers import blockers
 from amplifier_web.updates import UpdateManager
 from test_smart_tool_update_cleanup import OLD, configure, package
+from test_updates import app, repo, prepare, git  # noqa: F401 — isolated Git/app fixtures
 
 
 @pytest.fixture
@@ -79,7 +80,7 @@ async def test_cold_legacy_hold_allows_tool_update_but_retains_chat_fence_and_pa
     monkeypatch.setattr(app.management, 'apply_queued', apply)
     report = (await app.dispatch('updates.diagnostics', {}, include_state=False))['result']
     assert not report['activationGate']['blocked']
-    assert report['activationGate']['configurationHolds'][0]['reasonCode'] == 'legacy-hold-quiescent'
+    assert report['activationGate']['configurationHolds'][0]['reasonCode'] == 'idle-configuration-hold'
     await app.smart_tools.connect('board')
     assert not app.update_manager.busy()
     await app.update_manager.activateSmartTools()
@@ -220,9 +221,12 @@ async def test_held_refresh_never_retires_active_or_unobserved_state(held, monke
             release.set()
             if task:
                 await task
-    # Even when an observer itself could not be invoked, the pending marker
-    # was retained. Restoring observation cannot turn this into permission.
-    assert app.update_manager.busy()
+    # The local refresh retains its marker, but it is not a global update lock.
+    # Only the session's actual activity/handoff still blocks after observation
+    # is restored. Neither result authorizes recovery or clears the marker.
+    assert app.update_manager.busy() == (guard in {
+        'handoff', 'pending-handoff', 'running-turn', 'queued-child', 'working-child',
+        'persistent-child', 'working'})
 
 
 @pytest.mark.parametrize('refresh', [None, {'phase': 'pending', 'revision': 7}])
@@ -248,8 +252,8 @@ async def test_settled_held_refresh_only_clears_freshness_and_is_idempotent(held
 
 
 @pytest.mark.parametrize('guard', ['settings-task', 'cancelling-task', 'management-lock', 'runtime', 'other-runtime',
-    'queued', 'applying', 'refresh', 'refresh-applying', 'modern-operation', 'new-fence',
-    'handoff', 'working', 'worker', 'working-worker', 'persistent-worker', 'running-turn', 'unobservable-runtime',
+    'preparation-record', 'mounted-worker', 'handoff', 'pending-handoff', 'working',
+    'worker', 'working-worker', 'persistent-worker', 'running-turn', 'unobservable-runtime',
     'unobservable-tasks', 'unobservable-lock'])
 async def test_actual_or_unobservable_work_still_holds_update(held, guard):
     app, sid, path, payload = held
@@ -275,18 +279,12 @@ async def test_actual_or_unobservable_work_still_holds_update(held, guard):
     elif guard == 'other-runtime':
         app.runtime._locks['other-fixture-chat'] = asyncio.Lock()
         await app.runtime._locks['other-fixture-chat'].acquire()
-    elif guard in {'queued', 'applying'}:
-        session['pendingConfiguration']['phase'] = guard
-    elif guard == 'refresh':
-        session['configurationPending'] = True
-    elif guard == 'refresh-applying':
-        session['configurationRefresh'] = {'phase': 'applying'}
-    elif guard == 'modern-operation':
-        session['pendingConfiguration']['operationId'] = 'retained-operation'
-    elif guard == 'new-fence':
-        session['configurationOperationFence'] = 'different-operation'
-    elif guard == 'handoff':
-        session['worktreeHandoffs'] = [{'phase': 'unknown'}]
+    elif guard == 'preparation-record':
+        app.runtime._preparations[sid] = {'owner': 'fixture'}
+    elif guard == 'mounted-worker':
+        app.runtime.workers[sid] = {'process': SimpleNamespace(returncode=0)}
+    elif guard in {'handoff', 'pending-handoff'}:
+        session['worktreeHandoffs'] = [{'phase': 'unknown' if guard == 'handoff' else 'pending'}]
     elif guard == 'working':
         session['status'] = 'working'
     elif guard == 'worker':
@@ -308,10 +306,9 @@ async def test_actual_or_unobservable_work_still_holds_update(held, guard):
         expected = {
             'settings-task': 'configuration-task-pending', 'cancelling-task': 'configuration-task-pending',
             'management-lock': 'management-lock-held', 'runtime': 'runtime-operations-pending',
-            'other-runtime': 'runtime-operations-pending', 'queued': 'configuration-queued',
-            'applying': 'configuration-applying', 'refresh': 'configuration-pending',
-            'refresh-applying': 'configuration-refresh-applying', 'modern-operation': 'operation-bound-recovery',
-            'new-fence': 'configuration-operation-fence', 'handoff': 'checkout-handoff-unknown',
+            'other-runtime': 'runtime-operations-pending', 'preparation-record': 'runtime-operations-pending',
+            'mounted-worker': 'mounted-worker', 'handoff': 'checkout-handoff-unknown',
+            'pending-handoff': 'checkout-handoff-pending',
             'working': 'session-not-quiescent', 'worker': 'active-worker', 'working-worker': 'active-worker',
             'persistent-worker': 'persistent-worker', 'running-turn': 'running-turn',
             'unobservable-runtime': 'runtime-observer-unavailable', 'unobservable-tasks': 'management-tasks-unavailable',
@@ -339,6 +336,8 @@ async def test_actual_or_unobservable_work_still_holds_update(held, guard):
             app.management.pending_config_tasks = {}
         if guard == 'unobservable-lock':
             app.management.lock = asyncio.Lock()
+        app.runtime._preparations.clear()
+        app.runtime.workers.clear()
 
 
 def test_absent_management_cannot_prove_hold_is_quiescent():
@@ -407,5 +406,207 @@ async def test_public_diagnostics_identifies_global_wait_without_mutation(held, 
         monkeypatch.setattr(app.history, 'ensure_loaded', original_history)
     report = (await app.dispatch('updates.diagnostics', {}, include_state=False))['result']
     assert not report['activationGate']['blocked']
-    assert report['activationGate']['configurationHolds'][0]['reasonCode'] == 'legacy-hold-quiescent'
+    assert report['activationGate']['configurationHolds'][0]['reasonCode'] == 'idle-configuration-hold'
     assert session['configurationBusy'] and path.read_bytes() == payload
+
+
+@pytest.mark.parametrize('unknown', [False, True], ids=['four-saved', 'one-unknown'])
+async def test_four_cold_operations_allow_check_install_and_tick_without_recovery(app, repo, monkeypatch, unknown):
+    """Real native file writes, cold AppService, Git staging and MCP processes.
+
+    The component qualifier is the existing repository-staging fixture, not a
+    full provider graph. No model, live installation or original chat is used.
+    """
+    from unittest.mock import AsyncMock
+    from amplifier_web import updates
+    from amplifier_web.configuration_recovery import native_apply, prepare_attempt, authorize, receipt_path, seal
+    from amplifier_web.updates import active_release, foundation_home
+    from test_queued_configuration_boundary import ControlsTransport, plan
+
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(app.data_dir))
+    app.runtime = RuntimeManager()
+    app.management = Management(app)
+    manager, root = await prepare(app, repo)
+    sources = copy.deepcopy(manager.inventory)
+    await configure(app)
+    await package(app.smart_tools, 'b' * 24, 'b' * 40, staged=True)
+    await manager.publish(phase='staged', pendingSmartTools=[{'previous': OLD, 'target': 'b' * 24}])
+    identities = []
+    expected = {}
+    for number in range(4):
+        if number:
+            await app.dispatch('session.create', {})
+        session = app._session()
+        sid = session['id']
+        identities.append(sid)
+        transport = ControlsTransport(app.data_dir, sid)
+        try:
+            record = app.management.create_configuration_operation(session, plan(number + 2), f'original-{number}', None, None)
+            session.update(configurationBusy=True, configurationOperationFence=record['id'])
+            app.management.configuration_transition(session, record['id'], phase='applying', stage='preparing')
+            attempt = prepare_attempt(app.management, session, record['id'])
+
+            async def admit(args):
+                return authorize(app.management, sid, args)
+
+            await native_apply(transport.controls, plan(number + 2), attempt, admit,
+                               lambda: session.get('interruptionRevision', 0))
+            effect = 'unknown' if unknown and number == 3 else 'saved_not_mounted'
+            if effect == 'unknown':
+                receipt_path(attempt, home=app.data_dir).write_text(json.dumps(seal(attempt, 'unknown', terminal=True)))
+            app.management.configuration_transition(session, record['id'], phase='error', stage='readback',
+                effect=effect, recoveryRequired=True, error='Synthetic saved-versus-loaded mismatch')
+            session.update(status='stopped', interruptionRevision=1)
+            app._message(session, 'user', f'Original history {number}')
+            expected[sid] = {key: copy.deepcopy(session.get(key)) for key in (
+                'pendingConfiguration', 'configurationOperationFence', 'messages', 'interruptionRevision', 'status')}
+            assert not transport.calls and not transport.inputs
+        finally:
+            await transport.close()
+    app._save_changes(sessions=set(identities))
+    files = {str(path.relative_to(app.data_dir)): path.read_bytes()
+             for path in (app.data_dir / 'sessions').rglob('*') if path.is_file()}
+    home, workspace = app.data_dir, app.default_workspace
+    await app.close()
+
+    current = AppService(home, RuntimeManager(), workspace=workspace)
+    current.management = Management(current)
+    current.smart_tools = SmartToolsManager(current)
+    current.update_manager = manager = UpdateManager(current)
+    try:
+        if current.tasks:
+            await asyncio.gather(*list(current.tasks))
+        for method in ('start', 'send', 'stop'):
+            monkeypatch.setattr(current.runtime, method, AsyncMock(side_effect=AssertionError('No original runtime work')))
+        monkeypatch.setattr(current.management, 'apply_queued',
+                            AsyncMock(side_effect=AssertionError('No old operation replay')))
+        assert not manager.busy(), 'Saved recovery is not executing configuration work'
+        assert all(current._session(sid)['configurationBusy'] for sid in identities)
+        await current.smart_tools.connect('board')
+        staged = copy.deepcopy(current.state['updates']['pendingSmartTools'])
+        stage = AsyncMock(side_effect=AssertionError('Do not duplicate the known staged tool'))
+        monkeypatch.setattr(current.smart_tools, 'stage_update', stage)
+        monkeypatch.setattr(manager, 'inventory_sources', AsyncMock(return_value=[]))
+        await manager.check()  # Refresh app availability while keeping the exact tool target.
+        assert current.state['updates']['pendingSmartTools'] == staged
+        await manager.install()
+        assert current.smart_tools._server('board')['installationId'] == 'b' * 24
+        assert not current.state['updates']['pendingSmartTools']
+        assert not current.state['updates']['blockers']
+        assert len(current.smart_tools.state['installations']) == 2
+        stage.assert_not_awaited()
+        assert not (home / 'tool-effects').exists()
+
+        # Actual check and Git stage, with only discovery inputs/qualification
+        # supplied by the maintained synthetic repository fixture.
+        original_process = updates.process
+        async def process(*args, **kwargs):
+            args = tuple(str(repo[0]) if arg == 'https://example.invalid/repo' else arg for arg in args)
+            return await original_process(*args, **kwargs)
+        monkeypatch.setattr(updates, 'process', process)
+        monkeypatch.setattr(manager, 'inventory_sources', AsyncMock(return_value=copy.deepcopy(sources)))
+        release = asyncio.Event()
+        late_task = None
+        async def validate(stage, release_id):
+            nonlocal late_task
+            assert git(stage / 'foundation/cache/repository', 'rev-parse', 'HEAD') == repo[2]
+            late_task = asyncio.create_task(release.wait())
+            current.management.pending_config_tasks[identities[0]] = late_task
+        monkeypatch.setattr(manager, 'validate', validate)
+        # Exercise the idle-requiring adapter path rather than hot generation
+        # promotion, which intentionally permits already running work.
+        monkeypatch.setattr(current.runtime, 'promote_generation', None)
+        await manager.check(tier='other')
+        assert current.state['updates']['available'] == 1
+        await manager.install()
+        assert current.state['updates']['phase'] == 'staged'
+        assert not active_release(home)
+        assert current.state['updates']['blockers']
+        await manager.tick()
+        assert not active_release(home)
+        release.set()
+        await late_task
+        await manager.tick()
+        assert active_release(home)['current']
+        assert git(foundation_home(home) / 'cache/repository', 'rev-parse', 'HEAD') == repo[2]
+        assert git(root, 'rev-parse', 'HEAD') == repo[1]
+        current.state['settings']['updates']['autoCheck'] = False
+        await manager.tick()
+        assert not current.state['updates']['blockers']
+        assert not manager.busy()
+        for sid in identities:
+            session = current._session(sid)
+            assert {key: session.get(key) for key in expected[sid]} == expected[sid]
+            assert session['configurationBusy']
+        assert files == {str(path.relative_to(home)): path.read_bytes()
+                         for path in (home / 'sessions').rglob('*') if path.is_file()}
+        assert not current.runtime.workers
+    finally:
+        if 'release' in locals():
+            release.set()
+            if late_task:
+                await late_task
+        await current.close()
+    reopened = AppService(home, RuntimeManager(), workspace=workspace)
+    reopened.management = Management(reopened)
+    reopened.smart_tools = SmartToolsManager(reopened)
+    reopened.update_manager = UpdateManager(reopened)
+    try:
+        if reopened.tasks:
+            await asyncio.gather(*list(reopened.tasks))
+        assert not reopened.update_manager.busy()
+        assert reopened.smart_tools._server('board')['installationId'] == 'b' * 24
+        for sid in identities:
+            session = reopened._session(sid)
+            assert {key: session.get(key) for key in expected[sid]} == expected[sid]
+            assert session['configurationBusy']
+            with pytest.raises(AppError, match='settings|configuration|Configuration'):
+                await reopened.dispatch('conversation.send', {'sessionId': sid, 'text': 'Still held'})
+        assert files == {str(path.relative_to(home)): path.read_bytes()
+                         for path in (home / 'sessions').rglob('*') if path.is_file()}
+        assert not reopened.runtime.workers
+    finally:
+        await reopened.close()
+
+
+@pytest.mark.parametrize('guard', ['task', 'preparation', 'worker'])
+async def test_tool_tick_waits_for_actual_work_then_closes_new_input_during_switch(held, monkeypatch, guard):
+    from unittest.mock import AsyncMock
+    app, sid, path, payload = held
+    app._session(sid)['pendingConfiguration']['operationId'] = 'saved-not-mounted'
+    await app.dispatch('session.create', {'title': 'Unrelated new input'})
+    other = app._session()['id']
+    await app.smart_tools.connect('board')
+    app.state['settings']['updates']['autoCheck'] = False
+    app.state['updates']['application'] = {'status': 'current'}
+    release = asyncio.Event()
+    task = asyncio.create_task(release.wait())
+    with monkeypatch.context() as patch:
+        if guard == 'task':
+            patch.setattr(app.management, 'pending_config_tasks', {sid: task})
+        elif guard == 'preparation':
+            patch.setattr(app.runtime, '_preparations', {sid: {'owner': 'fixture'}})
+        else:
+            patch.setattr(app.runtime, 'workers', {sid: {'process': SimpleNamespace(returncode=0)}})
+        await app.update_manager.tick()
+        assert app.smart_tools._server('board')['installationId'] == OLD
+        assert app.state['updates']['pendingSmartTools'] and app.state['updates']['blockers']
+    release.set()
+    await task
+    prepare_connection = app.smart_tools._prepare_update_connection
+    calls = []
+    async def prepare_with_new_input(row):
+        assert app.state['updates']['phase'] == 'activating'
+        with pytest.raises(AppError, match='updat|switch'):
+            await app.dispatch('conversation.send', {'sessionId': other, 'text': 'Racing update'})
+        calls.append(row['installationId'])
+        return await prepare_connection(row)
+    monkeypatch.setattr(app.smart_tools, '_prepare_update_connection', prepare_with_new_input)
+    start = AsyncMock(side_effect=AssertionError('New input must not reach runtime'))
+    monkeypatch.setattr(app.runtime, 'start', start)
+    await app.update_manager.tick()
+    assert calls == ['b' * 24]
+    assert app.smart_tools._server('board')['installationId'] == 'b' * 24
+    assert not app.state['updates']['pendingSmartTools'] and not app.state['updates']['blockers']
+    assert path.read_bytes() == payload
+    start.assert_not_awaited()
