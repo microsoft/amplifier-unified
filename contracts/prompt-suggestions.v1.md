@@ -5,9 +5,35 @@ from every conversation participant and execution runtime.
 
 ## Behavior
 
-- App-global Settings selects an enabled saved connection, explicit model and
-  optional reasoning effort, with an editable prompt under Advanced and an
-  explicit Reset to default. Effort `null` means the provider's own default:
+- Chat & input presents one everyday **Prompt suggestions** preference for this
+  browser and signed-in owner, initially off. It applies immediately without
+  a separate Save step and is remembered through ordinary reloads and host
+  restarts within that login scope. Secondary scope help says **Remembered in
+  this browser for this sign-in**. It is not a second app-global model switch.
+  Host availability and saved model configuration remain separate prerequisites.
+  If the host is ready, turning this preference on needs no repeated setup.
+  If setup is missing or host availability is disabled, the same entry offers
+  one staged setup with **Save and enable**, not two competing enable controls.
+  A failed save does not turn on the personal preference or imply readiness.
+  Turning the personal preference off immediately hides assistance and prevents
+  new interested-client requests, including when storage cannot be written.
+- The everyday entry shows actual readiness, the saved connection/model summary
+  and a plain privacy/cost explanation outside Advanced: bounded conversation
+  text is sent to that selected connection; unsent drafts and private agent
+  context are excluded; requests may incur provider charges. Disabled, missing
+  selection, unavailable provider and failed requests do not hide behind a
+  misleading on/ready state. Composing always remains available.
+- **Advanced prompt suggestions** is one destination, linked from Chat & input
+  and from Advanced's AI group. The everyday Settings landing is not a raw
+  prompt editor. Advanced contains saved connection/model/optional effort,
+  recent/full transcript selection and deeper prompt customization; it adds no
+  generation button, speculative Smart context/summarization, or new
+  budget/cache controls. A custom prompt has a visible active indicator.
+  Editing or Reset to default stages that exact text for the existing Save
+  operation; neither action silently changes the saved prompt. Leaving without
+  saving does not apply staged instructions.
+- App-global configuration selects an enabled saved connection, explicit model
+  and optional reasoning effort. Effort `null` means the provider's own default:
   neither a chat selection nor saved connection reasoning/thinking overrides
   are silently inherited. Explicit effort uses the portable `reasoning_effort`
   request field and ordinary provider call option, not a host model-name map.
@@ -81,6 +107,44 @@ from every conversation participant and execution runtime.
   and 15-second deadline remain unchanged. Provider-owned reasoning may require
   more tokens than requested; no bounded-billing or universal output-cap promise,
   host budget increase, repair call or fallback is implied.
+
+## Personal preference and host configuration
+
+The personal switch controls this browser's interest, not host credentials,
+global model availability or another person's preference. Its remembered value
+uses `localStorage` under a feature-specific, versioned key whose sole identity
+partition is the authenticated, validated 64-lowercase-hex public
+`client.historyScope`. That opaque scope already partitions host data
+root, OS owner, session secret and signed-in cookie; it contains no exposed
+cookie/credential text and is not an authentication capability. Per-start
+`hostInstanceId` remains part of transient request/candidate freshness but is
+not part of this durable preference key.
+
+Only an authenticated 64-lowercase-hex scope may restore an on value.
+Absent, malformed, unreadable or different scope defaults off; there is no
+origin-only, client-ID or appearance-profile fallback. A new sign-in, owner,
+data root or session secret changes the scope, so the person may need to opt
+in again. Remembering across independent logins or devices is not promised.
+Same-scope tabs observe preference changes; another host/login is never enabled
+by copying an origin-wide value. The current document may carry forward its
+previous explicit session-only choice only under its exact current
+`[hostInstanceId, historyScope]` key. It must not scan old keys or infer another
+document's opt-in, and a remembered off value must not be overwritten by a
+legacy true value. No broader automatic migration is authorized.
+
+If saving or confirming an on preference fails, do not silently enable it.
+Off still takes effect for the current document, with useful feedback if that
+choice could not be remembered. A failed persistent Off must not leave an old
+true value eligible for restoration in that document. Storage availability
+does not change provider authorization, currentness or draft ownership.
+
+The host's `suggestionModels.enabled` and saved configuration retain their
+existing app-global scope. The everyday UI combines their actual receipt with
+the separate personal preference instead of presenting duplicate switches.
+Save and enable first completes the normal authorized global configuration
+write, then enables this browser's preference; neither a local preference nor
+an agent interpretation of this contract is a grant to change host settings.
+Current user instructions and existing action authority still govern.
 
 ## Wire
 
