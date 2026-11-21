@@ -20,6 +20,7 @@ DEFAULT_SERVER = {
     "bind": ["127.0.0.1"],
     "port": 8941,
     "public_origins": [],
+    "trusted_proxies": [],
     "session_ttl_seconds": 604800,
     "host_pam": None,
     "tls": {"method": "none", "cert": "", "key": ""},
@@ -120,6 +121,24 @@ def validate_origin(value: str) -> str:
     return f"{parsed.scheme}://{host}{f':{port}' if port is not None and port != default_port else ''}"
 
 
+def validate_trusted_proxies(value) -> list[str]:
+    """Exact proxy peer addresses or networks; never names or everyone."""
+    if not isinstance(value, list):
+        raise ValueError("trusted_proxies must be a list of IP addresses or networks.")
+    networks = []
+    for item in value:
+        if not isinstance(item, str) or item != item.strip() or not item:
+            raise ValueError("trusted_proxies must contain IP addresses or networks, such as 127.0.0.1.")
+        try:
+            network = ipaddress.ip_network(item, strict=True)
+        except ValueError as exc:
+            raise ValueError(f"trusted_proxies has an invalid IP address or network: {item}") from exc
+        if network.prefixlen == 0:
+            raise ValueError("trusted_proxies must not trust every address.")
+        networks.append(str(network) if network.num_addresses > 1 else str(network.network_address))
+    return list(dict.fromkeys(networks))
+
+
 def validate_server(value: dict) -> dict:
     if not isinstance(value, dict):
         raise ValueError("Server configuration must be a mapping.")
@@ -150,6 +169,7 @@ def validate_server(value: dict) -> dict:
     if not isinstance(origins, list):
         raise ValueError("public_origins must be a list.")
     config["public_origins"] = list(dict.fromkeys(validate_origin(item) for item in origins))
+    config["trusted_proxies"] = validate_trusted_proxies(config["trusted_proxies"])
     tls = config["tls"]
     if not isinstance(tls, dict) or set(tls) - {"method", "cert", "key"}:
         raise ValueError("tls must contain only method, cert, and key.")

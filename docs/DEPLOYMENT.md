@@ -811,7 +811,37 @@ remain separate from these local tests.
 
 ## Limits
 
-Unified owns its own HTTPS listener and authentication. It does not trust a reverse proxy, shared cookies, or `X-Forwarded-*` headers. Configure exact public origins rather than broad address patterns.
+Unified owns its own HTTPS listener and authentication. By default it does not trust a reverse proxy, shared cookies, or `X-Forwarded-*` headers. Configure exact public origins rather than broad address patterns.
+
+### Behind a reverse proxy
+
+If a reverse proxy you run (Caddy, nginx and so on) terminates TLS and connects
+to Unified, list the proxy's own connecting address in `trusted_proxies`:
+
+```bash
+amplifier-unified config set public_origins '["https://unified.example"]' trusted_proxies '["127.0.0.1", "::1"]'
+```
+
+Entries are exact IP addresses or CIDR networks. Names and `0.0.0.0/0` or `::/0`
+are rejected. The list is empty by default, and while it is empty forwarding
+headers are ignored.
+
+When a request's TCP peer is in `trusted_proxies`, Unified reads exactly one
+`X-Forwarded-Proto` (`http` or `https`) and one `X-Forwarded-Host`. It reads the
+client address from `X-Forwarded-For`, right to left, skipping trusted hops.
+Those values replace the request's scheme, host and client address. Every other
+check still runs unchanged against the address the browser used: the Host
+allowlist, the exact Origin match against `public_origins`, `Secure` cookies and
+authentication. A malformed or repeated forwarding header from a trusted peer is
+rejected with `400`. Headers from any other peer never change a request.
+
+A request relayed by a trusted proxy is never treated as coming from this
+computer, even though the proxy connects over loopback. Local-only owner entry
+must therefore use Unified's own listener directly, not the proxied address.
+
+The proxy must overwrite, not append to, any client-supplied `X-Forwarded-Proto`
+and `X-Forwarded-Host`. Caddy's `reverse_proxy` does this by default. Keep
+Unified bound to loopback, or firewall it, so that only the proxy can reach it.
 
 The public bootstrap endpoints are limited to `/login`, `/setup`, `/api/ca`, `/ca.crt`, and `/api/health`.
 
