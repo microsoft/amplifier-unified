@@ -171,7 +171,7 @@ class HostAgent:
                 and type(offered['version']) is int and offered['version'] == 1):
             try:
                 profile = agent_instance.InstanceProfile(self.owner)
-                if profile.selected is not None:
+                if profile.applies():
                     instance = profile.describe()
                     self.instance = profile
                     self.owner.attachment_guard = lambda identity: profile.bound(identity, profile.bindings.get(identity))
@@ -306,13 +306,19 @@ class HostAgent:
                                {'inputReceipt': result['receipt']})
         if result.get('outcome') not in {'completed', 'cancelled'}:
             raise RequestError(_REQUEST_FAILED, 'Outcome unresolved; inspect retained owner state before retrying.')
-        if metadata is not None:
-            self.instance.bound(session_id, metadata)
-        if result.get('text') and not streamed:
-            await text(result['text'])
-        return PromptResponse(stop_reason='end_turn' if result['outcome'] == 'completed' else 'cancelled',
-            field_meta=({agent_instance.NAMESPACE: await self.instance.inspect_input(session_id, metadata)}
-                        if metadata is not None else None))
+        try:
+            if metadata is not None:
+                self.instance.bound(session_id, metadata)
+            if result.get('text') and not streamed:
+                await text(result['text'])
+            return PromptResponse(stop_reason='end_turn' if result['outcome'] == 'completed' else 'cancelled',
+                field_meta=({agent_instance.NAMESPACE: await self.instance.inspect_input(session_id, metadata)}
+                            if metadata is not None else None))
+        except (AppError, ValueError, OSError, RuntimeError) as error:
+            raise RequestError(_REQUEST_FAILED,
+                f"Execution {result['outcome']}; response delivery or inspection unavailable: {error} "
+                "The original input was not sent again.",
+                {'outcome': result['outcome'], 'replayed': False, 'inputId': input_id}) from None
 
     async def cancel(self, session_id, **kwargs):
         self.require_initialized()

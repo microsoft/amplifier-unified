@@ -322,6 +322,14 @@ async def test_actual_task_owner_cas_consumption_stop_and_lost_receipt(tmp_path,
         assert read['task']['receipt']['action'] == 'task.pause'
         assert read['stop']['accepted'] is True
         assert service.runtime.stopped == [sid]
+        repeated = await profile.control({**change, 'operation': 'stop', 'commandId': 'stop',
+            'expectedRevision': 2, 'changes': {}, 'expectedExecution': {'interruptionRevision': 0, 'inputId': None}})
+        assert repeated['stop']['duplicate'] is True
+        assert repeated['task']['result']['receipt'] == read['task']['receipt']
+        assert service.runtime.stopped == [sid]
+        with pytest.raises(Exception, match='different contents'):
+            await profile.control({**change, 'operation': 'stop', 'commandId': 'stop',
+                'expectedRevision': 1, 'changes': {}, 'expectedExecution': {'interruptionRevision': 0, 'inputId': None}})
         # Updating paused work is not resume; preserve status and consumed turns.
         await profile.control({**change, 'commandId': 'paused-edit', 'expectedRevision': 3,
                                'changes': {'correction': 'Clarify without restarting'}})
@@ -538,6 +546,9 @@ async def test_profile_binding_commands_survive_actual_service_reconstruction(tm
     binding = session_metadata('urn:example:agent:U', room_source('R'))[NAMESPACE]
     sid, _ = await profile.connect(str(tmp_path), binding, {})
     source_plan(service, service._session(sid))
+    control_path = service.data_dir / 'sessions' / sid / 'control-state.json'
+    saved_control = json.loads(control_path.read_text())
+    control_path.write_text(json.dumps({**saved_control, 'task': None}))
     async def observe(row):
         pass
     pending = asyncio.create_task(profile.prompt(sid, metadata()[NAMESPACE], 'One accepted input', observe))
@@ -554,6 +565,14 @@ async def test_profile_binding_commands_survive_actual_service_reconstruction(tm
     recovered = InstanceProfile(attached)
     try:
         assert (await recovered.connect(str(tmp_path), binding, {}, sid))[0] == sid
+        before_hydration = await recovered.control({'sessionId': sid, 'binding': binding, 'operation': 'read'})
+        await fresh.history.ensure_loaded(sid, hydrate=False)
+        stopped = await recovered.control({'sessionId': sid, 'binding': binding, 'operation': 'stop',
+            'commandId': 'after-reconstruction-stop', 'taskId': None, 'expectedRevision': 0, 'changes': {},
+            'expectedExecution': before_hydration['expectedExecution']})
+        assert stopped['stop']['accepted']
+        await until(lambda: fresh._session(sid)['status'] == 'stopped')
+        assert fresh_runtime.stopped == [sid]
         receipt = await recovered.inspect_input(sid, metadata()[NAMESPACE])
         assert receipt['commandId'] == command and receipt['delivery'] == 'accepted'
         assert not fresh_runtime.sent
@@ -618,6 +637,36 @@ async def test_profile_source_change_during_approval_commit_does_not_decide(host
     result = await pending
     assert 'error' in result and not decisions
     assert service._session(sid)['approvals'][0]['status'] == 'pending'
+    await peer.socket.close()
+
+
+async def test_unavailable_task_authority_keeps_standard_current_turn_cancel_usable(host):
+    configure(host)
+    app, _, runtime, path = host
+    service = app['service']
+    peer, _ = await connect_profile(host)
+    sid = (await new(peer, path, 'R'))['result']['sessionId']
+    source_plan(service, service._session(sid))
+    control_path = service.data_dir / 'sessions' / sid / 'control-state.json'
+    control_path.write_text('{not-readable-task-authority')
+    binding = session_metadata('urn:example:agent:U', room_source('R'))[NAMESPACE]
+    state = (await peer.call('_amplifier/instance', sessionId=sid, binding=binding, operation='read'))['result']
+    assert state['work']['status'] == 'unavailable'
+    refused = await peer.call('_amplifier/instance', sessionId=sid, binding=binding,
+        operation='stop', commandId='cannot-assume-taskless', taskId=None, expectedRevision=0,
+        changes={}, expectedExecution=state['expectedExecution'])
+    assert 'Inspect the current saved task' in refused['error']['message']
+    assert not runtime.stopped
+    # Standard cancel can still interrupt this connection's own current turn.
+    # It makes no claim to pause/revoke the unreadable continuing responsibility.
+    pending = asyncio.create_task(prompt(peer, sid))
+    await until(lambda: len(runtime.sent) == 1 or pending.done())
+    assert len(runtime.sent) == 1, pending.result() if pending.done() else 'no input'
+    await peer.cancel(sid)
+    response = await pending
+    assert response['result']['stopReason'] == 'cancelled', response
+    assert runtime.stopped == [sid]
+    assert control_path.read_text() == '{not-readable-task-authority'
     await peer.socket.close()
 
 
@@ -691,4 +740,77 @@ async def test_changed_execution_location_is_not_the_original_source_binding(hos
     result = await inspect_input(peer, sid)
     assert 'source or location changed' in result['error']['message']
     assert not runtime.sent
+    await peer.socket.close()
+
+
+@pytest.mark.parametrize('mismatch', ['workspace', 'bundle'])
+async def test_optional_profile_for_other_launcher_keeps_plain_acp(host, mismatch):
+    configure(host)
+    app, _, runtime, path = host
+    if mismatch == 'workspace':
+        other = path / 'other'
+        other.mkdir()
+        app['service'].server_config['agentInstance']['workspace'] = str(other)
+    else:
+        app['service'].server_config['agentInstance']['bundle'] = 'other-profile'
+    peer, initialized = await connect_profile(host)
+    assert 'result' in initialized, initialized
+    assert NAMESPACE not in initialized['result'].get('_meta', {})
+    sid = await peer.new(path)
+    source_plan(app['service'], app['service']._session(sid))
+    pending = asyncio.create_task(peer.prompt(sid, 'Ordinary ACP remains useful'))
+    await until(lambda: len(runtime.sent) == 1)
+    await finish(app['service'], sid, runtime.sent[0][2])
+    assert (await pending)['result']['stopReason'] == 'end_turn'
+    assert 'error' in await new(peer, path, 'R')  # No implicit public-profile binding.
+    await peer.socket.close()
+
+
+async def test_same_native_alias_initialization_keeps_binding_but_foreign_identity_does_not(host):
+    configure(host)
+    app, _, runtime, path = host
+    service = app['service']
+    peer, _ = await connect_profile(host)
+    sid = (await new(peer, path, 'R'))['result']['sessionId']
+    source_plan(service, service._session(sid))
+    first = asyncio.create_task(prompt(peer, sid))
+    await until(lambda: len(runtime.sent) == 1)
+    await finish(service, sid, runtime.sent[-1][2])
+    assert 'result' in await first
+    # Match the directory's normal alias materialization, not another native ID.
+    session = service._session(sid)
+    session['runtimeSessionId'] = session['nativeIdentity'] = sid
+    result = await inspect_input(peer, sid)
+    assert 'result' in result, result
+    second = asyncio.create_task(prompt(peer, sid, identity='after-alias-initialization'))
+    await until(lambda: len(runtime.sent) == 2 or second.done())
+    assert len(runtime.sent) == 2, second.result() if second.done() else 'missing input'
+    await finish(service, sid, runtime.sent[-1][2])
+    assert 'result' in await second
+    session['runtimeSessionId'] = session['nativeIdentity'] = 'another-native-owner'
+    denied = await inspect_input(peer, sid)
+    assert 'source or location changed' in denied['error']['message']
+    assert len(runtime.sent) == 2
+    await peer.socket.close()
+
+
+async def test_postcompletion_profile_refusal_reports_completed_outcome_not_internal_error(host, monkeypatch):
+    configure(host)
+    app, _, runtime, path = host
+    service = app['service']
+    peer, _ = await connect_profile(host)
+    sid = (await new(peer, path, 'R'))['result']['sessionId']
+    owner, = service._execution_observers.attachments
+    called = []
+    async def completed(*args, **kwargs):
+        called.append(args)
+        service.server_config['agentInstance']['sources'] = []
+        return {'outcome': 'completed', 'text': 'Completed but no longer authorized for delivery'}
+    monkeypatch.setattr(owner, 'prompt', completed)
+    result = await prompt(peer, sid)
+    assert result['error']['code'] == -31000, result
+    assert result['error']['data']['outcome'] == 'completed'
+    assert result['error']['data']['replayed'] is False
+    assert 'not sent again' in result['error']['message']
+    assert len(called) == 1 and not runtime.sent
     await peer.socket.close()
