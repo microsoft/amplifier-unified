@@ -8,6 +8,12 @@ import pytest
 
 SCRIPT=Path(__file__).parents[1]/'scripts/install.sh'
 
+
+def test_installer_version_message_separates_shell_expansion_from_unicode():
+    installer = SCRIPT.read_text(encoding='utf-8')
+    assert 'echo "Installing Amplifier $version…"' not in installer
+
+
 @pytest.mark.parametrize('helper', ['path', 'new', 'standard', 'legacy'])
 @pytest.mark.parametrize('anonymous', [False, True])
 @pytest.mark.parametrize('verbose,bad_checksum',[(False,False),(True,False),(False,True)])
