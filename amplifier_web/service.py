@@ -250,7 +250,7 @@ ACTION_DEFINITIONS = {
     "updates.install": ("Stage and validate available application or ecosystem updates; activate when idle. Application updates restart the host.", schema()),
     "updates.reconcileManualHandoff": ("Verify an already completed manual Windows app handoff against the exact retained pre-effect refusal and the actual installed official wheel, owner, launcher, dependencies and pinned listener. Does not install, restart or promote. Preserves existing whole-sequence Install intent. Read updates.manualHandoffResults for the durable result; never replay an unknown request.", schema({"hostInstanceId":string(200),"revision":string(40),"generation":string(32),"attemptId":string(32)}, ["hostInstanceId","revision","generation","attemptId"])),
     "updates.rollback": ("Restore the previous ecosystem version when idle", schema()),
-    "settings.update": ("Change voice, workspace or update defaults. Update checks support intervalHours 1, 4, 8 or 24.", schema({"patch": {"type": "object"}})),
+    "settings.update": ("Change installation-owner preferences, voice, workspace or update defaults. suggestedMessages is a synced boolean, submitted alone; expectedSuggestedMessagesRevision protects a captured choice. Update checks support intervalHours 1, 4, 8 or 24.", schema({"patch": {"type": "object", "properties": {"suggestedMessages": {"type": "boolean"}}}, "expectedSuggestedMessagesRevision": {"type": "integer", "minimum": 0}}, ["patch"])),
     "state.export": ("Export app state and attached device views", schema()),
     "notification.request": ("Request notification permission on this device", schema()),
     "call.start": ("Start a realtime voice call on the connected browser", schema({"attemptId": string(200)}, [])),
@@ -405,6 +405,10 @@ ACTION_DEFINITIONS['conversation.send'][1]['properties']['recoveryAllowance'] = 
 
 from .settings_actions import definitions as settings_definitions, ACTIONS as SETTINGS_ACTIONS, NAVIGATION_ACTIONS as SETTINGS_NAVIGATION
 ACTION_DEFINITIONS.update(settings_definitions(schema, string))
+from .suggestion_settings import definitions as suggestion_settings_definitions
+from .prompt_suggestions import definitions as suggestion_definitions
+ACTION_DEFINITIONS.update(suggestion_settings_definitions(schema, string))
+ACTION_DEFINITIONS.update(suggestion_definitions(schema, string))
 from .instance_branding import InstanceBranding, definitions as instance_branding_definitions
 INSTANCE_BRANDING_ACTIONS = _register_actions(instance_branding_definitions(schema, string))
 
@@ -446,6 +450,8 @@ for _access, _actions in {
         "coordination.awareness", "coordination.intent.read",
     },
     "domain_authoritative": {
+        *suggestion_definitions(schema, string),
+        *suggestion_settings_definitions(schema, string),
         "instanceBranding.update", "instanceBranding.reset",
         *configuration_recovery_definitions(schema, string),
         *patch_placement_definitions(schema, string),
@@ -609,6 +615,10 @@ class AppService:
             "view": {"setupJourney":"welcome", "mode": "chat", "panel": None, "draft": "", "scheme": "system", "layout": "balanced"},
             "voice": {"status": "disconnected"}, "runtime": {"available": runtime is not None}, "devices": {}, "events": [],
         }
+        # Synced for the current installation owner, not a browser-local
+        # consent value. Never infer opt-in from previous browser storage.
+        self.state['settings'].setdefault('suggestedMessages', False)
+        self.state['settings'].setdefault('suggestedMessagesRevision', 0)
         from .managed_deletion import recover as recover_managed_deletions
         # Confirmed deletion recovery is an explicit offline reconciliation of
         # complete durable state. Ordinary warm starts admit only selected or
@@ -758,6 +768,8 @@ class AppService:
         self.event_log_view = EventLogView(self)
         from .client_views import ClientViews
         self.clients = ClientViews(self)
+        from .prompt_suggestions import PromptSuggestions
+        self.prompt_suggestions = PromptSuggestions(self)
         from .appearance_preferences import AppearancePreferences
         self.appearance = AppearancePreferences(self)
         self._client_snapshots = {}
@@ -1773,6 +1785,7 @@ class AppService:
     def _message(self, session, role, text, via="chat", *, human_post=False, **extra):
         message = {"id": str(uuid.uuid4()), "role": role, "text": text, "via": via, "createdAt": time.time(), **extra}
         session["messages"].append(message)
+        self.prompt_suggestions.observe_message(session, message)
         if getattr(self, 'workspace_work', None):
             from .workspace_work_coverage import observe
             observe(self.workspace_work, session, message)
@@ -1932,6 +1945,74 @@ class AppService:
         finally:
             self.worktrees.release_creation(reservation)
 
+    async def _update_suggestion_setting(self, args, origin, command_id, expected_revision,
+                                         include_state, caller, admission_check, authority):
+        """Use the existing owner settings record and ordinary publication transaction."""
+        patch = args['patch']
+        if set(patch) != {'suggestedMessages'} or type(patch['suggestedMessages']) is not bool:
+            raise AppError('Submit suggestedMessages as one boolean setting.')
+        fingerprint = command_fingerprint('settings.update', args, origin, self.clients.current.get(),
+                                          caller_session_id=caller)
+        async with self.lock:
+            if admission_check:
+                admission_check()
+            self.configuration_authority.check(authority)
+            if expected_revision is not None and getattr(self, '_progress_dirty', False):
+                self._commit_pending_progress()
+            if command_id:
+                previous = self.db.execute('SELECT fingerprint,receipt FROM commands WHERE id=?', (command_id,)).fetchone()
+                if previous:
+                    if previous[0] != fingerprint:
+                        raise AppError('This command ID was already used with different contents.', 409)
+                    if include_state and getattr(self, '_progress_dirty', False):
+                        self._commit_pending_progress()
+                    return {**json.loads(previous[1]), 'duplicate': True,
+                            **({'state': self.browser_state()} if include_state else {})}
+            if expected_revision is not None and expected_revision != self.state['revision']:
+                raise AppError('Settings changed. Read the current state before saving.', 409)
+            settings = self._state['settings']
+            previous = settings.get('suggestedMessages', False)
+            setting_revision = settings.get('suggestedMessagesRevision', 0)
+            if (type(setting_revision) is not int or setting_revision < 0
+                    or ('expectedSuggestedMessagesRevision' in args
+                        and args['expectedSuggestedMessagesRevision'] != setting_revision)):
+                raise AppError('Suggested messages changed. Review the current choice before saving.', 409)
+            enabled = patch['suggestedMessages']
+            receipt = {'accepted': True, 'revision': self.state['revision'] + 1, 'effects': [],
+                       'result': {'settings': {'suggestedMessages': enabled,
+                                               'suggestedMessagesRevision': setting_revision + 1},
+                                  'scope': 'installation-owner'}}
+            settings.update(receipt['result']['settings'])
+            try:
+                if command_id:
+                    self.db.execute('INSERT INTO commands VALUES (?,?,?)',
+                                    (command_id, fingerprint, json.dumps(receipt)))
+                self._publish_changes(sessions=set(), globals={'settings'})
+            except BaseException:
+                self.db.rollback()
+                # Publication can fail AFTER SQLite committed (for example a
+                # subscriber projection). Inspect the canonical committed
+                # setting/revision before deciding whether memory may roll back.
+                row = self.db.execute("SELECT value FROM state_records WHERE kind='global' AND id='settings'").fetchone()
+                durable = json.loads(row[0])['value'] if row else {}
+                committed = (durable.get('suggestedMessages') is enabled
+                             and durable.get('suggestedMessagesRevision') == setting_revision + 1)
+                if committed:
+                    settings.update(receipt['result']['settings'])
+                    self._state['revision'] = max(self._state['revision'], receipt['revision'])
+                    self._client_snapshots.clear()
+                    self._browser_snapshot = None
+                    if not enabled:
+                        self.prompt_suggestions.invalidate(clear_cache=False)
+                else:
+                    settings.update(suggestedMessages=previous, suggestedMessagesRevision=setting_revision)
+                raise
+            if not enabled:
+                # Cancel occupied utility work, but preserve saved successful
+                # assistance and irreversible paid claims for later opt-in.
+                self.prompt_suggestions.invalidate(clear_cache=False)
+            return {**receipt, **({'state': self.browser_state()} if include_state else {})}
+
     async def _dispatch(self, action, args=None, origin="ui", command_id=None, expected_revision=None, *, include_state=True, caller_session_id=None, admission_check=None):
         args = dict(args or {})
         if action == 'conversation.send' and 'recoveryAllowance' in args:
@@ -1956,7 +2037,7 @@ class AppService:
         passive_task = action in {'task.get', 'task.history', 'task.detail', 'task.receipt'} or (
             action == 'runtime.control' and isinstance(args.get('operation'), str) and args['operation'] in
             {'task.get', 'task.history', 'task.detail', 'task.receipt'})
-        passive_metadata = passive_task or action in {'assignment.brief', 'coordination.list', 'conversation.configuration'}
+        passive_metadata = passive_task or action.startswith('session.suggestion.') or action in {'assignment.brief', 'coordination.list', 'conversation.configuration'}
         if action in {'workspace.environments.removal.read', 'workspace.environments.removal.list'}:
             # Exact retained IDs only. General alias resolution can refresh
             # history and admit a dormant owner before the passive read runs.
@@ -2092,6 +2173,9 @@ class AppService:
             return await self.configuration_authority.decide(args, origin, command_id,
                                                             admission_check=admission_check)
         guard_history_action(self, action, args, origin, caller_session_id)
+        if action.startswith('session.suggestion.'):
+            return {'accepted': True, 'result': await self.prompt_suggestions.dispatch(
+                action, args, origin, admission_check)}
         if passive_task and origin not in {'ui', 'user'}:
             if not caller_session_id:
                 raise AppError('Task reads require a registered calling conversation.', 403)
@@ -2178,6 +2262,29 @@ class AppService:
             if retained is not None:
                 return retained
         configuration_authority = self.configuration_authority.capture(action, args, origin, caller_session_id)
+        if action == 'settings.update' and 'suggestedMessages' in args.get('patch', {}):
+            return await self._update_suggestion_setting(args, origin, command_id, expected_revision,
+                include_state, caller_session_id, admission_check, configuration_authority)
+        if action == 'settings.update' and 'expectedSuggestedMessagesRevision' in args:
+            raise AppError('expectedSuggestedMessagesRevision requires suggestedMessages.')
+        if action in {'providers.suggestionModels', 'providers.configureSuggestions'}:
+            async with self.lock:
+                if admission_check:
+                    admission_check()
+                self.configuration_authority.check(configuration_authority)
+                if args.get('configurationTarget', {'kind': 'global'}) != {'kind': 'global'}:
+                    raise AppError('Prompt suggestions use app-global Settings.', 409)
+                try:
+                    result = await self.prompt_suggestions.manager.perform(action, {
+                        **args, 'workspace': str(self.data_dir), 'scope': 'global'})
+                except ValueError as exc:
+                    raise AppError(str(exc), 409) from None
+                if action == 'providers.configureSuggestions':
+                    self.prompt_suggestions.invalidate()
+                    self.state['configurationRevision'] = self.state.get('configurationRevision', 0) + 1
+                    self._publish_changes(sessions=set(), globals={'configurationRevision'})
+                    result['configurationRevision'] = self.state['configurationRevision']
+                return {'accepted': True, 'result': result, 'effects': []}
         if action == 'instanceBranding.get':
             return {'accepted': True, 'result': self.instance_branding.snapshot(), 'effects': []}
         if action in {'externalAgents.list', 'externalAgents.get'}:
@@ -4711,7 +4818,7 @@ class AppService:
             return await self.external_conversations.send(session, text, input_id, preserve_draft)
         if not self.runtime:
             raise AppError("The Amplifier runtime is unavailable.")
-        from .message_delivery import find_message
+        from .message_delivery import find_message, receipt_delivery
         from .update_drain import UpdateDeferred, held, defer_send
         original = find_message(session, input_id) or {}
         if not retry and held(self) and not original.get('steering'):
@@ -4855,11 +4962,19 @@ class AppService:
                     send_result = {**(send_result if isinstance(send_result, dict) else {}), 'delivery': observed['delivery']['status'],
                                    'steering': copy.deepcopy(observed['steering'])}
                 else:
-                    self._delivery(current, input_id,
-                        'failed' if isinstance(send_result, dict) and send_result.get('accepted') is False
-                            and send_result.get('effect') == 'none' else 'accepted')
-                    send_result = {**(send_result if isinstance(send_result, dict) else {}),
-                                   'delivery': (find_message(current, input_id) or {})['delivery']['status']}
+                    delivery = ('failed' if isinstance(send_result, dict) and send_result.get('accepted') is False
+                                and send_result.get('effect') == 'none' else 'accepted')
+                    self._delivery(current, input_id, delivery)
+                    message = find_message(current, input_id) or {}
+                    if 'delivery' in message:
+                        delivery = message['delivery']['status']
+                    else:
+                        # A voice delegation or a worker spawn has no bubble with a
+                        # delivery. _delivery saved the status in the exact command
+                        # receipt; read it from there.
+                        row = self.db.execute('SELECT receipt FROM commands WHERE id=?', (input_id,)).fetchone()
+                        delivery = (receipt_delivery(row[0], current['id'], input_id) if row else None) or delivery
+                    send_result = {**(send_result if isinstance(send_result, dict) else {}), 'delivery': delivery}
                 sent = next((row for row in session["messages"] if row.get("inputId") == input_id), {})
                 self._clear_sent_draft(current, sent, text, preserve_draft)
                 current.pop("lockOwner", None)
@@ -6242,6 +6357,13 @@ class AppService:
                 if previous[0] != fingerprint:
                     raise AppError("This voice command ID was already used with different contents.", 409)
                 return {**json.loads(previous[1]), "duplicate": True}
+            from .update_drain import held
+            if held(self):
+                # A typed message is saved and sent after the update. A NEW voice
+                # request has no saved bubble to hold, so refuse it here in plain
+                # words instead of failing later inside the deferral. A repeated
+                # command has returned its saved receipt above.
+                raise AppError("An update is being installed. Nothing was sent; ask again in a moment.", 409)
             receipt = {"accepted": True, "inputId": command_id, "sessionId": session["id"], "delivery": "sending"}
             self.db.execute("INSERT INTO commands VALUES (?,?,?)", (command_id, fingerprint, json.dumps(receipt)))
             # The voice owner supplies the captured utterance ID. Text alone
@@ -6318,6 +6440,7 @@ class AppService:
             return
         self._close_started = True
         self.begin_shutdown()
+        await self.prompt_suggestions.close()
         await self.external_conversations.close()
         lifecycle_tasks = [task for task in self._runtime_lifecycle_tasks
                            if task is not asyncio.current_task()]

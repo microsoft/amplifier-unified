@@ -1,4 +1,5 @@
 from copy import deepcopy
+import asyncio
 import json
 
 import pytest
@@ -158,6 +159,89 @@ async def test_demand_is_client_scoped_and_full_reads_keep_evidence(live):
     await command(service, 'browser-a', 'view.update', {'patch': {'panel': None}})
     assert 'items' not in snapshot(service, 'browser-a')['updates']
     assert service._state['updates']['items']
+
+
+@pytest.mark.parametrize('surface', ['modal', 'canvas'])
+@pytest.mark.parametrize('page', ['chat-input', 'suggestion-advanced'])
+async def test_selected_chat_suggestion_settings_demands_exact_global_model_catalog(live, monkeypatch, surface, page):
+    from amplifier_web.management import Management
+    from amplifier_web.provider_catalog import model_key
+    from amplifier_web.setup import SetupManager
+
+    service, first, _ = live
+    service.management = Management(service)
+    manager = service.prompt_suggestions.manager
+    workspace = str(service.data_dir)
+    manager.store.update(workspace, 'global', lambda value: value.update(config={'providers': [{
+        'id': 'saved', 'module': 'provider-openai', 'config': {'api_key': 'synthetic-key'}}]}))
+    key = manager.catalog_key({'id': 'saved'}, workspace)
+    models = [{'id': 'utility-model', 'display_name': 'Utility model'}]
+    metadata = {'configSchema': {'fields': [
+        {'id': 'reasoning_effort', 'choices': ['low', 'high']}]}}
+    service.management.provider_catalog.put(model_key(key), {
+        'models': models, 'modelsSupported': True, 'modelsProvenance': 'provider-api',
+        'providerMetadata': metadata})
+
+    async def forbidden(*args, **kwargs):
+        raise AssertionError('Viewing cached Settings must not discover or call a model')
+    monkeypatch.setattr(SetupManager, 'probe', forbidden)
+    monkeypatch.setattr(SetupManager, 'discover_catalog', forbidden)
+    for client in ('browser-a', 'browser-b'):
+        await command(service, client, 'session.select', {'id': first})
+        await command(service, client, 'view.update', {'patch': {'panel': None}})
+    await command(service, 'browser-a', 'providers.list', {
+        'configurationTarget': {'kind': 'global'}})
+    # Complete the ordinary cached list/warm publication, not a hand-shaped
+    # browser response or a separate catalog owner.
+    while service.tasks:
+        await asyncio.gather(*tuple(service.tasks))
+    roster = (await command(service, 'browser-a', 'providers.suggestionModels'))['result']['providers']
+    assert roster[0]['sharedCatalogKey'] == key
+    service._session(first)['runtimeReport'] = {'provider_choices': [
+        {'id': 'saved', 'sharedCatalogKey': key}]}
+    service._publish_changes(sessions={first})
+    saved_settings = deepcopy(manager.store.read(workspace, 'global'))
+    model_selection = deepcopy(service._session(first).get('selection'))
+    config_revision = service._state.get('configurationRevision', 0)
+    paid_claims = list(service.db.execute('SELECT * FROM suggestion_requests'))
+
+    def assert_deferred(client):
+        closed = snapshot(service, client)
+        assert closed['selectedSessionId'] == first
+        assert closed['modelCatalogs'][key]['modelsDeferred'] is True
+        assert 'models' not in closed['modelCatalogs'][key]
+        assert 'providerCatalogs' not in closed['setup']
+        return closed
+
+    assert_deferred('browser-a')
+    patch = {'panel': 'settings' if surface == 'modal' else None,
+             'settingsExpanded': [page]}
+    if surface == 'canvas':
+        service.clients.records['browser-a']['canvas'] = {
+            'id': 'suggestion-settings', 'kind': 'settings', 'open': True}
+    await command(service, 'browser-a', 'view.update', {'patch': patch})
+    opened = snapshot(service, 'browser-a')
+    assert opened['selectedSessionId'] == first
+    assert opened['setup']['configurationTarget'] == {'kind': 'global'}
+    assert opened['setup']['providerCatalogs']['saved']['sharedCatalogKey'] == key
+    assert opened['modelCatalogs'][key]['models'] == models
+    assert opened['modelCatalogs'][key]['metadata'] == metadata
+    assert 'modelsDeferred' not in opened['modelCatalogs'][key]
+    assert_deferred('browser-b')
+    # These overview destinations link to controls but mount no model picker.
+    # In particular the superseded Privacy form must not keep demand alive.
+    for other_page in ('privacy', 'advanced', 'appearance', 'updates'):
+        await command(service, 'browser-a', 'view.update', {'patch': {'settingsExpanded': [other_page]}})
+        assert_deferred('browser-a')
+    service.clients.records['browser-a']['canvas'] = {}
+    await command(service, 'browser-a', 'view.update', {'patch': {'panel': None}})
+    assert_deferred('browser-a')
+    assert service._state['modelCatalogs'][key]['models'] == models
+    assert manager.store.read(workspace, 'global') == saved_settings
+    assert service._session(first).get('selection') == model_selection
+    assert service._state.get('configurationRevision', 0) == config_revision
+    assert list(service.db.execute('SELECT * FROM suggestion_requests')) == paid_claims
+    assert not service.runtime.started and not service.runtime.sent
 
 
 def test_shell_dedup_preserves_different_scopes_and_inputs():

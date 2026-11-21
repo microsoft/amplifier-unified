@@ -2145,6 +2145,10 @@ def test_permissions_history_selection_comes_from_actual_source(permissions_chec
                in node['tests/conversation-navigation.test.mjs'] for value in ('a', 'b'))
     assert all('delayed ' + value + ' cannot overtake later browsing, while later drawer intent still wins'
                in node['tests/conversation-navigation.test.mjs'] for value in ('navExpanded', 'navPinned'))
+    assert {
+        'composer focus is one-use and requires exact explicit selection commit',
+        'newer selection, rejection, user interaction and unsafe surfaces revoke pending focus',
+    } <= set(node['tests/conversation-navigation.test.mjs'])
     assert 'unexpected fixture exit is never reported as successful cleanup' in node['tests/fixture-lifecycle.test.mjs']
 
 
