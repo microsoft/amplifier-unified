@@ -13,6 +13,7 @@ import weakref
 import os
 from dataclasses import dataclass
 from .token_usage import with_gross_tokens
+from .model_outcome import response_outcome
 
 CALL_PURPOSE = contextvars.ContextVar('amplifier_web_call_purpose',default=None)
 CURRENT_CALL = contextvars.ContextVar("amplifier_web_public_call", default=None)
@@ -57,7 +58,7 @@ class _ImageOperationResult(Exception):
         self.result = result
 
 
-def public_usage(value, *, metadata=None):
+def public_usage(value, *, metadata=None, include_cost_source=True):
     if hasattr(value, "model_dump"):
         value = value.model_dump()
     if not isinstance(value, dict):
@@ -65,7 +66,8 @@ def public_usage(value, *, metadata=None):
     if "normalized" in value and "provider" in value:
         # Optional image operations separate normalized evidence from native
         # usage. Do not infer costs from another modality's model price.
-        value = value.get("normalized") or {}
+        normalized = value["normalized"]
+        value = normalized if isinstance(normalized, dict) else {}
     result = {}
     for source, target in (("input_tokens", "inputTokens"), ("output_tokens", "outputTokens"),
                            ("cache_read_tokens", "cacheReadTokens"), ("cache_write_tokens", "cacheWriteTokens"),
@@ -82,7 +84,7 @@ def public_usage(value, *, metadata=None):
         if not math.isfinite(cost) or cost < 0:
             raise ValueError()
         result.update(costUsd=cost, costType="estimated" if value.get("cost_type") == "estimated" else "reported")
-        if value.get("cost_source"):
+        if include_cost_source and value.get("cost_source"):
             result["costSource"] = str(value["cost_source"])[:300]
     except (KeyError, TypeError, ValueError):
         result["costType"] = "unavailable"
@@ -342,6 +344,9 @@ class ExecutionEvents:
             usage = response.get("usage") if isinstance(response, dict) else getattr(response, "usage", None)
             metadata = response.get("metadata") if isinstance(response, dict) else getattr(response, "metadata", None)
             terminal = {**row, "phase": "completed", "endedAt": time.time(), "usage": public_usage(usage, metadata=metadata)}
+            if row.get('label') == 'Model call':
+                from .provider_capture import observe
+                terminal.update(observe(response_outcome, response) or {})
             await safe_observe(self.context_inspectors.get(sid), 'finish', terminal)
             self.publish(terminal)
             return response
@@ -437,6 +442,7 @@ class ExecutionEvents:
             self.streaming_calls.add(row["id"])
             iterator = None
             phase = "completed"
+            returned_text = False
             admission = AdmittedProviderCall(row['id'], self.root_id, sid, self.admission_guard is not None)
             async def scoped(awaitable):
                 # Do not leak context across a yield or retain a token that
@@ -466,6 +472,9 @@ class ExecutionEvents:
                     if usage is not None:
                         metadata = chunk.get("metadata") if isinstance(chunk, dict) else getattr(chunk, "metadata", None)
                         self.publish({**self.nodes[row["id"]], "usage": public_usage(usage, metadata=metadata)})
+                    if (not returned_text and type(chunk) is dict and chunk.get('block_type') in (None, 'text')
+                            and chunk.get('visibility') in (None, 'user') and type(chunk.get('content')) is str):
+                        returned_text = bool(chunk['content'])
                     yield chunk
             except GeneratorExit:
                 phase = "interrupted"
@@ -482,6 +491,8 @@ class ExecutionEvents:
                     raise
                 finally:
                     terminal = {**self.nodes[row["id"]], "phase": phase, "endedAt": time.time()}
+                    if returned_text and phase == 'completed':
+                        terminal['modelOutcome'] = {'text': True}
                     from .context_inspection_adapter import safe_observe
                     await safe_observe(self.context_inspectors.get(sid), 'finish', terminal)
                     self.publish(terminal)

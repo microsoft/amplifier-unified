@@ -71,7 +71,7 @@ def migrate(home, state):
 # never persist action bodies or lazy event-file references here.
 ACCOUNTING_FIELDS = {'id', 'revision', 'producerId', 'budgetRevision', 'admittedAt',
     'parentId', 'turnId', 'admissionInputId', 'generationId', 'purpose', 'sessionId', 'rootSessionId', 'kind', 'phase', 'provider',
-    'model', 'startedAt', 'endedAt', 'usage', 'lifecycle', 'failure',
+    'model', 'startedAt', 'endedAt', 'usage', 'lifecycle', 'failure', 'modelOutcome',
     'assignmentId', 'assignmentRevision', 'assignmentReservation'}
 ACCOUNTING_USAGE_FIELDS = {'inputTokens', 'outputTokens', 'totalTokens',
     'cacheReadTokens', 'cacheWriteTokens', 'reasoningTokens', 'grossInputTokens',
@@ -153,7 +153,10 @@ def accounting_projection(tree, *, _retired=None):
         for field, value in row.items():
             if field not in ACCOUNTING_FIELDS:
                 continue
-            if field == 'usage':
+            if field == 'modelOutcome':
+                from .model_outcome import public_outcome
+                record.update(public_outcome(value))
+            elif field == 'usage':
                 if type(value) is dict:
                     usage = {}
                     for name, amount in value.items():

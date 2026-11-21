@@ -34,9 +34,9 @@ try{
  const firstTimer=await modelLine.innerText();await expect.poll(()=>modelLine.innerText()).not.toBe(firstTimer);
  console.log('Live model timing checked');const turn=page.locator('[data-group-id="inspect@long-answer"]');
  let failOutput=true;await page.route('**/api/conversation/detail?**',route=>{if(failOutput&&new URL(route.request().url()).searchParams.get('field')==='output'){failOutput=false;return route.fulfill({status:503,json:{error:'Temporary result load failure'}})}return route.continue()});
- const tool=turn.locator('[data-kind="tool"]');
- assert.equal(await tool.locator('.a-execution-body').count(),0);
- await tool.locator('button.a-execution-action-line').click();
+ const toolRow=turn.locator('[data-kind="tool"]'),tool=page.locator('#work-step-inspector');
+ assert.equal(await toolRow.locator('.a-execution-body').count(),0);
+ await toolRow.locator('button.a-execution-action-line').click();
  await tool.getByRole('button',{name:'Retry result',exact:true}).waitFor();console.log('Retry control visible');
  assert.equal(await tool.getByRole('button',{name:'Copy file content',exact:true}).isDisabled(),true);
  await tool.getByRole('button',{name:'Retry result',exact:true}).click();
@@ -65,12 +65,16 @@ try{
  await expect(tool.getByRole('status')).toHaveText('Copied');
  assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),fullResult);
  assert.equal(detailReads.filter(url=>url.searchParams.get('field')==='output').length,2);
- await control({op:'inspection-finish'});await expectCurrentWork();await expect(modelLine).toContainText('120 tokens');
+ await tool.getByRole('button',{name:'Close step details'}).click();
+ await control({op:'inspection-finish'});await expectCurrentWork();await expect(modelLine).toContainText('In 100');
+ await expect(modelLine).toContainText('Out 20');
+ await expect(modelLine).toContainText('$0.004');
  assert.match(await page.locator('[data-group-id="inspect@question"] > .a-execution-turn-line').innerText(),/120 tokens · \$0.004/);
  const finalTimer=await modelLine.innerText();await new Promise(resolve=>setTimeout(resolve,1200));assert.equal(await modelLine.innerText(),finalTimer);
  let failDetail=true;await page.route('**/api/conversation/detail?**',route=>{if(failDetail&&new URL(route.request().url()).searchParams.get('id')==='long-answer'){failDetail=false;return route.fulfill({status:503,json:{error:'Fixture detail temporarily unavailable'}})}return route.continue()});
  await page.reload();await expectCurrentWork();await model.waitFor();assert.equal(await modelLine.innerText(),finalTimer);
  await answer.scrollIntoViewIfNeeded();await page.getByRole('button',{name:'Retry loading full text'}).click();await page.getByText('COMPLETE-RESPONSE-END',{exact:false}).waitFor();
+ await toolRow.locator('button.a-execution-action-line').click();
  await tool.getByRole('link',{name:'https://example.com/artifact',exact:true}).waitFor();
  assert.deepEqual(errors,[]);console.log('Canonical owner content loads once with retry and full-copy support; clipboard denial retains selectable full content and explicit retry succeeds without another detail read; long fences preview 10 lines plus an explicit ellipsis; model one-liners stay visible; live timing and usage settle across reload.');
 }catch(error){console.error(log);throw error}finally{await browser.close();fixture.kill()}

@@ -259,9 +259,30 @@ def test_cut_prefix_does_not_pair_requests_infer_turns_or_compute_usage(owner):
     assert len(page['items']) == 3
     assert all('usage' not in row and 'turnId' not in row and 'anchorMessageId' not in row
                for row in page['items'])
+    assert page['items'][1]['observedUsage']['totalTokens'] == 100
+    assert 'observedUsage' not in page['items'][0]
     assert 'request' not in page['items'][0] and 'response' not in page['items'][1]
     assert page['items'][0]['requestDetail']['digestKind'] == 'event-field-v1'
     assert page['items'][1]['responseDetail']['digestKind'] == 'event-field-v1'
+
+
+def test_response_observations_only_expose_measures_and_survive_malformed_usage(owner):
+    session, path = owner
+    marker = 'private cost diagnostic'
+    receipt = {'input_tokens': 10, 'output_tokens': 4, 'cost_usd': .02,
+               'cost_type': 'estimated', 'cost_source': {'note': marker}}
+    usages = [receipt, {'provider': 'example', 'normalized': receipt},
+              {'provider': 'example', 'normalized': marker}]
+    write(path, [event(i, 'llm:response', usage=value, raw={'body': 'saved'})
+                 for i, value in enumerate(usages)])
+    rows = read(session)['items']
+    assert len(rows) == len(usages)
+    expected = {'inputTokens': 10, 'outputTokens': 4, 'totalTokens': 14,
+                'grossInputTokens': 10, 'grossTotalTokens': 14,
+                'costUsd': .02, 'costType': 'estimated'}
+    assert [row['observedUsage'] for row in rows] == [expected, expected, {'costType': 'unavailable'}]
+    assert all('responseDetail' in row for row in rows)
+    assert marker not in json.dumps(rows)
 
 
 @pytest.mark.parametrize('change', ['append', 'replace', 'edit', 'truncate'])

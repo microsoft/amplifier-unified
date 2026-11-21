@@ -25,6 +25,11 @@ def compact(row, session_id, part, limit):
     if part != 'messages':
         from .tool_observations import metadata as tool_metadata
         result.update(tool_metadata(row))
+        if row.get('kind') == 'llm':
+            from .model_outcome import public_outcome
+            result.update(public_outcome(row.get('modelOutcome')))
+            if row.get('purpose') in ('context_compaction', 'image_generation'):
+                result['purpose'] = row['purpose']
     if 'routing' in result:
         from .host.model_selection import public_routing
         result['routing'] = public_routing(result['routing'])
