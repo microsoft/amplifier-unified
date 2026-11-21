@@ -4,22 +4,52 @@ import json
 import os
 import sys
 
-from acp import run_agent
+from acp import RequestError, run_agent
 from acp.schema import AgentMessageChunk, AgentThoughtChunk, TextContentBlock, PromptResponse, PermissionOption, ToolCallUpdate
 from external_acp_agent import Fixture
+
+INSTANCE = 'com.microsoft.amplifier.agent-instance'
 
 
 class SharedFixture(Fixture):
     def __init__(self, home, identity, profile="plain"):
         super().__init__(home, True)
         self.identity, self.profile = identity, profile
+        self.source = None
 
     async def initialize(self, **kwargs):
         result = await super().initialize(**kwargs)
-        if self.profile == 'attention':
+        if self.profile.startswith('attention'):
             result.field_meta = {'com.microsoft.amplifier.attention': {
                 'version': 1, 'enabled': True, 'method': '_amplifier/attention'}}
+        if self.profile.startswith('instance'):
+            assert kwargs[INSTANCE] == {'version': 1}
+            if not (self.home / 'hide-profile').exists():
+                suffix = ':changed' if (self.home / 'change-identity').exists() else ''
+                result.field_meta[INSTANCE] = {'version': 1, 'agentId': 'public:' + self.identity + suffix}
         return result
+
+    def instance_session(self, result, metadata):
+        if self.profile.startswith('instance'):
+            assert metadata[INSTANCE]['agentId'] == 'public:' + self.identity
+            self.source = metadata[INSTANCE]['source']
+            self.record('instance-session', metadata=metadata[INSTANCE])
+            revision = int((self.home / 'revision').read_text()) if (self.home / 'revision').exists() else 7
+            result.field_meta = {INSTANCE: {**metadata[INSTANCE], 'expectedInterruptionRevision': revision}}
+            if self.profile == 'instance-malformed':
+                result.field_meta[INSTANCE].pop('expectedInterruptionRevision')
+        return result
+
+    async def new_session(self, cwd, mcp_servers=None, **kwargs):
+        return self.instance_session(await super().new_session(cwd, mcp_servers), kwargs)
+
+    async def resume_session(self, session_id, cwd, mcp_servers=None, **kwargs):
+        return self.instance_session(await super().resume_session(session_id, cwd, mcp_servers), kwargs)
+
+    async def cancel(self, session_id, **kwargs):
+        if self.profile.startswith('instance'):
+            (self.home / 'revision').write_text('8')
+        await super().cancel(session_id, **kwargs)
 
     def speaks(self, trigger):
         if trigger['sender'] in {'alpha', 'beta'}:
@@ -27,7 +57,7 @@ class SharedFixture(Fixture):
         return not (trigger['text'] == 'drop-after-effect' and self.identity == 'beta')
 
     async def ext_method(self, method, params):
-        assert self.profile == 'attention' and method == 'amplifier/attention'
+        assert self.profile.startswith('attention') and method == 'amplifier/attention'
         context = params['context']
         assert set(context) == {'conversation_id', 'thread_id', 'agent', 'participants', 'messages', 'trigger_id', 'responsibilities'}
         assert set(context['agent']) == {'id', 'name', 'is_agent'}
@@ -36,6 +66,10 @@ class SharedFixture(Fixture):
         assert len(context['participants']) <= 64 and 1 <= len(context['messages']) <= 40
         assert len(json.dumps(context, ensure_ascii=False, separators=(',', ':')).encode()) <= 32768
         self.record('offer', context=context, occurredAt=params['occurredAt'])
+        if self.profile == 'attention-error':
+            raise RequestError(-32002, 'Source authorization changed.')
+        if self.profile == 'attention-malformed':
+            return {'action': 'engage', 'id': 'offer'}
         trigger = next(row for row in context['messages'] if row['id'] == context['trigger_id'])
         if not self.speaks(trigger):
             return {'action': 'hold', 'id': 'offer'}
@@ -47,37 +81,70 @@ class SharedFixture(Fixture):
 
     async def prompt(self, session_id, prompt, **kwargs):
         text = prompt[-1].text
-        quiet = text.startswith('Decide quietly')
-        context = json.loads(text.split('Latest conversation projection:\n', 1)[1] if quiet else text.split('\n', 1)[1])
+        context = json.loads(text.split('\n', 1)[1])
         trigger = next(row for row in context['messages'] if row['id'] == context['trigger_id'])
         source = trigger['text']
-        self.record('decision' if quiet else 'work', sessionId=session_id,
-                    sourceId=trigger['id'], source=source, sender=trigger['sender'])
-        if quiet:
-            speak = self.speaks(trigger)
-            await self.emit(session_id, json.dumps({'decision': 'speak' if speak else 'pass', 'reason': 'fixture'}))
+        self.record('prompt', sessionId=session_id, sourceId=trigger['id'],
+                    source=source, sender=trigger['sender'], context=context)
+        if self.profile.startswith('instance'):
+            assert kwargs[INSTANCE] == {'agentId': 'public:' + self.identity, 'source': self.source,
+                'expectedInterruptionRevision': (int((self.home / 'revision').read_text())
+                    if (self.home / 'revision').exists() else 7), 'input': {
+                    'id': kwargs[INSTANCE]['input']['id'], 'revision': 0,
+                    'actor': trigger['sender'], 'audience': ['conversation'],
+                    'replyTo': context['conversation_id']}}
+            self.record('instance-input', metadata=kwargs[INSTANCE])
+        if not self.speaks(trigger):
+            await self.emit(session_id, '[[PASS]]')
             return PromptResponse(stop_reason='end_turn')
-        if self.profile == 'attention':
+        self.record('work', sessionId=session_id, sourceId=trigger['id'], source=source, sender=trigger['sender'])
+        if self.profile.startswith('attention'):
             assert kwargs['com.microsoft.amplifier.attention'] == {'id': 'offer', 'ticket': 'fixture-ticket'}
         self.cancelled.clear()
         if source == 'drop-after-effect':
             os._exit(7)
         if source == 'silent-after-decision':
             assert 'return exactly [[PASS]]' in text
-            await self.emit(session_id, '[[PASS]]')
+            for chunk in ('[[PA', 'SS]]'):
+                await self.emit(session_id, chunk)
+            return PromptResponse(stop_reason='end_turn')
+        if source == 'silent-split-wait':
+            await self.emit(session_id, '[[PA')
+            while not (self.home / 'release').exists() and not self.cancelled.is_set():
+                await asyncio.sleep(.01)
+            await self.emit(session_id, 'SS]]')
+            return PromptResponse(stop_reason='end_turn')
+        if source == 'pass-prefix-error':
+            await self.emit(session_id, '[[PA')
+            raise RequestError(-32002, 'Failed before silence marker completed.')
+        if source == 'silent-empty':
             return PromptResponse(stop_reason='end_turn')
         await self.client.session_update(session_id=session_id,
             update=AgentThoughtChunk(content=TextContentBlock(text='Private reasoning')))
         if source == 'permission':
-            result = await self.client.request_permission(session_id=session_id,
+            request = asyncio.create_task(self.client.request_permission(session_id=session_id,
                 tool_call=ToolCallUpdate(tool_call_id='synthetic', title='Synthetic permission'),
                 options=[PermissionOption(option_id='allow-this', name='Allow once', kind='allow_once'),
-                         PermissionOption(option_id='deny-this', name='Deny', kind='reject_once')])
+                         PermissionOption(option_id='deny-this', name='Deny', kind='reject_once')]))
+            cancelled = asyncio.create_task(self.cancelled.wait())
+            try:
+                await asyncio.wait([request, cancelled], return_when=asyncio.FIRST_COMPLETED)
+                if self.cancelled.is_set():
+                    request.cancel()
+                    await asyncio.gather(request, return_exceptions=True)
+                    return PromptResponse(stop_reason='cancelled')
+                result = request.result()
+            finally:
+                cancelled.cancel()
+                await asyncio.gather(cancelled, return_exceptions=True)
             self.record('permission', outcome=result.outcome.model_dump(mode='json', by_alias=True, exclude_none=True))
         if source == 'wait-for-stop':
             await self.emit(session_id, self.identity + ' unfinished draft')
             await self.cancelled.wait()
             return PromptResponse(stop_reason='cancelled')
+        if source == 'stream-error':
+            await self.emit(session_id, self.identity + ' interrupted draft')
+            raise RequestError(-32002, 'Failed after partial output.')
         if source == 'busy exchange':
             if self.identity == 'alpha':
                 result = 'Question for Beta: check 42'

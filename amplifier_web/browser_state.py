@@ -253,8 +253,9 @@ def snapshot(state, derived, *, session_id=None, index=None, copies=None, client
     result['conversationOrganization'] = organization_projection(state, visible, directory=directory)
     # Report history is read through bounded coordination cursors, never copied
     # into every browser progress snapshot. The worker's latest report remains.
+    from .shared_conversation import public_output
     result['sessions'] = [{**{key: value for key, value in row.items() if key not in {'_externalAgentSource', '_externalRoom'}}, 'workers': [{key: value for key, value in worker.items() if key != 'reportReceipts'}
-                           for worker in row.get('workers', [])]} for row in result['sessions']]
+                           for worker in row.get('workers', [])]} for row in map(public_output, result['sessions'])]
     # Only the selected owner's current, indexed waits; no transcript or peer
     # configuration loads, and this read never consumes a return notification.
     if directory is not None and selected_row:

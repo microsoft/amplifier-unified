@@ -41,9 +41,10 @@ def work(path, identity):
     return [row for row in operations(path / identity) if row['kind'] == 'work']
 
 
-async def test_concurrent_streams_public_acceptance_stop_and_later_post(app_factory, tmp_path):
+@pytest.mark.parametrize('profile', ['plain', 'attention', 'instance'])
+async def test_concurrent_streams_public_acceptance_stop_and_later_post(app_factory, tmp_path, profile):
     app = app_factory()
-    session = await room(app, tmp_path)
+    session = await room(app, tmp_path, profile)
     sid = session['id']
     assert is_shared(session)
     await send(app, sid, 'wait-for-stop', 'first')
@@ -51,6 +52,10 @@ async def test_concurrent_streams_public_acceptance_stop_and_later_post(app_fact
     assert len(app.external_conversations.shared.turns) == 2
     assert {stream['text'] for stream in session['externalStreams'].values()} == {
         'alpha unfinished draft', 'beta unfinished draft'}
+    for state in (app.browser_state(sid), app.session_state(sid)):
+        public = next(row for row in state['sessions'] if row['id'] == sid)
+        assert {row['text'] for row in public['externalStreams'].values()} == {
+            'alpha unfinished draft', 'beta unfinished draft'}
     assert all('streaming' not in row for row in bindings(session))
     await send(app, sid, 'pending while busy', 'second')
     assert session['externalAgent']['pendingCount'] == 2
@@ -80,9 +85,10 @@ async def test_concurrent_streams_public_acceptance_stop_and_later_post(app_fact
     assert not any('decision' in row['text'] or 'Private tool' in row['text'] for row in session['messages'])
 
 
-async def test_busy_peer_post_is_later_considered_once_without_forced_work(app_factory, tmp_path):
+@pytest.mark.parametrize('profile', ['plain', 'attention'])
+async def test_busy_peer_post_is_later_considered_once_without_forced_work(app_factory, tmp_path, profile):
     app = app_factory()
-    session = await room(app, tmp_path)
+    session = await room(app, tmp_path, profile)
     sid = session['id']
     await send(app, sid, 'busy exchange', 'exchange')
     await until(lambda: any(row.get('agentId') == 'alpha' for row in session['messages']))
@@ -97,7 +103,8 @@ async def test_busy_peer_post_is_later_considered_once_without_forced_work(app_f
     answers = [row for row in session['messages'] if row['role'] == 'assistant']
     assert [row['agentId'] for row in answers] == ['alpha', 'beta', 'beta']
     assert answers[-1]['text'] == 'Beta answer: 42'
-    assert any(row['state'] == 'listening' and row['agentId'] == 'alpha' for row in session['_externalRoom']['deliveries'])
+    assert any(row['state'] == ('listening' if profile == 'attention' else 'accepted')
+               and row['agentId'] == 'alpha' and row['sequence'] > 1 for row in session['_externalRoom']['deliveries'])
     assert not any(row['agentId'] == app.external_conversations.shared.message(session, row['sourceMessageId']).get('agentId')
                    for row in session['_externalRoom']['deliveries'])
 
@@ -109,7 +116,7 @@ async def test_unknown_recipient_keeps_binding_and_does_not_replay_after_restart
     await send(app, sid, 'drop-after-effect', 'uncertain')
     await idle(app, sid)
     original = copy.deepcopy(session['_externalRoom']['deliveries'])
-    assert {row['agentId']: row['state'] for row in original} == {'alpha': 'unknown', 'beta': 'listening'}
+    assert {row['agentId']: row['state'] for row in original} == {'alpha': 'unknown', 'beta': 'accepted'}
     remotes = {row['id']: row['sessionId'] for row in bindings(session)}
     await app.close()
     restored = app_factory()
@@ -219,15 +226,127 @@ async def test_attention_unicode_projection_preserves_trigger_within_wire_byte_l
     assert len(message['text']) == 24000  # Canonical source remains complete.
 
 
-async def test_execution_may_stay_silent_without_publishing_or_inviting_peers(app_factory, tmp_path):
+@pytest.mark.parametrize('text', ['silent-after-decision', 'silent-empty'])
+@pytest.mark.parametrize('profile', ['plain', 'attention'])
+async def test_execution_may_stay_silent_without_publishing_or_inviting_peers(app_factory, tmp_path, text, profile):
     app = app_factory()
-    session = await room(app, tmp_path)
-    await send(app, session['id'], 'silent-after-decision', 'silent')
+    session = await room(app, tmp_path, profile)
+    await send(app, session['id'], text, 'silent')
     await idle(app, session['id'])
     assert not any(row['role'] == 'assistant' for row in session['messages'])
     assert all(len(work(tmp_path, identity)) == 1 for identity in ('alpha', 'beta'))
     assert len(session['_externalRoom']['deliveries']) == 2
     assert all(row['state'] == 'accepted' for row in session['_externalRoom']['deliveries'])
+
+
+async def test_plain_participation_uses_one_ordinary_prompt_not_a_private_preflight(app_factory, tmp_path):
+    app = app_factory()
+    session = await room(app, tmp_path)
+    # Old values remain inert; new participation must not rewrite saved records.
+    bindings(session)[0]['lastOfferedSequence'] = 17
+    await send(app, session['id'], 'ordinary contribution', 'ordinary')
+    await idle(app, session['id'])
+    for identity in ('alpha', 'beta'):
+        rows = operations(tmp_path / identity)
+        assert not any(row['kind'] == 'decision' for row in rows)
+        assert len([row for row in rows if row['kind'] == 'work']) == 1
+        assert len([row for row in rows if row['kind'] == 'prompt']) == 2  # Own source and the other's public reply.
+    assert bindings(session)[0]['lastOfferedSequence'] == 17
+    assert 'lastOfferedSequence' not in bindings(session)[1]
+
+
+@pytest.mark.parametrize('profile', ['attention-error', 'attention-malformed'])
+async def test_advertised_attention_failure_never_sends_a_fallback_prompt(app_factory, tmp_path, profile):
+    app = app_factory()
+    session = await room(app, tmp_path, profile)
+    await send(app, session['id'], 'do not retry', 'failed-offer')
+    await idle(app, session['id'])
+    for identity in ('alpha', 'beta'):
+        rows = operations(tmp_path / identity)
+        assert [row['kind'] for row in rows] == ['new', 'offer']
+    assert all(row['state'] == 'unknown' for row in session['_externalRoom']['deliveries'])
+    assert len(session['messages']) == 1
+
+
+async def test_split_silence_chunks_and_private_thoughts_never_reach_public_views(app_factory, tmp_path):
+    import json
+    app = app_factory()
+    session = await room(app, tmp_path)
+    await send(app, session['id'], 'silent-split-wait', 'split-silent')
+    await until(lambda: len(session.get('externalStreams', {})) == 2)
+    from amplifier_web.browser_detail import project
+    for state in (app.browser_state(session['id']), app.session_state(session['id']), project(session)):
+        public = json.dumps(state)
+        assert '[[PA' not in public and 'Private reasoning' not in public
+    assert len(session['messages']) == 1
+    for identity in ('alpha', 'beta'):
+        (tmp_path / identity / 'peer/release').touch()
+    await idle(app, session['id'])
+    assert len(session['messages']) == 1 and not session.get('externalStreams')
+
+
+@pytest.mark.parametrize('text', ['stream-error', 'pass-prefix-error'])
+async def test_failed_stream_keeps_only_real_partial_reply_and_never_invites_peers(app_factory, tmp_path, text):
+    app = app_factory()
+    session = await room(app, tmp_path)
+    await send(app, session['id'], text, 'failed-stream')
+    await idle(app, session['id'])
+    replies = [row for row in session['messages'] if row['role'] == 'assistant']
+    assert len(replies) == (2 if text == 'stream-error' else 0)
+    assert all(row['partial'] and 'roomSequence' not in row for row in replies)
+    assert len(session['_externalRoom']['deliveries']) == 2
+    assert all(row['state'] == 'unknown' for row in session['_externalRoom']['deliveries'])
+    assert all(len(work(tmp_path, identity)) == 1 for identity in ('alpha', 'beta'))
+
+
+async def test_stop_while_ordinary_turn_waits_for_permission_revokes_late_choices(app_factory, tmp_path):
+    from amplifier_web.errors import AppError
+    app = app_factory()
+    session = await room(app, tmp_path)
+    await send(app, session['id'], 'permission', 'stop-permission')
+    await until(lambda: len([row for row in session['approvals'] if row['status'] == 'pending']) == 2)
+    cards = copy.deepcopy(session['approvals'])
+    await app.dispatch('conversation.stop', {'sessionId': session['id']}, command_id='stop-wait')
+    await idle(app, session['id'])
+    for card in cards:
+        with pytest.raises(AppError, match='no longer pending'):
+            await app.dispatch('approval.respond', {'sessionId': session['id'], 'id': card['id'],
+                'decision': 'allow', 'optionId': 'allow-this', 'expectedRequestHash': card['requestHash']})
+    assert not app.external_conversations.approvals.pending
+    assert not any(row['role'] == 'assistant' for row in session['messages'])
+
+
+@pytest.mark.parametrize('change', ['stop', 'source', 'endpoint'])
+async def test_attention_wait_rechecks_current_stop_and_source_before_prompt(app_factory, tmp_path, monkeypatch, change):
+    from amplifier_web.acp_participant import ACPParticipant
+    arrived, release = asyncio.Event(), asyncio.Event()
+    peers = set()
+    attention = ACPParticipant.attention
+    async def held(self, context, occurred_at):
+        offer = await attention(self, context, occurred_at)
+        peers.add(self)
+        if len(peers) == 2:
+            arrived.set()
+        await release.wait()
+        return offer
+    monkeypatch.setattr(ACPParticipant, 'attention', held)
+    app = app_factory()
+    session = await room(app, tmp_path, 'attention')
+    await send(app, session['id'], 'before wait', 'freshness')
+    await arrived.wait()
+    if change == 'stop':
+        # Exercise the durable boundary before the waiting response resumes.
+        session['interruptionRevision'] += 1
+    elif change == 'source':
+        session['messages'][0]['text'] = 'changed source'
+    else:
+        for endpoint in app.server_config['externalAgents']:
+            endpoint['args'].append('changed endpoint')
+    release.set()
+    await idle(app, session['id'])
+    assert all(not any(row['kind'] == 'prompt' for row in operations(tmp_path / identity))
+               for identity in ('alpha', 'beta'))
+    assert len(session['messages']) == 1
 
 
 async def test_failed_awareness_stays_unknown_without_a_second_offer(app_factory, tmp_path, monkeypatch):
@@ -244,11 +363,12 @@ async def test_failed_awareness_stays_unknown_without_a_second_offer(app_factory
     (tmp_path / 'beta/peer/release').touch()
     await idle(app, session['id'])
     assert [row['source'] for row in work(tmp_path, 'beta')] == ['busy exchange']
-    assert not any(row['kind'] == 'decision' and row['source'] == 'Question for Beta: check 42'
+    assert not any(row['kind'] == 'prompt' and row['source'] == 'Question for Beta: check 42'
                    for row in operations(tmp_path / 'beta'))
 
 
-async def test_interrupted_participant_stream_and_unknown_receipt_remain_visible(app_factory, tmp_path):
+@pytest.mark.parametrize('text', ['unfinished public draft', '[[PA', '[[PASS]]', '  '])
+async def test_interrupted_participant_stream_and_unknown_receipt_remain_visible(app_factory, tmp_path, text):
     app = app_factory()
     session = await room(app, tmp_path)
     source = app._message(session, 'user', 'interrupted source', inputId='interrupted', inputOrigin='ui')
@@ -257,17 +377,141 @@ async def test_interrupted_participant_stream_and_unknown_receipt_remain_visible
     delivery['state'] = 'sending'
     binding = bindings(session)[0]
     binding.update(status='working', activeInputId='interrupted', activeSourceMessageId=source['id'])
-    session['externalStreams'] = {'alpha': {'id': 'partial', 'text': 'unfinished public draft',
-                                         'inputId': 'interrupted', 'sourceMessageId': source['id']}}
+    session['externalStreams'] = {'alpha': {'id': 'partial', 'text': text,
+                        'inputId': 'interrupted', 'sourceMessageId': source['id']}}
     app._publish_changes(sessions={session['id']})
     await app.close()
     restored = app_factory()._session(session['id'])
     assert bindings(restored)[0]['status'] == 'unknown'
     assert 'unknown' in bindings(restored)[0]['error']
     assert bindings(restored)[0]['lastReceipt']['state'] == 'unknown'
-    assert restored['messages'][-1]['partial'] and restored['messages'][-1]['agentId'] == 'alpha'
-    assert 'roomSequence' not in restored['messages'][-1]
+    replies = [row for row in restored['messages'] if row['role'] == 'assistant']
+    assert len(replies) == (1 if text == 'unfinished public draft' else 0)
+    if replies:
+        assert replies[0]['partial'] and replies[0]['agentId'] == 'alpha'
+        assert 'roomSequence' not in replies[0]
     assert not restored.get('externalStreams')
+
+
+async def test_mention_is_context_not_exclusive_routing_and_other_rooms_stay_private(app_factory, tmp_path):
+    app = app_factory()
+    first = await room(app, tmp_path)
+    second_result = await app.dispatch('session.create', {'workspace': app.default_workspace,
+        'externalAgentIds': ['alpha', 'beta']}, command_id='second-shared-room')
+    second = app._session(second_result['result']['sessionId'])
+    await app.dispatch('conversation.send', {'sessionId': first['id'], 'text': 'room one only',
+        'recipientAgentId': 'alpha'}, command_id='mentioned-public')
+    await send(app, second['id'], 'room two only', 'other-public')
+    await asyncio.gather(idle(app, first['id']), idle(app, second['id']))
+    assert all(len([row for row in session['messages'] if row['role'] == 'assistant']) == 2
+               for session in (first, second))
+    for identity in ('alpha', 'beta'):
+        assert next(row for row in bindings(first) if row['id'] == identity)['sessionId'] != next(
+            row for row in bindings(second) if row['id'] == identity)['sessionId']
+        prompts = [row for row in operations(tmp_path / identity) if row['kind'] == 'prompt']
+        for prompt in prompts:
+            context = prompt['context']
+            other_text = 'room two only' if context['conversation_id'] == first['id'] else 'room one only'
+            assert not any(other_text in row['text'] for row in context['messages'])
+        addressed = next(row['context'] for row in prompts if row['source'] == 'room one only')
+        assert addressed['messages'][0]['recipients'] == ['alpha']
+
+
+@pytest.mark.parametrize('origin', [None, 'https://source.example'])
+async def test_negotiated_public_instance_preserves_original_input_source_and_exact_resume(app_factory, tmp_path, origin):
+    app = app_factory()
+    session = await room(app, tmp_path, 'instance')
+    if origin:
+        app.server_config['public_origins'] = [origin]
+    sid = session['id']
+    await send(app, sid, 'original source', 'original-input')
+    await idle(app, sid)
+    saved = copy.deepcopy(bindings(session))
+    for binding in saved:
+        assert binding['publicAgentId'] == 'public:' + binding['id']
+        assert binding['instanceSource'] == {'sourceId': origin or 'urn:amplifier:conversation:' + sid, 'conversationId': sid}
+        assert binding['instanceInterruptionRevision'] == 7
+        inputs = [row['metadata']['input'] for row in operations(tmp_path / binding['id']) if row['kind'] == 'instance-input']
+        assert inputs[0]['id'] == 'original-input'
+        # Other participant's reply keeps its own canonical message identity,
+        # not the triggering human input or JSON-RPC transport request ID.
+        peer_message = next(row for row in session['messages'] if row.get('agentId') not in {None, binding['id']})
+        assert inputs[1]['id'] == peer_message['id']
+    await app.close()
+    restored = app_factory()
+    configure(restored, tmp_path, 'instance')
+    restored.server_config['public_origins'] = ['https://changed-source.example']
+    await send(restored, sid, 'later source', 'later-input')
+    await idle(restored, sid)
+    for previous, current in zip(saved, bindings(restored._session(sid))):
+        assert previous['sessionId'] == current['sessionId']
+        assert previous['publicAgentId'] == current['publicAgentId']
+        assert previous['instanceSource'] == current['instanceSource']
+        assert len([row for row in operations(tmp_path / current['id']) if row['kind'] == 'resume']) == 1
+
+
+async def test_malformed_instance_ack_retains_allocated_identity_without_prompt_or_replacement(app_factory, tmp_path):
+    app = app_factory()
+    session = await room(app, tmp_path, 'instance-malformed')
+    await send(app, session['id'], 'not sent', 'bad-instance')
+    await idle(app, session['id'])
+    identities = [row['sessionId'] for row in bindings(session)]
+    await send(app, session['id'], 'explicit second', 'bad-instance-next')
+    await idle(app, session['id'])
+    assert [row['sessionId'] for row in bindings(session)] == identities
+    for identity in ('alpha', 'beta'):
+        kinds = [row['kind'] for row in operations(tmp_path / identity)]
+        assert kinds == ['new', 'instance-session', 'resume', 'instance-session']
+
+
+@pytest.mark.parametrize('change', ['change-identity', 'hide-profile'])
+async def test_public_identity_change_or_missing_profile_never_resumes_or_replaces_binding(app_factory, tmp_path, change):
+    app = app_factory()
+    session = await room(app, tmp_path, 'instance')
+    await send(app, session['id'], 'first identity', 'first-identity')
+    await idle(app, session['id'])
+    saved = copy.deepcopy(bindings(session))
+    await app.close()
+    for identity in ('alpha', 'beta'):
+        (tmp_path / identity / 'peer' / change).touch()
+    restored = app_factory()
+    configure(restored, tmp_path, 'instance')
+    await send(restored, session['id'], 'must not rebind', 'identity-replaced')
+    await idle(restored, session['id'])
+    for previous, current in zip(saved, bindings(restored._session(session['id']))):
+        assert (previous['sessionId'], previous['publicAgentId']) == (current['sessionId'], current['publicAgentId'])
+        rows = operations(tmp_path / current['id'])
+        assert len([row for row in rows if row['kind'] == 'new']) == 1
+        assert not any(row['kind'] == 'resume' or row.get('source') == 'must not rebind' for row in rows)
+
+
+async def test_unicode_ordinary_public_reply_and_unsupported_media_stay_in_existing_boundary(app_factory, tmp_path):
+    from amplifier_web.errors import AppError
+    app = app_factory()
+    session = await room(app, tmp_path)
+    with pytest.raises(AppError, match='ordinary text'):
+        await app.dispatch('conversation.send', {'sessionId': session['id'], 'text': 'media',
+                                                'attachmentIds': ['not-a-media-grant']}, command_id='no-media')
+    assert not session['messages']
+    await send(app, session['id'], '漢🙂' * 100, 'unicode-ordinary')
+    await idle(app, session['id'])
+    assert [row['text'] for row in session['messages'] if row['role'] == 'assistant'] == [
+        identity + ' public answer: ' + '漢🙂' * 100 for identity in
+        [row['agentId'] for row in session['messages'] if row['role'] == 'assistant']]
+
+
+def test_silence_projection_reads_only_current_streams_and_preserves_real_text():
+    from amplifier_web.shared_conversation import public_output
+    class UnreadHistory:
+        def __iter__(self):
+            raise AssertionError('Projection must not visit history')
+    streams = {str(index): {'id': str(index), 'text': text} for index, text in enumerate(
+        ['', '   ', '[[', ' [[PA', '[[PASS]] ', '漢🙂 live reply', '[[PASS]] is quoted', '[ordinary'])}
+    session = {'externalAgent': {'participation': 'shared'}, 'externalStreams': streams, 'messages': UnreadHistory()}
+    result = public_output(session)
+    assert [row['text'] for row in result['externalStreams'].values()] == [
+        '漢🙂 live reply', '[[PASS]] is quoted', '[ordinary']
+    assert len(session['externalStreams']) == 8  # Canonical buffer remains untouched.
 
 
 async def test_bounded_attention_projection_and_expired_receipt_details(app_factory, tmp_path):
