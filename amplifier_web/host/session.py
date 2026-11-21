@@ -165,6 +165,10 @@ class SelectedProvider:
                 selected = selected.model_copy(update={"max_output_tokens": request.max_output_tokens})
                 return await method(selected, **kwargs)
             return compact
+        if name == "supports_native_compaction" and callable(method) and "model" in inspect.signature(method).parameters:
+            def supports(*, model=None):
+                return method(model=model or self.selection.get("model"))
+            return supports
         if name == "validate_compacted_context" and callable(method):
             def validate(message):
                 if "model" in inspect.signature(method).parameters:
@@ -1404,6 +1408,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         if not providers:
             raise RuntimeError("No provider is configured. Add config.providers to the shared Amplifier settings.yaml.")
         with startup_timing.phase('manager.provider.info'):
+            from ..next_message_impact import cache_traits
             choices = []
             for identity, provider in providers.items():
                 info = provider.get_info()
@@ -1411,7 +1416,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                     info = await info
                 defaults = getattr(info, "defaults", {}) or {}
                 choices.append({"id": identity, "provider": getattr(info, "id", identity),
-                    "display_name": getattr(info, "display_name", None),
+                    "display_name": getattr(info, "display_name", None), "promptCacheTraits": cache_traits(info),
                     **({"available": False, "failure": provider.failure} if isinstance(provider, UnavailableProvider) else {}),
                     "model": defaults.get("model"), "effort": defaults.get("reasoning_effort") or next((row.get("config",{}).get("reasoning_effort") for row in prepared.mount_plan.get("providers",[]) if (row.get("instance_id") or row.get("id") or row["module"].removeprefix("provider-"))==identity),None), "sharedCatalogKey":catalog_keys.get(identity), "models": []})
         # Keep public connection choices available even when a saved ID prevents

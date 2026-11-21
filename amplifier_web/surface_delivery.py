@@ -548,6 +548,14 @@ class SurfaceProvider:
                 self._overflow_feedback.forget(request)
                 from . import provider_capture as capture
                 capture.observe(capture.invalidate, self, request)
+                metadata = getattr(request, 'metadata', None) or {}
+                if (metadata.get('purpose') == 'context-compaction'
+                        and isinstance(metadata.get('native_compaction_request_context'), bool)):
+                    # compact_context receives this request directly. Its fit
+                    # must not observe or attach foreground surface context.
+                    if require_measurement and _accepts_exact_count(method):
+                        kwargs['require_measurement'] = True
+                    return await self._budget(method, request, request_options=request_options, **kwargs)
                 original_request = request
                 request = await self._prepare(request, explicit_budget=True,
                     request_options={**(request_options or {}),

@@ -101,20 +101,34 @@ from successful requests that discarded incompatible reasoning.
 
 ## A deliberate model change in an existing conversation
 
-Saving a model choice does no provider work. On a genuinely new ordinary
-foreground input, the host may admit bounded context preparation for the saved
-target connection/model/options. Mounted selection acknowledgement is not proof
-that context fits or that the turn completed. Startup, status reads, retries,
-steering and automatic job/scheduled continuations do not create this admission.
+The picker records only the final saved intent. Browsing a conversation's models
+uses the local catalog. Explicit Refresh can query that connection's model list.
+Neither browsing nor changing a choice admits a turn or prepares history.
+For large prior input, the client can describe a known cache or history cost
+before a change takes effect. The hint uses completed foreground usage, cached
+or mounted provider capabilities and, when available, a verified native-only
+history size. Saving requires no extra confirmation. Hints grant no authority.
 
-A derived checkpoint is reusable only under its exact identity and validated
-canonical prefix/configuration. A structured identity-only transition
-classification is not an import authorization: corrupt digests, changed source
-or configuration, and incompatible paid progress remain rejected. Historical
-source-provider envelope attestation may be unavailable; structural validation
-does not claim that attestation. Target preparation never sends the old model's
-opaque state to the new model, including for counting, and never falls back to
-the old model or a larger cost/context tier.
+On a genuinely admitted foreground turn the same preparation path applies to
+an already active or newly started worker. Opening the chat, steering and
+automatic job or scheduled continuation do not create a fresh recovery grant.
+Identity includes the mounted connection, model and applicable options. The
+target provider can locally qualify a complete native checkpoint for reuse.
+The standalone OpenAI Responses window stays intact across qualified Astra
+and Sol switches; the direct Anthropic adapter preserves the signed block
+across qualified Claude switches. The source boundary, scope and target fit
+must validate before installation. Reuse consumes zero additional compactions.
+
+When native reuse is unavailable, Managed Context uses original messages that
+fit, or a validated readable checkpoint and its recent suffix that fit. If
+summarization is needed, it budgets for the target's instructions, tools, output
+and intact recent exchanges. The resulting ordinary history summary identifies
+older context; original messages remain available. An opaque vendor carrier
+never substitutes for readable history on a different provider. A legacy
+adapter can use the shared portable preparation path without implementing
+a native method. The existing call allowance bounds work when a very large
+prefix needs more than one request. Target preparation never falls back to a
+different model or a larger cost tier.
 
 The existing recovery journal binds the source checkpoint, canonical prefix,
 selection revision, target options, execution input and Stop/configuration

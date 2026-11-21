@@ -202,7 +202,7 @@ class SyntheticNativeProvider:
     def get_info(self):
         from amplifier_core import ProviderInfo
         return ProviderInfo(id=self.name, display_name='Fixture',
-            defaults={'model': self.default_model})
+            defaults={'model': self.default_model, 'max_output_tokens': 512})
 
     def supports_native_compaction(self):
         return True
@@ -443,7 +443,7 @@ class RecoveryWire:
     """Real SDK HTTP boundary; deterministic, content-dependent synthetic service."""
 
     def __init__(self):
-        self.counts, self.compactions, self.completions = [], [], []
+        self.counts, self.compactions, self.completions, self.summaries = [], [], [], []
         self.events, self.views, self.preparations = [], [], []
         self.effects = self.unknown_invocations = 0
         self.stop_revision = self.epoch = 0
@@ -489,21 +489,33 @@ class RecoveryWire:
             })
         assert request.url.path.endswith('/responses'), request.url
         assert not body.get('stream')
-        self.completions.append(copy.deepcopy(body))
-        fresh = 'CHECK-FRESH-READ-ONLY' in json.dumps(body['input'])
+        input_text = json.dumps(body['input'])
+        summary_request = (not body.get('tools') and
+                           'Prepare a factual continuation note' in str(body.get('instructions')))
+        (self.summaries if summary_request else self.completions).append(copy.deepcopy(body))
+        fresh = 'CHECK-FRESH-READ-ONLY' in input_text
         completed = any(item.get('type') == 'function_call_output'
                         and RECOVERY_DONE in str(item.get('output'))
                         for item in body['input'])
-        if not completed and not fresh:
-            assert 'SEED-EFFECT' in json.dumps(body['input'])
+        # A completed receipt can arrive as a tool result or inside the portable note.
+        completed = completed or any(
+            'Continuation note (reference data' in str(item.get('content'))
+            and RECOVERY_DONE in str(item.get('content')) for item in body['input'])
+        if not summary_request and not completed and not fresh:
+            assert 'SEED-EFFECT' in input_text
             output = [{'type': 'function_call', 'id': 'fc-effect-once',
                        'call_id': 'effect-once', 'name': 'save_once',
                        'arguments': '{}', 'status': 'completed'}]
         else:
-            text = ('Fresh read-only continuation.' if fresh else
-                    'Finished adjacent correction: ship Tuesday; report-v2; UNKNOWN-OP-31 remains unknown.'
-                    if 'ship Tuesday' in json.dumps(body['input']) else
-                    'Usable continuation: report-v2; COMPLETED-EFFECT-17 retained; UNKNOWN-OP-31 remains unknown.')
+            if summary_request:
+                markers = ['ORBIT', RECOVERY_DONE, 'report-v2', 'UNKNOWN-OP-31', 'ship Tuesday']
+                text = 'Recorded history: ' + ', '.join(item for item in markers if item in input_text)
+            elif fresh:
+                text = 'Fresh read-only continuation.'
+            elif 'ship Tuesday' in input_text:
+                text = 'Finished adjacent correction: ship Tuesday; report-v2; UNKNOWN-OP-31 remains unknown.'
+            else:
+                text = 'Usable continuation: report-v2; COMPLETED-EFFECT-17 retained; UNKNOWN-OP-31 remains unknown.'
             output = [{'type': 'message', 'id': 'msg-' + digest(body),
                        'role': 'assistant', 'status': 'completed',
                        'content': [{'type': 'output_text', 'text': text, 'annotations': []}]}]
@@ -707,10 +719,12 @@ async def test_ordinary_sdk_model_transition_counts_compacts_and_dispatches_sele
             assert case.adapter.recovery_status()['state'] == 'committed'
             assert case.adapter.recovery_status()['outcome'] == 'checkpoint-installed'
             assert all(body['model'] == target_model for body, _ in wire.counts[before[0]:])
-            assert all(body['model'] == target_model for body, _, _ in wire.compactions[before[1]:])
             assert all(body['model'] == target_model for body in wire.completions[before[2]:])
-            assert len(wire.compactions) > before[1] and len(wire.completions) == before[2] + 1
+            assert len(wire.compactions) == before[1]  # Unqualified model pair.
+            assert wire.summaries and all(body['model'] == target_model for body in wire.summaries)
+            assert len(wire.completions) == before[2] + 1
             body = wire.completions[-1]
+            assert all(fact in json.dumps(body['input']) for fact in ('ORBIT', RECOVERY_DONE, 'report-v2', 'UNKNOWN-OP-31'))
             assert wire.counts[-1][0] == {k: v for k, v in body.items() if k in RECOVERY_PROJECTION}
             assert (await case.context.get_messages())[:len(canonical)] == canonical
             assert wire.effects == 1 and wire.unknown_invocations == 0
@@ -749,8 +763,10 @@ async def test_frozen_writer_composed_transition_keeps_source_proof_and_install_
     fixture = packet['fixtures']['portable-true']
     record, config = copy.deepcopy(fixture['checkpoint']), copy.deepcopy(fixture['config'])
     source = copy.deepcopy(packet['messages'])
+    # Our wire count uses escaped JSON bytes. Multibyte evidence exercises the
+    # frozen writer's 1,200-character fragment cap within the normal 16 calls.
     source.extend([{'role': 'user', 'content': f'Accepted evidence {i}'}
-                   if i % 2 == 0 else {'role': 'assistant', 'content': RECOVERY_FILLER}
+                   if i % 2 == 0 else {'role': 'assistant', 'content': '🌍' * 1100}
                    for i in range(8)])
     source.extend([row for i in range(4) for row in (
         {'role': 'user', 'content': f'Latest correction {i}: keep canonical evidence.'},
@@ -834,7 +850,7 @@ async def test_frozen_writer_composed_transition_keeps_source_proof_and_install_
             assert pending['sourceCheckpointDigest'] == digest(record)
             assert pending['sourceCheckpointSha256'] == record['sha256']
             candidate_bytes = path.read_bytes()
-            before = len(wire.compactions)
+            before = len(wire.summaries)
             if other_recovery:
                 # A valid older journal may contain another unresolved owner.
                 # Candidate readback must not rebind past it on cold load.
@@ -857,19 +873,19 @@ async def test_frozen_writer_composed_transition_keeps_source_proof_and_install_
                 assert case.adapter.recovery_path.read_bytes() == journal_bytes
                 assert path.read_bytes() == candidate_bytes
                 assert len(installs) == len(writes) == 1
-                assert len(wire.compactions) == before
+                assert len(wire.summaries) == before
                 return
             with pytest.raises(RuntimeError, match='recovery_unreconciled'):
                 await prepare()
             origin.update(inputId='new-target-input', generationId='new-frozen-generation')
             coordinator.register_capability('context.recovery.recover', recover)
             await prepare()
-            assert path.read_bytes() == candidate_bytes and len(wire.compactions) == before
+            assert path.read_bytes() == candidate_bytes and len(wire.summaries) == before
         else:
             result = await prepare()
             assert result['outcome'] == 'transitioned'
         assert case.adapter.recovery_status()['state'] == 'committed'
-        assert len(installs) == len(writes) == 1 and wire.compactions
+        assert len(installs) == len(writes) == 1 and wire.summaries and not wire.compactions
         assert store.load('ordinary-recovery')[0] == source
         assert await case.context.get_messages() == source
         assert wire.effects == wire.unknown_invocations == 0
@@ -1066,8 +1082,8 @@ async def test_real_worker_controls_live_sdk_model_transition_admission(tmp_path
             await send('target', 'New authorized target input; never replay effects.', **options)
             assert case.adapter.recovery_status()['state'] == 'committed'
             assert all(body['model'] == target_model for body, _ in wire.counts[before[0]:])
-            assert all(body['model'] == target_model for body, _, _ in wire.compactions[before[1]:])
-            assert len(wire.compactions) > before[1]
+            assert len(wire.compactions) == before[1]
+            assert wire.summaries and all(body['model'] == target_model for body in wire.summaries)
             assert len(wire.completions) == before[2] + 1
             assert wire.completions[-1]['model'] == target_model
             assert wire.completions[-1]['reasoning']['effort'] == selection['effort']
@@ -1099,7 +1115,7 @@ async def sdk_transition_process_phase(directory, phase):
             body = json.loads(request.content)
             if (phase == 'prepare' and request.url.path.endswith('/input_tokens')
                     and body.get('model') == target_model
-                    and any(row[0]['model'] == target_model for row in self.compactions)):
+                    and any(row['model'] == target_model for row in self.summaries)):
                 return httpx.Response(400, json={'error': {'message': 'synthetic known final-count failure',
                     'type': 'invalid_request_error', 'code': 'invalid_request'}})
             return await super().transport(request)
@@ -1143,15 +1159,14 @@ async def sdk_transition_process_phase(directory, phase):
         else:
             assert 'Usable continuation' in await case.session.execute('New authorized input after actual interpreter restart.')
             assert case.adapter.recovery_status()['state'] == 'committed'
-            # New input advances eligible coverage. Only new pieces may be
-            # bought; the old acknowledged native prefix stays the seed.
-            assert case.adapter.recovery_status()['logicalCalls'] == before_calls + len(wire.compactions)
-            assert all(any(item.get('type') == 'compaction' for item in body['input'])
-                       for body, _, _ in wire.compactions)
+            # The earlier paid prefix is authoritative across a real shutdown.
+            assert case.adapter.recovery_status()['logicalCalls'] == before_calls + len(wire.summaries)
+            assert all(row['model'] == target_model for row in wire.summaries)
+            assert not wire.compactions
             assert len(wire.completions) == 1 and wire.effects == 1 and wire.unknown_invocations == 0
         return {'phase': phase, 'state': case.adapter.recovery_status()['state'],
                 'pid': os.getpid(),
-                'compactions': len(wire.compactions), 'effects': wire.effects,
+                'portableCalls': len(wire.summaries), 'effects': wire.effects,
                 'logicalCalls': case.adapter.recovery_status()['logicalCalls'],
                 'requests': [call['report']['requestSha256'] for call in case.adapter._recovery_record()['calls']]}
 
@@ -1170,8 +1185,8 @@ async def test_sdk_transition_confirmed_progress_survives_two_exited_interpreter
         assert process.returncode == 0, (stdout.decode(), stderr.decode())
         reports.append(json.loads(stdout.decode().splitlines()[-1]))
     assert [row['state'] for row in reports] == ['refused', 'committed']
-    assert reports[0]['compactions'] > 0
-    assert reports[1]['logicalCalls'] == reports[0]['logicalCalls'] + reports[1]['compactions']
+    assert reports[0]['portableCalls'] > 0
+    assert reports[1]['logicalCalls'] == reports[0]['logicalCalls'] + reports[1]['portableCalls']
     assert reports[1]['requests'][:reports[0]['logicalCalls']] == reports[0]['requests']
     assert len(set(reports[1]['requests'])) == len(reports[1]['requests'])
     assert reports[0]['pid'] != reports[1]['pid']
@@ -2346,12 +2361,12 @@ async def test_transition_final_commit_failure_reconciles_already_active_exact_c
     assert case.coordinator.context.summary_identity['model'] == 'target-model'
     candidate = case.adapter.path.read_bytes()
     assert case.adapter.recovery_status()['state'] == 'unknown'
-    paid = len(case.raw.compactions)
+    paid = len(case.raw.compactions) + len(case.raw.sent)
     case.origin.update(inputId='fresh-final-commit-reconciliation', generationId='new-generation')
     assert (await case.prepare())['outcome'] == 'transitioned'
     assert case.adapter.recovery_status()['state'] == 'committed'
     assert case.adapter.path.read_bytes() == candidate
-    assert len(writes) == 1 and len(case.raw.compactions) == paid
+    assert len(writes) == 1 and len(case.raw.compactions) + len(case.raw.sent) == paid
 
 
 async def test_transition_completed_progress_does_not_reset_total_call_cap(tmp_path):
@@ -2730,9 +2745,9 @@ async def test_checkpointless_unknown_target_allows_different_empty_canonical_id
     case.coordinator.register_capability('web.context_transition.originals', True)
     case.adapter = ContextContinuity(case.coordinator, 'session', directory, AsyncMock(),
                                     writer_guard=case.gate.check_current)
-    async def lost(request):
+    async def lost(request, **kwargs):
         raise RuntimeError('unknown checkpointless target')
-    case.raw.compact_context = lost
+    case.raw.complete = lost
     with pytest.raises(RuntimeError, match='unknown checkpointless'):
         await case.prepare()
     journal = case.adapter.recovery_path.read_bytes()
@@ -2969,9 +2984,9 @@ async def test_empty_originals_ordinary_failure_keeps_cooldown_without_rearming(
     selected = case.selected
     prepare = case.prepare
     if source == 'canonical-unknown':
-        async def lost(request):
+        async def lost(request, **kwargs):
             raise RuntimeError('original target UNKNOWN')
-        case.raw.compact_context = lost
+        case.raw.complete = lost
         with pytest.raises(RuntimeError, match='original target UNKNOWN'):
             await case.prepare()
         selected = SelectedProvider(case.raw, {'instance': 'fixture', 'model': 'other-canonical-model'})
