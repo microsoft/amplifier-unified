@@ -2125,7 +2125,7 @@ def test_permissions_history_selection_comes_from_actual_source(permissions_chec
     assert set(node) == set(module.NODE_TESTS)
     assert {name: len(names) for name, names in node.items()} == {
         'tests/approval-card.test.mjs': 27, 'tests/settings-action-queue.test.mjs': 9,
-        'tests/pending-view.test.mjs': 9, 'tests/conversation-navigation.test.mjs': 16,
+        'tests/pending-view.test.mjs': 9, 'tests/conversation-navigation.test.mjs': 18,
         'tests/fixture-lifecycle.test.mjs': 5}
     approval = node['tests/approval-card.test.mjs']
     assert {name.removeprefix('passive Stop lookup stays fenced on ') for name in approval
@@ -2142,6 +2142,10 @@ def test_permissions_history_selection_comes_from_actual_source(permissions_chec
                in node['tests/conversation-navigation.test.mjs'] for value in ('a', 'b'))
     assert all('delayed ' + value + ' cannot overtake later browsing, while later drawer intent still wins'
                in node['tests/conversation-navigation.test.mjs'] for value in ('navExpanded', 'navPinned'))
+    assert {
+        'composer focus is one-use and requires exact explicit selection commit',
+        'newer selection, rejection, user interaction and unsafe surfaces revoke pending focus',
+    } <= set(node['tests/conversation-navigation.test.mjs'])
     assert 'unexpected fixture exit is never reported as successful cleanup' in node['tests/fixture-lifecycle.test.mjs']
 
 
