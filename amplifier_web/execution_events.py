@@ -265,11 +265,17 @@ class ExecutionEvents:
         # Synchronous passive validation after the existing awaits. No guard,
         # quota, Work join, refit or provider-entry authority is changed here.
         observer = self.context_inspectors.get(sid)
+        if sid == self.root_id and not purpose:
+            row['turnModelSettings'] = None  # Mark an actual foreground call even if the mount is ambiguous.
         if getattr(observer, 'coordinator', None) is not None and sid == self.root_id and not purpose:
             from .next_message_impact import capture_basis
             basis = observe(capture_basis, observer.coordinator, provider, info, row['model'])
             if basis:
                 row['promptCostBasis'] = basis
+                from .turn_model_settings import capture as capture_turn_settings
+                settings = observe(capture_turn_settings, observer.coordinator, basis['instance'], row['model'], admission_input)
+                if settings:
+                    row['turnModelSettings'] = settings
         captured_budget = (observe(consume, capture, self, row, provider, request, request_options)
                            if observer is not None else None)
         diagnostic = observe(public_trace, trace, capture, captured_budget)

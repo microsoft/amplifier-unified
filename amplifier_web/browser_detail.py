@@ -10,7 +10,7 @@ NATIVE_MESSAGE_LIMIT=100
 NODE_LIMIT=100
 TEXT_LIMIT=4096
 SUMMARY_LIMIT=512
-PRIVATE_SESSION_FIELDS = frozenset({'_externalAgentSource', '_externalRoom', '_lastPromptUsage'})
+PRIVATE_SESSION_FIELDS = frozenset({'_externalAgentSource', '_externalRoom', '_lastPromptUsage', '_previousTurnBinding'})
 
 
 def digest(text):return sha256(text.encode()).hexdigest()

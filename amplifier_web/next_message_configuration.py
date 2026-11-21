@@ -8,8 +8,12 @@ def definitions(schema, string):
     from .new_chat import SELECTION
     value = schema({'sessionId': string(200), 'expectedRevision': {'type': 'integer', 'minimum': 0},
         'bundle': {**string(2000), 'minLength': 1}, 'selection': SELECTION,
-        'resetModel': {'type': 'boolean'}}, ['sessionId', 'expectedRevision'])
-    value['anyOf'] = [{'required': ['bundle']}, {'required': ['selection']}]
+        'resetModel': {'type': 'boolean'}, 'restorePreviousInputId': {**string(200), 'minLength': 1},
+        'restorePreviousGenerationId': {**string(200), 'minLength': 1}}, ['sessionId', 'expectedRevision'])
+    value['oneOf'] = [
+        {'required': ['restorePreviousInputId','restorePreviousGenerationId'], 'not': {'anyOf': [{'required': [k]} for k in ('bundle','selection','resetModel')]}},
+        {'not': {'anyOf': [{'required': [key]} for key in ('restorePreviousInputId','restorePreviousGenerationId')]}, 'anyOf': [{'required': ['bundle']}, {'required': ['selection']}]},
+    ]
     return {
         'conversation.configure': ('Save an explicitly targeted conversation’s Next message bundle/model choices without preparing a worker. '
             'Current authenticated Full root operators may target other registered own chats. '
@@ -110,6 +114,9 @@ def save(service, args, authority=None):
         raise AppError(session['historyReadOnlyReason'], 409)
     if session.get('sessionKind', 'root') != 'root':
         raise AppError('Worker and internal sessions retain their original configuration.', 409)
+    if 'restorePreviousInputId' in args:
+        from .turn_model_settings import restore
+        return restore(service, session, args['restorePreviousInputId'], args['restorePreviousGenerationId'], authority)
     selected = selection(args['selection']) if 'selection' in args else None
     if 'selection' in args and not selected:
         raise AppError('Choose a provider and model.', 400)

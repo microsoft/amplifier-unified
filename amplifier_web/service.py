@@ -4994,6 +4994,8 @@ class AppService:
     def _ingest_runtime_execution(self, session, payload):
         with self.performance_diagnostics.measure('execution.ingest', synchronous=True, session_id=session['id']):
             ingest_execution(session,payload)
+            from .turn_model_settings import record as record_model_settings
+            record_model_settings(session, payload)
         if (payload.get('kind') == 'llm' and payload.get('phase') == 'completed' and not payload.get('purpose')
                 and payload.get('lifecycle') != 'background'
                 and payload.get('sessionId') == payload.get('rootSessionId') == session['id']):
