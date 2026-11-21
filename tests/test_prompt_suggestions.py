@@ -110,12 +110,257 @@ class Requests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(other['suggestion'])
         self.assertNotIn('Please carry', repr(list(self.app.db.execute('SELECT * FROM suggestion_requests'))))
 
+    async def test_ready_retains_source_after_clock_expiry_and_reuses_new_audience_without_provider(self):
+        async def reported(*args):
+            self.calls.append('completion')
+            return {'status': 'ready', 'suggestion': 'Please carry out the next step.',
+                    'usage': {'input_tokens': 20, 'output_tokens': 8}, 'cost': None}
+        self.host.complete = reported
+        original = await self.terminal_request('original')
+        claims = list(self.app.db.execute('SELECT * FROM suggestion_requests'))
+        record = next(iter(self.host.records.values()))
+        record['created'] -= 91
+        self.host._expire(record)  # Even a previously scheduled callback cannot erase READY.
+        self.assertEqual((await self.status('original'))['status'], 'ready')
+        self.assertIsNone(original['expiresAt'])
+        self.assertEqual(original['retention'], 'source')
+        self.assertFalse(original['reused'])
+        self.assertTrue(original['generationId'])
+        self.app.clients.records['one']['selectedSessionId'] = 'elsewhere'
+        self.app.clients.records['one']['view'] = {'draft': 'Private unsent draft'}
+        self.app.clients.current.set('two')
+        self.assertEqual((await self.status('original'))['status'], 'expired')
+        self.app.clients.records.pop('one')  # Reload need not keep the old tab record alive.
+        reused = await self.terminal_request('rebound')
+        self.assertEqual(reused['status'], 'ready')
+        self.assertEqual(reused['suggestion'], original['suggestion'])
+        self.assertEqual(reused['generationId'], original['generationId'])
+        self.assertEqual(reused['usage'], original['usage'])
+        self.assertIsNone(reused['cost'])
+        self.assertIsNone(reused['expiresAt'])
+        self.assertEqual(reused['retention'], 'source')
+        self.assertTrue(reused['reused'])
+        self.assertEqual(self.calls, ['completion'])
+        self.assertEqual(self.app.db.execute('SELECT * FROM suggestion_requests WHERE identity=?',
+                                            (claims[0][0],)).fetchone(), claims[0])
+        self.assertNotIn(original['suggestion'], repr(list(self.app.db.execute('SELECT * FROM suggestion_requests'))))
+
+    async def test_explicit_regeneration_is_once_per_new_intent_and_never_reopens_automatic_source(self):
+        first = await self.terminal_request('manual-first', regenerate=True)
+        self.assertEqual(first['status'], 'ready')
+        self.assertFalse(first['reused'])
+        repeated = await self.terminal_request('manual-first', regenerate=True)
+        self.assertEqual(repeated['generationId'], first['generationId'])
+        self.assertEqual(len(self.calls), 1)
+        with self.assertRaisesRegex(Exception, 'different inputs'):
+            await self.request('manual-first', regenerate=False)
+        for invalid in ('true', 1, None):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(Exception, 'boolean'):
+                await self.request('bad', regenerate=invalid)
+        cached = await self.terminal_request('automatic-after-manual')
+        self.assertTrue(cached['reused'])
+        self.assertEqual(cached['generationId'], first['generationId'])
+        second = await self.terminal_request('manual-second', regenerate=True)
+        self.assertFalse(second['reused'])
+        self.assertNotEqual(second['generationId'], first['generationId'])
+        self.assertEqual(len(self.calls), 2)
+        claims = list(self.app.db.execute('SELECT * FROM suggestion_requests'))
+        self.app.clients.current.set('two')
+        # Same gesture ID in another audience must not authorize another paid call.
+        replay = await self.terminal_request('manual-second', regenerate=True)
+        self.assertEqual(replay['status'], 'expired')
+        self.assertEqual(len(self.calls), 2)
+        await self.host.close()
+        self.host = PromptSuggestions(self.app)
+        self.host.settings = lambda: (self.config, {'id': 'explicit-account'}, self.revision)
+        self.host.complete = AsyncMock(side_effect=AssertionError('lost memory is not a retry grant'))
+        absent = await self.terminal_request('automatic-lost-memory')
+        self.assertEqual(absent['status'], 'duplicate_source')
+        self.assertEqual(absent['reason'], 'prior_attempt_unavailable')
+        self.assertTrue(all(self.app.db.execute('SELECT * FROM suggestion_requests WHERE identity=?',
+                                               (row[0],)).fetchone() == row for row in claims))
+        replay = await self.terminal_request('manual-second', regenerate=True)
+        self.assertEqual(replay['status'], 'expired')
+        self.host.complete.assert_not_called()
+        self.host.complete = AsyncMock(return_value={
+            'status': 'ready', 'suggestion': 'A deliberately new attempt.', 'usage': None, 'cost': None})
+        recovered = await self.terminal_request('deliberate-recovery', regenerate=True)
+        self.assertEqual(recovered['status'], 'ready')
+        self.assertFalse(recovered['reused'])
+        self.assertTrue((await self.terminal_request('automatic-after-recovery'))['reused'])
+        self.host.complete.assert_awaited_once()
+        self.assertTrue(all(self.app.db.execute('SELECT * FROM suggestion_requests WHERE identity=?',
+                                               (row[0],)).fetchone() == row for row in claims))
+
+    async def test_explicit_intent_uuid_cannot_repay_after_audience_source_config_or_owner_change(self):
+        await self.terminal_request('one-gesture', regenerate=True)
+        claims = list(self.app.db.execute('SELECT * FROM suggestion_requests'))
+        self.app.clients.current.set('two')
+        self.app.session['messages'][-1]['text'] = 'Changed assistant text, identical message ID'
+        self.revision = 'changed-settings'
+        result = await self.request('one-gesture', regenerate=True)
+        self.assertEqual(result['status'], 'expired')
+        self.assertEqual(result['reason'], 'prior_attempt_unavailable')
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual((await self.request('one-gesture', regenerate=False))['status'], 'expired')
+        await self.host.close()
+        self.host = PromptSuggestions(self.app)
+        self.host.settings = lambda: (self.config, {'id': 'explicit-account'}, self.revision)
+        self.host.complete = AsyncMock(side_effect=AssertionError('old explicit intent repaid'))
+        self.app.session['messages'][-1]['text'] = 'Yet another public input after request-owner loss'
+        result = await self.request('one-gesture', regenerate=True)
+        self.assertEqual(result['status'], 'expired')
+        self.host.complete.assert_not_called()
+        self.assertEqual(list(self.app.db.execute('SELECT * FROM suggestion_requests')), claims)
+
+    async def test_ready_lru_is_bounded_status_keeps_exact_record_and_eviction_never_replays(self):
+        with patch('amplifier_web.prompt_suggestions.MAX_RETAINED', 3):
+            for i in range(3):
+                self.app.session['messages'][-1]['text'] = 'Completed ' + str(i)
+                await self.terminal_request('source-' + str(i))
+            # Repeated exact status at capacity must not evict an unrelated
+            # candidate, nor the exact oldest candidate being accessed.
+            await self.status('source-0')  # Changed public source is correctly stale.
+            self.assertEqual(len(self.host.records), 3)
+            self.app.session['messages'][-1]['text'] = 'Completed 2'
+            await self.status('source-2')
+            await self.terminal_request('alias')
+            self.assertEqual(len(self.host.records), 3)
+            self.assertTrue((await self.status('alias'))['reused'])
+            # Evict both aliases by introducing unrelated complete inputs.
+            for i in range(3, 6):
+                self.app.session['messages'][-1]['text'] = 'Completed ' + str(i)
+                await self.terminal_request('source-' + str(i))
+            self.assertEqual(len(self.host.records), 3)
+            self.app.session['messages'][-1]['text'] = 'Completed 2'
+            absent = await self.terminal_request('evicted-new-id')
+            self.assertEqual(absent['status'], 'duplicate_source')
+            self.assertEqual(absent['reason'], 'prior_attempt_unavailable')
+            self.assertEqual(len(self.calls), 6)
+
+    async def test_ready_lru_touch_and_cache_capture_revocation_preserve_authority(self):
+        from amplifier_web.prompt_suggestions import capture as original_capture
+        with patch('amplifier_web.prompt_suggestions.MAX_RETAINED', 3):
+            await self.terminal_request('original')
+            await self.terminal_request('alias-one')
+            await self.terminal_request('alias-two')
+            self.assertEqual(len(self.host.records), 3)
+            await self.status('original')
+            await self.terminal_request('alias-three')
+            self.assertEqual(len(self.host.records), 3)
+            ids = {row['requestId'] for row in self.host.records.values()}
+            self.assertIn('original', ids)
+            self.assertNotIn('alias-one', ids)
+        async def revoke(*args):
+            rows, key = await original_capture(*args)
+            self.app.session['interruptionRevision'] = 1
+            return rows, key
+        self.host.complete = AsyncMock(side_effect=AssertionError('cache must not mask revoked authority'))
+        with patch('amplifier_web.prompt_suggestions.capture', side_effect=revoke):
+            denied = await self.terminal_request('changed-during-capture')
+        self.assertEqual(denied['status'], 'stale')
+        self.assertIsNone(denied['suggestion'])
+        self.assertFalse(denied['reused'])
+        self.host.complete.assert_not_called()
+
+    async def test_ready_reuse_requires_original_epoch_source_stop_config_and_authenticated_principal(self):
+        original = await self.terminal_request('original')
+        self.app.clients.current.set('two')
+        original_complete = self.host.complete
+        self.host.complete = AsyncMock(side_effect=AssertionError('same paid input cannot infer automatically'))
+        # Same canonical text/config with a different Stop/owner/epoch witness
+        # cannot rebind an old READY even though its SQL input digest matches.
+        for index, change in enumerate((
+                patch.dict(self.app.session, interruptionRevision=1),
+                patch.dict(self.app.session, runtimeSessionId='other-runtime'),
+                patch.object(self.host, '_epoch', return_value='changed-signout-epoch'))):
+            with self.subTest(index=index), change:
+                denied = await self.terminal_request('changed-witness-' + str(index))
+                self.assertEqual(denied['status'], 'duplicate_source')
+                self.assertIsNone(denied['suggestion'])
+                self.assertFalse(denied['reused'])
+        self.host.complete.assert_not_called()
+        with patch.dict(self.app.session, archived=True):
+            self.assertEqual((await self.request('archived'))['status'], 'stale')
+        with patch.dict(self.app.session, _deleting=True):
+            with self.assertRaisesRegex(ValueError, 'missing'):
+                await self.request('deleting')
+        self.app.session['messages'][-1]['text'] = 'Actually edited same ID'
+        self.host.complete = original_complete
+        changed = await self.terminal_request('edited')
+        self.assertFalse(changed['reused'])
+        self.assertNotEqual(changed['generationId'], original['generationId'])
+        self.revision = 'new-settings'
+        changed = await self.terminal_request('settings')
+        self.assertFalse(changed['reused'])
+        token = BROWSER.set({'principal': 'foreign-cookie', 'valid': lambda: True})
+        try:
+            self.assertIsNone((await self.status('original'))['suggestion'])
+            foreign = await self.terminal_request('foreign-own')
+            self.assertFalse(foreign['reused'])
+            self.assertNotEqual(foreign['generationId'], changed['generationId'])
+        finally:
+            BROWSER.reset(token)
+        token = BROWSER.set({'principal': 'cookie-one', 'valid': lambda: False})
+        try:
+            with self.assertRaisesRegex(Exception, 'browser displaying'):
+                await self.request('revoked', regenerate=True)
+        finally:
+            BROWSER.reset(token)
+        self.assertEqual(len(self.calls), 4)
+
+    async def test_known_terminal_disposition_is_private_and_cancelled_or_failed_never_auto_retries(self):
+        for index, state in enumerate(('empty', 'failed', 'timeout', 'cancelled')):
+            self.app.session['messages'][-1]['text'] = 'Terminal input ' + str(index)
+            self.host.complete = AsyncMock(return_value={
+                'status': state, 'suggestion': None, 'usage': None, 'cost': None})
+            await self.terminal_request(state)
+            repeated = await self.terminal_request('after-' + state)
+            self.assertEqual(repeated['status'], 'duplicate_source')
+            self.assertEqual(repeated['reason'], 'prior_attempt_' + state)
+            self.host.complete.assert_awaited_once()
+            explicit = await self.terminal_request('explicit-' + state, regenerate=True)
+            self.assertEqual(explicit['status'], state)
+            self.assertEqual(self.host.complete.await_count, 2)
+        self.assertNotIn('prior_attempt_', repr(list(self.app.db.execute('SELECT * FROM suggestion_requests'))))
+
+    async def test_pending_cancel_blocks_other_client_regenerate_until_physical_settlement(self):
+        entered, settling, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        async def respond(*args):
+            self.calls.append('entered')
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                settling.set()
+                await release.wait()
+                raise
+        self.host.complete = respond
+        await self.request('pending')
+        await entered.wait()
+        claims = list(self.app.db.execute('SELECT * FROM suggestion_requests'))
+        await self.host.dispatch('session.suggestion.cancel', {'sessionId': 'chat', 'requestId': 'pending'}, 'ui')
+        await settling.wait()
+        self.app.clients.current.set('two')
+        try:
+            self.assertEqual((await self.request('too-early', regenerate=True))['status'], 'busy')
+        finally:
+            release.set()
+            await self.settle()
+        absent = await self.terminal_request('auto-return')
+        self.assertEqual(absent['status'], 'duplicate_source')
+        self.assertEqual(absent['reason'], 'prior_attempt_cancelled')
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.app.db.execute('SELECT * FROM suggestion_requests WHERE identity=?',
+                                            (claims[0][0],)).fetchone(), claims[0])
+
+
     async def test_same_request_and_new_request_same_source_do_not_replay(self):
         await self.request()
         await self.request()
         await self.settle()
         await self.request()
-        self.assertEqual((await self.terminal_request('other'))['status'], 'duplicate_source')
+        self.assertTrue((await self.terminal_request('other'))['reused'])
         self.assertEqual(len(self.calls), 1)
         await self.host.close()
         self.host = PromptSuggestions(self.app)
@@ -128,7 +373,7 @@ class Requests(unittest.IsolatedAsyncioTestCase):
         await self.settle()
         self.app.history.windows.invalidate({'chat'})
         self.app.clients.current.set('two')
-        self.assertEqual((await self.terminal_request('new-document'))['status'], 'duplicate_source')
+        self.assertTrue((await self.terminal_request('new-document'))['reused'])
         self.assertEqual(len(self.calls), 1)
 
     async def test_historical_claims_do_not_impose_lifetime_quota_or_scan_before_admission(self):
@@ -221,18 +466,23 @@ class Requests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.terminal_request('after-restart'))['status'], 'duplicate_source')
         self.host.complete.assert_not_called()
 
-    async def test_expiry_is_absolute_admission_epoch_milliseconds_and_never_extended(self):
+    async def test_nonready_expiry_is_absolute_and_ready_switches_to_explicit_source_retention(self):
         before = time.time() * 1000
         pending = await self.request()
         after = time.time() * 1000
         self.assertGreaterEqual(pending['expiresAt'], before + 60000)
         self.assertLessEqual(pending['expiresAt'], after + 60000)
         await self.settle()
-        self.assertEqual((await self.status())['expiresAt'], pending['expiresAt'])
-        self.assertEqual((await self.request())['expiresAt'], pending['expiresAt'])
+        self.assertIsNone((await self.status())['expiresAt'])
+        self.assertEqual((await self.request())['retention'], 'source')
         record = next(iter(self.host.records.values()))
         self.host._expire(record)
-        self.assertEqual((await self.status())['status'], 'expired')
+        self.assertEqual((await self.status())['status'], 'ready')
+        self.assertTrue(record['expiry'].cancelled())
+        self.assertEqual(record['_expiresAt'], pending['expiresAt'])
+        await self.host.dispatch('session.suggestion.cancel',
+                                 {'sessionId': 'chat', 'requestId': 'request'}, 'ui')
+        self.assertIsNone((await self.status())['retention'])
         self.assertEqual((await self.status())['expiresAt'], pending['expiresAt'])
 
     async def test_external_and_shared_accepted_inputs_do_not_require_native_generation_status(self):
@@ -1848,7 +2098,7 @@ class Integration(unittest.IsolatedAsyncioTestCase):
             try:
                 return await handler(request)
             except AppError as exc:
-                return web.json_response({'error': str(exc)}, status=403)
+                return web.json_response({'error': str(exc)}, status=exc.status)
         http = web.Application(middlewares=[errors, auth_required, client_context])
         http.update(service=self.app, session_secret='synthetic-secret', control_token='control',
                     server_config={'session_ttl_seconds': 600}, sessions=Sessions(), allowed_origins=set())
@@ -1888,6 +2138,35 @@ class Integration(unittest.IsolatedAsyncioTestCase):
             response = await client.post('/api/actions', json=status, headers=headers(cookie_one, bearer=True))
             self.assertEqual(response.status, 403)
             self.assertNotIn('SECRET', await response.text())
+            regenerate = {'action': 'session.suggestion.request',
+                          'args': {**args, 'requestId': 'manual', 'regenerate': True}}
+            calls = host.complete.await_count
+            response = await client.post('/api/actions', json=regenerate, headers=headers(cookie_one, bearer=True))
+            self.assertEqual(response.status, 403)
+            self.assertEqual(host.complete.await_count, calls)
+            # Schema validation belongs to the real AppService, not a test
+            # wrapper that merges or strips client action fields.
+            for invalid in ('true', 1, None):
+                response = await client.post('/api/actions', json={
+                    **regenerate, 'args': {**regenerate['args'], 'regenerate': invalid}},
+                    headers=headers(cookie_one))
+                self.assertEqual(response.status, 400)
+            response = await client.post('/api/actions', json=regenerate, headers=headers(cookie_one))
+            self.assertEqual(response.status, 200)
+            self.assertEqual((await response.json())['result']['status'], 'pending')
+            await asyncio.gather(*tuple(host.jobs))
+            self.assertEqual(host.complete.await_count, calls + 1)
+            response = await client.post('/api/actions', json=regenerate, headers=headers(cookie_one))
+            body = (await response.json())['result']
+            self.assertEqual(body['status'], 'ready')
+            self.assertEqual(body['retention'], 'source')
+            self.assertIsNone(body['expiresAt'])
+            self.assertFalse(body['reused'])
+            response = await client.post('/api/actions', json={
+                **regenerate, 'args': {**regenerate['args'], 'regenerate': False}},
+                headers=headers(cookie_one))
+            self.assertEqual(response.status, 409)
+            self.assertEqual(host.complete.await_count, calls + 1)
 
     async def test_cookie_owner_can_cancel_pending_request_after_real_navigation_but_cannot_read_old_chat(self):
         from aiohttp import web

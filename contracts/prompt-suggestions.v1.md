@@ -111,20 +111,25 @@ Effort/prompt edits change the settings/configuration witness and invalidate pen
 or ready candidates like other app configuration edits; no existing paid claim is
 rewritten or retried.
 
-`session.suggestion.request {sessionId,requestId,expectedLastMessageId}` returns
+`session.suggestion.request {sessionId,requestId,expectedLastMessageId,regenerate?:boolean}` returns
 promptly with `pending` or a typed terminal result.
 `session.suggestion.status|cancel {sessionId,requestId}` targets that exact private
 request. All return `{requestId,sessionId,status,suggestion,sourceKey,
-configRevision,usage,cost,reason,expiresAt}`; unavailable fields are null.
+configRevision,usage,cost,reason,expiresAt,retention,reused,generationId}`;
+unavailable fields are null. `reused` is a boolean on admitted request records.
 Request/status require that browser to display the intended chat. Cancellation
 alone may target its exact authenticated principal/device/client/session/request
 owner after navigation selects another chat. A foreign owner or unknown request
 gets only an empty `expired` receipt and cannot cancel another request, start a
 call, expose a candidate or create a new claim. It does not bypass authentication.
-`expiresAt` is admission wall time plus 60 seconds, expressed as epoch
-**milliseconds**, fixed across pending/ready reads and exact request retries.
-Clients use the earlier of that timestamp and their original request-start
-60-second deadline, never a new TTL measured from receiving a response.
+For pending and ordinary terminal records, `expiresAt` is admission wall time
+plus 60 seconds, expressed as epoch **milliseconds**, and `retention` is null.
+Successful READY instead has exactly `retention:"source", expiresAt:null`: no
+short wall-clock validity limit while retained in bounded private memory.
+Null without this explicit READY retention mode is not a validity grant.
+Pending work still has its independent 15-second overall deadline; clients do
+not renew finite expiry when receiving responses. Fresh source/authority checks
+remain mandatory for READY status and acceptance.
 
 Statuses: `pending`, `ready`, `empty`, `disabled`, `missing_selection`,
 `unsupported`, `stale`, `failed`, `timeout`, `cancelled`, `expired`,
@@ -132,6 +137,49 @@ Statuses: `pending`, `ready`, `empty`, `disabled`, `missing_selection`,
 reported finite token counters only; missing usage and unknown cost stay null.
 Cancellation requests process cleanup but never claim to undo provider effects.
 The occupied slot remains held until the physical request/cleanup settles.
+That occupancy covers the same principal/session across clients, not just the
+tab which originally requested the utility.
+
+An automatic request (`regenerate` omitted or false) first reuses an existing
+READY for the exact same principal, conversation, configuration, canonical
+bounded public input, source/Stop witness and sign-out epoch. A new request
+still captures and validates its own current selected-chat authority. The
+old tab need not remain selected. Only text and reported usage/cost are copied
+into the new privately owned record; no other client's request identity or
+authentication callback is returned. `reused:true` and the original opaque
+`generationId` identify this as the same completion, not new token consumption
+or a second accounting event. Unknown original cost stays null.
+
+`regenerate:true` is reserved by the bundled client for an explicit Generate
+another/Regenerate gesture, visibly identified as a new attempt which may incur
+cost. It is an authenticated UI request, not cryptographic human-presence proof.
+It skips READY reuse and authorizes one new attempt with a new request ID.
+The same ID is never replayed; while retained, changing its tail or normalized
+regenerate flag is a conflict (omitted and false are equivalent). Schema
+validation rejects nonboolean flags. Focus, reconnect, polling, automatic
+completion hooks and failure handling must never set this flag.
+A separate content-free principal/conversation/explicit-request-ID claim commits
+with admission, independently of audience, configuration and captured input.
+Reusing that gesture ID from another client or after request-memory loss cannot
+authorize another call even when the source/configuration changed.
+
+Every attempt retains its exact request tombstone before capture/effects.
+Explicit regeneration adds a domain-separated paid claim including its request
+ID and also reserves the ordinary input's base claim, so manual-first cannot
+allow a later automatic duplicate call. Old claims are never deleted, purged
+or rewritten. A failed, cancelled, timed-out or uncertain attempt does not
+authorize automatic retry or imply zero cost.
+
+After eviction/restart, a claimed input without a retained READY returns
+`duplicate_source` with `reason:"prior_attempt_unavailable"`; a lost exact
+request returns `expired` with that reason. This is not model abstention.
+When a matching terminal record is still in private memory, a duplicate may
+instead report `prior_attempt_empty`, `prior_attempt_failed`,
+`prior_attempt_timeout`, `prior_attempt_cancelled`, `prior_attempt_stale` or
+`prior_attempt_unsupported`. These finite dispositions reveal no foreign
+request IDs, pending bodies or error prose. The durable claim has no outcome;
+legacy outcomes must remain unknown. Only deliberate new regeneration can
+authorize another call, subject to normal authority and physical settlement.
 
 Failed utility calls may carry a static allowlisted `reason:"<stage>_<category>"`.
 Stages are
@@ -181,11 +229,18 @@ its real principal-specific display authorization before enabling the feature.
 
 Candidate bodies live only in a bounded in-memory request owner (128 records),
 never shared session state, action status, agent readback, history, native storage
-or durable command receipts. Candidates expire 60 seconds after admission, including
-without polling. Separate cookie principals cannot read another principal's
+or durable command receipts. READY records use source-bound validity with a
+128-record LRU memory bound; ordinary terminal records retain their 60-second
+admission expiry. Accessing an exact record at capacity does not evict it
+prematurely. Eviction, host restart and process closure lose candidate bodies;
+no durable recovery or automatic replacement inference is promised.
+Separate cookie principals cannot read another principal's
 candidate. Client IDs provide presentation partitioning, **not a security boundary
 between tabs sharing the same login cookie**: that authenticated user can choose
 another client ID in an HTTP header. No cross-tab secret isolation is claimed.
+Same-cookie/principal cached assistance may therefore be rebound to a freshly
+authorized selected browser client; status/cancel still address only the exact
+new audience-owned request. This is not a future multi-user ACL policy.
 
 Before dispatch, after provider construction and before publishing/reading a
 candidate, recheck current client/audience, saved sign-out witness, source owner,
@@ -228,13 +283,15 @@ after an exact status-only check. Leaving and returning to the chat does not
 consume a ready candidate hidden by an ordinary draft. Restoration never starts
 inference, renews expiry, writes draft text, or retargets a candidate to another
 chat. Escape or an explicit dismissal keeps that candidate dismissed.
-Existing source, configuration, authentication, Stop, archive, expiry and
+Existing source, configuration, authentication, Stop, archive, memory-retention and
 eligibility checks still apply; a delayed acceptance cannot insert after the
 composer changes. Pending work cancelled while composing or leaving is not
 restarted when the box becomes empty.
 
 Content-free durable request/source hashes are claimed before inference, preventing
-same-request/source replay after reconnect or restart. Each claim retains two
+same-request replay and automatic same-source replay after reconnect or restart.
+An explicit new regeneration is a separately claimed paid intent, not a replay
+or settlement of an older uncertain operation. Each claim retains two
 fixed-size SHA-256 hashes in indexed SQLite columns, not an in-memory journal.
 An exact-request tombstone commits before bounded capture. After capture, fresh
 authorization/currentness is rechecked under admission exclusion and the paid
@@ -242,8 +299,8 @@ source claim commits from the exact bounded canonical model input plus
 principal/conversation/configuration identity, before provider dispatch. Resident,
 native and cold-storage stamps remain freshness checks, not paid identity:
 unchanged captured input cannot pay again merely because its storage retired.
-Duplicate input can therefore report `pending` while capture runs, then
-`duplicate_source` without inference.
+Duplicate automatic input can therefore report `pending` while capture runs,
+then a privately rebound READY or `duplicate_source` without inference.
 Storage grows with distinct admitted requests; there is no lifetime request-count
 quota or automatic age-based deletion that could reauthorize an uncertain paid
 effect. Candidate memory remains independently bounded to 128 records. Claims
