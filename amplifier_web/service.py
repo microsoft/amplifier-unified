@@ -248,7 +248,7 @@ ACTION_DEFINITIONS = {
     "updates.install": ("Stage and validate available application or ecosystem updates; activate when idle. Application updates restart the host.", schema()),
     "updates.reconcileManualHandoff": ("Verify an already completed manual Windows app handoff against the exact retained pre-effect refusal and the actual installed official wheel, owner, launcher, dependencies and pinned listener. Does not install, restart or promote. Preserves existing whole-sequence Install intent. Read updates.manualHandoffResults for the durable result; never replay an unknown request.", schema({"hostInstanceId":string(200),"revision":string(40),"generation":string(32),"attemptId":string(32)}, ["hostInstanceId","revision","generation","attemptId"])),
     "updates.rollback": ("Restore the previous ecosystem version when idle", schema()),
-    "settings.update": ("Change voice, workspace or update defaults. Update checks support intervalHours 1, 4, 8 or 24.", schema({"patch": {"type": "object"}})),
+    "settings.update": ("Change installation-owner preferences, voice, workspace or update defaults. suggestedMessages is a synced boolean, submitted alone; expectedSuggestedMessagesRevision protects a captured choice. Update checks support intervalHours 1, 4, 8 or 24.", schema({"patch": {"type": "object", "properties": {"suggestedMessages": {"type": "boolean"}}}, "expectedSuggestedMessagesRevision": {"type": "integer", "minimum": 0}}, ["patch"])),
     "state.export": ("Export app state and attached device views", schema()),
     "notification.request": ("Request notification permission on this device", schema()),
     "call.start": ("Start a realtime voice call on the connected browser", schema({"attemptId": string(200)}, [])),
@@ -603,6 +603,10 @@ class AppService:
             "view": {"setupJourney":"welcome", "mode": "chat", "panel": None, "draft": "", "scheme": "system", "layout": "balanced"},
             "voice": {"status": "disconnected"}, "runtime": {"available": runtime is not None}, "devices": {}, "events": [],
         }
+        # Synced for the current installation owner, not a browser-local
+        # consent value. Never infer opt-in from previous browser storage.
+        self.state['settings'].setdefault('suggestedMessages', False)
+        self.state['settings'].setdefault('suggestedMessagesRevision', 0)
         from .managed_deletion import recover as recover_managed_deletions
         # Confirmed deletion recovery is an explicit offline reconciliation of
         # complete durable state. Ordinary warm starts admit only selected or
@@ -1910,6 +1914,74 @@ class AppService:
         finally:
             self.worktrees.release_creation(reservation)
 
+    async def _update_suggestion_setting(self, args, origin, command_id, expected_revision,
+                                         include_state, caller, admission_check, authority):
+        """Use the existing owner settings record and ordinary publication transaction."""
+        patch = args['patch']
+        if set(patch) != {'suggestedMessages'} or type(patch['suggestedMessages']) is not bool:
+            raise AppError('Submit suggestedMessages as one boolean setting.')
+        fingerprint = command_fingerprint('settings.update', args, origin, self.clients.current.get(),
+                                          caller_session_id=caller)
+        async with self.lock:
+            if admission_check:
+                admission_check()
+            self.configuration_authority.check(authority)
+            if expected_revision is not None and getattr(self, '_progress_dirty', False):
+                self._commit_pending_progress()
+            if command_id:
+                previous = self.db.execute('SELECT fingerprint,receipt FROM commands WHERE id=?', (command_id,)).fetchone()
+                if previous:
+                    if previous[0] != fingerprint:
+                        raise AppError('This command ID was already used with different contents.', 409)
+                    if include_state and getattr(self, '_progress_dirty', False):
+                        self._commit_pending_progress()
+                    return {**json.loads(previous[1]), 'duplicate': True,
+                            **({'state': self.browser_state()} if include_state else {})}
+            if expected_revision is not None and expected_revision != self.state['revision']:
+                raise AppError('Settings changed. Read the current state before saving.', 409)
+            settings = self._state['settings']
+            previous = settings.get('suggestedMessages', False)
+            setting_revision = settings.get('suggestedMessagesRevision', 0)
+            if (type(setting_revision) is not int or setting_revision < 0
+                    or ('expectedSuggestedMessagesRevision' in args
+                        and args['expectedSuggestedMessagesRevision'] != setting_revision)):
+                raise AppError('Suggested messages changed. Review the current choice before saving.', 409)
+            enabled = patch['suggestedMessages']
+            receipt = {'accepted': True, 'revision': self.state['revision'] + 1, 'effects': [],
+                       'result': {'settings': {'suggestedMessages': enabled,
+                                               'suggestedMessagesRevision': setting_revision + 1},
+                                  'scope': 'installation-owner'}}
+            settings.update(receipt['result']['settings'])
+            try:
+                if command_id:
+                    self.db.execute('INSERT INTO commands VALUES (?,?,?)',
+                                    (command_id, fingerprint, json.dumps(receipt)))
+                self._publish_changes(sessions=set(), globals={'settings'})
+            except BaseException:
+                self.db.rollback()
+                # Publication can fail AFTER SQLite committed (for example a
+                # subscriber projection). Inspect the canonical committed
+                # setting/revision before deciding whether memory may roll back.
+                row = self.db.execute("SELECT value FROM state_records WHERE kind='global' AND id='settings'").fetchone()
+                durable = json.loads(row[0])['value'] if row else {}
+                committed = (durable.get('suggestedMessages') is enabled
+                             and durable.get('suggestedMessagesRevision') == setting_revision + 1)
+                if committed:
+                    settings.update(receipt['result']['settings'])
+                    self._state['revision'] = max(self._state['revision'], receipt['revision'])
+                    self._client_snapshots.clear()
+                    self._browser_snapshot = None
+                    if not enabled:
+                        self.prompt_suggestions.invalidate(clear_cache=False)
+                else:
+                    settings.update(suggestedMessages=previous, suggestedMessagesRevision=setting_revision)
+                raise
+            if not enabled:
+                # Cancel occupied utility work, but preserve saved successful
+                # assistance and irreversible paid claims for later opt-in.
+                self.prompt_suggestions.invalidate(clear_cache=False)
+            return {**receipt, **({'state': self.browser_state()} if include_state else {})}
+
     async def _dispatch(self, action, args=None, origin="ui", command_id=None, expected_revision=None, *, include_state=True, caller_session_id=None, admission_check=None):
         args = dict(args or {})
         if action == 'session.selection':
@@ -2151,6 +2223,11 @@ class AppService:
             if retained is not None:
                 return retained
         configuration_authority = self.configuration_authority.capture(action, args, origin, caller_session_id)
+        if action == 'settings.update' and 'suggestedMessages' in args.get('patch', {}):
+            return await self._update_suggestion_setting(args, origin, command_id, expected_revision,
+                include_state, caller_session_id, admission_check, configuration_authority)
+        if action == 'settings.update' and 'expectedSuggestedMessagesRevision' in args:
+            raise AppError('expectedSuggestedMessagesRevision requires suggestedMessages.')
         if action in {'providers.suggestionModels', 'providers.configureSuggestions'}:
             async with self.lock:
                 if admission_check:

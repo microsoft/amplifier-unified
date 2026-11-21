@@ -22,7 +22,7 @@ CACHE_ENTRY_BYTES = 4096
 USAGE_FIELDS = frozenset({'input_tokens', 'output_tokens', 'total_tokens',
                           'cache_read_input_tokens', 'cache_creation_input_tokens'})
 CURRENT_REASONS = frozenset('current_' + name for name in (
-    'closed', 'auth', 'epoch', 'audience', 'selected', 'config', 'session',
+    'closed', 'auth', 'epoch', 'audience', 'selected', 'config', 'preference', 'session',
     'archived', 'deleting', 'eligibility', 'busy', 'sourcewitness')) | SOURCE_REASONS
 STALE_REASONS = CURRENT_REASONS | {'capture_source_changed', 'current_invalidated'}
 PROVIDER_REASONS = frozenset({'custom_source_not_prepared', 'runtime_not_prepared',
@@ -162,6 +162,9 @@ class PromptSuggestions:
     def settings(self):
         return selected(self.manager, str(self.service.data_dir))
 
+    def enabled(self):
+        return getattr(self.service, '_state', {}).get('settings', {}).get('suggestedMessages') is True
+
     def audience(self, sid, origin, *, require_selected=True):
         clients = self.service.clients
         identity, record = clients.current.get(), clients.record()
@@ -211,6 +214,8 @@ class PromptSuggestions:
                 return 'current_selected'
             if record['configRevision'] != revision:
                 return 'current_config'
+            if not self.enabled():
+                return 'current_preference'
             dimension = 'current_session'
             session = self.service._session(record['sessionId'], hydrate=False)
             if session.get('archived'):
@@ -423,7 +428,7 @@ class PromptSuggestions:
             record['configRevision'] = revision
             if self.closed or self.service.closed:
                 self._finish(record, 'cancelled')
-            elif not config['enabled']:
+            elif not self.enabled() or not config['enabled']:
                 self._finish(record, 'disabled')
             elif not provider or not config['model']:
                 self._finish(record, 'missing_selection')

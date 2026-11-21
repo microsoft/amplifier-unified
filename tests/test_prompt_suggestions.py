@@ -38,6 +38,7 @@ class Service:
         self.lock = asyncio.Lock()
         self.closed = False
         self.clients = Clients()
+        self._state = {'settings': {'suggestedMessages': True}}  # Explicitly opted-in utility fixture.
         self.session = {'id': 'chat', 'status': 'idle', 'messages': [
             {'id': 'human', 'role': 'user', 'text': 'Plan the next step.', 'inputOrigin': 'ui'},
             {'id': 'assistant', 'role': 'assistant', 'text': 'The plan is ready.'}]}
@@ -683,7 +684,8 @@ class Requests(unittest.IsolatedAsyncioTestCase):
                             record['principal'], client.get('deviceOwner', 'local-owner'),
                             record['client']]) != record['audience']
                         or client.get('selectedSessionId') != record['sessionId']
-                        or record['configRevision'] != revision):
+                        or record['configRevision'] != revision
+                        or self.app._state['settings']['suggestedMessages'] is not True):
                     return False
                 session = self.app._session(record['sessionId'], hydrate=False)
                 from amplifier_web.prompt_suggestions import eligible, witness
@@ -699,6 +701,7 @@ class Requests(unittest.IsolatedAsyncioTestCase):
             ('audience', patch.dict(self.app.clients.records['one'], deviceOwner='PRIVATE owner')),
             ('selected', patch.dict(self.app.clients.records['one'], selectedSessionId='PRIVATE session')),
             ('config', patch.object(self.host, 'settings', return_value=(self.config, {}, 'PRIVATE revision'))),
+            ('preference', patch.dict(self.app._state['settings'], suggestedMessages=False)),
             ('session', patch.object(self.app, '_session', side_effect=ValueError('PRIVATE path'))),
             ('archived', patch.dict(self.app.session, archived=True)),
             ('deleting', patch.dict(self.app.session, _deleting=True)),
@@ -973,7 +976,7 @@ class Requests(unittest.IsolatedAsyncioTestCase):
         self.app.session['scheduledRunId'] = 'run'
         self.assertEqual((await self.request('scheduled'))['status'], 'unsupported')
         self.app.session.pop('scheduledRunId')
-        self.app._state = {'updates': {'phase': 'activating'}}
+        self.app._state = {'settings': {'suggestedMessages': True}, 'updates': {'phase': 'activating'}}
         self.assertEqual((await self.request('paused'))['status'], 'unsupported')
         self.assertEqual(self.calls, [])
 
@@ -1542,11 +1545,285 @@ class Integration(unittest.IsolatedAsyncioTestCase):
         from amplifier_web.service import AppService
         self.runtime = SimpleNamespace(close=AsyncMock(), start=AsyncMock(), send=AsyncMock())
         self.app = AppService(self.root / 'app', self.runtime, workspace=self.root)
+        # Existing utility cases qualify model behavior with owner opt-in.
+        # Default-off and failed-save semantics have separate real-service cases.
+        await self.app.dispatch('settings.update', {'patch': {'suggestedMessages': True}}, include_state=False)
 
     async def asyncTearDown(self):
         await self.app.close()
         self.env.stop()
         self.tmp.cleanup()
+
+    async def test_synced_preference_default_off_two_browsers_new_client_and_restart_same_owner(self):
+        from amplifier_web.service import AppService
+        await self.app.close()
+        self.app = AppService(self.root / 'fresh-owner', self.runtime, workspace=self.root)
+        self.assertFalse(self.app.state['settings']['suggestedMessages'])
+        await self.app.dispatch('session.create', {}, include_state=False)
+        sid = self.app.state['selectedSessionId']
+        session = self.app._session(sid)
+        session['selection'] = {'instance': 'saved-chat', 'model': 'foreground', 'effort': None}
+        original_selection = copy.deepcopy(session['selection'])
+        self.app._publish_changes(sessions={sid})
+        for identity in ('one', 'two'):
+            self.app.clients.attach(identity, kind='web')
+            self.app.clients.records[identity]['selectedSessionId'] = sid
+            with self.app.clients.bind(identity):
+                await self.app.dispatch('view.update', {'patch': {'draft': 'Private draft ' + identity}},
+                                        include_state=False)
+        before_drafts = {key: copy.deepcopy(row['drafts']) for key, row in self.app.clients.records.items()}
+        before = copy.deepcopy(self.app.state['settings'])
+        model_config = describe(self.app.prompt_suggestions.manager, self.root)
+        claims = list(self.app.db.execute('SELECT * FROM suggestion_requests'))
+        self.app.prompt_suggestions.complete = AsyncMock(side_effect=AssertionError('toggling is never inference'))
+        # Observe two separately-bound cached projections before changing one.
+        for identity in ('one', 'two'):
+            with self.app.clients.bind(identity):
+                self.assertFalse(self.app.browser_state()['settings']['suggestedMessages'])
+        streams = {}
+        for identity in ('one', 'two'):
+            with self.app.clients.bind(identity):
+                streams[identity] = self.app.subscribe()
+                while not streams[identity].empty():
+                    streams[identity].get_nowait()
+        with self.app.clients.bind('one'):
+            receipt = await self.app.dispatch('settings.update', {'patch': {'suggestedMessages': True}},
+                                             command_id='synced-on', include_state=False)
+            self.assertEqual(receipt['result'], {
+                'settings': {'suggestedMessages': True, 'suggestedMessagesRevision': 1}, 'scope': 'installation-owner'})
+        for identity in ('one', 'two'):
+            queue = streams[identity]
+            self.assertFalse(queue.empty(), 'Owner setting must publish to every connected browser')
+            while not queue.empty():
+                published = queue.get_nowait()
+            self.assertTrue(published['settings']['suggestedMessages'])
+            self.assertEqual(published['client']['id'], identity)
+            self.assertEqual(published['view']['draft'], 'Private draft ' + identity)
+            self.app.unsubscribe(queue)
+            with self.app.clients.bind(identity):
+                self.assertTrue(self.app.browser_state()['settings']['suggestedMessages'])
+        self.app.clients.attach('third', kind='web')
+        with self.app.clients.bind('third'):
+            self.assertTrue(self.app.browser_state()['settings']['suggestedMessages'])
+        self.assertEqual({key: row['drafts'] for key, row in self.app.clients.records.items()
+                          if key in before_drafts}, before_drafts)
+        self.assertEqual(self.app._session(sid)['selection'], original_selection)
+        self.assertEqual(describe(self.app.prompt_suggestions.manager, self.root), model_config)
+        self.assertEqual(list(self.app.db.execute('SELECT * FROM suggestion_requests')), claims)
+        self.assertEqual({key: value for key, value in self.app.state['settings'].items()
+                          if key not in {'suggestedMessages', 'suggestedMessagesRevision'}},
+                         {key: value for key, value in before.items()
+                          if key not in {'suggestedMessages', 'suggestedMessagesRevision'}})
+        self.app.prompt_suggestions.complete.assert_not_called()
+        await self.app.close()
+        self.app = AppService(self.root / 'fresh-owner', self.runtime, workspace=self.root)
+        self.app.clients.attach('after-new-signin-document', kind='web')
+        with self.app.clients.bind('after-new-signin-document'):
+            self.assertTrue(self.app.browser_state()['settings']['suggestedMessages'])
+            await self.app.dispatch('settings.update', {'patch': {'suggestedMessages': False}},
+                                    command_id='synced-off', include_state=False)
+        await self.app.close()
+        self.app = AppService(self.root / 'fresh-owner', self.runtime, workspace=self.root)
+        self.assertFalse(self.app.state['settings']['suggestedMessages'])
+        self.runtime.start.assert_not_called()
+        self.runtime.send.assert_not_called()
+
+    async def test_synced_preference_rejects_invalid_unauthorized_or_failed_writes_without_optimistic_state(self):
+        await self.app.dispatch('settings.update', {'patch': {'suggestedMessages': False}}, include_state=False)
+        before = copy.deepcopy(self.app.state['settings'])
+        revision = self.app.state['revision']
+        for invalid in ('true', 1, None, {}):
+            with self.subTest(invalid=invalid), self.assertRaises(Exception):
+                await self.app.dispatch('settings.update', {'patch': {'suggestedMessages': invalid}}, include_state=False)
+        with self.assertRaisesRegex(Exception, 'one boolean'):
+            await self.app.dispatch('settings.update', {'patch': {'suggestedMessages': True, 'voiceName': 'marin'}},
+                                    include_state=False)
+        with self.assertRaises(Exception):
+            await self.app.dispatch('settings.update', {'patch': {'suggestedMessages': True}},
+                                    origin='agent', caller_session_id=None, include_state=False)
+        with self.assertRaisesRegex(Exception, 'revoked'):
+            await self.app.dispatch('settings.update', {'patch': {'suggestedMessages': True}},
+                                    admission_check=lambda: (_ for _ in ()).throw(ValueError('revoked')),
+                                    include_state=False)
+        self.app.db.execute('''CREATE TRIGGER reject_setting_update BEFORE UPDATE ON state_records
+            WHEN NEW.kind='global' AND NEW.id='settings'
+            BEGIN SELECT RAISE(ABORT,'synthetic settings commit failure'); END''')
+        self.app.db.commit()
+        with self.assertRaises(sqlite3.Error):
+            await self.app.dispatch('settings.update', {'patch': {'suggestedMessages': True}},
+                                    command_id='failed-save', include_state=False)
+        self.assertEqual(self.app.state['settings'], before)
+        self.assertEqual(self.app.state['revision'], revision)
+        self.assertIsNone(self.app.db.execute("SELECT 1 FROM commands WHERE id='failed-save'").fetchone())
+        self.app.db.execute('DROP TRIGGER reject_setting_update')
+        self.app.db.commit()
+        saved = await self.app.dispatch('settings.update', {'patch': {'suggestedMessages': True}},
+                                        command_id='saved-on', include_state=False)
+        replay = await self.app.dispatch('settings.update', {'patch': {'suggestedMessages': True}},
+                                         command_id='saved-on', include_state=False)
+        self.assertTrue(replay['duplicate'])
+        self.assertEqual(replay['revision'], saved['revision'])
+        with self.assertRaisesRegex(Exception, 'different contents'):
+            await self.app.dispatch('settings.update', {'patch': {'suggestedMessages': False}},
+                                    command_id='saved-on', include_state=False)
+        self.app.db.execute('''CREATE TRIGGER reject_setting_off BEFORE UPDATE ON state_records
+            WHEN NEW.kind='global' AND NEW.id='settings'
+            BEGIN SELECT RAISE(ABORT,'synthetic settings off failure'); END''')
+        self.app.db.commit()
+        with self.assertRaises(sqlite3.Error):
+            await self.app.dispatch('settings.update', {'patch': {'suggestedMessages': False}}, include_state=False)
+        self.assertTrue(self.app.state['settings']['suggestedMessages'])
+        self.assertTrue(self.app.browser_state()['settings']['suggestedMessages'])
+        self.app.db.execute('DROP TRIGGER reject_setting_off')
+        self.app.db.commit()
+
+    async def test_synced_preference_setting_revision_protects_delayed_setup_from_other_client_explicit_off(self):
+        await self.app.dispatch('settings.update', {'patch': {'suggestedMessages': False}}, include_state=False)
+        for identity in ('one', 'two'):
+            self.app.clients.attach(identity, kind='web')
+        captured = self.app.state['settings']['suggestedMessagesRevision']
+        with self.app.clients.bind('two'):
+            off = await self.app.dispatch('settings.update', {
+                'patch': {'suggestedMessages': False}, 'expectedSuggestedMessagesRevision': captured},
+                command_id='newer-off', include_state=False)
+            self.assertEqual(off['result']['settings']['suggestedMessagesRevision'], captured + 1)
+            replay = await self.app.dispatch('settings.update', {
+                'patch': {'suggestedMessages': False}, 'expectedSuggestedMessagesRevision': captured},
+                command_id='newer-off', include_state=False)
+            self.assertTrue(replay['duplicate'])
+            self.assertEqual(self.app.state['settings']['suggestedMessagesRevision'], captured + 1)
+        # Model setup completes independently; it cannot advance or reset the
+        # captured user preference revision.
+        await self.app.dispatch('providers.configureSuggestions', {
+            'enabled': False, 'scope': 'global', 'configurationTarget': {'kind': 'global'}}, include_state=False)
+        self.assertEqual(self.app.state['settings']['suggestedMessagesRevision'], captured + 1)
+        revision = self.app.state['revision']
+        cache = list(self.app.db.execute('SELECT * FROM suggestion_success_cache'))
+        claims = list(self.app.db.execute('SELECT * FROM suggestion_requests'))
+        with self.app.clients.bind('one'):
+            with self.assertRaisesRegex(Exception, 'Suggested messages changed'):
+                await self.app.dispatch('settings.update', {
+                    'patch': {'suggestedMessages': True}, 'expectedSuggestedMessagesRevision': captured},
+                    command_id='late-enable', include_state=False)
+        self.assertFalse(self.app.state['settings']['suggestedMessages'])
+        self.assertEqual(self.app.state['revision'], revision)
+        self.assertEqual(list(self.app.db.execute('SELECT * FROM suggestion_success_cache')), cache)
+        self.assertEqual(list(self.app.db.execute('SELECT * FROM suggestion_requests')), claims)
+        self.assertIsNone(self.app.db.execute("SELECT 1 FROM commands WHERE id='late-enable'").fetchone())
+        for invalid in (-1, True, '1', None):
+            with self.subTest(invalid=invalid), self.assertRaises(Exception):
+                await self.app.dispatch('settings.update', {
+                    'patch': {'suggestedMessages': True}, 'expectedSuggestedMessagesRevision': invalid},
+                    include_state=False)
+        with self.assertRaisesRegex(Exception, 'requires suggestedMessages'):
+            await self.app.dispatch('settings.update', {
+                'patch': {'notifications': {}}, 'expectedSuggestedMessagesRevision': captured}, include_state=False)
+
+    async def test_synced_preference_pending_progress_is_flushed_before_cas_and_duplicate_state(self):
+        await self.app.dispatch('session.create', {}, include_state=False)
+        sid = self.app.state['selectedSessionId']
+        revision = self.app.state['revision']
+        self.app._session(sid)['streaming'] = 'Coalesced progress'
+        self.app._publish_progress(session_ids={sid}, record_only=True)
+        self.assertTrue(self.app._progress_dirty)
+        with self.assertRaisesRegex(Exception, 'Settings changed'):
+            await self.app.dispatch('settings.update', {'patch': {'suggestedMessages': False}},
+                                    expected_revision=revision, include_state=False)
+        self.assertTrue(self.app.state['settings']['suggestedMessages'])
+        self.assertGreater(self.app.state['revision'], revision)
+        result = await self.app.dispatch('settings.update', {'patch': {'suggestedMessages': False}},
+                                         command_id='once-off', include_state=False)
+        self.app._session(sid)['streaming'] = 'More coalesced progress'
+        self.app._publish_progress(session_ids={sid}, record_only=True)
+        replay = await self.app.dispatch('settings.update', {'patch': {'suggestedMessages': False}},
+                                         command_id='once-off', include_state=True)
+        self.assertTrue(replay['duplicate'])
+        self.assertGreater(replay['state']['revision'], result['revision'])
+        self.assertFalse(self.app._progress_dirty)
+        self.assertFalse(replay['state']['settings']['suggestedMessages'])
+
+    async def test_synced_preference_postcommit_publication_error_keeps_off_and_cancels_pending(self):
+        # This real projection hook runs after the ordinary SQLite commit.
+        host = self.app.prompt_suggestions
+        with patch.object(host, 'invalidate', wraps=host.invalidate) as invalidate, \
+                patch.object(self.app, 'status_emitter',
+                             SimpleNamespace(publish=Mock(side_effect=OSError('projection failed')))):
+            with self.assertRaisesRegex(OSError, 'projection failed'):
+                await self.app.dispatch('settings.update', {'patch': {'suggestedMessages': False}},
+                                        command_id='committed-off', include_state=False)
+            invalidate.assert_called_once_with(clear_cache=False)
+        self.assertFalse(self.app.state['settings']['suggestedMessages'])
+        durable = json.loads(self.app.db.execute(
+            "SELECT value FROM state_records WHERE kind='global' AND id='settings'").fetchone()[0])['value']
+        self.assertFalse(durable['suggestedMessages'])
+        self.assertEqual(durable['suggestedMessagesRevision'],
+                         self.app.state['settings']['suggestedMessagesRevision'])
+        receipt = json.loads(self.app.db.execute(
+            "SELECT receipt FROM commands WHERE id='committed-off'").fetchone()[0])
+        self.assertFalse(receipt['result']['settings']['suggestedMessages'])
+        replay = await self.app.dispatch('settings.update', {'patch': {'suggestedMessages': False}},
+                                         command_id='committed-off', include_state=False)
+        self.assertTrue(replay['duplicate'])
+        self.assertFalse(self.app.state['settings']['suggestedMessages'])
+
+    async def test_synced_preference_disable_cancels_pending_other_browser_and_keeps_paid_claims_and_cache(self):
+        await self.app.dispatch('session.create', {}, include_state=False)
+        session = self.app._session()
+        sid = session['id']
+        session.update(status='idle', historyManaged=False, messages=[
+            {'id': 'human', 'role': 'user', 'text': 'Task', 'inputOrigin': 'ui'},
+            {'id': 'assistant', 'role': 'assistant', 'text': 'Complete'}])
+        self.app._publish_changes(sessions={sid})
+        for identity in ('one', 'two'):
+            self.app.clients.attach(identity, kind='web')
+            self.app.clients.records[identity]['selectedSessionId'] = sid
+        host = self.app.prompt_suggestions
+        host.settings = lambda: ({'enabled': True, 'provider': 'saved', 'model': 'model',
+                                  'transcriptMode': 'last_n', 'humanTurns': 6}, {'id': 'saved'}, 'revision')
+        entered, settling, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        async def respond(*args):
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                settling.set()
+                await release.wait()
+                raise
+        host.complete = AsyncMock(side_effect=respond)
+        token = BROWSER.set({'principal': 'cookie', 'valid': lambda: True})
+        try:
+            with self.app.clients.bind('one'):
+                await host.dispatch('session.suggestion.request', {
+                    'sessionId': sid, 'requestId': 'pending', 'expectedLastMessageId': 'assistant'}, 'ui')
+            await entered.wait()
+            claims = list(self.app.db.execute('SELECT * FROM suggestion_requests'))
+            with self.app.clients.bind('two'):
+                await self.app.dispatch('settings.update', {'patch': {'suggestedMessages': False}},
+                                        include_state=False)
+                self.assertFalse(self.app.browser_state()['settings']['suggestedMessages'])
+            await asyncio.wait_for(settling.wait(), 3)
+            self.assertTrue(host.jobs, 'Off cannot claim physical settlement early')
+            with self.app.clients.bind('one'):
+                self.assertFalse(self.app.browser_state()['settings']['suggestedMessages'])
+                disabled = await host.dispatch('session.suggestion.request', {
+                    'sessionId': sid, 'requestId': 'off-request', 'expectedLastMessageId': 'assistant'}, 'ui')
+                self.assertEqual(disabled['status'], 'disabled')
+            host.complete.assert_awaited_once()
+            self.assertEqual(list(self.app.db.execute('SELECT * FROM suggestion_requests')), claims)
+        finally:
+            release.set()
+            await asyncio.gather(*tuple(host.jobs))
+            BROWSER.reset(token)
+        # Saved successful assistance is independent of the opt-in switch:
+        # Off hides/cancels RAM work without purging a user's saved result.
+        self.app.db.execute('INSERT INTO suggestion_success_cache VALUES (?,?,?,?,?)',
+                            ('cookie', sid, 'synthetic-key', '{"status":"empty"}', 1))
+        self.app.db.commit()
+        cached = list(self.app.db.execute('SELECT * FROM suggestion_success_cache'))
+        await self.app.dispatch('settings.update', {'patch': {'suggestedMessages': False}}, include_state=False)
+        self.assertEqual(list(self.app.db.execute('SELECT * FROM suggestion_success_cache')), cached)
+        self.runtime.start.assert_not_called()
+        self.runtime.send.assert_not_called()
 
     async def test_durable_success_and_empty_recover_after_real_app_restart_without_draft_or_model_work(self):
         from amplifier_web.service import AppService
@@ -2475,6 +2752,22 @@ class Integration(unittest.IsolatedAsyncioTestCase):
                 return {'X-Amplifier-Client': identity,
                         **({'Authorization': 'Bearer control'} if bearer else {}),
                         'Cookie': SESSION_COOKIE + '=' + cookie}
+            synced = {'action': 'settings.update', 'args': {'patch': {'suggestedMessages': False}}}
+            for invalid_cookie in ('invalid-cookie', ''):
+                response = await client.post('/api/actions', json=synced, headers=headers(invalid_cookie))
+                self.assertEqual(response.status, 401)
+                self.assertTrue(self.app.state['settings']['suggestedMessages'])
+            # Both valid owner sign-ins share preferences, not private
+            # candidates. No change to cookie-bound candidate ownership.
+            response = await client.post('/api/actions', json=synced, headers=headers(cookie_two, 'two'))
+            self.assertEqual(response.status, 200)
+            self.assertFalse(self.app.state['settings']['suggestedMessages'])
+            with self.app.clients.bind('one'):
+                self.assertFalse(self.app.browser_state()['settings']['suggestedMessages'])
+            response = await client.post('/api/actions', json={
+                **synced, 'args': {'patch': {'suggestedMessages': True}}}, headers=headers(cookie_one))
+            self.assertEqual(response.status, 200)
+            host.complete.assert_not_called()
             response = await client.post('/api/actions', json={'action': 'session.suggestion.request', 'args': args},
                                          headers=headers(cookie_one, bearer=True))
             self.assertEqual(response.status, 403)  # Even valid cookie cannot bless bearer route.

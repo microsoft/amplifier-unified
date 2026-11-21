@@ -5,18 +5,21 @@ from every conversation participant and execution runtime.
 
 ## Behavior
 
-- Chat & input presents one everyday **Prompt suggestions** preference for this
-  browser and signed-in owner, initially off. It applies immediately without
-  a separate Save step and is remembered through ordinary reloads and host
-  restarts within that login scope. Secondary scope help says **Remembered in
-  this browser for this sign-in**. It is not a second app-global model switch.
+- Chat & input presents one everyday **Suggested messages** setting for the
+  installation owner, initially off. It applies after an immediate save
+  acknowledgement, without a separate Save button, and syncs to that owner's
+  other clients on the same host. Reloads, new client attachments, later
+  sign-ins and host restarts read the same saved setting. This is not a
+  browser-only choice or cross-host/cloud account federation.
   Host availability and saved model configuration remain separate prerequisites.
   If the host is ready, turning this preference on needs no repeated setup.
   If setup is missing or host availability is disabled, the same entry offers
   one staged setup with **Save and enable**, not two competing enable controls.
-  A failed save does not turn on the personal preference or imply readiness.
-  Turning the personal preference off immediately hides assistance and prevents
-  new interested-client requests, including when storage cannot be written.
+  A failed save does not turn on suggestions or imply readiness. A confirmed
+  Off stops new suggestion work and withdraws pending assistance across clients.
+  During a failed/disconnected Off save, the initiating client may immediately
+  hide/suspend locally for safety, but must say the synced setting was not saved
+  rather than claim other clients or future visits are off.
 - The everyday entry shows actual readiness, the saved connection/model summary
   and a plain privacy/cost explanation outside Advanced: bounded conversation
   text is sent to that selected connection; unsent drafts and private agent
@@ -108,43 +111,61 @@ from every conversation participant and execution runtime.
   more tokens than requested; no bounded-billing or universal output-cap promise,
   host budget increase, repair call or fallback is implied.
 
-## Personal preference and host configuration
+## Synced owner setting and host configuration
 
-The personal switch controls this browser's interest, not host credentials,
-global model availability or another person's preference. Its remembered value
-uses `localStorage` under a feature-specific, versioned key whose sole identity
-partition is the authenticated, validated 64-lowercase-hex public
-`client.historyScope`. That opaque scope already partitions host data
-root, OS owner, session secret and signed-in cookie; it contains no exposed
-cookie/credential text and is not an authentication capability. Per-start
-`hostInstanceId` remains part of transient request/candidate freshness but is
-not part of this durable preference key.
+The existing app `settings` record is the canonical preference owner, persisted
+in the installation's private SQLite database and published to connected clients.
+`settings.suggestedMessages` is one boolean, default false. There is no separate
+browser storage value or fallback. Old local/session-storage On choices must
+not silently opt in the synced owner; no browser preference migration occurs.
+Absent, malformed or not-yet-loaded state is treated as off.
+`settings.suggestedMessagesRevision` is a nonnegative integer, initially zero,
+which advances for every explicit saved choice, including Off when already off.
 
-Only an authenticated 64-lowercase-hex scope may restore an on value.
-Absent, malformed, unreadable or different scope defaults off; there is no
-origin-only, client-ID or appearance-profile fallback. A new sign-in, owner,
-data root or session secret changes the scope, so the person may need to opt
-in again. Remembering across independent logins or devices is not promised.
-Same-scope tabs observe preference changes; another host/login is never enabled
-by copying an origin-wide value. The current document may carry forward its
-previous explicit session-only choice only under its exact current
-`[hostInstanceId, historyScope]` key. It must not scan old keys or infer another
-document's opt-in, and a remembered off value must not be overwritten by a
-legacy true value. No broader automatic migration is authorized.
+Today's host authenticates one installation owner. Sync means that owner's
+clients and sign-ins using the same installation/data root, not individual
+members of a hypothetical multi-user host or independent hosts. A different app
+data root has its own preference. No new principal registry, account federation,
+cookie claim, auth scope or multi-user ACL is introduced. Existing authentication
+and action/configuration authority still apply; an agent interpretation of this
+contract does not grant permission to change a user's setting.
 
-If saving or confirming an on preference fails, do not silently enable it.
-Off still takes effect for the current document, with useful feedback if that
-choice could not be remembered. A failed persistent Off must not leave an old
-true value eligible for restoration in that document. Storage availability
-does not change provider authorization, currentness or draft ownership.
+Clients use the existing `settings.update` action with
+`{patch:{suggestedMessages:boolean},expectedSuggestedMessagesRevision?:integer}`,
+with that setting submitted alone. The saved receipt is
+`{result:{settings:{suggestedMessages:boolean,suggestedMessagesRevision:integer},
+scope:"installation-owner"}}`
+within the ordinary accepted/revision envelope; ordinary state includes the
+same value. The receipt and changed settings commit together before cross-client
+publication. A failed commit leaves the prior saved/projected preference and
+revision intact. Reusing a command ID with different contents is a conflict.
+Turning the setting on/off is not a provider/model call or a chat message.
+The bundled control sends the captured setting revision. Initial setup captures
+it before saving host model configuration; a newer choice in another client,
+even an explicit Off-to-Off write, makes delayed enable fail with 409 before
+changing anything. Host model setup does not advance this preference revision.
+Replaying the exact saved command ID does not increment it twice.
+The existing whole-state expected-revision barrier still flushes pending
+progress before CAS and before returning current state with a duplicate.
+If notification/projection fails after a successful commit, the saved choice
+and receipt remain authoritative: committed Off must stay Off in the host gate,
+and its pending-work withdrawal still occurs. A notification error is not proof
+that the setting write was rolled back.
+
+Once Off commits, the host refuses new suggestion requests even if a stale
+client still thinks it is on. Pending utility cancellation retains physical
+occupancy until cleanup settles. Off does not delete the durable successful
+assistance cache or paid/uncertain claims; re-enabling does not authorize replay.
+Private candidate access remains cookie/client/selected-chat bound. Sharing a
+nonsecret preference between the owner's sign-ins does not share private
+request IDs or weaken candidate authorization.
 
 The host's `suggestionModels.enabled` and saved configuration retain their
 existing app-global scope. The everyday UI combines their actual receipt with
-the separate personal preference instead of presenting duplicate switches.
+the synced setting instead of presenting duplicate switches.
 Save and enable first completes the normal authorized global configuration
-write, then enables this browser's preference; neither a local preference nor
-an agent interpretation of this contract is a grant to change host settings.
-Current user instructions and existing action authority still govern.
+write, then commits `settings.suggestedMessages:true`. Neither local draft UI
+state nor a stale browser value can substitute for either acknowledgement.
 
 ## Wire
 
@@ -274,7 +295,7 @@ Earlier failed receipts without diagnostics remain unattributed. No failure
 authorizes a retry, fallback or assumption of zero provider cost.
 Currentness refusal uses only a first-failed-gate reason: `current_closed`,
 `current_auth`, `current_epoch`, `current_audience`, `current_selected`,
-`current_config`, `current_session`, `current_archived`, `current_deleting`,
+`current_config`, `current_preference`, `current_session`, `current_archived`, `current_deleting`,
 `current_eligibility`, `current_busy` or `current_sourcewitness`. Exceptions at an
 existing gate report that gate, without error text or values. A changed capture
 key reports `capture_source_changed`; explicit invalidation without a failed gate
