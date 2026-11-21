@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 import copy
 import itertools
+import pytest
 
 from amplifier_web.update_blockers import blockers
 
@@ -160,3 +161,21 @@ def test_one_activity_observation_is_shared_by_all_holds():
     assert observation['configurationHolds'][0]['reasonCode'] == 'idle-configuration-hold'
     assert observation['configurationHoldCount'] == 4
     assert observation['blocked'] is False
+
+
+@pytest.mark.parametrize('delivery', ['sending', 'accepted', 'failed', 'unknown', 'held', 'queued_for_update'])
+def test_ready_admitted_input_is_work_but_retained_delivery_is_not(delivery):
+    service = SimpleNamespace(state={'sessions': [{'id': 'chat', 'status': 'ready',
+        'messages': [{'inputId': 'input', 'delivery': {'status': delivery}}]}]})
+    assert bool(blockers(service)) == (delivery == 'sending')
+    service.state['sessions'][0]['status'] = 'stopped'
+    assert not blockers(service)  # Stop is not reopened by an old message.
+
+
+def test_update_activity_does_not_load_cold_messages(monkeypatch):
+    from amplifier_web import cold_display
+    session = cold_display.ColdRecord({'id': 'cold', 'status': 'ready',
+        '_coldFields': {'messages': {'$resource': 'never-read'}}}, None)
+    monkeypatch.setattr(cold_display, 'load', lambda *args: pytest.fail('No cold message scan'))
+    service = SimpleNamespace(state={'sessions': [session]})
+    assert not blockers(service)

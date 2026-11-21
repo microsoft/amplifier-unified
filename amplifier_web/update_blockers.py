@@ -92,8 +92,10 @@ def _settings_hold(service, session, *, activity=None):
 
 
 def _conversation_working(session):
+    from .message_delivery import sending_input
     return session.get('status') in {'working', 'starting', 'stopping'} or (session.get('status') == 'ready' and
-        any(turn.get('phase') == 'running' for turn in session.get('execution', {}).get('turns', [])))
+        (sending_input(session) or
+         any(turn.get('phase') == 'running' for turn in session.get('execution', {}).get('turns', []))))
 
 
 def _worker_working(worker):
@@ -104,7 +106,7 @@ def working_sessions(service):
     """Count conversations whose own or background work is running, queued or finishing.
 
     The same two predicates as the update gate, and the same reads: a saved
-    execution record is opened only for a conversation whose status is `ready`.
+    execution record and resident input are read only when status is `ready`.
     The owner's uninstall asks this before a normal stop would interrupt work.
     """
     return sum(_conversation_working(row) or any(_worker_working(worker) for worker in row.get('workers', []))
