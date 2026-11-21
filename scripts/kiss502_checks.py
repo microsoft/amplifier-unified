@@ -42,6 +42,7 @@ FIXTURES = (
     "peer_return_worker_probe.py", "collaboration_native_probe.py",
     "external_multiparty_ui_server.py",
     "canvas_runtime_probe.py", "surface_context_probe.py", "workspace_awareness_runtime_probe.py",
+    "mcp_unfamiliar_server.py",
 )
 BROWSERS = ("external-multiparty-browser.mjs", "external-approval-browser.mjs")
 OWNER_TARGETS = ("test_execution_owner", "test_execution_owner_service",
