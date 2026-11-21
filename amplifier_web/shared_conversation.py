@@ -391,6 +391,9 @@ class SharedConversations:
                 agentId=binding['id'], agentLabel=binding['label'], sourceMessageId=delivery['sourceMessageId'],
                 **({} if publish else {'partial': True}))
             if publish:
+                if state == 'accepted':
+                    self.service.prompt_suggestions.observe_message(
+                        session, message, shared_completion=(turn, delivery))
                 self.capture(session, message)
         self._record(session, delivery, state)
         binding['status'] = 'unknown' if state == 'unknown' else 'error' if state == 'failed' else 'idle'

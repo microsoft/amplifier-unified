@@ -1651,6 +1651,175 @@ class Integration(unittest.IsolatedAsyncioTestCase):
         self.env.stop()
         self.tmp.cleanup()
 
+    async def shared_migration_fixture(self, identity):
+        """Real UI admission/capture/receipt; no ACP process or model starts."""
+        from amplifier_web.shared_conversation import Participation
+        self.app.server_config = {'externalAgents': [
+            {'id': agent, 'label': agent.title(), 'command': sys.executable,
+             'args': ['-c', 'raise AssertionError("offline observer fixture must not start ACP")']}
+            for agent in ('alpha', 'beta')]}
+        result = await self.app.dispatch('session.create', {
+            'workspace': str(self.root), 'externalAgentIds': ['alpha', 'beta']},
+            command_id='room-' + identity, include_state=False)
+        session = self.app._session(result['result']['sessionId'])
+        shared = self.app.external_conversations.shared
+        floor = self.app.db.execute('SELECT COALESCE(MAX(rowid),0) FROM commands').fetchone()[0]
+        self.app.db.execute('UPDATE suggestion_cache_policy SET legacy=1,command_floor=?', (floor,))
+        self.app.db.execute('INSERT OR IGNORE INTO suggestion_requests VALUES (?,?)',
+                            ('legacy-unknown', 'old-unprojectable-paid-claim'))
+        self.app.db.commit()
+        with patch.object(shared, '_schedule') as schedule:
+            receipt = await self.app.dispatch('conversation.send', {
+                'sessionId': session['id'], 'text': 'Direct new human work'},
+                command_id=identity, include_state=False)
+        schedule.assert_called_once()
+        self.assertEqual(receipt['delivery'], 'accepted')
+        source = shared.message(session, next(row['sourceMessageId'] for row in shared.room(session)['deliveries']
+                                             if row['inputId'] == identity))
+        delivery = next(row for row in shared.room(session)['deliveries']
+                        if row['sourceMessageId'] == source['id'] and row['agentId'] == 'alpha')
+        delivery['state'] = 'sending'
+        turn = Participation(delivery['id'], identity, 'alpha', session['interruptionRevision'],
+                             SimpleNamespace(close=AsyncMock()), attempted=True, speaking=True)
+        shared.turns[(session['id'], 'alpha')] = turn
+        session['externalStreams'] = {'alpha': {'text': 'Direct completed shared reply.'}}
+        self.app.prompt_suggestions.complete = AsyncMock(side_effect=AssertionError('no inference'))
+        return session, shared, turn, delivery, source, floor
+
+    async def test_shared_direct_ui_completion_migration_preserves_dto_peer_ids_floor_and_claims(self):
+        from amplifier_web.suggestion_settings import digest
+        for label in (None, 'action', 'commandAction'):
+            with self.subTest(label=label):
+                session, shared, turn, delivery, source, floor = await self.shared_migration_fixture(
+                    'direct-' + str(label))
+                sid = session['id']
+                raw = self.app.db.execute('SELECT receipt FROM commands WHERE id=?', (turn.input_id,)).fetchone()[0]
+                receipt = json.loads(raw)
+                receipt.pop('action', None)
+                receipt.pop('commandAction', None)
+                if label:
+                    receipt[label] = 'conversation.send'
+                self.app.db.execute('UPDATE commands SET receipt=? WHERE id=?',
+                                    (json.dumps(receipt), turn.input_id))
+                claims = list(self.app.db.execute('SELECT * FROM suggestion_requests'))
+                source_before = copy.deepcopy(source)
+                try:
+                    with patch.object(self.app, '_message', wraps=self.app._message) as insertion:
+                        async with self.app.lock:
+                            shared._settle(session, turn, 'accepted', publish=True)
+                    insertion.assert_called_once_with(session, 'assistant', 'Direct completed shared reply.',
+                        source='external', agentId='alpha', agentLabel='Alpha', sourceMessageId=source['id'])
+                    message = session['messages'][-1]
+                    self.assertEqual(set(message), {
+                        'id', 'role', 'text', 'via', 'createdAt', 'source',
+                        'agentId', 'agentLabel', 'sourceMessageId', 'roomSequence'})
+                    self.assertNotIn('inputId', message)
+                    self.assertEqual(source, source_before)
+                    peer, = [row for row in shared.room(session)['deliveries']
+                             if row['sourceMessageId'] == message['id']]
+                    self.assertEqual(peer['agentId'], 'beta')
+                    self.assertEqual(peer['inputId'], message['id'])
+                    self.assertNotEqual(peer['inputId'], turn.input_id)
+                    proof = self.app.db.execute('SELECT message_key FROM suggestion_fresh_completion WHERE session_id=?',
+                                                (sid,)).fetchone()
+                    self.assertEqual(proof, (digest(message['id']),))
+                    host = self.app.prompt_suggestions
+                    self.assertTrue(host._migration_allows({'sessionId': sid}, [message]))
+                    self.assertFalse(host._migration_allows({'sessionId': sid}, [{'id': 'other-assistant'}]))
+                    self.assertEqual(self.app.db.execute(
+                        'SELECT legacy,command_floor FROM suggestion_cache_policy').fetchone(), (1, floor))
+                    self.assertEqual(list(self.app.db.execute('SELECT * FROM suggestion_requests')), claims)
+                    host.complete.assert_not_called()
+                finally:
+                    shared.turns.pop((sid, 'alpha'), None)
+
+    async def shared_migration_refusal(self, fault):
+        session, shared, turn, delivery, source, floor = await self.shared_migration_fixture(fault)
+        sid = session['id']
+        receipt = json.loads(self.app.db.execute('SELECT receipt FROM commands WHERE id=?',
+                                                (turn.input_id,)).fetchone()[0])
+        state, publish = 'accepted', True
+        if fault == 'peer-source':
+            source.update(role='assistant', agentId='beta', inputOrigin='agent',
+                          sourceMessageId='earlier-human')
+        elif fault == 'agent-source': source['inputOrigin'] = 'agent'
+        elif fault == 'unknown-source': source.pop('inputOrigin')
+        elif fault == 'contradictory-actor': source['inputActor'] = {'kind': 'agent'}
+        elif fault == 'partial-source': source['partial'] = True
+        elif fault == 'private-source': source['metadata'] = {'private': True}
+        elif fault == 'missing-source': session['messages'].remove(source)
+        elif fault == 'ambiguous-source': session['messages'].append(copy.deepcopy(source))
+        elif fault == 'ambiguous-input':
+            session['messages'].append({**source, 'id': 'different-display-same-input'})
+        elif fault == 'pruned-source':
+            session['messages'].extend({'id': 'later-' + str(i), 'role': 'assistant', 'text': 'Later'}
+                                       for i in range(100))
+        elif fault == 'partial-result': publish = False
+        elif fault == 'unknown-result': state, publish = 'unknown', False
+        elif fault == 'silence': session['externalStreams']['alpha']['text'] = '[[PASS]]'
+        elif fault == 'stopped-turn': turn.stop = True
+        elif fault == 'replaced-turn': shared.turns[(sid, 'alpha')] = copy.copy(turn)
+        elif fault == 'source-stop': source['interruptionRevision'] += 1
+        elif fault == 'delivery-stop': delivery['interruptionRevision'] += 1
+        elif fault == 'delivery-input': delivery['inputId'] = 'other-input'
+        elif fault == 'delivery-agent': delivery['agentId'] = 'beta'
+        elif fault == 'turn-input': turn.input_id = 'other-input'
+        elif fault == 'missing-receipt':
+            self.app.db.execute('DELETE FROM commands WHERE id=?', (turn.input_id,))
+        elif fault == 'malformed-receipt':
+            self.app.db.execute('UPDATE commands SET receipt=? WHERE id=?', ('[]', turn.input_id))
+        elif fault == 'at-floor':
+            floor = self.app.db.execute('SELECT rowid FROM commands WHERE id=?', (turn.input_id,)).fetchone()[0]
+            self.app.db.execute('UPDATE suggestion_cache_policy SET command_floor=?', (floor,))
+        else:
+            if fault in {'action', 'commandAction'}: receipt[fault] = 'coordination.send'
+            elif fault == 'wrong-session': receipt['sessionId'] = 'elsewhere'
+            elif fault == 'wrong-input': receipt['inputId'] = 'elsewhere'
+            elif fault == 'unknown-receipt': receipt['delivery'] = 'unknown'
+            elif fault == 'rejected-receipt': receipt['accepted'] = False
+            elif fault == 'error-receipt': receipt['error'] = 'unconfirmed'
+            elif fault == 'status-receipt': receipt['status'] = 500
+            elif fault == 'missing-navigation': receipt.pop('navigationPost')
+            elif fault == 'wrong-fence': receipt['navigationPost']['fence'] = 'another-fence'
+            elif fault == 'rejected-navigation': receipt['navigationPost']['disposition'] = 'rejected'
+            else: self.fail('Unknown mutation ' + fault)
+            self.app.db.execute('UPDATE commands SET receipt=? WHERE id=?',
+                                (json.dumps(receipt), turn.input_id))
+        claims = list(self.app.db.execute('SELECT * FROM suggestion_requests'))
+        try:
+            async with self.app.lock:
+                shared._settle(session, turn, state, publish=publish)
+            self.assertIsNone(self.app.db.execute(
+                'SELECT 1 FROM suggestion_fresh_completion WHERE session_id=?', (sid,)).fetchone())
+            self.assertEqual(list(self.app.db.execute('SELECT * FROM suggestion_requests')), claims)
+            self.assertEqual(self.app.db.execute(
+                'SELECT legacy,command_floor FROM suggestion_cache_policy').fetchone(), (1, floor))
+            self.app.prompt_suggestions.complete.assert_not_called()
+            self.assertTrue(all('inputId' not in row for row in session['messages']
+                                if row.get('source') == 'external'))
+        finally:
+            shared.turns.pop((sid, 'alpha'), None)
+
+    async def test_shared_migration_direct_human_provenance_and_bounded_source_fail_closed(self):
+        for fault in ('peer-source', 'agent-source', 'unknown-source', 'contradictory-actor',
+                      'partial-source', 'private-source', 'missing-source', 'ambiguous-source',
+                      'ambiguous-input', 'pruned-source'):
+            with self.subTest(fault=fault):
+                await self.shared_migration_refusal(fault)
+
+    async def test_shared_migration_requires_exact_accepted_receipt_floor_and_navigation_fence(self):
+        for fault in ('missing-receipt', 'malformed-receipt', 'at-floor', 'action', 'commandAction',
+                      'wrong-session', 'wrong-input', 'unknown-receipt', 'rejected-receipt',
+                      'error-receipt', 'status-receipt', 'missing-navigation', 'wrong-fence', 'rejected-navigation'):
+            with self.subTest(fault=fault):
+                await self.shared_migration_refusal(fault)
+
+    async def test_shared_migration_partial_unknown_silence_and_changed_turn_never_prove_completion(self):
+        for fault in ('partial-result', 'unknown-result', 'silence', 'stopped-turn', 'replaced-turn',
+                      'source-stop', 'delivery-stop', 'delivery-input', 'delivery-agent', 'turn-input'):
+            with self.subTest(fault=fault):
+                await self.shared_migration_refusal(fault)
+
     async def test_synced_preference_default_off_two_browsers_new_client_and_restart_same_owner(self):
         from amplifier_web.service import AppService
         await self.app.close()

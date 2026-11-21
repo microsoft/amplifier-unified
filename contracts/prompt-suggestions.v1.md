@@ -278,8 +278,16 @@ conversation proofs) private table retains only the hashed assistant display
 ID. The newly captured final assistant must match that identity and pass the
 normal currentness/public-input checks. No timestamp supplied by message text,
 an imported native row, label or wall-clock guess establishes this proof.
-Host-observed native and external responses use the same canonical message
-insertion hook. Inputs without a durable command ID/receipt, or responses
+Host-observed native and exclusive external responses use the canonical message
+insertion hook. A completed shared response can supply its exact delivery/turn
+pair to that observer without adding a human `inputId` to the published assistant.
+Its direct source must be an unambiguous, accepted UI human input in the retained
+100-row suffix, with matching source/display/input/participant/Stop identities,
+an accepted exact command receipt and the same navigation fence. Supplied receipt
+action labels must be `conversation.send`; legacy unlabelled receipts remain
+eligible. Partial, unknown, missing/pruned and peer/agent sources fail closed;
+there is no ancestor-human lookup or change to subsequent shared capture IDs.
+Inputs without a durable command ID/receipt, or responses
 imported without that observation, conservatively remain unavailable after
 legacy migration until qualifying new work occurs; no history scan is added.
 Eligible saved successes recover before this migration check.

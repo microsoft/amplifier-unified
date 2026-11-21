@@ -103,32 +103,85 @@ class PromptSuggestions:
         self._trim_cache()
         service.db.commit()
 
-    def observe_message(self, session, message):
+    def observe_message(self, session, message, *, shared_completion=None):
         """Exact host-observed response to a newly admitted UI input, not text/time inference."""
-        if (message.get('role') != 'assistant' or not message.get('inputId')
-                or message.get('source') not in {'amplifier', 'external'}):
+        input_id = message.get('inputId')
+        if (message.get('role') != 'assistant' or (not input_id and shared_completion is None)
+                or message.get('source') not in {'amplifier', 'external'} or message.get('partial')):
             return
         db = self.service.db
         legacy, floor = db.execute('SELECT legacy,command_floor FROM suggestion_cache_policy WHERE version=1').fetchone()
         if not legacy:
             return
+        source_post = None
+        if shared_completion is not None:
+            # Only the synchronous shared settlement owner supplies this pair;
+            # it is never an action argument or a field of the published DTO.
+            # Keep the peer reply's own future participation input identity.
+            from .shared_conversation import is_shared
+            from .suggestion_source import MAX_ROWS, speaker
+            turn, delivery = shared_completion
+            shared = self.service.external_conversations.shared
+            if (not is_shared(session) or message.get('source') != 'external' or input_id is not None
+                    or not shared._valid(session, turn) or turn.retiring
+                    or not turn.attempted or not turn.speaking
+                    or delivery.get('id') != turn.delivery_id or delivery.get('state') != 'sending'
+                    or delivery.get('agentId') != turn.agent_id or message.get('agentId') != turn.agent_id
+                    or delivery.get('inputId') != turn.input_id
+                    or delivery.get('interruptionRevision') != turn.revision
+                    or delivery.get('sourceMessageId') != message.get('sourceMessageId')):
+                return
+            # The canonical source must still be in the bounded resident suffix.
+            # Do not hydrate/scan history or follow a peer reply back to a human.
+            tail = dict.get(session, 'messages', ())[-MAX_ROWS:]
+            sources = [row for row in tail if row.get('id') == delivery.get('sourceMessageId')
+                       or row.get('inputId') == turn.input_id]
+            if len(sources) != 1:
+                return
+            source = sources[0]
+            if (source.get('id') != delivery.get('sourceMessageId')
+                    or not isinstance(turn.input_id, str) or not turn.input_id
+                    or source.get('inputId') != turn.input_id or source.get('role') != 'user'
+                    or source.get('inputOrigin') != 'ui' or speaker(source)['kind'] != 'human'
+                    or source.get('partial') or source.get('private') or source.get('ephemeral')
+                    or source.get('observation') or source.get('visibility') in {'internal', 'developer'}
+                    or source.get('interruptionRevision') != turn.revision
+                    or source.get('delivery') != {'status': 'accepted', 'scope': 'conversation'}):
+                return
+            metadata = source.get('metadata') or {}
+            if not isinstance(metadata, dict) or any(metadata.get(key) for key in (
+                    'private', 'ephemeral', 'amplifier_visible_reference', 'amplifier_recovery_reference')):
+                return
+            input_id = source['inputId']
+            source_post = source.get('navigationPost')
+            if not isinstance(source_post, dict) or source_post.get('disposition') == 'rejected':
+                return
         # Exact indexed receipt, never an event/transcript scan. Host command
         # row identity is post-migration; message-provided timestamps prove nothing.
-        row = db.execute('SELECT rowid,receipt FROM commands WHERE id=?', (message['inputId'],)).fetchone()
+        row = db.execute('SELECT rowid,receipt FROM commands WHERE id=?', (input_id,)).fetchone()
         if row is None or row[0] <= floor:
             return
+        if shared_completion is not None:
+            from .message_delivery import receipt_delivery
+            if receipt_delivery(row[1], session['id'], input_id) != 'accepted':
+                return
         try:
             receipt = json.loads(row[1])
         except (ValueError, TypeError):
             return
+        if not isinstance(receipt, dict):
+            return
         post = receipt.get('navigationPost') or {}
         # navigationPost is authored only by ordinary host-trusted UI send,
         # not caller fields, imported history or an agent-origin command.
-        if (receipt.get('accepted') is not True or receipt.get('inputId') != message['inputId']
+        if (receipt.get('accepted') is not True or receipt.get('inputId') != input_id
                 or receipt.get('sessionId') != session['id'] or not isinstance(post, dict)
-                or post.get('sessionId') != session['id'] or post.get('inputId') != message['inputId']
+                or post.get('sessionId') != session['id'] or post.get('inputId') != input_id
                 or not isinstance(post.get('fence'), str) or not post['fence']
                 or post.get('disposition') == 'rejected'):
+            return
+        if source_post is not None and any(source_post.get(key) != post[key]
+                                           for key in ('sessionId', 'inputId', 'fence')):
             return
         db.execute('INSERT OR REPLACE INTO suggestion_fresh_completion VALUES (?,?,?)',
                    (session['id'], digest(message['id']), time.time_ns()))
