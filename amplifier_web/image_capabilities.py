@@ -11,9 +11,16 @@ IMAGE_TAGS = {'vision', 'image', 'images', 'multimodal'}
 async def _model_catalog(provider, loader):
     # Recommendations may omit a valid saved model. Ask the same provider for
     # its advertised full inventory without altering its picker configuration.
-    info = await model_list_info(provider)
-    filters = info.get("unfiltered") if info and info.get("filters_keyword") == "filters" else None
-    rows = loader(filters=filters) if isinstance(filters, dict) else loader()
+    kwargs = {}
+    try:
+        # A legacy subclass may inherit the hint but override the method.
+        inspect.signature(loader).bind(filters={})
+        info = await model_list_info(provider)
+        if info and info.get("filters_keyword") == "filters" and isinstance(info.get("unfiltered"), dict):
+            kwargs["filters"] = info["unfiltered"]
+    except (TypeError, ValueError):
+        pass
+    rows = loader(**kwargs)
     return await rows if inspect.isawaitable(rows) else rows
 
 

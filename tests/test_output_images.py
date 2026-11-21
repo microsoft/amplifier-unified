@@ -147,6 +147,26 @@ async def test_saved_model_image_support_uses_provider_inventory_once_per_select
     assert calls == [{"filters": full_scope}] * 3
 
 
+@pytest.mark.parametrize("metadata", [None, {"version": 2}])
+async def test_invalid_or_new_catalog_metadata_keeps_default_image_model(metadata):
+    from amplifier_web.image_capabilities import ImageCapabilities
+
+    calls = []
+    class Provider:
+        def get_info(self):
+            return {}
+
+        def get_model_list_info(self):
+            return metadata
+
+        def list_models(self, **kwargs):
+            calls.append(kwargs)
+            return [{"id": "visual", "capabilities": ["vision"]}]
+
+    assert await ImageCapabilities().supports(ChatRequest(model="visual", messages=[]), Provider())
+    assert calls == [{}]
+
+
 @pytest.mark.parametrize('serialization', ['direct', 'model_dump', 'observed_loop_envelope', 'kernel_hooks', 'live_loop_hooks'])
 async def test_selected_provider_keeps_typed_images_and_selection_on_every_boundary(saved,serialization):
     from amplifier_core import ProviderInfo, HookRegistry, HookResult
