@@ -162,9 +162,7 @@ class HostAgent:
     async def initialize(self, protocol_version, **kwargs):
         if self.initialized:
             raise RequestError.invalid_request({'details': 'Connection already initialized.'})
-        self.initialized = True
         policy = approval_policy.negotiate(kwargs.get(approval_policy.NAMESPACE))
-        self.owner.approval_policy = policy is not None
         instance = None
         offered = kwargs.get(agent_instance.NAMESPACE)
         if (isinstance(offered, dict) and set(offered) == {'version'}
@@ -173,17 +171,21 @@ class HostAgent:
                 profile = agent_instance.InstanceProfile(self.owner)
                 if profile.applies():
                     instance = profile.describe()
-                    self.instance = profile
-                    self.owner.attachment_guard = lambda identity: profile.bound(identity, profile.bindings.get(identity))
             except (ValueError, OSError) as error:
                 raise RequestError(_REQUEST_FAILED, str(error)) from None
-        return InitializeResponse(protocol_version=1, agent_capabilities=AgentCapabilities(
+        response = InitializeResponse(protocol_version=1, agent_capabilities=AgentCapabilities(
             load_session=False, mcp_capabilities=McpCapabilities(http=True, sse=False),
             session_capabilities=SessionCapabilities(resume=SessionResumeCapabilities())),
             field_meta={RETIREMENT: {'version': 1, 'method': '_amplifier/retire',
                 'notification': '_amplifier/retirementRequested'},
                 **({approval_policy.NAMESPACE: policy} if policy else {}),
                 **({agent_instance.NAMESPACE: instance} if instance else {})})
+        if instance is not None:
+            self.instance = profile
+            self.owner.attachment_guard = lambda identity: profile.bound(identity, profile.bindings.get(identity))
+        self.owner.approval_policy = policy is not None
+        self.initialized = True
+        return response
 
     def instance_metadata(self, kwargs):
         value = kwargs.get(agent_instance.NAMESPACE)

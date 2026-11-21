@@ -69,6 +69,20 @@ async def test_optional_profile_plain_acp_and_negotiation(host):
     await peer.socket.close()
 
 
+async def test_initialize_can_retry_after_profile_configuration_is_corrected(host):
+    app, _, _, _ = host
+    configure(host)
+    del app['service'].server_config['agentInstance']['id']
+    peer, response = await connect_profile(host)
+    try:
+        assert 'error' in response
+        configure(host)
+        response = await peer.call('initialize', protocolVersion=1, _meta={NAMESPACE: {'version': 1}})
+        assert response['result']['_meta'][NAMESPACE]['agentId'] == 'urn:example:agent:U'
+    finally:
+        await peer.socket.close()
+
+
 async def test_same_public_agent_two_sources_independent_concurrent_contexts(host):
     configure(host)
     app, _, runtime, path = host
