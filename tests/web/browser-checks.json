@@ -396,6 +396,14 @@
       }
     },
     {
+      "id": "model-change-history",
+      "command": ["node", "tests/web/model-change-browser.mjs"],
+      "env": {
+        "AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/model-change-history",
+        "AMPLIFIER_TEST_PYTHON": "{root}/.venv/bin/python"
+      }
+    },
+    {
       "id": "provider-native",
       "command": [
         "node",
@@ -672,6 +680,14 @@
       ],
       "env": {
         "AMPLIFIER_TEST_OUTPUT_DIR": "{root}/output/browser-checks/tool-previews"
+      }
+    },
+    {
+      "id": "grouped-work-inspector",
+      "command": ["node", "tests/web/grouped-work-inspector-browser.mjs"],
+      "env": {
+        "AMPLIFIER_TEST_PYTHON": "{root}/.venv/bin/python",
+        "AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/grouped-work-inspector"
       }
     },
     {
@@ -1263,6 +1279,7 @@
     "chat-reference",
     "draft-provider-refresh",
     "provider-selection",
+    "model-change-history",
     "provider-native",
     "immediate-direction",
     "draft-discovery-recovery",
@@ -1304,6 +1321,7 @@
     "delegate-work-stream",
     "tool-details",
     "tool-previews",
+    "grouped-work-inspector",
     "canonical-work",
     "interim-replies",
     "tool-outcomes",

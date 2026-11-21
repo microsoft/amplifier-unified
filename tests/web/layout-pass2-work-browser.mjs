@@ -560,15 +560,19 @@ async function expandGroup(selector){
  await expect(toggle).toHaveAttribute('aria-expanded','true');return group;
 }
 async function expandNode(selector){
+ const inspector=current.page.locator('#work-step-inspector');
+ if(await inspector.getByRole('button',{name:'Close step details'}).isVisible())await inspector.getByRole('button',{name:'Close step details'}).click();
  const node=current.page.locator(selector),toggle=node.locator(':scope > button.a-execution-action-line');
  await expect(toggle).toBeVisible();
  if(await toggle.getAttribute('aria-expanded')!=='true')await toggle.click();
- await expect(node.locator(':scope > .a-execution-body')).toBeVisible();return node;
+ await expect(inspector).toBeVisible();return inspector;
 }
 async function inspectionTool(callId){
  // The maintained finish event can move the public call between message gaps.
  // Source identity comes from the fixture's read-only public execution rows,
  // not from a node which is absent while its group body is collapsed/deferred.
+ const inspector=current.page.locator('#work-step-inspector');
+ if(await inspector.isVisible())await inspector.getByRole('button',{name:'Close step details'}).click();
  const source=await control({op:'inspect-work-source'});
  const sid=(await state()).selectedSessionId;
  const sourceNodes=source.sessions.find(row=>row.id===sid)?.execution?.nodes||[];
@@ -620,7 +624,7 @@ async function inspectionTool(callId){
  const selector=`.a-messages [data-group-id=${JSON.stringify(observed.groupId)}] [data-kind="tool"][data-node-id=${JSON.stringify(observed.nodeId)}]`;
  const node=await expandNode(selector);
  discovery.lookupStatus='exact-fixture-call-rendered';discovery.rendered=observed;await save();
- return {node,selector,observedGroups:groupIds,publicFixtureNodeId:sourceNode.id,toolCallId:callId,...observed};
+ return {node,selector:'#work-step-inspector',rowSelector:selector,observedGroups:groupIds,publicFixtureNodeId:sourceNode.id,toolCallId:callId,...observed};
 }
 function messageArtifact(id,version=1){
  return current.page.locator(`.a-messages .a-chat-artifacts > section.a-document-output[data-artifact-id=${JSON.stringify(id)}][data-artifact-version="${version}"]`);
@@ -720,8 +724,9 @@ async function detailScenes(){
     'Measurement/capture must not scroll the summary out of its witnessed position');
    for(const id of ['pass2-child-failed','pass2-grandchild-failed','pass2-sibling-tool']){
     const exact=`${selector} [data-node-id="${id}"]`;
-    const node=await expandNode(exact);shots.push(await capture(id,node,exact));
+    const node=await expandNode(exact);shots.push(await capture(id,node,'#work-step-inspector'));
    }
+   await current.page.locator('#work-step-inspector').getByRole('button',{name:'Close step details'}).click();
    return {top,shots,input:'synthetic-hierarchy-input.json',
     togetherMeaning:'Failed parent + first operation line; the farther child operation follows an intentional delegate Request',
     oracleChange:'Accepted parent b37 scope: one operation in the shared viewport, no CSS change or tolerance increase; farther raw coordinates retained',
@@ -742,6 +747,7 @@ async function detailScenes(){
    }
    await expandNode('[data-node-id="pass2-root-failed"]');
    await expandNode('[data-node-id="pass2-worked-tool"]');
+   await current.page.locator('#work-step-inspector').getByRole('button',{name:'Close step details'}).click();
    let hierarchyAssertions=null;
    if(process.env.LAYOUT_REQUIRE_FIXED==='1'){
     const {assertWorkHierarchy}=await import('../../.build/web-client/tests/work-hierarchy-geometry.mjs');
@@ -769,6 +775,7 @@ async function detailScenes(){
    if(id==='failed')await expect(node).toContainText('AssertionError: expected committed');
    shots.push(await capture(id,node,selector));calls.push(binding);
   }
+  await current.page.locator('#work-step-inspector').getByRole('button',{name:'Close step details'}).click();
   return {shots,calls,scope:'Observed inspect-turn groups and exact public fixture calls; recorded Input/Output/failed/nested bodies; no tools executed'};
  });
  }
@@ -776,8 +783,8 @@ async function detailScenes(){
  await control({op:'canonical-work'});await fresh();
  await eachLook('W04.model-recordings',async()=>{
   const turn=await expandGroup('[data-group-id="canonical@before"]');
-  const node=turn.locator('[data-kind="llm"]');
-  await node.locator(':scope > button.a-execution-action-line').click();
+  const row=turn.locator('[data-kind="llm"]'),node=current.page.locator('#work-step-inspector');
+  await row.locator(':scope > button.a-execution-action-line').click();
   await expect(node.getByRole('button',{name:/^View request/})).toBeVisible();
   await node.getByRole('button',{name:/^View request/}).click();
   const request=node.getByRole('group',{name:'Request payload',exact:true});
@@ -785,9 +792,9 @@ async function detailScenes(){
   await node.getByRole('button',{name:/^View response/}).click();
   const response=node.getByRole('group',{name:'Response payload',exact:true});
   await response.getByRole('button',{name:/^Response Object/}).click();
-  const shot=await capture('model-input-output',node,'[data-group-id="canonical@before"] [data-kind="llm"]');
+  const shot=await capture('model-input-output',node,'#work-step-inspector');
   // Close only the local toggles; the next checkpoint opens them explicitly.
-  await node.locator(':scope > button.a-execution-action-line').click();
+  await node.getByRole('button',{name:'Close step details'}).click();
   return {shots:[shot],downloadsAndCopies:'controls observed, not activated'};
  });
  }

@@ -32,8 +32,16 @@ try{
  const progress=saved.messages.find(m=>m.text==='Checking the first detail.');
  const exportText=()=>page.evaluate(async id=>{const r=await window.amplifier.dispatch('session.export',{id,format:'markdown',destination:'none'});return (await (await fetch(r.result.url)).json()).content},started.alpha);
  const originalExport=await exportText();
- await openSettingsPage(page,'appearance');
- const toggle=page.getByRole('checkbox',{name:/Collapse interim replies/});
+ const openAppearance=async()=>{
+  await openSettingsPage(page,'appearance');
+  const browserProfile=page.getByRole('button',{name:'This browser',exact:true});
+  if(await browserProfile.getAttribute('aria-pressed')!=='true')await browserProfile.click();
+  await expect(browserProfile).toHaveAttribute('aria-pressed','true');
+  const advanced=page.locator('.a-appearance-more');
+  if(!await advanced.evaluate(node=>node.open))await advanced.locator(':scope > summary').click();
+ };
+ await openAppearance();
+ const toggle=page.getByRole('checkbox',{name:'Collapse earlier updates',exact:true});
  await expect(toggle).not.toBeChecked();await toggle.check();
  await expect(toggle).toBeChecked();await page.getByRole('button',{name:'Close panel',exact:true}).click();
  const group=page.locator('[data-interim-group]'),header=group.locator('button.a-execution-turn-line').first();
@@ -53,10 +61,15 @@ try{
  await expect(header).toHaveAttribute('aria-expanded','true');
  await expect(page.locator(`[data-message-id="${progress.id}"]`)).toBeFocused();
  await header.click();
- await openSettingsPage(page,'appearance');await page.getByRole('radio',{name:/^Everything /}).check();
+ await openAppearance();await page.getByRole('combobox',{name:'Interface detail',exact:true}).selectOption('detailed');
  await page.getByRole('button',{name:'Close panel',exact:true}).click();
  await expect(header).toHaveAttribute('aria-expanded','false');
- await page.reload();await expect(header).toHaveAttribute('aria-expanded','false');
+ await page.reload();
+ await page.locator('.a-messages [data-message-id]').first().waitFor();
+ // Reload may restore a reading position above the tail, where automatic
+ // regrouping is deliberately deferred. Resume following before asserting.
+ await page.locator('.a-messages').evaluate(n=>{n.scrollTop=n.scrollHeight;n.dispatchEvent(new Event('scroll'))});
+ await expect(header).toHaveAttribute('aria-expanded','false');
  // Another browser has its own presentation choice.
  otherBrowser=await chromium.launch(launchOptions);
  const other=await otherBrowser.newContext({extraHTTPHeaders:headers});
@@ -127,20 +140,22 @@ try{
   const node=group.locator(`[data-node-id="tool:${started.alpha}:${detailGeneration}-call-${index}"]`);
   const button=node.locator(':scope > button.a-execution-action-line');
   if(await button.getAttribute('aria-expanded')==='false')await button.click();
-  const copyOutput=node.getByRole('button',{name:'Copy file content',exact:true});
+  const inspector=page.locator('#work-step-inspector');
+  const copyOutput=inspector.getByRole('button',{name:'Copy file content',exact:true});
   await expect(copyOutput).toBeEnabled();
   await copyOutput.click();
   const output='雪𝄞'.repeat(10000)+`:OUTPUT-${index}`;
   await expect.poll(()=>page.evaluate(()=>navigator.clipboard.readText())).toBe(output);
-  const copyInput=node.getByRole('button',{name:'Copy arguments',exact:true});
+  const copyInput=inspector.getByRole('button',{name:'Copy arguments',exact:true});
   await expect(copyInput).toBeEnabled();await copyInput.click();
   assert.deepEqual(JSON.parse(await page.evaluate(()=>navigator.clipboard.readText())),
    {note:'界𝄞'.repeat(10000)+`:INPUT-${index}`});
-  const contents=node.locator('.a-execution-payload').filter({has:page.getByRole('button',{name:'Copy file content',exact:true})});
+  const contents=inspector.locator('.a-execution-payload').filter({has:page.getByRole('button',{name:'Copy file content',exact:true})});
   await expect(contents).toHaveCount(1);
   await contents.getByRole('button',{name:/^Show all /}).click();
   await expect(contents.locator('pre code')).toHaveText(output);
-  await expect(node.locator('.a-execution-load-error')).toHaveCount(0);
+  await expect(inspector.locator('.a-execution-load-error')).toHaveCount(0);
+  await inspector.getByRole('button',{name:'Close step details',exact:true}).click();
  }
  await page.setViewportSize({width:390,height:844});
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
@@ -280,16 +295,18 @@ try{
  await expect(group,'scrollback defers automatic folding after terminal render').toHaveCount(0);
  await page.getByRole('button',{name:'Jump to latest messages',exact:true}).click();
  await expect(group).toHaveCount(1);
- await openSettingsPage(page,'appearance');
+ await openAppearance();
  const rejectSave=async route=>{
-  if(route.request().postDataJSON()?.action==='shell.changes.prepare')
+  if(route.request().postDataJSON()?.action==='appearance.preferences.update')
    return route.fulfill({status:409,json:{error:'Synthetic preference save rejected.'}});
   return route.continue();
  };
  await page.route('**/api/actions',rejectSave);await toggle.click();
  await expect(page.getByText('Synthetic preference save rejected.',{exact:true})).toBeVisible();
- await expect(toggle).toBeChecked();
- await page.unroute('**/api/actions',rejectSave);await toggle.uncheck();
+ const retained=await page.evaluate(async()=>(await window.amplifier.dispatch('appearance.preferences.read',{})).result.local.values);
+ assert.equal(retained.collapseInterimReplies,true,'rejected save preserves the previous value');
+ await page.unroute('**/api/actions',rejectSave);
+ await page.locator('[data-appearance-preference="collapseInterimReplies"]').getByRole('button',{name:/Retry/}).click();
  await expect(toggle).not.toBeChecked();
  await page.getByRole('button',{name:'Close panel',exact:true}).click();
  await expect(group).toHaveCount(0);

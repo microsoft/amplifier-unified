@@ -35,7 +35,7 @@ def capture(service, action, args, origin, caller):
     authority = service.access_mode.capture_full(source, origin)
     if authority is None or authority.get('inputCoverage') != 'complete':
         service.configuration_authority.error('Other-chat configuration requires current Full access and authenticated assigned inputs.')
-    effect, scope = ('bundles' if 'bundle' in args else 'model_defaults', 'session') if peer else ('bundles', 'local')
+    effect, scope = ('bundles' if 'bundle' in args or 'restorePreviousInputId' in args else 'model_defaults', 'session') if peer else ('bundles', 'local')
     authority.update(workspace=source['workspace'], interruptionRevision=source.get('interruptionRevision', 0),
                      effect=effect, scope=scope)
     witness = {'caller': binding(service, source)}

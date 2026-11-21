@@ -5109,6 +5109,8 @@ class AppService:
     def _ingest_runtime_execution(self, session, payload):
         with self.performance_diagnostics.measure('execution.ingest', synchronous=True, session_id=session['id']):
             ingest_execution(session,payload)
+            from .turn_model_settings import record as record_model_settings
+            record_model_settings(session, payload)
         if (payload.get('kind') == 'llm' and payload.get('phase') == 'completed' and not payload.get('purpose')
                 and payload.get('lifecycle') != 'background'
                 and payload.get('sessionId') == payload.get('rootSessionId') == session['id']):
@@ -5656,7 +5658,9 @@ class AppService:
                     if admitted_start:
                         initial = payload.get('initial_input_id')
                         message = next((m for m in session['messages'] if m.get('inputId') == initial), {})
-                        ensure_turn(session, initial, message.get('text', ''))
+                        # The native start precedes transport. Timestamp newly discovered
+                        # turns at that start so their exact process owner can bind.
+                        ensure_turn(session, initial, message.get('text', ''), started_at=payload.get('observedAt'))
                     from .input_status import generation as observe_input_generation, PREFIX, record_failure
                     input_annotation = PREFIX + str(payload.get('initial_input_id', ''))
                     before_input = session.get('messageAnnotations', {}).get(input_annotation)

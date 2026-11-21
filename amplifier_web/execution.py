@@ -179,7 +179,7 @@ def interrupt_unfinished(session):
 
 USAGE_KEYS=('inputTokens','outputTokens','cacheReadTokens','cacheWriteTokens','totalTokens','grossInputTokens','grossTotalTokens','reasoningTokens')
 
-def ensure_turn(session,identity,label=''):
+def ensure_turn(session,identity,label='', *, started_at=None):
     from .execution_working_set import working
     owner = working(session)
     tree = owner.current if owner is not None else session.setdefault('execution', {'nodes': [], 'turns': [], 'currentTurnId': None})
@@ -190,7 +190,10 @@ def ensure_turn(session,identity,label=''):
         request_shape = shape(session, identity, label)
         from .execution_working_set import recent_turns
         hint = estimate(recent_turns(session), request_shape) if request_shape is not None else None
-        started = time.time()
+        from .input_status import timestamp
+        started = timestamp(started_at)
+        if started is None:
+            started = time.time()
         tree['turns'].append({'id':identity,'inputId':identity,'label':label[:100],'startedAt':started,'phase':'running','aggregateUsage':rollup([]),
                              **({'durationShape': request_shape} if request_shape else {})})
         session['turnDurationHint'] = {**hint, 'inputId': identity, 'startedAt': started} if hint else None
@@ -277,6 +280,9 @@ def ingest(session,event):
     if not identity:return
     allowed={'id','revision','producerId','budgetRevision','admittedAt','parentId','turnId','admissionInputId','generationId','runtimeOwnerId','purpose','sessionId','rootSessionId','kind','phase','label','toolCallId','provider','model','routing','runId','parentProvider','startedAt','endedAt','usage','summary','input','output','error','lifecycle','failure','liveObservation'}
     safe={k:v for k,v in event.items() if k in allowed}
+    if safe.get('kind') == 'llm' and 'modelOutcome' in event:
+        from .model_outcome import public_outcome
+        safe.update(public_outcome(event['modelOutcome']))
     from .tool_observations import metadata as tool_metadata
     safe.update(tool_metadata(event))
     for key in ('assignmentId', 'assignmentRevision', 'assignmentReservation'):

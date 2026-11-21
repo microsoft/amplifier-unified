@@ -7,6 +7,76 @@ from amplifier_web.runtime import normalize_event
 
 
 class ExecutionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_receipt_carries_only_normalized_outcomes_with_capture_off(self):
+        from amplifier_web import execution
+        from amplifier_web.browser_detail import compact
+        from amplifier_web.model_outcome import response_outcome
+        from amplifier_web.session_projection import accounting_projection
+
+        private = 'PRIVATE-ARGUMENT-REPLY-AND-TOOL-NAME'
+        calls = [SimpleNamespace(name=name, arguments={'data': private})
+                 for name in ('read_file', 'read_file', 'bash', private)]
+        class Provider:
+            def get_info(self):
+                return {'id': 'fixture', 'defaults': {'model': 'fixture'}}
+
+            async def complete(self, request):
+                return SimpleNamespace(content=[{'type': 'tool_call', 'name': 'bash'},
+                                                {'type': 'text', 'text': private}], tool_calls=calls)
+
+        emitted = []
+        events = ExecutionEvents('root', emitted.append)
+        events.turn_id = 'turn'
+        await events.instrument_provider('root', Provider()).complete(SimpleNamespace(model='fixture'))
+        row, = events.nodes.values()
+        expected = {'fileReads': 2, 'commands': 1, 'otherTools': 1}
+        self.assertEqual(row['modelOutcome'], expected)
+        self.assertNotIn(private, str(row))
+        session = {'id': 'root'}
+        emitted[-1]['event']['modelOutcome']['secret'] = private
+        kind, handoff = normalize_event(emitted[-1], 'root')
+        self.assertEqual(kind, 'execution.event')
+        self.assertEqual(handoff['modelOutcome'], expected)
+        execution.ingest(session, handoff)
+        saved, = accounting_projection(session['execution'])
+        self.assertEqual(saved['modelOutcome'], expected)
+        display = compact(saved, 'root', 'nodes', 512)
+        self.assertEqual(display['modelOutcome'], expected)
+        self.assertNotIn(private, str(display))
+        self.assertEqual(response_outcome({'content': [{'type': 'text', 'text': private}]}),
+                         {'modelOutcome': {'text': True}})
+        self.assertEqual(response_outcome({'content': [{'type': 'thinking', 'text': private},
+                          {'type': 'text', 'text': private, 'visibility': 'internal'}]}), {})
+        self.assertEqual(response_outcome({'content': [{'type': 'tool_call', 'name': 'read_file'}]}),
+                         {'modelOutcome': {'fileReads': 1}})
+        self.assertEqual(response_outcome({'raw': {'text': private}}), {})
+
+    async def test_only_completed_public_text_stream_records_text_outcome(self):
+        class Provider:
+            def get_info(self):
+                return {'id': 'fixture'}
+
+            async def complete(self, request):
+                raise AssertionError
+
+            async def stream(self, request):
+                for chunk in request.chunks:
+                    yield chunk
+
+        hidden = {'block_type': 'thinking', 'content': 'private'}
+        visible = {'block_type': 'text', 'content': 'returned text'}
+        for chunks, close, expected in [([hidden], False, None), ([hidden, visible], False, {'text': True}),
+                                       ([visible, visible], True, None)]:
+            events = ExecutionEvents('root', lambda value: None)
+            stream = events.instrument_provider('root', Provider()).stream(SimpleNamespace(chunks=chunks))
+            async for _ in stream:
+                if close:
+                    await stream.aclose()
+                    break
+            row, = events.nodes.values()
+            self.assertEqual(row.get('modelOutcome'), expected)
+            self.assertNotIn('private', str(row))
+
     async def test_compaction_calls_have_distinct_label_usage_and_no_public_stream(self):
         from amplifier_web.execution_events import CALL_PURPOSE
         events=ExecutionEvents('root',lambda value:None)

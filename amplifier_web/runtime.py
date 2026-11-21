@@ -257,6 +257,18 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
         allowed = ("id", "revision", "producerId", "budgetRevision", "admittedAt", "parentId", "turnId", "admissionInputId", "generationId", "purpose", "sessionId", "rootSessionId", "kind", "phase", "label",
             "toolCallId", "provider", "model", "parentProvider", "routing", "runId", "startedAt", "endedAt", "usage", "summary", "input", "output", "error", "lifecycle", "failure", "liveObservation")
         public = {key:event[key] for key in allowed if key in event and (key not in {"input", "output", "error"} or event.get("kind") == "tool")}
+        if event.get('kind') == 'llm' and 'modelOutcome' in event:
+            from .model_outcome import public_outcome
+            public.update(public_outcome(event['modelOutcome']))
+        if (event.get('kind') == 'llm' and not event.get('purpose') and
+                event.get('sessionId') == event.get('rootSessionId') == session_id):
+            if event.get('phase') == 'running' and 'turnModelSettings' in event:
+                from .turn_model_settings import public_receipt
+                public['turnModelSettings'] = public_receipt(event['turnModelSettings'], public.get('model'))
+            if event.get('phase') == 'completed' and isinstance(event.get('promptCostBasis'), dict):
+                from .next_message_impact import observation
+                seen = observation(event)
+                public['promptCostBasis'] = {k: seen[k] for k in ('instance','traits','portableHistoryTokens') if k in seen}
         if event.get("phase") == "running" and event.get("incompleteHistoryDispatched") is True:
             public["incompleteHistoryDispatched"] = True
         from .tool_observations import metadata as tool_metadata

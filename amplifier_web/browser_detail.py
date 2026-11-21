@@ -10,7 +10,7 @@ NATIVE_MESSAGE_LIMIT=100
 NODE_LIMIT=100
 TEXT_LIMIT=4096
 SUMMARY_LIMIT=512
-PRIVATE_SESSION_FIELDS = frozenset({'_externalAgentSource', '_externalRoom', '_lastPromptUsage'})
+PRIVATE_SESSION_FIELDS = frozenset({'_externalAgentSource', '_externalRoom', '_lastPromptUsage', '_previousTurnBinding'})
 
 
 def digest(text):return sha256(text.encode()).hexdigest()
@@ -25,6 +25,11 @@ def compact(row, session_id, part, limit):
     if part != 'messages':
         from .tool_observations import metadata as tool_metadata
         result.update(tool_metadata(row))
+        if row.get('kind') == 'llm':
+            from .model_outcome import public_outcome
+            result.update(public_outcome(row.get('modelOutcome')))
+            if row.get('purpose') in ('context_compaction', 'image_generation'):
+                result['purpose'] = row['purpose']
     if 'routing' in result:
         from .host.model_selection import public_routing
         result['routing'] = public_routing(result['routing'])

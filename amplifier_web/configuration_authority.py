@@ -72,7 +72,7 @@ def requirement(action, args):
         return 'bundles', 'local' if args['scope'] == 'workspace' else 'global'
     if action == 'bundle.save':
         return 'bundles', 'global'
-    if action in {'bundle.switch', 'bundle.fork'} or action == 'conversation.configure' and 'bundle' in args:
+    if action in {'bundle.switch', 'bundle.fork'} or action == 'conversation.configure' and ('bundle' in args or 'restorePreviousInputId' in args):
         return 'bundles', 'session'
     if action in {'configuration.apply', 'configuration.patchPlacement.bind'}:
         return 'runtime_configuration', 'session'

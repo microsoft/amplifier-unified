@@ -268,25 +268,44 @@ async function checkReadingAnchor(page,operation) {
   await button.scrollIntoViewIfNeeded();
   await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
   const pane=page.locator('[data-part="messages"]');
-  const anchor=await pane.evaluate(el=>{
+  const capture=()=>pane.evaluate(el=>{
     const top=el.getBoundingClientRect().top;
     const row=[...el.querySelectorAll('[data-message-id]')].find(row=>row.getBoundingClientRect().bottom>top);
     return row?{id:row.dataset.messageId,offset:row.getBoundingClientRect().top-top}:null;
   });
-  assert.ok(anchor,'Reading-position check needs an actual message anchor');
-  const offset=()=>pane.evaluate((el,id)=>{
-    const row=[...el.querySelectorAll('[data-message-id]')].find(row=>row.dataset.messageId===id);
-    return row?row.getBoundingClientRect().top-el.getBoundingClientRect().top:null;
-  },anchor.id);
-  await button.click();
-  await expect.poll(async()=>Math.abs((await offset())-anchor.offset)).toBeLessThanOrEqual(1);
-  await button.click();
-  await expect.poll(async()=>Math.abs((await offset())-anchor.offset)).toBeLessThanOrEqual(1);
+  const checkPosition=async anchor=>{
+    assert.ok(anchor,'Reading-position check needs an actual message anchor');
+    // Docking changes responsive padding. At either scroll limit the exact
+    // prior offset may be physically unreachable; require the closest one.
+    await expect.poll(()=>pane.evaluate((el,{id,offset})=>{
+      const row=[...el.querySelectorAll('[data-message-id]')].find(row=>row.dataset.messageId===id);
+      if(!row)return Infinity;
+      const delta=row.getBoundingClientRect().top-el.getBoundingClientRect().top-offset;
+      const target=Math.min(el.scrollHeight-el.clientHeight,Math.max(0,el.scrollTop+delta));
+      return Math.abs(el.scrollTop-target);
+    },anchor)).toBeLessThanOrEqual(1);
+  };
+  const inspect=async anchor=>{
+    await button.click();
+    const inspector=page.locator('#work-step-inspector');
+    await expect(inspector).toBeVisible();
+    await checkPosition(anchor);
+    await inspector.getByRole('button',{name:'Close step details'}).click();
+    await expect(button).toBeFocused();
+    await checkPosition(anchor);
+  };
+  await inspect(await capture());
+  // Deliberately read inside the scroll range as well as at its edge.
+  await pane.evaluate(el=>{el.scrollTop=Math.min(el.scrollHeight-el.clientHeight-32,Math.max(32,el.scrollTop))});
+  await expect.poll(()=>pane.evaluate(el=>Math.min(el.scrollTop,el.scrollHeight-el.clientHeight-el.scrollTop))).toBeGreaterThan(1);
+  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+  const anchor=await capture();
+  await inspect(anchor);
   const viewport=page.viewportSize();
   await page.setViewportSize({...viewport,width:viewport.width+12});
-  await expect.poll(async()=>Math.abs((await offset())-anchor.offset)).toBeLessThanOrEqual(1);
+  await checkPosition(anchor);
   await page.setViewportSize(viewport);
-  await expect.poll(async()=>Math.abs((await offset())-anchor.offset)).toBeLessThanOrEqual(1);
+  await checkPosition(anchor);
 }
 async function enterStreamConversation(page,expectedSessionId,stage) {
   // Keep the shared Home-to-chat setup and desktop pinned preference intact.
@@ -533,10 +552,13 @@ try {
     for (const operation of operations)
       await expect(operation.locator(':scope > button')).toHaveAttribute('aria-expanded', 'false');
     await operations[0].locator(':scope > button').click();
-    await expect(operations[0]).toContainText('CHILD READ RESULT');
+    const inspector=page.locator('#work-step-inspector');
+    await expect(inspector).toContainText('CHILD READ RESULT');
+    await expect(operations[0].locator(':scope > button')).toHaveAttribute('aria-expanded','true');
     for (const operation of operations.slice(1))
       await expect(operation.locator(':scope > button')).toHaveAttribute('aria-expanded', 'false');
-    await operations[0].locator(':scope > button').click();
+    await inspector.getByRole('button',{name:'Close step details'}).click();
+    await expect(operations[0].locator(':scope > button')).toBeFocused();
     await toggle.click();
     await expect(rows[0]).toBeHidden();
     await toggle.click();

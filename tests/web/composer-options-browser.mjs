@@ -67,9 +67,10 @@ try{
  const unsent=await(await page.request.get(url+'/fixture')).json();assert.deepEqual(unsent.started,[]);assert.deepEqual(unsent.sent,[]);
  await expect(menu.locator('#chat-provider')).toBeFocused();
  await expect(menu.getByRole('button',{name:/^(Choose model|Choose provider|Choose reasoning effort|Back to chat options)$/})).toHaveCount(0);
- for(const section of ['provider','model','effort'])await showComposerOption(page,section);
+ for(const section of ['provider','model'])await showComposerOption(page,section);
+ await expect(menu.locator('#chat-effort')).toBeHidden();
  const bundle=menu.locator('#composer-options-bundle');
- await expect(bundle).toBeHidden();await showComposerOption(page,'bundle');
+ await expect(bundle).toBeHidden();await showComposerOption(page,'effort');await showComposerOption(page,'bundle');
  const bundleSaved=actionResponse('view.update',args=>args?.patch?.newSessionDraft?.bundle==='work');
  await bundle.selectOption('work');await accepted(bundleSaved);
  const modelSaved=actionResponse('view.update',args=>args?.patch?.newSessionDraft?.selection?.model==='chosen-model');
@@ -103,9 +104,10 @@ try{
  await composer.fill('Preserve this unsent draft during active work');
  await options.click();await expect(menu.locator('#chat-provider')).toBeEnabled();await expect(menu.locator('#chat-model')).toBeEnabled();
  await expect(menu.locator('#chat-provider')).toBeFocused();
- await expect(menu.getByText('Your current turn stays unchanged. You can save settings for your next message.',{exact:true})).toBeVisible();
+ await expect(menu.getByText('Changes apply to your next message.',{exact:true})).toBeVisible();
  const nextModel=actionResponse('conversation.configure',args=>args.selection?.model==='first');
  await menu.locator('#chat-model').selectOption('first');await accepted(nextModel);
+ await showComposerOption(page,'effort');
  const nextEffort=actionResponse('conversation.configure',args=>args.selection?.effort==='high');
  await menu.locator('#chat-effort').press('End');await accepted(nextEffort);
  await showComposerOption(page,'bundle');await expect(bundle).toBeEnabled();
@@ -140,7 +142,7 @@ try{
  await closeMenu();
  await composer.fill('Keep this draft while managing connections');
  await options.click();await expect(menu).toBeVisible();
- await showComposerOption(page,'provider');
+ await showComposerOption(page,'advanced');
  await menu.getByRole('button',{name:'Manage connections'}).click();
  await expect(menu).toHaveCount(0);
  // Settings is a canvas surface, not the old generic panel. Use its own
@@ -200,6 +202,7 @@ try{
  await options.click();await expect(menu.locator('select#chat-model')).toHaveValue('chosen-model');
  assert.deepEqual(await currentCatalog(),preferenceCatalog);assert.equal((await discovery()).calls,2);
  assert.equal((await page.request.post(url+'/fixture/model-discovery',{data:{mode:'error'}})).ok(),true);
+ await showComposerOption(page,'advanced');
  await menu.getByRole('button',{name:'Refresh this connection',exact:true}).click();
  const manual=menu.getByRole('textbox',{name:'Conversation model',exact:true});
  await expect(manual).toBeVisible();await expect(manual).toHaveValue('chosen-model');
@@ -213,7 +216,9 @@ try{
  const manualReceipt=await accepted(manualSaved);assert.equal(manualReceipt.result.revision,expectedRevision+1);
  await expect.poll(()=>page.evaluate(sid=>window.amplifier.getState().sessions.find(row=>row.id===sid)?.pendingModelSelection?.model,sid)).toBe('manual-deployment-id');
  await assertDiscoveredOptions(menu.locator('select#chat-model-catalog'));await expect(menu.locator('select#chat-model-catalog')).toHaveValue('');
- await closeMenu();await page.reload();await expect(options).toContainText('manual-deployment-id');await options.click();await expect(manual).toHaveValue('manual-deployment-id');
+ await closeMenu();await page.reload();await expect(options).toContainText('manual-deployment-id');await options.click();
+ await expect(menu.locator('details.a-picker-advanced')).not.toHaveAttribute('open','');
+ await expect(manual).toBeVisible();await expect(manual).toHaveValue('manual-deployment-id');
  await expect(menu.getByText('Saved selection: manual-deployment-id (not in the discovered list)',{exact:true})).toBeVisible();
  await assertDiscoveredOptions(menu.locator('select#chat-model-catalog'));assert.deepEqual(await currentCatalog(),failedCatalog);assert.equal((await discovery()).calls,3);
  await closeMenu();await expect(composer).toHaveDraft('Keep this draft while managing connections');
