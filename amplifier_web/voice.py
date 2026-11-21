@@ -952,6 +952,11 @@ class VoiceCall:
             if did not in self.pending_delegations:
                 self.request_revision += 1
                 self.input_revisions[result.get('inputId')] = self.request_revision
+            def chat():
+                return next((row for row in self.service.state.get('sessions', []) if row.get('id') == self.session_id), {})
+            # No await since the request was accepted: a failure record with
+            # another time than this one was made for this turn.
+            known = (chat().get('failure') or {}).get('recordedAt')
             try:
                 response = await self.service.wait_for_response(self.session_id, input_id=result.get("inputId"), timeout=600)
             except TimeoutError:
@@ -959,12 +964,17 @@ class VoiceCall:
                     self.pending_delegations[did]['status'] = 'waiting_result'
                 return {'status': 'pending', 'input_ids': [result.get('inputId')], 'text': 'Amplifier is still working.'}
             except Exception as exc:
-                # The wait raises the chat's saved error, which can be raw worker
-                # or exception text. Tell the voice what the chat shows instead.
-                current = next((row for row in self.service.state.get('sessions', []) if row.get('id') == self.session_id), {})
-                if current.get('status') == 'error':
-                    summary = (current.get('failure') or {}).get('summary')
-                    raise VoiceError(summary if isinstance(summary, str) and summary else 'Something interrupted this chat.') from exc
+                # The wait raises the chat's saved error. With a failure record of
+                # this turn that error can be raw worker or exception text, so
+                # tell the voice the record's summary, which is what the chat
+                # shows. An older record says nothing about this turn (a Stop
+                # that could not be confirmed keeps it): pass that error on.
+                current = chat()
+                failure = current.get('failure') if isinstance(current.get('failure'), dict) else {}
+                summary = failure.get('summary')
+                if (current.get('status') == 'error' and failure.get('recordedAt') != known
+                        and isinstance(summary, str) and summary):
+                    raise VoiceError(summary) from exc
                 if current.get('status') in {'stopped', 'interrupted'}:
                     raise VoiceError('Execution ended before the response completed.') from exc
                 raise

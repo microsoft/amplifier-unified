@@ -140,11 +140,13 @@ async def test_realtime_tool_failure_output_has_no_internal_error_text():
 
 
 def failed_chat(service, raw):
-    """As the host saves a failed turn: raw text in `error`, the product's words in `failure`."""
+    """As the host saves a turn that fails during the wait: raw text in `error`, the product's words in `failure`."""
     from amplifier_web.errors import AppError
-    service.state['sessions'][0].update(status='error', error=raw,
-        failure={'category': 'unknown', 'summary': 'Something interrupted this chat.'})
-    service.wait_for_response = AsyncMock(side_effect=AppError(raw))
+    async def wait(*args, **kwargs):
+        service.state['sessions'][0].update(status='error', error=raw, errorAt=2.0,
+            failure={'category': 'unknown', 'summary': 'Something interrupted this chat.', 'recordedAt': 2.0})
+        raise AppError(raw)
+    service.wait_for_response = wait
 
 
 @pytest.mark.parametrize('raw', ['no_active_job', "'NoneType' object is not subscriptable"])
@@ -156,6 +158,24 @@ async def test_the_voice_is_told_the_summary_that_the_chat_shows_not_its_raw_sav
     assert call.socket.sent[-1]['content'] == (
         'Amplifier received this request but could not complete it: Something interrupted this chat.'
         ' Check the shared chat before asking again.')
+
+
+async def test_an_older_failure_record_is_not_told_as_the_cause_of_this_turn():
+    from amplifier_web.errors import AppError
+    service, call = call_fixture()
+    chat = service.state['sessions'][0]
+    chat.update(errorAt=1.0, failure={'category': 'authentication', 'recordedAt': 1.0,
+                                      'summary': 'The provider rejected its credentials.'})
+    async def stop_fails(*args, **kwargs):
+        # As the host's stop.failed handler does: a new error, the earlier failure record kept.
+        chat.update(status='error', error='Stop could not be confirmed. Inspect the runtime details before continuing.')
+        raise AppError(chat['error'])
+    service.wait_for_response = stop_fails
+    await call.record('user', 'Check the code.', 'spoken')
+    await call.delegate_live('d')
+    assert call.socket.sent[-1]['content'] == (
+        'Amplifier received this request but could not complete it: Stop could not be confirmed.'
+        ' Inspect the runtime details before continuing. Check the shared chat before asking again.')
 
 
 async def test_a_stopped_chat_does_not_pass_an_older_saved_error_to_the_voice():
@@ -276,6 +296,14 @@ async def test_realtime_failure_before_acceptance_does_not_wait_for_a_result():
     service.voice_delegate = AsyncMock(side_effect=ValueError('admission unavailable'))
     await call.realtime_tool({'name': 'amplifier_delegate', 'arguments': '{"text": "Check the code."}', 'call_id': 'c1'})
     assert call.pending_delegations['c1']['status'] == 'submitting'
+    output = json.loads(next(e for e in call.socket.sent if e['type'] == 'conversation.item.create')['item']['output'])
+    assert output == {'error': 'Amplifier could not complete this request, and no work was started: An internal error stopped it.'}
+    service.state['sessions'][0]['generations'] = [{'event': 'generation.finished',
+        'generation_id': 'unrelated', 'sessionId': 'main', 'rootSessionId': 'main',
+        'input_ids': ['voice:live:c1'], 'text': 'A result that this call never asked for.'}]
+    call.socket.sent.clear()
+    await call.announce_generations(browser_snapshot(service))
+    assert call.socket.sent == []
 
 
 async def test_append_ack_tracks_context_injection_and_rejection_without_reexecution():
