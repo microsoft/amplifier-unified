@@ -367,14 +367,41 @@ def request_call_failure(session, inputs, generation=None, error_type=None):
     return None
 
 
+def has_open_generation(session):
+    active = session.get('collaborationGeneration') or {}
+    if (not active.get('id') or active.get('terminal')
+            or active.get('interruptionRevision', 0) != session.get('interruptionRevision', 0)):
+        return False
+    start = latest_root_event(session)
+    # A previous host or owner may have interrupted the turn without a native terminal.
+    from .execution import LIVE_PHASES, current_execution, execution_record
+    saw_start = start.get('event') == 'generation.started'
+    # Child sessions can displace the root start from the event tail. In that
+    # case use only a live turn explicitly bound to the same generation.
+    identity = start.get('initial_input_id') if saw_start else current_execution(session).get('currentTurnId')
+    turn = execution_record(session, 'turns', {'id': identity}) if identity else None
+    if turn is None:
+        return saw_start
+    if turn.get('phase') not in LIVE_PHASES or turn.get('endedAt'):
+        return False
+    if turn.get('generationId'):
+        return turn['generationId'] == active['id']
+    return saw_start or turn.get('inputId', identity) in active.get('inputIds', [])
+
+
+def startup_fault(payload):
+    return payload.get('phase') == 'worker_startup' or payload.get('errorType') == 'RuntimeStartupError'
+
+
 def runtime_fault_is_current(session, payload):
     """Runtime availability is not the outcome of an already saved response."""
     if session.get('status') in {'stopped', 'stopping'}:
         return False  # An error cannot turn actual Stop into an application failure.
-    if payload.get('phase') == 'worker_startup' or payload.get('errorType') == 'RuntimeStartupError':
-        return True  # A new start is a new operation, even after a completed turn.
-    generation = payload.get('generationId') or (payload.get('executionFailure') or {}).get('generationId')
+    if startup_fault(payload):
+        # A failed start never settles work already admitted to a generation.
+        return not has_open_generation(session)
     active = session.get('collaborationGeneration') or {}
+    generation = payload.get('generationId') or (payload.get('executionFailure') or {}).get('generationId')
     latest = latest_root_event(session)
     if generation and (active.get('id') or latest.get('generation_id')) and generation != (active.get('id') or latest['generation_id']):
         return False
@@ -417,7 +444,7 @@ def causal_timeline(session, failure=None):
         at = _event_time(row.get('at'))
         observed = row.get('generationId') or row.get('generation_id')
         if (generation and observed == generation or
-                not observed and start is not None and at is not None and start <= at
+                not observed and row.get('scope') != 'runtime' and start is not None and at is not None and start <= at
                 and (end is None or at <= end)):
             rows.append(row)
     return [event_detail(row) for row in sorted(rows, key=lambda row: _event_time(row.get('at')) or 0)[-20:]]

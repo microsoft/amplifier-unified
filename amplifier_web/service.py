@@ -3619,7 +3619,7 @@ class AppService:
                                         if shared_room else copy.deepcopy(session))
                     pending.append((self._send, (dispatch_session, text, input_id, previous_activity, args.get('preserveDraft', False))))
             elif action == "conversation.retry":
-                from .message_delivery import find_message
+                from .message_delivery import find_message, latest_user_input
                 session = self._session(args['sessionId'], hydrate=False)
                 message = find_message(session, args['inputId'])
                 if message is None:
@@ -3631,7 +3631,7 @@ class AppService:
                 else:
                     if message.get('delivery', {}).get('status') not in {'unknown', 'failed', 'sending'}:
                         raise AppError('This message is not awaiting delivery recovery.', 409)
-                    if message is not next((m for m in reversed(session['messages']) if m.get('role') == 'user'), None):
+                    if message is not latest_user_input(session):
                         raise AppError('Only the latest unconfirmed message can be resent. Review later messages first.', 409)
                     if session['status'] in {'working', 'starting', 'running', 'stopping'} or message.get('delivery', {}).get('status') == 'sending':
                         raise AppError('Wait for the current delivery or work to settle before resending.', 409)
@@ -3639,9 +3639,10 @@ class AppService:
                         raise AppError('Delivery is uncertain. Confirm that sending again may repeat earlier work.', 409, code='delivery_uncertain')
                     if not self.runtime or not hasattr(self.runtime, 'retry'):
                         raise AppError('This runtime does not support message recovery.', 409)
-                    original_status = session['status']
-                    known_undelivered = message.get('delivery', {}).get('status') == 'failed'
-                    original_turn = copy.deepcopy(execution_record(session, 'turns', {'id': args['inputId']}) or {})
+                    before = {'status': session['status'], 'error': session.get('error'),
+                              'delivery': message['delivery']['status'], 'currentTurnId': current_execution(session).get('currentTurnId'),
+                              'turn': copy.deepcopy(execution_record(session, 'turns', {'id': args['inputId']})),
+                              'turnDurationHint': session.get('turnDurationHint')}
                     self._delivery(session, args['inputId'], 'sending')
                     self._activity(session, 'queued', 'Sending your saved message again.', reset=True)
                     session['status'] = 'working'
@@ -3653,7 +3654,7 @@ class AppService:
                     turn.pop('endedAt', None)
                     turn.pop('runtimeOwnerId', None)
                     turn.pop('generationId', None)
-                    pending.append((self._retry_message, (copy.deepcopy(session), message['text'], args['inputId'], original_status, original_turn, known_undelivered)))
+                    pending.append((self._retry_message, (copy.deepcopy(session), message['text'], args['inputId'], before)))
             elif action == "conversation.stop":
                 session = self._session(args.get("sessionId"), hydrate=False)
                 session["interruptionRevision"] = session.get("interruptionRevision", 0) + 1
@@ -4258,7 +4259,7 @@ class AppService:
                     if action == 'conversation.retry' and command_id:
                         async with self.lock:
                             receipt['result'] = {'delivery': 'unknown', 'message': 'Delivery could not be confirmed. Check delivery before trying again.'}
-                            if isinstance(exc, AppError) and exc.code == 'worker_startup_failed':
+                            if isinstance(exc, AppError) and exc.code in {'worker_startup_failed', 'retry_waiting_for_update'}:
                                 receipt.update(accepted=False, status=exc.status, code=exc.code,
                                                error=str(exc), receipt=exc.receipt)
                                 receipt['result'] = {'delivery': exc.receipt['delivery'], 'message': str(exc)}
@@ -4575,22 +4576,56 @@ class AppService:
                 self._publish_changes(sessions={sid})
             return result(status, current, message)
 
-    async def _retry_message(self, session, text, input_id, original_status, original_turn, known_undelivered=False):
-        result = await self._send(session, text, input_id, preserve_draft=True, retry=True, known_undelivered=known_undelivered)
-        if isinstance(result, dict) and result.get('duplicate'):
-            async with self.lock:
-                current = self._session(session['id'], hydrate=False)
-                if current['status'] == 'working' and current_execution(current).get('currentTurnId') == input_id:
-                    current['status'] = original_status
-                    self._activity(current, original_status, 'Delivery confirmed. Amplifier already received this message.')
-                    turn = execution_record(current, 'turns', {'id': input_id})
+    async def _retry_message(self, session, text, input_id, before):
+        from .message_delivery import find_message, receipt_delivery
+        from .update_drain import UpdateDeferred
+        try:
+            result = await self._send(session, text, input_id, preserve_draft=True, retry=True,
+                                      known_undelivered=before['delivery'] == 'failed')
+        except UpdateDeferred:
+            # This retry never reached the transport. Its original admission may still be uncertain.
+            waiting = True
+        else:
+            if not (isinstance(result, dict) and result.get('duplicate')):
+                return {'delivery': 'accepted', 'resent': True}
+            waiting = False
+        async with self.lock:
+            current = self._session(session['id'], hydrate=False)
+            if waiting:
+                saved = self.db.execute('SELECT receipt FROM commands WHERE id=?', (input_id,)).fetchone()
+                status = (find_message(current, input_id) or {}).get('delivery', {}).get('status')
+                confirmed = status == 'accepted' or (saved and receipt_delivery(saved[0], current['id'], input_id) == 'accepted')
+                delivery = 'accepted' if confirmed else before['delivery']
+                self._delivery(current, input_id, delivery)
+                waiting = not confirmed
+            tree = current_execution(current)
+            turn = execution_record(current, 'turns', {'id': input_id})
+            if (current['status'] in {'working', 'starting', 'ready'} and tree.get('currentTurnId') == input_id
+                    and turn and not turn.get('generationId') and turn.get('phase') == 'running'
+                    and current.get('interruptionRevision') == session.get('interruptionRevision')
+                    and (current.get('collaborationGeneration') or {}).get('id') ==
+                        (session.get('collaborationGeneration') or {}).get('id')):
+                current['status'] = before['status']
+                if before['error']:
+                    current['error'] = before['error']
+                self._activity(current, before['status'], 'Retry after the app update finishes.' if waiting
+                               else 'Delivery confirmed. Amplifier already received this message.')
+                if before['turn'] is None:
+                    tree['turns'].remove(turn)
+                    current['turnDurationHint'] = before['turnDurationHint']
+                else:
                     for key in ('phase', 'endedAt', 'retriedAt', 'runtimeOwnerId', 'generationId'):
-                        if key in original_turn:
-                            turn[key] = original_turn[key]
+                        if key in before['turn']:
+                            turn[key] = before['turn'][key]
                         else:
                             turn.pop(key, None)
-                    self._publish_changes(sessions={session['id']})
-        return {'delivery': 'accepted', 'resent': not bool(isinstance(result, dict) and result.get('duplicate'))}
+                tree['currentTurnId'] = before['currentTurnId']
+            self._publish_changes(sessions={session['id']})
+        if waiting:
+            raise AppError('The app is updating. Retry your saved message after the update finishes.', 409,
+                           code='retry_waiting_for_update',
+                           receipt={'delivery': delivery, 'inputId': input_id, 'sessionId': session['id']})
+        return {'delivery': 'accepted', 'resent': False}
 
     def _delivery(self, session, input_id, status):
         from .message_delivery import receipt_mapping
@@ -4681,6 +4716,8 @@ class AppService:
                          if original.get('handoffOrigin') else {})
             send_result = await sender(session, text, input_id, self.on_runtime_event, **admission)
         except UpdateDeferred:
+            if retry:
+                raise
             return await defer_send(self, session['id'], input_id, preserve_draft)
         except RuntimeHostClosingError:
             async with self.lock:
@@ -4728,7 +4765,7 @@ class AppService:
             from .session_health import startup_failure_details
             await self.on_runtime_event('runtime.error', {
                 'sessionId': session['id'], 'error': message, 'errorType': 'RuntimeStartupError',
-                'phase': 'worker_startup',
+                'phase': 'worker_startup', 'inputId': input_id,
                 **startup_failure_details(vars(exc)),
                 **({'moduleFailures': exc.failures} if getattr(exc, 'failures', None) else {}),
                 **diagnostic_reference(exc),
@@ -5146,6 +5183,12 @@ class AppService:
                 if payload.get('activityOnly') and session.get('status') not in {'working','starting'}:
                     return
                 status = payload.get("status", "idle")
+                if ((status == 'starting' and payload.get('phase') == 'runtime-setup')
+                        or payload.get('phase') == 'worker_startup'):
+                    from .session_health import has_open_generation
+                    if has_open_generation(session):
+                        # Preparation and cleanup of an unadmitted worker belong to its attempt.
+                        return
                 if (payload.get('event') in {'session.ready', 'session.idle'}
                         and session.get('status') in {'stopped', 'interrupted', 'error'}):
                     # A new worker emits both events when it boots an old session.
@@ -5206,18 +5249,19 @@ class AppService:
                 if payload.get("runtimeSessionId"):
                     session["runtimeSessionId"] = payload["runtimeSessionId"]
             elif kind == "runtime.error":
+                from .session_health import runtime_fault_is_current, startup_fault
                 from .support_diagnostics import event_detail, public_execution_failure
+                startup = startup_fault(payload)
                 capture = public_execution_failure(payload.get('executionFailure'))
                 native = session.get('runtimeSessionId') or session.get('nativeIdentity') or session['id']
                 if capture and capture['runtimeSessionId'] != native:
                     capture = None
                 event = {**event_detail(payload), 'type': kind, 'at': time.time(),
                          'generationId': payload.get('generationId') or (capture or {}).get('generationId') or
-                             (session.get('collaborationGeneration') or {}).get('id'),
+                             (None if startup else (session.get('collaborationGeneration') or {}).get('id')),
                          **({'exceptionChain': capture['exceptionChain']} if capture else {})}
                 session.setdefault('runtimeEvents', []).append(event)
                 session['runtimeEvents'] = session['runtimeEvents'][-100:]
-                from .session_health import runtime_fault_is_current
                 if not runtime_fault_is_current(session, payload):
                     event['scope'] = 'runtime'
                     from .session_health import latest_root_event
@@ -5250,7 +5294,6 @@ class AppService:
                     failure=ConfiguredModuleError(payload['moduleFailures'])
                     session['moduleFailures']=failure.failures
                     detail=str(failure)
-                startup = payload.get('errorType') == 'RuntimeStartupError' or payload.get('phase') == 'worker_startup'
                 error_type = payload.get('errorType') or (None if startup else session.get('turnErrorType'))
                 from .session_health import current_terminal_failure, failure_details, startup_failure_details
                 projected = failure_details(detail, error_type)

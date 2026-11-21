@@ -1247,9 +1247,47 @@ async def test_unknown_input_not_saved_is_distinct_and_cannot_resend(recovery):
     assert not runtime.sent
 
 
-async def test_retry_never_reorders_later_messages(recovery):
+async def test_retry_after_late_delegate_observation(held_post, tmp_path):
+    from amplifier_web.native_message_projection import display_message
+
+    app, runtime, _ = held_post
+    session = app._session()
+    sid = session['id']
+    failed = await start_post(app, runtime, 'original', 'failed')
+    runtime.release['original'].set()
+    with pytest.raises(AppError) as exc:
+        await failed
+    assert exc.value.code == 'worker_startup_failed'
+    observation = display_message({
+        'role': 'user', 'content': 'Delegated work finished.',
+        'metadata': {'amplifier_input': {'version': 1, 'kind': 'service', 'id': 'report',
+                                         'source': 'amplifier-delegate'}},
+    }, 10, session)
+    session['messages'].append(observation)
+    app._publish_changes(sessions={sid})
+    await app.close()
+    app._test_closed = True
+
+    replacement = RecoveryRuntime()
+    restored = AppService(tmp_path / 'app', replacement, workspace=tmp_path)
+    try:
+        assert not replacement.sent
+        result = await restored.dispatch('conversation.retry', {'sessionId': sid, 'inputId': 'original'})
+        assert result['result'] == {'delivery': 'accepted', 'resent': True}
+        assert replacement.sent == [(sid, 'original', 'original')]
+        assert [row for row in restored._session(sid)['messages'] if row['id'] == observation['id']] == [observation]
+    finally:
+        await restored.close()
+
+
+@pytest.mark.parametrize('later', [
+    {'inputId': 'later'},
+    {},  # Native or legacy human input with no delivery metadata.
+    {'inputId': 'later', 'observation': {'source': 'amplifier-delegate', 'id': 'report'}},
+])
+async def test_retry_never_reorders_later_messages(recovery, later):
     app, runtime, _ = recovery
-    app._message(app._session(), 'user', 'Later request', 'chat', inputId='later')
+    app._message(app._session(), 'user', 'Delegated work finished.', 'chat', **later)
     with pytest.raises(AppError, match='latest'):
         await app.dispatch('conversation.retry', {**recovery_args(app), 'confirmUncertain': True})
     assert not runtime.sent
