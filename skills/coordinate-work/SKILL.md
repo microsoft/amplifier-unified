@@ -107,14 +107,18 @@ back and forth. A test waiting for capacity blocks that dependency, not unrelate
 implementation. Use the host's saved result notification instead of polling or
 adding a second watch for the same work.
 
-Declare one concise `coordination.reply` for the actual delivered `requestId`,
+Ordinary peer speech needs no prior result acknowledgement or qualified artifact
+report. Use `coordination.send` for discussion, questions and review decisions,
+optionally with `replyToRequestId`; do not manufacture an artifact just to speak.
+
+For a saved deliverable or blocker, declare one concise `coordination.reply` for the actual delivered `requestId`,
 with typed outcome, source/PR identity, affected checks, limitations and evidence
 references. Omit `messageIds` unless you know your assistant output IDs from the
 current generation. Never use the incoming peer request's `messageId`. The host
 seals the declaration against actual root completion; a reply is not independent
 review or proof that an unknown effect succeeded.
 
-Retain a local file using `path@sha256:<64 lowercase hex digits>`, relative to
+When returning file evidence, retain a local file using `path@sha256:<64 lowercase hex digits>`, relative to
 your actual execution folder. For a file containing exactly `hello`, use:
 
 ```text
@@ -155,8 +159,9 @@ applies its acceptance criteria and standing scope.
 After accepting a member's exact contribution, use `assignment.task.read` then
 `assignment.task.complete` with current revisions and completion evidence. The
 worker does not need another model turn to acknowledge acceptance or shipment.
-Use the available result acknowledgement and membership-retirement controls when
-appropriate. `assignment.retire` ends settled participation, not an objective:
+Optionally acknowledge an exact reviewed outcome to suppress its pending
+notification; this is not required before replying, continuing work or accepting
+a contribution. `assignment.retire` ends settled participation, not an objective:
 stopped or superseded members can leave with their unfinished tasks and failed
 settings intact. Never fake completion or mount old settings just to retire them.
 Actual writers, pending effects, shared claims and resource custody must settle;

@@ -133,6 +133,19 @@ def test_manager_guidance_keeps_open_objectives_alive_across_process_boundaries(
     assert 'coordination.send mode:auto' in CANVAS_GUIDANCE
 
 
+def test_ordinary_peer_speech_does_not_require_result_ceremony():
+    from amplifier_web.app_guidance import CANVAS_GUIDANCE
+    from amplifier_web.builtin_behaviors import resource_root
+
+    assert 'Ordinary peer speech needs no prior result acknowledgement or qualified artifact report' in CANVAS_GUIDANCE
+    for relative in ('skills/coordinate-work/SKILL.md',
+                     'skills/coordinate-work/references/protocol.md'):
+        text = ' '.join((resource_root() / relative).read_text().split())
+        assert 'Ordinary peer speech needs no prior result acknowledgement or qualified artifact report' in text
+        assert 'coordination.send' in text and 'replyToRequestId' in text
+        assert 'path@sha256:' in text and 'artifacts[].status:' in text
+
+
 def test_surface_runtime_import_does_not_require_host_css_parser():
     result = subprocess.run([sys.executable, '-c', """
 import importlib.abc

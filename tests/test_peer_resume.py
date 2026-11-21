@@ -1,5 +1,6 @@
 """Human-directed recovery uses ordinary peer admission, never forged UI input."""
 import copy
+import time
 
 import pytest
 
@@ -30,6 +31,16 @@ def arguments(target, human):
 async def submit(app, source, target, human, identity='resume-member', **changes):
     return await agent_action(app, source, 'coordination.send',
                               {**arguments(target, human), **changes}, identity)
+
+
+@pytest.mark.parametrize('seconds', [None, 60])
+async def test_human_resume_preserves_default_or_explicit_deadline(app, seconds):
+    source, target, human = await paused_member(app)
+    before = time.time()
+    await submit(app, source, target, human,
+        **({'expiresInSeconds': seconds} if seconds is not None else {}))
+    receipt = await settled(app, 'resume-member', 'accepted')
+    assert before + (seconds or 86400) <= receipt['expiresAt'] <= time.time() + (seconds or 86400)
 
 
 @pytest.mark.parametrize('task_status', ['blocked', 'paused', 'completed'])

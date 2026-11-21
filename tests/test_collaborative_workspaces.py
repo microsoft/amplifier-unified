@@ -1630,7 +1630,11 @@ async def test_sealing_rejects_invalid_link_without_breaking_next_runtime_event(
         canonical = "missing-canonical-id"
         legacy = app.collaboration.receipt(request)
         legacy['response']['messageIds'] = [canonical]
-        app.collaboration.save_response(legacy)
+        reply = app.collaboration.receipt('declare-' + request)
+        reply.pop('responseRef', None)
+        reply['result'] = copy.deepcopy(legacy['response'])
+        app.db.execute('UPDATE commands SET receipt=? WHERE id=?',
+                       (json.dumps(reply), 'declare-' + request))
         app.collaboration.save(request, legacy)
     if conflict == "unknown-id":
         assert app.collaboration.resolve_message(target, canonical) is None
