@@ -54,9 +54,10 @@ def coverage_plan():
     changelog_ids = changelog_days_browser_addition(plan['scenarios'])
     activity_ids = retained_activity_browser_addition(plan['scenarios'])
     context_ids = context_degradation_browser_addition(plan['scenarios'])
+    update_hold_ids = update_configuration_hold_browser_addition(plan['scenarios'])
     rows = []
     for row in plan['scenarios']:
-        if row['id'] in retained_ids | appearance_ids | responsive_ids | notices_ids | preview_ids | approval_ids | multiparty_ids | shared_room_ids | repair_ids | layout_ids | pass2_ids | changelog_ids | activity_ids | context_ids:
+        if row['id'] in retained_ids | appearance_ids | responsive_ids | notices_ids | preview_ids | approval_ids | multiparty_ids | shared_room_ids | repair_ids | layout_ids | pass2_ids | changelog_ids | activity_ids | context_ids | update_hold_ids:
             continue
         row = {**row, 'command': [coverage_paths(part) for part in row['command']]}
         row.pop('cwd', None)
@@ -1125,6 +1126,79 @@ def context_degradation_browser_addition(rows, readiness_scripts=()):
     return {expected['id']}
 
 
+def update_configuration_hold_browser_addition(rows, readiness_scripts=()):
+    """Require the exact host-owned update journey before historical exclusion."""
+    script = 'tests/web/update-configuration-hold-browser.mjs'
+    expected = {
+        'id': 'update-configuration-hold', 'command': ['node', script],
+        'env': {
+            'AMPLIFIER_TEST_PYTHON': '{root}/.venv/bin/python',
+            'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/update-configuration-hold',
+        },
+    }
+    owners = [row for row in rows if row['id'] == expected['id']
+              or any(Path(part).name == Path(script).name for part in row['command'])]
+    assert owners == [expected], 'update-configuration-hold: expected one exact host owner'
+    assert not any(Path(part).name == Path(script).name for part in readiness_scripts), (
+        'update-configuration-hold: duplicate readiness owner')
+    return {expected['id']}
+
+
+def test_update_configuration_hold_has_one_host_owner_and_preserves_prior_order():
+    host = json.loads((ROOT / 'tests/web/browser-checks.json').read_text())
+    plan = current_plan()
+    identities = update_configuration_hold_browser_addition(plan['scenarios'])
+    assert identities == update_configuration_hold_browser_addition(host['scenarios']) == {
+        'update-configuration-hold'}
+    assert [row['id'] for row in plan['scenarios']] == host['scenarioOrder']
+    assert host['scenarioOrder'].count('update-configuration-hold') == 1
+    index = host['scenarioOrder'].index('update-configuration-hold')
+    assert host['scenarioOrder'][index - 1:index + 2] == [
+        'update-restart', 'update-configuration-hold', 'update-effects']
+    # Exact order from 474dc80, before this sole new host scenario was added.
+    previous = [name for name in host['scenarioOrder'] if name not in identities]
+    assert len(previous) == len(set(previous)) == 173
+    assert hashlib.sha256(json.dumps(previous).encode()).hexdigest() == (
+        '17d7f2322aa99c4b6bd51f78bd2a49f88c388ffd09e921278a75aec279acc602')
+    assert len(plan['scenarios']) == 173 + len(identities)
+    assert (ROOT / 'tests/web/update-configuration-hold-browser.mjs').is_file()
+    assert not identities & {row['id'] for row in coverage_plan()['scenarios']}
+
+
+@pytest.mark.parametrize('fault', [
+    'missing', 'duplicate', 'identical-duplicate', 'renamed', 'command', 'extra-argument',
+    'environment', 'python', 'artifacts', 'extra-environment', 'cwd', 'client-copy',
+    'readiness', 'normalized-readiness',
+])
+def test_update_configuration_hold_rejects_mutated_owner_before_exclusion(monkeypatch, fault):
+    plan = current_plan()
+    rows = plan['scenarios']
+    owner = next(row for row in rows if row['id'] == 'update-configuration-hold')
+    readiness = set()
+    if fault == 'missing': rows.remove(owner)
+    elif fault == 'duplicate': rows.append({**owner, 'id': 'update-hold-duplicate'})
+    elif fault == 'identical-duplicate': rows.append(json.loads(json.dumps(owner)))
+    elif fault == 'renamed': owner['id'] += '-other'
+    elif fault == 'command': owner['command'] = ['node', 'tests/web/other.mjs']
+    elif fault == 'extra-argument': owner['command'].append('--skip')
+    elif fault == 'environment': owner.pop('env')
+    elif fault == 'python': owner['env']['AMPLIFIER_TEST_PYTHON'] = 'python'
+    elif fault == 'artifacts': owner['env']['AMPLIFIER_TEST_ARTIFACTS'] += '-other'
+    elif fault == 'extra-environment': owner['env']['UNEXPECTED'] = 'extra'
+    elif fault == 'cwd': owner['cwd'] = '.build/web-client'
+    elif fault == 'client-copy':
+        rows.append({'id': 'client-copy', 'cwd': '.build/web-client',
+                     'command': ['node', 'tests/update-configuration-hold-browser.mjs']})
+    elif fault == 'readiness': readiness.add(owner['command'][1])
+    else: readiness.add(coverage_paths(owner['command'][1]))
+    with pytest.raises(AssertionError, match='update-configuration-hold'):
+        update_configuration_hold_browser_addition(rows, readiness)
+    if not readiness:
+        monkeypatch.setattr(sys.modules[__name__], 'current_plan', lambda: plan)
+        with pytest.raises(AssertionError, match='update-configuration-hold'):
+            coverage_plan()
+
+
 def test_context_degradation_has_one_client_owner_and_preserves_prior_order():
     host_path = ROOT / 'tests/web/browser-checks.json'
     host = json.loads(host_path.read_text())
@@ -1135,7 +1209,9 @@ def test_context_degradation_has_one_client_owner_and_preserves_prior_order():
     index = host['scenarioOrder'].index('context-degradation')
     assert host['scenarioOrder'][index - 1:index + 2] == [
         'shared-notices-motion', 'context-degradation', 'input-status']
-    previous = [name for name in host['scenarioOrder'] if name != 'context-degradation']
+    update_hold_ids = update_configuration_hold_browser_addition(plan['scenarios'])
+    previous = [name for name in host['scenarioOrder']
+                if name not in {'context-degradation'} | update_hold_ids]
     assert len(previous) == len(set(previous)) == 172
     assert hashlib.sha256(json.dumps(previous).encode()).hexdigest() == (
         'fb68878eafdfb0410141ac5237253e6510be1f261d831db154106ee1eda378d1')
@@ -1195,12 +1271,14 @@ def test_retained_activity_is_composed_once_and_preserves_all_prior_scenario_ord
     # Independent accepted 1c963e70 order: adding one owner must neither move nor
     # drop any of the 171 existing IDs, including the original changelog placement.
     assert context_degradation_browser_addition(plan['scenarios']) == {'context-degradation'}
+    update_hold_ids = update_configuration_hold_browser_addition(plan['scenarios'])
     preceding_order = [name for name in host['scenarioOrder']
-                       if name not in {'retained-activity', 'context-degradation'}]
+                       if name not in {'retained-activity', 'context-degradation'} | update_hold_ids]
     assert len(preceding_order) == len(set(preceding_order)) == 171
     assert hashlib.sha256(json.dumps(preceding_order).encode()).hexdigest() == 'a7038948908313656b5a9017c5677406b912c89ec911c7cb5e3b704edb80177e'
-    assert len([row for row in plan['scenarios'] if row['id'] != 'context-degradation']) == 172
-    assert len(plan['scenarios']) == len({row['id'] for row in plan['scenarios']}) == 173
+    assert len([row for row in plan['scenarios']
+                if row['id'] not in {'context-degradation'} | update_hold_ids]) == 172
+    assert len(plan['scenarios']) == len({row['id'] for row in plan['scenarios']}) == 173 + len(update_hold_ids)
     assert proof['registrySha256'] == {'unified': runner.digest(host_path), 'client': runner.digest(client_path)}
     assert proof['clientSelectionSha256'] == runner.digest(ROOT / 'components/web-client.source.json')
     assert (client_path.parent / 'retained-activity-browser.mjs').is_file()
@@ -1702,6 +1780,7 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     layout_pass2_browser_additions(current_plan()['scenarios'], readiness_scripts)
     retained_activity_browser_addition(current_plan()['scenarios'], readiness_scripts)
     context_degradation_browser_addition(current_plan()['scenarios'], readiness_scripts)
+    update_configuration_hold_browser_addition(current_plan()['scenarios'], readiness_scripts)
     plan = coverage_plan()
     navigation_ids = agent_navigation_browser_additions(plan['scenarios'], readiness_scripts)
     sidebar_ids = sidebar_controls_browser_addition(plan['scenarios'], readiness_scripts)
@@ -4189,6 +4268,7 @@ def test_current_composed_registry_owns_every_executable_and_both_mixed_suites()
     changelog_ids = changelog_days_browser_addition(plan['scenarios'])
     activity_ids = retained_activity_browser_addition(plan['scenarios'])
     context_ids = context_degradation_browser_addition(plan['scenarios'])
+    update_hold_ids = update_configuration_hold_browser_addition(plan['scenarios'])
     lifecycle_additions = [
         {'id': 'session-health-request-failure',
          'command': ['node', 'tests/web/session-health-browser.mjs', '--request-failure']},
@@ -4197,10 +4277,10 @@ def test_current_composed_registry_owns_every_executable_and_both_mixed_suites()
     ]
     lifecycle_ids = {row['id'] for row in lifecycle_additions}
     assert [row for row in plan['scenarios'] if row['id'] in lifecycle_ids] == lifecycle_additions
-    preceding = [row for row in plan['scenarios'] if row['id'] not in navigation_ids | client_addition_ids | retained_ids | appearance_ids | responsive_ids | notices_ids | lifecycle_ids | preview_ids | approval_ids | multiparty_ids | shared_room_ids | repair_ids | layout_ids | pass2_ids | changelog_ids | activity_ids | context_ids]
+    preceding = [row for row in plan['scenarios'] if row['id'] not in navigation_ids | client_addition_ids | retained_ids | appearance_ids | responsive_ids | notices_ids | lifecycle_ids | preview_ids | approval_ids | multiparty_ids | shared_room_ids | repair_ids | layout_ids | pass2_ids | changelog_ids | activity_ids | context_ids | update_hold_ids]
     assert len(preceding) == len({row['id'] for row in preceding}) == 147
-    assert len(plan['scenarios']) == len({row['id'] for row in plan['scenarios']}) == 152 + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(preview_ids) + len(approval_ids) + len(multiparty_ids) + len(shared_room_ids) + len(lifecycle_ids) + len(repair_ids) + len(layout_ids) + len(pass2_ids) + len(changelog_ids) + len(activity_ids) + len(context_ids)
-    assert len(plan['scenarios']) == 147 + len(navigation_ids) + len(client_addition_ids) + len(retained_ids) + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(preview_ids) + len(approval_ids) + len(multiparty_ids) + len(shared_room_ids) + len(lifecycle_ids) + len(repair_ids) + len(layout_ids) + len(pass2_ids) + len(changelog_ids) + len(activity_ids) + len(context_ids)
+    assert len(plan['scenarios']) == len({row['id'] for row in plan['scenarios']}) == 152 + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(preview_ids) + len(approval_ids) + len(multiparty_ids) + len(shared_room_ids) + len(lifecycle_ids) + len(repair_ids) + len(layout_ids) + len(pass2_ids) + len(changelog_ids) + len(activity_ids) + len(context_ids) + len(update_hold_ids)
+    assert len(plan['scenarios']) == 147 + len(navigation_ids) + len(client_addition_ids) + len(retained_ids) + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(preview_ids) + len(approval_ids) + len(multiparty_ids) + len(shared_room_ids) + len(lifecycle_ids) + len(repair_ids) + len(layout_ids) + len(pass2_ids) + len(changelog_ids) + len(activity_ids) + len(context_ids) + len(update_hold_ids)
     assert sum(row.get('cwd') == '.build/web-client' for row in preceding) == 14
     assert sum(row.get('cwd') == '.build/web-client' for row in plan['scenarios']) == 17 + len(preview_ids) + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(shared_room_ids) + len(repair_ids) + len(layout_ids) + len(pass2_ids) + len(changelog_ids) + len(activity_ids) + len(context_ids)
     client_path = source_test('tests/input-status-browser.mjs').with_name('browser-checks.json')
@@ -4417,6 +4497,7 @@ def test_layout_pass2_assembly_retains_prior_order_and_binds_all_four_selected_o
     changelog_ids = changelog_days_browser_addition(plan['scenarios'])
     activity_ids = retained_activity_browser_addition(plan['scenarios'])
     context_ids = context_degradation_browser_addition(plan['scenarios'])
+    update_hold_ids = update_configuration_hold_browser_addition(plan['scenarios'])
     assert identities == {
         'worktree-move', 'work-hierarchy', 'settings-action-spacing', 'settings-draft-focus'}
     client_path = source_test('tests/worktree-move-browser.mjs').with_name('browser-checks.json')
@@ -4490,15 +4571,15 @@ def test_layout_pass2_assembly_retains_prior_order_and_binds_all_four_selected_o
         voice-work-message external-multiparty shared-room
     '''.split()
     assert len(preceding_order) == len(set(preceding_order)) == 165
-    assert [name for name in host['scenarioOrder'] if name not in new_ids | changelog_ids | activity_ids | context_ids | {'external-approval', 'attachment-preview'}] == preceding_order
+    assert [name for name in host['scenarioOrder'] if name not in new_ids | changelog_ids | activity_ids | context_ids | update_hold_ids | {'external-approval', 'attachment-preview'}] == preceding_order
     # Preserve the prior spacing/hierarchy placements independently of where the
     # newly validated draft-focus journey is inserted into the host order.
-    before_focus = [name for name in host['scenarioOrder'] if name not in changelog_ids | activity_ids | context_ids | {'settings-draft-focus', 'external-approval', 'attachment-preview'}]
+    before_focus = [name for name in host['scenarioOrder'] if name not in changelog_ids | activity_ids | context_ids | update_hold_ids | {'settings-draft-focus', 'external-approval', 'attachment-preview'}]
     assert before_focus[before_focus.index('shared-controls') + 1:
                         before_focus.index('delivery-warning')] == ['settings-action-spacing']
     assert before_focus[-2:] == ['shared-room', 'work-hierarchy']
     assert [row['id'] for row in plan['scenarios']] == host['scenarioOrder']
-    assert len(plan['scenarios']) == len(host['scenarioOrder']) == 165 + len(new_ids) + 2 + len(changelog_ids) + len(activity_ids) + len(context_ids) == 170 + len(changelog_ids) + len(activity_ids) + len(context_ids)
+    assert len(plan['scenarios']) == len(host['scenarioOrder']) == 165 + len(new_ids) + 2 + len(changelog_ids) + len(activity_ids) + len(context_ids) + len(update_hold_ids) == 170 + len(changelog_ids) + len(activity_ids) + len(context_ids) + len(update_hold_ids)
     assert proof['registrySha256'] == {'unified': runner.digest(host_path), 'client': runner.digest(client_path)}
     assert proof['clientSelectionSha256'] == runner.digest(ROOT / 'components/web-client.source.json')
     assert not identities & {row['id'] for row in coverage_plan()['scenarios']}
