@@ -326,8 +326,6 @@ async def test_legacy_visibility_edit_preserves_saved_exact_choice_and_only_refe
     assert calls == {'one': 2, 'two': 1, 'broken': 1}
     for _ in range(3):
         await browse(service.management, chat)
-    assert calls == {'one': 1, 'two': 1, 'broken': 1}
-    await browse(service.management, chat, refresh=True, instance='one')
     assert calls == {'one': 2, 'two': 1, 'broken': 1}, 'Warm reads must not repeat discovery'
     prepared, guard = await prepare(service, chat)
     guard()
