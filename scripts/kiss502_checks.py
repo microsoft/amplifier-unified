@@ -44,6 +44,8 @@ FIXTURES = (
     "canvas_runtime_probe.py", "surface_context_probe.py", "workspace_awareness_runtime_probe.py",
 )
 BROWSERS = ("external-multiparty-browser.mjs", "external-approval-browser.mjs")
+OWNER_TARGETS = ("test_execution_owner", "test_execution_owner_service",
+                 "test_execution_owner_resume", "test_task_continuity", "test_work_native_effects")
 CHANGED_TARGETS = ("test_acp_native_execution", "test_agent_instance",
                    "test_agent_instance_composition", "test_external_conversation",
                    "test_shared_conversation", "test_acp_participant", "test_owner_update_wait")
@@ -55,7 +57,7 @@ def digest(path):
 
 def selection():
     """Only local test imports are traversed; product source is never copied."""
-    pending = [ROOT / "tests" / (name + ".py") for name in TARGETS]
+    pending = [ROOT / "tests" / (name + ".py") for name in (*TARGETS, *OWNER_TARGETS)]
     pending += [ROOT / "tests" / "fixtures" / name for name in FIXTURES]
     pending += [ROOT / "tests/conftest.py"]
     selected = set()
@@ -231,6 +233,12 @@ def run(output, targets=TARGETS):
                       *["tests/" + name + ".py" for name in targets]], cwd=harness,
             env={**clean, "UNIFIED_RUNTIME_PYTHON": python,
                  "AMPLIFIER_TEST_ARTIFACTS": str(output / "native")}, required=False)
+    command("owner-pytest", [python, "-I", "-B", "-m", "pytest", "-c", "/dev/null",
+            "--rootdir", str(harness), "-o", "asyncio_mode=auto", "-p", "no:cacheprovider", "-q",
+            "--basetemp", str(output / "owner-tmp"),
+            "--junitxml=" + str(output / "owner-junit.xml"),
+            *["tests/" + name + ".py" for name in OWNER_TARGETS]], cwd=harness,
+            env={**clean, "UNIFIED_RUNTIME_PYTHON": python}, required=False)
     for name in BROWSERS:
         command(name, ["node", "tests/web/" + name], cwd=harness, env={
             **clean, "AMPLIFIER_TEST_ROOT": str(harness), "AMPLIFIER_TEST_PYTHON": python,
