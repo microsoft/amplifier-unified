@@ -137,6 +137,8 @@ class HostAgent:
             'amplifier/retirementRequested', {'sessionId': identity})
 
     async def request_permission(self, identity, approval):
+        if self.instance is not None:
+            self.instance.bound(identity, self.instance.bindings.get(identity))
         details = approval.get('details', {})
         text = str(approval.get('prompt') or approval.get('title') or 'Allow this request?')
         if details:
@@ -149,6 +151,8 @@ class HostAgent:
                 field_meta={approval_policy.NAMESPACE: approval['policyScope']} if approval.get('policyScope') else None,
                 content=[{'type': 'content', 'content': {'type': 'text', 'text': text}}]), options=options)
         outcome = response.outcome
+        if self.instance is not None:
+            self.instance.bound(identity, self.instance.bindings.get(identity))
         return outcome.option_id if outcome.outcome == 'selected' else 'deny'
 
     def require_initialized(self):
@@ -162,12 +166,15 @@ class HostAgent:
         policy = approval_policy.negotiate(kwargs.get(approval_policy.NAMESPACE))
         self.owner.approval_policy = policy is not None
         instance = None
-        if kwargs.get(agent_instance.NAMESPACE) == {'version': 1}:
+        offered = kwargs.get(agent_instance.NAMESPACE)
+        if (isinstance(offered, dict) and set(offered) == {'version'}
+                and type(offered['version']) is int and offered['version'] == 1):
             try:
                 profile = agent_instance.InstanceProfile(self.owner)
                 if profile.selected is not None:
                     instance = profile.describe()
                     self.instance = profile
+                    self.owner.approval_guard = lambda identity: profile.bound(identity, profile.bindings.get(identity))
             except (ValueError, OSError) as error:
                 raise RequestError(_REQUEST_FAILED, str(error)) from None
         return InitializeResponse(protocol_version=1, agent_capabilities=AgentCapabilities(
@@ -241,6 +248,8 @@ class HostAgent:
 
         async def observe(row):
             nonlocal streamed, had_deltas, last_model
+            if metadata is not None:
+                self.instance.bound(session_id, metadata)
             kind = row.get('type')
             if kind == 'assistant.delta':
                 streamed = had_deltas = True
@@ -297,6 +306,8 @@ class HostAgent:
                                {'inputReceipt': result['receipt']})
         if result.get('outcome') not in {'completed', 'cancelled'}:
             raise RequestError(_REQUEST_FAILED, 'Outcome unresolved; inspect retained owner state before retrying.')
+        if metadata is not None:
+            self.instance.bound(session_id, metadata)
         if result.get('text') and not streamed:
             await text(result['text'])
         return PromptResponse(stop_reason='end_turn' if result['outcome'] == 'completed' else 'cancelled',

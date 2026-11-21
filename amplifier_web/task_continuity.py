@@ -15,7 +15,7 @@ PROJECTION_BYTES = 9 * 1024
 CONTROL_BYTES = 32 * 1024 * 1024
 CURRENT_FIELDS = ("objective", "constraints", "blockedReason", "questionIds",
                   "operationIds", "artifactRefs", "completionEvidence", "corrections")
-DETAIL_FIELDS = (*CURRENT_FIELDS, "originalObjective", "change")
+DETAIL_FIELDS = (*CURRENT_FIELDS, "originalObjective", "change", "sourceInputIds")
 
 
 def _json(value):
@@ -66,6 +66,9 @@ def _project(task, history, goal, sid, *, continuity=None, supported=None):
     summary = {key: copy.deepcopy(task.get(key)) for key in (
         "id", "revision", "appliedRevision", "status", "continuationEpoch",
         "createdAt", "updatedAt", "completedAt", "maxTurns", "blockProvenance")}
+    if "sourceInputIds" in task:
+        summary["sourceInputCount"] = len(task["sourceInputIds"])
+        summary["sourceInputRef"] = _detail_ref(task, sid, "sourceInputIds")
     summary.update(continuationEpoch=continuation_epoch(task),
                    correctionCount=len(task.get("corrections", [])),
                    originalObjectiveAvailable=isinstance(task.get("originalObjective"), str),
@@ -255,7 +258,10 @@ def _saved_receipt(receipts, identity):
 def _read(operation, args, *, task, history, receipts, sid, goal=None,
           continuity=None, supported=None):
     if operation == "task.get":
-        return _project(task, history, goal, sid, continuity=continuity, supported=supported)
+        result = _project(task, history, goal, sid, continuity=continuity, supported=supported)
+        if args.get("sourceInputId") is not None:
+            result["sourceInputAssociated"] = bool(task and args["sourceInputId"] in task.get("sourceInputIds", []))
+        return result
     if operation == "task.receipt":
         return _saved_receipt(receipts, args.get("commandId"))
     if operation == "task.history" and not args.get("taskId"):
@@ -267,7 +273,11 @@ def _read(operation, args, *, task, history, receipts, sid, goal=None,
 def definitions(schema, string):
     sid = {"sessionId": string(200)}
     revision = {"expectedRevision": {"type": "integer", "minimum": 0},
-                "expectedTaskId": {**string(200), "minLength": 1}}
+                "expectedTaskId": {**string(200), "minLength": 1},
+                "expectedExecution": schema({
+                    "interruptionRevision": {"type": "integer", "minimum": 0},
+                    "inputId": {"type": ["string", "null"], "maxLength": 200}},
+                    ["interruptionRevision", "inputId"])}
     strings = {"type": "array", "maxItems": 100, "items": {**string(4000), "minLength": 1}}
     fields = {"objective": {**string(16000), "minLength": 1}, "constraints": strings,
               "correction": {**string(8000), "minLength": 1}, "questionIds": strings,
@@ -275,7 +285,7 @@ def definitions(schema, string):
               "maxTurns": {"type": ["integer", "null"], "minimum": 1,
                            "description": "Optional enforced turn limit, not a planning estimate. Omit unless a hard limit is required. Changing an authorized limit retains turns already used; preserve explicit user and owner limits."}}
     return {
-        "task.get": ("Read the saved task, applied revision, goal controller, and compaction checkpoint status. Reading never starts model work.", schema(sid)),
+        "task.get": ("Read the saved task, applied revision, goal controller, and compaction checkpoint status. Optional sourceInputId checks creation-time association without returning the input list. Reading never starts model work.", schema({**sid, "sourceInputId": string(200)}, ["sessionId"])),
         "task.history": ("Read bounded retained task identities, or changes for an exact taskId. Historical corrections remain required detail; reading does not grant authority.", schema({
             **sid, "taskId": string(200), "after": string(2048),
             "limit": {"type": "integer", "minimum": 1, "maximum": 50}}, ["sessionId"])),
@@ -535,6 +545,13 @@ class TaskController:
                     "appliedRevision": None, "status": "active", "constraints": [], "corrections": [],
                     "questionIds": [], "operationIds": [], "artifactRefs": [], "completionEvidence": [], "goalState": {},
                     "originalObjective": args["objective"], "changes": [], "changesRecordedFromRevision": revision + 1}
+            # Native generation provenance, not a caller-supplied work link.
+            # Legacy/offline tasks without an active generation stay unlinked.
+            generation = getattr(self.controls.runtime, "generation", None) or {}
+            inputs = generation.get("input_ids")
+            if isinstance(inputs, list) and inputs and all(
+                    isinstance(value, str) and 0 < len(value) <= 200 for value in inputs):
+                task["sourceInputIds"] = list(dict.fromkeys(inputs))
         elif previous is None:
             raise ValueError("Create a durable task first")
         else:
@@ -666,6 +683,9 @@ def _valid_saved_task(task):
             or not isinstance(task.get("status"), str)
             or task["status"] not in {"active", "paused", "blocked", "completed"}
             or not isinstance(task.get("objective"), str) or not task["objective"].strip()):
+        return False
+    if "sourceInputIds" in task and (not isinstance(task["sourceInputIds"], list) or any(
+            not isinstance(value, str) or not 0 < len(value) <= 200 for value in task["sourceInputIds"])):
         return False
     for field in ("constraints", "questionIds", "operationIds", "artifactRefs", "completionEvidence"):
         if (not isinstance(task.get(field), list)

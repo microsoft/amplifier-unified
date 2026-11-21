@@ -120,6 +120,7 @@ class ExecutionOwner:
         self.retirement_hint = None
         self.request_permission = None
         self.approval_policy = False
+        self.approval_guard = None
         self._retirement_hint_task = None
         self._observers = ensure_observers(service)
         self._observers.attachments.add(self)
@@ -209,6 +210,7 @@ class ExecutionOwner:
                 args["expectedInterruptionRevision"] = expected_interruption_revision
             admission = self.service._task(self.service.dispatch("conversation.send", args,
                 origin=origin or self.origin, command_id=input_id, include_state=False,
+                **({"caller_session_id": identity} if origin is not None else {}),
                 **({"admission_check": admission_check} if admission_check is not None else {})))
             admission.add_done_callback(lambda task: None if task.cancelled() else task.exception())
             done, _ = await asyncio.wait({admission, delivery.failed}, return_when=asyncio.FIRST_COMPLETED)
@@ -336,7 +338,9 @@ class ExecutionOwner:
                     await self.service.dispatch('approval.respond', {'sessionId': identity, 'id': approval['id'],
                         'decision': choice, 'expectedRequestHash': captured,
                         **({'expectedApprovalScope': scope['key']} if scope else {})},
-                        origin=self.origin, command_id=str(uuid.uuid4()), include_state=False)
+                        origin=self.origin, command_id=str(uuid.uuid4()), include_state=False,
+                        **({'admission_check': lambda: self.approval_guard(identity)}
+                           if self.approval_guard is not None else {}))
         except Exception:
             row["delivery"].fail("Approval settlement is unresolved; inspect retained owner state before retrying.")
         finally:

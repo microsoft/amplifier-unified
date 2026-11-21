@@ -27,9 +27,14 @@ def source(value):
     return copy.deepcopy(value)
 
 
-def room_source(identity):
-    """A source-qualified public room reference, never an installation credential."""
-    return source({'sourceId': 'urn:amplifier:conversation:' + identity, 'conversationId': identity})
+def room_source(identity, source_id=None):
+    """Use the source's public origin when available; UUID fallback is local scope.
+
+    The fallback follows the room's existing globally allocated identity, not a
+    claim of cross-installation authentication or import/copy disambiguation.
+    """
+    return source({'sourceId': source_id or 'urn:amplifier:conversation:' + identity,
+                   'conversationId': identity})
 
 
 def session_metadata(agent_id, source_ref):
@@ -55,28 +60,30 @@ class InstanceProfile:
         self.owner = owner
         self.selected = self.config()
         self.bindings = {}
+        self.execution_sources = {}
 
     def config(self):
         value = getattr(self.owner.service, 'server_config', {}).get('agentInstance')
         if value is None:
             return None
-        if (not isinstance(value, dict) or set(value) != {'id', 'label', 'workspace', 'bundle', 'sources'}
+        if (not isinstance(value, dict) or set(value) - {'id', 'label', 'workspace', 'bundle', 'sources'}
                 or not all(_text(value.get(key)) for key in ('id', 'label', 'workspace', 'bundle'))
-                or not isinstance(value['sources'], list)):
-            raise ValueError('agentInstance requires id, label, workspace, bundle and authorized sources.')
-        for row in value['sources']:
+                or ('sources' in value and not isinstance(value['sources'], list))):
+            raise ValueError('agentInstance requires id, label, workspace and bundle; sources is optional.')
+        for row in value.get('sources', []):
             source(row)
         return copy.deepcopy(value)
 
     def current(self, source_ref=None):
         self.owner.require_connection()
         current = self.config()
-        if not self.selected or current != self.selected:
+        if (not self.selected or not current or any(
+                current.get(key) != self.selected.get(key) for key in ('id', 'workspace', 'bundle'))):
             raise ValueError('The public agent profile changed or was revoked; inspect before reconnecting.')
         if (Path(current['workspace']).resolve(strict=True) != self.owner.workspace
                 or current['bundle'] != self.owner.bundle):
             raise ValueError('The launcher does not match the configured agent workspace and bundle.')
-        if source_ref is not None and source_ref not in current['sources']:
+        if source_ref is not None and 'sources' in current and source_ref not in current['sources']:
             raise ValueError('This source conversation is not authorized for the public agent.')
         return current
 
@@ -84,8 +91,9 @@ class InstanceProfile:
         current = self.current()
         return {'version': 1, 'agentId': current['id'], 'label': current['label'],
             'method': '_' + METHOD, 'interactions': ['text'],
-            'inputInspection': True, 'workControls': ['read', 'update', 'pause', 'stop'],
-            'limits': {'sourceAuthorization': 'configured-owner-attachment',
+            'inputInspection': True, 'workControls': ['read', 'update', 'pause', 'stop', 'workReceipt'],
+            'limits': {'sourceAuthorization': 'trusted-owner-attachment-not-multi-tenant-auth',
+                       'executionMapping': 'one-default-root-per-source-pair',
                        'actor': 'source-attribution-not-a-grant',
                        'inputRevision': 'immutable-source-revision',
                        'retention': 'existing-command-and-task-retention',
@@ -136,7 +144,13 @@ class InstanceProfile:
             await self.owner.release(expected)
             raise
         self.bindings[expected] = binding
+        self.execution_sources[expected] = self.execution_source(session)
         return expected, self.session_info(expected)
+
+    @staticmethod
+    def execution_source(session):
+        return {key: session.get(key) for key in
+                ('workspace', 'workingDirectory', 'runtimeSessionId', 'nativeIdentity')}
 
     def bound(self, identity, value):
         binding = self.request(value)
@@ -146,6 +160,8 @@ class InstanceProfile:
         session = self.owner.service._session(identity, hydrate=False)
         if session.get('messageAnnotations', {}).get(BINDING) != binding:
             raise ValueError('The saved execution binding changed.')
+        if self.execution_source(session) != self.execution_sources.get(identity):
+            raise ValueError('The execution source or location changed; reconnect explicitly.')
         return session, binding
 
     def session_info(self, identity):
@@ -195,6 +211,10 @@ class InstanceProfile:
 
     async def inspect_input(self, identity, value):
         _, command = self.input(identity, value)
+        delivery = await self.owner.service.dispatch('conversation.delivery',
+            {'sessionId': identity, 'inputId': command}, origin='acp',
+            caller_session_id=identity, include_state=False,
+            admission_check=lambda: self.bound(identity, value))
         async with self.owner.service.lock:
             session, _ = self.bound(identity, value)
             row = self.owner.service.db.execute(
@@ -205,15 +225,20 @@ class InstanceProfile:
             from .input_status import PREFIX, public
             status = public(session.get('messageAnnotations', {}).get(PREFIX + command, {}).get('inputStatus'), command)
             result = {'agentId': self.selected['id'], 'source': copy.deepcopy(value['source']),
-                'input': copy.deepcopy(value['input']), 'commandId': command,
-                'delivery': receipt.get('delivery', 'unknown'), 'status': status,
+                'input': {key: value['input'][key] for key in ('id', 'revision')},
+                'attribution': 'lookup-key-only-original-attribution-owned-by-source',
+                'commandId': command,
+                'delivery': ('unknown' if delivery['result']['delivery'] == 'not_saved'
+                             else delivery['result']['delivery']), 'status': status,
                 'replayed': False}
-        work = await self.owner.service.dispatch('task.get', {'sessionId': identity},
-            origin='acp', include_state=False)
+        work = await self.owner.service.dispatch('task.get', {'sessionId': identity, 'sourceInputId': command},
+            origin='acp', caller_session_id=identity, include_state=False)
         self.bound(identity, value)
         task = work['result'].get('task')
         result['work'] = ({'sessionId': identity, 'taskId': task['id'],
-                           'revision': task['revision'], 'operation': 'read'} if task else None)
+                           'revision': task['revision'], 'operation': 'read'}
+                          if task and work['result'].get('sourceInputAssociated') else None)
+        result['workAssociation'] = 'current-task-creation-input-only-not-complete-history'
         result['workAvailability'] = work['result'].get('status', 'unknown')
         return result
 
@@ -226,36 +251,74 @@ class InstanceProfile:
             return await self.inspect_input(identity, binding)
         if operation == 'read' and set(params) == {'sessionId', 'binding', 'operation'}:
             result = await self.owner.service.dispatch('task.get', {'sessionId': identity},
-                origin='acp', include_state=False)
+                origin='acp', caller_session_id=identity, include_state=False)
             self.bound(identity, binding)
+            session, _ = self.bound(identity, binding)
+            from .message_delivery import execution_boundary
             return {'agentId': self.selected['id'], 'source': copy.deepcopy(binding['source']),
-                    'work': result['result']}
+                    'work': result['result'], 'executionStatus': session.get('status'),
+                    'expectedExecution': execution_boundary(session)}
+        if operation == 'workReceipt' and set(params) == {'sessionId', 'binding', 'operation', 'commandId'}:
+            if not _text(params['commandId']):
+                raise ValueError('An exact original commandId is required.')
+            result = await self.owner.service.dispatch('task.receipt', {
+                'sessionId': identity, 'commandId': _identity('control', self.bindings[identity], params['commandId']),
+            }, origin='acp', caller_session_id=identity, include_state=False)
+            self.bound(identity, binding)
+            row = self.owner.service.db.execute('SELECT receipt FROM commands WHERE id=?',
+                (_identity('stop', self.bindings[identity], params['commandId']),)).fetchone()
+            return {'task': result['result'], 'stop': json.loads(row[0]) if row else None}
         # Work amendments use the native task's own CAS, command receipt and
         # resource guard. No task is created or resumed by this profile.
         if operation not in {'update', 'pause', 'stop'}:
             raise ValueError('Unsupported instance operation; use advertised native controls.')
-        if set(params) != {'sessionId', 'binding', 'operation', 'commandId', 'taskId', 'expectedRevision', 'changes'}:
+        keys = {'sessionId', 'binding', 'operation', 'commandId', 'taskId', 'expectedRevision', 'changes'}
+        if set(params) != keys | ({'expectedExecution'} if operation == 'stop' else set()):
             raise ValueError('Work changes require an exact task, revision, command and changes.')
-        if not _text(params['commandId']) or not _text(params['taskId']):
+        if not _text(params['commandId']) or not (
+                _text(params['taskId']) or operation == 'stop' and params['taskId'] is None):
             raise ValueError('Exact command and task identities are required.')
         changes = params['changes']
         if not isinstance(changes, dict) or (operation in {'pause', 'stop'} and changes) or set(changes) - {
                 'objective', 'constraints', 'correction', 'maxTurns'}:
             raise ValueError('Unsupported work amendment.')
-        result = await self.owner.service.dispatch('task.' + ('pause' if operation == 'stop' else operation), {
-            'sessionId': identity, 'expectedTaskId': params['taskId'],
-            'expectedRevision': params['expectedRevision'], **changes,
-        }, origin='acp', command_id=_identity('control', self.bindings[identity], params['commandId']),
-            include_state=False, admission_check=lambda: self.bound(identity, binding))
+        def guard():
+            session, _ = self.bound(identity, binding)
+            if operation == 'stop':
+                from .message_delivery import execution_boundary
+                if params['expectedExecution'] != execution_boundary(session):
+                    raise ValueError('New input or another interruption superseded this Stop intent.')
+        result = None
+        if params['taskId'] is not None:
+            result = await self.owner.service.dispatch('task.' + ('pause' if operation == 'stop' else operation), {
+                'sessionId': identity, 'expectedTaskId': params['taskId'],
+                'expectedRevision': params['expectedRevision'], **changes,
+                **({'expectedExecution': params['expectedExecution']} if operation == 'stop' else {}),
+            }, origin='acp-instance-stop' if operation == 'stop' else 'acp',
+                command_id=_identity('control', self.bindings[identity], params['commandId']),
+                caller_session_id=identity, include_state=False, admission_check=guard)
         self.bound(identity, binding)
         if operation == 'stop':
             # Pause settles in the existing task owner before native Stop. If
             # either acknowledgement is lost, exact command receipts reconcile;
             # cancellation of one prompt is never advertised as work revocation.
-            def guard():
-                self.bound(identity, binding)
-            stopped = await self.owner.service.dispatch('conversation.stop', {'sessionId': identity},
+            if params['taskId'] is None:
+                current = await self.owner.service.dispatch('task.get', {'sessionId': identity},
+                    origin='acp', caller_session_id=identity, include_state=False)
+                task = current['result'].get('task')
+                if current['result'].get('status') != 'available' or task and task.get('status') != 'completed':
+                    raise ValueError('Inspect the current saved task before stopping this execution.')
+            def stop_guard():
+                guard()
+                if params['taskId'] is not None:
+                    task = self.owner.service._session(identity, hydrate=False).get('task') or {}
+                    if (task.get('id') != params['taskId']
+                            or task.get('revision') != params['expectedRevision'] + 1
+                            or task.get('status') != 'paused'):
+                        raise ValueError('The saved task changed after pause; no successor work was stopped.')
+            stopped = await self.owner.service.dispatch('conversation.stop',
+                {'sessionId': identity, 'expectedExecution': params['expectedExecution']},
                 origin='acp', command_id=_identity('stop', self.bindings[identity], params['commandId']),
-                include_state=False, admission_check=guard)
+                caller_session_id=identity, include_state=False, admission_check=stop_guard)
             return {'task': result, 'stop': stopped, 'settlement': 'inspect-native-state'}
         return result

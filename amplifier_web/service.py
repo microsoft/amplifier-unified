@@ -154,7 +154,9 @@ ACTION_DEFINITIONS = {
     "attachment.remove": ("Remove an attachment from a conversation draft", schema({"sessionId":{"type":["string","null"],"maxLength":200},"id":string(32)},["id"])),
     "conversation.delivery": ("Check a saved input's delivery without sending or starting work. Missing evidence remains uncertain.", schema({"sessionId": string(200), "inputId": string(200)}, ["sessionId", "inputId"])),
     "conversation.retry": ("Explicitly resend an unconfirmed latest message, preserving its input identity and attachments. Unknown delivery requires confirmUncertain after the user accepts that prior effects might repeat. Never call as a passive check.", schema({"sessionId": string(200), "inputId": string(200), "confirmUncertain": {"type": "boolean"}}, ["sessionId", "inputId"])),
-    "conversation.stop": ("Stop session execution", schema({"sessionId": string(200)}, [])),
+    "conversation.stop": ("Stop session execution. Optional expectedExecution fences the original Stop intent against newer input or another interruption.", schema({"sessionId": string(200), "expectedExecution": schema({
+        "interruptionRevision": {"type": "integer", "minimum": 0},
+        "inputId": {"type": ["string", "null"], "maxLength": 200}}, ["interruptionRevision", "inputId"])}, [])),
     "worker.spawn": ("Start a worker lane for heavier work", schema({"sessionId": string(200), "instruction": string(100000), "bundle": string(2000)}, ["instruction"])),
     "worker.stop": ("Stop one worker lane", schema({"sessionId": string(200), "id": string(100)}, ["id"])),
     "worker.message": ("Send a follow-up to an active persistent worker", schema({"sessionId": string(200), "id": string(100), "text": string(100000)}, ["sessionId", "id", "text"])),
@@ -3655,6 +3657,10 @@ class AppService:
                     pending.append((self._retry_message, (copy.deepcopy(session), message['text'], args['inputId'], original_status, original_turn, known_undelivered)))
             elif action == "conversation.stop":
                 session = self._session(args.get("sessionId"), hydrate=False)
+                if "expectedExecution" in args:
+                    from .message_delivery import execution_boundary
+                    if args["expectedExecution"] != execution_boundary(session):
+                        raise AppError('New input or another interruption superseded this Stop intent. Nothing was stopped.', 409)
                 session["interruptionRevision"] = session.get("interruptionRevision", 0) + 1
                 session["lastInterruption"] = {"commandId": command_id, "at": time.time(), "origin": origin}
                 if session.get('externalAgent', {}).get('status') not in {'unknown', 'error'}:
