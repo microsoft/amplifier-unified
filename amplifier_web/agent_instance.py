@@ -132,6 +132,7 @@ class InstanceProfile:
         async with self.owner.service.lock:
             self.current(binding['source'])
             session = self.owner.service._session(expected, hydrate=False)
+            execution_source = self.execution_source(session)
             saved = session.setdefault('messageAnnotations', {}).get(BINDING)
             if saved is not None and saved != binding:
                 raise ValueError('The saved execution binding changed.')
@@ -144,7 +145,6 @@ class InstanceProfile:
                     raise ValueError('The original source creation receipt is unavailable.')
                 session['messageAnnotations'][BINDING] = copy.deepcopy(binding)
                 self.owner.service._save_changes(sessions={expected})
-            execution_source = self.execution_source(session)
         await self.owner.attach(expected, cwd, mcp_servers=servers)
         try:
             self.current(binding['source'])  # Recheck authorization after MCP binding.
@@ -164,11 +164,12 @@ class InstanceProfile:
         # Directory/history refresh fills aliases with the same native identity.
         # That is not a writer/source replacement; a genuinely different native
         # identity or effective execution location still changes the witness.
+        native = native_id(session)
+        if session.get('runtimeSessionId') and session['runtimeSessionId'] != native:
+            raise ValueError('The execution source or location changed: conflicting native identities.')
         return {'workspace': session.get('workspace'),
                 'workingDirectory': session.get('workingDirectory') or session.get('workspace'),
-                'nativeIdentity': native_id(session),
-                'conflictingRuntimeIdentity': (session.get('runtimeSessionId')
-                    if session.get('runtimeSessionId') not in (None, native_id(session)) else None)}
+                'nativeIdentity': native}
 
     def bound(self, identity, value):
         binding = self.request(value)
@@ -313,6 +314,9 @@ class InstanceProfile:
         if not isinstance(changes, dict) or (operation in {'pause', 'stop'} and changes) or set(changes) - {
                 'objective', 'constraints', 'correction', 'maxTurns'}:
             raise ValueError('Unsupported work amendment.')
+        if operation == 'stop' and params['taskId'] is None and (
+                type(params['expectedRevision']) is not int or params['expectedRevision'] != 0):
+            raise ValueError('A taskless Stop has no task revision; this command has different contents.')
         def guard():
             session, _ = self.bound(identity, binding)
             if operation == 'stop':
@@ -320,19 +324,32 @@ class InstanceProfile:
                 if params['expectedExecution'] != execution_boundary(session):
                     raise ValueError('New input or another interruption superseded this Stop intent.')
         result = None
-        if params['taskId'] is not None:
-            arguments = {
-                'sessionId': identity, 'expectedTaskId': params['taskId'],
-                'expectedRevision': params['expectedRevision'], **changes,
-                **({'expectedExecution': params['expectedExecution']} if operation == 'stop' else {})}
-            command = _identity('control', self.bindings[identity], params['commandId'])
-            if operation == 'stop':
-                retained = await self.owner.service.dispatch('task.receipt', {
-                    'sessionId': identity, 'commandId': command},
-                    origin='acp', caller_session_id=identity, include_state=False)
+        arguments = {
+            'sessionId': identity, 'expectedTaskId': params['taskId'],
+            'expectedRevision': params['expectedRevision'], **changes,
+            **({'expectedExecution': params['expectedExecution']} if operation == 'stop' else {})}
+        command = _identity('control', self.bindings[identity], params['commandId'])
+        if operation == 'stop':
+            # Reconcile BOTH owners before either fresh leg. In particular an
+            # earlier taskless Stop must not pause a newly supplied task before
+            # discovering that its host Stop command already has other contents.
+            retained = await self.owner.service.dispatch('task.receipt', {
+                'sessionId': identity, 'commandId': command},
+                origin='acp', caller_session_id=identity, include_state=False)
+            async with self.owner.service.lock:
                 self.bound(identity, binding)
                 saved = retained['result'].get('receipt')
+                stop_row = self.owner.service.db.execute('SELECT fingerprint,receipt FROM commands WHERE id=?',
+                    (_identity('stop', self.bindings[identity], params['commandId']),)).fetchone()
+                if stop_row:
+                    from .service import command_fingerprint as host_fingerprint
+                    if (stop_row[0] != host_fingerprint('conversation.stop', {
+                            'sessionId': identity, 'expectedExecution': params['expectedExecution']}, 'acp', None)
+                            or saved is None and params['taskId'] is not None):
+                        raise ValueError('This Stop command ID already has different contents.')
                 if saved is not None:
+                    if params['taskId'] is None:
+                        raise ValueError('This Stop command ID already has different contents.')
                     forwarded = {key: item for key, item in arguments.items() if key != 'sessionId'}
                     forwarded.update(commandId=command, origin='acp-instance-stop')
                     from .task_continuity import command_fingerprint
@@ -340,6 +357,10 @@ class InstanceProfile:
                     if saved.get('fingerprint') != digest:
                         raise ValueError('This task command ID already has different contents.')
                     result = {'accepted': True, 'result': {**retained['result'], 'duplicate': True}}
+                if stop_row:
+                    return {'task': result, 'stop': {**json.loads(stop_row[1]), 'duplicate': True},
+                            'settlement': 'inspect-native-state'}
+        if params['taskId'] is not None:
             if result is None:
                 result = await self.owner.service.dispatch('task.' + ('pause' if operation == 'stop' else operation),
                     arguments, origin='acp-instance-stop' if operation == 'stop' else 'acp',

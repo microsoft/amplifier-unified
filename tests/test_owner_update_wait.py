@@ -421,6 +421,31 @@ async def test_busy_command_enrollment_installs_original_marker_before_observe_o
     assert not h.runtime.admitted
 
 
+async def test_wait_for_update_checks_optional_task_identity_before_native_enrollment(waiting):
+    h = waiting
+    task = h.controller.tasks.record()
+    before_task = copy.deepcopy(task)
+    before_updates = copy.deepcopy(h.app.state['updates'])
+    worker = h.runtime.native[h.sid]
+    before_boundary = getattr(worker, '_handoff_boundary', None)
+    wrong = {**h.wait_args, 'expectedTaskId': 'another-responsibility'}
+    with pytest.raises(AppError, match='task.*replaced|task.*identity'):
+        await h.wait(args=wrong, command='wrong-task-wait')
+    assert h.controller.tasks.record() == before_task
+    assert h.app.state['updates'] == before_updates
+    assert not h.runtime.boundary_calls
+    assert getattr(worker, '_handoff_boundary', None) is before_boundary
+    assert h.app.db.execute('SELECT 1 FROM commands WHERE id=?', ('wrong-task-wait',)).fetchone() is None
+    valid = {**h.wait_args, 'expectedTaskId': task['id']}
+    receipt = await h.wait(args=valid, command='exact-task-wait')
+    assert receipt['accepted']
+    assert len(h.runtime.boundary_calls) == 1
+    assert h.row['taskBinding']['taskId'] == task['id']
+    duplicate = await h.wait(args=valid, command='exact-task-wait')
+    assert duplicate['duplicate'] is True
+    assert len(h.runtime.boundary_calls) == 1
+
+
 async def test_owner_wait_yields_restores_and_continues_exactly_once_without_resuming_paused_predecessor(waiting):
     h = waiting
     paused = await h.new_task('Previously paused objective', paused=True)
