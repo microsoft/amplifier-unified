@@ -18,7 +18,7 @@ const stop=ownFixture(fixture);
 const readiness=createInterface({input:fixture.stdout});
 const reads=[],errors=[],checks=[];
 let disclosing=false;
-const markers=['RECORDED-REQUEST','FULL-RECORDING-END','RECORDED-RESPONSE'];
+const markers=['RECORDED-REQUEST','FULL-RECORDING-END','RECORDED-RESPONSE','FULL-RESPONSE-END'];
 const transfers=[];
 const output=process.env.AMPLIFIER_TEST_OUTPUT_DIR||process.env.AMPLIFIER_TEST_ARTIFACTS;
 let browser,page;
@@ -37,7 +37,7 @@ try{
   assert.equal(response.ok,true,'Fixture control '+body.op+' returned '+response.status);
   return response.json();
  }
- await control({op:'bounded-provider-records',retention:true});
+ await control({op:'bounded-provider-records',retention:true,largeResponse:true});
  const {alpha,beta}=await control({op:'grouped-long-chat'});
  browser=await chromium.launch({headless:true,executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH});
  const context=await browser.newContext({viewport:{width:1360,height:950},extraHTTPHeaders:headers});
@@ -132,7 +132,16 @@ try{
  await inspector().getByRole('button',{name:/^View response/}).click();
  await expect.poll(()=>reads).toContain('detail:response');
  assert.equal(reads.filter(read=>read.includes('response')).length,1);
- checks.push('Request preview, full 1.1 MB recording and response open independently on explicit action');
+ const responseRecording=page.waitForResponse(res=>new URL(res.url()).pathname==='/api/conversation/provider-recording');
+ await inspector().getByRole('button',{name:'Show full recorded response',exact:true}).click();
+ const responseBody=await (await responseRecording).json();
+ assert.equal(responseBody.payload.largeDiagnostic.length,1_100_000);
+ assert.equal(responseBody.capture.truncated,false);
+ const responseView=inspector().getByRole('group',{name:'Recorded response payload'});
+ await responseView.getByRole('button').first().click();
+ await expect(responseView).toContainText('FULL-RESPONSE-END');
+ assert.deepEqual(reads,['detail:request','recording:request','detail:response','recording:response']);
+ checks.push('Both 1.1 MB recordings open independently on explicit action and render their final fields');
  await page.setViewportSize({width:390,height:844});
  await expect(page.getByRole('dialog',{name:'Step details'})).toBeVisible();
  assert.ok(await inspector().evaluate(el=>el.getBoundingClientRect().width<=innerWidth&&el.scrollWidth<=el.clientWidth+1));

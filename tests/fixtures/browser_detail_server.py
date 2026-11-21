@@ -450,8 +450,11 @@ async def main():
                         await hooks.emit('llm:request', {'provider': 'test', 'model': 'bounded-recording',
                             'request_id': 'bounded-attempt', 'raw': {'instructions': 'RECORDED-REQUEST',
                             'largeDiagnostic': 'x' * 1_100_000, 'end': 'FULL-RECORDING-END'}})
+                        response = {'text': 'RECORDED-RESPONSE'}
+                        if args.get('largeResponse'):
+                            response.update(largeDiagnostic='y' * 1_100_000, end='FULL-RESPONSE-END')
                         await hooks.emit('llm:response', {'provider': 'test', 'model': 'bounded-recording',
-                            'request_id': 'bounded-attempt', 'raw': {'text': 'RECORDED-RESPONSE'}})
+                            'request_id': 'bounded-attempt', 'raw': response})
                         return {'usage': {'input_tokens': 2500, 'output_tokens': 103,
                             'cache_read_tokens': 2000, 'cost_usd': 0.0048, 'cost_type': 'estimated'},
                             'content': [{'type': 'text', 'text': 'A fixture result.'}]}
