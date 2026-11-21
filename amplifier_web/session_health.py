@@ -86,7 +86,7 @@ def generation_failure(event):
             guidance = 'Original history is preserved; the candidate checkpoint was not accepted because its measurement was unavailable or did not show a reduction. A completed compaction call is not proof that the full continuation fits. Copy the chat diagnostics and report native_no_reduction before retrying; an unchanged retry is not a repair. A recovery copy with the same history can hit the same limit; do not replay completed actions or paste the entire history into a new chat.'
         elif code in {'native_measurement_unavailable', 'authoritative_measurement_unavailable'}:
             summary = 'Could not check conversation size.'
-            guidance = 'Original history and the saved checkpoint are preserved. The counting service returned no usable measurement; the underlying cause was not recorded. Try Continue conversation once. If it fails again, share diagnostics; resetting the chat is not required.'
+            guidance = 'Original history and the saved checkpoint are preserved. The counting service returned no usable measurement and the cause was not recorded. Open Details & reporting to review diagnostics.'
         elif code == 'summary_output_limit':
             summary = 'The conversation summary reached its output limit.'
             guidance = 'Increase the context module’s summary_max_output_tokens allowance before continuing. No incomplete summary was saved; original history is preserved.'
@@ -136,7 +136,7 @@ def generation_failure(event):
             count['requestId'] = request_id
         guidance = 'Original history and the saved checkpoint are preserved. ' + reasons.get(reason, 'The counting failure needs investigation.')
         if count['retryable']:
-            guidance += ' Wait briefly, then choose Continue conversation to try again.'
+            guidance += ' Wait briefly, then send a new message in this chat to try again. The earlier message will not be automatically resent.'
     return {**({'code': code} if category == 'context_compaction' and code in known else {}),
             **({'countFailure': count} if category == 'context_measurement' else {}),
             'category': category, 'errorType': kind, 'stage': stage,
@@ -248,6 +248,12 @@ def _context_recovery_details(code):
         'recovery_checkpoint_rejected': (
             'persistence', 'The saved checkpoint could not be validated for this model change.',
             'Keep the original chat history and restore a compatible, validated checkpoint before continuing.'),
+        'recovery_unreconciled': (
+            'context_compaction', 'Earlier conversation preparation could not be resumed.',
+            'This preparation step stopped before a model request. Copy the chat diagnostics from Details & reporting.'),
+        'summary_work_paused': (
+            'context_compaction', 'Conversation preparation can continue from saved progress.',
+            'Review preparation to approve calls for your next message. One earlier call remains unconfirmed and counts against the original allowance.'),
     }
     category, summary, guidance = messages[code]
     return {'category': category, 'code': code, 'stage': 'context_preparation',

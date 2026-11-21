@@ -1454,6 +1454,8 @@ class Management:
                             self.configuration_transition(self.service._session(session['id']), configuration_operation,
                                 stage='readback', effect='mounted')
                             self.service._publish_changes(sessions={session['id']})
+                if args['operation'] == 'context.recovery.status' and command_id:
+                    result = {**result, 'readCommandId': command_id}
                 refreshed={}
                 if result.get('requiresRestart') and not placement:refreshed['configuration.providers']=await self.service.runtime.control(session['id'],'configuration.providers',{})
                 refresh={'native.compact':'native.status','mode.set':'mode.list','mode.clear':'mode.list','goals.set':'goals.get','goals.clear':'goals.get','budget.set':'budget.get','provider.select':'configuration.providers','provider.reset':'configuration.providers','configuration.toggle':'configuration.inspect'}.get(args['operation'])
