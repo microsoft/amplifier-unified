@@ -224,7 +224,7 @@ def callback_rejection_detail(row):
 def event_detail(row):
     result = {}
     for key in ('event', 'timestamp', 'ts', 'at', 'generation_id', 'session_id', 'sessionId',
-                'rootSessionId', 'runtimeSessionId', 'generationId', 'request_id', 'response_id', 'tool_call_id', 'provider', 'model',
+                'rootSessionId', 'runtimeSessionId', 'generationId', 'inputId', 'request_id', 'response_id', 'tool_call_id', 'provider', 'model',
                 'error_type', 'error_stage', 'error_category', 'disposition', 'operation',
                 'bridgeId', 'action', 'errorType', 'phase', 'type', 'id', 'turnId', 'parentId', 'kind', 'startedAt', 'endedAt', 'scope'):
         value = row.get(key)
