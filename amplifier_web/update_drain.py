@@ -145,6 +145,8 @@ async def wait_for_update(service, args, command_id, *, origin, guard=None):
                 # Missing proof can still wait, but cannot later supply authority.
                 lineage = service.collaboration.lineage(session, origin)
         task = session.get('task') or service.coordination.task(session['id'])
+        if args.get('expectedTaskId') is not None and (task or {}).get('id') != args['expectedTaskId']:
+            raise AppError('The saved task was replaced; inspect its identity before waiting for an update.', 409)
         worker = getattr(service.runtime, 'workers', {}).get(session['id'])
         if (not task or task.get('status') != 'active' or task.get('revision') != args['expectedRevision']
                 or session.get('status') != 'working' or not worker or not worker.get('runtimeOwnerId')

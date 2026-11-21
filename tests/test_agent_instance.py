@@ -342,6 +342,94 @@ async def test_actual_task_owner_cas_consumption_stop_and_lost_receipt(tmp_path,
         await owner.close()
 
 
+async def test_taskless_stop_command_cannot_pause_a_later_task_before_conflict(host, monkeypatch):
+    """Both old receipt legs must reconcile before a new pause can take effect."""
+    from test_task_continuity import controls, create
+    configure(host)
+    app, _, runtime, path = host
+    service = app['service']
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(service.data_dir))
+    peer, _ = await connect_profile(host)
+    sid = (await new(peer, path, 'R'))['result']['sessionId']
+    source_plan(service, service._session(sid))
+    control_path = service.data_dir / 'sessions' / sid / 'control-state.json'
+    saved = json.loads(control_path.read_text())
+    control_path.write_text(json.dumps({**saved, 'task': None}))
+    binding = session_metadata('urn:example:agent:U', room_source('R'))[NAMESPACE]
+    first_read = (await peer.call('_amplifier/instance', sessionId=sid, binding=binding, operation='read'))['result']
+    original = {'sessionId': sid, 'binding': binding, 'operation': 'stop', 'commandId': 'original-taskless-stop',
+                'taskId': None, 'expectedRevision': 0, 'changes': {},
+                'expectedExecution': first_read['expectedExecution']}
+    stopped = await peer.call('_amplifier/instance', **original)
+    assert stopped['result']['task'] is None
+    await until(lambda: service._session(sid)['status'] == 'stopped')
+    retry = await peer.call('_amplifier/instance', **original)
+    assert retry['result']['stop']['duplicate'] is True
+    assert runtime.stopped == [sid]
+    worker = controls(sid)
+    try:
+        await create(worker, commandId='new-explicit-task', objective='Later independent responsibility')
+        task = worker.tasks.record()
+        before = control_path.read_bytes()
+        calls = []
+
+        async def control(target, operation, args, *, guard=None):
+            if guard:
+                guard()
+            calls.append(operation)
+            return await worker.perform(operation, args)
+
+        monkeypatch.setattr(runtime, 'control', control, raising=False)
+        monkeypatch.setattr(service.management, 'ensure_runtime', AsyncMock())
+        current = (await peer.call('_amplifier/instance', sessionId=sid, binding=binding, operation='read'))['result']
+        changed = await peer.call('_amplifier/instance', **{
+            **original, 'taskId': task['id'], 'expectedRevision': task['revision'],
+            'expectedExecution': current['expectedExecution']})
+        assert 'error' in changed and 'different contents' in changed['error']['message'], changed
+        assert not calls, 'A fresh pause must not precede the existing Stop conflict.'
+        assert worker.tasks.record()['status'] == 'active'
+        assert worker.tasks.record()['revision'] == 1
+        assert control_path.read_bytes() == before
+        assert runtime.stopped == [sid]
+        # Original taskless receipt remains recoverable without touching the new
+        # responsibility. Current source authority is still required.
+        again = await peer.call('_amplifier/instance', **original)
+        assert again['result']['stop']['duplicate'] is True
+        assert not calls and runtime.stopped == [sid]
+        service.server_config['agentInstance']['sources'] = []
+        assert 'error' in await peer.call('_amplifier/instance', **original)
+    finally:
+        await worker.close()
+        await peer.socket.close()
+
+
+async def test_reconnect_refuses_preexisting_contradictory_native_aliases(host):
+    configure(host)
+    app, _, runtime, path = host
+    service = app['service']
+    peer, _ = await connect_profile(host)
+    sid = (await new(peer, path, 'R'))['result']['sessionId']
+    await peer.socket.close()
+    await until(lambda: not app['acp_connections'])
+    session = service._session(sid)
+    session['nativeIdentity'] = sid
+    session['runtimeSessionId'] = 'another-native-owner'
+    before = json.dumps(session, sort_keys=True)
+    peer, _ = await connect_profile(host)
+    refused = await peer.call('session/resume', sessionId=sid, cwd=str(path), mcpServers=[],
+        _meta=session_metadata('urn:example:agent:U', room_source('R')))
+    assert 'error' in refused and 'conflicting native' in refused['error']['message'], refused
+    assert not runtime.bindings and not runtime.sent and not runtime.stopped
+    assert json.dumps(session, sort_keys=True) == before
+    # Correct same-native aliases are still an ordinary supported resume.
+    session['runtimeSessionId'] = sid
+    resumed = await peer.call('session/resume', sessionId=sid, cwd=str(path), mcpServers=[],
+        _meta=session_metadata('urn:example:agent:U', room_source('R')))
+    assert 'result' in resumed, resumed
+    assert 'result' in await inspect_input(peer, sid)
+    await peer.socket.close()
+
+
 async def test_native_only_delivery_reconciliation_and_lookup_not_invented_attribution(host, monkeypatch):
     configure(host)
     app, _, runtime, path = host
