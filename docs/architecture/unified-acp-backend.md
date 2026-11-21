@@ -402,6 +402,10 @@ The optional `_amplifier/instance` request contains exact `sessionId`, `binding`
   is admission, not proof of settled execution, descendant revocation or rollback.
   An exact retry validates existing task/Stop fingerprints and returns their
   receipts without repeating Stop; changed contents still conflict.
+  A saved Stop command ID cannot be reused for an ordinary pause or update.
+  If the task receipt owner is unavailable, a known host Stop receipt remains
+  inspectable as an unresolved pair, not an exact taskless match; no fresh leg
+  is dispatched while that evidence is unavailable.
 - `workReceipt`: stable original `commandId` recovers existing native task and
   host Stop receipts without redispatch. Partial/unknown legs remain explicit.
 
