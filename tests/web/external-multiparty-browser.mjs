@@ -76,12 +76,12 @@ try{
   const otherComposer=other.getByRole('textbox',{name:'Message Amplifier',exact:true});
   await composer.fill('First private draft — never public');
   await otherComposer.fill('Second private draft — never public');
-  await expect(composer).toHaveValue('First private draft — never public');
+  await expect(composer).toHaveText('First private draft — never public');
   await other.evaluate(id=>window.amplifier.dispatch('session.select',{id}),legacyId);
   assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),sharedId);
-  await expect(composer).toHaveValue('First private draft — never public');
+  await expect(composer).toHaveText('First private draft — never public');
   await other.evaluate(id=>window.amplifier.dispatch('session.select',{id}),sharedId);
-  await expect(otherComposer).toHaveValue('Second private draft — never public');
+  await expect(otherComposer).toHaveText('Second private draft — never public');
   assert.deepEqual((await observe()).peers,sharedFirst.peers);
   report.privateClientViews={separateDrafts:true,separateNavigation:true,noPeerPrompt:true};
  }finally{await other.close()}
