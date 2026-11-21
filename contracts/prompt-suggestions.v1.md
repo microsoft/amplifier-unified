@@ -293,6 +293,11 @@ an accepted exact command receipt and the same navigation fence. Supplied receip
 action labels must be `conversation.send`; legacy unlabelled receipts remain
 eligible. Partial, unknown, missing/pruned and peer/agent sources fail closed;
 there is no ancestor-human lookup or change to subsequent shared capture IDs.
+This optional shared observer uses a local SQLite savepoint: a failed lookup,
+proof insert or retention trim leaves no new partial proof and does not roll back
+the conversation transaction. Its failure cannot change the accepted reply into
+UNKNOWN or prevent ordinary peer capture. It starts no retry or inference;
+canonical conversation publication still owns its own errors and commit.
 Inputs without a durable command ID/receipt, or responses
 imported without that observation, conservatively remain unavailable after
 legacy migration until qualifying new work occurs; no history scan is added.

@@ -103,6 +103,29 @@ class PromptSuggestions:
         self._trim_cache()
         service.db.commit()
 
+    def observe_shared_completion(self, session, message, turn, delivery):
+        """Optional proof cannot turn an accepted shared reply into UNKNOWN."""
+        db = self.service.db
+        try:
+            # Keep RELEASE from committing ahead of the conversation's own
+            # publication when this optional observer starts the transaction.
+            if not db.in_transaction:
+                db.execute('BEGIN')
+            db.execute('SAVEPOINT suggestion_shared_completion')
+            try:
+                self.observe_message(session, message, shared_completion=(turn, delivery))
+                db.execute('RELEASE suggestion_shared_completion')
+            except Exception:
+                # Undo only the optional proof (including an insert followed by
+                # failed trimming), never the enclosing conversation transaction.
+                db.execute('ROLLBACK TO suggestion_shared_completion')
+                db.execute('RELEASE suggestion_shared_completion')
+                raise
+        except Exception:
+            # No retry or inference. The shared owner must still capture the
+            # completed assistant and settle its original accepted delivery.
+            return
+
     def observe_message(self, session, message, *, shared_completion=None):
         """Exact host-observed response to a newly admitted UI input, not text/time inference."""
         input_id = message.get('inputId')

@@ -1847,6 +1847,106 @@ class Integration(unittest.IsolatedAsyncioTestCase):
             with self.subTest(fault=fault):
                 await self.shared_migration_refusal(fault)
 
+    async def test_shared_run_acceptance_survives_optional_lookup_insert_and_trim_failures(self):
+        """Real _run/end_turn/settlement and SQLite; only ACP/model is synthetic."""
+        for fault in ('lookup', 'insert', 'trim'):
+            with self.subTest(fault=fault):
+                session, shared, turn, delivery, source, floor = await self.shared_migration_fixture(
+                    'optional-' + fault)
+                sid = session['id']
+                db = self.app.db
+                db.execute('DELETE FROM suggestion_fresh_completion')
+                db.executemany('INSERT INTO suggestion_fresh_completion VALUES (?,?,?)',
+                               [('older-' + str(i), 'old-proof-' + str(i), i) for i in range(128)])
+                db.execute('CREATE TABLE IF NOT EXISTS suggestion_test_host_write (id TEXT PRIMARY KEY, message TEXT)')
+                db.commit()
+                proofs = list(db.execute('SELECT * FROM suggestion_fresh_completion ORDER BY session_id'))
+                claims = list(db.execute('SELECT * FROM suggestion_requests'))
+                source_before = copy.deepcopy(source)
+                sequence = shared.room(session)['sequence']
+                denied = []
+                if fault == 'lookup':
+                    def authorize(action, table, column, database, origin):
+                        if action == sqlite3.SQLITE_READ and table == 'suggestion_cache_policy':
+                            denied.append(table)
+                            return sqlite3.SQLITE_DENY
+                        return sqlite3.SQLITE_OK
+                    db.set_authorizer(authorize)
+                else:
+                    operation = 'INSERT' if fault == 'insert' else 'DELETE'
+                    db.create_function('suggestion_optional_failure_seen', 0,
+                                       lambda: denied.append(fault) or 0)
+                    db.execute('CREATE TEMP TRIGGER suggestion_optional_failure BEFORE ' + operation +
+                               " ON suggestion_fresh_completion BEGIN SELECT suggestion_optional_failure_seen();"
+                               " SELECT RAISE(ABORT, 'optional proof unavailable'); END")
+
+                async def respond(*args, **kwargs):
+                    # _run observes a valid end_turn, not a direct _settle test.
+                    return SimpleNamespace(stop_reason='end_turn')
+                participant = SimpleNamespace(
+                    connect=AsyncMock(), attention=AsyncMock(return_value=None),
+                    source_metadata=Mock(return_value={}), prompt=AsyncMock(side_effect=respond),
+                    close=AsyncMock())
+                turn.participant = participant
+                original_message, original_capture = self.app._message, shared.capture
+                def append_message(*args, **kwargs):
+                    message = original_message(*args, **kwargs)
+                    # Stand in for another canonical write in this same host
+                    # transaction. Observer rollback must not remove it.
+                    db.execute('INSERT INTO suggestion_test_host_write VALUES (?,?)', (sid, message['id']))
+                    return message
+                def capture_reply(current, message, mention=None):
+                    # Releasing the optional savepoint must not commit the
+                    # surrounding host write ahead of canonical publication.
+                    with sqlite3.connect(self.root / 'app' / 'app.sqlite3') as other:
+                        self.assertIsNone(other.execute(
+                            'SELECT message FROM suggestion_test_host_write WHERE id=?', (sid,)).fetchone())
+                    return original_capture(current, message, mention)
+                try:
+                    with patch.object(shared, '_schedule') as schedule, \
+                            patch.object(self.app, '_message', side_effect=append_message) as insertion, \
+                            patch.object(shared, 'capture', side_effect=capture_reply) as capture:
+                        await shared._run(sid, turn)
+                    if fault == 'lookup':
+                        self.assertTrue(denied)
+                    else:
+                        self.assertEqual(denied, [fault], 'The intended optional SQL boundary must actually fail.')
+                    self.assertEqual(delivery['state'], 'accepted')
+                    self.assertEqual(shared.participant(session, 'alpha')['lastReceipt']['state'], 'accepted')
+                    self.assertEqual(shared.participant(session, 'alpha')['status'], 'idle')
+                    self.assertFalse(turn.stop or turn.retiring)
+                    participant.prompt.assert_awaited_once()
+                    participant.close.assert_not_called()
+                    insertion.assert_called_once()
+                    capture.assert_called_once()
+                    schedule.assert_called_once()  # No real peer execution.
+                    messages = [row for row in session['messages'] if row.get('source') == 'external']
+                    self.assertEqual(len(messages), 1)
+                    message = messages[0]
+                    self.assertEqual(message['roomSequence'], sequence + 1)
+                    self.assertNotIn('inputId', message)
+                    self.assertFalse(message.get('partial'))
+                    peer, = [row for row in shared.room(session)['deliveries']
+                             if row['sourceMessageId'] == message['id']]
+                    self.assertEqual((peer['agentId'], peer['inputId']), ('beta', message['id']))
+                    self.assertEqual(source, source_before)
+                    self.assertEqual(list(db.execute(
+                        'SELECT * FROM suggestion_fresh_completion ORDER BY session_id')), proofs)
+                    self.assertEqual(list(db.execute('SELECT * FROM suggestion_requests')), claims)
+                    with sqlite3.connect(self.root / 'app' / 'app.sqlite3') as other:
+                        self.assertEqual(other.execute(
+                            'SELECT message FROM suggestion_test_host_write WHERE id=?', (sid,)).fetchone(),
+                            (message['id'],))
+                    self.app.prompt_suggestions.complete.assert_not_called()
+                finally:
+                    db.set_authorizer(None)
+                    if fault != 'lookup':
+                        db.execute('DROP TRIGGER suggestion_optional_failure')
+                        db.create_function('suggestion_optional_failure_seen', 0, None)
+                    shared.turns.pop((sid, 'alpha'), None)
+                self.assertEqual(db.execute(
+                    'SELECT legacy,command_floor FROM suggestion_cache_policy').fetchone(), (1, floor))
+
     async def test_synced_preference_default_off_two_browsers_new_client_and_restart_same_owner(self):
         from amplifier_web.service import AppService
         await self.app.close()

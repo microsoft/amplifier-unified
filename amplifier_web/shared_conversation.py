@@ -392,8 +392,8 @@ class SharedConversations:
                 **({} if publish else {'partial': True}))
             if publish:
                 if state == 'accepted':
-                    self.service.prompt_suggestions.observe_message(
-                        session, message, shared_completion=(turn, delivery))
+                    self.service.prompt_suggestions.observe_shared_completion(
+                        session, message, turn, delivery)
                 self.capture(session, message)
         self._record(session, delivery, state)
         binding['status'] = 'unknown' if state == 'unknown' else 'error' if state == 'failed' else 'idle'
