@@ -450,6 +450,56 @@ async def test_negotiated_public_instance_preserves_original_input_source_and_ex
         assert len([row for row in operations(tmp_path / current['id']) if row['kind'] == 'resume']) == 1
 
 
+@pytest.mark.parametrize('shared', [False, True])
+async def test_saved_plain_peer_new_profile_advertisement_keeps_same_plain_binding(app_factory, tmp_path, shared):
+    app = app_factory()
+    configure(app, tmp_path)
+    if not shared:
+        app.server_config['externalAgents'][0]['args'] = [
+            str(Path(__file__).parent / 'fixtures/external_acp_agent.py'), str(tmp_path / 'alpha/peer')]
+    receipt = await app.dispatch('session.create', {'workspace': app.default_workspace,
+        'externalAgentIds': ['alpha', 'beta'] if shared else ['alpha']}, command_id='legacy-before-upgrade')
+    sid = receipt['result']['sessionId']
+    async def settled(current):
+        if shared:
+            await idle(current, sid)
+        else:
+            await until(lambda: sid not in current.external_conversations.turns)
+    async def post(current, text, command):
+        receipt = await current.dispatch('conversation.send', {'sessionId': sid, 'text': text}, command_id=command)
+        assert receipt['accepted']
+    await post(app, 'original before upgrade', 'before-upgrade')
+    await settled(app)
+    saved = copy.deepcopy(bindings(app._session(sid)))
+    assert all(row.get('sessionId') and not row.get('publicAgentId') for row in saved)
+    await app.close()
+    for row in saved:
+        (tmp_path / row['id'] / 'peer/advertise-instance').touch()
+    restored = app_factory()
+    configure(restored, tmp_path)
+    if not shared:
+        restored.server_config['externalAgents'][0]['args'] = [
+            str(Path(__file__).parent / 'fixtures/external_acp_agent.py'), str(tmp_path / 'alpha/peer')]
+    await post(restored, 'explicit after peer upgrade', 'after-upgrade')
+    await settled(restored)
+    session = restored._session(sid)
+    assert session['status'] == 'idle', session.get('error')
+    for before, after in zip(saved, bindings(session)):
+        assert before['sessionId'] == after['sessionId']
+        assert not after.get('publicAgentId') and not after.get('instanceSource')
+        rows = operations(tmp_path / after['id'])
+        assert sum(row['kind'] == 'new' for row in rows) == 1
+        assert sum(row['kind'] == 'resume' for row in rows) == 1
+        assert [row['offered'] for row in rows if row['kind'] == 'instance-offer'] == [None]
+        assert not any(row['kind'] == 'instance-session' for row in rows)
+    if shared:
+        assert all(sum(row.get('source') == 'original before upgrade' for row in work(tmp_path, identity)) == 1
+                   for identity in ('alpha', 'beta'))
+    else:
+        assert [row['text'] for row in operations(tmp_path / 'alpha') if row['kind'] == 'prompt'] == [
+            'original before upgrade', 'explicit after peer upgrade']
+
+
 async def test_malformed_instance_ack_retains_allocated_identity_without_prompt_or_replacement(app_factory, tmp_path):
     app = app_factory()
     session = await room(app, tmp_path, 'instance-malformed')

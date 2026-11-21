@@ -99,9 +99,13 @@ class ACPParticipant:
             transport_kwargs={'stderr': asyncio.subprocess.DEVNULL}, observers=[self._observe_wire])
         try:
             self.connection, self.process = await self.context.__aenter__()
+            # An existing plain ACP session stays plain when its peer later
+            # advertises an optional profile. Never convert its saved identity.
+            offer_instance = source is not None and (
+                not binding.get('sessionId') or bool(binding.get('publicAgentId')))
             initialized = await self.connection.initialize(
                 protocol_version=PROTOCOL_VERSION, client_capabilities=ClientCapabilities(),
-                **({AGENT_INSTANCE: {'version': 1}} if source is not None else {}))
+                **({AGENT_INSTANCE: {'version': 1}} if offer_instance else {}))
             if initialized.protocol_version != PROTOCOL_VERSION:
                 raise ValueError('The external agent selected an unsupported ACP protocol version.')
             self.initialization_metadata = deepcopy(initialized.field_meta or {})
@@ -111,11 +115,9 @@ class ACPParticipant:
             if binding.get('publicAgentId') and binding['publicAgentId'] != agent_id:
                 raise ValueError('The public agent identity changed. Its saved execution was preserved.')
             instance = {}
-            if source is not None and profile is not None:
+            if offer_instance and profile is not None:
                 if not isinstance(agent_id, str) or not agent_id:
                     raise ValueError('The external agent advertised an invalid public identity.')
-                if binding.get('sessionId') and not binding.get('publicAgentId'):
-                    raise ValueError('The saved execution has no public agent binding. It was not rebound.')
                 if binding.get('instanceSource', source) != source:
                     raise ValueError('The saved public conversation source changed.')
                 instance = {AGENT_INSTANCE: {'agentId': agent_id, 'source': deepcopy(source)}}

@@ -30,11 +30,16 @@ class Fixture:
         assert protocol_version == 1
         assert not client_capabilities.terminal
         assert not client_capabilities.fs.read_text_file and not client_capabilities.fs.write_text_file
-        return InitializeResponse(protocol_version=1, agent_capabilities=AgentCapabilities(
+        result = InitializeResponse(protocol_version=1, agent_capabilities=AgentCapabilities(
             session_capabilities=SessionCapabilities(
                 resume=SessionResumeCapabilities() if self.resume else None)),
             field_meta={'com.microsoft.amplifier.approval-policy': {
                 'version': 1, 'owner': 'instance', 'producer': 'fixture/v1', 'reusableRequests': True}})
+        if (self.home / 'advertise-instance').exists():
+            namespace = 'com.microsoft.amplifier.agent-instance'
+            self.record('instance-offer', offered=kwargs.get(namespace))
+            result.field_meta[namespace] = {'version': 1, 'agentId': 'public:upgraded-peer'}
+        return result
 
     async def new_session(self, cwd, mcp_servers=None, **kwargs):
         identity = str(uuid.uuid4())
