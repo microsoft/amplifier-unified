@@ -49,8 +49,11 @@ def public_receipt(value, model):
 
 def record(session, receipt):
     """Join the first foreground request to its exact admitted native turn."""
-    if ('turnModelSettings' not in receipt or receipt.get('kind') != 'llm' or receipt.get('phase') != 'running'
-            or receipt.get('purpose') or receipt.get('lifecycle') == 'background'
+    # A hook-only request can precede a wrapped call that carries real settings.
+    # Its completion, however, proves that an otherwise unverified turn occurred.
+    observed = (receipt.get('phase') == 'running' and 'turnModelSettings' in receipt
+                or receipt.get('phase') == 'completed')
+    if (not observed or receipt.get('kind') != 'llm' or receipt.get('purpose') or receipt.get('lifecycle') == 'background'
             or receipt.get('sessionId') != session['id'] or receipt.get('rootSessionId') != session['id']):
         return
     input_id = receipt.get('admissionInputId')

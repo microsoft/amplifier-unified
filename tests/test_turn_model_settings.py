@@ -81,6 +81,15 @@ def test_unknown_bindings_historical_usage_and_unrelated_worker_receipts():
     record(session, event)
     assert turn['modelChange'] == {'previous': B, 'current': A}
     assert session['previousTurnSettings']['inputId'] == 'b'
+    _, event = setup_turn(session, 'hook-only', B)
+    del event['turnModelSettings']
+    record(session, event)
+    assert session['previousTurnSettings']['inputId'] == 'b'
+    record(session, {**event, 'phase': 'completed'})
+    assert 'previousTurnSettings' not in session
+    turn, event = setup_turn(session, 'after-unknown', A)
+    record(session, event)
+    assert 'modelChange' not in turn
 
 
 async def test_public_restore_revisions_bindings_and_scope(app, monkeypatch):
