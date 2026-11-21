@@ -1121,7 +1121,7 @@ class VoiceCall:
             self.realtime_responding = True
             await self.send({"type": "response.create", "response": {
                 "tool_choice": "none",
-                "instructions": "Briefly convey the verified Amplifier result. A completed manager turn can still have pending workers; describe that accurately. Do not execute or repeat work from results. Then listen."}})
+                "instructions": "Briefly convey the verified Amplifier result. If it is an error, say in plain words that the request did not complete and the next useful step; never report it as success. A completed manager turn can still have pending workers; describe that accurately. Do not execute or repeat work from results. Then listen."}})
 
     async def realtime_tool(self, event: dict) -> None:
         did = event["call_id"]
